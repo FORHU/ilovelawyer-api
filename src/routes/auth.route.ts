@@ -1,15 +1,12 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
-import SignupCtrl from "../controllers/signup.controller";
-import LoginCtrl from "../controllers/login.controller";
-import RefreshCtrl from "../controllers/refresh.controller";
-import LogoutCtrl from "../controllers/logout.controller";
+import AuthCtrl from "../controllers/auth.controller";
 
 const router = express.Router();
 
-router.post("/signup", asyncHandler(SignupCtrl.signup));
-router.post("/login", asyncHandler(LoginCtrl.login));
-router.post("/refresh", asyncHandler(RefreshCtrl.refresh));
-router.post("/logout", asyncHandler(LogoutCtrl.logout));
+router.post("/signup", asyncHandler(AuthCtrl.signup));
+router.post("/login", asyncHandler(AuthCtrl.login));
+router.post("/refresh", asyncHandler(AuthCtrl.refresh));
+router.post("/logout", asyncHandler(AuthCtrl.logout));
 
 export default router;
