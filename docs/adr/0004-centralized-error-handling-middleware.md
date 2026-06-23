@@ -1,5 +1,0 @@
-# Centralize error-to-response translation in one Express error-handling middleware
-
-Controllers throw (rather than catch-and-respond themselves); one error-handling middleware mounted last in `app.ts` reads `err.statusCode` (set via `HttpError`, see [ADR 0002](0002-http-error-class.md)) and formats the HTTP response. This replaces the old `todo.controller.ts` pattern of a `try/catch` + `res.status(...).json(...)` block repeated in every controller method.
-
-Express doesn't automatically catch promise rejections thrown inside `async` route handlers — an uncaught rejection there just hangs the request. So this only works if controllers are wrapped to forward errors to `next(err)`; we use a small `asyncHandler` wrapper (`src/utils/async-handler.ts`) around each controller method rather than writing `try/catch { next(err) }` by hand in every method. The payoff: every future controller (not just auth) gets consistent error-to-status-code translation for free, with the actual response-formatting logic living in exactly one place.
