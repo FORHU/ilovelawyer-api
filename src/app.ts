@@ -3,7 +3,8 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import router from "./routes";
-import { isDev } from "./config";
+import errorHandler from "./middleware/error-handler.middleware";
+import { isDev, CLIENT_URL } from "./config";
 import setup from "./setup";
 import cors from "cors";
 import { createServer } from "http";
@@ -15,8 +16,7 @@ app.set("trust proxy", 1);
 
 app.use(
   cors({
-    origin: "*",
-    credentials: true,
+    origin: CLIENT_URL,
   }),
 );
 
@@ -36,6 +36,9 @@ app.disable("x-powered-by");
 
 // Use router for routing
 app.use("/api", router);
+
+// Must be mounted last: catches errors forwarded via asyncHandler/next(err)
+app.use(errorHandler);
 
 const server = createServer(app);
 

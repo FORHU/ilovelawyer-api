@@ -9,6 +9,7 @@ const express_1 = __importDefault(require("express"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const helmet_1 = __importDefault(require("helmet"));
 const routes_1 = __importDefault(require("./routes"));
+const error_handler_middleware_1 = __importDefault(require("./middleware/error-handler.middleware"));
 const config_1 = require("./config");
 const setup_1 = __importDefault(require("./setup"));
 const cors_1 = __importDefault(require("cors"));
@@ -33,6 +34,8 @@ app.use((0, helmet_1.default)());
 app.disable("x-powered-by");
 // Use router for routing
 app.use("/api", routes_1.default);
+// Must be mounted last: catches errors forwarded via asyncHandler/next(err)
+app.use(error_handler_middleware_1.default);
 const server = (0, http_1.createServer)(app);
 exports.io = new socket_io_1.Server(server, {
     cors: {

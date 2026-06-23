@@ -23,7 +23,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SERVICE_ACCOUNT = exports.REDIS_PASSWORD = exports.REDIS_PORT = exports.REDIS_HOST = exports.ACCESS_TOKEN_EXPIRY = exports.REFRESH_TOKEN_SECRET = exports.ACCESS_TOKEN_SECRET = exports.MAILER_PASSWORD = exports.MAILER_EMAIL = exports.MAILER_TRANSPORT_SECURE = exports.MAILER_TRANSPORT_PORT = exports.MAILER_TRANSPORT_HOST = exports.isDev = exports.SECRET_KEY = exports.PORT = exports.DATABASE_URL = void 0;
+exports.SERVICE_ACCOUNT = exports.REDIS_PASSWORD = exports.REDIS_PORT = exports.REDIS_HOST = exports.REFRESH_TOKEN_EXPIRY_DAYS = exports.ACCESS_TOKEN_EXPIRY = exports.REFRESH_TOKEN_SECRET = exports.ACCESS_TOKEN_SECRET = exports.MAILER_PASSWORD = exports.MAILER_EMAIL = exports.MAILER_TRANSPORT_SECURE = exports.MAILER_TRANSPORT_PORT = exports.MAILER_TRANSPORT_HOST = exports.isDev = exports.SECRET_KEY = exports.PORT = exports.DATABASE_URL = void 0;
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
 exports.DATABASE_URL = process.env.DATABASE_URL;
@@ -38,6 +38,7 @@ exports.MAILER_PASSWORD = process.env.MAILER_PASSWORD;
 exports.ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
 exports.REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 exports.ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY;
+exports.REFRESH_TOKEN_EXPIRY_DAYS = Number(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 30);
 exports.REDIS_HOST = process.env.REDIS_HOST;
 exports.REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 exports.REDIS_PASSWORD = process.env.REDIS_PASSWORD;
