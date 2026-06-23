@@ -7,12 +7,57 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Todo {
-  id          String   @id @default(uuid())
-  title       String
-  description String
-  status      String   @default("active")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+model User {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  password            String?
+  name                String?
+  username            String    @unique
+  role                Role      @default(USER)
+  isActive            Boolean   @default(true)
+  lastLoginAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  provider            String?
+  googleId            String?   @unique
+  googleAccessToken   String?
+  googleRefreshToken  String?
+  avatarId            String?
+  isEmailVerified     Boolean   @default(false)
+  onboardingCompleted Boolean   @default(false)
+  otpCode             String?
+  otpExpiry           DateTime?
+
+  sessions Session[]
+  avatar   File?     @relation(fields: [avatarId], references: [id])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  refreshToken String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model File {
+  id        String    @id @default(uuid())
+  filename  String?
+  fileUrl   String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  metaData  Json?
+  users     User[]
+}
+
+enum Role {
+  USER
+  ADMIN
 }
 
