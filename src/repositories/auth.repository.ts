@@ -24,4 +24,28 @@ export default class AuthRepo {
   static async deleteByRefreshToken(refreshToken: string) {
     return prisma.session.deleteMany({ where: { refreshToken } });
   }
+
+  static async findByGoogleId(googleId: string) {
+    return prisma.user.findUnique({ where: { googleId } });
+  }
+
+  static async createGoogleUser(email: string, googleId: string, name?: string) {
+    const base = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
+    let username = base;
+    while (await prisma.user.findUnique({ where: { username } })) {
+      username = `${base}${Math.floor(Math.random() * 9000) + 1000}`;
+    }
+
+    return prisma.user.create({
+      data: {
+        username,
+        email,
+        googleId,
+        name,
+        provider: "google",
+        isEmailVerified: true,
+        lastLoginAt: new Date(),
+      },
+    });
+  }
 }

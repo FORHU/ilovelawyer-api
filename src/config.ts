@@ -19,3 +19,5 @@ export const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 export const REDIS_PASSWORD = process.env.REDIS_PASSWORD as string;
 export const SERVICE_ACCOUNT = process.env.SERVICE_ACCOUNT as string;
 export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
+export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;

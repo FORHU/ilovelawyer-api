@@ -78,4 +78,21 @@ export default class AuthCtrl {
 
     return res.status(200).json({ message: "Logged out successfully" });
   }
+
+  static async google(req: Request, res: Response) {
+    const { idToken } = req.body;
+
+    const schema = Joi.object({
+      idToken: Joi.string().required(),
+    });
+
+    const { error } = schema.validate({ idToken });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const result = await AuthSvc.loginWithGoogle(idToken);
+
+    return res.status(200).json(result);
+  }
 }
