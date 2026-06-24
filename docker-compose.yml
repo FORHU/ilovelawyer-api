@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ilovelawyer_api
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - ilovelawyer-api_postgres_data:/var/lib/postgresql/data
 
@@ -17,7 +17,7 @@ services:
     container_name: ilovelawyer-api-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6380:6379"
 
 volumes:
   ilovelawyer-api_postgres_data:

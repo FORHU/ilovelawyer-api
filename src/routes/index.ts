@@ -1,5 +1,5 @@
 import express from "express";
-import todoRoute from "./todo.route";
+import authRoute from "./auth.route";
 
 const router = express.Router();
 
@@ -9,6 +9,6 @@ router.get("/v1", (_, res) => {
   });
 });
 
-router.use("/todo", todoRoute);
+router.use("/auth", authRoute);
 
 export default router;
