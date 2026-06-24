@@ -30,8 +30,12 @@ model User {
   otpCode             String?
   otpExpiry           DateTime?
 
-  sessions Session[]
-  avatar   File?     @relation(fields: [avatarId], references: [id])
+  sessions                 Session[]
+  avatar                   File?                     @relation(fields: [avatarId], references: [id])
+  conversations            Conversation[]
+  messages                 Message[]
+  createdInvites           ConversationInvite[]
+  conversationParticipants ConversationParticipant[]
 }
 
 model Session {
@@ -59,5 +63,72 @@ model File {
 enum Role {
   USER
   ADMIN
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+model Conversation {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String?
+  createdAt DateTime @default(now())
+
+  user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages     Message[]
+  invites      ConversationInvite[]
+  participants ConversationParticipant[]
+
+  @@index([userId])
+}
+
+model Message {
+  id              String      @id @default(uuid())
+  conversationId  String
+  role            MessageRole
+  content         String      @db.Text
+  imagePreview    String?
+  timestamp       DateTime?
+  createdAt       DateTime    @default(now())
+  userId          String?
+  parentMessageId String?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parent       Message?     @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  replies      Message[]    @relation("MessageThread")
+
+  @@index([conversationId])
+  @@index([userId])
+  @@index([parentMessageId])
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+}
+
+model ConversationInvite {
+  id             String   @id @default(uuid())
+  conversationId String
+  createdBy      String
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  creator      User         @relation(fields: [createdBy], references: [id])
+
+  @@index([conversationId])
+}
+
+model ConversationParticipant {
+  conversationId String
+  userId         String
+  joinedAt       DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@id([conversationId, userId])
 }
 
