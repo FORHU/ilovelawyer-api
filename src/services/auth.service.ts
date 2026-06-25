@@ -1,10 +1,12 @@
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../repositories/auth.repository";
 import loginToken from "../utils/loginToken";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
-import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS } from "../config";
+import { sendEmail } from "../utils/mailer";
+import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL } from "../config";
 
 export default class AuthSvc {
   static async signup(username: string, email: string, password: string) {
@@ -108,5 +110,41 @@ export default class AuthSvc {
       accessToken,
       refreshToken,
     };
+  }
+
+  static async forgotPassword(email: string) {
+    const user = await AuthRepo.findByEmail(email);
+    if (!user) {
+      // Always succeed, even if the email isn't registered — prevents
+      // attackers from using this endpoint to probe which emails exist.
+      return;
+    }
+
+    const token = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    await AuthRepo.setResetToken(user.id, token, expiresAt);
+
+    const resetLink = `${CLIENT_URL[0]}/reset-password?token=${token}`;
+    await sendEmail({
+      to: user.email,
+      subject: "Reset your password",
+      html: `
+        <p>Hello ${user.name || "User"},</p>
+        <p>We received a request to reset your password. If you didn't make this request, you can safely ignore this email.</p>
+        <p><a href="${resetLink}">Reset Password</a></p>
+        <p>Or copy and paste this link: ${resetLink}</p>
+        <p>This link will expire in 1 hour.</p>
+      `,
+    });
+  }
+
+  static async resetPassword(token: string, password: string) {
+    const user = await AuthRepo.findByResetToken(token);
+    if (!user) {
+      throw new HttpError("Invalid or expired reset token", 400);
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await AuthRepo.resetPassword(user.id, hashedPassword);
   }
 }

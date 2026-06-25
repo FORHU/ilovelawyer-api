@@ -48,4 +48,19 @@ export default class AuthRepo {
       },
     });
   }
+
+  static async setResetToken(userId: string, token: string, expiresAt: Date) {
+    return prisma.user.update({ where: { id: userId }, data: { otpCode: token, otpExpiry: expiresAt } });
+  }
+
+  static async findByResetToken(token: string) {
+    return prisma.user.findFirst({ where: { otpCode: token, otpExpiry: { gt: new Date() } } });
+  }
+
+  static async resetPassword(userId: string, hashedPassword: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword, otpCode: null, otpExpiry: null },
+    });
+  }
 }

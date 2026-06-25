@@ -95,4 +95,39 @@ export default class AuthCtrl {
 
     return res.status(200).json(result);
   }
+
+  static async forgotPassword(req: Request, res: Response) {
+    const { email } = req.body;
+
+    const schema = Joi.object({
+      email: Joi.string().email().required(),
+    });
+
+    const { error } = schema.validate({ email });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    await AuthSvc.forgotPassword(email);
+
+    return res.status(200).json({ success: true });
+  }
+
+  static async resetPassword(req: Request, res: Response) {
+    const { token, password } = req.body;
+
+    const schema = Joi.object({
+      token: Joi.string().required(),
+      password: Joi.string().min(8).required(),
+    });
+
+    const { error } = schema.validate({ token, password });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    await AuthSvc.resetPassword(token, password);
+
+    return res.status(200).json({ success: true });
+  }
 }

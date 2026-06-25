@@ -1,5 +1,5 @@
 import { SendMailOptions, createTransport } from "nodemailer";
-import { MAILER_EMAIL, MAILER_PASSWORD, MAILER_TRANSPORT_HOST, MAILER_TRANSPORT_PORT, MAILER_TRANSPORT_SECURE } from "../config";
+import { MAILER_EMAIL, MAILER_PASSWORD, MAILER_TRANSPORT_HOST, MAILER_TRANSPORT_PORT, MAILER_TRANSPORT_SECURE, MAILER_FROM } from "../config";
 
 export async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }): Promise<string> {
   const transporter = createTransport({
@@ -12,10 +12,8 @@ export async function sendEmail({ to, subject, text, html }: { to: string; subje
     },
   });
 
-  console.log(MAILER_EMAIL, MAILER_PASSWORD, MAILER_TRANSPORT_HOST, MAILER_TRANSPORT_PORT);
-
   const mailOptions: SendMailOptions = {
-    from: `Seven 365 <${MAILER_EMAIL}>`,
+    from: `ilovelawyer <${MAILER_FROM}>`,
     to,
     subject,
   };
