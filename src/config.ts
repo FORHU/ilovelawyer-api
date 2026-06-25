@@ -24,3 +24,4 @@ export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
 export const CHAT_WONDER_API_URL = process.env.CHAT_WONDER_API_URL as string;
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
+export const RAG_DATABASE_URL = process.env.RAG_DATABASE_URL as string;
