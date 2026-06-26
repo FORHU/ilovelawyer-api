@@ -13,7 +13,7 @@ export async function sendEmail({ to, subject, text, html }: { to: string; subje
   });
 
   const mailOptions: SendMailOptions = {
-    from: `ilovelawyer <${MAILER_FROM}>`,
+    from: isDev? `[TEST] ilovelawyer <${MAILER_FROM}>`: `ilovelawyer <${MAILER_FROM}>`,
     to,
     subject: isDev ? `[TEST] ${subject}` : subject,
   };

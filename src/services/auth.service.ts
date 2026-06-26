@@ -116,26 +116,24 @@ export default class AuthSvc {
   static async forgotPassword(email: string) {
     const user = await AuthRepo.findByEmail(email);
     const result = { message: "If the email exists, a reset link will be sent" };
-    if (!user) {
-      // To prevent email enumeration, return the same response whether or not the user exists
-      return result;
+
+    if (user) {
+      const token = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+      await AuthRepo.setResetToken(user.id, token, expiresAt);
+
+      const resetLink = `${CLIENT_URL[0]}/reset-password?token=${token}`;
+      const html = await renderTemplate("reset-password", {
+        name: user.name || "User",
+        resetLink,
+      });
+
+      await sendEmail({
+        to: user.email,
+        subject: "Reset your password",
+        html,
+      });
     }
-
-    const token = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
-    await AuthRepo.setResetToken(user.id, token, expiresAt);
-
-    const resetLink = `${CLIENT_URL[0]}/reset-password?token=${token}`;
-    const html = await renderTemplate("reset-password", {
-      name: user.name || "User",
-      resetLink,
-    });
-
-    await sendEmail({
-      to: user.email,
-      subject: "Reset your password",
-      html,
-    });
 
     return result;
   }
