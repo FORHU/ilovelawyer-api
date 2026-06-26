@@ -115,8 +115,10 @@ export default class AuthSvc {
 
   static async forgotPassword(email: string) {
     const user = await AuthRepo.findByEmail(email);
+    const result = { message: "If the email exists, a reset link will be sent" };
     if (!user) {
-      throw new HttpError("If the email exists, a reset link will be sent", 200); // To prevent email enumeration, we return a success message even if the user doesn't exist
+      // To prevent email enumeration, return the same response whether or not the user exists
+      return result;
     }
 
     const token = crypto.randomUUID();
@@ -134,6 +136,8 @@ export default class AuthSvc {
       subject: "Reset your password",
       html,
     });
+
+    return result;
   }
 
   static async resetPassword(token: string, password: string) {

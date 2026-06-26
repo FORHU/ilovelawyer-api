@@ -108,9 +108,9 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    await AuthSvc.forgotPassword(email);
+    const result = await AuthSvc.forgotPassword(email);
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json(result);
   }
 
   static async resetPassword(req: Request, res: Response) {
