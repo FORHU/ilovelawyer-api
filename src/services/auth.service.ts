@@ -6,6 +6,7 @@ import loginToken from "../utils/loginToken";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
+import { renderTemplate } from "../utils/template";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL } from "../config";
 
 export default class AuthSvc {
@@ -115,9 +116,7 @@ export default class AuthSvc {
   static async forgotPassword(email: string) {
     const user = await AuthRepo.findByEmail(email);
     if (!user) {
-      // Always succeed, even if the email isn't registered — prevents
-      // attackers from using this endpoint to probe which emails exist.
-      return;
+      throw new HttpError("If the email exists, a reset link will be sent", 200); // To prevent email enumeration, we return a success message even if the user doesn't exist
     }
 
     const token = crypto.randomUUID();
@@ -125,16 +124,15 @@ export default class AuthSvc {
     await AuthRepo.setResetToken(user.id, token, expiresAt);
 
     const resetLink = `${CLIENT_URL[0]}/reset-password?token=${token}`;
+    const html = await renderTemplate("reset-password", {
+      name: user.name || "User",
+      resetLink,
+    });
+
     await sendEmail({
       to: user.email,
       subject: "Reset your password",
-      html: `
-        <p>Hello ${user.name || "User"},</p>
-        <p>We received a request to reset your password. If you didn't make this request, you can safely ignore this email.</p>
-        <p><a href="${resetLink}">Reset Password</a></p>
-        <p>Or copy and paste this link: ${resetLink}</p>
-        <p>This link will expire in 1 hour.</p>
-      `,
+      html,
     });
   }
 
