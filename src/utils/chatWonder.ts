@@ -1,10 +1,7 @@
 import axios from "axios";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
-import { RELATED_QUERIES_RULE } from "../constants/chatWonder.constants";
-
-const SESSION_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
+import { RELATED_QUERIES_RULE, SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,8 +29,6 @@ function stripSources(chunk: string): string {
   const idx = chunk.indexOf("[Sources]");
   return idx !== -1 ? chunk.slice(0, idx) : chunk;
 }
-
-const LEGAL_TAG = "[legal ai]";
 
 function stripLegalTag(input: string): string {
   const lower = input.toLowerCase();

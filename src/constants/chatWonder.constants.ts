@@ -1,3 +1,7 @@
+export const SESSION_RETRIES = 3;
+export const RETRY_DELAY_MS = 1000;
+export const LEGAL_TAG = "[legal ai]";
+
 export const RELATED_QUERIES_RULE = `
 
 At the end of your response, output this tag:
