@@ -87,12 +87,20 @@ export default class AuthRepo {
   }
 
   static async consumeResetToken(token: string, hashedPassword: string): Promise<string | null> {
-    const rows = await prisma.$queryRaw<{ id: string }[]>`
-      UPDATE "User"
-      SET password = ${hashedPassword}, "otpCode" = NULL, "otpExpiry" = NULL
-      WHERE "otpCode" = ${token} AND "otpExpiry" > NOW()
-      RETURNING id
-    `;
-    return rows[0]?.id ?? null;
+    const user = await prisma.user.findFirst({
+      where: { otpCode: token, otpExpiry: { gt: new Date() } },
+      select: { id: true },
+    });
+    if (!user) return null;
+
+    // The WHERE clause here is re-evaluated atomically by Postgres at update time,
+    // not at the time of the findFirst above — so concurrent requests racing on the
+    // same token still only let one of them actually match and consume it.
+    const result = await prisma.user.updateMany({
+      where: { id: user.id, otpCode: token, otpExpiry: { gt: new Date() } },
+      data: { password: hashedPassword, otpCode: null, otpExpiry: null },
+    });
+
+    return result.count > 0 ? user.id : null;
   }
 }

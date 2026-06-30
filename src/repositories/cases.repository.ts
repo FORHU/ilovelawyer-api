@@ -1,4 +1,5 @@
-import ragPool from "../lib/db-rag";
+import prisma from "../lib/prisma";
+import { Prisma } from "@prisma/client";
 
 interface ListParams {
   page: number;
@@ -9,7 +10,7 @@ interface ListParams {
 }
 
 interface CaseSummaryRow {
-  id: number;
+  id: bigint;
   title: string | null;
   case_no: string | null;
   year: number | null;
@@ -17,11 +18,11 @@ interface CaseSummaryRow {
   subcategory: string | null;
   concise_summary: string | null;
   source_url: string | null;
-  total_count: string;
+  total_count: bigint;
 }
 
 interface CaseDetailRow {
-  id: number;
+  id: bigint;
   title: string | null;
   case_no: string | null;
   year: number | null;
@@ -41,36 +42,26 @@ export default class CasesRepo {
   static async list({ page, limit, category, year, search }: ListParams) {
     const offset = (page - 1) * limit;
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-
-    if (category) {
-      params.push(category);
-      conditions.push(`category ILIKE $${params.length}`);
-    }
-    if (year) {
-      params.push(year);
-      conditions.push(`year = $${params.length}`);
-    }
+    const conditions: Prisma.Sql[] = [];
+    if (category) conditions.push(Prisma.sql`category ILIKE ${category}`);
+    if (year) conditions.push(Prisma.sql`year = ${year}`);
     if (search) {
-      params.push(`%${search}%`);
-      conditions.push(`(title ILIKE $${params.length} OR case_no ILIKE $${params.length})`);
+      const pattern = `%${search}%`;
+      conditions.push(Prisma.sql`(title ILIKE ${pattern} OR case_no ILIKE ${pattern})`);
     }
 
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    params.push(limit, offset);
+    const where = conditions.length > 0 ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
 
-    const { rows } = await ragPool.query<CaseSummaryRow>(
-      `SELECT id, title, case_no, year, category, subcategory, concise_summary, source_url,
-              COUNT(*) OVER() AS total_count
-       FROM documents
-       ${where}
-       ORDER BY year DESC NULLS LAST
-       LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params,
-    );
+    const rows = await prisma.$queryRaw<CaseSummaryRow[]>`
+      SELECT id, title, case_no, year, category, subcategory, concise_summary, source_url,
+             COUNT(*) OVER() AS total_count
+      FROM documents
+      ${where}
+      ORDER BY year DESC NULLS LAST
+      LIMIT ${limit} OFFSET ${offset}
+    `;
 
-    const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0;
+    const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
 
     return {
       total,
@@ -79,14 +70,13 @@ export default class CasesRepo {
   }
 
   static async findById(id: bigint) {
-    const { rows } = await ragPool.query<CaseDetailRow>(
-      `SELECT id, title, case_no, year, category, subcategory, source_url, summary,
-              concise_summary, full_text, formatted_markdown, metadata_json, created_at, updated_at
-       FROM documents
-       WHERE id = $1
-       LIMIT 1`,
-      [id.toString()],
-    );
+    const rows = await prisma.$queryRaw<CaseDetailRow[]>`
+      SELECT id, title, case_no, year, category, subcategory, source_url, summary,
+             concise_summary, full_text, formatted_markdown, metadata_json, created_at, updated_at
+      FROM documents
+      WHERE id = ${id}
+      LIMIT 1
+    `;
 
     const doc = rows[0];
     if (!doc) return null;
