@@ -113,6 +113,23 @@ export default class AuthCtrl {
     return res.status(200).json(result);
   }
 
+  static async validateResetToken(req: Request, res: Response) {
+    const { token } = req.query;
+
+    const schema = Joi.object({
+      token: Joi.string().required(),
+    });
+
+    const { error } = schema.validate({ token });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const valid = await AuthSvc.validateResetToken(token as string);
+
+    return res.status(200).json({ valid });
+  }
+
   static async resetPassword(req: Request, res: Response) {
     const { token, password } = req.body;
 
@@ -126,8 +143,8 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    await AuthSvc.resetPassword(token, password);
+    const result = await AuthSvc.resetPassword(token, password);
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json(result);
   }
 }

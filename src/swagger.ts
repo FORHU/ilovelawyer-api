@@ -292,6 +292,26 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
+    "/auth/reset-password/validate": {
+      get: {
+        tags: ["Auth"],
+        summary: "Check whether a reset token is still valid (read-only, does not consume it)",
+        parameters: [
+          { name: "token", in: "query", required: true, schema: { type: "string" }, description: "Reset token from the email link" },
+        ],
+        responses: {
+          200: {
+            description: "Validity check result",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { valid: { type: "boolean" } } },
+              },
+            },
+          },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
     "/auth/reset-password": {
       post: {
         tags: ["Auth"],
@@ -312,7 +332,10 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          200: { description: "Password reset successfully" },
+          200: {
+            description: "Password reset successfully — all prior sessions are revoked and a fresh token pair is issued",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } },
+          },
           400: { description: "Invalid or expired token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },

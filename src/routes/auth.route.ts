@@ -10,6 +10,7 @@ router.post("/refresh", asyncHandler(AuthCtrl.refresh));
 router.post("/logout", asyncHandler(AuthCtrl.logout));
 router.post("/google", asyncHandler(AuthCtrl.google));
 router.post("/forgot-password", asyncHandler(AuthCtrl.forgotPassword));
+router.get("/reset-password/validate", asyncHandler(AuthCtrl.validateResetToken));
 router.post("/reset-password", asyncHandler(AuthCtrl.resetPassword));
 
 export default router;

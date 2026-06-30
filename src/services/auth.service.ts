@@ -133,13 +133,23 @@ export default class AuthSvc {
     return result;
   }
 
+  static async validateResetToken(token: string): Promise<boolean> {
+    return AuthRepo.isResetTokenValid(token);
+  }
+
   static async resetPassword(token: string, password: string) {
-    const user = await AuthRepo.findByResetToken(token);
-    if (!user) {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = await AuthRepo.consumeResetToken(token, hashedPassword);
+    if (!userId) {
       throw new HttpError("Invalid or expired reset token", 400);
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await AuthRepo.resetPassword(user.id, hashedPassword);
+    await AuthRepo.deleteSessionsByUserId(userId);
+
+    const { accessToken, refreshToken } = loginToken(userId);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    await AuthRepo.createSession(userId, refreshToken, expiresAt);
+
+    return { accessToken, refreshToken };
   }
 }

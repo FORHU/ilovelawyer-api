@@ -46,6 +46,10 @@ export default class AuthRepo {
     return prisma.session.deleteMany({ where: { refreshToken } });
   }
 
+  static async deleteSessionsByUserId(userId: string) {
+    return prisma.session.deleteMany({ where: { userId } });
+  }
+
   static async findByGoogleId(googleId: string) {
     return prisma.user.findUnique({ where: { googleId } });
   }
@@ -74,14 +78,21 @@ export default class AuthRepo {
     return prisma.user.update({ where: { id: userId }, data: { otpCode: token, otpExpiry: expiresAt } });
   }
 
-  static async findByResetToken(token: string) {
-    return prisma.user.findFirst({ where: { otpCode: token, otpExpiry: { gt: new Date() } } });
+  static async isResetTokenValid(token: string): Promise<boolean> {
+    const user = await prisma.user.findFirst({
+      where: { otpCode: token, otpExpiry: { gt: new Date() } },
+      select: { id: true },
+    });
+    return !!user;
   }
 
-  static async resetPassword(userId: string, hashedPassword: string) {
-    return prisma.user.update({
-      where: { id: userId },
-      data: { password: hashedPassword, otpCode: null, otpExpiry: null },
-    });
+  static async consumeResetToken(token: string, hashedPassword: string): Promise<string | null> {
+    const rows = await prisma.$queryRaw<{ id: string }[]>`
+      UPDATE "User"
+      SET password = ${hashedPassword}, "otpCode" = NULL, "otpExpiry" = NULL
+      WHERE "otpCode" = ${token} AND "otpExpiry" > NOW()
+      RETURNING id
+    `;
+    return rows[0]?.id ?? null;
   }
 }
