@@ -38,11 +38,6 @@ export default class AuthSvc {
     await AuthRepo.updateLastLogin(user.id);
 
     return {
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-      },
       accessToken,
       refreshToken,
     };

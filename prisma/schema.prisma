@@ -132,3 +132,7 @@ model ConversationParticipant {
   @@id([conversationId, userId])
 }
 
+// Legal RAG tables (documents, document_chunks, ingestion_runs) live in this same
+// database but are intentionally not modeled here — they're owned by an external
+// ingestion pipeline. Query them via lib/db-rag.ts (raw SQL with pg Pool) using DATABASE_URL.
+

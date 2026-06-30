@@ -9,6 +9,27 @@ export default class AuthRepo {
     return prisma.user.findUnique({ where: { email } });
   }
 
+  static async findById(id: string) {
+    return prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        isEmailVerified: true,
+        onboardingCompleted: true,
+        provider: true,
+        avatarId: true,
+        lastLoginAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
   static async updateLastLogin(userId: string) {
     return prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
   }

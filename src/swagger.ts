@@ -32,6 +32,33 @@ const swaggerSpec: OAS3Definition = {
           email: { type: "string" },
         },
       },
+      UserProfile: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          username: { type: "string" },
+          email: { type: "string" },
+          name: { type: "string", nullable: true },
+          role: { type: "string", enum: ["USER", "ADMIN"] },
+          isActive: { type: "boolean" },
+          isEmailVerified: { type: "boolean" },
+          onboardingCompleted: { type: "boolean" },
+          provider: { type: "string", nullable: true },
+          avatarId: { type: "string", nullable: true },
+          lastLoginAt: { type: "string", format: "date-time", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
+        },
+      },
+      File: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          filename: { type: "string", nullable: true },
+          fileUrl: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
       Conversation: {
         type: "object",
         properties: {
@@ -291,6 +318,23 @@ const swaggerSpec: OAS3Definition = {
       },
     },
 
+    // ── Users ─────────────────────────────────────────────────────────────
+    "/users/me": {
+      get: {
+        tags: ["Users"],
+        summary: "Get the current authenticated user's profile",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Current user profile",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "User not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
     // ── Chat ──────────────────────────────────────────────────────────────
     "/chat/session": {
       get: {
@@ -457,6 +501,37 @@ const swaggerSpec: OAS3Definition = {
           400: { description: "Invalid ID", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Files ─────────────────────────────────────────────────────────────
+    "/files/upload": {
+      post: {
+        tags: ["Files"],
+        summary: "Upload a file to S3 and record it",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                required: ["file"],
+                properties: {
+                  file: { type: "string", format: "binary" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: {
+            description: "File uploaded",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/File" } } },
+          },
+          400: { description: "No file provided", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
