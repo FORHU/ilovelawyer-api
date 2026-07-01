@@ -9,7 +9,7 @@ interface ListParams {
   search?: string;
 }
 
-interface CaseSummaryRow {
+interface LegalRagSummaryRow {
   id: bigint;
   title: string | null;
   case_no: string | null;
@@ -21,7 +21,7 @@ interface CaseSummaryRow {
   total_count: bigint;
 }
 
-interface CaseDetailRow {
+interface LegalRagDetailRow {
   id: bigint;
   title: string | null;
   case_no: string | null;
@@ -38,7 +38,7 @@ interface CaseDetailRow {
   updated_at: Date;
 }
 
-export default class CasesRepo {
+export default class LegalRagRepo {
   static async list({ page, limit, category, year, search }: ListParams) {
     const offset = (page - 1) * limit;
 
@@ -52,7 +52,7 @@ export default class CasesRepo {
 
     const where = conditions.length > 0 ? Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}` : Prisma.empty;
 
-    const rows = await prisma.$queryRaw<CaseSummaryRow[]>`
+    const rows = await prisma.$queryRaw<LegalRagSummaryRow[]>`
       SELECT id, title, case_no, year, category, subcategory, concise_summary, source_url,
              COUNT(*) OVER() AS total_count
       FROM documents
@@ -70,7 +70,7 @@ export default class CasesRepo {
   }
 
   static async findById(id: bigint) {
-    const rows = await prisma.$queryRaw<CaseDetailRow[]>`
+    const rows = await prisma.$queryRaw<LegalRagDetailRow[]>`
       SELECT id, title, case_no, year, category, subcategory, source_url, summary,
              concise_summary, full_text, formatted_markdown, metadata_json, created_at, updated_at
       FROM documents

@@ -36,6 +36,7 @@ model User {
   messages                 Message[]
   createdInvites           ConversationInvite[]
   conversationParticipants ConversationParticipant[]
+  cases                    Case[]
 }
 
 model Session {
@@ -132,7 +133,24 @@ model ConversationParticipant {
   @@id([conversationId, userId])
 }
 
+// ── Case Management ────────────────────────────────────────────────────────────
+
+model Case {
+  id            String   @id @default(uuid())
+  userId        String
+  caseName      String
+  partyInvolved String?
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
 // Legal RAG tables (documents, document_chunks, ingestion_runs) live in this same
 // database but are intentionally not modeled here — they're owned by an external
-// ingestion pipeline. Query them via lib/db-rag.ts (raw SQL with pg Pool) using DATABASE_URL.
+// ingestion pipeline. Query them via prisma.$queryRaw (see src/repositories/cases.repository.ts)
+// using DATABASE_URL.
 

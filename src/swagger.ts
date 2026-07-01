@@ -78,7 +78,7 @@ const swaggerSpec: OAS3Definition = {
           createdAt: { type: "string", format: "date-time" },
         },
       },
-      CaseSummary: {
+      LegalRagSummary: {
         type: "object",
         properties: {
           id: { type: "string" },
@@ -91,7 +91,7 @@ const swaggerSpec: OAS3Definition = {
           source_url: { type: "string", nullable: true },
         },
       },
-      CaseDetail: {
+      LegalRagDetail: {
         type: "object",
         properties: {
           id: { type: "string" },
@@ -108,6 +108,18 @@ const swaggerSpec: OAS3Definition = {
           metadata_json: { type: "object", nullable: true },
           created_at: { type: "string", format: "date-time", nullable: true },
           updated_at: { type: "string", format: "date-time", nullable: true },
+        },
+      },
+      UserCase: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          userId: { type: "string" },
+          caseName: { type: "string" },
+          partyInvolved: { type: "string", nullable: true },
+          notes: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
         },
       },
       Error: {
@@ -470,11 +482,11 @@ const swaggerSpec: OAS3Definition = {
       },
     },
 
-    // ── Cases ─────────────────────────────────────────────────────────────
-    "/cases": {
+    // ── Legal RAG ─────────────────────────────────────────────────────────
+    "/legal-rag": {
       get: {
-        tags: ["Cases"],
-        summary: "List cases (paginated, filterable, searchable)",
+        tags: ["Legal RAG"],
+        summary: "List case-law documents (paginated, filterable, searchable)",
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
@@ -485,14 +497,14 @@ const swaggerSpec: OAS3Definition = {
         ],
         responses: {
           200: {
-            description: "Paginated list of cases",
+            description: "Paginated list of case-law documents",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   properties: {
                     total: { type: "integer" },
-                    data: { type: "array", items: { $ref: "#/components/schemas/CaseSummary" } },
+                    data: { type: "array", items: { $ref: "#/components/schemas/LegalRagSummary" } },
                   },
                 },
               },
@@ -502,10 +514,10 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
-    "/cases/{id}": {
+    "/legal-rag/{id}": {
       get: {
-        tags: ["Cases"],
-        summary: "Get full case detail by ID",
+        tags: ["Legal RAG"],
+        summary: "Get full case-law document detail by ID",
         security: [{ bearerAuth: [] }],
         parameters: [
           {
@@ -513,17 +525,17 @@ const swaggerSpec: OAS3Definition = {
             in: "path",
             required: true,
             schema: { type: "integer" },
-            description: "Case document ID",
+            description: "Case-law document ID",
           },
         ],
         responses: {
           200: {
-            description: "Case detail",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/CaseDetail" } } },
+            description: "Case-law document detail",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/LegalRagDetail" } } },
           },
           400: { description: "Invalid ID", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Case-law document not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -555,6 +567,122 @@ const swaggerSpec: OAS3Definition = {
           },
           400: { description: "No file provided", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── My Cases (case management) ──────────────────────────────────────────
+    "/my-cases": {
+      post: {
+        tags: ["My Cases"],
+        summary: "Create a new case",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["caseName"],
+                properties: {
+                  caseName: { type: "string", example: "Smith vs. Jones — Custody Dispute" },
+                  partyInvolved: { type: "string" },
+                  notes: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: {
+            description: "Case created",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } },
+          },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      get: {
+        tags: ["My Cases"],
+        summary: "List the current user's cases (paginated)",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "page", in: "query", schema: { type: "integer", default: 1 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 20, maximum: 100 } },
+        ],
+        responses: {
+          200: {
+            description: "Paginated list of cases",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    total: { type: "integer" },
+                    data: { type: "array", items: { $ref: "#/components/schemas/UserCase" } },
+                  },
+                },
+              },
+            },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/my-cases/{id}": {
+      get: {
+        tags: ["My Cases"],
+        summary: "Get a case by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Case detail",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      patch: {
+        tags: ["My Cases"],
+        summary: "Update a case",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  caseName: { type: "string" },
+                  partyInvolved: { type: "string" },
+                  notes: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Case updated",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } },
+          },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["My Cases"],
+        summary: "Delete a case",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Case deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },

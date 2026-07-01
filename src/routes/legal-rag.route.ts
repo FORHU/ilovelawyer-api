@@ -1,13 +1,13 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
-import CasesCtrl from "../controllers/cases.controller";
+import LegalRagCtrl from "../controllers/legal-rag.controller";
 
 const router = express.Router();
 
 router.use(validSession);
 
-router.get("/", asyncHandler(CasesCtrl.list));
-router.get("/:id", asyncHandler(CasesCtrl.getById));
+router.get("/", asyncHandler(LegalRagCtrl.list));
+router.get("/:id", asyncHandler(LegalRagCtrl.getById));
 
 export default router;

@@ -8,7 +8,7 @@
     "lint": "eslint src/**/*.ts --fix",
     "test": "NODE_ENV=development mocha --require ts-node/register 'test/**/*.spec.ts'",
     "build": "tsc && copyfiles -u 1 \"src/templates/**/*.mjml\" dist",
-    "start": "node ./dist/src/server.js",
+    "start": "node ./dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },
