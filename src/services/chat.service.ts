@@ -7,6 +7,26 @@ export default class ChatSvc {
     return ChatRepo.createConversation(userId, title);
   }
 
+  static async listConversations(userId: string) {
+    return ChatRepo.listConversations(userId);
+  }
+
+  static async renameConversation(userId: string, conversationId: string, title: string) {
+    const conversation = await ChatRepo.findConversationById(conversationId);
+    if (!conversation || conversation.userId !== userId) {
+      throw new HttpError("Conversation not found", 404);
+    }
+    return ChatRepo.updateConversation(conversationId, title);
+  }
+
+  static async deleteConversation(userId: string, conversationId: string) {
+    const conversation = await ChatRepo.findConversationById(conversationId);
+    if (!conversation || conversation.userId !== userId) {
+      throw new HttpError("Conversation not found", 404);
+    }
+    return ChatRepo.deleteConversation(conversationId);
+  }
+
   static async listMessages(userId: string, conversationId: string) {
     const conversation = await ChatRepo.findConversationById(conversationId);
     if (!conversation || conversation.userId !== userId) {
@@ -14,6 +34,18 @@ export default class ChatSvc {
     }
 
     return ChatRepo.listMessagesByConversation(conversationId);
+  }
+
+  static async deleteMessage(userId: string, conversationId: string, messageId: string) {
+    const conversation = await ChatRepo.findConversationById(conversationId);
+    if (!conversation || conversation.userId !== userId) {
+      throw new HttpError("Conversation not found", 404);
+    }
+    const message = await ChatRepo.findMessageById(messageId);
+    if (!message || message.conversationId !== conversationId) {
+      throw new HttpError("Message not found", 404);
+    }
+    return ChatRepo.deleteMessage(messageId);
   }
 
   static async sendMessage(

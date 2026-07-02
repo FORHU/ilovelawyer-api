@@ -10,29 +10,43 @@ export default class ChatCtrl {
     return res.status(200).json({ session_id: sessionId });
   }
 
+  static async listConversations(req: Request, res: Response) {
+    const conversations = await ChatSvc.listConversations(req.user.userId);
+    return res.status(200).json(conversations);
+  }
+
   static async createConversation(req: Request, res: Response) {
-    const { title } = req.body;
+    const schema = Joi.object({ title: Joi.string().optional() });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
 
-    const schema = Joi.object({
-      title: Joi.string().optional(),
-    });
-
-    const { error } = schema.validate({ title });
-    if (error) {
-      throw new HttpError(error.message, 400);
-    }
-
-    const conversation = await ChatSvc.createConversation(req.user.userId, title);
-
+    const conversation = await ChatSvc.createConversation(req.user.userId, value.title);
     return res.status(201).json(conversation);
+  }
+
+  static async renameConversation(req: Request, res: Response) {
+    const schema = Joi.object({ title: Joi.string().required() });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const conversation = await ChatSvc.renameConversation(req.user.userId, req.params.conversationId, value.title);
+    return res.status(200).json(conversation);
+  }
+
+  static async deleteConversation(req: Request, res: Response) {
+    await ChatSvc.deleteConversation(req.user.userId, req.params.conversationId);
+    return res.status(204).send();
   }
 
   static async listMessages(req: Request, res: Response) {
     const { conversationId } = req.params;
-
     const messages = await ChatSvc.listMessages(req.user.userId, conversationId);
-
     return res.status(200).json(messages);
+  }
+
+  static async deleteMessage(req: Request, res: Response) {
+    await ChatSvc.deleteMessage(req.user.userId, req.params.conversationId, req.params.messageId);
+    return res.status(204).send();
   }
 
   static async sendMessage(req: Request, res: Response) {

@@ -8,6 +8,7 @@ import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL } from "../config";
+import { BCRYPT_SALT_ROUNDS, OTP_EXPIRY_MS } from "../constants/auth.constants";
 
 export default class AuthSvc {
   static async signup(username: string, email: string, password: string) {
@@ -16,7 +17,7 @@ export default class AuthSvc {
       throw new HttpError("Email already in use", 409);
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
     return AuthRepo.createUser(username, email, hashedPassword);
   }
 
@@ -114,7 +115,7 @@ export default class AuthSvc {
 
     if (user) {
       const token = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
       await AuthRepo.setResetToken(user.id, token, expiresAt);
 
       const resetLink = `${CLIENT_URL[0]}/reset-password?token=${token}`;
@@ -138,7 +139,7 @@ export default class AuthSvc {
   }
 
   static async resetPassword(token: string, password: string) {
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
     const userId = await AuthRepo.consumeResetToken(token, hashedPassword);
     if (!userId) {
       throw new HttpError("Invalid or expired reset token", 400);

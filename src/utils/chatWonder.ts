@@ -7,6 +7,14 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export async function callChatWonderRest(prompt: string, sessionId: string): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
+  const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, {
+    user_input: prompt,
+    session_id: sessionId,
+  });
+  return data;
+}
+
 export async function getChatWonderSessionId(): Promise<string> {
   for (let attempt = 1; attempt <= SESSION_RETRIES; attempt++) {
     try {

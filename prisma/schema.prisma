@@ -37,6 +37,8 @@ model User {
   createdInvites           ConversationInvite[]
   conversationParticipants ConversationParticipant[]
   cases                    Case[]
+  documents                UserDocument[]
+  bookmarks                Bookmark[]
 }
 
 model Session {
@@ -144,13 +146,73 @@ model Case {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents UserDocument[]
 
   @@index([userId])
 }
 
+// ── User Documents ────────────────────────────────────────────────────────────
+
+model UserDocument {
+  id        String   @id @default(uuid())
+  userId    String
+  caseId    String?
+  name      String
+  fileUrl   String?
+  s3Key     String?
+  aiSummary String?  @db.Text
+  createdAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case Case? @relation(fields: [caseId], references: [id])
+
+  @@index([userId])
+}
+
+// ── Legal Source Analysis Cache ───────────────────────────────────────────────
+
+model LegalSourceAnalysisCache {
+  id                String   @id @default(uuid())
+  rawKeyword        String
+  normalizedKeyword String   @unique
+  title             String
+  markdownContent   String   @db.Text
+  rawResponse       String   @db.Text
+  sourceUrl         String?
+  metadataJson      Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// ── Bookmarks ─────────────────────────────────────────────────────────────────
+
+model Bookmark {
+  id        String       @id @default(uuid())
+  userId    String
+  itemId    String
+  title     String
+  reference String?
+  type      BookmarkType
+  url       String?
+  aiSummary String?      @db.Text
+  doctrine  String?      @db.Text
+  facts     String?      @db.Text
+  createdAt DateTime     @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId])
+  @@index([userId])
+}
+
+enum BookmarkType {
+  case
+  source
+}
+
 // Legal RAG tables (documents, document_chunks, ingestion_runs) live in this same
 // database but are intentionally not modeled here — they're owned by an external
-// ingestion pipeline. Query them via prisma.$queryRaw (see src/repositories/cases.repository.ts)
+// ingestion pipeline. Query them via prisma.$queryRaw (see src/repositories/legal-rag.repository.ts)
 // using DATABASE_URL.
 
