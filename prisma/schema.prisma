@@ -39,6 +39,7 @@ model User {
   cases                    Case[]
   documents                UserDocument[]
   bookmarks                Bookmark[]
+  transcriptions           Transcription[]
 }
 
 model Session {
@@ -56,11 +57,13 @@ model File {
   id        String    @id @default(uuid())
   filename  String?
   fileUrl   String?
+  s3Key     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
   metaData  Json?
-  users     User[]
+  users          User[]
+  transcriptions Transcription[]
 }
 
 enum Role {
@@ -209,6 +212,26 @@ model Bookmark {
 enum BookmarkType {
   case
   source
+}
+
+// ── Transcription ─────────────────────────────────────────────────────────────
+
+model Transcription {
+  id           String   @id @default(uuid())
+  userId       String
+  audioFileId  String?
+  title        String?
+  transcript   String?  @db.Text
+  duration     Float?
+  jobName      String?
+  status       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  audioFile File? @relation(fields: [audioFileId], references: [id])
+
+  @@index([userId])
 }
 
 // Legal RAG tables (documents, document_chunks, ingestion_runs) live in this same

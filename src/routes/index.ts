@@ -8,6 +8,7 @@ import caseRoute from "./case.route";
 import bookmarkRoute from "./bookmark.route";
 import userDocumentRoute from "./user-document.route";
 import legalSourceCacheRoute from "./legal-source-cache.route";
+import transcriptionRoute from "./transcription.route";
 
 const router = express.Router();
 
@@ -26,5 +27,6 @@ router.use("/my-cases", caseRoute);
 router.use("/bookmarks", bookmarkRoute);
 router.use("/documents", userDocumentRoute);
 router.use("/legal-source-analysis", legalSourceCacheRoute);
+router.use("/transcriptions", transcriptionRoute);
 
 export default router;
