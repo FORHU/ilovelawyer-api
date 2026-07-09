@@ -38,7 +38,27 @@ interface LegalRagDetailRow {
   updated_at: Date;
 }
 
+interface VectorSearchRow {
+  chunk_text: string;
+  document_id: bigint;
+  title: string | null;
+  category: string;
+}
+
 export default class LegalRagRepo {
+  static async searchByVector(embedding: number[], limit = 5): Promise<VectorSearchRow[]> {
+    const vector = `[${embedding.join(",")}]`;
+    return prisma.$queryRawUnsafe<VectorSearchRow[]>(
+      `SELECT dc.chunk_text, dc.document_id, d.title, d.category
+       FROM document_chunks dc
+       JOIN documents d ON dc.document_id = d.id
+       ORDER BY dc.embedding <=> $1::vector
+       LIMIT $2`,
+      vector,
+      limit,
+    );
+  }
+
   static async list({ page, limit, category, year, search }: ListParams) {
     const offset = (page - 1) * limit;
 
@@ -82,5 +102,37 @@ export default class LegalRagRepo {
     if (!doc) return null;
 
     return { ...doc, id: doc.id.toString() };
+  }
+
+  static async findByIdForSourcePage(id: bigint) {
+    const rows = await prisma.$queryRaw<LegalRagDetailRow[]>`
+      SELECT id, title, case_no, year, category, subcategory, source_url, summary,
+             concise_summary, full_text, formatted_markdown, metadata_json
+      FROM documents
+      WHERE id = ${id}
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  }
+
+  static async findByTitleOrCaseNo(titleHint: string) {
+    const loose = `%${titleHint}%`;
+    const rows = await prisma.$queryRaw<LegalRagDetailRow[]>`
+      SELECT id, title, case_no, year, category, subcategory, source_url, summary,
+             concise_summary, full_text, formatted_markdown, metadata_json
+      FROM documents
+      WHERE title ILIKE ${loose} OR case_no ILIKE ${loose}
+      ORDER BY
+        CASE
+          WHEN lower(title) = lower(${titleHint}) THEN 0
+          WHEN title ILIKE ${loose} THEN 1
+          WHEN case_no ILIKE ${loose} THEN 2
+          ELSE 3
+        END,
+        year DESC NULLS LAST,
+        id DESC
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
   }
 }

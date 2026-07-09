@@ -48,6 +48,50 @@ function withLegalTag(input: string): string {
   return `${LEGAL_TAG} ${stripLegalTag(input)}`;
 }
 
+export async function generateTitleViaWs(prompt: string): Promise<string> {
+  const sessionId = await getChatWonderSessionId();
+
+  return new Promise((resolve) => {
+    const ws = new WebSocket(CHAT_WONDER_WS_URL);
+    let accumulated = "";
+    let settled = false;
+
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch { /* ignore */ }
+      resolve(value);
+    };
+
+    const timeout = setTimeout(() => finish(""), 30_000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        type: "chat",
+        user_input: prompt,
+        session_id: sessionId,
+        use_full_legal_chain: false,
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      if (settled) return;
+      const msg = typeof event.data === "string" ? event.data : String(event.data);
+      if (msg === "__END__" || msg.endsWith("__END__")) {
+        const content = msg.endsWith("__END__") ? msg.slice(0, -"__END__".length) : "";
+        if (content) accumulated += content;
+        clearTimeout(timeout);
+        finish(accumulated.trim());
+        return;
+      }
+      accumulated += msg;
+    };
+
+    ws.onerror = () => { clearTimeout(timeout); finish(""); };
+    ws.onclose  = () => { clearTimeout(timeout); finish(accumulated.trim()); };
+  });
+}
+
 export function streamChatWonderMessage(
   sessionId: string,
   userInput: string,

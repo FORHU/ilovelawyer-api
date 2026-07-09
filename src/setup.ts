@@ -1,5 +1,3 @@
-import RedisUtil from "./utils/redis.util";
-
 export default async () => {
-  await RedisUtil.initialize();
+  // Redis is initialized lazily via src/lib/redis.ts on first use
 };

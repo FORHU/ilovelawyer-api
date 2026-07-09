@@ -40,6 +40,8 @@ model User {
   documents                UserDocument[]
   bookmarks                Bookmark[]
   transcriptions           Transcription[]
+  calendarWatchChannels    CalendarWatchChannel[]
+  events                   Event[]
 }
 
 model Session {
@@ -212,6 +214,45 @@ model Bookmark {
 enum BookmarkType {
   case
   source
+}
+
+// ── Calendar ──────────────────────────────────────────────────────────────────
+
+model CalendarWatchChannel {
+  id         String   @id @default(uuid())
+  channelId  String   @unique
+  resourceId String
+  userId     String
+  expiration BigInt
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Event {
+  id                      String    @id @default(uuid())
+  userId                  String
+  title                   String
+  type                    String    @default("Meeting")
+  dateTime                DateTime  @map("date_time")
+  clientEmail             String?   @map("client_email")
+  notes                   String?   @db.Text
+  status                  String    @default("pending")
+  googleLink              String?   @map("google_link")
+  googleEventId           String?   @map("google_event_id")
+  lastReminderSentAt      DateTime? @map("last_reminder_sent_at")
+  reminderDayBeforeSentAt DateTime? @map("reminder_day_before_sent_at")
+  reminderDayOfSentAt     DateTime? @map("reminder_day_of_sent_at")
+  lawyerAcknowledgedAt    DateTime? @map("lawyer_acknowledged_at")
+  clientFeedback          String?   @map("client_feedback") @db.Text
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([googleEventId, userId], map: "events_google_event_id_user_id_key")
+  @@index([userId])
+  @@map("events")
 }
 
 // ── Transcription ─────────────────────────────────────────────────────────────

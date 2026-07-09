@@ -9,6 +9,9 @@ import bookmarkRoute from "./bookmark.route";
 import userDocumentRoute from "./user-document.route";
 import legalSourceCacheRoute from "./legal-source-cache.route";
 import transcriptionRoute from "./transcription.route";
+import eventRoute from "./event.route";
+import calendarRoute from "./calendar.route";
+import legalRoute from "./legal.route";
 
 const router = express.Router();
 
@@ -28,5 +31,8 @@ router.use("/bookmarks", bookmarkRoute);
 router.use("/documents", userDocumentRoute);
 router.use("/legal-source-analysis", legalSourceCacheRoute);
 router.use("/transcriptions", transcriptionRoute);
+router.use("/events", eventRoute);
+router.use("/calendar", calendarRoute);
+router.use("/legal", legalRoute);
 
 export default router;

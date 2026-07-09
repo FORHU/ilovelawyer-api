@@ -31,4 +31,11 @@ export default class LegalRagCtrl {
     const doc = await LegalRagSvc.getById(id);
     return res.status(200).json(doc);
   }
+
+  static async getSourcePageDoc(req: Request, res: Response) {
+    const { itemId } = req.params;
+    const titleHint = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
+    const doc = await LegalRagSvc.getSourcePageDoc(itemId, titleHint);
+    return res.status(200).json(doc);
+  }
 }
