@@ -1,6 +1,7 @@
 import LegalRagRepo from "../repositories/legal-rag.repository";
 import HttpError from "../utils/http-error";
 import { redis } from "../lib/redis";
+import { embedText } from "../utils/embedding";
 
 const CACHE_TTL_S  = 60 * 60;
 const CACHE_TTL_MS = CACHE_TTL_S * 1000;
@@ -80,5 +81,25 @@ export default class LegalRagSvc {
     redis.set(cacheKey, result, CACHE_TTL_S);
 
     return result;
+  }
+
+  static async search(query: string, limit: number) {
+    const cacheKey = `legal:search:${Buffer.from(query.toLowerCase()).toString("base64")}:${limit}`;
+
+    const cached = await redis.get<unknown>(cacheKey);
+    if (cached) return cached;
+
+    const embedding = await embedText(query);
+    const rows = await LegalRagRepo.searchByVector(embedding, limit);
+
+    const results = rows.map((r) => ({
+      document_id: r.document_id.toString(),
+      title: r.title,
+      category: r.category,
+      chunk_text: r.chunk_text,
+    }));
+
+    redis.set(cacheKey, results, CACHE_TTL_S);
+    return results;
   }
 }

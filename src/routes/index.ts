@@ -12,6 +12,9 @@ import transcriptionRoute from "./transcription.route";
 import eventRoute from "./event.route";
 import calendarRoute from "./calendar.route";
 import legalRoute from "./legal.route";
+import sendEmailRoute from "./send-email.route";
+import rsvpRoute from "./rsvp.route";
+import ttsRoute from "./tts.route";
 
 const router = express.Router();
 
@@ -34,5 +37,8 @@ router.use("/transcriptions", transcriptionRoute);
 router.use("/events", eventRoute);
 router.use("/calendar", calendarRoute);
 router.use("/legal", legalRoute);
+router.use("/send-email", sendEmailRoute);
+router.use("/rsvp", rsvpRoute);
+router.use("/tts", ttsRoute);
 
 export default router;

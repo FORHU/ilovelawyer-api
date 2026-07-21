@@ -8,5 +8,6 @@ const router = express.Router();
 router.use(validSession);
 
 router.get("/case/:itemId", asyncHandler(LegalRagCtrl.getSourcePageDoc));
+router.get("/search", asyncHandler(LegalRagCtrl.search));
 
 export default router;

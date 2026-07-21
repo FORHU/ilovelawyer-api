@@ -34,6 +34,32 @@ export default class AuthRepo {
     return prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
   }
 
+  static async findByUsername(username: string) {
+    return prisma.user.findUnique({ where: { username } });
+  }
+
+  static async updateProfile(userId: string, data: { name?: string; username?: string }) {
+    return prisma.user.update({
+      where: { id: userId },
+      data,
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        isEmailVerified: true,
+        onboardingCompleted: true,
+        provider: true,
+        avatarId: true,
+        lastLoginAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
   static async findByRefreshToken(refreshToken: string) {
     return prisma.session.findUnique({ where: { refreshToken } });
   }

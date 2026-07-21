@@ -116,17 +116,11 @@ export default class ChatSvc {
   private static async retrieveContext(userInput: string): Promise<string> {
     const cacheKey = contextCacheKey(userInput);
     const cached = await redis.get<string>(cacheKey);
-    if (cached) {
-      console.log("[RAG] context cache hit");
-      return cached;
-    }
+    if (cached) return cached;
 
     try {
-      console.log("[RAG] embedding query...");
       const embedding = await embedText(userInput);
-      console.log("[RAG] vector search...");
       const chunks = await LegalRagRepo.searchByVector(embedding, VECTOR_TOP_K);
-      console.log(`[RAG] retrieved ${chunks.length} chunks:`, chunks.map(c => c.title ?? c.category));
       if (!chunks.length) return "";
 
       const context = chunks

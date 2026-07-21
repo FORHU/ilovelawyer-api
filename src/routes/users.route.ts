@@ -8,5 +8,6 @@ const router = express.Router();
 router.use(validSession);
 
 router.get("/me", asyncHandler(UsersCtrl.me));
+router.patch("/me", asyncHandler(UsersCtrl.updateMe));
 
 export default router;

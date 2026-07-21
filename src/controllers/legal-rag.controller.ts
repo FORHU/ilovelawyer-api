@@ -38,4 +38,17 @@ export default class LegalRagCtrl {
     const doc = await LegalRagSvc.getSourcePageDoc(itemId, titleHint);
     return res.status(200).json(doc);
   }
+
+  static async search(req: Request, res: Response) {
+    const schema = Joi.object({
+      q: Joi.string().min(2).required(),
+      limit: Joi.number().integer().min(1).max(20).default(5),
+    });
+
+    const { error, value } = schema.validate(req.query, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const results = await LegalRagSvc.search(value.q, value.limit);
+    return res.status(200).json(results);
+  }
 }

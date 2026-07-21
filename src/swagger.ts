@@ -78,6 +78,32 @@ const swaggerSpec: OAS3Definition = {
           createdAt: { type: "string", format: "date-time" },
         },
       },
+      ConversationInvite: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          conversationId: { type: "string" },
+          createdBy: { type: "string" },
+          expiresAt: { type: "string", format: "date-time" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      ConversationParticipant: {
+        type: "object",
+        properties: {
+          userId: { type: "string" },
+          conversationId: { type: "string" },
+          joinedAt: { type: "string", format: "date-time" },
+          user: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              username: { type: "string" },
+              email: { type: "string" },
+            },
+          },
+        },
+      },
       LegalRagSummary: {
         type: "object",
         properties: {
@@ -110,6 +136,30 @@ const swaggerSpec: OAS3Definition = {
           updated_at: { type: "string", format: "date-time", nullable: true },
         },
       },
+      LegalSourceDoc: {
+        type: "object",
+        properties: {
+          item_id: { type: "string" },
+          type: { type: "string" },
+          title: { type: "string" },
+          url: { type: "string", nullable: true },
+          text_content: { type: "string" },
+          formatted_markdown: { type: "string", nullable: true },
+          gr_number: { type: "string" },
+          law_number: { type: "string" },
+          date: { type: "string" },
+          year: { type: "string" },
+        },
+      },
+      VectorSearchResult: {
+        type: "object",
+        properties: {
+          document_id: { type: "string" },
+          title: { type: "string" },
+          category: { type: "string" },
+          chunk_text: { type: "string" },
+        },
+      },
       UserCase: {
         type: "object",
         properties: {
@@ -118,6 +168,69 @@ const swaggerSpec: OAS3Definition = {
           caseName: { type: "string" },
           partyInvolved: { type: "string", nullable: true },
           notes: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
+        },
+      },
+      Bookmark: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          userId: { type: "string" },
+          itemId: { type: "string" },
+          title: { type: "string" },
+          type: { type: "string", enum: ["case", "source"] },
+          reference: { type: "string", nullable: true },
+          url: { type: "string", nullable: true },
+          aiSummary: { type: "string", nullable: true },
+          doctrine: { type: "string", nullable: true },
+          facts: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      UserDocument: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          userId: { type: "string" },
+          caseId: { type: "string", nullable: true },
+          name: { type: "string", nullable: true },
+          fileUrl: { type: "string", nullable: true },
+          aiSummary: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
+        },
+      },
+      Transcription: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          userId: { type: "string" },
+          title: { type: "string", nullable: true },
+          audioFileId: { type: "string", nullable: true },
+          transcript: { type: "string", nullable: true },
+          duration: { type: "number", nullable: true },
+          jobId: { type: "string", nullable: true },
+          jobStatus: { type: "string", nullable: true },
+          createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" },
+        },
+      },
+      Event: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          userId: { type: "string" },
+          googleEventId: { type: "string", nullable: true },
+          title: { type: "string" },
+          description: { type: "string", nullable: true },
+          start: { type: "string", format: "date-time", nullable: true },
+          end: { type: "string", format: "date-time", nullable: true },
+          status: { type: "string", nullable: true },
+          clientFeedback: { type: "string", nullable: true },
+          htmlLink: { type: "string", nullable: true },
+          iCalUID: { type: "string", nullable: true },
+          attendees: { type: "array", items: { type: "object" }, nullable: true },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
         },
@@ -164,10 +277,7 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          201: {
-            description: "User created",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } },
-          },
+          201: { description: "User created", content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           409: { description: "Email already in use", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -186,17 +296,14 @@ const swaggerSpec: OAS3Definition = {
                 required: ["email", "password"],
                 properties: {
                   email: { type: "string", format: "email", example: "juan@example.com" },
-                  password: { type: "string", minLength: 8, example: "password123" },
+                  password: { type: "string", example: "password123" },
                 },
               },
             },
           },
         },
         responses: {
-          200: {
-            description: "Login successful",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } },
-          },
+          200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Invalid credentials", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -213,18 +320,13 @@ const swaggerSpec: OAS3Definition = {
               schema: {
                 type: "object",
                 required: ["refreshToken"],
-                properties: {
-                  refreshToken: { type: "string" },
-                },
+                properties: { refreshToken: { type: "string" } },
               },
             },
           },
         },
         responses: {
-          200: {
-            description: "New tokens issued",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } },
-          },
+          200: { description: "New tokens issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
           401: { description: "Invalid or expired refresh token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -232,7 +334,7 @@ const swaggerSpec: OAS3Definition = {
     "/auth/logout": {
       post: {
         tags: ["Auth"],
-        summary: "Logout (revoke current session)",
+        summary: "Logout — revoke current session",
         requestBody: {
           required: true,
           content: {
@@ -240,9 +342,7 @@ const swaggerSpec: OAS3Definition = {
               schema: {
                 type: "object",
                 required: ["refreshToken"],
-                properties: {
-                  refreshToken: { type: "string" },
-                },
+                properties: { refreshToken: { type: "string" } },
               },
             },
           },
@@ -256,7 +356,7 @@ const swaggerSpec: OAS3Definition = {
     "/auth/google": {
       post: {
         tags: ["Auth"],
-        summary: "Login with Google OAuth",
+        summary: "Login or register with Google OAuth",
         requestBody: {
           required: true,
           content: {
@@ -264,18 +364,13 @@ const swaggerSpec: OAS3Definition = {
               schema: {
                 type: "object",
                 required: ["idToken"],
-                properties: {
-                  idToken: { type: "string", description: "Google OAuth ID token" },
-                },
+                properties: { idToken: { type: "string", description: "Google OAuth ID token" } },
               },
             },
           },
         },
         responses: {
-          200: {
-            description: "Login successful",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } },
-          },
+          200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
           401: { description: "Invalid Google token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -291,15 +386,13 @@ const swaggerSpec: OAS3Definition = {
               schema: {
                 type: "object",
                 required: ["email"],
-                properties: {
-                  email: { type: "string", format: "email", example: "juan@example.com" },
-                },
+                properties: { email: { type: "string", format: "email" } },
               },
             },
           },
         },
         responses: {
-          200: { description: "Reset email sent (or silently skipped if email not found)" },
+          200: { description: "Reset email sent (silently skipped if email not found)" },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -307,18 +400,14 @@ const swaggerSpec: OAS3Definition = {
     "/auth/reset-password/validate": {
       get: {
         tags: ["Auth"],
-        summary: "Check whether a reset token is still valid (read-only, does not consume it)",
+        summary: "Check if a reset token is still valid (read-only)",
         parameters: [
-          { name: "token", in: "query", required: true, schema: { type: "string" }, description: "Reset token from the email link" },
+          { name: "token", in: "query", required: true, schema: { type: "string" } },
         ],
         responses: {
           200: {
             description: "Validity check result",
-            content: {
-              "application/json": {
-                schema: { type: "object", properties: { valid: { type: "boolean" } } },
-              },
-            },
+            content: { "application/json": { schema: { type: "object", properties: { valid: { type: "boolean" } } } } },
           },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -327,7 +416,7 @@ const swaggerSpec: OAS3Definition = {
     "/auth/reset-password": {
       post: {
         tags: ["Auth"],
-        summary: "Complete password reset",
+        summary: "Complete password reset — all prior sessions are revoked",
         requestBody: {
           required: true,
           content: {
@@ -336,18 +425,15 @@ const swaggerSpec: OAS3Definition = {
                 type: "object",
                 required: ["token", "password"],
                 properties: {
-                  token: { type: "string", description: "Reset token from the email link" },
-                  password: { type: "string", minLength: 8, example: "newpassword123" },
+                  token: { type: "string" },
+                  password: { type: "string", minLength: 8 },
                 },
               },
             },
           },
         },
         responses: {
-          200: {
-            description: "Password reset successfully — all prior sessions are revoked and a fresh token pair is issued",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } },
-          },
+          200: { description: "Password reset, new tokens issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
           400: { description: "Invalid or expired token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -360,12 +446,33 @@ const swaggerSpec: OAS3Definition = {
         summary: "Get the current authenticated user's profile",
         security: [{ bearerAuth: [] }],
         responses: {
-          200: {
-            description: "Current user profile",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } },
-          },
+          200: { description: "Current user profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "User not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      patch: {
+        tags: ["Users"],
+        summary: "Update the current authenticated user's name and/or username",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  username: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Updated user profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: { description: "Username already taken", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -378,21 +485,26 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         responses: {
           200: {
-            description: "Session ID returned",
-            content: {
-              "application/json": {
-                schema: {
-                  type: "object",
-                  properties: { session_id: { type: "string" } },
-                },
-              },
-            },
+            description: "Session ID",
+            content: { "application/json": { schema: { type: "object", properties: { session_id: { type: "string" } } } } },
           },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
     "/chat/conversations": {
+      get: {
+        tags: ["Chat"],
+        summary: "List all conversations for the current user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "List of conversations",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Conversation" } } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
       post: {
         tags: ["Chat"],
         summary: "Create a new conversation",
@@ -403,18 +515,51 @@ const swaggerSpec: OAS3Definition = {
               schema: {
                 type: "object",
                 properties: {
-                  title: { type: "string", example: "Question about R.A. 9262" },
+                  title: { type: "string", description: "Optional — omit to enable auto-title generation" },
                 },
               },
             },
           },
         },
         responses: {
-          201: {
-            description: "Conversation created",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/Conversation" } } },
-          },
+          201: { description: "Conversation created", content: { "application/json": { schema: { $ref: "#/components/schemas/Conversation" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/chat/conversations/{conversationId}": {
+      patch: {
+        tags: ["Chat"],
+        summary: "Rename a conversation",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["title"],
+                properties: { title: { type: "string" } },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Conversation renamed", content: { "application/json": { schema: { $ref: "#/components/schemas/Conversation" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Conversation not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Chat"],
+        summary: "Delete a conversation and all its messages",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Conversation deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Conversation not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -423,38 +568,20 @@ const swaggerSpec: OAS3Definition = {
         tags: ["Chat"],
         summary: "List all messages in a conversation",
         security: [{ bearerAuth: [] }],
-        parameters: [
-          {
-            name: "conversationId",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
+        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
         responses: {
           200: {
-            description: "Messages returned",
-            content: {
-              "application/json": {
-                schema: { type: "array", items: { $ref: "#/components/schemas/Message" } },
-              },
-            },
+            description: "Messages",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Message" } } } },
           },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
       post: {
         tags: ["Chat"],
-        summary: "Send a message and stream the AI response",
+        summary: "Send a message — streams the AI response via chunked transfer encoding",
         security: [{ bearerAuth: [] }],
-        parameters: [
-          {
-            name: "conversationId",
-            in: "path",
-            required: true,
-            schema: { type: "string" },
-          },
-        ],
+        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
           required: true,
           content: {
@@ -465,19 +592,132 @@ const swaggerSpec: OAS3Definition = {
                 properties: {
                   message: { type: "string", example: "What is the penalty under R.A. 9262?" },
                   sessionId: { type: "string", description: "ChatWonder session ID from GET /chat/session" },
-                  documentContext: { type: "string", description: "Optional document text to include as context" },
+                  documentContext: { type: "string", description: "Optional extra context to pass to the AI" },
                 },
               },
             },
           },
         },
         responses: {
-          200: {
-            description: "Streamed plain-text response (chunked transfer encoding)",
-            content: { "text/plain": { schema: { type: "string" } } },
-          },
+          200: { description: "Streamed plain-text AI response", content: { "text/plain": { schema: { type: "string" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/chat/conversations/{conversationId}/messages/{messageId}": {
+      delete: {
+        tags: ["Chat"],
+        summary: "Delete a single message",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "conversationId", in: "path", required: true, schema: { type: "string" } },
+          { name: "messageId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          204: { description: "Message deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Message not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Chat Invites ──────────────────────────────────────────────────────
+    "/chat/conversations/{conversationId}/invites": {
+      get: {
+        tags: ["Chat Invites"],
+        summary: "List all invites for a conversation",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "List of invites",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ConversationInvite" } } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      post: {
+        tags: ["Chat Invites"],
+        summary: "Create a new invite link for a conversation (48-hour TTL)",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          201: { description: "Invite created", content: { "application/json": { schema: { $ref: "#/components/schemas/ConversationInvite" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Not the conversation owner", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/chat/invites/{id}": {
+      get: {
+        tags: ["Chat Invites"],
+        summary: "Get invite details by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Invite detail", content: { "application/json": { schema: { $ref: "#/components/schemas/ConversationInvite" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Invite not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Chat Invites"],
+        summary: "Delete an invite (only the creator can delete)",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Invite deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Not the invite creator", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/chat/invites/{id}/accept": {
+      post: {
+        tags: ["Chat Invites"],
+        summary: "Accept an invite — joins the current user as a conversation participant",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Joined conversation", content: { "application/json": { schema: { $ref: "#/components/schemas/ConversationParticipant" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Invite not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          410: { description: "Invite expired", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Chat Participants ─────────────────────────────────────────────────
+    "/chat/conversations/{conversationId}/participants": {
+      get: {
+        tags: ["Chat Participants"],
+        summary: "List participants in a conversation",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "List of participants",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ConversationParticipant" } } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/chat/conversations/{conversationId}/participants/{userId}": {
+      delete: {
+        tags: ["Chat Participants"],
+        summary: "Remove a participant from a conversation (owner only)",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "conversationId", in: "path", required: true, schema: { type: "string" } },
+          { name: "userId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          204: { description: "Participant removed" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Not the conversation owner", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Participant not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -486,18 +726,18 @@ const swaggerSpec: OAS3Definition = {
     "/legal-rag": {
       get: {
         tags: ["Legal RAG"],
-        summary: "List case-law documents (paginated, filterable, searchable)",
+        summary: "List case-law documents (paginated, filterable)",
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
           { name: "limit", in: "query", schema: { type: "integer", default: 20, maximum: 100 } },
-          { name: "category", in: "query", schema: { type: "string" }, description: "Filter by category" },
-          { name: "year", in: "query", schema: { type: "integer" }, description: "Filter by year" },
+          { name: "category", in: "query", schema: { type: "string" } },
+          { name: "year", in: "query", schema: { type: "integer" } },
           { name: "search", in: "query", schema: { type: "string" }, description: "Search by title or case number" },
         ],
         responses: {
           200: {
-            description: "Paginated list of case-law documents",
+            description: "Paginated list",
             content: {
               "application/json": {
                 schema: {
@@ -517,25 +757,78 @@ const swaggerSpec: OAS3Definition = {
     "/legal-rag/{id}": {
       get: {
         tags: ["Legal RAG"],
-        summary: "Get full case-law document detail by ID",
+        summary: "Get full case-law document by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        responses: {
+          200: { description: "Document detail", content: { "application/json": { schema: { $ref: "#/components/schemas/LegalRagDetail" } } } },
+          400: { description: "Invalid ID", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Legal ─────────────────────────────────────────────────────────────
+    "/legal/case/{itemId}": {
+      get: {
+        tags: ["Legal"],
+        summary: "Get a source-page document by item ID (used by frontend /sources page)",
         security: [{ bearerAuth: [] }],
         parameters: [
-          {
-            name: "id",
-            in: "path",
-            required: true,
-            schema: { type: "integer" },
-            description: "Case-law document ID",
-          },
+          { name: "itemId", in: "path", required: true, schema: { type: "string" }, description: "Numeric legal document ID" },
+          { name: "title", in: "query", schema: { type: "string" }, description: "Optional title hint for fallback lookup" },
+        ],
+        responses: {
+          200: { description: "Source document", content: { "application/json": { schema: { $ref: "#/components/schemas/LegalSourceDoc" } } } },
+          400: { description: "Invalid item_id", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/legal/search": {
+      get: {
+        tags: ["Legal"],
+        summary: "Semantic vector search over legal documents",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "q", in: "query", required: true, schema: { type: "string", minLength: 2 }, description: "Natural-language search query" },
+          { name: "limit", in: "query", schema: { type: "integer", default: 5, minimum: 1, maximum: 20 } },
         ],
         responses: {
           200: {
-            description: "Case-law document detail",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/LegalRagDetail" } } },
+            description: "Vector search results",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/VectorSearchResult" } } } },
           },
-          400: { description: "Invalid ID", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          404: { description: "Case-law document not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Legal Source Analysis ─────────────────────────────────────────────
+    "/legal-source-analysis": {
+      post: {
+        tags: ["Legal Source Analysis"],
+        summary: "Analyze a legal keyword — returns AI-generated insights with cached results",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["keyword"],
+                properties: { keyword: { type: "string", example: "R.A. 9262" } },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Analysis result", content: { "application/json": { schema: { type: "object" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -544,7 +837,7 @@ const swaggerSpec: OAS3Definition = {
     "/files/upload": {
       post: {
         tags: ["Files"],
-        summary: "Upload a file to S3 and record it",
+        summary: "Upload a file to S3 and get back its URL",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
@@ -553,25 +846,20 @@ const swaggerSpec: OAS3Definition = {
               schema: {
                 type: "object",
                 required: ["file"],
-                properties: {
-                  file: { type: "string", format: "binary" },
-                },
+                properties: { file: { type: "string", format: "binary" } },
               },
             },
           },
         },
         responses: {
-          201: {
-            description: "File uploaded",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/File" } } },
-          },
+          201: { description: "File uploaded", content: { "application/json": { schema: { $ref: "#/components/schemas/File" } } } },
           400: { description: "No file provided", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
 
-    // ── My Cases (case management) ──────────────────────────────────────────
+    // ── My Cases ──────────────────────────────────────────────────────────
     "/my-cases": {
       post: {
         tags: ["My Cases"],
@@ -594,10 +882,7 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          201: {
-            description: "Case created",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } },
-          },
+          201: { description: "Case created", content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -612,7 +897,7 @@ const swaggerSpec: OAS3Definition = {
         ],
         responses: {
           200: {
-            description: "Paginated list of cases",
+            description: "Paginated cases",
             content: {
               "application/json": {
                 schema: {
@@ -636,12 +921,9 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          200: {
-            description: "Case detail",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } },
-          },
+          200: { description: "Case detail", content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
       patch: {
@@ -665,13 +947,10 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          200: {
-            description: "Case updated",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } },
-          },
+          200: { description: "Case updated", content: { "application/json": { schema: { $ref: "#/components/schemas/UserCase" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
       delete: {
@@ -682,7 +961,571 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           204: { description: "Case deleted" },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Bookmarks ─────────────────────────────────────────────────────────
+    "/bookmarks": {
+      get: {
+        tags: ["Bookmarks"],
+        summary: "List all bookmarks for the current user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Bookmarks",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Bookmark" } } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      post: {
+        tags: ["Bookmarks"],
+        summary: "Create a bookmark",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["itemId", "title", "type"],
+                properties: {
+                  itemId: { type: "string" },
+                  title: { type: "string" },
+                  type: { type: "string", enum: ["case", "source"] },
+                  reference: { type: "string" },
+                  url: { type: "string", format: "uri" },
+                  aiSummary: { type: "string" },
+                  doctrine: { type: "string" },
+                  facts: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: "Bookmark created", content: { "application/json": { schema: { $ref: "#/components/schemas/Bookmark" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/bookmarks/check": {
+      get: {
+        tags: ["Bookmarks"],
+        summary: "Check whether a given itemId is already bookmarked by the current user",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "itemId", in: "query", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          200: {
+            description: "Check result",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    bookmarked: { type: "boolean" },
+                    bookmark: { $ref: "#/components/schemas/Bookmark", nullable: true } as object,
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "itemId missing", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/bookmarks/{id}": {
+      get: {
+        tags: ["Bookmarks"],
+        summary: "Get a bookmark by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Bookmark detail", content: { "application/json": { schema: { $ref: "#/components/schemas/Bookmark" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Bookmarks"],
+        summary: "Delete a bookmark",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Bookmark deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Documents ─────────────────────────────────────────────────────────
+    "/documents": {
+      get: {
+        tags: ["Documents"],
+        summary: "List user documents — optionally filtered by caseId",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "caseId", in: "query", schema: { type: "string" }, description: "Filter by case ID" },
+        ],
+        responses: {
+          200: {
+            description: "Documents",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/UserDocument" } } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      post: {
+        tags: ["Documents"],
+        summary: "Upload a user document (file + optional caseId)",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                required: ["file"],
+                properties: {
+                  file: { type: "string", format: "binary" },
+                  caseId: { type: "string", description: "Associate with a case (optional)" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: "Document uploaded", content: { "application/json": { schema: { $ref: "#/components/schemas/UserDocument" } } } },
+          400: { description: "No file or validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/documents/{id}": {
+      get: {
+        tags: ["Documents"],
+        summary: "Get a document by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Document detail", content: { "application/json": { schema: { $ref: "#/components/schemas/UserDocument" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      patch: {
+        tags: ["Documents"],
+        summary: "Update a document's metadata",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  caseId: { type: "string", nullable: true },
+                  aiSummary: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          204: { description: "Document updated" },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Documents"],
+        summary: "Delete a document",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Document deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Transcriptions ────────────────────────────────────────────────────
+    "/transcriptions": {
+      get: {
+        tags: ["Transcriptions"],
+        summary: "List all transcriptions for the current user",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "Transcriptions",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Transcription" } } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      post: {
+        tags: ["Transcriptions"],
+        summary: "Create a transcription record",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  audioFileId: { type: "string", format: "uuid" },
+                  transcript: { type: "string" },
+                  duration: { type: "number" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: "Transcription created", content: { "application/json": { schema: { $ref: "#/components/schemas/Transcription" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/transcriptions/{id}": {
+      get: {
+        tags: ["Transcriptions"],
+        summary: "Get a transcription by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Transcription detail", content: { "application/json": { schema: { $ref: "#/components/schemas/Transcription" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      patch: {
+        tags: ["Transcriptions"],
+        summary: "Update a transcription",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  transcript: { type: "string" },
+                  duration: { type: "number" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Transcription updated", content: { "application/json": { schema: { $ref: "#/components/schemas/Transcription" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Transcriptions"],
+        summary: "Delete a transcription",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Transcription deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/transcriptions/{id}/start-job": {
+      post: {
+        tags: ["Transcriptions"],
+        summary: "Start an AWS Transcribe batch job for this transcription",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Job started", content: { "application/json": { schema: { type: "object", properties: { jobId: { type: "string" } } } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/transcriptions/{id}/poll-job": {
+      get: {
+        tags: ["Transcriptions"],
+        summary: "Poll the status of an AWS Transcribe batch job",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Job status",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    status: { type: "string", enum: ["IN_PROGRESS", "COMPLETED", "FAILED"] },
+                    transcript: { type: "string", nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Events ────────────────────────────────────────────────────────────
+    "/events": {
+      get: {
+        tags: ["Events"],
+        summary: "List events for the current user",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "startRange", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "endRange", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "excludeId", in: "query", schema: { type: "string" } },
+          { name: "excludeStatus", in: "query", schema: { type: "string" } },
+          { name: "limitOne", in: "query", schema: { type: "boolean" } },
+        ],
+        responses: {
+          200: {
+            description: "Events",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { events: { type: "array", items: { $ref: "#/components/schemas/Event" } } } },
+              },
+            },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      post: {
+        tags: ["Events"],
+        summary: "Create an event",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/Event" } } },
+        },
+        responses: {
+          201: { description: "Event created", content: { "application/json": { schema: { type: "object", properties: { event: { $ref: "#/components/schemas/Event" } } } } },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/events/{id}": {
+      get: {
+        tags: ["Events"],
+        summary: "Get an event by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: { description: "Event", content: { "application/json": { schema: { type: "object", properties: { event: { $ref: "#/components/schemas/Event" } } } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      put: {
+        tags: ["Events"],
+        summary: "Update an event by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/Event" } } },
+        },
+        responses: {
+          200: { description: "Event updated", content: { "application/json": { schema: { type: "object" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Events"],
+        summary: "Delete an event by ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Event deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/events/by-google-id/{googleEventId}": {
+      put: {
+        tags: ["Events"],
+        summary: "Update an event by Google Calendar event ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "googleEventId", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/Event" } } },
+        },
+        responses: {
+          200: { description: "Event updated", content: { "application/json": { schema: { type: "object" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Events"],
+        summary: "Delete an event by Google Calendar event ID",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "googleEventId", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          204: { description: "Event deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Calendar ──────────────────────────────────────────────────────────
+    "/calendar/watch": {
+      post: {
+        tags: ["Calendar"],
+        summary: "Register a Google Calendar push-notification watch channel",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["webhookUrl"],
+                properties: {
+                  webhookUrl: { type: "string", format: "uri", description: "Public URL Google will push notifications to" },
+                  providerToken: { type: "string", description: "Google access token (falls back to stored token if omitted)" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Watch channel registered", content: { "application/json": { schema: { type: "object" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/calendar/webhooks/calendar": {
+      post: {
+        tags: ["Calendar"],
+        summary: "Google Calendar webhook receiver — syncs new/updated events (no auth required)",
+        parameters: [
+          { name: "x-goog-channel-id", in: "header", required: true, schema: { type: "string" } },
+          { name: "x-goog-resource-state", in: "header", required: true, schema: { type: "string" } },
+        ],
+        responses: {
+          200: { description: "Acknowledged" },
+        },
+      },
+    },
+
+    // ── Send Email ────────────────────────────────────────────────────────
+    "/send-email": {
+      post: {
+        tags: ["Email"],
+        summary: "Send a transactional email",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["to", "subject"],
+                properties: {
+                  to: { type: "string", format: "email" },
+                  subject: { type: "string" },
+                  text: { type: "string", description: "Plain-text body (at least one of text or html required)" },
+                  html: { type: "string", description: "HTML body (at least one of text or html required)" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Email sent", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" } } } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── RSVP ──────────────────────────────────────────────────────────────
+    "/rsvp/{eventId}": {
+      post: {
+        tags: ["RSVP"],
+        summary: "Client RSVP to an event — notifies the lawyer by email",
+        parameters: [{ name: "eventId", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["status", "clientEmail"],
+                properties: {
+                  status: { type: "string", enum: ["accepted", "declined"] },
+                  clientEmail: { type: "string", format: "email" },
+                  feedback: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "RSVP recorded", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" } } } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Event not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── TTS ───────────────────────────────────────────────────────────────
+    "/tts/polly": {
+      post: {
+        tags: ["TTS"],
+        summary: "Convert text to speech using AWS Polly — returns MP3 audio",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["text"],
+                properties: {
+                  text: { type: "string", maxLength: 3000, example: "Ang batas ay para sa lahat." },
+                  voiceId: { type: "string", default: "Joanna", example: "Joanna", description: "AWS Polly voice ID (neural engine)" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "MP3 audio stream", content: { "audio/mpeg": { schema: { type: "string", format: "binary" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          502: { description: "Polly returned no audio", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
