@@ -100,6 +100,15 @@ export default class AuthRepo {
     });
   }
 
+  static async findGoogleRefreshToken(userId: string): Promise<string | null> {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { googleRefreshToken: true } });
+    return user?.googleRefreshToken ?? null;
+  }
+
+  static async updateGoogleAccessToken(userId: string, accessToken: string) {
+    return prisma.user.update({ where: { id: userId }, data: { googleAccessToken: accessToken } });
+  }
+
   static async setResetToken(userId: string, token: string, expiresAt: Date) {
     return prisma.user.update({ where: { id: userId }, data: { otpCode: token, otpExpiry: expiresAt } });
   }

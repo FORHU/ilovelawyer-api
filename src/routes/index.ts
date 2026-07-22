@@ -18,7 +18,7 @@ import ttsRoute from "./tts.route";
 
 const router = express.Router();
 
-router.get("/v1", (_, res) => {
+router.get("/v2", (_, res) => {
   res.json({
     message: "Welcome to my API",
   });

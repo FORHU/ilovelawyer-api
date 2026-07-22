@@ -45,7 +45,51 @@ interface VectorSearchRow {
   category: string;
 }
 
+interface RelatedRow {
+  id: bigint;
+  title: string | null;
+  case_no: string | null;
+  category: string;
+  subcategory: string | null;
+  year: number | null;
+  concise_summary: string | null;
+  similarity: number;
+}
+
+interface ChunkVectorSearchRow {
+  id: bigint;
+  document_id: bigint;
+  chunk_index: number;
+  chunk_text: string;
+  char_count: number;
+  created_at: Date;
+  similarity: number;
+  doc_title: string | null;
+  doc_category: string;
+  doc_subcategory: string | null;
+  doc_case_no: string | null;
+  doc_year: number | null;
+  doc_source_url: string | null;
+  doc_concise_summary: string | null;
+}
+
 export default class LegalRagRepo {
+  static async getCategories(): Promise<string[]> {
+    const rows = await prisma.$queryRaw<{ category: string }[]>`
+      SELECT DISTINCT category FROM documents WHERE category IS NOT NULL ORDER BY category ASC
+    `;
+    return rows.map((r) => r.category);
+  }
+
+  static async getSubcategories(category: string): Promise<string[]> {
+    const rows = await prisma.$queryRaw<{ subcategory: string }[]>`
+      SELECT DISTINCT subcategory FROM documents
+      WHERE category = ${category} AND subcategory IS NOT NULL
+      ORDER BY subcategory ASC
+    `;
+    return rows.map((r) => r.subcategory);
+  }
+
   static async searchByVector(embedding: number[], limit = 5): Promise<VectorSearchRow[]> {
     const vector = `[${embedding.join(",")}]`;
     return prisma.$queryRawUnsafe<VectorSearchRow[]>(
@@ -57,6 +101,57 @@ export default class LegalRagRepo {
       vector,
       limit,
     );
+  }
+
+  static async vectorSearch(
+    embedding: number[],
+    { limit = 10, offset = 0, minSimilarity = 0.3 }: { limit?: number; offset?: number; minSimilarity?: number } = {},
+  ): Promise<ChunkVectorSearchRow[]> {
+    const vector = `[${embedding.join(",")}]`;
+    return prisma.$queryRawUnsafe<ChunkVectorSearchRow[]>(
+      `SELECT
+         dc.id, dc.document_id, dc.chunk_index, dc.chunk_text, dc.char_count, dc.created_at,
+         1 - (dc.embedding <=> $1::vector) AS similarity,
+         d.title       AS doc_title,
+         d.category    AS doc_category,
+         d.subcategory AS doc_subcategory,
+         d.case_no     AS doc_case_no,
+         d.year        AS doc_year,
+         d.source_url  AS doc_source_url,
+         d.concise_summary AS doc_concise_summary
+       FROM document_chunks dc
+       JOIN documents d ON d.id = dc.document_id
+       WHERE 1 - (dc.embedding <=> $1::vector) >= $2
+       ORDER BY dc.embedding <=> $1::vector
+       LIMIT $3 OFFSET $4`,
+      vector,
+      minSimilarity,
+      limit,
+      offset,
+    );
+  }
+
+  static async findRelated(id: bigint, limit = 5): Promise<RelatedRow[]> {
+    const rows = await prisma.$queryRaw<RelatedRow[]>`
+      WITH avg_embedding AS (
+        SELECT avg(embedding)::vector AS embedding
+        FROM document_chunks
+        WHERE document_id = ${id}
+      )
+      SELECT DISTINCT ON (d.id)
+        d.id, d.title, d.case_no, d.category, d.subcategory, d.year, d.concise_summary,
+        1 - (dc.embedding <=> avg_embedding.embedding) AS similarity
+      FROM document_chunks dc
+      JOIN documents d ON d.id = dc.document_id
+      CROSS JOIN avg_embedding
+      WHERE d.id != ${id}
+        AND avg_embedding.embedding IS NOT NULL
+        AND 1 - (dc.embedding <=> avg_embedding.embedding) >= 0.5
+      ORDER BY d.id, dc.embedding <=> avg_embedding.embedding
+      LIMIT 20
+    `;
+
+    return rows.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
   }
 
   static async list({ page, limit, category, year, search }: ListParams) {

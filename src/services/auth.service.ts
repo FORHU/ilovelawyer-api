@@ -7,7 +7,7 @@ import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
-import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL } from "../config";
+import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
 import { BCRYPT_SALT_ROUNDS, OTP_EXPIRY_MS } from "../constants/auth.constants";
 
 export default class AuthSvc {
@@ -107,6 +107,33 @@ export default class AuthSvc {
       accessToken,
       refreshToken,
     };
+  }
+
+  static async refreshGoogleToken(userId: string) {
+    const googleRefreshToken = await AuthRepo.findGoogleRefreshToken(userId);
+    if (!googleRefreshToken) {
+      throw new HttpError("No refresh token — user must reconnect Google", 400);
+    }
+
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: googleRefreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    const data = await tokenRes.json();
+    if (!tokenRes.ok || !data.access_token) {
+      throw new HttpError(data.error ?? "Refresh failed", 400);
+    }
+
+    await AuthRepo.updateGoogleAccessToken(userId, data.access_token);
+
+    return { access_token: data.access_token };
   }
 
   static async forgotPassword(email: string) {

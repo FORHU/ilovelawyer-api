@@ -96,6 +96,11 @@ export default class AuthCtrl {
     return res.status(200).json(result);
   }
 
+  static async refreshGoogleToken(req: Request, res: Response) {
+    const result = await AuthSvc.refreshGoogleToken(req.user.userId);
+    return res.status(200).json(result);
+  }
+
   static async forgotPassword(req: Request, res: Response) {
     const { email } = req.body;
 

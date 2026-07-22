@@ -375,6 +375,21 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
+    "/auth/google/refresh": {
+      post: {
+        tags: ["Auth"],
+        summary: "Refresh the current user's stored Google OAuth access token using their stored refresh token",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "New Google access token",
+            content: { "application/json": { schema: { type: "object", properties: { access_token: { type: "string" } } } } },
+          },
+          400: { description: "No Google refresh token on file, or refresh failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
     "/auth/forgot-password": {
       post: {
         tags: ["Auth"],
@@ -723,6 +738,139 @@ const swaggerSpec: OAS3Definition = {
     },
 
     // ── Legal RAG ─────────────────────────────────────────────────────────
+    "/legal-rag/categories": {
+      get: {
+        tags: ["Legal RAG"],
+        summary: "List distinct categories, or subcategories for a given category",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "category", in: "query", schema: { type: "string" }, description: "If set, returns subcategories for this category instead of the category list" },
+        ],
+        responses: {
+          200: {
+            description: "Categories or subcategories",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    categories: { type: "array", items: { type: "string" } },
+                    subcategories: { type: "array", items: { type: "string" } },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/legal-rag/search-vector": {
+      post: {
+        tags: ["Legal RAG"],
+        summary: "Raw vector similarity search — accepts a pre-computed embedding directly (distinct from GET /legal/search, which embeds a text query server-side)",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["embedding"],
+                properties: {
+                  embedding: { type: "array", items: { type: "number" }, description: "Float embedding vector, e.g. length 1536" },
+                  limit: { type: "integer", default: 10, minimum: 1, maximum: 100 },
+                  offset: { type: "integer", default: 0, minimum: 0 },
+                  minSimilarity: { type: "number", default: 0.3, minimum: 0, maximum: 1 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Matching chunks with parent document info",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    results: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          document_id: { type: "string" },
+                          chunk_index: { type: "integer" },
+                          chunk_text: { type: "string" },
+                          char_count: { type: "integer" },
+                          created_at: { type: "string", format: "date-time" },
+                          similarity: { type: "number" },
+                          document: {
+                            type: "object",
+                            properties: {
+                              id: { type: "string" },
+                              title: { type: "string", nullable: true },
+                              category: { type: "string" },
+                              subcategory: { type: "string", nullable: true },
+                              case_no: { type: "string", nullable: true },
+                              year: { type: "integer", nullable: true },
+                              source_url: { type: "string", nullable: true },
+                              concise_summary: { type: "string", nullable: true },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/legal-rag/format-documents": {
+      post: {
+        tags: ["Legal RAG"],
+        summary: "Batch-format legal documents into formatted_markdown (proxies Chat Wonder) — can take up to an hour when all=true",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "force", in: "query", schema: { type: "boolean", default: false }, description: "Re-format documents that already have formatted_markdown" },
+          { name: "all", in: "query", schema: { type: "boolean", default: false }, description: "Format all eligible documents rather than a limited batch" },
+          { name: "generate_title", in: "query", schema: { type: "boolean", default: true } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1 } },
+          { name: "delay", in: "query", schema: { type: "number", minimum: 0 }, description: "Delay in seconds between documents" },
+        ],
+        responses: {
+          200: { description: "Batch format result (shape defined by Chat Wonder)", content: { "application/json": { schema: { type: "object" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          502: { description: "Chat Wonder format failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/legal-rag/{id}/format": {
+      post: {
+        tags: ["Legal RAG"],
+        summary: "Format a single legal document into formatted_markdown (proxies Chat Wonder)",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          { name: "force", in: "query", schema: { type: "boolean", default: false }, description: "Re-format even if formatted_markdown already exists" },
+          { name: "generate_title", in: "query", schema: { type: "boolean", default: true } },
+        ],
+        responses: {
+          200: { description: "Format result (shape defined by Chat Wonder)", content: { "application/json": { schema: { type: "object" } } } },
+          400: { description: "Invalid ID", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          502: { description: "Chat Wonder format failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
     "/legal-rag": {
       get: {
         tags: ["Legal RAG"],
@@ -750,6 +898,49 @@ const swaggerSpec: OAS3Definition = {
               },
             },
           },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/legal-rag/{id}/related": {
+      get: {
+        tags: ["Legal RAG"],
+        summary: "Find documents related to a given document via chunk-embedding similarity",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer" } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 5, minimum: 1, maximum: 20 } },
+        ],
+        responses: {
+          200: {
+            description: "Related documents",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    related: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          title: { type: "string", nullable: true },
+                          case_no: { type: "string", nullable: true },
+                          category: { type: "string" },
+                          subcategory: { type: "string", nullable: true },
+                          year: { type: "integer", nullable: true },
+                          concise_summary: { type: "string", nullable: true },
+                          similarity: { type: "number" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Invalid ID", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },

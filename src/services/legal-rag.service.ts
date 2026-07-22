@@ -2,6 +2,7 @@ import LegalRagRepo from "../repositories/legal-rag.repository";
 import HttpError from "../utils/http-error";
 import { redis } from "../lib/redis";
 import { embedText } from "../utils/embedding";
+import { CHAT_WONDER_API_URL } from "../config";
 
 const CACHE_TTL_S  = 60 * 60;
 const CACHE_TTL_MS = CACHE_TTL_S * 1000;
@@ -26,8 +27,45 @@ function l1Set(key: string, data: unknown): void {
 }
 
 export default class LegalRagSvc {
+  static async getCategories() {
+    return LegalRagRepo.getCategories();
+  }
+
+  static async getSubcategories(category: string) {
+    return LegalRagRepo.getSubcategories(category);
+  }
+
   static async list(page: number, limit: number, category?: string, year?: number, search?: string) {
     return LegalRagRepo.list({ page, limit, category, year, search });
+  }
+
+  static async vectorSearch(embedding: number[], limit: number, offset: number, minSimilarity: number) {
+    const rows = await LegalRagRepo.vectorSearch(embedding, { limit, offset, minSimilarity });
+
+    return rows.map((r) => ({
+      id: r.id.toString(),
+      document_id: r.document_id.toString(),
+      chunk_index: r.chunk_index,
+      chunk_text: r.chunk_text,
+      char_count: r.char_count,
+      created_at: r.created_at,
+      similarity: r.similarity,
+      document: {
+        id: r.document_id.toString(),
+        title: r.doc_title,
+        category: r.doc_category,
+        subcategory: r.doc_subcategory,
+        case_no: r.doc_case_no,
+        year: r.doc_year,
+        source_url: r.doc_source_url,
+        concise_summary: r.doc_concise_summary,
+      },
+    }));
+  }
+
+  static async getRelated(id: number, limit: number) {
+    const rows = await LegalRagRepo.findRelated(BigInt(id), limit);
+    return rows.map((r) => ({ ...r, id: r.id.toString() }));
   }
 
   static async getById(id: number) {
@@ -81,6 +119,36 @@ export default class LegalRagSvc {
     redis.set(cacheKey, result, CACHE_TTL_S);
 
     return result;
+  }
+
+  static async formatDocument(id: number, opts: { force?: boolean; generateTitle?: boolean }) {
+    const forward = new URLSearchParams();
+    if (opts.force) forward.set("force", "true");
+    if (opts.generateTitle === false) forward.set("generate_title", "false");
+    const qs = forward.toString() ? `?${forward.toString()}` : "";
+
+    const response = await fetch(`${CHAT_WONDER_API_URL}/api/legal/format-document/${id}${qs}`, { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new HttpError(data.detail || data.error || "Format failed", response.status);
+    return data;
+  }
+
+  static async formatDocuments(opts: { force?: boolean; all?: boolean; generateTitle?: boolean; limit?: number; delay?: number }) {
+    const forward = new URLSearchParams();
+    if (opts.force) forward.set("force", "true");
+    if (opts.all) forward.set("all", "true");
+    if (opts.generateTitle === false) forward.set("generate_title", "false");
+    if (opts.limit !== undefined) forward.set("limit", String(opts.limit));
+    if (opts.delay !== undefined) forward.set("delay", String(opts.delay));
+    const qs = forward.toString();
+
+    const response = await fetch(`${CHAT_WONDER_API_URL}/api/legal/format-documents${qs ? `?${qs}` : ""}`, {
+      method: "POST",
+      signal: AbortSignal.timeout(60 * 60 * 1000),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new HttpError(data.detail || data.error || "Batch format failed", response.status);
+    return data;
   }
 
   static async search(query: string, limit: number) {
