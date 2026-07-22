@@ -2,10 +2,12 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
+import swaggerUi from "swagger-ui-express";
 import router from "./routes";
 import errorHandler from "./middleware/error-handler.middleware";
 import { isDev, CLIENT_URL } from "./config";
 import setup from "./setup";
+import swaggerSpec from "./swagger";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -17,6 +19,7 @@ app.set("trust proxy", 1);
 app.use(
   cors({
     origin: CLIENT_URL,
+    credentials: true,
   }),
 );
 
@@ -33,6 +36,11 @@ if (!isDev) app.use(limiter);
 // Set up security headers
 app.use(helmet());
 app.disable("x-powered-by");
+
+// Swagger UI (dev only)
+if (isDev) {
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 // Use router for routing
 app.use("/api", router);
