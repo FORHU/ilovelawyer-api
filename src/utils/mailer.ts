@@ -1,22 +1,23 @@
-import { SendMailOptions, createTransport, getTestMessageUrl } from "nodemailer";
-import { SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, MAILER_FROM, MAILER_TRANSPORT_HOST, MAILER_TRANSPORT_PORT, MAILER_TRANSPORT_SECURE, MAILER_EMAIL, MAILER_PASSWORD, isDev } from "../config";
+import { SendMailOptions, createTransport } from "nodemailer";
+import { MAILER_EMAIL, MAILER_PASSWORD, MAILER_TRANSPORT_HOST, MAILER_TRANSPORT_PORT, MAILER_TRANSPORT_SECURE } from "../config";
 
 export async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }): Promise<string> {
   const transporter = createTransport({
-    host: isDev ? MAILER_TRANSPORT_HOST : SMTP_HOST,
-    port: isDev ? MAILER_TRANSPORT_PORT : SMTP_PORT,
-    secure: isDev ? MAILER_TRANSPORT_SECURE : SMTP_SECURE,
+    host: MAILER_TRANSPORT_HOST,
+    port: MAILER_TRANSPORT_PORT,
+    secure: MAILER_TRANSPORT_SECURE,
     auth: {
-      user: isDev ? MAILER_EMAIL : SMTP_USER,
-      pass: isDev ? MAILER_PASSWORD : SMTP_PASS,
+      user: MAILER_EMAIL,
+      pass: MAILER_PASSWORD,
     },
   });
 
-  const from = isDev ? MAILER_EMAIL : MAILER_FROM;
+  console.log(MAILER_EMAIL, MAILER_PASSWORD, MAILER_TRANSPORT_HOST, MAILER_TRANSPORT_PORT);
+
   const mailOptions: SendMailOptions = {
-    from: isDev ? `[TEST] ilovelawyer <${from}>` : `ilovelawyer <${from}>`,
+    from: `Seven 365 <${MAILER_EMAIL}>`,
     to,
-    subject: isDev ? `[TEST] ${subject}` : subject,
+    subject,
   };
 
   if (text) {
@@ -28,11 +29,7 @@ export async function sendEmail({ to, subject, text, html }: { to: string; subje
   }
 
   try {
-    const info = await transporter.sendMail(mailOptions);
-
-    const previewUrl = getTestMessageUrl(info);
-    if (previewUrl) console.log(`[mailer] Preview email: ${previewUrl}`);
-
+    await transporter.sendMail(mailOptions);
     return Promise.resolve("Email sent successfully");
   } catch (error) {
     return Promise.reject(error);

@@ -1,35 +1,23 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
-    container_name: ilovelawyer-postgres
+    image: postgres:16
+    container_name: ilovelawyer-api-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: legalrag
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ilovelawyer_api
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: always
+      - ilovelawyer-api_postgres_data:/var/lib/postgresql/data
 
   redis:
-    image: redis:7-alpine
-    container_name: ilovelawyer-redis
-    command: redis-server --requirepass password
+    image: redis:7
+    container_name: ilovelawyer-api-redis
+    restart: unless-stopped
     ports:
-      - "6379:6379"
-    restart: always
-
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    container_name: ilovelawyer-redis-ui
-    environment:
-      - REDIS_HOSTS=local:redis:6379:0:password
-    ports:
-      - "8081:8081"
-    depends_on:
-      - redis
-    restart: always
+      - "6380:6379"
 
 volumes:
-  postgres_data:
+  ilovelawyer-api_postgres_data:
