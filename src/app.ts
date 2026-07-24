@@ -39,10 +39,7 @@ if (!isDev) app.use(limiter);
 app.use(helmet());
 app.disable("x-powered-by");
 
-// Swagger UI (dev only)
-if (isDev) {
-  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-}
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Use router for routing
 app.use("/api", router);
