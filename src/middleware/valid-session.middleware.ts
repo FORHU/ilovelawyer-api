@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { SECRET_KEY } from "../config";
+import { SECRET_KEY, ACCESS_TOKEN_SECRET } from "../config";
 
 const sessionMiddleware = (req: Request, res: Response, next: NextFunction) => {
   const scopedAuth = req.headers["scoped-auth"];
@@ -10,7 +10,7 @@ const sessionMiddleware = (req: Request, res: Response, next: NextFunction) => {
   const token = authorization && authorization.split(" ")[1];
   if (!token) return res.status(401).json({ message: "Unauthorized" });
 
-  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET as string, (err: any, user: any) => {
+  jwt.verify(token, ACCESS_TOKEN_SECRET, (err: any, user: any) => {
     if (err) return res.status(401).json({ message: "Authorization token expired" });
     req.user = user;
     next();

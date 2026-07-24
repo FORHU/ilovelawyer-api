@@ -74,6 +74,7 @@ jobs:
           REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
           ACCESS_TOKEN_EXPIRY: ${{ secrets.ACCESS_TOKEN_EXPIRY }}
           REFRESH_TOKEN_EXPIRY_DAYS: ${{ secrets.REFRESH_TOKEN_EXPIRY_DAYS }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
           REDIS_HOST: ${{ secrets.REDIS_HOST }}
           REDIS_PORT: ${{ secrets.REDIS_PORT }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
@@ -96,6 +97,8 @@ jobs:
           REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET}
           ACCESS_TOKEN_EXPIRY=${ACCESS_TOKEN_EXPIRY}
           REFRESH_TOKEN_EXPIRY_DAYS=${REFRESH_TOKEN_EXPIRY_DAYS}
+          REDIS_URL=${REDIS_URL}
+          REDIS_URL=${REDIS_URL}
           REDIS_HOST=${REDIS_HOST}
           REDIS_PORT=${REDIS_PORT}
           REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -146,6 +149,7 @@ jobs:
             docker rm   ilovelawyer-api 2>/dev/null || true
             docker run -d --name ilovelawyer-api --restart unless-stopped \
               --env-file /home/ec2-user/ilovelawyer-api.env \
+              --add-host=host.docker.internal:host-gateway \
               -p 3001:3001 \
               "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG"
             docker image prune -f
