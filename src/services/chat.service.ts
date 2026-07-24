@@ -1,17 +1,13 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
-import LegalRagRepo from "../repositories/legal-rag.repository";
 import CaseSvc from "./case.service";
 import { generateTitleViaWs, streamChatWonderMessage } from "../utils/chatWonder";
-import { embedText } from "../utils/embedding";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 60 * 24;     // 24 hours
-const CONTEXT_CACHE_TTL  = 60 * 60 * 6;      // 6 hours
-const VECTOR_TOP_K       = 5;                 // chunks to retrieve per query
 const TITLE_MAX_CHARS    = 60;                // max title length (matches frontend truncation)
 const TITLE_INPUT_CHARS  = 500;              // how much of the user message to feed the title prompt
 
@@ -25,10 +21,6 @@ function titleCacheKey(userMessage: string): string {
 
 function responseCacheKey(userMessage: string, resolvedContext: string): string {
   return `chat:response:${messageHash(userMessage.trim().toLowerCase() + resolvedContext)}`;
-}
-
-function contextCacheKey(userMessage: string): string {
-  return `chat:context:${messageHash(userMessage.trim().toLowerCase())}`;
 }
 
 export default class ChatSvc {
@@ -101,10 +93,10 @@ export default class ChatSvc {
       ChatSvc.generateAndSaveTitle(conversationId, userInput).catch(() => {});
     }
 
-    // Retrieve context ourselves via vector search (falls back to caller-supplied context)
-    //const resolvedContext = documentContext ?? await ChatSvc.retrieveContext(userInput);
-
-    const resolvedContext = documentContext as string;
+    // Re-derived from the live Case row on every message (not cached on the conversation),
+    // so edits to the Case's fields are picked up immediately rather than going stale.
+    const caseContext = conversation.case ? CaseSvc.formatForAiContext(conversation.case) : "";
+    const resolvedContext = [caseContext, documentContext].filter(Boolean).join("\n\n");
 
     const cacheKey = responseCacheKey(userInput, resolvedContext);
     const cached = await redis.get<string>(cacheKey);
@@ -132,28 +124,6 @@ export default class ChatSvc {
 
     if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
-  }
-
-  private static async retrieveContext(userInput: string): Promise<string> {
-    const cacheKey = contextCacheKey(userInput);
-    const cached = await redis.get<string>(cacheKey);
-    if (cached) return cached;
-
-    try {
-      const embedding = await embedText(userInput);
-      const chunks = await LegalRagRepo.searchByVector(embedding, VECTOR_TOP_K);
-      if (!chunks.length) return "";
-
-      const context = chunks
-        .map((c, i) => `[${i + 1}] ${c.title ?? c.category}\n${c.chunk_text}`)
-        .join("\n\n");
-
-      redis.set(cacheKey, context, CONTEXT_CACHE_TTL);
-      return context;
-    } catch (err) {
-      console.error("[RAG] retrieveContext failed:", (err as Error).message);
-      return "";
-    }
   }
 
   static buildTitlePrompt(userMessage: string): string {
