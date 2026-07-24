@@ -1,10 +1,12 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
 import LegalRagRepo from "../repositories/legal-rag.repository";
+import CaseSvc from "./case.service";
 import { generateTitleViaWs, streamChatWonderMessage } from "../utils/chatWonder";
 import { embedText } from "../utils/embedding";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
+import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 60 * 24;     // 24 hours
@@ -30,12 +32,16 @@ function contextCacheKey(userMessage: string): string {
 }
 
 export default class ChatSvc {
-  static async createConversation(userId: string, title?: string) {
-    return ChatRepo.createConversation(userId, title);
+  static async createConversation(userId: string, title?: string, caseId?: string) {
+    if (caseId) {
+      // Throws 404 if the case doesn't exist or isn't owned by this user
+      await CaseSvc.getById(caseId, userId);
+    }
+    return ChatRepo.createConversation(userId, title, caseId);
   }
 
-  static async listConversations(userId: string) {
-    return ChatRepo.listConversations(userId);
+  static async listConversations(userId: string, caseId?: string) {
+    return ChatRepo.listConversations(userId, caseId);
   }
 
   static async renameConversation(userId: string, conversationId: string, title: string) {
@@ -83,7 +89,7 @@ export default class ChatSvc {
     onChunk: (text: string) => void,
     documentContext?: string,
   ) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
+    const conversation = await ChatRepo.findConversationWithCase(conversationId);
     if (!conversation || conversation.userId !== userId) {
       throw new HttpError("Conversation not found", 404);
     }
@@ -96,7 +102,12 @@ export default class ChatSvc {
     }
 
     // Retrieve context ourselves via vector search (falls back to caller-supplied context)
-    const resolvedContext = documentContext ?? await ChatSvc.retrieveContext(userInput);
+    const retrievedContext = documentContext ?? await ChatSvc.retrieveContext(userInput);
+
+    // Re-derived from the live Case row on every message (not cached on the conversation),
+    // so edits to the Case's fields are picked up immediately rather than going stale.
+    const caseContext = conversation.case ? CaseSvc.formatForAiContext(conversation.case) : "";
+    const resolvedContext = [caseContext, retrievedContext].filter(Boolean).join("\n\n");
 
     const cacheKey = responseCacheKey(userInput, resolvedContext);
     const cached = await redis.get<string>(cacheKey);
@@ -110,7 +121,20 @@ export default class ChatSvc {
       redis.set(cacheKey, fullResponse, RESPONSE_CACHE_TTL);
     }
 
-    await ChatRepo.createMessage(conversationId, "assistant", fullResponse, undefined, userMessage.id);
+    const timeline = extractTimeline(fullResponse);
+    const mindMap = extractMindMap(fullResponse);
+    const cleanedContent = stripStructuredBlocks(fullResponse);
+
+    const assistantMessage = await ChatRepo.createMessage(
+      conversationId,
+      "assistant",
+      cleanedContent,
+      undefined,
+      userMessage.id,
+    );
+
+    if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
+    if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
   }
 
   private static async retrieveContext(userInput: string): Promise<string> {

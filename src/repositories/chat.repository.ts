@@ -1,20 +1,28 @@
 import prisma from "../lib/prisma";
-import { MessageRole } from "@prisma/client";
+import { MessageRole, Prisma } from "@prisma/client";
+import { TimelineItem, MindMapItem } from "../utils/response-parser";
 
 export default class ChatRepo {
-  static async createConversation(userId: string, title?: string) {
-    return prisma.conversation.create({ data: { userId, title } });
+  static async createConversation(userId: string, title?: string, caseId?: string) {
+    return prisma.conversation.create({ data: { userId, title, caseId } });
   }
 
-  static async listConversations(userId: string) {
+  static async listConversations(userId: string, caseId?: string) {
     return prisma.conversation.findMany({
-      where: { userId },
+      where: { userId, ...(caseId ? { caseId } : {}) },
       orderBy: { createdAt: "desc" },
     });
   }
 
   static async findConversationById(conversationId: string) {
     return prisma.conversation.findUnique({ where: { id: conversationId } });
+  }
+
+  static async findConversationWithCase(conversationId: string) {
+    return prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: { case: { include: { parties: true } } },
+    });
   }
 
   static async updateConversation(conversationId: string, title: string) {
@@ -29,6 +37,7 @@ export default class ChatRepo {
     return prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: "asc" },
+      include: { timeline: true, mindMap: true },
     });
   }
 
@@ -44,8 +53,20 @@ export default class ChatRepo {
     });
   }
 
+  static async saveTimeline(messageId: string, items: TimelineItem[]) {
+    return prisma.messageTimeline.create({
+      data: { messageId, items: items as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  static async saveMindMap(messageId: string, data: MindMapItem) {
+    return prisma.messageMindMap.create({
+      data: { messageId, data: data as unknown as Prisma.InputJsonValue },
+    });
+  }
+
   static async findMessageById(messageId: string) {
-    return prisma.message.findUnique({ where: { id: messageId } });
+    return prisma.message.findUnique({ where: { id: messageId }, include: { timeline: true, mindMap: true } });
   }
 
   static async deleteMessage(messageId: string) {

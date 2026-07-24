@@ -9,6 +9,7 @@ import { isDev, CLIENT_URL } from "./config";
 import setup from "./setup";
 import swaggerSpec from "./swagger";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { createServer } from "http";
 import { Server } from "socket.io";
 
@@ -24,6 +25,7 @@ app.use(
 );
 
 app.use(express.json());
+app.use(cookieParser());
 
 // Set up rate limiting middleware
 const limiter = rateLimit({
@@ -37,10 +39,7 @@ if (!isDev) app.use(limiter);
 app.use(helmet());
 app.disable("x-powered-by");
 
-// Swagger UI (dev only)
-if (isDev) {
-  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-}
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Use router for routing
 app.use("/api", router);
