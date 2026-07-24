@@ -102,12 +102,9 @@ export default class ChatSvc {
     }
 
     // Retrieve context ourselves via vector search (falls back to caller-supplied context)
-    const retrievedContext = documentContext ?? await ChatSvc.retrieveContext(userInput);
+    //const resolvedContext = documentContext ?? await ChatSvc.retrieveContext(userInput);
 
-    // Re-derived from the live Case row on every message (not cached on the conversation),
-    // so edits to the Case's fields are picked up immediately rather than going stale.
-    const caseContext = conversation.case ? CaseSvc.formatForAiContext(conversation.case) : "";
-    const resolvedContext = [caseContext, retrievedContext].filter(Boolean).join("\n\n");
+    const resolvedContext = documentContext as string;
 
     const cacheKey = responseCacheKey(userInput, resolvedContext);
     const cached = await redis.get<string>(cacheKey);
