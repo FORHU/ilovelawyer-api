@@ -21,7 +21,7 @@ export default class AuthSvc {
     return AuthRepo.createUser(username, email, hashedPassword);
   }
 
-  static async login(email: string, password: string) {
+  static async login(email: string, password: string, remember = false) {
     const user = await AuthRepo.findByEmail(email);
     if (!user || !user.password) {
       throw new HttpError("Invalid email or password", 401);
@@ -32,22 +32,23 @@ export default class AuthSvc {
       throw new HttpError("Invalid email or password", 401);
     }
 
-    const { accessToken, refreshToken } = loginToken(user.id);
+    const { accessToken, refreshToken } = loginToken(user.id, remember);
 
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
     await AuthRepo.updateLastLogin(user.id);
 
     return {
+      user: await AuthRepo.findById(user.id),
       accessToken,
       refreshToken,
     };
   }
 
   static async refresh(refreshToken: string) {
-    let payload: { userId: string };
+    let payload: { userId: string; remember?: boolean };
     try {
-      payload = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET) as { userId: string };
+      payload = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET) as { userId: string; remember?: boolean };
     } catch {
       throw new HttpError("Invalid or expired refresh token", 401);
     }
@@ -59,18 +60,19 @@ export default class AuthSvc {
 
     await AuthRepo.deleteByRefreshToken(refreshToken);
 
-    const { accessToken, refreshToken: newRefreshToken } = loginToken(payload.userId);
+    const remember = !!payload.remember;
+    const { accessToken, refreshToken: newRefreshToken } = loginToken(payload.userId, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(payload.userId, newRefreshToken, expiresAt);
 
-    return { accessToken, refreshToken: newRefreshToken };
+    return { accessToken, refreshToken: newRefreshToken, remember };
   }
 
   static async logout(refreshToken: string) {
     await AuthRepo.deleteByRefreshToken(refreshToken);
   }
 
-  static async loginWithGoogle(idToken: string) {
+  static async loginWithGoogle(idToken: string, remember = true) {
     const { googleId, email, name, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
@@ -94,16 +96,12 @@ export default class AuthSvc {
       await AuthRepo.updateLastLogin(user.id);
     }
 
-    const { accessToken, refreshToken } = loginToken(user.id);
+    const { accessToken, refreshToken } = loginToken(user.id, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
 
     return {
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-      },
+      user: await AuthRepo.findById(user.id),
       accessToken,
       refreshToken,
     };
@@ -165,7 +163,7 @@ export default class AuthSvc {
     return AuthRepo.isResetTokenValid(token);
   }
 
-  static async resetPassword(token: string, password: string) {
+  static async resetPassword(token: string, password: string, remember = true) {
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
     const userId = await AuthRepo.consumeResetToken(token, hashedPassword);
     if (!userId) {
@@ -174,7 +172,7 @@ export default class AuthSvc {
 
     await AuthRepo.deleteSessionsByUserId(userId);
 
-    const { accessToken, refreshToken } = loginToken(userId);
+    const { accessToken, refreshToken } = loginToken(userId, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(userId, refreshToken, expiresAt);
 

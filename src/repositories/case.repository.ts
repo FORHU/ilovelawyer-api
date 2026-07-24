@@ -1,8 +1,31 @@
 import prisma from "../lib/prisma";
 
+export interface PartyInput {
+  name: string;
+  designation: string;
+}
+
+export interface CaseData {
+  caseName?: string;
+  partyInvolved?: string;
+  actionType?: string;
+  jurisdiction?: string;
+  notes?: string;
+  parties?: PartyInput[];
+}
+
 export default class CaseRepo {
-  static async create(userId: string, caseName: string, partyInvolved?: string, notes?: string) {
-    return prisma.case.create({ data: { userId, caseName, partyInvolved, notes } });
+  static async create(userId: string, data: CaseData & { caseName: string }) {
+    const { parties, ...caseFields } = data;
+
+    return prisma.case.create({
+      data: {
+        userId,
+        ...caseFields,
+        parties: parties ? { create: parties } : undefined,
+      },
+      include: { parties: true },
+    });
   }
 
   static async list(userId: string, page: number, limit: number) {
@@ -15,6 +38,7 @@ export default class CaseRepo {
         skip,
         take: limit,
         orderBy: { updatedAt: "desc" },
+        include: { parties: true },
       }),
     ]);
 
@@ -22,12 +46,27 @@ export default class CaseRepo {
   }
 
   static async findById(id: string, userId: string) {
-    return prisma.case.findFirst({ where: { id, userId } });
+    return prisma.case.findFirst({ where: { id, userId }, include: { parties: true } });
   }
 
-  static async update(id: string, userId: string, data: { caseName?: string; partyInvolved?: string; notes?: string }) {
-    const result = await prisma.case.updateMany({ where: { id, userId }, data });
-    return result.count > 0;
+  static async update(id: string, userId: string, data: CaseData) {
+    const { parties, ...caseFields } = data;
+
+    const existing = await prisma.case.findFirst({ where: { id, userId }, select: { id: true } });
+    if (!existing) return false;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.case.update({ where: { id }, data: caseFields });
+
+      if (parties) {
+        await tx.party.deleteMany({ where: { caseId: id } });
+        if (parties.length > 0) {
+          await tx.party.createMany({ data: parties.map((p) => ({ ...p, caseId: id })) });
+        }
+      }
+    });
+
+    return true;
   }
 
   static async delete(id: string, userId: string) {

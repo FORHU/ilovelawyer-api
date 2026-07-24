@@ -9,6 +9,7 @@ import { isDev, CLIENT_URL } from "./config";
 import setup from "./setup";
 import swaggerSpec from "./swagger";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { createServer } from "http";
 import { Server } from "socket.io";
 
@@ -24,6 +25,7 @@ app.use(
 );
 
 app.use(express.json());
+app.use(cookieParser());
 
 // Set up rate limiting middleware
 const limiter = rateLimit({

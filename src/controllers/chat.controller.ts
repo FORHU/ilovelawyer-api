@@ -11,16 +11,23 @@ export default class ChatCtrl {
   }
 
   static async listConversations(req: Request, res: Response) {
-    const conversations = await ChatSvc.listConversations(req.user.userId);
+    const schema = Joi.object({ caseId: Joi.string().guid().optional() });
+    const { error, value } = schema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+
+    const conversations = await ChatSvc.listConversations(req.user.userId, value.caseId);
     return res.status(200).json(conversations);
   }
 
   static async createConversation(req: Request, res: Response) {
-    const schema = Joi.object({ title: Joi.string().optional() });
+    const schema = Joi.object({
+      title: Joi.string().optional(),
+      caseId: Joi.string().guid().optional(),
+    });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const conversation = await ChatSvc.createConversation(req.user.userId, value.title);
+    const conversation = await ChatSvc.createConversation(req.user.userId, value.title, value.caseId);
     return res.status(201).json(conversation);
   }
 
