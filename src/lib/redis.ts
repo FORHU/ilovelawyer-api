@@ -12,6 +12,15 @@ client.connect().catch(() => {});
 client.on("error", () => {});
 
 export const redis = {
+  async ping(): Promise<boolean> {
+    if (!client.isReady) return false;
+    try {
+      return (await client.ping()) === "PONG";
+    } catch {
+      return false;
+    }
+  },
+
   async get<T>(key: string): Promise<T | null> {
     if (!client.isReady) return null;
     try {

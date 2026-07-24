@@ -15,15 +15,11 @@ import legalRoute from "./legal.route";
 import sendEmailRoute from "./send-email.route";
 import rsvpRoute from "./rsvp.route";
 import ttsRoute from "./tts.route";
+import healthRoute from "./health.route";
 
 const router = express.Router();
 
-router.get("/v2", (_, res) => {
-  res.json({
-    message: "Welcome to my API",
-  });
-});
-
+router.use("/health", healthRoute);
 router.use("/auth", authRoute);
 router.use("/chat", chatRoute);
 router.use("/legal-rag", legalRagRoute);
