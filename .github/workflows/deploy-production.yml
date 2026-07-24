@@ -66,24 +66,24 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           MAILER_TRANSPORT_HOST: ${{ secrets.MAILER_TRANSPORT_HOST }}
-          MAILER_TRANSPORT_PORT: ${{ secrets.MAILER_TRANSPORT_PORT }}
-          MAILER_TRANSPORT_SECURE: ${{ secrets.MAILER_TRANSPORT_SECURE }}
+          MAILER_TRANSPORT_PORT: ${{ vars.MAILER_TRANSPORT_PORT }}
+          MAILER_TRANSPORT_SECURE: ${{ vars.MAILER_TRANSPORT_SECURE }}
           MAILER_EMAIL: ${{ secrets.MAILER_EMAIL }}
           MAILER_PASSWORD: ${{ secrets.MAILER_PASSWORD }}
           ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
           REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
-          ACCESS_TOKEN_EXPIRY: ${{ secrets.ACCESS_TOKEN_EXPIRY }}
-          REFRESH_TOKEN_EXPIRY_DAYS: ${{ secrets.REFRESH_TOKEN_EXPIRY_DAYS }}
+          ACCESS_TOKEN_EXPIRY: ${{ vars.ACCESS_TOKEN_EXPIRY }}
+          REFRESH_TOKEN_EXPIRY_DAYS: ${{ vars.REFRESH_TOKEN_EXPIRY_DAYS }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
           REDIS_HOST: ${{ secrets.REDIS_HOST }}
           REDIS_PORT: ${{ secrets.REDIS_PORT }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
           SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
-          CLIENT_URL: ${{ secrets.CLIENT_URL }}
+          CLIENT_URL: ${{ vars.CLIENT_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          CHAT_WONDER_API_URL: ${{ secrets.CHAT_WONDER_API_URL }}
-          CHAT_WONDER_WS_URL: ${{ secrets.CHAT_WONDER_WS_URL }}
+          CHAT_WONDER_API_URL: ${{ vars.CHAT_WONDER_API_URL }}
+          CHAT_WONDER_WS_URL: ${{ vars.CHAT_WONDER_WS_URL }}
         run: |
           cat > ${{ github.workspace }}/ilovelawyer-api.env << EOF
           DATABASE_URL=${DATABASE_URL}
@@ -97,7 +97,6 @@ jobs:
           REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET}
           ACCESS_TOKEN_EXPIRY=${ACCESS_TOKEN_EXPIRY}
           REFRESH_TOKEN_EXPIRY_DAYS=${REFRESH_TOKEN_EXPIRY_DAYS}
-          REDIS_URL=${REDIS_URL}
           REDIS_URL=${REDIS_URL}
           REDIS_HOST=${REDIS_HOST}
           REDIS_PORT=${REDIS_PORT}

@@ -17,11 +17,19 @@ const swaggerSpec: OAS3Definition = {
       },
     },
     schemas: {
-      AuthTokens: {
+      AccessToken: {
         type: "object",
+        description: "The refreshToken itself is never in the body — it's set as an httpOnly, SameSite=Lax cookie scoped to /api/auth.",
         properties: {
           accessToken: { type: "string" },
-          refreshToken: { type: "string" },
+        },
+      },
+      UserAuthResponse: {
+        type: "object",
+        description: "The refreshToken itself is never in the body — it's set as an httpOnly, SameSite=Lax cookie scoped to /api/auth.",
+        properties: {
+          user: { $ref: "#/components/schemas/UserProfile" },
+          accessToken: { type: "string" },
         },
       },
       User: {
@@ -64,6 +72,7 @@ const swaggerSpec: OAS3Definition = {
         properties: {
           id: { type: "string" },
           userId: { type: "string" },
+          caseId: { type: "string", nullable: true },
           title: { type: "string", nullable: true },
           createdAt: { type: "string", format: "date-time" },
         },
@@ -160,6 +169,16 @@ const swaggerSpec: OAS3Definition = {
           chunk_text: { type: "string" },
         },
       },
+      Party: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          designation: {
+            type: "string",
+            enum: ["Petitioner / Plaintiff", "Respondent / Defendant", "Intervenor / Third-Party"],
+          },
+        },
+      },
       UserCase: {
         type: "object",
         properties: {
@@ -167,7 +186,14 @@ const swaggerSpec: OAS3Definition = {
           userId: { type: "string" },
           caseName: { type: "string" },
           partyInvolved: { type: "string", nullable: true },
+          actionType: {
+            type: "string",
+            nullable: true,
+            enum: ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"],
+          },
+          jurisdiction: { type: "string", nullable: true },
           notes: { type: "string", nullable: true },
+          parties: { type: "array", items: { $ref: "#/components/schemas/Party" } },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
         },
@@ -210,8 +236,8 @@ const swaggerSpec: OAS3Definition = {
           audioFileId: { type: "string", nullable: true },
           transcript: { type: "string", nullable: true },
           duration: { type: "number", nullable: true },
-          jobId: { type: "string", nullable: true },
-          jobStatus: { type: "string", nullable: true },
+          jobName: { type: "string", nullable: true },
+          status: { type: "string", nullable: true },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
         },
@@ -245,12 +271,43 @@ const swaggerSpec: OAS3Definition = {
   },
   paths: {
     // ── Health ────────────────────────────────────────────────────────────
-    "/v1": {
+    "/health": {
       get: {
         tags: ["Health"],
-        summary: "Health check",
+        summary: "Health check — pings the database and Redis",
         responses: {
-          200: { description: "API is running" },
+          200: {
+            description: "All dependencies healthy",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    status: { type: "string", enum: ["ok"] },
+                    database: { type: "string", enum: ["up", "down"] },
+                    redis: { type: "string", enum: ["up", "down"] },
+                  },
+                },
+              },
+            },
+          },
+          503: {
+            description: "One or more dependencies unreachable",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    status: { type: "string", enum: ["degraded"] },
+                    database: { type: "string", enum: ["up", "down"] },
+                    redis: { type: "string", enum: ["up", "down"] },
+                  },
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -287,6 +344,7 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Auth"],
         summary: "Login with email and password",
+        description: "Sets a refreshToken httpOnly cookie (session-only unless remember is true, in which case it persists for REFRESH_TOKEN_EXPIRY_DAYS).",
         requestBody: {
           required: true,
           content: {
@@ -297,13 +355,14 @@ const swaggerSpec: OAS3Definition = {
                 properties: {
                   email: { type: "string", format: "email", example: "juan@example.com" },
                   password: { type: "string", example: "password123" },
+                  remember: { type: "boolean", default: false, description: "Persist the refreshToken cookie across browser restarts" },
                 },
               },
             },
           },
         },
         responses: {
-          200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
+          200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Invalid credentials", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -312,21 +371,10 @@ const swaggerSpec: OAS3Definition = {
     "/auth/refresh": {
       post: {
         tags: ["Auth"],
-        summary: "Refresh access token",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["refreshToken"],
-                properties: { refreshToken: { type: "string" } },
-              },
-            },
-          },
-        },
+        summary: "Rotate the refresh token and issue a new access token",
+        description: "Reads the refreshToken from the httpOnly cookie (no request body) and sets a new rotated cookie in the response.",
         responses: {
-          200: { description: "New tokens issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
+          200: { description: "New access token issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AccessToken" } } } },
           401: { description: "Invalid or expired refresh token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -335,21 +383,9 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Auth"],
         summary: "Logout — revoke current session",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["refreshToken"],
-                properties: { refreshToken: { type: "string" } },
-              },
-            },
-          },
-        },
+        description: "Reads the refreshToken from the httpOnly cookie (no request body), revokes it server-side, and clears the cookie.",
         responses: {
           200: { description: "Logged out successfully" },
-          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -357,6 +393,7 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Auth"],
         summary: "Login or register with Google OAuth",
+        description: "Sets a refreshToken httpOnly cookie (session-only unless remember is true, in which case it persists for REFRESH_TOKEN_EXPIRY_DAYS).",
         requestBody: {
           required: true,
           content: {
@@ -364,14 +401,18 @@ const swaggerSpec: OAS3Definition = {
               schema: {
                 type: "object",
                 required: ["idToken"],
-                properties: { idToken: { type: "string", description: "Google OAuth ID token" } },
+                properties: {
+                  idToken: { type: "string", description: "Google OAuth ID token" },
+                  remember: { type: "boolean", default: true, description: "Persist the refreshToken cookie across browser restarts" },
+                },
               },
             },
           },
         },
         responses: {
-          200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
+          200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
           401: { description: "Invalid Google token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: { description: "Email already registered with a different sign-in method", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -432,6 +473,7 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Auth"],
         summary: "Complete password reset — all prior sessions are revoked",
+        description: "Sets a new refreshToken httpOnly cookie so the user stays signed in after reset.",
         requestBody: {
           required: true,
           content: {
@@ -448,7 +490,7 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          200: { description: "Password reset, new tokens issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthTokens" } } } },
+          200: { description: "Password reset, new access token issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AccessToken" } } } },
           400: { description: "Invalid or expired token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -512,6 +554,9 @@ const swaggerSpec: OAS3Definition = {
         tags: ["Chat"],
         summary: "List all conversations for the current user",
         security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "caseId", in: "query", schema: { type: "string" }, description: "Filter conversations linked to a single Case" },
+        ],
         responses: {
           200: {
             description: "List of conversations",
@@ -531,6 +576,7 @@ const swaggerSpec: OAS3Definition = {
                 type: "object",
                 properties: {
                   title: { type: "string", description: "Optional — omit to enable auto-title generation" },
+                  caseId: { type: "string", description: "Link to one of the user's Cases (set only at creation, not reassignable later)" },
                 },
               },
             },
@@ -539,6 +585,7 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           201: { description: "Conversation created", content: { "application/json": { schema: { $ref: "#/components/schemas/Conversation" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "caseId not found or not owned by the user", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -595,6 +642,7 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Chat"],
         summary: "Send a message — streams the AI response via chunked transfer encoding",
+        description: "If the conversation is linked to a Case (via caseId), the Case's fields are combined with legal-RAG retrieval and injected as context automatically — documentContext is not required for that.",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
@@ -607,7 +655,7 @@ const swaggerSpec: OAS3Definition = {
                 properties: {
                   message: { type: "string", example: "What is the penalty under R.A. 9262?" },
                   sessionId: { type: "string", description: "ChatWonder session ID from GET /chat/session" },
-                  documentContext: { type: "string", description: "Optional extra context to pass to the AI" },
+                  documentContext: { type: "string", description: "Optional extra context to pass to the AI, combined with Case context and legal-RAG retrieval" },
                 },
               },
             },
@@ -1066,7 +1114,13 @@ const swaggerSpec: OAS3Definition = {
                 properties: {
                   caseName: { type: "string", example: "Smith vs. Jones — Custody Dispute" },
                   partyInvolved: { type: "string" },
+                  actionType: {
+                    type: "string",
+                    enum: ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"],
+                  },
+                  jurisdiction: { type: "string" },
                   notes: { type: "string" },
+                  parties: { type: "array", items: { $ref: "#/components/schemas/Party" } },
                 },
               },
             },
@@ -1131,7 +1185,13 @@ const swaggerSpec: OAS3Definition = {
                 properties: {
                   caseName: { type: "string" },
                   partyInvolved: { type: "string" },
+                  actionType: {
+                    type: "string",
+                    enum: ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"],
+                  },
+                  jurisdiction: { type: "string" },
                   notes: { type: "string" },
+                  parties: { type: "array", items: { $ref: "#/components/schemas/Party" } },
                 },
               },
             },
@@ -1448,7 +1508,7 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          200: { description: "Job started", content: { "application/json": { schema: { type: "object", properties: { jobId: { type: "string" } } } } } },
+          200: { description: "Job started", content: { "application/json": { schema: { type: "object", properties: { jobName: { type: "string" }, status: { type: "string" } } } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
