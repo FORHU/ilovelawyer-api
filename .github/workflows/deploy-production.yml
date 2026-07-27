@@ -148,7 +148,6 @@ jobs:
             docker rm   ilovelawyer-api 2>/dev/null || true
             docker run -d --name ilovelawyer-api --restart unless-stopped \
               --env-file /home/ec2-user/ilovelawyer-api.env \
-              --add-host=host.docker.internal:host-gateway \
               -p 3001:3001 \
               "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG"
             docker image prune -f
