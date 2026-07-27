@@ -15,6 +15,15 @@ export function normalizeKeyword(input: string): string {
     .replace(/\s+/g, " ");
 }
 
+// Collapses letter-spaced runs like "D E C I S I O N" -> "DECISION". Restricted to
+// uppercase letters/digits with a 4+ character minimum so it can't misfire on normal
+// prose (which practically never has 4 consecutive single-letter uppercase "words")
+// or on short legitimate spaced-out sequences like Roman numerals or initials.
+export function normalizeLetterSpacing(text: string): string {
+  if (!text) return text;
+  return text.replace(/\b(?:[A-Z0-9]\s){3,}[A-Z0-9]\b/g, (match) => match.replace(/\s+/g, ""));
+}
+
 export function cleanAiText(text: string): string {
   if (!text) return text;
   return text

@@ -4,7 +4,7 @@ import LegalSourceCacheRepo from "../repositories/legal-source-cache.repository"
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
 import { EMPTY_PLACEHOLDER, SOURCE_ANALYSIS_PROMPT } from "../constants/legalSourceCache.constants";
-import { normalizeKeyword, cleanAiText, extractYearHint, extractRagSearchTerms } from "../utils/legalSourceCache.utils";
+import { normalizeKeyword, cleanAiText, normalizeLetterSpacing, extractYearHint, extractRagSearchTerms } from "../utils/legalSourceCache.utils";
 
 interface RagMatch {
   id: bigint;
@@ -76,7 +76,7 @@ export default class LegalSourceCacheSvc {
     // Tier 2: RAG DB match
     const ragDoc = await findInRagDb(rawKeyword);
     if (ragDoc) {
-      const markdownContent = ragDoc.formatted_markdown?.trim() || ragDoc.concise_summary?.trim() || "";
+      const markdownContent = normalizeLetterSpacing(ragDoc.formatted_markdown?.trim() || ragDoc.concise_summary?.trim() || "");
       if (markdownContent) {
         const title = ragDoc.title || rawKeyword;
         const persisted = await LegalSourceCacheRepo.upsert({ rawKeyword, normalizedKeyword, title, markdownContent, rawResponse: markdownContent, sourceUrl: ragDoc.source_url });
@@ -98,7 +98,7 @@ export default class LegalSourceCacheSvc {
     }
 
     const rawResponse = String(chatPayload.response || chatPayload.intermediate_response || "").trim();
-    const markdownContent = cleanAiText(rawResponse) || rawResponse || `# ${rawKeyword}\n\n${EMPTY_PLACEHOLDER}`;
+    const markdownContent = normalizeLetterSpacing(cleanAiText(rawResponse) || rawResponse || `# ${rawKeyword}\n\n${EMPTY_PLACEHOLDER}`);
     const sourceUrl = Array.isArray(chatPayload.source_metadata) && chatPayload.source_metadata.length > 0
       ? (chatPayload.source_metadata[0] as Record<string, unknown>)?.source_url as string ?? null
       : null;
