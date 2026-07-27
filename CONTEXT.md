@@ -17,7 +17,7 @@ Short-lived JWT proving identity on a per-request basis. Verified statelessly (s
 _Avoid_: "auth token" (ambiguous between this and Refresh Token)
 
 **Refresh Token**:
-Longer-lived JWT used only to mint a new Access Token once it expires. Persisted in a Session row (unlike the Access Token) so it can be revoked before its natural expiry — that's what makes Logout possible. Rotated on every use: refreshing deletes the old Session/token and creates a new one, rather than reusing the same Refresh Token until its original expiry (see [ADR 0001](docs/adr/0001-refresh-token-rotation.md)).
+Longer-lived JWT used only to mint a new Access Token once it expires. Persisted in a Session row (unlike the Access Token) so it can be revoked before its natural expiry — that's what makes Logout possible. Rotated on every use: refreshing deletes the old Session/token and creates a new one, rather than reusing the same Refresh Token until its original expiry.
 
 ## Example dialogue
 
