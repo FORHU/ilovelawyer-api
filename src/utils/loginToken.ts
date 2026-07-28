@@ -3,7 +3,7 @@ import {
     ACCESS_TOKEN_SECRET,
     ACCESS_TOKEN_EXPIRY,
     REFRESH_TOKEN_SECRET,
-    REFRESH_TOKEN_EXPIRY_DAYS,
+    REFRESH_TOKEN_EXPIRY,
 } from "../config";
 
 export default function loginToken(userId: string, remember = false) {
@@ -11,7 +11,7 @@ export default function loginToken(userId: string, remember = false) {
         expiresIn: ACCESS_TOKEN_EXPIRY,
     });
     const refreshToken = jwt.sign({ userId, remember }, REFRESH_TOKEN_SECRET, {
-        expiresIn: `${REFRESH_TOKEN_EXPIRY_DAYS}d`,
+        expiresIn: REFRESH_TOKEN_EXPIRY,
     });
 
     return { accessToken, refreshToken };

@@ -19,10 +19,14 @@ export const MAILER_PASSWORD = process.env.MAILER_PASSWORD as string;
 export const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET as string;
 export const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET as string;
 export const ACCESS_TOKEN_EXPIRY = (process.env.ACCESS_TOKEN_EXPIRY || "1d") as string;
-/** Day count used for cookies/DB. Env may be "30" or "30d". */
-export const REFRESH_TOKEN_EXPIRY_DAYS = (() => {
+/** JWT timespan from env (e.g. "30d"). */
+export const REFRESH_TOKEN_EXPIRY = (() => {
     const raw = (process.env.REFRESH_TOKEN_EXPIRY_DAYS || "30d").trim();
-    const days = Number(raw.replace(/d$/i, ""));
+    return /d$/i.test(raw) ? raw : `${raw}d`;
+})();
+/** Day count for cookies/DB expiry math. */
+export const REFRESH_TOKEN_EXPIRY_DAYS = (() => {
+    const days = Number(REFRESH_TOKEN_EXPIRY.replace(/d$/i, ""));
     if (!Number.isFinite(days) || days <= 0) {
         throw new Error(
             `REFRESH_TOKEN_EXPIRY_DAYS must be a positive day count like "30" or "30d" (got ${JSON.stringify(process.env.REFRESH_TOKEN_EXPIRY_DAYS)})`,
