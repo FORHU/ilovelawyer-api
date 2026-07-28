@@ -51,6 +51,12 @@ export default class ChatCtrl {
     return res.status(200).json(messages);
   }
 
+  static async getRelatedCases(req: Request, res: Response) {
+    const { conversationId } = req.params;
+    const relatedCases = await ChatSvc.getRelatedCases(req.user.userId, conversationId);
+    return res.status(200).json({ relatedCases });
+  }
+
   static async deleteMessage(req: Request, res: Response) {
     await ChatSvc.deleteMessage(req.user.userId, req.params.conversationId, req.params.messageId);
     return res.status(204).send();
