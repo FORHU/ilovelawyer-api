@@ -18,4 +18,9 @@ export default class UsersSvc {
 
     return AuthRepo.updateProfile(userId, data);
   }
+
+  static async deleteMe(userId: string) {
+    await AuthRepo.deleteSessionsByUserId(userId);
+    await AuthRepo.deleteUser(userId);
+  }
 }

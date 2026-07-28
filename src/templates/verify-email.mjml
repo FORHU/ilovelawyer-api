@@ -1,0 +1,12 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Use the code below to verify your email address:</mj-text>
+        <mj-text font-size="28px" font-weight="bold" align="center" letter-spacing="4px">{{code}}</mj-text>
+        <mj-text>This code will expire in 1 hour. If you didn't request this, you can safely ignore this email.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

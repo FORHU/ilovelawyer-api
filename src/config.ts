@@ -18,8 +18,22 @@ export const MAILER_EMAIL = process.env.MAILER_EMAIL as string;
 export const MAILER_PASSWORD = process.env.MAILER_PASSWORD as string;
 export const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET as string;
 export const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET as string;
-export const ACCESS_TOKEN_EXPIRY = process.env.ACCESS_TOKEN_EXPIRY as string;
-export const REFRESH_TOKEN_EXPIRY_DAYS = parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || "30", 10);
+export const ACCESS_TOKEN_EXPIRY = (process.env.ACCESS_TOKEN_EXPIRY || "1d") as string;
+/** JWT timespan from env (e.g. "30d"). */
+export const REFRESH_TOKEN_EXPIRY = (() => {
+    const raw = (process.env.REFRESH_TOKEN_EXPIRY_DAYS || "30d").trim();
+    return /d$/i.test(raw) ? raw : `${raw}d`;
+})();
+/** Day count for cookies/DB expiry math. */
+export const REFRESH_TOKEN_EXPIRY_DAYS = (() => {
+    const days = Number(REFRESH_TOKEN_EXPIRY.replace(/d$/i, ""));
+    if (!Number.isFinite(days) || days <= 0) {
+        throw new Error(
+            `REFRESH_TOKEN_EXPIRY_DAYS must be a positive day count like "30" or "30d" (got ${JSON.stringify(process.env.REFRESH_TOKEN_EXPIRY_DAYS)})`,
+        );
+    }
+    return days;
+})();
 export const REDIS_URL = process.env.REDIS_URL as string;
 export const REDIS_HOST = process.env.REDIS_HOST as string;
 export const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);

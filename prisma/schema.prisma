@@ -29,6 +29,8 @@ model User {
   onboardingCompleted Boolean   @default(false)
   otpCode             String?
   otpExpiry           DateTime?
+  emailVerificationOtp       String?
+  emailVerificationOtpExpiry DateTime?
 
   sessions                 Session[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
@@ -157,7 +159,7 @@ model ConversationInvite {
   expiresAt      DateTime
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  creator      User         @relation(fields: [createdBy], references: [id])
+  creator      User         @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
 }
@@ -168,7 +170,7 @@ model ConversationParticipant {
   joinedAt       DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id])
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, userId])
 }

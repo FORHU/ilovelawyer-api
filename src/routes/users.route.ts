@@ -9,5 +9,6 @@ router.use(validSession);
 
 router.get("/me", asyncHandler(UsersCtrl.me));
 router.patch("/me", asyncHandler(UsersCtrl.updateMe));
+router.delete("/me", asyncHandler(UsersCtrl.deleteMe));
 
 export default router;

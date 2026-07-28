@@ -495,6 +495,56 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
+    "/auth/send-otp": {
+      post: {
+        tags: ["Auth"],
+        summary: "Send (or resend) a 6-digit email verification code",
+        description: "Intended to be called by the frontend right after a successful /auth/signup, and again for a \"resend code\" action.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email"],
+                properties: { email: { type: "string", format: "email" } },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Verification code sent", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" } } } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "User not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/auth/verify-otp": {
+      post: {
+        tags: ["Auth"],
+        summary: "Verify the emailed code and log the user in",
+        description: "On success, marks the account as isEmailVerified and sets a refreshToken httpOnly cookie, same as login.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email", "code"],
+                properties: {
+                  email: { type: "string", format: "email" },
+                  code: { type: "string", minLength: 6, maxLength: 6, example: "123456" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Email verified, login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
+          400: { description: "Invalid or expired code", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
 
     // ── Users ─────────────────────────────────────────────────────────────
     "/users/me": {
@@ -530,6 +580,15 @@ const swaggerSpec: OAS3Definition = {
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           409: { description: "Username already taken", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Users"],
+        summary: "Permanently delete the current user's account and all associated data",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          204: { description: "Account deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },

@@ -146,4 +146,40 @@ export default class AuthCtrl {
 
     return res.status(200).json({ accessToken });
   }
+
+  static async sendOtp(req: Request, res: Response) {
+    const { email } = req.body;
+
+    const schema = Joi.object({
+      email: Joi.string().email().required(),
+    });
+
+    const { error } = schema.validate({ email });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const result = await AuthSvc.sendOtp(email);
+
+    return res.status(200).json(result);
+  }
+
+  static async verifyOtp(req: Request, res: Response) {
+    const { email, code } = req.body;
+
+    const schema = Joi.object({
+      email: Joi.string().email().required(),
+      code: Joi.string().length(6).pattern(/^\d+$/).required(),
+    });
+
+    const { error } = schema.validate({ email, code });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const { user, accessToken, refreshToken } = await AuthSvc.verifyOtp(email, code);
+    setRefreshTokenCookie(res, refreshToken, true);
+
+    return res.status(200).json({ user, accessToken });
+  }
 }
