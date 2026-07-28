@@ -11,7 +11,7 @@ export default function loginToken(userId: string, remember = false) {
         expiresIn: ACCESS_TOKEN_EXPIRY,
     });
     const refreshToken = jwt.sign({ userId, remember }, REFRESH_TOKEN_SECRET, {
-        expiresIn: `${REFRESH_TOKEN_EXPIRY_DAYS}`,
+        expiresIn: `${REFRESH_TOKEN_EXPIRY_DAYS}d`,
     });
 
     return { accessToken, refreshToken };
