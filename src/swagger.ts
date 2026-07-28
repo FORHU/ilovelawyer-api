@@ -365,7 +365,6 @@ const swaggerSpec: OAS3Definition = {
           200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Invalid credentials", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          403: { description: "Account has been deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -377,7 +376,6 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           200: { description: "New access token issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AccessToken" } } } },
           401: { description: "Invalid or expired refresh token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          403: { description: "Account has been deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -414,7 +412,6 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
           401: { description: "Invalid Google token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          403: { description: "Account has been deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           409: { description: "Email already registered with a different sign-in method", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -591,18 +588,6 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         responses: {
           204: { description: "Account deleted" },
-          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-        },
-      },
-    },
-    "/users/me/deactivate": {
-      patch: {
-        tags: ["Users"],
-        summary: "Deactivate the current user's account and revoke all sessions",
-        description: "Sets isActive to false. Login (password or Google) and token refresh are rejected with 403 for deactivated accounts.",
-        security: [{ bearerAuth: [] }],
-        responses: {
-          200: { description: "Account deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },

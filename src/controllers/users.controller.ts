@@ -29,11 +29,6 @@ export default class UsersCtrl {
     return res.status(200).json(user);
   }
 
-  static async deactivateMe(req: Request, res: Response) {
-    const user = await UsersSvc.deactivateMe(req.user.userId);
-    return res.status(200).json(user);
-  }
-
   static async deleteMe(req: Request, res: Response) {
     await UsersSvc.deleteMe(req.user.userId);
     return res.status(204).send();

@@ -32,10 +32,6 @@ export default class AuthSvc {
       throw new HttpError("Invalid email or password", 401);
     }
 
-    if (!user.isActive) {
-      throw new HttpError("This account has been deactivated", 403);
-    }
-
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -62,12 +58,7 @@ export default class AuthSvc {
       throw new HttpError("Invalid or expired refresh token", 401);
     }
 
-    const user = await AuthRepo.findById(payload.userId);
     await AuthRepo.deleteByRefreshToken(refreshToken);
-
-    if (!user || !user.isActive) {
-      throw new HttpError("This account has been deactivated", 403);
-    }
 
     const remember = !!payload.remember;
     const { accessToken, refreshToken: newRefreshToken } = loginToken(payload.userId, remember);
@@ -102,9 +93,6 @@ export default class AuthSvc {
 
       user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined);
     } else {
-      if (!user.isActive) {
-        throw new HttpError("This account has been deactivated", 403);
-      }
       await AuthRepo.updateLastLogin(user.id);
     }
 
