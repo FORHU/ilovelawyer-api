@@ -60,28 +60,6 @@ export default class AuthRepo {
     });
   }
 
-  static async deactivate(userId: string) {
-    return prisma.user.update({
-      where: { id: userId },
-      data: { isActive: false },
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        isEmailVerified: true,
-        onboardingCompleted: true,
-        provider: true,
-        avatarId: true,
-        lastLoginAt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-  }
-
   static async deleteUser(userId: string) {
     return prisma.user.delete({ where: { id: userId } });
   }
