@@ -365,6 +365,7 @@ const swaggerSpec: OAS3Definition = {
           200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Invalid credentials", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Account has been deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -376,6 +377,7 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           200: { description: "New access token issued", content: { "application/json": { schema: { $ref: "#/components/schemas/AccessToken" } } } },
           401: { description: "Invalid or expired refresh token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Account has been deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -412,6 +414,7 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
           401: { description: "Invalid Google token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Account has been deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           409: { description: "Email already registered with a different sign-in method", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -495,6 +498,56 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
+    "/auth/send-otp": {
+      post: {
+        tags: ["Auth"],
+        summary: "Send (or resend) a 6-digit email verification code",
+        description: "Intended to be called by the frontend right after a successful /auth/signup, and again for a \"resend code\" action.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email"],
+                properties: { email: { type: "string", format: "email" } },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Verification code sent", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" } } } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "User not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/auth/verify-otp": {
+      post: {
+        tags: ["Auth"],
+        summary: "Verify the emailed code and log the user in",
+        description: "On success, marks the account as isEmailVerified and sets a refreshToken httpOnly cookie, same as login.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email", "code"],
+                properties: {
+                  email: { type: "string", format: "email" },
+                  code: { type: "string", minLength: 6, maxLength: 6, example: "123456" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Email verified, login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
+          400: { description: "Invalid or expired code", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
 
     // ── Users ─────────────────────────────────────────────────────────────
     "/users/me": {
@@ -530,6 +583,27 @@ const swaggerSpec: OAS3Definition = {
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           409: { description: "Username already taken", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Users"],
+        summary: "Permanently delete the current user's account and all associated data",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          204: { description: "Account deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/deactivate": {
+      patch: {
+        tags: ["Users"],
+        summary: "Deactivate the current user's account and revoke all sessions",
+        description: "Sets isActive to false. Login (password or Google) and token refresh are rejected with 403 for deactivated accounts.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Account deactivated", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },

@@ -32,6 +32,10 @@ export default class AuthSvc {
       throw new HttpError("Invalid email or password", 401);
     }
 
+    if (!user.isActive) {
+      throw new HttpError("This account has been deactivated", 403);
+    }
+
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -58,7 +62,12 @@ export default class AuthSvc {
       throw new HttpError("Invalid or expired refresh token", 401);
     }
 
+    const user = await AuthRepo.findById(payload.userId);
     await AuthRepo.deleteByRefreshToken(refreshToken);
+
+    if (!user || !user.isActive) {
+      throw new HttpError("This account has been deactivated", 403);
+    }
 
     const remember = !!payload.remember;
     const { accessToken, refreshToken: newRefreshToken } = loginToken(payload.userId, remember);
@@ -93,6 +102,9 @@ export default class AuthSvc {
 
       user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined);
     } else {
+      if (!user.isActive) {
+        throw new HttpError("This account has been deactivated", 403);
+      }
       await AuthRepo.updateLastLogin(user.id);
     }
 
@@ -177,5 +189,47 @@ export default class AuthSvc {
     await AuthRepo.createSession(userId, refreshToken, expiresAt);
 
     return { accessToken, refreshToken };
+  }
+
+  static async sendOtp(email: string) {
+    const user = await AuthRepo.findByEmail(email);
+    if (!user) {
+      throw new HttpError("User not found", 404);
+    }
+
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+    const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
+    await AuthRepo.setEmailVerificationOtp(user.id, code, expiresAt);
+
+    const html = await renderTemplate("verify-email", {
+      name: user.name || "User",
+      code,
+    });
+
+    await sendEmail({
+      to: user.email,
+      subject: "Verify your email",
+      html,
+    });
+
+    return { message: "Verification code sent" };
+  }
+
+  static async verifyOtp(email: string, code: string, remember = true) {
+    const user = await AuthRepo.consumeEmailVerificationOtp(email, code);
+    if (!user) {
+      throw new HttpError("Invalid or expired code", 400);
+    }
+
+    const { accessToken, refreshToken } = loginToken(user.id, remember);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    await AuthRepo.createSession(user.id, refreshToken, expiresAt);
+    await AuthRepo.updateLastLogin(user.id);
+
+    return {
+      user: await AuthRepo.findById(user.id),
+      accessToken,
+      refreshToken,
+    };
   }
 }
