@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
 import CaseSvc from "./case.service";
-import { generateTitleViaWs, streamChatWonderMessage } from "../utils/chatWonder";
+import { generateTitleViaWs, streamChatWonderMessage, RelatedCase } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
@@ -99,15 +99,19 @@ export default class ChatSvc {
     const resolvedContext = [caseContext, documentContext].filter(Boolean).join("\n\n");
 
     const cacheKey = responseCacheKey(userInput, resolvedContext);
-    const cached = await redis.get<string>(cacheKey);
+    const cached = await redis.get<{ content: string; relatedCases: RelatedCase[] }>(cacheKey);
 
     let fullResponse: string;
+    let relatedCases: RelatedCase[];
     if (cached) {
-      onChunk(cached);
-      fullResponse = cached;
+      onChunk(cached.content);
+      fullResponse = cached.content;
+      relatedCases = cached.relatedCases;
     } else {
-      fullResponse = await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext);
-      redis.set(cacheKey, fullResponse, RESPONSE_CACHE_TTL);
+      const result = await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext);
+      fullResponse = result.content;
+      relatedCases = result.relatedCases;
+      redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
     }
 
     const timeline = extractTimeline(fullResponse);
@@ -124,6 +128,17 @@ export default class ChatSvc {
 
     if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
+    if (relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, relatedCases);
+  }
+
+  static async getRelatedCases(userId: string, conversationId: string) {
+    const conversation = await ChatRepo.findConversationById(conversationId);
+    if (!conversation || conversation.userId !== userId) {
+      throw new HttpError("Conversation not found", 404);
+    }
+
+    const message = await ChatRepo.findLatestAssistantMessage(conversationId);
+    return message?.relatedCases?.items ?? [];
   }
 
   static buildTitlePrompt(userMessage: string): string {

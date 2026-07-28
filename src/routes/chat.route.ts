@@ -15,6 +15,7 @@ router.post("/conversations", asyncHandler(ChatCtrl.createConversation));
 router.patch("/conversations/:conversationId", asyncHandler(ChatCtrl.renameConversation));
 router.delete("/conversations/:conversationId", asyncHandler(ChatCtrl.deleteConversation));
 router.get("/conversations/:conversationId/messages", asyncHandler(ChatCtrl.listMessages));
+router.get("/conversations/:conversationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
 router.post("/conversations/:conversationId/messages", asyncHandler(ChatCtrl.sendMessage));
 router.delete("/conversations/:conversationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
 

@@ -34,6 +34,18 @@ export async function getChatWonderSessionId(): Promise<string> {
   throw new HttpError("Could not initialize chat session. Chat Wonder may be unreachable.", 503);
 }
 
+export interface RelatedCase {
+  type: string;
+  title: string | null;
+  url: string | null;
+  case_number: string | null;
+  ra_number: string | null;
+  year: unknown;
+  snippet: string | null;
+  relevance: number | null;
+  vetted: boolean;
+}
+
 function stripSources(chunk: string): string {
   const idx = chunk.indexOf("[Sources]");
   return idx !== -1 ? chunk.slice(0, idx) : chunk;
@@ -93,17 +105,23 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
   });
 }
 
+export interface ChatWonderStreamResult {
+  content: string;
+  relatedCases: RelatedCase[];
+}
+
 export function streamChatWonderMessage(
   sessionId: string,
   userInput: string,
   onChunk: (text: string) => void,
   documentContext?: string,
-): Promise<string> {
+): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
     let accumulated = "";
     let sourcesDropped = false;
     let settled = false;
+    let relatedCases: RelatedCase[] = [];
 
     const finish = () => {
       if (settled) return;
@@ -113,7 +131,7 @@ export function streamChatWonderMessage(
       } catch {
         // already closing
       }
-      resolve(accumulated);
+      resolve({ content: accumulated, relatedCases });
     };
 
     ws.onopen = () => {
@@ -153,6 +171,21 @@ export function streamChatWonderMessage(
           onChunk(clean);
         }
         finish();
+        return;
+      }
+
+      const relatedIdx = message.indexOf("[RELATED_CASES]");
+      if (relatedIdx !== -1) {
+        try {
+          relatedCases = JSON.parse(message.slice(relatedIdx + "[RELATED_CASES]".length));
+        } catch {
+          // malformed frame — leave relatedCases as whatever it was (usually [])
+        }
+        if (relatedIdx > 0 && !sourcesDropped) {
+          const clean = message.slice(0, relatedIdx);
+          accumulated += clean;
+          onChunk(clean);
+        }
         return;
       }
 

@@ -109,6 +109,7 @@ model Message {
   replies      Message[]        @relation("MessageThread")
   timeline     MessageTimeline?
   mindMap      MessageMindMap?
+  relatedCases MessageRelatedCases?
 
   @@index([conversationId])
   @@index([userId])
@@ -128,6 +129,15 @@ model MessageMindMap {
   id        String   @id @default(uuid())
   messageId String   @unique
   data      Json
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+model MessageRelatedCases {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  items     Json
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)

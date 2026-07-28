@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 import { MessageRole, Prisma } from "@prisma/client";
 import { TimelineItem, MindMapItem } from "../utils/response-parser";
+import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
   static async createConversation(userId: string, title?: string, caseId?: string) {
@@ -37,7 +38,7 @@ export default class ChatRepo {
     return prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: "asc" },
-      include: { timeline: true, mindMap: true },
+      include: { timeline: true, mindMap: true, relatedCases: true },
     });
   }
 
@@ -65,8 +66,25 @@ export default class ChatRepo {
     });
   }
 
+  static async saveRelatedCases(messageId: string, items: RelatedCase[]) {
+    return prisma.messageRelatedCases.create({
+      data: { messageId, items: items as unknown as Prisma.InputJsonValue },
+    });
+  }
+
   static async findMessageById(messageId: string) {
-    return prisma.message.findUnique({ where: { id: messageId }, include: { timeline: true, mindMap: true } });
+    return prisma.message.findUnique({
+      where: { id: messageId },
+      include: { timeline: true, mindMap: true, relatedCases: true },
+    });
+  }
+
+  static async findLatestAssistantMessage(conversationId: string) {
+    return prisma.message.findFirst({
+      where: { conversationId, role: "assistant" },
+      orderBy: { createdAt: "desc" },
+      include: { relatedCases: true },
+    });
   }
 
   static async deleteMessage(messageId: string) {
