@@ -46,11 +46,6 @@ export interface RelatedCase {
   vetted: boolean;
 }
 
-function stripSources(chunk: string): string {
-  const idx = chunk.indexOf("[Sources]");
-  return idx !== -1 ? chunk.slice(0, idx) : chunk;
-}
-
 function stripLegalTag(input: string): string {
   const lower = input.toLowerCase();
   if (!lower.startsWith(LEGAL_TAG)) return input;
@@ -107,7 +102,10 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
 
 export interface ChatWonderStreamResult {
   content: string;
-  relatedCases: RelatedCase[];
+  /** Raw search terms Chat Wonder tagged via [RELATED_QUERIES] — article/section numbers,
+   * statute names, GR numbers it cited. Callers resolve these against the legal document
+   * store to build the actual RelatedCase records; Chat Wonder never returns cases directly. */
+  relatedQueries: string[];
 }
 
 export function streamChatWonderMessage(
@@ -121,7 +119,7 @@ export function streamChatWonderMessage(
     let accumulated = "";
     let sourcesDropped = false;
     let settled = false;
-    let relatedCases: RelatedCase[] = [];
+    let relatedQueries: string[] = [];
 
     const finish = () => {
       if (settled) return;
@@ -131,7 +129,7 @@ export function streamChatWonderMessage(
       } catch {
         // already closing
       }
-      resolve({ content: accumulated, relatedCases });
+      resolve({ content: accumulated, relatedQueries });
     };
 
     ws.onopen = () => {
@@ -156,54 +154,45 @@ export function streamChatWonderMessage(
     ws.onmessage = (event) => {
       if (settled) return;
 
-      const message = typeof event.data === "string" ? event.data : String(event.data);
+      let message = typeof event.data === "string" ? event.data : String(event.data);
 
       if (message === "__END__") {
         finish();
         return;
       }
 
-      if (message.endsWith("__END__")) {
-        const content = message.slice(0, -"__END__".length);
-        if (content) {
-          const clean = stripSources(content);
-          accumulated += clean;
-          onChunk(clean);
-        }
-        finish();
-        return;
-      }
+      // Note whether this frame carries the terminator so it can still get its
+      // [RELATED_QUERIES]/[Sources] stripped below instead of being flushed raw —
+      // Chat Wonder often ships the tag and __END__ together in the final frame.
+      const isFinal = message.endsWith("__END__");
+      if (isFinal) message = message.slice(0, -"__END__".length);
 
-      const relatedIdx = message.indexOf("[RELATED_CASES]");
-      if (relatedIdx !== -1) {
+      const relatedMatch = message.match(/\[RELATED_QUERIES\]([\s\S]*?)\[\/RELATED_QUERIES\]/i);
+      if (relatedMatch) {
         try {
-          relatedCases = JSON.parse(message.slice(relatedIdx + "[RELATED_CASES]".length));
+          relatedQueries = JSON.parse(relatedMatch[1]);
         } catch {
-          // malformed frame — leave relatedCases as whatever it was (usually [])
+          // malformed frame — leave relatedQueries as whatever it was (usually [])
         }
-        if (relatedIdx > 0 && !sourcesDropped) {
-          const clean = message.slice(0, relatedIdx);
-          accumulated += clean;
-          onChunk(clean);
-        }
-        return;
+        message = message.replace(relatedMatch[0], "");
       }
 
-      if (sourcesDropped) return;
-
-      const idx = message.indexOf("[Sources]");
-      if (idx !== -1) {
-        sourcesDropped = true;
-        if (idx > 0) {
-          const clean = message.slice(0, idx);
-          accumulated += clean;
-          onChunk(clean);
+      if (sourcesDropped) {
+        message = "";
+      } else {
+        const idx = message.indexOf("[Sources]");
+        if (idx !== -1) {
+          sourcesDropped = true;
+          message = message.slice(0, idx);
         }
-        return;
       }
 
-      accumulated += message;
-      onChunk(message);
+      if (message) {
+        accumulated += message;
+        onChunk(message);
+      }
+
+      if (isFinal) finish();
     };
 
     ws.onerror = () => {

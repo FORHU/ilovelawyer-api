@@ -8,16 +8,25 @@ const createSchema = Joi.object({
   audioFileId: Joi.string().uuid().optional(),
   transcript: Joi.string().optional(),
   duration: Joi.number().optional(),
+  caseId: Joi.string().optional(),
 });
 
 const updateSchema = Joi.object({
   title: Joi.string().optional(),
   transcript: Joi.string().optional(),
   duration: Joi.number().optional(),
+  caseId: Joi.string().allow(null).optional(),
 });
 
 export default class TranscriptionCtrl {
   static async list(req: Request, res: Response) {
+    const { caseId } = req.query;
+
+    if (caseId && typeof caseId === "string") {
+      const items = await TranscriptionSvc.listByCase(req.user.userId, caseId);
+      return res.status(200).json(items);
+    }
+
     const items = await TranscriptionSvc.list(req.user.userId);
     return res.status(200).json(items);
   }

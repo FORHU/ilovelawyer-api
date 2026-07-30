@@ -30,6 +30,10 @@ export default class TranscriptionSvc {
     return TranscriptionRepo.findAllByUser(userId);
   }
 
+  static async listByCase(userId: string, caseId: string) {
+    return TranscriptionRepo.findAllByCase(userId, caseId);
+  }
+
   static async getById(id: string, userId: string) {
     const item = await TranscriptionRepo.findById(id, userId);
     if (!item) throw new HttpError("Transcription not found", 404);
@@ -43,6 +47,7 @@ export default class TranscriptionSvc {
     duration?: number;
     jobName?: string;
     status?: string;
+    caseId?: string;
   }) {
     return TranscriptionRepo.create(userId, {
       title: data.title ?? "Untitled Transcription",
@@ -106,6 +111,7 @@ export default class TranscriptionSvc {
     title?: string;
     transcript?: string;
     duration?: number;
+    caseId?: string | null;
   }) {
     const item = await TranscriptionRepo.findById(id, userId);
     if (!item) throw new HttpError("Transcription not found", 404);
