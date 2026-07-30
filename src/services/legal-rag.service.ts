@@ -3,6 +3,7 @@ import HttpError from "../utils/http-error";
 import { redis } from "../lib/redis";
 import { embedText } from "../utils/embedding";
 import { CHAT_WONDER_API_URL } from "../config";
+import { LIBRARY_SECTIONS } from "../constants/library-sections.constants";
 
 const CACHE_TTL_S  = 60 * 60;
 const CACHE_TTL_MS = CACHE_TTL_S * 1000;
@@ -35,8 +36,31 @@ export default class LegalRagSvc {
     return LegalRagRepo.getSubcategories(category);
   }
 
-  static async list(page: number, limit: number, category?: string, year?: number, search?: string) {
-    return LegalRagRepo.list({ page, limit, category, year, search });
+  static async list(
+    page: number,
+    limit: number,
+    category?: string,
+    year?: number,
+    search?: string,
+    subcategory?: string,
+  ) {
+    return LegalRagRepo.list({ page, limit, category, subcategory, year, search });
+  }
+
+  static async getLibrarySections() {
+    return Promise.all(
+      LIBRARY_SECTIONS.map(async (section) => ({
+        key: section.key,
+        items: await Promise.all(
+          section.items.map(async (item) => ({
+            key: item.key,
+            category: item.category,
+            subcategory: item.subcategory ?? null,
+            count: item.category ? await LegalRagRepo.countByCategory(item.category, item.subcategory) : null,
+          })),
+        ),
+      })),
+    );
   }
 
   static async vectorSearch(embedding: number[], limit: number, offset: number, minSimilarity: number) {

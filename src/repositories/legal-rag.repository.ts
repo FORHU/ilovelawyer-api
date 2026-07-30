@@ -5,6 +5,7 @@ interface ListParams {
   page: number;
   limit: number;
   category?: string;
+  subcategory?: string;
   year?: number;
   search?: string;
 }
@@ -90,6 +91,16 @@ export default class LegalRagRepo {
     return rows.map((r) => r.subcategory);
   }
 
+  static async countByCategory(category: string, subcategory?: string): Promise<number> {
+    const conditions: Prisma.Sql[] = [Prisma.sql`category = ${category}`];
+    if (subcategory) conditions.push(Prisma.sql`subcategory = ${subcategory}`);
+
+    const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+      SELECT COUNT(*) AS count FROM documents WHERE ${Prisma.join(conditions, " AND ")}
+    `;
+    return Number(rows[0]?.count ?? 0);
+  }
+
   static async searchByVector(embedding: number[], limit = 5): Promise<VectorSearchRow[]> {
     const vector = `[${embedding.join(",")}]`;
     return prisma.$queryRawUnsafe<VectorSearchRow[]>(
@@ -154,11 +165,12 @@ export default class LegalRagRepo {
     return rows.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
   }
 
-  static async list({ page, limit, category, year, search }: ListParams) {
+  static async list({ page, limit, category, subcategory, year, search }: ListParams) {
     const offset = (page - 1) * limit;
 
     const conditions: Prisma.Sql[] = [];
     if (category) conditions.push(Prisma.sql`category ILIKE ${category}`);
+    if (subcategory) conditions.push(Prisma.sql`subcategory ILIKE ${subcategory}`);
     if (year) conditions.push(Prisma.sql`year = ${year}`);
     if (search) {
       const pattern = `%${search}%`;
