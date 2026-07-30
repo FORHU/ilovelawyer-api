@@ -8,7 +8,7 @@ const createSchema = Joi.object({
   audioFileId: Joi.string().uuid().optional(),
   transcript: Joi.string().optional(),
   duration: Joi.number().optional(),
-  caseId: Joi.string().optional(),
+  caseId: Joi.string().allow(null).optional(),
 });
 
 const updateSchema = Joi.object({

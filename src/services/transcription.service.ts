@@ -47,7 +47,7 @@ export default class TranscriptionSvc {
     duration?: number;
     jobName?: string;
     status?: string;
-    caseId?: string;
+    caseId?: string | null;
   }) {
     return TranscriptionRepo.create(userId, {
       title: data.title ?? "Untitled Transcription",

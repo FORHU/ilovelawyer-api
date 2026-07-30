@@ -31,7 +31,7 @@ export default class TranscriptionRepo {
     duration?: number;
     jobName?: string;
     status?: string;
-    caseId?: string;
+    caseId?: string | null;
   }) {
     return prisma.transcription.create({
       data: { userId, ...data },

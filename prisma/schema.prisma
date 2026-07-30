@@ -32,6 +32,14 @@ model User {
   emailVerificationOtp       String?
   emailVerificationOtpExpiry DateTime?
 
+  // Signup email verification — deliberately separate from otpCode/otpExpiry
+  // above (which belong to the password-reset flow) so the two one-time-code
+  // flows can't clobber each other. See docs/adr/0001-email-verification-otp.md.
+  emailVerificationCode       String?
+  emailVerificationExpiry     DateTime?
+  emailVerificationAttempts   Int       @default(0)
+  emailVerificationLastSentAt DateTime?
+
   sessions                 Session[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
   conversations            Conversation[]
@@ -188,10 +196,10 @@ model Case {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents      UserDocument[]
-  parties        Party[]
-  conversations  Conversation[]
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents     UserDocument[]
+  parties       Party[]
+  conversations Conversation[]
   transcriptions Transcription[]
 
   @@index([userId])
@@ -326,6 +334,7 @@ model Transcription {
   audioFile File? @relation(fields: [audioFileId], references: [id])
 
   @@index([userId])
+  @@index([caseId])
 }
 
 // Legal RAG tables (documents, document_chunks, ingestion_runs) live in this same
