@@ -169,7 +169,7 @@ export default class AuthCtrl {
 
     const schema = Joi.object({
       email: Joi.string().email().required(),
-      code: Joi.string().length(6).pattern(/^\d+$/).required(),
+      code: Joi.string().length(6).required(),
     });
 
     const { error } = schema.validate({ email, code });

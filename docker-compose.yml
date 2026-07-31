@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: legalrag
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
@@ -17,7 +17,7 @@ services:
     container_name: ilovelawyer-redis
     command: redis-server --requirepass password
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     restart: always
 
   redis-commander:
@@ -26,7 +26,7 @@ services:
     environment:
       - REDIS_HOSTS=local:redis:6379:0:password
     ports:
-      - "8081:8081"
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
     depends_on:
       - redis
     restart: always

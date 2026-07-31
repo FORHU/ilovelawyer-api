@@ -6,6 +6,8 @@ import AuthCtrl from "../controllers/auth.controller";
 const router = express.Router();
 
 router.post("/signup", asyncHandler(AuthCtrl.signup));
+router.post("/send-otp", asyncHandler(AuthCtrl.sendOtp));
+router.post("/verify-otp", asyncHandler(AuthCtrl.verifyOtp));
 router.post("/login", asyncHandler(AuthCtrl.login));
 router.post("/refresh", asyncHandler(AuthCtrl.refresh));
 router.post("/logout", asyncHandler(AuthCtrl.logout));
