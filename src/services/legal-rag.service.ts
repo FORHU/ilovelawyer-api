@@ -54,9 +54,14 @@ export default class LegalRagSvc {
         items: await Promise.all(
           section.items.map(async (item) => ({
             key: item.key,
+            mode: item.mode,
             category: item.category,
             subcategory: item.subcategory ?? null,
-            count: item.category ? await LegalRagRepo.countByCategory(item.category, item.subcategory) : null,
+            query: item.query ?? null,
+            count:
+              item.mode === "browse" && item.category
+                ? await LegalRagRepo.countByCategory(item.category, item.subcategory)
+                : null,
           })),
         ),
       })),
