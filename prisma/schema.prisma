@@ -29,6 +29,16 @@ model User {
   onboardingCompleted Boolean   @default(false)
   otpCode             String?
   otpExpiry           DateTime?
+  emailVerificationOtp       String?
+  emailVerificationOtpExpiry DateTime?
+
+  // Signup email verification — deliberately separate from otpCode/otpExpiry
+  // above (which belong to the password-reset flow) so the two one-time-code
+  // flows can't clobber each other. See docs/adr/0001-email-verification-otp.md.
+  emailVerificationCode       String?
+  emailVerificationExpiry     DateTime?
+  emailVerificationAttempts   Int       @default(0)
+  emailVerificationLastSentAt DateTime?
 
   sessions                 Session[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
@@ -157,7 +167,7 @@ model ConversationInvite {
   expiresAt      DateTime
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  creator      User         @relation(fields: [createdBy], references: [id])
+  creator      User         @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
 }
@@ -168,7 +178,7 @@ model ConversationParticipant {
   joinedAt       DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id])
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([conversationId, userId])
 }
@@ -186,10 +196,11 @@ model Case {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   documents     UserDocument[]
   parties       Party[]
   conversations Conversation[]
+  transcriptions Transcription[]
 
   @@index([userId])
 }
@@ -308,6 +319,7 @@ model Event {
 model Transcription {
   id           String   @id @default(uuid())
   userId       String
+  caseId       String?
   audioFileId  String?
   title        String?
   transcript   String?  @db.Text
@@ -318,9 +330,11 @@ model Transcription {
   updatedAt    DateTime @updatedAt
 
   user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case      Case? @relation(fields: [caseId], references: [id])
   audioFile File? @relation(fields: [audioFileId], references: [id])
 
   @@index([userId])
+  @@index([caseId])
 }
 
 // Legal RAG tables (documents, document_chunks, ingestion_runs) live in this same

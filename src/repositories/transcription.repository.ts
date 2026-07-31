@@ -9,6 +9,14 @@ export default class TranscriptionRepo {
     });
   }
 
+  static async findAllByCase(userId: string, caseId: string) {
+    return prisma.transcription.findMany({
+      where: { userId, caseId },
+      include: { audioFile: true },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
   static async findById(id: string, userId: string) {
     return prisma.transcription.findFirst({
       where: { id, userId },
@@ -23,6 +31,7 @@ export default class TranscriptionRepo {
     duration?: number;
     jobName?: string;
     status?: string;
+    caseId?: string | null;
   }) {
     return prisma.transcription.create({
       data: { userId, ...data },
@@ -37,6 +46,7 @@ export default class TranscriptionRepo {
     duration?: number;
     jobName?: string;
     status?: string;
+    caseId?: string | null;
   }) {
     return prisma.transcription.updateMany({
       where: { id, userId },

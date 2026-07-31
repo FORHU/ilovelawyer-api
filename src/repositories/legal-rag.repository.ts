@@ -46,6 +46,16 @@ interface VectorSearchRow {
   category: string;
 }
 
+interface RelatedCaseTermRow {
+  id: bigint;
+  title: string | null;
+  case_no: string | null;
+  year: number | null;
+  category: string;
+  source_url: string | null;
+  concise_summary: string | null;
+}
+
 interface RelatedRow {
   id: bigint;
   title: string | null;
@@ -140,6 +150,23 @@ export default class LegalRagRepo {
       limit,
       offset,
     );
+  }
+
+  /** Resolves a citation term (e.g. "Article 297", "GR No. 185222") — as surfaced by Chat
+   * Wonder's [RELATED_QUERIES] tag — to the document it identifies, preferring an exact
+   * case-number hit over a looser title match. */
+  static async findForRelatedTerm(term: string): Promise<RelatedCaseTermRow | null> {
+    const pattern = `%${term}%`;
+    const rows = await prisma.$queryRaw<RelatedCaseTermRow[]>`
+      SELECT id, title, case_no, year, category, source_url, concise_summary
+      FROM documents
+      WHERE title ILIKE ${pattern} OR case_no ILIKE ${pattern}
+      ORDER BY
+        CASE WHEN case_no ILIKE ${pattern} THEN 0 ELSE 1 END,
+        year DESC NULLS LAST
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
   }
 
   static async findRelated(id: bigint, limit = 5): Promise<RelatedRow[]> {

@@ -60,6 +60,10 @@ export default class AuthRepo {
     });
   }
 
+  static async deleteUser(userId: string) {
+    return prisma.user.delete({ where: { id: userId } });
+  }
+
   static async findByRefreshToken(refreshToken: string) {
     return prisma.session.findUnique({ where: { refreshToken } });
   }
@@ -113,6 +117,28 @@ export default class AuthRepo {
     return prisma.user.update({ where: { id: userId }, data: { otpCode: token, otpExpiry: expiresAt } });
   }
 
+  static async setEmailVerificationOtp(userId: string, code: string, expiresAt: Date) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { emailVerificationOtp: code, emailVerificationOtpExpiry: expiresAt },
+    });
+  }
+
+  static async consumeEmailVerificationOtp(email: string, code: string) {
+    const user = await prisma.user.findFirst({
+      where: { email, emailVerificationOtp: code, emailVerificationOtpExpiry: { gt: new Date() } },
+    });
+    if (!user) return null;
+
+    // Re-evaluated atomically by Postgres at update time, same race-safety as consumeResetToken.
+    const result = await prisma.user.updateMany({
+      where: { id: user.id, emailVerificationOtp: code, emailVerificationOtpExpiry: { gt: new Date() } },
+      data: { isEmailVerified: true, emailVerificationOtp: null, emailVerificationOtpExpiry: null },
+    });
+
+    return result.count > 0 ? user : null;
+  }
+
   static async isResetTokenValid(token: string): Promise<boolean> {
     const user = await prisma.user.findFirst({
       where: { otpCode: token, otpExpiry: { gt: new Date() } },
@@ -137,5 +163,45 @@ export default class AuthRepo {
     });
 
     return result.count > 0 ? user.id : null;
+  }
+
+  static async setEmailVerificationCode(userId: string, code: string, expiresAt: Date) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        emailVerificationCode: code,
+        emailVerificationExpiry: expiresAt,
+        emailVerificationAttempts: 0,
+        emailVerificationLastSentAt: new Date(),
+      },
+    });
+  }
+
+  static async incrementEmailVerificationAttempts(userId: string): Promise<number> {
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { emailVerificationAttempts: { increment: 1 } },
+      select: { emailVerificationAttempts: true },
+    });
+    return user.emailVerificationAttempts;
+  }
+
+  static async invalidateEmailVerificationCode(userId: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { emailVerificationCode: null, emailVerificationExpiry: null },
+    });
+  }
+
+  static async markEmailVerified(userId: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        isEmailVerified: true,
+        emailVerificationCode: null,
+        emailVerificationExpiry: null,
+        emailVerificationAttempts: 0,
+      },
+    });
   }
 }

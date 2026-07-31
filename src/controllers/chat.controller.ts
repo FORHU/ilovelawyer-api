@@ -86,6 +86,10 @@ export default class ChatCtrl {
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
           "Transfer-Encoding": "chunked",
+          // Tells an nginx reverse proxy (if one sits in front of this API) not to
+          // buffer the response before forwarding it — otherwise chunked streaming
+          // arrives at the client all at once instead of incrementally.
+          "X-Accel-Buffering": "no",
         });
       }
       res.write(chunk);
