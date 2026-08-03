@@ -17,7 +17,6 @@ export default class CaseCtrl {
   static async create(req: Request, res: Response) {
     const schema = Joi.object({
       caseName: Joi.string().required(),
-      partyInvolved: Joi.string().allow("").optional(),
       actionType: Joi.string()
         .valid(...ACTION_TYPES)
         .optional(),
@@ -55,7 +54,6 @@ export default class CaseCtrl {
   static async update(req: Request, res: Response) {
     const schema = Joi.object({
       caseName: Joi.string().optional(),
-      partyInvolved: Joi.string().allow("").optional(),
       actionType: Joi.string()
         .valid(...ACTION_TYPES)
         .optional(),

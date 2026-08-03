@@ -7,7 +7,6 @@ export interface PartyInput {
 
 export interface CaseData {
   caseName?: string;
-  partyInvolved?: string;
   actionType?: string;
   jurisdiction?: string;
   notes?: string;
@@ -37,7 +36,7 @@ export default class CaseRepo {
         ? {
             OR: [
               { caseName: { contains: search, mode: "insensitive" as const } },
-              { partyInvolved: { contains: search, mode: "insensitive" as const } },
+              { parties: { some: { name: { contains: search, mode: "insensitive" as const } } } },
             ],
           }
         : {}),
