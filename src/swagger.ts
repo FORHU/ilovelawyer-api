@@ -48,7 +48,6 @@ const swaggerSpec: OAS3Definition = {
           email: { type: "string" },
           name: { type: "string", nullable: true },
           role: { type: "string", enum: ["USER", "ADMIN"] },
-          isActive: { type: "boolean" },
           isEmailVerified: { type: "boolean" },
           onboardingCompleted: { type: "boolean" },
           provider: { type: "string", nullable: true },

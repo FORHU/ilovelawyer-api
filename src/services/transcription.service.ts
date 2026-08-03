@@ -6,6 +6,7 @@ import {
 import axios from "axios";
 import TranscriptionRepo from "../repositories/transcription.repository";
 import HttpError from "../utils/http-error";
+import logger from "../utils/logger";
 import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_S3_BUCKET } from "../config";
 
 const SUPPORTED_FORMATS = ["mp3", "wav", "flac", "ogg", "webm", "weba", "m4a", "mp4", "amr"];
@@ -76,7 +77,16 @@ export default class TranscriptionSvc {
     };
     if (mediaFormat) params.MediaFormat = mediaFormat;
 
-    await client.send(new StartTranscriptionJobCommand(params));
+    try {
+      await client.send(new StartTranscriptionJobCommand(params));
+    } catch (err) {
+      logger.error("Failed to start AWS Transcribe job", { err, transcriptionId: id, jobName, s3Uri });
+      throw new HttpError(
+        `Failed to start transcription${err instanceof Error ? `: ${err.message}` : ""}`,
+        502,
+      );
+    }
+
     await TranscriptionRepo.update(id, userId, { jobName, status: "IN_PROGRESS" });
 
     return { jobName, status: "IN_PROGRESS" };
@@ -88,7 +98,18 @@ export default class TranscriptionSvc {
     if (!item.jobName) throw new HttpError("No transcription job started for this record", 400);
 
     const client = getTranscribeClient();
-    const data = await client.send(new GetTranscriptionJobCommand({ TranscriptionJobName: item.jobName }));
+
+    let data;
+    try {
+      data = await client.send(new GetTranscriptionJobCommand({ TranscriptionJobName: item.jobName }));
+    } catch (err) {
+      logger.error("Failed to poll AWS Transcribe job", { err, transcriptionId: id, jobName: item.jobName });
+      throw new HttpError(
+        `Failed to check transcription status${err instanceof Error ? `: ${err.message}` : ""}`,
+        502,
+      );
+    }
+
     const job = data.TranscriptionJob;
     if (!job) throw new HttpError("Job not found in AWS Transcribe", 404);
 
@@ -101,7 +122,9 @@ export default class TranscriptionSvc {
     }
 
     if (status === "FAILED") {
+      logger.error("AWS Transcribe job failed", { transcriptionId: id, jobName: item.jobName, failureReason: job.FailureReason });
       await TranscriptionRepo.update(id, userId, { status });
+      return { status, failureReason: job.FailureReason };
     }
 
     return { status };
