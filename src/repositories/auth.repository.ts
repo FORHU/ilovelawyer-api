@@ -18,7 +18,6 @@ export default class AuthRepo {
         email: true,
         name: true,
         role: true,
-        isActive: true,
         isEmailVerified: true,
         onboardingCompleted: true,
         provider: true,
@@ -48,7 +47,6 @@ export default class AuthRepo {
         email: true,
         name: true,
         role: true,
-        isActive: true,
         isEmailVerified: true,
         onboardingCompleted: true,
         provider: true,
@@ -159,9 +157,53 @@ export default class AuthRepo {
     // same token still only let one of them actually match and consume it.
     const result = await prisma.user.updateMany({
       where: { id: user.id, otpCode: token, otpExpiry: { gt: new Date() } },
-      data: { password: hashedPassword, otpCode: null, otpExpiry: null },
+      // Completing a reset via the emailed link is proof of ownership of that inbox,
+      // so it also satisfies email verification — otherwise an unverified account that
+      // resets its password would still be locked out of login by the isEmailVerified
+      // check right after successfully resetting.
+      data: { password: hashedPassword, otpCode: null, otpExpiry: null, isEmailVerified: true },
     });
 
     return result.count > 0 ? user.id : null;
+  }
+
+  static async setEmailVerificationCode(userId: string, code: string, expiresAt: Date) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        emailVerificationCode: code,
+        emailVerificationExpiry: expiresAt,
+        emailVerificationAttempts: 0,
+        emailVerificationLastSentAt: new Date(),
+      },
+    });
+  }
+
+  static async incrementEmailVerificationAttempts(userId: string): Promise<number> {
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { emailVerificationAttempts: { increment: 1 } },
+      select: { emailVerificationAttempts: true },
+    });
+    return user.emailVerificationAttempts;
+  }
+
+  static async invalidateEmailVerificationCode(userId: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { emailVerificationCode: null, emailVerificationExpiry: null },
+    });
+  }
+
+  static async markEmailVerified(userId: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        isEmailVerified: true,
+        emailVerificationCode: null,
+        emailVerificationExpiry: null,
+        emailVerificationAttempts: 0,
+      },
+    });
   }
 }

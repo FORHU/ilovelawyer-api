@@ -28,13 +28,25 @@ export default class CaseRepo {
     });
   }
 
-  static async list(userId: string, page: number, limit: number) {
+  static async list(userId: string, page: number, limit: number, search?: string) {
     const skip = (page - 1) * limit;
 
+    const where = {
+      userId,
+      ...(search
+        ? {
+            OR: [
+              { caseName: { contains: search, mode: "insensitive" as const } },
+              { partyInvolved: { contains: search, mode: "insensitive" as const } },
+            ],
+          }
+        : {}),
+    };
+
     const [total, rows] = await prisma.$transaction([
-      prisma.case.count({ where: { userId } }),
+      prisma.case.count({ where }),
       prisma.case.findMany({
-        where: { userId },
+        where,
         skip,
         take: limit,
         orderBy: { updatedAt: "desc" },

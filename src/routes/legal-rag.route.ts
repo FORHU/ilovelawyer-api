@@ -8,6 +8,7 @@ const router = express.Router();
 router.use(validSession);
 
 router.get("/categories", asyncHandler(LegalRagCtrl.categories));
+router.get("/library-sections", asyncHandler(LegalRagCtrl.librarySections));
 router.post("/search-vector", asyncHandler(LegalRagCtrl.vectorSearch));
 router.post("/format-documents", asyncHandler(LegalRagCtrl.formatDocuments));
 router.get("/", asyncHandler(LegalRagCtrl.list));

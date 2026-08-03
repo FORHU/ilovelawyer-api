@@ -19,6 +19,11 @@ _Avoid_: "auth token" (ambiguous between this and Refresh Token)
 **Refresh Token**:
 Longer-lived JWT used only to mint a new Access Token once it expires. Persisted in a Session row (unlike the Access Token) so it can be revoked before its natural expiry — that's what makes Logout possible. Rotated on every use: refreshing deletes the old Session/token and creates a new one, rather than reusing the same Refresh Token until its original expiry.
 
+**Email Verification**:
+A blocking gate on password-based Signup: a User's `isEmailVerified` flag starts `false` and Login is refused until it's flipped `true` by successfully completing OTP verification. Not required for Google signups — Google has already verified the email, so `isEmailVerified` is set `true` at account creation.
+_Avoid_: "OTP" alone as the name of the gate (OTP is the mechanism — the one-time code — not the gate itself; the gate is Email Verification)
+_Status: designed, not yet implemented — see Pending._
+
 ## Example dialogue
 
 > **Dev:** "Should logout delete the User's row in the DB?"

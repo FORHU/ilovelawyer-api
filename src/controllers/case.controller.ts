@@ -37,12 +37,13 @@ export default class CaseCtrl {
     const schema = Joi.object({
       page: Joi.number().integer().min(1).default(1),
       limit: Joi.number().integer().min(1).max(100).default(20),
+      search: Joi.string().trim().allow("").optional(),
     });
 
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.list(req.user.userId, value.page, value.limit);
+    const result = await CaseSvc.list(req.user.userId, value.page, value.limit, value.search);
     return res.status(200).json(result);
   }
 
