@@ -3,7 +3,16 @@ import { MulterError } from "multer";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
-export default function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export default function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {
+  // A streaming response (e.g. chat) may already have sent headers/content before failing
+  // partway through; calling res.json()/res.status() at that point throws ERR_HTTP_HEADERS_SENT
+  // and masks the original error. Still log it, but delegate to Express's default handler
+  // (which just closes the connection) instead of trying to write a second response.
+  if (res.headersSent) {
+    logger.error(err instanceof Error ? err.message : "Unknown error", { err });
+    return next(err);
+  }
+
   if (err instanceof HttpError) {
     return res.status(err.statusCode).json({ message: err.message });
   }
