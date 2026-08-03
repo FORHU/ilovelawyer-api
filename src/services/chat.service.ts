@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
 import CaseSvc from "./case.service";
 import LegalRagRepo from "../repositories/legal-rag.repository";
-import { generateTitleViaWs, streamChatWonderMessage, RelatedCase } from "../utils/chatWonder";
+import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
@@ -81,6 +81,7 @@ export default class ChatSvc {
     userInput: string,
     onChunk: (text: string) => void,
     documentContext?: string,
+    onSessionRotated?: (newSessionId: string) => void,
   ) {
     const conversation = await ChatRepo.findConversationWithCase(conversationId);
     if (!conversation || conversation.userId !== userId) {
@@ -109,7 +110,7 @@ export default class ChatSvc {
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
     } else {
-      const result = await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext);
+      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated);
       fullResponse = result.content;
       relatedCases = await ChatSvc.resolveRelatedCases(result.relatedQueries);
       redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
@@ -130,6 +131,32 @@ export default class ChatSvc {
     if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
     if (relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, relatedCases);
+  }
+
+  /** Chat Wonder keeps sessions in memory and drops them on restart; the frontend caches
+   * its session_id indefinitely (including across login/logout), so a "session_id not
+   * recognized" rejection from streamChatWonderMessage is an expected, recoverable event
+   * rather than a real failure. "Unknown session." is always the very first frame Chat
+   * Wonder sends for this case (see the_server.py's chat_stream handler), before any real
+   * content — so retrying from scratch here can't cause onChunk to double-emit content. */
+  private static async streamWithSessionRetry(
+    sessionId: string,
+    userInput: string,
+    onChunk: (text: string) => void,
+    resolvedContext: string,
+    onSessionRotated?: (newSessionId: string) => void,
+  ) {
+    try {
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext);
+    } catch (err) {
+      if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
+      const freshSessionId = await getChatWonderSessionId();
+      // Report the rotation before streaming starts, so the caller (ChatCtrl) can still
+      // set a response header — nothing has been written to the HTTP response yet at
+      // this point, since "Unknown session." always arrives before any real content.
+      onSessionRotated?.(freshSessionId);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext);
+    }
   }
 
   /** Resolves the citation terms Chat Wonder surfaced via [RELATED_QUERIES] against the
