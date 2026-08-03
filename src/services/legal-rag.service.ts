@@ -36,15 +36,16 @@ export default class LegalRagSvc {
     return LegalRagRepo.getSubcategories(category);
   }
 
-  static async list(
-    page: number,
-    limit: number,
-    category?: string,
-    year?: number,
-    search?: string,
-    subcategory?: string,
-  ) {
-    return LegalRagRepo.list({ page, limit, category, subcategory, year, search });
+  static async list(params: {
+    page: number;
+    limit: number;
+    category?: string;
+    subcategory?: string;
+    noSubcategory?: boolean;
+    year?: number;
+    search?: string;
+  }) {
+    return LegalRagRepo.list(params);
   }
 
   static async getLibrarySections() {
@@ -57,10 +58,11 @@ export default class LegalRagSvc {
             mode: item.mode,
             category: item.category,
             subcategory: item.subcategory ?? null,
+            noSubcategory: item.noSubcategory ?? false,
             query: item.query ?? null,
             count:
               item.mode === "browse" && item.category
-                ? await LegalRagRepo.countByCategory(item.category, item.subcategory)
+                ? await LegalRagRepo.countByCategory(item.category, item.subcategory, item.noSubcategory)
                 : null,
           })),
         ),

@@ -1,7 +1,6 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
 import CaseSvc from "./case.service";
-import LegalRagRepo from "../repositories/legal-rag.repository";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
@@ -112,7 +111,7 @@ export default class ChatSvc {
     } else {
       const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated);
       fullResponse = result.content;
-      relatedCases = await ChatSvc.resolveRelatedCases(result.relatedQueries);
+      relatedCases = result.relatedCases;
       redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
     }
 
@@ -157,48 +156,6 @@ export default class ChatSvc {
       onSessionRotated?.(freshSessionId);
       return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext);
     }
-  }
-
-  /** Resolves the citation terms Chat Wonder surfaced via [RELATED_QUERIES] against the
-   * legal document store. Terms that don't match a known document are dropped rather than
-   * fabricated into a result. */
-  static async resolveRelatedCases(terms: string[]): Promise<RelatedCase[]> {
-    // A bare term like "Republic Act" (no number — the model dropped it, or emitted a
-    // topic word despite the prompt's rules) has no anchor to a specific document: an
-    // ILIKE lookup against it matches every RA-type row in the table, and the DB's
-    // year-DESC tiebreak then surfaces whichever happens to be newest — unrelated to
-    // what was actually discussed. Only resolve terms that carry a real identifier: a
-    // number (article/section/RA/PD/GR) or a case-name pattern ("X v. Y").
-    const isSpecificCitation = (term: string) => /\d/.test(term) || /\bvs?\.?\s+\S/i.test(term);
-
-    const uniqueTerms = [...new Set(terms.map((term) => term.trim()).filter(Boolean))].filter(isSpecificCitation);
-    if (!uniqueTerms.length) return [];
-
-    const rows = await Promise.all(uniqueTerms.map((term) => LegalRagRepo.findForRelatedTerm(term)));
-
-    const cases: RelatedCase[] = [];
-    const seenIds = new Set<string>();
-    rows.forEach((row, i) => {
-      if (!row) return;
-      const id = row.id.toString();
-      if (seenIds.has(id)) return; // same document matched by more than one term
-      seenIds.add(id);
-
-      const raMatch = uniqueTerms[i].match(/republic act\s+(?:no\.?\s*)?(\d+)/i);
-      cases.push({
-        type: row.category,
-        title: row.title,
-        url: row.source_url,
-        case_number: row.case_no,
-        ra_number: raMatch ? raMatch[1] : null,
-        year: row.year,
-        snippet: row.concise_summary ? row.concise_summary.slice(0, 240) : null,
-        relevance: null,
-        vetted: true,
-      });
-    });
-
-    return cases;
   }
 
   static async getRelatedCases(userId: string, conversationId: string) {

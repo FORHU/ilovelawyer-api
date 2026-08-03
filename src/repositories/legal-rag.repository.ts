@@ -6,6 +6,8 @@ interface ListParams {
   limit: number;
   category?: string;
   subcategory?: string;
+  /** When true, filters to rows with subcategory IS NULL (exact — excludes any tagged subcategory). Takes precedence over `subcategory`. */
+  noSubcategory?: boolean;
   year?: number;
   search?: string;
 }
@@ -44,16 +46,6 @@ interface VectorSearchRow {
   document_id: bigint;
   title: string | null;
   category: string;
-}
-
-interface RelatedCaseTermRow {
-  id: bigint;
-  title: string | null;
-  case_no: string | null;
-  year: number | null;
-  category: string;
-  source_url: string | null;
-  concise_summary: string | null;
 }
 
 interface RelatedRow {
@@ -101,9 +93,15 @@ export default class LegalRagRepo {
     return rows.map((r) => r.subcategory);
   }
 
-  static async countByCategory(category: string, subcategory?: string): Promise<number> {
+  /**
+   * `noSubcategory: true` filters to subcategory IS NULL exactly, excluding any tagged
+   * subcategory — required whenever a section item must not overlap with a sibling item
+   * that filters on a specific subcategory value under the same category.
+   */
+  static async countByCategory(category: string, subcategory?: string, noSubcategory?: boolean): Promise<number> {
     const conditions: Prisma.Sql[] = [Prisma.sql`category = ${category}`];
-    if (subcategory) conditions.push(Prisma.sql`subcategory = ${subcategory}`);
+    if (noSubcategory) conditions.push(Prisma.sql`subcategory IS NULL`);
+    else if (subcategory) conditions.push(Prisma.sql`subcategory = ${subcategory}`);
 
     const rows = await prisma.$queryRaw<{ count: bigint }[]>`
       SELECT COUNT(*) AS count FROM documents WHERE ${Prisma.join(conditions, " AND ")}
@@ -152,23 +150,6 @@ export default class LegalRagRepo {
     );
   }
 
-  /** Resolves a citation term (e.g. "Article 297", "GR No. 185222") — as surfaced by Chat
-   * Wonder's [RELATED_QUERIES] tag — to the document it identifies, preferring an exact
-   * case-number hit over a looser title match. */
-  static async findForRelatedTerm(term: string): Promise<RelatedCaseTermRow | null> {
-    const pattern = `%${term}%`;
-    const rows = await prisma.$queryRaw<RelatedCaseTermRow[]>`
-      SELECT id, title, case_no, year, category, source_url, concise_summary
-      FROM documents
-      WHERE title ILIKE ${pattern} OR case_no ILIKE ${pattern}
-      ORDER BY
-        CASE WHEN case_no ILIKE ${pattern} THEN 0 ELSE 1 END,
-        year DESC NULLS LAST
-      LIMIT 1
-    `;
-    return rows[0] ?? null;
-  }
-
   static async findRelated(id: bigint, limit = 5): Promise<RelatedRow[]> {
     const rows = await prisma.$queryRaw<RelatedRow[]>`
       WITH avg_embedding AS (
@@ -192,12 +173,13 @@ export default class LegalRagRepo {
     return rows.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
   }
 
-  static async list({ page, limit, category, subcategory, year, search }: ListParams) {
+  static async list({ page, limit, category, subcategory, noSubcategory, year, search }: ListParams) {
     const offset = (page - 1) * limit;
 
     const conditions: Prisma.Sql[] = [];
     if (category) conditions.push(Prisma.sql`category ILIKE ${category}`);
-    if (subcategory) conditions.push(Prisma.sql`subcategory ILIKE ${subcategory}`);
+    if (noSubcategory) conditions.push(Prisma.sql`subcategory IS NULL`);
+    else if (subcategory) conditions.push(Prisma.sql`subcategory ILIKE ${subcategory}`);
     if (year) conditions.push(Prisma.sql`year = ${year}`);
     if (search) {
       const pattern = `%${search}%`;
