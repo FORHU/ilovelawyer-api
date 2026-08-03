@@ -77,11 +77,12 @@ export default class ChatCtrl {
       throw new HttpError(error.message, 400);
     }
 
+    let effectiveSessionId = sessionId;
     let headersSent = false;
     const writeChunk = (chunk: string) => {
       if (!headersSent) {
         headersSent = true;
-        res.writeHead(200, {
+        const headers: Record<string, string> = {
           "Content-Type": "text/plain; charset=utf-8",
           "Cache-Control": "no-cache, no-transform",
           Connection: "keep-alive",
@@ -90,13 +91,30 @@ export default class ChatCtrl {
           // buffer the response before forwarding it — otherwise chunked streaming
           // arrives at the client all at once instead of incrementally.
           "X-Accel-Buffering": "no",
-        });
+        };
+        // Chat Wonder's session_id is cached client-side indefinitely; if this request
+        // had to rotate to a fresh one (see ChatSvc.streamWithSessionRetry), tell the
+        // client so it can update its cache instead of repeating the same failed-then-
+        // retried round trip on every future message.
+        if (effectiveSessionId !== sessionId) {
+          headers["X-Chat-Session-Id"] = effectiveSessionId;
+        }
+        res.writeHead(200, headers);
       }
       res.write(chunk);
     };
 
-
-    await ChatSvc.sendMessage(req.user.userId, conversationId, sessionId, message, writeChunk, documentContext);
+    await ChatSvc.sendMessage(
+      req.user.userId,
+      conversationId,
+      sessionId,
+      message,
+      writeChunk,
+      documentContext,
+      (newSessionId) => {
+        effectiveSessionId = newSessionId;
+      },
+    );
 
     res.end();
   }

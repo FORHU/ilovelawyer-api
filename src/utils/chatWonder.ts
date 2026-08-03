@@ -132,6 +132,17 @@ export function streamChatWonderMessage(
       resolve({ content: accumulated, relatedQueries });
     };
 
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      try {
+        ws.close();
+      } catch {
+        // already closing
+      }
+      reject(err);
+    };
+
     ws.onopen = () => {
       const payload: {
         type: string;
@@ -158,6 +169,16 @@ export function streamChatWonderMessage(
 
       if (message === "__END__") {
         finish();
+        return;
+      }
+
+      // Chat Wonder sends these as plain streamed text, not a distinct protocol frame —
+      // without this check they'd be silently appended to the answer and shown to the
+      // user as if the AI had said "[Error] Unknown session." Must reject, not resolve,
+      // so callers can detect this and retry with a fresh session_id instead of
+      // displaying it as a real response.
+      if (message.startsWith("[Error]")) {
+        fail(new Error(message.replace(/^\[Error\]\s*/, "")));
         return;
       }
 

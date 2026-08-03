@@ -21,6 +21,10 @@ app.use(
   cors({
     origin: CLIENT_URL,
     credentials: true,
+    // Custom response headers are invisible to frontend fetch() calls across origins
+    // unless explicitly exposed — X-Chat-Session-Id lets the client silently pick up a
+    // rotated Chat Wonder session_id (see ChatCtrl.sendMessage) without needing an error.
+    exposedHeaders: ["X-Chat-Session-Id"],
   }),
 );
 

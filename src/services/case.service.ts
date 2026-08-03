@@ -15,8 +15,8 @@ export default class CaseSvc {
     return CaseRepo.create(userId, data);
   }
 
-  static async list(userId: string, page: number, limit: number) {
-    return CaseRepo.list(userId, page, limit);
+  static async list(userId: string, page: number, limit: number, search?: string) {
+    return CaseRepo.list(userId, page, limit, search);
   }
 
   static async getById(id: string, userId: string) {

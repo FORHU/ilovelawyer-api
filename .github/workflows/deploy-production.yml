@@ -84,6 +84,11 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           CHAT_WONDER_API_URL: ${{ vars.CHAT_WONDER_API_URL }}
           CHAT_WONDER_WS_URL: ${{ vars.CHAT_WONDER_WS_URL }}
+          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
+          CLOUDFRONT_URL: ${{ vars.CLOUDFRONT_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           cat > ${{ github.workspace }}/ilovelawyer-api.env << EOF
           DATABASE_URL=${DATABASE_URL}
@@ -107,6 +112,12 @@ jobs:
           GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
           CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
           CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}
+          AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
+          AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+          AWS_S3_BUCKET=${AWS_S3_BUCKET}
+          AWS_REGION=${{ env.AWS_REGION }}
+          CLOUDFRONT_URL=${CLOUDFRONT_URL}
+          OPENAI_API_KEY=${OPENAI_API_KEY}
           NODE_ENV=${{ env.NODE_ENV }}
           PORT=3001
           EOF

@@ -18,7 +18,6 @@ export default class AuthRepo {
         email: true,
         name: true,
         role: true,
-        isActive: true,
         isEmailVerified: true,
         onboardingCompleted: true,
         provider: true,
@@ -48,7 +47,6 @@ export default class AuthRepo {
         email: true,
         name: true,
         role: true,
-        isActive: true,
         isEmailVerified: true,
         onboardingCompleted: true,
         provider: true,
@@ -159,7 +157,11 @@ export default class AuthRepo {
     // same token still only let one of them actually match and consume it.
     const result = await prisma.user.updateMany({
       where: { id: user.id, otpCode: token, otpExpiry: { gt: new Date() } },
-      data: { password: hashedPassword, otpCode: null, otpExpiry: null },
+      // Completing a reset via the emailed link is proof of ownership of that inbox,
+      // so it also satisfies email verification — otherwise an unverified account that
+      // resets its password would still be locked out of login by the isEmailVerified
+      // check right after successfully resetting.
+      data: { password: hashedPassword, otpCode: null, otpExpiry: null, isEmailVerified: true },
     });
 
     return result.count > 0 ? user.id : null;
