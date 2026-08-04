@@ -5,7 +5,6 @@ interface CaseWithParties {
   caseName: string;
   actionType?: string | null;
   jurisdiction?: string | null;
-  partyInvolved?: string | null;
   notes?: string | null;
   parties?: { name: string; designation: string }[];
 }
@@ -52,8 +51,6 @@ export default class CaseSvc {
       for (const party of caseRecord.parties) {
         lines.push(`- ${party.name} (${party.designation})`);
       }
-    } else if (caseRecord.partyInvolved) {
-      lines.push(`Parties: ${caseRecord.partyInvolved}`);
     }
 
     if (caseRecord.notes) lines.push(`Notes: ${caseRecord.notes}`);

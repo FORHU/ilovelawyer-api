@@ -184,7 +184,6 @@ const swaggerSpec: OAS3Definition = {
           id: { type: "string" },
           userId: { type: "string" },
           caseName: { type: "string" },
-          partyInvolved: { type: "string", nullable: true },
           actionType: {
             type: "string",
             nullable: true,
@@ -1171,7 +1170,6 @@ const swaggerSpec: OAS3Definition = {
                 required: ["caseName"],
                 properties: {
                   caseName: { type: "string", example: "Smith vs. Jones — Custody Dispute" },
-                  partyInvolved: { type: "string" },
                   actionType: {
                     type: "string",
                     enum: ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"],
@@ -1242,7 +1240,6 @@ const swaggerSpec: OAS3Definition = {
                 type: "object",
                 properties: {
                   caseName: { type: "string" },
-                  partyInvolved: { type: "string" },
                   actionType: {
                     type: "string",
                     enum: ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"],
