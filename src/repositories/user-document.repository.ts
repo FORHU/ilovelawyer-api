@@ -32,8 +32,4 @@ export default class UserDocumentRepo {
     const result = await prisma.userDocument.deleteMany({ where: { id, userId } });
     return result.count > 0;
   }
-
-  static async updateRagStatus(id: string, ragStatus: "PENDING" | "READY" | "FAILED") {
-    return prisma.userDocument.update({ where: { id }, data: { ragStatus } });
-  }
 }

@@ -218,41 +218,19 @@ model Party {
 // ── User Documents ────────────────────────────────────────────────────────────
 
 model UserDocument {
-  id        String                 @id @default(uuid())
+  id        String   @id @default(uuid())
   userId    String
   caseId    String?
   name      String
   fileUrl   String?
   s3Key     String?
-  aiSummary String?                @db.Text
-  ragStatus UserDocumentRagStatus  @default(PENDING)
-  createdAt DateTime               @default(now())
+  aiSummary String?  @db.Text
+  createdAt DateTime @default(now())
 
-  user   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case   Case?               @relation(fields: [caseId], references: [id])
-  chunks UserDocumentChunk[]
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case Case? @relation(fields: [caseId], references: [id])
 
   @@index([userId])
-}
-
-enum UserDocumentRagStatus {
-  PENDING
-  READY
-  FAILED
-}
-
-model UserDocumentChunk {
-  id         String   @id @default(uuid())
-  documentId String
-  chunkIndex Int
-  chunkText  String   @db.Text
-  charCount  Int
-  embedding  Unsupported("vector(1536)")
-  createdAt  DateTime @default(now())
-
-  document UserDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
-
-  @@index([documentId])
 }
 
 // ── Legal Source Analysis Cache ───────────────────────────────────────────────
