@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import { RELATED_QUERIES_RULE, SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
+import logger from "./logger";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -216,9 +217,10 @@ export function streamChatWonderMessage(
       if (isFinal) finish();
     };
 
-    ws.onerror = () => {
+    ws.onerror = (event) => {
       if (settled) return;
       settled = true;
+      logger.error("Chat Wonder websocket connection error", { err: event.error ?? event.message, sessionId });
       reject(new HttpError("Chat Wonder connection error", 503));
     };
 

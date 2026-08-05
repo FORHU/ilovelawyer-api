@@ -3,6 +3,7 @@ import Joi from "joi";
 import ChatSvc from "../services/chat.service";
 import { getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
+import logger from "../utils/logger";
 
 export default class ChatCtrl {
   static async getSession(_req: Request, res: Response) {
@@ -64,15 +65,14 @@ export default class ChatCtrl {
 
   static async sendMessage(req: Request, res: Response) {
     const { conversationId } = req.params;
-    const { message, sessionId, documentContext } = req.body;
+    const { message, sessionId } = req.body;
 
     const schema = Joi.object({
-      message: Joi.string().required(),
+      message: Joi.string().max(20000).required(),
       sessionId: Joi.string().required(),
-      documentContext: Joi.string().optional(),
     });
 
-    const { error } = schema.validate({ message, sessionId, documentContext });
+    const { error } = schema.validate({ message, sessionId });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -104,17 +104,29 @@ export default class ChatCtrl {
       res.write(chunk);
     };
 
-    await ChatSvc.sendMessage(
-      req.user.userId,
-      conversationId,
-      sessionId,
-      message,
-      writeChunk,
-      documentContext,
-      (newSessionId) => {
-        effectiveSessionId = newSessionId;
-      },
-    );
+    try {
+      await ChatSvc.sendMessage(
+        req.user.userId,
+        conversationId,
+        sessionId,
+        message,
+        writeChunk,
+        (newSessionId) => {
+          effectiveSessionId = newSessionId;
+        },
+      );
+    } catch (err) {
+      logger.error("chat stream failed mid-response", { err, conversationId });
+      if (headersSent) {
+        // Streaming already started — the client is mid-chunked-response, so we can't
+        // fall back to a JSON error. Append a visible notice and terminate the chunked
+        // body cleanly instead of leaving the connection to time out as
+        // ERR_INCOMPLETE_CHUNKED_ENCODING.
+        writeChunk("\n\n[Error: the response was interrupted. Please try again.]");
+        return res.end();
+      }
+      throw err; // nothing sent yet — let the global error handler produce the normal JSON error
+    }
 
     res.end();
   }
