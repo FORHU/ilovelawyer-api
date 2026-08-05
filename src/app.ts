@@ -47,6 +47,7 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Use router for routing
 app.use("/api", router);
+app.use("/api/v1", router);
 
 // Must be mounted last: catches errors forwarded via asyncHandler/next(err)
 app.use(errorHandler);
