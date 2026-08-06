@@ -213,7 +213,7 @@ const swaggerSpec: OAS3Definition = {
           createdAt: { type: "string", format: "date-time" },
         },
       },
-      CaseDocument: {
+      UserDocument: {
         type: "object",
         properties: {
           id: { type: "string" },
@@ -1386,7 +1386,7 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           200: {
             description: "Documents",
-            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/CaseDocument" } } } },
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/UserDocument" } } } },
           },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -1412,7 +1412,7 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          201: { description: "Document recorded", content: { "application/json": { schema: { $ref: "#/components/schemas/CaseDocument" } } } },
+          201: { description: "Document recorded", content: { "application/json": { schema: { $ref: "#/components/schemas/UserDocument" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -1467,7 +1467,7 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          200: { description: "Document detail", content: { "application/json": { schema: { $ref: "#/components/schemas/CaseDocument" } } } },
+          200: { description: "Document detail", content: { "application/json": { schema: { $ref: "#/components/schemas/UserDocument" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
