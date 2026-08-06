@@ -1,5 +1,20 @@
 import CaseRepo, { CaseData } from "../repositories/case.repository";
 import HttpError from "../utils/http-error";
+import FileSvc from "./files.service";
+import UserDocumentRepo from "../repositories/user-document.repository";
+import DocumentExtractionSvc from "./document-extraction.service";
+import prisma from "../lib/prisma";
+import { s3UrlForKey } from "../utils/s3";
+
+export interface IncomingCaseDocument {
+  filename: string;
+  s3Key: string;
+  metaData: {
+    documentType?: string;
+    fileSize: number;
+    mimeType: string;
+  };
+}
 
 interface CaseWithParties {
   caseName: string;
@@ -59,5 +74,40 @@ export default class CaseSvc {
     if (caseRecord.notes) lines.push(`Notes: ${caseRecord.notes}`);
 
     return lines.join("\n");
+  }
+
+  static async handleCreateCaseWithDocument(caseData: { caseId: string; userId: string }, documentData: IncomingCaseDocument[]) {
+    await this.getById(caseData.caseId, caseData.userId);
+
+    // fileUrl is derived from s3Key server-side, never accepted from the client (spoofing risk:
+    // a client-supplied fileUrl could point a row at an S3 object it doesn't own).
+    const filesToCreate: Express.FileTypes[] = documentData.map((doc) => ({
+      filename: doc.filename,
+      fileUrl: s3UrlForKey(doc.s3Key),
+      s3Key: doc.s3Key,
+      metaData: doc.metaData,
+    }));
+
+    const createdDocuments = await prisma.$transaction(async (tx) => {
+      const files = await FileSvc.createFile(filesToCreate, tx);
+
+      const userDocumentData = files.map((file, i) => ({
+        userId: caseData.userId,
+        caseId: caseData.caseId,
+        name: file.filename ?? "",
+        fileId: file.id,
+        documentType: documentData[i].metaData.documentType,
+        fileSize: documentData[i].metaData.fileSize,
+        mimeType: documentData[i].metaData.mimeType,
+      }));
+
+      return UserDocumentRepo.createManyAndReturn(userDocumentData, tx);
+    });
+
+    // Dispatched after the transaction commits, not inside it — the rows must actually exist
+    // before extraction tries to read/update them.
+    for (const doc of createdDocuments) void DocumentExtractionSvc.process(doc.id);
+
+    return createdDocuments;
   }
 }
