@@ -84,7 +84,6 @@ export default class CaseCtrl {
         filename: Joi.string().required(),
         s3Key: Joi.string().required(),
         metaData: Joi.object({
-          documentType: Joi.string().optional(),
           fileSize: Joi.number().integer().positive().required(),
           mimeType: Joi.string().required(),
         }).required(),

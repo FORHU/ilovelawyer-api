@@ -1,8 +1,7 @@
 import CaseRepo, { CaseData } from "../repositories/case.repository";
 import HttpError from "../utils/http-error";
 import FileSvc from "./files.service";
-import UserDocumentRepo from "../repositories/user-document.repository";
-import DocumentExtractionSvc from "./document-extraction.service";
+import CaseDocumentRepo from "../repositories/case-document.repository";
 import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
 
@@ -91,7 +90,7 @@ export default class CaseSvc {
     const createdDocuments = await prisma.$transaction(async (tx) => {
       const files = await FileSvc.createFile(filesToCreate, tx);
 
-      const userDocumentData = files.map((file, i) => ({
+      const caseDocumentData = files.map((file, i) => ({
         userId: caseData.userId,
         caseId: caseData.caseId,
         name: file.filename ?? "",
@@ -101,12 +100,8 @@ export default class CaseSvc {
         mimeType: documentData[i].metaData.mimeType,
       }));
 
-      return UserDocumentRepo.createManyAndReturn(userDocumentData, tx);
+      return CaseDocumentRepo.createManyAndReturn(caseDocumentData, tx);
     });
-
-    // Dispatched after the transaction commits, not inside it — the rows must actually exist
-    // before extraction tries to read/update them.
-    for (const doc of createdDocuments) void DocumentExtractionSvc.process(doc.id);
 
     return createdDocuments;
   }

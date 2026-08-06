@@ -46,7 +46,7 @@ model User {
   createdInvites           ConversationInvite[]
   conversationParticipants ConversationParticipant[]
   cases                    Case[]
-  documents                UserDocument[]
+  documents                CaseDocument[]
   bookmarks                Bookmark[]
   transcriptions           Transcription[]
   calendarWatchChannels    CalendarWatchChannel[]
@@ -75,7 +75,7 @@ model File {
   metaData  Json?
   users          User[]
   transcriptions Transcription[]
-  userDocuments  UserDocument[]
+  caseDocuments  CaseDocument[]
 }
 
 enum Role {
@@ -197,7 +197,7 @@ model Case {
   updatedAt     DateTime @updatedAt
 
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents     UserDocument[]
+  documents     CaseDocument[]
   parties       Party[]
   conversations Conversation[]
   transcriptions Transcription[]
@@ -216,51 +216,21 @@ model Party {
   @@index([caseId])
 }
 
-// ── User Documents ────────────────────────────────────────────────────────────
+// ── Case Documents ────────────────────────────────────────────────────────────
 
-model UserDocument {
+model CaseDocument {
   id           String    @id @default(uuid())
   userId       String
   caseId       String?
   name         String
   fileId       String?
-  documentType String?
-  fileSize     Int?
-  mimeType     String?
-  ragStatus    RagStatus @default(PENDING)
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime  @default(now())\
 
-  user   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case   Case?               @relation(fields: [caseId], references: [id])
-  file   File?               @relation(fields: [fileId], references: [id])
-  chunks CaseDocumentChunk[]
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case Case? @relation(fields: [caseId], references: [id])
+  file File? @relation(fields: [fileId], references: [id])
 
   @@index([userId])
-}
-
-enum RagStatus {
-  PENDING
-  READY
-  FAILED
-}
-
-// Case Document chunk + embedding store (ADR 0008/0010) — distinct from legal-rag's externally-
-// owned `document_chunks` table above; this one belongs to this app and holds chunks extracted
-// from user-uploaded Case Documents. `embedding` is `Unsupported` because Prisma Client can't
-// model pgvector natively — read/write it via raw SQL (see CaseDocumentChunkRepo), same pattern
-// legal-rag already uses for its own vector column.
-model CaseDocumentChunk {
-  id             String                       @id @default(uuid())
-  userDocumentId String
-  chunkIndex     Int
-  chunkText      String
-  charCount      Int
-  embedding      Unsupported("vector(1536)")?
-  createdAt      DateTime                     @default(now())
-
-  userDocument UserDocument @relation(fields: [userDocumentId], references: [id], onDelete: Cascade)
-
-  @@index([userDocumentId])
 }
 
 // ── Legal Source Analysis Cache ───────────────────────────────────────────────
