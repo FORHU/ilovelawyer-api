@@ -4,8 +4,13 @@ import CaseDocumentChunkRepo from "../repositories/case-document-chunk.repositor
 import { getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import { chunkText } from "../utils/chunking";
-import { embedText } from "../utils/embedding";
+import { embedTexts } from "../utils/embedding";
 import logger from "../utils/logger";
+
+// OpenAI accepts an array `input`, but a single request still needs to stay well under its
+// token/size limits — batching keeps a document with tens of thousands of chunks (e.g. a 50MB
+// PDF) from either firing thousands of concurrent connections or one oversized request.
+const EMBEDDING_BATCH_SIZE = 100;
 
 export default class DocumentExtractionSvc {
   /**
@@ -38,20 +43,42 @@ export default class DocumentExtractionSvc {
         return;
       }
 
-      const embeddedChunks = await Promise.all(
-        chunks.map(async (chunk, index) => ({
-          userDocumentId: documentId,
-          chunkIndex: index,
-          chunkText: chunk,
-          charCount: chunk.length,
-          embedding: await embedText(chunk),
-        })),
+      const embeddedChunks: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[] }[] = [];
+      for (let i = 0; i < chunks.length; i += EMBEDDING_BATCH_SIZE) {
+        const batch = chunks.slice(i, i + EMBEDDING_BATCH_SIZE);
+        const embeddings = await embedTexts(batch);
+        batch.forEach((chunk, j) =>
+          embeddedChunks.push({
+            caseDocumentId: documentId,
+            chunkIndex: i + j,
+            chunkText: chunk,
+            charCount: chunk.length,
+            embedding: embeddings[j],
+          }),
+        );
+      }
+
+      // Default interactive-transaction timeout (5s) is tuned for small transactions; a document
+      // with tens of thousands of chunks needs the storage step to run considerably longer.
+      await prisma.$transaction(
+        async (tx) => {
+          await CaseDocumentChunkRepo.deleteByDocument(documentId, tx);
+          await CaseDocumentChunkRepo.insertMany(embeddedChunks, tx);
+        },
+        { timeout: 120_000 },
       );
 
-      await prisma.$transaction(async (tx) => {
-        await CaseDocumentChunkRepo.deleteByDocument(documentId, tx);
-        await CaseDocumentChunkRepo.insertMany(embeddedChunks, tx);
-      });
+      const { chunkCount, embeddedCount } = await CaseDocumentChunkRepo.verify(documentId);
+      if (chunkCount !== embeddedChunks.length || embeddedCount !== chunkCount) {
+        logger.error("Document extraction: chunk verification mismatch", {
+          documentId,
+          expected: embeddedChunks.length,
+          chunkCount,
+          embeddedCount,
+        });
+        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        return;
+      }
 
       await UserDocumentRepo.updateRagStatus(documentId, "READY");
     } catch (err) {

@@ -64,15 +64,16 @@ export default class ChatCtrl {
 
   static async sendMessage(req: Request, res: Response) {
     const { conversationId } = req.params;
-    const { message, sessionId, documentContext } = req.body;
+    const { message, sessionId, documentContext, caseDocumentId } = req.body;
 
     const schema = Joi.object({
       message: Joi.string().required(),
       sessionId: Joi.string().required(),
       documentContext: Joi.string().optional(),
+      caseDocumentId: Joi.string().optional(),
     });
 
-    const { error } = schema.validate({ message, sessionId, documentContext });
+    const { error } = schema.validate({ message, sessionId, documentContext, caseDocumentId });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -114,6 +115,7 @@ export default class ChatCtrl {
       (newSessionId) => {
         effectiveSessionId = newSessionId;
       },
+      caseDocumentId,
     );
 
     res.end();
