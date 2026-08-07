@@ -3,15 +3,9 @@ import ChatRepo from "../repositories/chat.repository";
 import CaseSvc from "./case.service";
 import LegalRagRepo from "../repositories/legal-rag.repository";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase } from "../utils/chatWonder";
-import UserDocumentChunkRepo from "../repositories/user-document-chunk.repository";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
-import { embedText } from "../utils/embedding";
-import logger from "../utils/logger";
-
-const DOCUMENT_RAG_LIMIT = 8;
-const DOCUMENT_RAG_MIN_SIMILARITY = 0.3;
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 60 * 24;     // 24 hours
@@ -86,7 +80,9 @@ export default class ChatSvc {
     sessionId: string,
     userInput: string,
     onChunk: (text: string) => void,
+    documentContext?: string,
     onSessionRotated?: (newSessionId: string) => void,
+    caseDocumentId?: string,
   ) {
     const conversation = await ChatRepo.findConversationWithCase(conversationId);
     if (!conversation || conversation.userId !== userId) {
@@ -100,13 +96,10 @@ export default class ChatSvc {
       ChatSvc.generateAndSaveTitle(conversationId, userInput).catch(() => {});
     }
 
-    // Both re-derived fresh on every message (never cached on the conversation), so edits to
-    // the Case or newly-extracted documents are picked up immediately rather than going stale.
+    // Re-derived from the live Case row on every message (not cached on the conversation),
+    // so edits to the Case's fields are picked up immediately rather than going stale.
     const caseContext = conversation.case ? CaseSvc.formatForAiContext(conversation.case) : "";
-    const documentRagContext = conversation.case
-      ? await ChatSvc.buildDocumentRagContext(userId, conversation.caseId as string, userInput)
-      : "";
-    const resolvedContext = [caseContext, documentRagContext].filter(Boolean).join("\n\n");
+    const resolvedContext = [caseContext, documentContext].filter(Boolean).join("\n\n");
 
     const cacheKey = responseCacheKey(userInput, resolvedContext);
     const cached = await redis.get<{ content: string; relatedCases: RelatedCase[] }>(cacheKey);
@@ -118,7 +111,7 @@ export default class ChatSvc {
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
     } else {
-      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated);
+      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, caseDocumentId);
       fullResponse = result.content;
       relatedCases = await ChatSvc.resolveRelatedCases(result.relatedQueries);
       redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
@@ -153,9 +146,10 @@ export default class ChatSvc {
     onChunk: (text: string) => void,
     resolvedContext: string,
     onSessionRotated?: (newSessionId: string) => void,
+    caseDocumentId?: string,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, caseDocumentId);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await getChatWonderSessionId();
@@ -163,28 +157,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext);
-    }
-  }
-
-  /** Retrieves the Case's linked documents' chunks most relevant to the user's latest message
-   * and formats them the same way the old client-supplied documentContext was shaped. A
-   * document with no chunk rows (extraction still PENDING, or FAILED) simply contributes
-   * nothing here — no status check needed. A retrieval failure (embedding API down, etc.)
-   * degrades to no document context rather than failing the whole chat message — same
-   * "never surfaced to the user" handling the extraction pipeline itself uses. */
-  static async buildDocumentRagContext(userId: string, caseId: string, userInput: string): Promise<string> {
-    try {
-      const embedding = await embedText(userInput);
-      const chunks = await UserDocumentChunkRepo.vectorSearch(caseId, userId, embedding, {
-        limit: DOCUMENT_RAG_LIMIT,
-        minSimilarity: DOCUMENT_RAG_MIN_SIMILARITY,
-      });
-
-      return chunks.map((chunk) => `From "${chunk.doc_name}":\n${chunk.chunk_text}`).join("\n\n");
-    } catch (err) {
-      logger.error("Document RAG retrieval failed", { err, caseId, userId });
-      return "";
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, caseDocumentId);
     }
   }
 

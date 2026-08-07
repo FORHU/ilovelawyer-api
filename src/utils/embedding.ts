@@ -9,9 +9,18 @@ function getClient(): OpenAI {
 }
 
 export async function embedText(text: string): Promise<number[]> {
+  const [embedding] = await embedTexts([text]);
+  return embedding;
+}
+
+/** Embeds multiple chunks in a single OpenAI request. Callers with many chunks must batch
+ * through this instead of firing one embedText() per chunk — a large document can produce
+ * tens of thousands of chunks, and issuing that many concurrent HTTP requests exhausts local
+ * sockets and OpenAI's rate limit alike. */
+export async function embedTexts(texts: string[]): Promise<number[][]> {
   const res = await getClient().embeddings.create({
     model: "text-embedding-3-small",
-    input: text.trim().slice(0, 8000),
+    input: texts.map((text) => text.trim().slice(0, 8000)),
   });
-  return res.data[0].embedding;
+  return res.data.map((d) => d.embedding);
 }

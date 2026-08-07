@@ -13,4 +13,16 @@ router.get("/:id", asyncHandler(CaseCtrl.getById));
 router.patch("/:id", asyncHandler(CaseCtrl.update));
 router.delete("/:id", asyncHandler(CaseCtrl.delete));
 
+/**
+ *  UI routes for user document management.
+ *   1. Request a presigned URL for uploading a document to S3.
+ *   2. Create case
+ *   3. upload document to S3 using the presigned URL.
+ *   4. Create a document record in the database after the file has been uploaded to S3.
+ *
+ * 
+ */
+
+router.post("/:caseId/documents", asyncHandler(CaseCtrl.handleCreateCaseWithDocument));
+
 export default router;

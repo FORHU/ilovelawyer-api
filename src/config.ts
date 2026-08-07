@@ -39,6 +39,8 @@ export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
 export const CHAT_WONDER_API_URL = (process.env.CHAT_WONDER_API_URL || "").replace(/\/+$/, "");
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
+/** Shared secret Chat Wonder sends back to us via `x-api-key` when it calls our API (e.g. to fetch case document chunks). */
+export const CHAT_WONDER_API_KEY = process.env.CHAT_WONDER_API_KEY as string;
 export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;
 export const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY as string;
 export const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET as string;

@@ -1,5 +1,6 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import type { Readable } from "stream";
 import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_REGION, CLOUDFRONT_URL } from "../config";
 
 const client = new S3Client({
@@ -38,10 +39,14 @@ export async function getPresignedUploadUrl(key: string, contentType: string): P
   return getSignedUrl(client, command, { expiresIn: PRESIGN_EXPIRY_SECONDS });
 }
 
-/** Short-expiry presigned GET used by the extraction pipeline to fetch a document's bytes —
- * always via this, never `file.buffer` from the original request, so the job stays decoupled
- * from the request/process that created the Document row. */
-export async function getPresignedDownloadUrl(key: string): Promise<string> {
-  const command = new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key });
-  return getSignedUrl(client, command, { expiresIn: PRESIGN_EXPIRY_SECONDS });
+/** Downloads an object's full contents into memory — used by document extraction to read an
+ * uploaded Case Document's bytes back out of S3 for text extraction. */
+export async function getObjectBuffer(key: string): Promise<Buffer> {
+  const res = await client.send(new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
+  const stream = res.Body as Readable;
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }

@@ -222,7 +222,6 @@ const swaggerSpec: OAS3Definition = {
           name: { type: "string", nullable: true },
           fileUrl: { type: "string", nullable: true },
           aiSummary: { type: "string", nullable: true },
-          ragStatus: { type: "string", enum: ["PENDING", "READY", "FAILED"], description: "Background text-extraction/embedding status for chat retrieval — not surfaced as an error to the user either way" },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
         },
@@ -701,7 +700,7 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Chat"],
         summary: "Send a message — streams the AI response via chunked transfer encoding",
-        description: "If the conversation is linked to a Case (via caseId), the Case's fields are combined with legal-RAG retrieval and its linked documents' extracted-and-embedded chunks, injected as context automatically.",
+        description: "If the conversation is linked to a Case (via caseId), the Case's fields are combined with legal-RAG retrieval and injected as context automatically — documentContext is not required for that.",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
@@ -714,6 +713,7 @@ const swaggerSpec: OAS3Definition = {
                 properties: {
                   message: { type: "string", example: "What is the penalty under R.A. 9262?" },
                   sessionId: { type: "string", description: "ChatWonder session ID from GET /chat/session" },
+                  documentContext: { type: "string", description: "Optional extra context to pass to the AI, combined with Case context and legal-RAG retrieval" },
                 },
               },
             },
@@ -1394,7 +1394,6 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Documents"],
         summary: "Record a Document row for a file already uploaded to S3 via a presigned PUT (see POST /documents/presign)",
-        description: "Dispatches background text extraction/embedding (fire-and-forget) if caseId is given — see ragStatus on the returned Document. Content-type/size are validated post-hoc by that pipeline, not here.",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,

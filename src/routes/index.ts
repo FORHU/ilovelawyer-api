@@ -16,10 +16,12 @@ import sendEmailRoute from "./send-email.route";
 import rsvpRoute from "./rsvp.route";
 import ttsRoute from "./tts.route";
 import healthRoute from "./health.route";
+import caseDocumentRoute from "./case-document.route";
 
 const router = express.Router();
 
 router.use("/health", healthRoute);
+router.use("/case-document", caseDocumentRoute);
 router.use("/auth", authRoute);
 router.use("/chat", chatRoute);
 router.use("/legal-rag", legalRagRoute);

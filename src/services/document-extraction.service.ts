@@ -1,63 +1,91 @@
-import axios from "axios";
+import prisma from "../lib/prisma";
 import UserDocumentRepo from "../repositories/user-document.repository";
-import UserDocumentChunkRepo from "../repositories/user-document-chunk.repository";
-import { getPresignedDownloadUrl } from "../utils/s3";
-import { sniffFileKind, extractText, chunkText } from "../utils/document-extraction";
-import { embedText } from "../utils/embedding";
+import CaseDocumentChunkRepo from "../repositories/case-document-chunk.repository";
+import { getObjectBuffer } from "../utils/s3";
+import { extractText } from "../utils/document-text-extraction";
+import { chunkText } from "../utils/chunking";
+import { embedTexts } from "../utils/embedding";
 import logger from "../utils/logger";
 
-const MAX_FILE_BYTES = 100 * 1024 * 1024;
-
-interface ExtractableDocument {
-  id: string;
-  s3Key: string | null;
-  name: string;
-}
+// OpenAI accepts an array `input`, but a single request still needs to stay well under its
+// token/size limits — batching keeps a document with tens of thousands of chunks (e.g. a 50MB
+// PDF) from either firing thousands of concurrent connections or one oversized request.
+const EMBEDDING_BATCH_SIZE = 100;
 
 export default class DocumentExtractionSvc {
-  /** Fire-and-forget: fetches the Document's bytes fresh from S3, extracts text, chunks and
-   * embeds it, and stores the chunks. Any failure — fetch error, oversized file, a file that
-   * isn't actually a PDF/DOCX despite its claimed type, extraction error, embedding error —
-   * marks the Document FAILED, logs it, and stops. No retry, no error surfaced to the user;
-   * this mirrors how the Document simply stays without RAG context if extraction never
-   * succeeds. */
-  static async process(doc: ExtractableDocument): Promise<void> {
+  /**
+   * Extraction → chunking → embedding → storage pipeline for a Case Document (ADR 0010).
+   * Dispatched fire-and-forget by the confirm/PATCH/bulk-confirm call sites once a document is
+   * linked to a case — never throws, always resolves ragStatus to READY or FAILED.
+   */
+  static async process(documentId: string): Promise<void> {
     try {
-      if (!doc.s3Key) throw new Error("Document has no s3Key");
-
-      const url = await getPresignedDownloadUrl(doc.s3Key);
-      const res = await axios.get<ArrayBuffer>(url, { responseType: "arraybuffer" });
-      const buf = Buffer.from(res.data);
-
-      if (buf.byteLength > MAX_FILE_BYTES) {
-        throw new Error(`File exceeds ${MAX_FILE_BYTES} bytes (${buf.byteLength})`);
+      const doc = await UserDocumentRepo.findByIdWithFile(documentId);
+      if (!doc?.file?.s3Key) {
+        logger.error("Document extraction: no file/s3Key for document", { documentId });
+        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        return;
       }
 
-      const kind = sniffFileKind(buf);
-      if (!kind) {
-        throw new Error("File is not a recognizable PDF or DOCX");
+      const buffer = await getObjectBuffer(doc.file.s3Key);
+      const text = await extractText(buffer, doc.mimeType, doc.name);
+      const trimmed = text.trim();
+
+      // Empty extraction (e.g. a scanned/image-only PDF — no OCR) counts as failed, not ready.
+      if (!trimmed) {
+        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        return;
       }
 
-      const text = await extractText(buf, kind);
-      const chunks = chunkText(text);
-      if (!chunks.length) {
-        throw new Error("No extractable text");
+      const chunks = chunkText(trimmed);
+      if (chunks.length === 0) {
+        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        return;
       }
 
-      const embedded = await Promise.all(
-        chunks.map(async (chunk, chunkIndex) => ({
-          chunkIndex,
-          chunkText: chunk,
-          charCount: chunk.length,
-          embedding: await embedText(chunk),
-        })),
+      const embeddedChunks: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[] }[] = [];
+      for (let i = 0; i < chunks.length; i += EMBEDDING_BATCH_SIZE) {
+        const batch = chunks.slice(i, i + EMBEDDING_BATCH_SIZE);
+        const embeddings = await embedTexts(batch);
+        batch.forEach((chunk, j) =>
+          embeddedChunks.push({
+            caseDocumentId: documentId,
+            chunkIndex: i + j,
+            chunkText: chunk,
+            charCount: chunk.length,
+            embedding: embeddings[j],
+          }),
+        );
+      }
+
+      // Default interactive-transaction timeout (5s) is tuned for small transactions; a document
+      // with tens of thousands of chunks needs the storage step to run considerably longer.
+      await prisma.$transaction(
+        async (tx) => {
+          await CaseDocumentChunkRepo.deleteByDocument(documentId, tx);
+          await CaseDocumentChunkRepo.insertMany(embeddedChunks, tx);
+        },
+        { timeout: 120_000 },
       );
 
-      await UserDocumentChunkRepo.insertMany(doc.id, embedded);
-      await UserDocumentRepo.updateRagStatus(doc.id, "READY");
+      const { chunkCount, embeddedCount } = await CaseDocumentChunkRepo.verify(documentId);
+      if (chunkCount !== embeddedChunks.length || embeddedCount !== chunkCount) {
+        logger.error("Document extraction: chunk verification mismatch", {
+          documentId,
+          expected: embeddedChunks.length,
+          chunkCount,
+          embeddedCount,
+        });
+        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        return;
+      }
+
+      await UserDocumentRepo.updateRagStatus(documentId, "READY");
     } catch (err) {
-      logger.error("Document extraction failed", { err, documentId: doc.id, name: doc.name });
-      await UserDocumentRepo.updateRagStatus(doc.id, "FAILED").catch(() => {});
+      logger.error("Document extraction failed", { err, documentId });
+      await UserDocumentRepo.updateRagStatus(documentId, "FAILED").catch((updateErr) => {
+        logger.error("Failed to mark document FAILED after extraction error", { updateErr, documentId });
+      });
     }
   }
 }

@@ -51,7 +51,6 @@ export default class UserDocumentCtrl {
     const schema = Joi.object({
       name: Joi.string().optional(),
       caseId: Joi.string().allow(null).optional(),
-      aiSummary: Joi.string().optional(),
     });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
