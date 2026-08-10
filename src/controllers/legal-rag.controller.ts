@@ -24,6 +24,7 @@ export default class LegalRagCtrl {
       limit: Joi.number().integer().min(1).max(100).default(20),
       category: Joi.string().optional(),
       subcategory: Joi.string().optional(),
+      noSubcategory: Joi.boolean().optional(),
       year: Joi.number().integer().optional(),
       search: Joi.string().optional(),
     });
@@ -31,8 +32,7 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const { page, limit, category, year, search, subcategory } = value;
-    const result = await LegalRagSvc.list(page, limit, category, year, search, subcategory);
+    const result = await LegalRagSvc.list(value);
 
     return res.status(200).json(result);
   }

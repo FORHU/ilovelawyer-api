@@ -9,6 +9,14 @@ export interface LibrarySectionItem {
   mode: "browse" | "analyze";
   category: string | null;
   subcategory?: string;
+  /**
+   * When true, filters to rows with subcategory IS NULL exactly — required whenever this
+   * item must NOT overlap with a sibling item that filters on a specific subcategory value
+   * under the same category (e.g. supremeCourtDecisions vs. courtOfTaxAppeals, both under
+   * category='jurisprudence'). Without this, omitting `subcategory` means "any subcategory,"
+   * which silently includes tagged subsets and produces overlapping/duplicated counts.
+   */
+  noSubcategory?: boolean;
   query?: string;
 }
 
@@ -55,7 +63,7 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
   {
     key: "jurisprudence",
     items: [
-      { key: "supremeCourtDecisions", mode: "browse", category: "jurisprudence" },
+      { key: "supremeCourtDecisions", mode: "browse", category: "jurisprudence", noSubcategory: true },
       { key: "courtOfTaxAppeals", mode: "browse", category: "jurisprudence", subcategory: "court_of_tax_appeals" },
       { key: "indexedDecisions", mode: "browse", category: null },
     ],

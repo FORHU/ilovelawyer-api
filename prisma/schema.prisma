@@ -189,7 +189,6 @@ model Case {
   id            String   @id @default(uuid())
   userId        String
   caseName      String
-  partyInvolved String?
   actionType    String?
   jurisdiction  String?
   notes         String?  @db.Text

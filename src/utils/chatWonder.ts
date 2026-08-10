@@ -2,7 +2,7 @@ import axios from "axios";
 import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
-import { RELATED_QUERIES_RULE, SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
+import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
 import CaseDocumentChunkRepo from "../repositories/case-document-chunk.repository";
 
 function sleep(ms: number) {
@@ -116,10 +116,12 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
 
 export interface ChatWonderStreamResult {
   content: string;
-  /** Raw search terms Chat Wonder tagged via [RELATED_QUERIES] — article/section numbers,
-   * statute names, GR numbers it cited. Callers resolve these against the legal document
-   * store to build the actual RelatedCase records; Chat Wonder never returns cases directly. */
-  relatedQueries: string[];
+  /** Related cases Chat Wonder itself resolved via its own juris.ph MCP tool calls
+   * (search_jurisprudence/search_republic_acts/get_case/get_republic_act), already
+   * deduped and ranked server-side (vetted get_* entries outranking raw search rows —
+   * see chat-wonder-v2-api's legal_citations.py::select_related_cases). Sent as a
+   * dedicated [RELATED_CASES] frame; empty for non-legal-persona replies. */
+  relatedCases: RelatedCase[];
 }
 
 export function streamChatWonderMessage(
@@ -134,7 +136,7 @@ export function streamChatWonderMessage(
     let accumulated = "";
     let sourcesDropped = false;
     let settled = false;
-    let relatedQueries: string[] = [];
+    let relatedCases: RelatedCase[] = [];
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
     // the time onopen fires, instead of waiting on this serially after the socket is up.
     const chunkIdsPromise = caseDocumentId
@@ -149,7 +151,7 @@ export function streamChatWonderMessage(
       } catch {
         // already closing
       }
-      resolve({ content: accumulated, relatedQueries });
+      resolve({ content: accumulated, relatedCases });
     };
 
     const fail = (err: Error) => {
@@ -176,7 +178,7 @@ export function streamChatWonderMessage(
             case_document_chunk_ids?: string[];
           } = {
             type: "chat",
-            user_input: withLegalTag(userInput) + RELATED_QUERIES_RULE,
+            user_input: withLegalTag(userInput),
             session_id: sessionId,
             use_full_legal_chain: false,
           };
@@ -213,19 +215,23 @@ export function streamChatWonderMessage(
       }
 
       // Note whether this frame carries the terminator so it can still get its
-      // [RELATED_QUERIES]/[Sources] stripped below instead of being flushed raw —
+      // [RELATED_CASES]/[Sources] stripped below instead of being flushed raw —
       // Chat Wonder often ships the tag and __END__ together in the final frame.
       const isFinal = message.endsWith("__END__");
       if (isFinal) message = message.slice(0, -"__END__".length);
 
-      const relatedMatch = message.match(/\[RELATED_QUERIES\]([\s\S]*?)\[\/RELATED_QUERIES\]/i);
-      if (relatedMatch) {
+      // Chat Wonder's own MCP-grounded related cases, sent as a dedicated frame right
+      // before __END__ (see the_server.py's /chat-stream handler). Must be captured
+      // before the sourcesDropped blanking below, which would otherwise silently
+      // swallow it since this frame always arrives right after [Sources].
+      const relatedIdx = message.indexOf("[RELATED_CASES]");
+      if (relatedIdx !== -1) {
         try {
-          relatedQueries = JSON.parse(relatedMatch[1]);
+          relatedCases = JSON.parse(message.slice(relatedIdx + "[RELATED_CASES]".length));
         } catch {
-          // malformed frame — leave relatedQueries as whatever it was (usually [])
+          // malformed frame — leave relatedCases as whatever it was (usually [])
         }
-        message = message.replace(relatedMatch[0], "");
+        message = message.slice(0, relatedIdx);
       }
 
       if (sourcesDropped) {
