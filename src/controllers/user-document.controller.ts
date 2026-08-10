@@ -4,13 +4,29 @@ import UserDocumentSvc from "../services/user-document.service";
 import HttpError from "../utils/http-error";
 
 export default class UserDocumentCtrl {
-  static async upload(req: Request, res: Response) {
-    if (!req.file) throw new HttpError("No file provided", 400);
-
-    const { error, value } = Joi.object({ caseId: Joi.string().optional() }).validate(req.body);
+  static async presign(req: Request, res: Response) {
+    const schema = Joi.object({
+      filename: Joi.string().required(),
+      contentType: Joi.string().required(),
+      caseId: Joi.string().optional(),
+    });
+    const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const doc = await UserDocumentSvc.upload(req.user.userId, req.file, value.caseId);
+    const result = await UserDocumentSvc.presign(req.user.userId, value.filename, value.contentType, value.caseId);
+    return res.status(200).json(result);
+  }
+
+  static async create(req: Request, res: Response) {
+    const schema = Joi.object({
+      key: Joi.string().required(),
+      name: Joi.string().required(),
+      caseId: Joi.string().optional(),
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const doc = await UserDocumentSvc.create(req.user.userId, value);
     return res.status(201).json(doc);
   }
 
@@ -35,7 +51,6 @@ export default class UserDocumentCtrl {
     const schema = Joi.object({
       name: Joi.string().optional(),
       caseId: Joi.string().allow(null).optional(),
-      aiSummary: Joi.string().optional(),
     });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);

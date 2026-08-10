@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import Joi from "joi";
-import CaseSvc from "../services/case.service";
+import CaseSvc, { IncomingCaseDocument } from "../services/case.service";
 import HttpError from "../utils/http-error";
 
 const ACTION_TYPES = ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"];
@@ -74,5 +74,45 @@ export default class CaseCtrl {
   static async delete(req: Request, res: Response) {
     await CaseSvc.delete(req.params.id, req.user.userId);
     return res.status(204).send();
+  }
+
+  static async handleCreateCaseWithDocument(req: Request, res: Response) {
+
+    const schema = Joi.object({
+      caseId: Joi.string().required(),
+      documentData: Joi.array().min(1).items(Joi.object({
+        filename: Joi.string().required(),
+        s3Key: Joi.string().required(),
+        metaData: Joi.object({
+          documentType: Joi.string().optional(),
+          fileSize: Joi.number().integer().positive().required(),
+          mimeType: Joi.string().required(),
+        }).required(),
+      })).required()
+    });
+
+
+    const input = {
+      ...req.body,
+      ...(req.params.caseId ? { caseId: String(req.params.caseId) } : {}),
+    };
+
+    const { error, value } = schema.validate(input);
+    if (error) throw new HttpError(error.message, 400);
+
+    const caseData: { caseId: string; userId: string } = {
+      caseId: value.caseId,
+      userId: req.user.userId
+    };
+
+    const documentData: IncomingCaseDocument[] = value.documentData.map((doc: any) => ({
+      filename: doc.filename,
+      s3Key: doc.s3Key,
+      metaData: doc.metaData,
+    }));
+
+
+    const result = await CaseSvc.handleCreateCaseWithDocument(caseData, documentData);
+    return res.status(201).json(result);
   }
 }

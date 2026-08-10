@@ -3,16 +3,30 @@ import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
+import CaseDocumentChunkRepo from "../repositories/case-document-chunk.repository";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function callChatWonderRest(prompt: string, sessionId: string): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
-  const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, {
-    user_input: prompt,
+export async function callChatWonderRest(
+  prompt: string,
+  sessionId: string,
+  caseDocumentId?: string,
+): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
+  const payload: { session_id: string; user_input: string; case_document_id?: string; case_document_chunk_ids?: string[] } = {
     session_id: sessionId,
-  });
+    user_input: prompt,
+  };
+  // Lets Chat Wonder pull chunks itself via GET /api/v1/case-document/:caseDocumentId
+  // instead of us inlining the full document text into the prompt. The chunk ids are sent
+  // alongside so Chat Wonder can target that exact chunk set instead of re-deriving it.
+  if (caseDocumentId) {
+    payload.case_document_id = caseDocumentId;
+    payload.case_document_chunk_ids = await CaseDocumentChunkRepo.findIdsByDocument(caseDocumentId);
+  }
+
+  const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload);
   return data;
 }
 
@@ -115,6 +129,7 @@ export function streamChatWonderMessage(
   userInput: string,
   onChunk: (text: string) => void,
   documentContext?: string,
+  caseDocumentId?: string,
 ): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
@@ -122,6 +137,11 @@ export function streamChatWonderMessage(
     let sourcesDropped = false;
     let settled = false;
     let relatedCases: RelatedCase[] = [];
+    // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
+    // the time onopen fires, instead of waiting on this serially after the socket is up.
+    const chunkIdsPromise = caseDocumentId
+      ? CaseDocumentChunkRepo.findIdsByDocument(caseDocumentId)
+      : Promise.resolve<string[]>([]);
 
     const finish = () => {
       if (settled) return;
@@ -146,22 +166,32 @@ export function streamChatWonderMessage(
     };
 
     ws.onopen = () => {
-      const payload: {
-        type: string;
-        user_input: string;
-        session_id: string;
-        use_full_legal_chain: boolean;
-        document_context?: string;
-      } = {
-        type: "chat",
-        user_input: withLegalTag(userInput),
-        session_id: sessionId,
-        use_full_legal_chain: false,
-      };
-      if (documentContext) {
-        payload.document_context = documentContext;
-      }
-      ws.send(JSON.stringify(payload));
+      chunkIdsPromise
+        .then((chunkIds) => {
+          const payload: {
+            type: string;
+            user_input: string;
+            session_id: string;
+            use_full_legal_chain: boolean;
+            document_context?: string;
+            case_document_id?: string;
+            case_document_chunk_ids?: string[];
+          } = {
+            type: "chat",
+            user_input: withLegalTag(userInput),
+            session_id: sessionId,
+            use_full_legal_chain: false,
+          };
+          if (documentContext) {
+            payload.document_context = documentContext;
+          }
+          if (caseDocumentId) {
+            payload.case_document_id = caseDocumentId;
+            payload.case_document_chunk_ids = chunkIds;
+          }
+          ws.send(JSON.stringify(payload));
+        })
+        .catch((err) => fail(err instanceof Error ? err : new Error(String(err))));
     };
 
     ws.onmessage = (event) => {

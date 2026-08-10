@@ -81,6 +81,7 @@ export default class ChatSvc {
     onChunk: (text: string) => void,
     documentContext?: string,
     onSessionRotated?: (newSessionId: string) => void,
+    caseDocumentId?: string,
   ) {
     const conversation = await ChatRepo.findConversationWithCase(conversationId);
     if (!conversation || conversation.userId !== userId) {
@@ -109,7 +110,7 @@ export default class ChatSvc {
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
     } else {
-      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated);
+      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, caseDocumentId);
       fullResponse = result.content;
       relatedCases = result.relatedCases;
       redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
@@ -144,9 +145,10 @@ export default class ChatSvc {
     onChunk: (text: string) => void,
     resolvedContext: string,
     onSessionRotated?: (newSessionId: string) => void,
+    caseDocumentId?: string,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, caseDocumentId);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await getChatWonderSessionId();
@@ -154,7 +156,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, caseDocumentId);
     }
   }
 
