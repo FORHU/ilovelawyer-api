@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import Joi from "joi";
 import CaseSvc, { IncomingCaseDocument } from "../services/case.service";
 import HttpError from "../utils/http-error";
+import { PartyInput } from "../repositories/case.repository";
 
 const ACTION_TYPES = ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"];
 const PARTY_DESIGNATIONS = ["Petitioner / Plaintiff", "Respondent / Defendant", "Intervenor / Third-Party"];
@@ -12,6 +13,27 @@ const partySchema = Joi.object({
     .valid(...PARTY_DESIGNATIONS)
     .required(),
 });
+
+/** Converts legacy `"Name (Designation)"` into a parties array when `parties` is absent. */
+function normalizeCaseBody(value: {
+  partyInvolved?: string;
+  parties?: PartyInput[];
+  [key: string]: unknown;
+}) {
+  const { partyInvolved, ...rest } = value;
+  if (rest.parties || !partyInvolved?.trim()) return rest;
+
+  const trimmed = partyInvolved.trim();
+  const match = trimmed.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  const parties: PartyInput[] = match
+    ? [{ name: match[1].trim(), designation: match[2].trim() }]
+    : [{ name: trimmed, designation: "Petitioner / Plaintiff" }];
+
+  const { error, value: validatedParties } = Joi.array().items(partySchema).validate(parties);
+  if (error) throw new HttpError(error.message, 400);
+
+  return { ...rest, parties: validatedParties };
+}
 
 export default class CaseCtrl {
   static async create(req: Request, res: Response) {
@@ -29,7 +51,13 @@ export default class CaseCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.create(req.user.userId, value);
+    const result = await CaseSvc.create(req.user.userId, normalizeCaseBody(value) as {
+      caseName: string;
+      actionType?: string;
+      jurisdiction?: string;
+      notes?: string;
+      parties?: PartyInput[];
+    });
     return res.status(201).json(result);
   }
 
@@ -67,7 +95,7 @@ export default class CaseCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.update(req.params.id, req.user.userId, value);
+    const result = await CaseSvc.update(req.params.id, req.user.userId, normalizeCaseBody(value));
     return res.status(200).json(result);
   }
 

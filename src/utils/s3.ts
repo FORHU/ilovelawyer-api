@@ -21,6 +21,10 @@ export function s3UrlForKey(key: string): string {
 }
 
 export async function uploadToS3(key: string, body: Buffer, contentType: string): Promise<string> {
+  if (!AWS_S3_BUCKET) {
+    throw new Error("AWS_S3_BUCKET is not configured");
+  }
+
   await client.send(
     new PutObjectCommand({
       Bucket: AWS_S3_BUCKET,

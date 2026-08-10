@@ -62,6 +62,7 @@ export default class TranscriptionSvc {
 
     const s3Key = item.audioFile?.s3Key;
     if (!s3Key) throw new HttpError("No audio file or S3 key linked to this transcription", 400);
+    if (!AWS_S3_BUCKET) throw new HttpError("AWS_S3_BUCKET is not configured", 500);
 
     const s3Uri = `s3://${AWS_S3_BUCKET}/${s3Key}`;
     const jobName = `transcription-${id}-${Date.now()}`;
