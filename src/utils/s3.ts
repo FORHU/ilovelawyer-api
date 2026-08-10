@@ -9,6 +9,10 @@ const client = new S3Client({
     accessKeyId: AWS_ACCESS_KEY,
     secretAccessKey: AWS_SECRET_ACCESS_KEY,
   },
+  // SDK v3 defaults checksums into PutObject signatures; browsers don't send those
+  // headers on fetch PUT, so S3 returns 403 which Chrome surfaces as a CORS error.
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
 });
 
 const PRESIGN_EXPIRY_SECONDS = 300;
