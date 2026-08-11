@@ -12,6 +12,12 @@ import logger from "../utils/logger";
 // PDF) from either firing thousands of concurrent connections or one oversized request.
 const EMBEDDING_BATCH_SIZE = 100;
 
+// A 50MB PDF can chunk into 30k+ pieces (300+ batches) — running those strictly sequentially
+// took 45+ minutes with no observable progress. A small concurrency window keeps the request
+// count bounded (unlike firing everything at once) while cutting wall-clock time roughly
+// proportionally.
+const EMBEDDING_CONCURRENCY = 5;
+
 export default class DocumentExtractionSvc {
   /**
    * Extraction → chunking → embedding → storage pipeline for a Case Document (ADR 0010).
@@ -43,19 +49,27 @@ export default class DocumentExtractionSvc {
         return;
       }
 
-      const embeddedChunks: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[] }[] = [];
+      const batches: string[][] = [];
       for (let i = 0; i < chunks.length; i += EMBEDDING_BATCH_SIZE) {
-        const batch = chunks.slice(i, i + EMBEDDING_BATCH_SIZE);
-        const embeddings = await embedTexts(batch);
-        batch.forEach((chunk, j) =>
-          embeddedChunks.push({
-            caseDocumentId: documentId,
-            chunkIndex: i + j,
-            chunkText: chunk,
-            charCount: chunk.length,
-            embedding: embeddings[j],
-          }),
-        );
+        batches.push(chunks.slice(i, i + EMBEDDING_BATCH_SIZE));
+      }
+
+      const embeddedChunks: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[] }[] = [];
+      for (let i = 0; i < batches.length; i += EMBEDDING_CONCURRENCY) {
+        const group = batches.slice(i, i + EMBEDDING_CONCURRENCY);
+        const groupEmbeddings = await Promise.all(group.map((batch) => embedTexts(batch)));
+        group.forEach((batch, g) => {
+          const baseChunkIndex = (i + g) * EMBEDDING_BATCH_SIZE;
+          batch.forEach((chunk, j) =>
+            embeddedChunks.push({
+              caseDocumentId: documentId,
+              chunkIndex: baseChunkIndex + j,
+              chunkText: chunk,
+              charCount: chunk.length,
+              embedding: groupEmbeddings[g][j],
+            }),
+          );
+        });
       }
 
       // Default interactive-transaction timeout (5s) is tuned for small transactions; a document
