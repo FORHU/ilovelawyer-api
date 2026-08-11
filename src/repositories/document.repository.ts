@@ -14,7 +14,7 @@ interface NewUserDocument {
 }
 
 export default class DocumentRepo {
-  static async create(userId: string, data: { name: string; fileId: string; caseId?: string }) {
+  static async create(userId: string, data: { name: string; fileId: string; caseId?: string; consultationId?: string }) {
     return prisma.document.create({ data: { userId, ...data } });
   }
 
@@ -44,6 +44,12 @@ export default class DocumentRepo {
    * of a document it just created/confirmed itself, not a user-supplied id. */
   static async findByIdWithFile(id: string) {
     return prisma.document.findUnique({ where: { id }, include: { file: true } });
+  }
+
+  /** Most recently attached document for a consultation — lets chat auto-ground later turns
+   * against it without the client having to re-pass caseDocumentId on every message. */
+  static async findMostRecentByConsultation(consultationId: string) {
+    return prisma.document.findFirst({ where: { consultationId }, orderBy: { createdAt: "desc" } });
   }
 
   static async update(id: string, userId: string, data: { name?: string; caseId?: string | null }) {

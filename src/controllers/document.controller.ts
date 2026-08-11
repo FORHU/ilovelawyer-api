@@ -9,22 +9,49 @@ export default class DocumentCtrl {
       filename: Joi.string().required(),
       contentType: Joi.string().required(),
       caseId: Joi.string().optional(),
+      consultationId: Joi.string().optional(),
     });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await DocumentSvc.presign(req.user.userId, value.filename, value.contentType, value.caseId);
+    const result = await DocumentSvc.presign(
+      req.user.userId,
+      value.filename,
+      value.contentType,
+      value.caseId,
+      value.consultationId
+    );
     return res.status(200).json(result);
   }
 
   static async create(req: Request, res: Response) {
-    const schema = Joi.object({
-      key: Joi.string().required(),
-      name: Joi.string().required(),
-      caseId: Joi.string().optional(),
-    });
+    const schema = Joi.alternatives().try(
+      Joi.object({
+        key: Joi.string().required(),
+        name: Joi.string().required(),
+        caseId: Joi.string().optional(),
+        consultationId: Joi.string().optional(),
+      }),
+      Joi.object({
+        items: Joi.array()
+          .items(
+            Joi.object({
+              key: Joi.string().required(),
+              name: Joi.string().required(),
+            }),
+          )
+          .min(1)
+          .required(),
+        caseId: Joi.string().optional(),
+      }),
+    );
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+
+    if (value.items) {
+      const docs = await DocumentSvc.createMany(req.user.userId, value.items, value.caseId);
+      return res.status(201).json(docs);
+    }
 
     const doc = await DocumentSvc.create(req.user.userId, value);
     return res.status(201).json(doc);

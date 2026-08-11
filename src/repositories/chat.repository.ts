@@ -4,53 +4,53 @@ import { TimelineItem, MindMapItem } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
-  static async createConversation(userId: string, title?: string, caseId?: string) {
-    return prisma.conversation.create({ data: { userId, title, caseId } });
+  static async createConsultation(userId: string, title?: string, caseId?: string) {
+    return prisma.consultation.create({ data: { userId, title, caseId } });
   }
 
-  static async listConversations(userId: string, caseId?: string) {
-    return prisma.conversation.findMany({
+  static async listConsultations(userId: string, caseId?: string) {
+    return prisma.consultation.findMany({
       where: { userId, ...(caseId ? { caseId } : {}) },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  static async findConversationById(conversationId: string) {
-    return prisma.conversation.findUnique({ where: { id: conversationId } });
+  static async findConsultationById(consultationId: string) {
+    return prisma.consultation.findUnique({ where: { id: consultationId } });
   }
 
-  static async findConversationWithCase(conversationId: string) {
-    return prisma.conversation.findUnique({
-      where: { id: conversationId },
+  static async findConsultationWithCase(consultationId: string) {
+    return prisma.consultation.findUnique({
+      where: { id: consultationId },
       include: { case: { include: { parties: true } } },
     });
   }
 
-  static async updateConversation(conversationId: string, title: string) {
-    return prisma.conversation.update({ where: { id: conversationId }, data: { title } });
+  static async updateConsultation(consultationId: string, title: string) {
+    return prisma.consultation.update({ where: { id: consultationId }, data: { title } });
   }
 
-  static async deleteConversation(conversationId: string) {
-    return prisma.conversation.delete({ where: { id: conversationId } });
+  static async deleteConsultation(consultationId: string) {
+    return prisma.consultation.delete({ where: { id: consultationId } });
   }
 
-  static async listMessagesByConversation(conversationId: string) {
+  static async listMessagesByConsultation(consultationId: string) {
     return prisma.message.findMany({
-      where: { conversationId },
+      where: { consultationId },
       orderBy: { createdAt: "asc" },
       include: { timeline: true, mindMap: true, relatedCases: true },
     });
   }
 
   static async createMessage(
-    conversationId: string,
+    consultationId: string,
     role: MessageRole,
     content: string,
     userId?: string,
     parentMessageId?: string,
   ) {
     return prisma.message.create({
-      data: { conversationId, role, content, userId, parentMessageId },
+      data: { consultationId, role, content, userId, parentMessageId },
     });
   }
 
@@ -79,9 +79,9 @@ export default class ChatRepo {
     });
   }
 
-  static async findLatestAssistantMessage(conversationId: string) {
+  static async findLatestAssistantMessage(consultationId: string) {
     return prisma.message.findFirst({
-      where: { conversationId, role: "assistant" },
+      where: { consultationId, role: "assistant" },
       orderBy: { createdAt: "desc" },
       include: { relatedCases: true },
     });

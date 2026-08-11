@@ -41,10 +41,10 @@ model User {
 
   sessions                 Session[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
-  conversations            Conversation[]
+  consultations            Consultation[]
   messages                 Message[]
-  createdInvites           ConversationInvite[]
-  conversationParticipants ConversationParticipant[]
+  createdInvites           ConsultationInvite[]
+  consultationParticipants ConsultationParticipant[]
   cases                    Case[]
   documents                Document[]
   bookmarks                Bookmark[]
@@ -85,7 +85,7 @@ enum Role {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
-model Conversation {
+model Consultation {
   id        String   @id @default(uuid())
   userId    String
   caseId    String?
@@ -95,8 +95,9 @@ model Conversation {
   user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   case         Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
   messages     Message[]
-  invites      ConversationInvite[]
-  participants ConversationParticipant[]
+  invites      ConsultationInvite[]
+  participants ConsultationParticipant[]
+  documents    Document[]
 
   @@index([userId])
   @@index([caseId])
@@ -104,7 +105,7 @@ model Conversation {
 
 model Message {
   id              String      @id @default(uuid())
-  conversationId  String
+  consultationId  String
   role            MessageRole
   content         String      @db.Text
   imagePreview    String?
@@ -113,7 +114,7 @@ model Message {
   userId          String?
   parentMessageId String?
 
-  conversation Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  consultation Consultation     @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user         User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
   parent       Message?         @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
   replies      Message[]        @relation("MessageThread")
@@ -121,7 +122,7 @@ model Message {
   mindMap      MessageMindMap?
   relatedCases MessageRelatedCases?
 
-  @@index([conversationId])
+  @@index([consultationId])
   @@index([userId])
   @@index([parentMessageId])
 }
@@ -159,28 +160,28 @@ enum MessageRole {
   system
 }
 
-model ConversationInvite {
+model ConsultationInvite {
   id             String   @id @default(uuid())
-  conversationId String
+  consultationId String
   createdBy      String
   createdAt      DateTime @default(now())
   expiresAt      DateTime
 
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   creator      User         @relation(fields: [createdBy], references: [id], onDelete: Cascade)
 
-  @@index([conversationId])
+  @@index([consultationId])
 }
 
-model ConversationParticipant {
-  conversationId String
+model ConsultationParticipant {
+  consultationId String
   userId         String
   joinedAt       DateTime @default(now())
 
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@id([conversationId, userId])
+  @@id([consultationId, userId])
 }
 
 // ── Case Management ────────────────────────────────────────────────────────────
@@ -198,7 +199,7 @@ model Case {
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   documents     Document[]
   parties       Party[]
-  conversations Conversation[]
+  consultations Consultation[]
   transcriptions Transcription[]
 
   @@index([userId])
@@ -218,23 +219,26 @@ model Party {
 // ── Case Documents ───────────────────────────────────────────────────────────
 
 model Document {
-  id           String    @id @default(uuid())
-  userId       String
-  caseId       String?
-  name         String
-  fileId       String?
-  documentType String?
-  fileSize     Int?
-  mimeType     String?
-  ragStatus    RagStatus @default(PENDING)
-  createdAt    DateTime  @default(now())
+  id             String    @id @default(uuid())
+  userId         String
+  caseId         String?
+  consultationId String?
+  name           String
+  fileId         String?
+  documentType   String?
+  fileSize       Int?
+  mimeType       String?
+  ragStatus      RagStatus @default(PENDING)
+  createdAt      DateTime  @default(now())
 
-  user   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case   Case?               @relation(fields: [caseId], references: [id])
-  file   File?               @relation(fields: [fileId], references: [id])
-  chunks CaseDocumentChunk[]
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case         Case?               @relation(fields: [caseId], references: [id])
+  consultation Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  file         File?               @relation(fields: [fileId], references: [id])
+  chunks       CaseDocumentChunk[]
 
   @@index([userId])
+  @@index([consultationId])
 }
 
 enum RagStatus {

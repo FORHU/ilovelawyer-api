@@ -10,24 +10,24 @@ const router = express.Router();
 router.use(validSession);
 
 router.get("/session", asyncHandler(ChatCtrl.getSession));
-router.get("/conversations", asyncHandler(ChatCtrl.listConversations));
-router.post("/conversations", asyncHandler(ChatCtrl.createConversation));
-router.patch("/conversations/:conversationId", asyncHandler(ChatCtrl.renameConversation));
-router.delete("/conversations/:conversationId", asyncHandler(ChatCtrl.deleteConversation));
-router.get("/conversations/:conversationId/messages", asyncHandler(ChatCtrl.listMessages));
-router.get("/conversations/:conversationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
-router.post("/conversations/:conversationId/messages", asyncHandler(ChatCtrl.sendMessage));
-router.delete("/conversations/:conversationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
+router.get("/consultations", asyncHandler(ChatCtrl.listConsultations));
+router.post("/consultations", asyncHandler(ChatCtrl.createConsultation));
+router.patch("/consultations/:consultationId", asyncHandler(ChatCtrl.renameConsultation));
+router.delete("/consultations/:consultationId", asyncHandler(ChatCtrl.deleteConsultation));
+router.get("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.listMessages));
+router.get("/consultations/:consultationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
+router.post("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.sendMessage));
+router.delete("/consultations/:consultationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
 
 // Invites
-router.post("/conversations/:conversationId/invites", asyncHandler(InviteCtrl.create));
-router.get("/conversations/:conversationId/invites", asyncHandler(InviteCtrl.listByConversation));
+router.post("/consultations/:consultationId/invites", asyncHandler(InviteCtrl.create));
+router.get("/consultations/:consultationId/invites", asyncHandler(InviteCtrl.listByConsultation));
 router.get("/invites/:id", asyncHandler(InviteCtrl.getById));
 router.post("/invites/:id/accept", asyncHandler(InviteCtrl.accept));
 router.delete("/invites/:id", asyncHandler(InviteCtrl.delete));
 
 // Participants
-router.get("/conversations/:conversationId/participants", asyncHandler(ParticipantCtrl.list));
-router.delete("/conversations/:conversationId/participants/:userId", asyncHandler(ParticipantCtrl.remove));
+router.get("/consultations/:consultationId/participants", asyncHandler(ParticipantCtrl.list));
+router.delete("/consultations/:consultationId/participants/:userId", asyncHandler(ParticipantCtrl.remove));
 
 export default router;

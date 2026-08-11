@@ -1,27 +1,27 @@
 import prisma from "../lib/prisma";
 
 export default class InviteRepo {
-  static async create(conversationId: string, createdBy: string, expiresAt: Date) {
-    return prisma.conversationInvite.create({
-      data: { conversationId, createdBy, expiresAt },
+  static async create(consultationId: string, createdBy: string, expiresAt: Date) {
+    return prisma.consultationInvite.create({
+      data: { consultationId, createdBy, expiresAt },
     });
   }
 
   static async findById(id: string) {
-    return prisma.conversationInvite.findUnique({
+    return prisma.consultationInvite.findUnique({
       where: { id },
-      include: { conversation: true, creator: { select: { id: true, name: true, email: true } } },
+      include: { consultation: true, creator: { select: { id: true, name: true, email: true } } },
     });
   }
 
-  static async listByConversation(conversationId: string) {
-    return prisma.conversationInvite.findMany({
-      where: { conversationId },
+  static async listByConsultation(consultationId: string) {
+    return prisma.consultationInvite.findMany({
+      where: { consultationId },
       orderBy: { createdAt: "desc" },
     });
   }
 
   static async delete(id: string) {
-    return prisma.conversationInvite.delete({ where: { id } });
+    return prisma.consultationInvite.delete({ where: { id } });
   }
 }

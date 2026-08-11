@@ -1,5 +1,5 @@
 /**
- * One-time script: generate titles for all conversations where title IS NULL.
+ * One-time script: generate titles for all consultations where title IS NULL.
  * Run: npx ts-node scripts/backfill-titles.ts
  */
 import * as dotenv from "dotenv";
@@ -16,20 +16,20 @@ function sleep(ms: number) {
 }
 
 async function main() {
-  const conversations = await prisma.conversation.findMany({
+  const consultations = await prisma.consultation.findMany({
     select: { id: true, title: true },
     orderBy: { createdAt: "asc" },
   });
 
-  console.log(`Found ${conversations.length} untitled conversations.`);
+  console.log(`Found ${consultations.length} untitled consultations.`);
 
   let success = 0;
   let skipped = 0;
   let failed = 0;
 
-  for (const { id, title } of conversations) {
+  for (const { id, title } of consultations) {
     const messages = await prisma.message.findMany({
-      where: { conversationId: id },
+      where: { consultationId: id },
       orderBy: { createdAt: "asc" },
       take: 4,
     });
@@ -67,7 +67,7 @@ async function main() {
         continue;
       }
 
-      await prisma.conversation.update({ where: { id }, data: { title } });
+      await prisma.consultation.update({ where: { id }, data: { title } });
       console.log(`  [ok]   ${id} — "${title}"`);
       success++;
     } catch (err) {

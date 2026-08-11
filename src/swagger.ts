@@ -66,7 +66,7 @@ const swaggerSpec: OAS3Definition = {
           createdAt: { type: "string", format: "date-time" },
         },
       },
-      Conversation: {
+      Consultation: {
         type: "object",
         properties: {
           id: { type: "string" },
@@ -80,27 +80,27 @@ const swaggerSpec: OAS3Definition = {
         type: "object",
         properties: {
           id: { type: "string" },
-          conversationId: { type: "string" },
+          consultationId: { type: "string" },
           role: { type: "string", enum: ["user", "assistant", "system"] },
           content: { type: "string" },
           createdAt: { type: "string", format: "date-time" },
         },
       },
-      ConversationInvite: {
+      ConsultationInvite: {
         type: "object",
         properties: {
           id: { type: "string" },
-          conversationId: { type: "string" },
+          consultationId: { type: "string" },
           createdBy: { type: "string" },
           expiresAt: { type: "string", format: "date-time" },
           createdAt: { type: "string", format: "date-time" },
         },
       },
-      ConversationParticipant: {
+      ConsultationParticipant: {
         type: "object",
         properties: {
           userId: { type: "string" },
-          conversationId: { type: "string" },
+          consultationId: { type: "string" },
           joinedAt: { type: "string", format: "date-time" },
           user: {
             type: "object",
@@ -606,25 +606,25 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
-    "/chat/conversations": {
+    "/chat/consultations": {
       get: {
         tags: ["Chat"],
-        summary: "List all conversations for the current user",
+        summary: "List all consultations for the current user",
         security: [{ bearerAuth: [] }],
         parameters: [
-          { name: "caseId", in: "query", schema: { type: "string" }, description: "Filter conversations linked to a single Case" },
+          { name: "caseId", in: "query", schema: { type: "string" }, description: "Filter consultations linked to a single Case" },
         ],
         responses: {
           200: {
-            description: "List of conversations",
-            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Conversation" } } } },
+            description: "List of consultations",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Consultation" } } } },
           },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
       post: {
         tags: ["Chat"],
-        summary: "Create a new conversation",
+        summary: "Create a new consultation",
         security: [{ bearerAuth: [] }],
         requestBody: {
           content: {
@@ -640,18 +640,18 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          201: { description: "Conversation created", content: { "application/json": { schema: { $ref: "#/components/schemas/Conversation" } } } },
+          201: { description: "Consultation created", content: { "application/json": { schema: { $ref: "#/components/schemas/Consultation" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "caseId not found or not owned by the user", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
-    "/chat/conversations/{conversationId}": {
+    "/chat/consultations/{consultationId}": {
       patch: {
         tags: ["Chat"],
-        summary: "Rename a conversation",
+        summary: "Rename a consultation",
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
           required: true,
           content: {
@@ -665,29 +665,29 @@ const swaggerSpec: OAS3Definition = {
           },
         },
         responses: {
-          200: { description: "Conversation renamed", content: { "application/json": { schema: { $ref: "#/components/schemas/Conversation" } } } },
+          200: { description: "Consultation renamed", content: { "application/json": { schema: { $ref: "#/components/schemas/Consultation" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          404: { description: "Conversation not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Consultation not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
       delete: {
         tags: ["Chat"],
-        summary: "Delete a conversation and all its messages",
+        summary: "Delete a consultation and all its messages",
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          204: { description: "Conversation deleted" },
+          204: { description: "Consultation deleted" },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          404: { description: "Conversation not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Consultation not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
-    "/chat/conversations/{conversationId}/messages": {
+    "/chat/consultations/{consultationId}/messages": {
       get: {
         tags: ["Chat"],
-        summary: "List all messages in a conversation",
+        summary: "List all messages in a consultation",
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         responses: {
           200: {
             description: "Messages",
@@ -699,9 +699,9 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Chat"],
         summary: "Send a message — streams the AI response via chunked transfer encoding",
-        description: "If the conversation is linked to a Case (via caseId), the Case's fields are combined with legal-RAG retrieval and injected as context automatically — documentContext is not required for that.",
+        description: "If the consultation is linked to a Case (via caseId), the Case's fields are combined with legal-RAG retrieval and injected as context automatically — documentContext is not required for that.",
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
           required: true,
           content: {
@@ -725,13 +725,13 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
-    "/chat/conversations/{conversationId}/messages/{messageId}": {
+    "/chat/consultations/{consultationId}/messages/{messageId}": {
       delete: {
         tags: ["Chat"],
         summary: "Delete a single message",
         security: [{ bearerAuth: [] }],
         parameters: [
-          { name: "conversationId", in: "path", required: true, schema: { type: "string" } },
+          { name: "consultationId", in: "path", required: true, schema: { type: "string" } },
           { name: "messageId", in: "path", required: true, schema: { type: "string" } },
         ],
         responses: {
@@ -743,29 +743,29 @@ const swaggerSpec: OAS3Definition = {
     },
 
     // ── Chat Invites ──────────────────────────────────────────────────────
-    "/chat/conversations/{conversationId}/invites": {
+    "/chat/consultations/{consultationId}/invites": {
       get: {
         tags: ["Chat Invites"],
-        summary: "List all invites for a conversation",
+        summary: "List all invites for a consultation",
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         responses: {
           200: {
             description: "List of invites",
-            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ConversationInvite" } } } },
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ConsultationInvite" } } } },
           },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
       post: {
         tags: ["Chat Invites"],
-        summary: "Create a new invite link for a conversation (48-hour TTL)",
+        summary: "Create a new invite link for a consultation (48-hour TTL)",
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          201: { description: "Invite created", content: { "application/json": { schema: { $ref: "#/components/schemas/ConversationInvite" } } } },
+          201: { description: "Invite created", content: { "application/json": { schema: { $ref: "#/components/schemas/ConsultationInvite" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          403: { description: "Not the conversation owner", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Not the consultation owner", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -776,7 +776,7 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          200: { description: "Invite detail", content: { "application/json": { schema: { $ref: "#/components/schemas/ConversationInvite" } } } },
+          200: { description: "Invite detail", content: { "application/json": { schema: { $ref: "#/components/schemas/ConsultationInvite" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Invite not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -796,11 +796,11 @@ const swaggerSpec: OAS3Definition = {
     "/chat/invites/{id}/accept": {
       post: {
         tags: ["Chat Invites"],
-        summary: "Accept an invite — joins the current user as a conversation participant",
+        summary: "Accept an invite — joins the current user as a consultation participant",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          200: { description: "Joined conversation", content: { "application/json": { schema: { $ref: "#/components/schemas/ConversationParticipant" } } } },
+          200: { description: "Joined consultation", content: { "application/json": { schema: { $ref: "#/components/schemas/ConsultationParticipant" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Invite not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           410: { description: "Invite expired", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
@@ -809,34 +809,34 @@ const swaggerSpec: OAS3Definition = {
     },
 
     // ── Chat Participants ─────────────────────────────────────────────────
-    "/chat/conversations/{conversationId}/participants": {
+    "/chat/consultations/{consultationId}/participants": {
       get: {
         tags: ["Chat Participants"],
-        summary: "List participants in a conversation",
+        summary: "List participants in a consultation",
         security: [{ bearerAuth: [] }],
-        parameters: [{ name: "conversationId", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         responses: {
           200: {
             description: "List of participants",
-            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ConversationParticipant" } } } },
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ConsultationParticipant" } } } },
           },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
-    "/chat/conversations/{conversationId}/participants/{userId}": {
+    "/chat/consultations/{consultationId}/participants/{userId}": {
       delete: {
         tags: ["Chat Participants"],
-        summary: "Remove a participant from a conversation (owner only)",
+        summary: "Remove a participant from a consultation (owner only)",
         security: [{ bearerAuth: [] }],
         parameters: [
-          { name: "conversationId", in: "path", required: true, schema: { type: "string" } },
+          { name: "consultationId", in: "path", required: true, schema: { type: "string" } },
           { name: "userId", in: "path", required: true, schema: { type: "string" } },
         ],
         responses: {
           204: { description: "Participant removed" },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          403: { description: "Not the conversation owner", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Not the consultation owner", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Participant not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -1390,26 +1390,62 @@ const swaggerSpec: OAS3Definition = {
       },
       post: {
         tags: ["Documents"],
-        summary: "Record a Document row for a file already uploaded to S3 via a presigned PUT (see POST /documents/presign)",
+        summary:
+          "Record a Document row for a file already uploaded to S3 via a presigned PUT (see POST /documents/presign). Accepts either a single-document body or a batch body ({ items: [...] }); the batch form records several Document rows in one transaction and returns an array.",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
           content: {
             "application/json": {
               schema: {
-                type: "object",
-                required: ["key", "name"],
-                properties: {
-                  key: { type: "string", description: "The S3 key returned by POST /documents/presign" },
-                  name: { type: "string", description: "Display name (typically the original filename)" },
-                  caseId: { type: "string", description: "Associate with a case (optional)" },
-                },
-              },
+                oneOf: [
+                  {
+                    type: "object",
+                    required: ["key", "name"],
+                    properties: {
+                      key: { type: "string", description: "The S3 key returned by POST /documents/presign" },
+                      name: { type: "string", description: "Display name (typically the original filename)" },
+                      caseId: { type: "string", description: "Associate with a case (optional)" },
+                    },
+                  },
+                  {
+                    type: "object",
+                    required: ["items"],
+                    properties: {
+                      items: {
+                        type: "array",
+                        minItems: 1,
+                        items: {
+                          type: "object",
+                          required: ["key", "name"],
+                          properties: {
+                            key: { type: "string", description: "The S3 key returned by POST /documents/presign" },
+                            name: { type: "string", description: "Display name (typically the original filename)" },
+                          },
+                        },
+                      },
+                      caseId: { type: "string", description: "Associate all documents with a case (optional)" },
+                    },
+                  },
+                ],
+              } as object,
             },
           },
         },
         responses: {
-          201: { description: "Document recorded", content: { "application/json": { schema: { $ref: "#/components/schemas/UserDocument" } } } },
+          201: {
+            description: "Document(s) recorded — a single UserDocument for the single-document shape, or an array for the batch shape",
+            content: {
+              "application/json": {
+                schema: {
+                  oneOf: [
+                    { $ref: "#/components/schemas/UserDocument" },
+                    { type: "array", items: { $ref: "#/components/schemas/UserDocument" } },
+                  ],
+                } as object,
+              },
+            },
+          },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
@@ -1433,7 +1469,12 @@ const swaggerSpec: OAS3Definition = {
                   caseId: {
                     type: "string",
                     description:
-                      "Associate with a case (optional). When given, the returned key is scoped under documents/cases/{caseId}/; when omitted, under documents/users/{userId}/.",
+                      "Associate with a case (optional). When given, the returned key is scoped under documents/cases/{caseId}/, taking precedence over consultationId.",
+                  },
+                  consultationId: {
+                    type: "string",
+                    description:
+                      "Associate with a consultation (optional). Ignored when caseId is given. When given (and caseId is not), the returned key is scoped under documents/consultations/{consultationId}/; when neither is given, under documents/users/{userId}/.",
                   },
                 },
               },

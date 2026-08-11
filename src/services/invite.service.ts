@@ -6,14 +6,14 @@ import HttpError from "../utils/http-error";
 const INVITE_TTL_HOURS = 48;
 
 export default class InviteSvc {
-  static async create(userId: string, conversationId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async create(userId: string, consultationId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
 
     const expiresAt = new Date(Date.now() + INVITE_TTL_HOURS * 60 * 60 * 1000);
-    return InviteRepo.create(conversationId, userId, expiresAt);
+    return InviteRepo.create(consultationId, userId, expiresAt);
   }
 
   static async getById(id: string) {
@@ -22,12 +22,12 @@ export default class InviteSvc {
     return invite;
   }
 
-  static async listByConversation(userId: string, conversationId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async listByConsultation(userId: string, consultationId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
-    return InviteRepo.listByConversation(conversationId);
+    return InviteRepo.listByConsultation(consultationId);
   }
 
   static async accept(userId: string, inviteId: string) {
@@ -35,8 +35,8 @@ export default class InviteSvc {
     if (!invite) throw new HttpError("Invite not found", 404);
     if (invite.expiresAt < new Date()) throw new HttpError("Invite has expired", 410);
 
-    await ParticipantRepo.add(invite.conversationId, userId);
-    return { conversationId: invite.conversationId };
+    await ParticipantRepo.add(invite.consultationId, userId);
+    return { consultationId: invite.consultationId };
   }
 
   static async delete(userId: string, inviteId: string) {

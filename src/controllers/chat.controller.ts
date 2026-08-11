@@ -10,16 +10,16 @@ export default class ChatCtrl {
     return res.status(200).json({ session_id: sessionId });
   }
 
-  static async listConversations(req: Request, res: Response) {
+  static async listConsultations(req: Request, res: Response) {
     const schema = Joi.object({ caseId: Joi.string().guid().optional() });
     const { error, value } = schema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
-    const conversations = await ChatSvc.listConversations(req.user.userId, value.caseId);
-    return res.status(200).json(conversations);
+    const consultations = await ChatSvc.listConsultations(req.user.userId, value.caseId);
+    return res.status(200).json(consultations);
   }
 
-  static async createConversation(req: Request, res: Response) {
+  static async createConsultation(req: Request, res: Response) {
     const schema = Joi.object({
       title: Joi.string().optional(),
       caseId: Joi.string().guid().optional(),
@@ -27,43 +27,43 @@ export default class ChatCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const conversation = await ChatSvc.createConversation(req.user.userId, value.title, value.caseId);
-    return res.status(201).json(conversation);
+    const consultation = await ChatSvc.createConsultation(req.user.userId, value.title, value.caseId);
+    return res.status(201).json(consultation);
   }
 
-  static async renameConversation(req: Request, res: Response) {
+  static async renameConsultation(req: Request, res: Response) {
     const schema = Joi.object({ title: Joi.string().required() });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const conversation = await ChatSvc.renameConversation(req.user.userId, req.params.conversationId, value.title);
-    return res.status(200).json(conversation);
+    const consultation = await ChatSvc.renameConsultation(req.user.userId, req.params.consultationId, value.title);
+    return res.status(200).json(consultation);
   }
 
-  static async deleteConversation(req: Request, res: Response) {
-    await ChatSvc.deleteConversation(req.user.userId, req.params.conversationId);
+  static async deleteConsultation(req: Request, res: Response) {
+    await ChatSvc.deleteConsultation(req.user.userId, req.params.consultationId);
     return res.status(204).send();
   }
 
   static async listMessages(req: Request, res: Response) {
-    const { conversationId } = req.params;
-    const messages = await ChatSvc.listMessages(req.user.userId, conversationId);
+    const { consultationId } = req.params;
+    const messages = await ChatSvc.listMessages(req.user.userId, consultationId);
     return res.status(200).json(messages);
   }
 
   static async getRelatedCases(req: Request, res: Response) {
-    const { conversationId } = req.params;
-    const relatedCases = await ChatSvc.getRelatedCases(req.user.userId, conversationId);
+    const { consultationId } = req.params;
+    const relatedCases = await ChatSvc.getRelatedCases(req.user.userId, consultationId);
     return res.status(200).json({ relatedCases });
   }
 
   static async deleteMessage(req: Request, res: Response) {
-    await ChatSvc.deleteMessage(req.user.userId, req.params.conversationId, req.params.messageId);
+    await ChatSvc.deleteMessage(req.user.userId, req.params.consultationId, req.params.messageId);
     return res.status(204).send();
   }
 
   static async sendMessage(req: Request, res: Response) {
-    const { conversationId } = req.params;
+    const { consultationId } = req.params;
     const { message, sessionId, documentContext, caseDocumentId } = req.body;
 
     const schema = Joi.object({
@@ -107,7 +107,7 @@ export default class ChatCtrl {
 
     await ChatSvc.sendMessage(
       req.user.userId,
-      conversationId,
+      consultationId,
       sessionId,
       message,
       writeChunk,
