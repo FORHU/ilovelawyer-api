@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import Joi from "joi";
 import CaseSvc, { IncomingCaseDocument } from "../services/case.service";
+import DocumentChunkSvc from "../services/document-chunk.service";
 import HttpError from "../utils/http-error";
 import { PartyInput } from "../repositories/case.repository";
 
@@ -142,5 +143,26 @@ export default class CaseCtrl {
 
     const result = await CaseSvc.handleCreateCaseWithDocument(caseData, documentData);
     return res.status(201).json(result);
+  }
+
+  /** Rank READY case-document chunks for a query — payload for chat-wonder case grounding. */
+  static async relevantChunks(req: Request, res: Response) {
+    const schema = Joi.object({
+      query: Joi.string().trim().min(1).required(),
+      limit: Joi.number().integer().min(1).max(100).default(20),
+    });
+
+    const { error, value } = schema.validate(req.body, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    // Ownership check — throws 404 if the case is missing or not owned by this user.
+    await CaseSvc.getById(req.params.caseId, req.user.userId);
+
+    const result = await DocumentChunkSvc.relevantChunksForCase(
+      req.params.caseId,
+      value.query,
+      value.limit,
+    );
+    return res.status(200).json(result);
   }
 }

@@ -24,5 +24,6 @@ router.delete("/:id", asyncHandler(CaseCtrl.delete));
  */
 
 router.post("/:caseId/documents", asyncHandler(CaseCtrl.handleCreateCaseWithDocument));
+router.post("/:caseId/relevant-chunks", asyncHandler(CaseCtrl.relevantChunks));
 
 export default router;

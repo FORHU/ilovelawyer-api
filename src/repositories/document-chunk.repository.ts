@@ -111,6 +111,28 @@ export default class DocumentChunkRepo {
     return rows.map((row) => row.id);
   }
 
+  /** Same ranking as `findRelevantByDocument`, but across every READY document under a case.
+   * Returns chunk id + owning document id so callers can build chat-wonder's
+   * `case_document_ids` + `case_document_chunk_ids` payload. */
+  static async findRelevantByCase(
+    caseId: string,
+    queryEmbedding: number[],
+    limit = 20,
+    client: DbClient = prisma,
+  ): Promise<{ id: string; caseDocumentId: string }[]> {
+    const vectorLiteral = `[${queryEmbedding.join(",")}]`;
+    return client.$queryRaw<{ id: string; caseDocumentId: string }[]>`
+      SELECT c.id, c."caseDocumentId"
+      FROM "CaseDocumentChunk" c
+      INNER JOIN "Document" d ON d.id = c."caseDocumentId"
+      WHERE d."caseId" = ${caseId}
+        AND d."ragStatus" = 'READY'
+        AND c.embedding IS NOT NULL
+      ORDER BY c.embedding <=> ${vectorLiteral}::vector
+      LIMIT ${limit}
+    `;
+  }
+
   /**
    * Ordered chunk listing for a document, including each chunk's embedding vector. `embedding`
    * is an `Unsupported` Prisma type, so it's cast to text in SQL and parsed back into a number

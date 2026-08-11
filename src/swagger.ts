@@ -699,7 +699,8 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Chat"],
         summary: "Send a message — streams the AI response via chunked transfer encoding",
-        description: "If the consultation is linked to a Case (via caseId), the Case's fields are combined with legal-RAG retrieval and injected as context automatically — documentContext is not required for that.",
+        description:
+          "If the consultation is linked to a Case (via caseId), or the request body includes caseId, Case fields and READY case documents are grounded into the AI turn automatically — documentContext is not required for that.",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
@@ -713,6 +714,13 @@ const swaggerSpec: OAS3Definition = {
                   message: { type: "string", example: "What is the penalty under R.A. 9262?" },
                   sessionId: { type: "string", description: "ChatWonder session ID from GET /chat/session" },
                   documentContext: { type: "string", description: "Optional extra context to pass to the AI, combined with Case context and legal-RAG retrieval" },
+                  caseDocumentId: { type: "string", description: "Optional single document to ground on (skips case-wide ranking)" },
+                  caseId: {
+                    type: "string",
+                    format: "uuid",
+                    description:
+                      "Optional Case id when the consultation is not already linked — used by case-portfolio chat to ground on that case's READY documents",
+                  },
                 },
               },
             },
@@ -1268,6 +1276,50 @@ const swaggerSpec: OAS3Definition = {
           204: { description: "Case deleted" },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    "/my-cases/{caseId}/relevant-chunks": {
+      post: {
+        tags: ["My Cases"],
+        summary:
+          "Rank READY case-document chunks by similarity to a query — returns caseDocumentIds + caseDocumentChunkIds for chat-wonder grounding",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["query"],
+                properties: {
+                  query: { type: "string", minLength: 1, description: "Natural-language question to rank chunks against" },
+                  limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Ranked document and chunk ids for chat-wonder",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    caseDocumentIds: { type: "array", items: { type: "string", format: "uuid" } },
+                    caseDocumentChunkIds: { type: "array", items: { type: "string", format: "uuid" } },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Case not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },

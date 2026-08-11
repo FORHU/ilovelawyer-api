@@ -2,9 +2,11 @@ import prisma from "../lib/prisma";
 import { redis } from "../lib/redis";
 import DocumentChunkRepo, { DocumentChunkRow } from "../repositories/document-chunk.repository";
 import HttpError from "../utils/http-error";
+import { embedText } from "../utils/embedding";
 import { RagStatus } from "@prisma/client";
 
 const CACHE_TTL_S = 300; // 5 minutes
+const DEFAULT_CASE_CHUNK_LIMIT = 20;
 const cacheKey = (caseDocumentId: string) => `case_document_chunks:${caseDocumentId}`;
 const filterCacheKey = (filter: { caseId?: string; consultationId?: string }) =>
   filter.caseId ? `case_document_chunks:case:${filter.caseId}` : `case_document_chunks:consultation:${filter.consultationId}`;
@@ -15,6 +17,12 @@ export interface DocumentWithChunks {
   caseId: string | null;
   ragStatus: RagStatus;
   chunks: DocumentChunkRow[];
+}
+
+/** Shape chat-wonder expects: document ids to prefetch + ranked chunk ids to filter each fetch. */
+export interface RelevantCaseChunks {
+  caseDocumentIds: string[];
+  caseDocumentChunkIds: string[];
 }
 
 export default class DocumentChunkSvc {
@@ -69,5 +77,36 @@ export default class DocumentChunkSvc {
 
     await redis.set(key, result, CACHE_TTL_S);
     return result;
+  }
+
+  /**
+   * Rank READY case-document chunks by similarity to `query` and return the chat-wonder
+   * payload fields. On embedding/search failure, falls back to every READY document id with
+   * an empty chunk-id list (chat-wonder then loads full document text).
+   */
+  static async relevantChunksForCase(
+    caseId: string,
+    query: string,
+    limit = DEFAULT_CASE_CHUNK_LIMIT,
+  ): Promise<RelevantCaseChunks> {
+    try {
+      const queryEmbedding = await embedText(query);
+      const rows = await DocumentChunkRepo.findRelevantByCase(caseId, queryEmbedding, limit);
+      const caseDocumentIds = [...new Set(rows.map((r) => r.caseDocumentId))];
+      return {
+        caseDocumentIds,
+        caseDocumentChunkIds: rows.map((r) => r.id),
+      };
+    } catch {
+      const docs = await prisma.document.findMany({
+        where: { caseId, ragStatus: "READY" },
+        select: { id: true },
+        orderBy: { createdAt: "desc" },
+      });
+      return {
+        caseDocumentIds: docs.map((d) => d.id),
+        caseDocumentChunkIds: [],
+      };
+    }
   }
 }

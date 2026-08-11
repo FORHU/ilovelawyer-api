@@ -2,7 +2,8 @@ import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
 import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
-import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase } from "../utils/chatWonder";
+import DocumentChunkSvc from "./document-chunk.service";
+import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
@@ -20,8 +21,16 @@ function titleCacheKey(userMessage: string): string {
   return `title:prompt:${messageHash(userMessage.slice(0, 500))}`;
 }
 
-function responseCacheKey(userMessage: string, resolvedContext: string, caseDocumentId?: string): string {
-  return `chat:response:${messageHash(userMessage.trim().toLowerCase() + resolvedContext + (caseDocumentId ?? ""))}`;
+function responseCacheKey(userMessage: string, resolvedContext: string, groundingKey: string): string {
+  return `chat:response:${messageHash(userMessage.trim().toLowerCase() + resolvedContext + groundingKey)}`;
+}
+
+function groundingCacheKey(grounding?: CaseDocumentGrounding): string {
+  if (!grounding?.caseDocumentIds.length) return "";
+  return [
+    grounding.caseDocumentIds.slice().sort().join(","),
+    (grounding.caseDocumentChunkIds ?? []).join(","),
+  ].join("|");
 }
 
 export default class ChatSvc {
@@ -83,10 +92,19 @@ export default class ChatSvc {
     documentContext?: string,
     onSessionRotated?: (newSessionId: string) => void,
     caseDocumentId?: string,
+    caseId?: string,
   ) {
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
     if (!consultation || consultation.userId !== userId) {
       throw new HttpError("Consultation not found", 404);
+    }
+
+    // Prefer consultation.caseId; allow per-message caseId for case-portfolio chats
+    // whose consultation was created without a case link.
+    let effectiveCaseId = consultation.caseId ?? undefined;
+    if (!effectiveCaseId && caseId) {
+      await CaseSvc.getById(caseId, userId); // ownership check
+      effectiveCaseId = caseId;
     }
 
     const needsTitle = consultation.title === null;
@@ -98,21 +116,29 @@ export default class ChatSvc {
 
     // Re-derived from the live Case row on every message (not cached on the consultation),
     // so edits to the Case's fields are picked up immediately rather than going stale.
-    const caseContext = consultation.case ? CaseSvc.formatForAiContext(consultation.case) : "";
+    let caseRecord = consultation.case;
+    if (!caseRecord && effectiveCaseId) {
+      caseRecord = await CaseSvc.getById(effectiveCaseId, userId);
+    }
+    const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
     const resolvedContext = [caseContext, documentContext].filter(Boolean).join("\n\n");
 
-    // If the client didn't attach a document to this specific message, fall back to the most
-    // recently attached document in this consultation — so a file attached in an earlier turn
-    // stays groundable in later ones instead of only ever answering for the turn it was sent in.
-    // Deliberately scoped to consultationId only (not caseId) — case-linked consultations keep
-    // today's explicit-only behavior.
-    let effectiveCaseDocumentId = caseDocumentId;
-    if (!effectiveCaseDocumentId) {
+    // Grounding priority:
+    // 1. Explicit caseDocumentId on this message (single-doc ranking inside the streamer)
+    // 2. Case id (consultation or message body) → rank READY docs under that case
+    // 3. Most recent document attached to this consultation (non-case chats)
+    let grounding: CaseDocumentGrounding | undefined;
+    if (caseDocumentId) {
+      grounding = { caseDocumentIds: [caseDocumentId] };
+    } else if (effectiveCaseId) {
+      grounding = await DocumentChunkSvc.relevantChunksForCase(effectiveCaseId, userInput);
+      if (!grounding.caseDocumentIds.length) grounding = undefined;
+    } else {
       const recentDoc = await DocumentRepo.findMostRecentByConsultation(consultationId);
-      if (recentDoc) effectiveCaseDocumentId = recentDoc.id;
+      if (recentDoc) grounding = { caseDocumentIds: [recentDoc.id] };
     }
 
-    const cacheKey = responseCacheKey(userInput, resolvedContext, effectiveCaseDocumentId);
+    const cacheKey = responseCacheKey(userInput, resolvedContext, groundingCacheKey(grounding));
     const cached = await redis.get<{ content: string; relatedCases: RelatedCase[] }>(cacheKey);
 
     let fullResponse: string;
@@ -122,7 +148,7 @@ export default class ChatSvc {
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
     } else {
-      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, effectiveCaseDocumentId);
+      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, grounding);
       fullResponse = result.content;
       relatedCases = result.relatedCases;
       redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
@@ -157,10 +183,10 @@ export default class ChatSvc {
     onChunk: (text: string) => void,
     resolvedContext: string,
     onSessionRotated?: (newSessionId: string) => void,
-    caseDocumentId?: string,
+    grounding?: CaseDocumentGrounding,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, caseDocumentId);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await getChatWonderSessionId();
@@ -168,7 +194,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, caseDocumentId);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding);
     }
   }
 

@@ -10,6 +10,11 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export interface CaseDocumentGrounding {
+  caseDocumentIds: string[];
+  caseDocumentChunkIds?: string[];
+}
+
 /** Chunk ids to send Chat Wonder for a given (document, question) pair. Embeds the
  * user's question and ranks this document's chunks by cosine similarity — this is what
  * actually uses the `embedding` column each chunk was stored with. Falls back to every
@@ -24,22 +29,42 @@ async function relevantChunkIdsFor(caseDocumentId: string, query: string): Promi
   }
 }
 
+function normalizeGrounding(
+  grounding?: CaseDocumentGrounding | string,
+): CaseDocumentGrounding | undefined {
+  if (!grounding) return undefined;
+  if (typeof grounding === "string") {
+    return { caseDocumentIds: [grounding] };
+  }
+  if (!grounding.caseDocumentIds?.length) return undefined;
+  return grounding;
+}
+
 export async function callChatWonderRest(
   prompt: string,
   sessionId: string,
-  caseDocumentId?: string,
+  grounding?: CaseDocumentGrounding | string,
 ): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
-  const payload: { session_id: string; user_input: string; case_document_id?: string; case_document_chunk_ids?: string[] } = {
+  const resolved = normalizeGrounding(grounding);
+  const payload: {
+    session_id: string;
+    user_input: string;
+    case_document_ids?: string[];
+    case_document_chunk_ids?: string[];
+  } = {
     session_id: sessionId,
     user_input: prompt,
   };
   // Lets Chat Wonder pull chunks itself via GET /api/v1/case-document/:caseDocumentId
-  // instead of us inlining the full document text into the prompt. The chunk ids sent
-  // alongside are ranked by embedding similarity to `prompt`, not just "every chunk" —
-  // see relevantChunkIdsFor.
-  if (caseDocumentId) {
-    payload.case_document_id = caseDocumentId;
-    payload.case_document_chunk_ids = await relevantChunkIdsFor(caseDocumentId, prompt);
+  // instead of us inlining the full document text into the prompt. Chunk ids are ranked
+  // by embedding similarity when not already provided — see relevantChunkIdsFor.
+  if (resolved) {
+    payload.case_document_ids = resolved.caseDocumentIds;
+    payload.case_document_chunk_ids =
+      resolved.caseDocumentChunkIds ??
+      (resolved.caseDocumentIds.length === 1
+        ? await relevantChunkIdsFor(resolved.caseDocumentIds[0], prompt)
+        : []);
   }
 
   const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload);
@@ -145,7 +170,7 @@ export function streamChatWonderMessage(
   userInput: string,
   onChunk: (text: string) => void,
   documentContext?: string,
-  caseDocumentId?: string,
+  grounding?: CaseDocumentGrounding | string,
 ): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
@@ -153,12 +178,17 @@ export function streamChatWonderMessage(
     let sourcesDropped = false;
     let settled = false;
     let relatedCases: RelatedCase[] = [];
+    const resolved = normalizeGrounding(grounding);
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
     // the time onopen fires, instead of waiting on this serially after the socket is up.
-    // Ranked by embedding similarity to userInput, not just "every chunk" — see
-    // relevantChunkIdsFor.
-    const chunkIdsPromise = caseDocumentId
-      ? relevantChunkIdsFor(caseDocumentId, userInput)
+    // When chunk ids are already supplied (case-scoped ranking), reuse them; otherwise
+    // rank a single document's chunks against userInput — see relevantChunkIdsFor.
+    const chunkIdsPromise = resolved
+      ? resolved.caseDocumentChunkIds !== undefined
+        ? Promise.resolve(resolved.caseDocumentChunkIds)
+        : resolved.caseDocumentIds.length === 1
+          ? relevantChunkIdsFor(resolved.caseDocumentIds[0], userInput)
+          : Promise.resolve<string[]>([])
       : Promise.resolve<string[]>([]);
 
     const finish = () => {
@@ -192,7 +222,7 @@ export function streamChatWonderMessage(
             session_id: string;
             use_full_legal_chain: boolean;
             document_context?: string;
-            case_document_id?: string;
+            case_document_ids?: string[];
             case_document_chunk_ids?: string[];
           } = {
             type: "chat",
@@ -203,8 +233,9 @@ export function streamChatWonderMessage(
           if (documentContext) {
             payload.document_context = documentContext;
           }
-          if (caseDocumentId) {
-            payload.case_document_id = caseDocumentId;
+          if (resolved) {
+            // chat-wonder ChatRequest only reads the plural field — singular is ignored.
+            payload.case_document_ids = resolved.caseDocumentIds;
             payload.case_document_chunk_ids = chunkIds;
           }
           ws.send(JSON.stringify(payload));
