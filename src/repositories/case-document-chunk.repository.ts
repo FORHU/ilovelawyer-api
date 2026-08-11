@@ -73,6 +73,28 @@ export default class CaseDocumentChunkRepo {
     return rows.map((row) => row.id);
   }
 
+  /** Chunk ids ranked by embedding similarity (pgvector cosine distance, `<=>`) against a
+   * query embedding, scoped to one document. This is what actually uses the `embedding`
+   * column stored per chunk — `findIdsByDocument` above returns every chunk unfiltered and
+   * never touches it. Callers embed the user's question (see `embedding.ts::embedText`) and
+   * pass the resulting vector in here to get back only the most relevant chunks. */
+  static async findRelevantByDocument(
+    caseDocumentId: string,
+    queryEmbedding: number[],
+    limit = 10,
+    client: DbClient = prisma,
+  ): Promise<string[]> {
+    const vectorLiteral = `[${queryEmbedding.join(",")}]`;
+    const rows = await client.$queryRaw<{ id: string }[]>`
+      SELECT id
+      FROM "CaseDocumentChunk"
+      WHERE "caseDocumentId" = ${caseDocumentId}
+      ORDER BY embedding <=> ${vectorLiteral}::vector
+      LIMIT ${limit}
+    `;
+    return rows.map((row) => row.id);
+  }
+
   /**
    * Ordered chunk listing for a document. `embedding` is deliberately excluded — it's a
    * 1536-dim vector, both an `Unsupported` Prisma type (not selectable via the query builder)

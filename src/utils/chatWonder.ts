@@ -4,9 +4,24 @@ import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
 import CaseDocumentChunkRepo from "../repositories/case-document-chunk.repository";
+import { embedText } from "./embedding";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Chunk ids to send Chat Wonder for a given (document, question) pair. Embeds the
+ * user's question and ranks this document's chunks by cosine similarity — this is what
+ * actually uses the `embedding` column each chunk was stored with. Falls back to every
+ * chunk (unfiltered, chunkIndex order) if embedding/similarity search fails for any
+ * reason — a degraded but still-correct result, never a broken chat turn. */
+async function relevantChunkIdsFor(caseDocumentId: string, query: string): Promise<string[]> {
+  try {
+    const queryEmbedding = await embedText(query);
+    return await CaseDocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding);
+  } catch {
+    return CaseDocumentChunkRepo.findIdsByDocument(caseDocumentId);
+  }
 }
 
 export async function callChatWonderRest(
@@ -19,11 +34,12 @@ export async function callChatWonderRest(
     user_input: prompt,
   };
   // Lets Chat Wonder pull chunks itself via GET /api/v1/case-document/:caseDocumentId
-  // instead of us inlining the full document text into the prompt. The chunk ids are sent
-  // alongside so Chat Wonder can target that exact chunk set instead of re-deriving it.
+  // instead of us inlining the full document text into the prompt. The chunk ids sent
+  // alongside are ranked by embedding similarity to `prompt`, not just "every chunk" —
+  // see relevantChunkIdsFor.
   if (caseDocumentId) {
     payload.case_document_id = caseDocumentId;
-    payload.case_document_chunk_ids = await CaseDocumentChunkRepo.findIdsByDocument(caseDocumentId);
+    payload.case_document_chunk_ids = await relevantChunkIdsFor(caseDocumentId, prompt);
   }
 
   const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload);
@@ -139,8 +155,10 @@ export function streamChatWonderMessage(
     let relatedCases: RelatedCase[] = [];
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
     // the time onopen fires, instead of waiting on this serially after the socket is up.
+    // Ranked by embedding similarity to userInput, not just "every chunk" — see
+    // relevantChunkIdsFor.
     const chunkIdsPromise = caseDocumentId
-      ? CaseDocumentChunkRepo.findIdsByDocument(caseDocumentId)
+      ? relevantChunkIdsFor(caseDocumentId, userInput)
       : Promise.resolve<string[]>([]);
 
     const finish = () => {

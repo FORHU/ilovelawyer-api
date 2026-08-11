@@ -9,7 +9,7 @@ export default class CaseDocumentChunkCtrl {
     const { error, value } = schema.validate(req.params);
     if (error) throw new HttpError(error.message, 400);
 
-    const chunks = await CaseDocumentChunkSvc.listByDocument(value.caseDocumentId);
-    return res.status(200).json({ caseDocumentId: value.caseDocumentId, chunks });
+    const result = await CaseDocumentChunkSvc.listByDocument(value.caseDocumentId);
+    return res.status(200).json(result);
   }
 }
