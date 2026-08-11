@@ -9,7 +9,7 @@ const prisma = new PrismaClient();
   await prisma.user.create({
     data: { id: userId, email: `seed-${userId}@example.com`, username: `seed-${userId}` },
   });
-  await prisma.caseDocument.create({
+  await prisma.document.create({
     data: { id: caseDocumentId, userId, name: 'Manual Test Document' },
   });
   await prisma.$executeRawUnsafe(

@@ -22,10 +22,7 @@ export default class CaseDocumentChunkSvc {
     const cached = await redis.get<CaseDocumentWithChunks>(key);
     if (cached) return cached;
 
-    const doc = await prisma.caseDocument.findUnique({
-      where: { id: caseDocumentId },
-      select: { id: true, name: true, caseId: true, ragStatus: true },
-    });
+    const doc = await prisma.document.findUnique({ where: { id: caseDocumentId }, select: { id: true } });
     if (!doc) throw new HttpError("Case document not found", 404);
 
     const chunks = await CaseDocumentChunkRepo.findByDocument(caseDocumentId);

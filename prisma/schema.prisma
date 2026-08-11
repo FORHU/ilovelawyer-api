@@ -46,7 +46,7 @@ model User {
   createdInvites           ConversationInvite[]
   conversationParticipants ConversationParticipant[]
   cases                    Case[]
-  documents                CaseDocument[]
+  documents                Document[]
   bookmarks                Bookmark[]
   transcriptions           Transcription[]
   calendarWatchChannels    CalendarWatchChannel[]
@@ -75,7 +75,7 @@ model File {
   metaData  Json?
   users          User[]
   transcriptions Transcription[]
-  caseDocuments  CaseDocument[]
+  caseDocuments  Document[]
 }
 
 enum Role {
@@ -196,7 +196,7 @@ model Case {
   updatedAt     DateTime @updatedAt
 
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents     CaseDocument[]
+  documents     Document[]
   parties       Party[]
   conversations Conversation[]
   transcriptions Transcription[]
@@ -217,7 +217,7 @@ model Party {
 
 // ── Case Documents ───────────────────────────────────────────────────────────
 
-model CaseDocument {
+model Document {
   id           String    @id @default(uuid())
   userId       String
   caseId       String?
@@ -257,7 +257,7 @@ model CaseDocumentChunk {
   embedding      Unsupported("vector(1536)")?
   createdAt      DateTime                     @default(now())
 
-  caseDocument CaseDocument @relation(fields: [caseDocumentId], references: [id], onDelete: Cascade)
+  caseDocument Document @relation(fields: [caseDocumentId], references: [id], onDelete: Cascade)
 
   @@index([caseDocumentId])
 }

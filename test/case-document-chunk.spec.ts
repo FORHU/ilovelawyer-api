@@ -15,7 +15,7 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
     await prisma.user.create({
       data: { id: userId, email: `test-${userId}@example.com`, username: `test-${userId}` },
     });
-    await prisma.caseDocument.create({
+    await prisma.document.create({
       data: { id: caseDocumentId, userId, name: "Test Document" },
     });
     await prisma.$executeRaw`
@@ -28,7 +28,7 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
 
   after(async () => {
     await prisma.$executeRaw`DELETE FROM "CaseDocumentChunk" WHERE "caseDocumentId" = ${caseDocumentId}`;
-    await prisma.caseDocument.delete({ where: { id: caseDocumentId } });
+    await prisma.document.delete({ where: { id: caseDocumentId } });
     await prisma.user.delete({ where: { id: userId } });
   });
 
