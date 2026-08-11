@@ -8,7 +8,7 @@ import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
-const RESPONSE_CACHE_TTL = 60 * 60 * 24;     // 24 hours
+const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
 const TITLE_MAX_CHARS    = 60;                // max title length (matches frontend truncation)
 const TITLE_INPUT_CHARS  = 500;              // how much of the user message to feed the title prompt
 
@@ -20,10 +20,21 @@ function titleCacheKey(userMessage: string): string {
   return `title:prompt:${messageHash(userMessage.slice(0, 500))}`;
 }
 
-function responseCacheKey(userMessage: string, resolvedContext: string, groundingKey: string): string {
-  return `chat:response:${messageHash(userMessage.trim().toLowerCase() + resolvedContext + groundingKey)}`;
+/** Redis key for a cached chat-wonder reply.
+ * Includes consultationId so two chats with the same prompt/docs don't share answers. */
+function responseCacheKey(
+  consultationId: string,
+  userMessage: string,
+  resolvedContext: string,
+  groundingKey: string,
+): string {
+  return `chat:response:${messageHash(
+    [consultationId, userMessage.trim().toLowerCase(), resolvedContext, groundingKey].join("\0"),
+  )}`;
 }
 
+/** Compact fingerprint of which docs/chunks grounded this turn — part of responseCacheKey.
+ * Built from the ranking result (doc ids + chunk ids), not stored separately in Redis. */
 function groundingCacheKey(grounding?: CaseDocumentGrounding): string {
   if (!grounding?.caseDocumentIds.length) return "";
   return [
@@ -155,7 +166,12 @@ export default class ChatSvc {
       : "";
     const resolvedContext = [caseContext, documentContext, groundingContext].filter(Boolean).join("\n\n");
 
-    const cacheKey = responseCacheKey(userInput, resolvedContext, groundingCacheKey(grounding));
+    const cacheKey = responseCacheKey(
+      consultationId,
+      userInput,
+      resolvedContext,
+      groundingCacheKey(grounding),
+    );
     const cached = await redis.get<{ content: string; relatedCases: RelatedCase[] }>(cacheKey);
 
     let fullResponse: string;
