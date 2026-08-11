@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
-import UserDocumentRepo from "../repositories/user-document.repository";
-import CaseDocumentChunkRepo from "../repositories/case-document-chunk.repository";
+import DocumentRepo from "../repositories/document.repository";
+import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import { chunkText } from "../utils/chunking";
@@ -20,10 +20,10 @@ export default class DocumentExtractionSvc {
    */
   static async process(documentId: string): Promise<void> {
     try {
-      const doc = await UserDocumentRepo.findByIdWithFile(documentId);
+      const doc = await DocumentRepo.findByIdWithFile(documentId);
       if (!doc?.file?.s3Key) {
         logger.error("Document extraction: no file/s3Key for document", { documentId });
-        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
 
@@ -33,13 +33,13 @@ export default class DocumentExtractionSvc {
 
       // Empty extraction (e.g. a scanned/image-only PDF — no OCR) counts as failed, not ready.
       if (!trimmed) {
-        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
 
       const chunks = chunkText(trimmed);
       if (chunks.length === 0) {
-        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
 
@@ -62,13 +62,13 @@ export default class DocumentExtractionSvc {
       // with tens of thousands of chunks needs the storage step to run considerably longer.
       await prisma.$transaction(
         async (tx) => {
-          await CaseDocumentChunkRepo.deleteByDocument(documentId, tx);
-          await CaseDocumentChunkRepo.insertMany(embeddedChunks, tx);
+          await DocumentChunkRepo.deleteByDocument(documentId, tx);
+          await DocumentChunkRepo.insertMany(embeddedChunks, tx);
         },
         { timeout: 120_000 },
       );
 
-      const { chunkCount, embeddedCount } = await CaseDocumentChunkRepo.verify(documentId);
+      const { chunkCount, embeddedCount } = await DocumentChunkRepo.verify(documentId);
       if (chunkCount !== embeddedChunks.length || embeddedCount !== chunkCount) {
         logger.error("Document extraction: chunk verification mismatch", {
           documentId,
@@ -76,14 +76,14 @@ export default class DocumentExtractionSvc {
           chunkCount,
           embeddedCount,
         });
-        await UserDocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
 
-      await UserDocumentRepo.updateRagStatus(documentId, "READY");
+      await DocumentRepo.updateRagStatus(documentId, "READY");
     } catch (err) {
       logger.error("Document extraction failed", { err, documentId });
-      await UserDocumentRepo.updateRagStatus(documentId, "FAILED").catch((updateErr) => {
+      await DocumentRepo.updateRagStatus(documentId, "FAILED").catch((updateErr) => {
         logger.error("Failed to mark document FAILED after extraction error", { updateErr, documentId });
       });
     }

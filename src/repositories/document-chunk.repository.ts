@@ -12,7 +12,7 @@ interface NewChunk {
   embedding: number[];
 }
 
-export interface CaseDocumentChunkRow {
+export interface DocumentChunkRow {
   id: string;
   caseDocumentId: string;
   chunkIndex: number;
@@ -27,7 +27,7 @@ export interface CaseDocumentChunkRow {
 const INSERT_BATCH_SIZE = 500;
 const COLUMNS_PER_ROW = 6;
 
-export default class CaseDocumentChunkRepo {
+export default class DocumentChunkRepo {
   static async deleteByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<void> {
     await client.$executeRaw`DELETE FROM "CaseDocumentChunk" WHERE "caseDocumentId" = ${caseDocumentId}`;
   }
@@ -100,8 +100,8 @@ export default class CaseDocumentChunkRepo {
    * 1536-dim vector, both an `Unsupported` Prisma type (not selectable via the query builder)
    * and far too large to serialize into an API response.
    */
-  static async findByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<CaseDocumentChunkRow[]> {
-    return client.$queryRaw<CaseDocumentChunkRow[]>`
+  static async findByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<DocumentChunkRow[]> {
+    return client.$queryRaw<DocumentChunkRow[]>`
       SELECT id, "caseDocumentId", "chunkIndex", "chunkText", "charCount", "createdAt"
       FROM "CaseDocumentChunk"
       WHERE "caseDocumentId" = ${caseDocumentId}

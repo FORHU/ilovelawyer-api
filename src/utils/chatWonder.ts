@@ -3,7 +3,7 @@ import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
-import CaseDocumentChunkRepo from "../repositories/case-document-chunk.repository";
+import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
 
 function sleep(ms: number) {
@@ -18,9 +18,9 @@ function sleep(ms: number) {
 async function relevantChunkIdsFor(caseDocumentId: string, query: string): Promise<string[]> {
   try {
     const queryEmbedding = await embedText(query);
-    return await CaseDocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding);
+    return await DocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding);
   } catch {
-    return CaseDocumentChunkRepo.findIdsByDocument(caseDocumentId);
+    return DocumentChunkRepo.findIdsByDocument(caseDocumentId);
   }
 }
 

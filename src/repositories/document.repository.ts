@@ -13,7 +13,7 @@ interface NewUserDocument {
   mimeType?: string;
 }
 
-export default class UserDocumentRepo {
+export default class DocumentRepo {
   static async create(userId: string, data: { name: string; fileId: string; caseId?: string }) {
     return prisma.document.create({ data: { userId, ...data } });
   }
