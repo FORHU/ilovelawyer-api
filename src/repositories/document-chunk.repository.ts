@@ -89,6 +89,22 @@ export default class DocumentChunkRepo {
     return rows.map((row) => row.id);
   }
 
+  /** Chunk text for a set of ids (preserves input order). Used to inline grounding into
+   * chat-wonder's document_context when the callback fetch to this API may fail. */
+  static async findTextsByIds(
+    ids: string[],
+    client: DbClient = prisma,
+  ): Promise<{ id: string; caseDocumentId: string; chunkText: string; chunkIndex: number }[]> {
+    if (ids.length === 0) return [];
+    const rows = await client.$queryRaw<{ id: string; caseDocumentId: string; chunkText: string; chunkIndex: number }[]>`
+      SELECT id, "caseDocumentId", "chunkText", "chunkIndex"
+      FROM "CaseDocumentChunk"
+      WHERE id IN (${Prisma.join(ids)})
+    `;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
+  }
+
   /** Chunk ids ranked by embedding similarity (pgvector cosine distance, `<=>`) against a
    * query embedding, scoped to one document. This is what actually uses the `embedding`
    * column stored per chunk — `findIdsByDocument` above returns every chunk unfiltered and

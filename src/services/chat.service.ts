@@ -125,15 +125,15 @@ export default class ChatSvc {
       caseRecord = await CaseSvc.getById(effectiveCaseId, userId);
     }
     const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
-    const resolvedContext = [caseContext, documentContext].filter(Boolean).join("\n\n");
 
     // Grounding priority:
-    // 1. Explicit caseDocumentId on this message (single-doc ranking inside the streamer)
+    // 1. Explicit caseDocumentId on this message (single-doc ranking)
     // 2. READY docs attached to this consultation (consultation-specific data source)
     // 3. Case id (consultation or message body) → rank READY docs under that case
     let grounding: CaseDocumentGrounding | undefined;
     if (caseDocumentId) {
-      grounding = { caseDocumentIds: [caseDocumentId] };
+      grounding = await DocumentChunkSvc.relevantChunksForDocument(caseDocumentId, userInput);
+      if (!grounding.caseDocumentIds.length) grounding = undefined;
     } else {
       const consultationDocs = await DocumentChunkSvc.relevantChunksForConsultation(
         consultationId,
@@ -146,6 +146,14 @@ export default class ChatSvc {
         if (!grounding.caseDocumentIds.length) grounding = undefined;
       }
     }
+
+    // Inline ranked chunk text into document_context. Chat-wonder also receives case_document_ids
+    // for its callback fetch, but that often fails in local/staging (ILOVELAWYER_API_BASE points
+    // at production with a mismatched API key) — inlining keeps analysis working either way.
+    const groundingContext = grounding
+      ? await DocumentChunkSvc.formatGroundingContext(grounding)
+      : "";
+    const resolvedContext = [caseContext, documentContext, groundingContext].filter(Boolean).join("\n\n");
 
     const cacheKey = responseCacheKey(userInput, resolvedContext, groundingCacheKey(grounding));
     const cached = await redis.get<{ content: string; relatedCases: RelatedCase[] }>(cacheKey);

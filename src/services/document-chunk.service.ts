@@ -134,4 +134,75 @@ export default class DocumentChunkSvc {
       };
     }
   }
+
+  /** Rank chunks for one READY document (same shape as case/consultation helpers). */
+  static async relevantChunksForDocument(
+    caseDocumentId: string,
+    query: string,
+    limit = DEFAULT_CASE_CHUNK_LIMIT,
+  ): Promise<RelevantCaseChunks> {
+    try {
+      const queryEmbedding = await embedText(query);
+      const chunkIds = await DocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding, limit);
+      return { caseDocumentIds: chunkIds.length ? [caseDocumentId] : [], caseDocumentChunkIds: chunkIds };
+    } catch {
+      const chunkIds = await DocumentChunkRepo.findIdsByDocument(caseDocumentId);
+      return {
+        caseDocumentIds: chunkIds.length ? [caseDocumentId] : [],
+        caseDocumentChunkIds: chunkIds.slice(0, limit),
+      };
+    }
+  }
+
+  /**
+   * Build plain-text document context from ranked chunks so chat-wonder can analyze
+   * attachments even when its callback to GET /case-document fails (wrong base URL / API key).
+   */
+  static async formatGroundingContext(
+    grounding: RelevantCaseChunks,
+    charCap = 12_000,
+  ): Promise<string> {
+    if (!grounding.caseDocumentIds.length) return "";
+
+    let chunkIds = grounding.caseDocumentChunkIds;
+    if (!chunkIds.length && grounding.caseDocumentIds.length === 1) {
+      chunkIds = await DocumentChunkRepo.findIdsByDocument(grounding.caseDocumentIds[0]);
+    }
+    if (!chunkIds.length) return "";
+
+    const rows = await DocumentChunkRepo.findTextsByIds(chunkIds);
+    if (!rows.length) return "";
+
+    const docs = await prisma.document.findMany({
+      where: { id: { in: [...new Set(rows.map((r) => r.caseDocumentId))] } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(docs.map((d) => [d.id, d.name]));
+
+    const byDoc = new Map<string, string[]>();
+    for (const row of rows) {
+      const list = byDoc.get(row.caseDocumentId) ?? [];
+      list.push(row.chunkText);
+      byDoc.set(row.caseDocumentId, list);
+    }
+
+    const blocks: string[] = [];
+    let used = 0;
+    for (const [docId, texts] of byDoc) {
+      const header = `Document "${nameById.get(docId) ?? docId}" (id: ${docId}):`;
+      let body = texts.join("\n\n");
+      const room = charCap - used - header.length - 2;
+      if (room <= 0) break;
+      if (body.length > room) body = `${body.slice(0, room).trimEnd()}\n\n[...truncated...]`;
+      blocks.push(`${header}\n${body}`);
+      used += header.length + body.length + 2;
+    }
+
+    if (!blocks.length) return "";
+    return (
+      "[CASE DOCUMENTS — files the user uploaded. Reference them directly when relevant; " +
+      "do NOT treat them as public legal precedent. Do not ask the user to re-upload these files.]\n\n" +
+      blocks.join("\n\n")
+    );
+  }
 }
