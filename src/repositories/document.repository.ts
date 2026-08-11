@@ -6,6 +6,7 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
 interface NewUserDocument {
   userId: string;
   caseId?: string;
+  consultationId?: string;
   fileId: string;
   name: string;
   documentType?: string;
@@ -36,6 +37,19 @@ export default class DocumentRepo {
     });
   }
 
+  static async listByConsultation(userId: string, consultationId: string) {
+    return prisma.document.findMany({
+      where: { userId, consultationId },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  static async countReadyByConsultation(consultationId: string) {
+    return prisma.document.count({
+      where: { consultationId, ragStatus: "READY" },
+    });
+  }
+
   static async findById(id: string, userId: string) {
     return prisma.document.findFirst({ where: { id, userId } });
   }
@@ -52,7 +66,7 @@ export default class DocumentRepo {
     return prisma.document.findFirst({ where: { consultationId }, orderBy: { createdAt: "desc" } });
   }
 
-  static async update(id: string, userId: string, data: { name?: string; caseId?: string | null }) {
+  static async update(id: string, userId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
     const result = await prisma.document.updateMany({ where: { id, userId }, data });
     return result.count > 0;
   }

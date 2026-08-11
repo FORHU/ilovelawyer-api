@@ -16,6 +16,7 @@ router.patch("/consultations/:consultationId", asyncHandler(ChatCtrl.renameConsu
 router.delete("/consultations/:consultationId", asyncHandler(ChatCtrl.deleteConsultation));
 router.get("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.listMessages));
 router.get("/consultations/:consultationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
+router.post("/consultations/:consultationId/relevant-chunks", asyncHandler(ChatCtrl.relevantChunks));
 router.post("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.sendMessage));
 router.delete("/consultations/:consultationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
 

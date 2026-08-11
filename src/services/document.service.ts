@@ -43,11 +43,14 @@ export default class DocumentSvc {
     return doc;
   }
 
-  /** Bulk variant of `create()` — confirms several files uploaded to S3 in one transaction
-   * (mirrors CaseSvc.handleCreateCaseWithDocument). Same caseId rule as `create()`: only
-   * dispatched for extraction when caseId is given, so uncased documents (e.g. consultation
-   * attachments before the chat has a linked case) aren't extracted yet. */
-  static async createMany(userId: string, items: { key: string; name: string }[], caseId?: string) {
+  /** Bulk variant of `create()` — confirms several files uploaded to S3 in one transaction.
+   * Extraction is dispatched when either caseId or consultationId is given. */
+  static async createMany(
+    userId: string,
+    items: { key: string; name: string }[],
+    caseId?: string,
+    consultationId?: string,
+  ) {
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({
       filename: item.name,
       fileUrl: s3UrlForKey(item.key),
@@ -60,6 +63,7 @@ export default class DocumentSvc {
       const userDocumentData = files.map((file, i) => ({
         userId,
         caseId,
+        consultationId,
         name: items[i].name,
         fileId: file.id,
       }));
@@ -67,7 +71,7 @@ export default class DocumentSvc {
       return DocumentRepo.createManyAndReturn(userDocumentData, tx);
     });
 
-    if (caseId) {
+    if (caseId || consultationId) {
       for (const doc of createdDocuments) void DocumentExtractionSvc.process(doc.id);
     }
 
@@ -82,16 +86,20 @@ export default class DocumentSvc {
     return DocumentRepo.listByCase(userId, caseId);
   }
 
+  static async listByConsultation(userId: string, consultationId: string) {
+    return DocumentRepo.listByConsultation(userId, consultationId);
+  }
+
   static async getById(id: string, userId: string) {
     const doc = await DocumentRepo.findById(id, userId);
     if (!doc) throw new HttpError("Document not found", 404);
     return doc;
   }
 
-  static async update(id: string, userId: string, data: { name?: string; caseId?: string | null }) {
+  static async update(id: string, userId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
     const updated = await DocumentRepo.update(id, userId, data);
     if (!updated) throw new HttpError("Document not found", 404);
-    if (data.caseId) void DocumentExtractionSvc.process(id);
+    if (data.caseId || data.consultationId) void DocumentExtractionSvc.process(id);
   }
 
   static async delete(id: string, userId: string) {

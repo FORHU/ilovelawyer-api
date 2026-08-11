@@ -700,7 +700,7 @@ const swaggerSpec: OAS3Definition = {
         tags: ["Chat"],
         summary: "Send a message — streams the AI response via chunked transfer encoding",
         description:
-          "If the consultation is linked to a Case (via caseId), or the request body includes caseId, Case fields and READY case documents are grounded into the AI turn automatically — documentContext is not required for that.",
+          "Grounds on READY documents attached to this consultation first (consultation-specific data source). If none, falls back to READY case documents when the consultation (or request body) has a caseId. Case metadata is still injected when a case is linked.",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
@@ -730,6 +730,49 @@ const swaggerSpec: OAS3Definition = {
           200: { description: "Streamed plain-text AI response", content: { "text/plain": { schema: { type: "string" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/chat/consultations/{consultationId}/relevant-chunks": {
+      post: {
+        tags: ["Chat"],
+        summary:
+          "Rank READY consultation-document chunks by similarity to a query — returns caseDocumentIds + caseDocumentChunkIds for chat-wonder grounding",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "consultationId", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["query"],
+                properties: {
+                  query: { type: "string", minLength: 1 },
+                  limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Ranked document and chunk ids for chat-wonder",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    caseDocumentIds: { type: "array", items: { type: "string", format: "uuid" } },
+                    caseDocumentChunkIds: { type: "array", items: { type: "string", format: "uuid" } },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Consultation not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -1431,6 +1474,7 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         parameters: [
           { name: "caseId", in: "query", schema: { type: "string" }, description: "Filter by case ID" },
+          { name: "consultationId", in: "query", schema: { type: "string" }, description: "Filter by consultation ID" },
         ],
         responses: {
           200: {

@@ -43,13 +43,19 @@ export default class DocumentCtrl {
           .min(1)
           .required(),
         caseId: Joi.string().optional(),
+        consultationId: Joi.string().optional(),
       }),
     );
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     if (value.items) {
-      const docs = await DocumentSvc.createMany(req.user.userId, value.items, value.caseId);
+      const docs = await DocumentSvc.createMany(
+        req.user.userId,
+        value.items,
+        value.caseId,
+        value.consultationId,
+      );
       return res.status(201).json(docs);
     }
 
@@ -58,10 +64,15 @@ export default class DocumentCtrl {
   }
 
   static async list(req: Request, res: Response) {
-    const { caseId } = req.query;
+    const { caseId, consultationId } = req.query;
 
     if (caseId && typeof caseId === "string") {
       const docs = await DocumentSvc.listByCase(req.user.userId, caseId);
+      return res.status(200).json(docs);
+    }
+
+    if (consultationId && typeof consultationId === "string") {
+      const docs = await DocumentSvc.listByConsultation(req.user.userId, consultationId);
       return res.status(200).json(docs);
     }
 
@@ -78,6 +89,7 @@ export default class DocumentCtrl {
     const schema = Joi.object({
       name: Joi.string().optional(),
       caseId: Joi.string().allow(null).optional(),
+      consultationId: Joi.string().allow(null).optional(),
     });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);

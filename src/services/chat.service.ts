@@ -1,6 +1,5 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
-import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
@@ -47,11 +46,16 @@ export default class ChatSvc {
   }
 
   static async renameConsultation(userId: string, consultationId: string, title: string) {
+    await this.assertConsultationOwned(userId, consultationId);
+    return ChatRepo.updateConsultation(consultationId, title);
+  }
+
+  static async assertConsultationOwned(userId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
     if (!consultation || consultation.userId !== userId) {
       throw new HttpError("Consultation not found", 404);
     }
-    return ChatRepo.updateConsultation(consultationId, title);
+    return consultation;
   }
 
   static async deleteConsultation(userId: string, consultationId: string) {
@@ -125,17 +129,22 @@ export default class ChatSvc {
 
     // Grounding priority:
     // 1. Explicit caseDocumentId on this message (single-doc ranking inside the streamer)
-    // 2. Case id (consultation or message body) → rank READY docs under that case
-    // 3. Most recent document attached to this consultation (non-case chats)
+    // 2. READY docs attached to this consultation (consultation-specific data source)
+    // 3. Case id (consultation or message body) → rank READY docs under that case
     let grounding: CaseDocumentGrounding | undefined;
     if (caseDocumentId) {
       grounding = { caseDocumentIds: [caseDocumentId] };
-    } else if (effectiveCaseId) {
-      grounding = await DocumentChunkSvc.relevantChunksForCase(effectiveCaseId, userInput);
-      if (!grounding.caseDocumentIds.length) grounding = undefined;
     } else {
-      const recentDoc = await DocumentRepo.findMostRecentByConsultation(consultationId);
-      if (recentDoc) grounding = { caseDocumentIds: [recentDoc.id] };
+      const consultationDocs = await DocumentChunkSvc.relevantChunksForConsultation(
+        consultationId,
+        userInput,
+      );
+      if (consultationDocs.caseDocumentIds.length) {
+        grounding = consultationDocs;
+      } else if (effectiveCaseId) {
+        grounding = await DocumentChunkSvc.relevantChunksForCase(effectiveCaseId, userInput);
+        if (!grounding.caseDocumentIds.length) grounding = undefined;
+      }
     }
 
     const cacheKey = responseCacheKey(userInput, resolvedContext, groundingCacheKey(grounding));

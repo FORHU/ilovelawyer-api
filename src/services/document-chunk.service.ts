@@ -80,7 +80,7 @@ export default class DocumentChunkSvc {
   }
 
   /**
-   * Rank READY case-document chunks by similarity to `query` and return the chat-wonder
+   * Rank READY document chunks by similarity to `query` and return the chat-wonder
    * payload fields. On embedding/search failure, falls back to every READY document id with
    * an empty chunk-id list (chat-wonder then loads full document text).
    */
@@ -89,9 +89,34 @@ export default class DocumentChunkSvc {
     query: string,
     limit = DEFAULT_CASE_CHUNK_LIMIT,
   ): Promise<RelevantCaseChunks> {
+    return DocumentChunkSvc.relevantChunksForScope({ caseId }, query, limit);
+  }
+
+  /** Same as `relevantChunksForCase`, but for documents attached to a consultation. */
+  static async relevantChunksForConsultation(
+    consultationId: string,
+    query: string,
+    limit = DEFAULT_CASE_CHUNK_LIMIT,
+  ): Promise<RelevantCaseChunks> {
+    return DocumentChunkSvc.relevantChunksForScope({ consultationId }, query, limit);
+  }
+
+  private static async relevantChunksForScope(
+    scope: { caseId: string } | { consultationId: string },
+    query: string,
+    limit: number,
+  ): Promise<RelevantCaseChunks> {
+    const where =
+      "caseId" in scope
+        ? { caseId: scope.caseId, ragStatus: "READY" as const }
+        : { consultationId: scope.consultationId, ragStatus: "READY" as const };
+
     try {
       const queryEmbedding = await embedText(query);
-      const rows = await DocumentChunkRepo.findRelevantByCase(caseId, queryEmbedding, limit);
+      const rows =
+        "caseId" in scope
+          ? await DocumentChunkRepo.findRelevantByCase(scope.caseId, queryEmbedding, limit)
+          : await DocumentChunkRepo.findRelevantByConsultation(scope.consultationId, queryEmbedding, limit);
       const caseDocumentIds = [...new Set(rows.map((r) => r.caseDocumentId))];
       return {
         caseDocumentIds,
@@ -99,7 +124,7 @@ export default class DocumentChunkSvc {
       };
     } catch {
       const docs = await prisma.document.findMany({
-        where: { caseId, ragStatus: "READY" },
+        where,
         select: { id: true },
         orderBy: { createdAt: "desc" },
       });

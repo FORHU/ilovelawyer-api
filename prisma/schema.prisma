@@ -238,6 +238,7 @@ model Document {
   chunks       CaseDocumentChunk[]
 
   @@index([userId])
+  @@index([caseId])
   @@index([consultationId])
 }
 
