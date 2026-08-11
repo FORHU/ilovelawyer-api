@@ -159,12 +159,12 @@ export default class DocumentChunkSvc {
    * attachments even when its callback to GET /case-document fails (wrong base URL / API key).
    */
   static async formatGroundingContext(
-    grounding: RelevantCaseChunks,
+    grounding: { caseDocumentIds: string[]; caseDocumentChunkIds?: string[] },
     charCap = 12_000,
   ): Promise<string> {
     if (!grounding.caseDocumentIds.length) return "";
 
-    let chunkIds = grounding.caseDocumentChunkIds;
+    let chunkIds = grounding.caseDocumentChunkIds ?? [];
     if (!chunkIds.length && grounding.caseDocumentIds.length === 1) {
       chunkIds = await DocumentChunkRepo.findIdsByDocument(grounding.caseDocumentIds[0]);
     }
