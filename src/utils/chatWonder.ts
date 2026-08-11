@@ -58,8 +58,10 @@ export async function callChatWonderRest(
   // Lets Chat Wonder pull chunks itself via GET /api/v1/case-document/:caseDocumentId
   // instead of us inlining the full document text into the prompt. Chunk ids are ranked
   // by embedding similarity when not already provided — see relevantChunkIdsFor.
+  // Always send case_document_ids (including []) so chat-wonder replaces session-scoped
+  // active_case_documents instead of keeping docs from a previous case/consultation.
+  payload.case_document_ids = resolved?.caseDocumentIds ?? [];
   if (resolved) {
-    payload.case_document_ids = resolved.caseDocumentIds;
     payload.case_document_chunk_ids =
       resolved.caseDocumentChunkIds ??
       (resolved.caseDocumentIds.length === 1
@@ -233,9 +235,11 @@ export function streamChatWonderMessage(
           if (documentContext) {
             payload.document_context = documentContext;
           }
+          // Always send case_document_ids (including []) so chat-wonder replaces
+          // session-scoped active_case_documents instead of keeping prior-case docs.
+          // chat-wonder ChatRequest only reads the plural field — singular is ignored.
+          payload.case_document_ids = resolved?.caseDocumentIds ?? [];
           if (resolved) {
-            // chat-wonder ChatRequest only reads the plural field — singular is ignored.
-            payload.case_document_ids = resolved.caseDocumentIds;
             payload.case_document_chunk_ids = chunkIds;
           }
           ws.send(JSON.stringify(payload));
