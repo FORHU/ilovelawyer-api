@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
+import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
@@ -19,55 +20,55 @@ function titleCacheKey(userMessage: string): string {
   return `title:prompt:${messageHash(userMessage.slice(0, 500))}`;
 }
 
-function responseCacheKey(userMessage: string, resolvedContext: string): string {
-  return `chat:response:${messageHash(userMessage.trim().toLowerCase() + resolvedContext)}`;
+function responseCacheKey(userMessage: string, resolvedContext: string, caseDocumentId?: string): string {
+  return `chat:response:${messageHash(userMessage.trim().toLowerCase() + resolvedContext + (caseDocumentId ?? ""))}`;
 }
 
 export default class ChatSvc {
-  static async createConversation(userId: string, title?: string, caseId?: string) {
+  static async createConsultation(userId: string, title?: string, caseId?: string) {
     if (caseId) {
       // Throws 404 if the case doesn't exist or isn't owned by this user
       await CaseSvc.getById(caseId, userId);
     }
-    return ChatRepo.createConversation(userId, title, caseId);
+    return ChatRepo.createConsultation(userId, title, caseId);
   }
 
-  static async listConversations(userId: string, caseId?: string) {
-    return ChatRepo.listConversations(userId, caseId);
+  static async listConsultations(userId: string, caseId?: string) {
+    return ChatRepo.listConsultations(userId, caseId);
   }
 
-  static async renameConversation(userId: string, conversationId: string, title: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async renameConsultation(userId: string, consultationId: string, title: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
-    return ChatRepo.updateConversation(conversationId, title);
+    return ChatRepo.updateConsultation(consultationId, title);
   }
 
-  static async deleteConversation(userId: string, conversationId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async deleteConsultation(userId: string, consultationId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
-    return ChatRepo.deleteConversation(conversationId);
+    return ChatRepo.deleteConsultation(consultationId);
   }
 
-  static async listMessages(userId: string, conversationId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async listMessages(userId: string, consultationId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
 
-    return ChatRepo.listMessagesByConversation(conversationId);
+    return ChatRepo.listMessagesByConsultation(consultationId);
   }
 
-  static async deleteMessage(userId: string, conversationId: string, messageId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async deleteMessage(userId: string, consultationId: string, messageId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
     const message = await ChatRepo.findMessageById(messageId);
-    if (!message || message.conversationId !== conversationId) {
+    if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
     }
     return ChatRepo.deleteMessage(messageId);
@@ -75,7 +76,7 @@ export default class ChatSvc {
 
   static async sendMessage(
     userId: string,
-    conversationId: string,
+    consultationId: string,
     sessionId: string,
     userInput: string,
     onChunk: (text: string) => void,
@@ -83,24 +84,35 @@ export default class ChatSvc {
     onSessionRotated?: (newSessionId: string) => void,
     caseDocumentId?: string,
   ) {
-    const conversation = await ChatRepo.findConversationWithCase(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+    const consultation = await ChatRepo.findConsultationWithCase(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
 
-    const needsTitle = conversation.title === null;
-    const userMessage = await ChatRepo.createMessage(conversationId, "user", userInput, userId);
+    const needsTitle = consultation.title === null;
+    const userMessage = await ChatRepo.createMessage(consultationId, "user", userInput, userId);
 
     if (needsTitle) {
-      ChatSvc.generateAndSaveTitle(conversationId, userInput).catch(() => {});
+      ChatSvc.generateAndSaveTitle(consultationId, userInput).catch(() => {});
     }
 
-    // Re-derived from the live Case row on every message (not cached on the conversation),
+    // Re-derived from the live Case row on every message (not cached on the consultation),
     // so edits to the Case's fields are picked up immediately rather than going stale.
-    const caseContext = conversation.case ? CaseSvc.formatForAiContext(conversation.case) : "";
+    const caseContext = consultation.case ? CaseSvc.formatForAiContext(consultation.case) : "";
     const resolvedContext = [caseContext, documentContext].filter(Boolean).join("\n\n");
 
-    const cacheKey = responseCacheKey(userInput, resolvedContext);
+    // If the client didn't attach a document to this specific message, fall back to the most
+    // recently attached document in this consultation — so a file attached in an earlier turn
+    // stays groundable in later ones instead of only ever answering for the turn it was sent in.
+    // Deliberately scoped to consultationId only (not caseId) — case-linked consultations keep
+    // today's explicit-only behavior.
+    let effectiveCaseDocumentId = caseDocumentId;
+    if (!effectiveCaseDocumentId) {
+      const recentDoc = await DocumentRepo.findMostRecentByConsultation(consultationId);
+      if (recentDoc) effectiveCaseDocumentId = recentDoc.id;
+    }
+
+    const cacheKey = responseCacheKey(userInput, resolvedContext, effectiveCaseDocumentId);
     const cached = await redis.get<{ content: string; relatedCases: RelatedCase[] }>(cacheKey);
 
     let fullResponse: string;
@@ -110,7 +122,7 @@ export default class ChatSvc {
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
     } else {
-      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, caseDocumentId);
+      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, effectiveCaseDocumentId);
       fullResponse = result.content;
       relatedCases = result.relatedCases;
       redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
@@ -121,7 +133,7 @@ export default class ChatSvc {
     const cleanedContent = stripStructuredBlocks(fullResponse);
 
     const assistantMessage = await ChatRepo.createMessage(
-      conversationId,
+      consultationId,
       "assistant",
       cleanedContent,
       undefined,
@@ -160,19 +172,19 @@ export default class ChatSvc {
     }
   }
 
-  static async getRelatedCases(userId: string, conversationId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async getRelatedCases(userId: string, consultationId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
 
-    const message = await ChatRepo.findLatestAssistantMessage(conversationId);
+    const message = await ChatRepo.findLatestAssistantMessage(consultationId);
     return message?.relatedCases?.items ?? [];
   }
 
   static buildTitlePrompt(userMessage: string): string {
     return (
-      `Create a concise title for a Philippine legal conversation.\n` +
+      `Create a concise title for a Philippine legal consultation.\n` +
       `Format: [Legal Area]: [Specific Issue] — for example: "Philippine Labor Law: Illegal Dismissal", "Family Code: Custody Rights", "Criminal Law: Estafa"\n` +
       `Rules: plain text only, no markdown, no quotes, no trailing period, max ${TITLE_MAX_CHARS} characters.\n` +
       `User asked: ${userMessage.slice(0, TITLE_INPUT_CHARS)}\n` +
@@ -190,7 +202,7 @@ export default class ChatSvc {
   }
 
   private static async generateAndSaveTitle(
-    conversationId: string,
+    consultationId: string,
     userMessage: string,
   ): Promise<void> {
     const cacheKey = titleCacheKey(userMessage);
@@ -205,6 +217,6 @@ export default class ChatSvc {
       redis.set(cacheKey, title, TITLE_CACHE_TTL);
     }
 
-    await ChatRepo.updateConversation(conversationId, title);
+    await ChatRepo.updateConsultation(consultationId, title);
   }
 }

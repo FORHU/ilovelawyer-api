@@ -3,7 +3,7 @@ import InviteSvc from "../services/invite.service";
 
 export default class InviteCtrl {
   static async create(req: Request, res: Response) {
-    const invite = await InviteSvc.create(req.user.userId, req.params.conversationId);
+    const invite = await InviteSvc.create(req.user.userId, req.params.consultationId);
     return res.status(201).json(invite);
   }
 
@@ -12,8 +12,8 @@ export default class InviteCtrl {
     return res.status(200).json(invite);
   }
 
-  static async listByConversation(req: Request, res: Response) {
-    const invites = await InviteSvc.listByConversation(req.user.userId, req.params.conversationId);
+  static async listByConsultation(req: Request, res: Response) {
+    const invites = await InviteSvc.listByConsultation(req.user.userId, req.params.consultationId);
     return res.status(200).json(invites);
   }
 

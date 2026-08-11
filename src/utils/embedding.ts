@@ -17,7 +17,7 @@ export async function embedText(text: string): Promise<number[]> {
 }
 
 /** Embeds multiple chunks in a single OpenAI request. Callers with many chunks must batch
- * through this instead of firing one embedText() per chunk — a large document can produce
+ * through this insteag one embedText() per chunk — a large document can produce
  * tens of thousands of chunks, and issuing that many concurrent HTTP requests exhausts local
  * sockets and OpenAI's rate limit alike. */
 export async function embedTexts(texts: string[]): Promise<number[][]> {

@@ -1,31 +1,31 @@
 import prisma from "../lib/prisma";
 
 export default class ParticipantRepo {
-  static async add(conversationId: string, userId: string) {
-    return prisma.conversationParticipant.upsert({
-      where: { conversationId_userId: { conversationId, userId } },
-      create: { conversationId, userId },
+  static async add(consultationId: string, userId: string) {
+    return prisma.consultationParticipant.upsert({
+      where: { consultationId_userId: { consultationId, userId } },
+      create: { consultationId, userId },
       update: {},
     });
   }
 
-  static async list(conversationId: string) {
-    return prisma.conversationParticipant.findMany({
-      where: { conversationId },
+  static async list(consultationId: string) {
+    return prisma.consultationParticipant.findMany({
+      where: { consultationId },
       include: { user: { select: { id: true, name: true, email: true, username: true } } },
       orderBy: { joinedAt: "asc" },
     });
   }
 
-  static async remove(conversationId: string, userId: string) {
-    return prisma.conversationParticipant.delete({
-      where: { conversationId_userId: { conversationId, userId } },
+  static async remove(consultationId: string, userId: string) {
+    return prisma.consultationParticipant.delete({
+      where: { consultationId_userId: { consultationId, userId } },
     });
   }
 
-  static async exists(conversationId: string, userId: string) {
-    const row = await prisma.conversationParticipant.findUnique({
-      where: { conversationId_userId: { conversationId, userId } },
+  static async exists(consultationId: string, userId: string) {
+    const row = await prisma.consultationParticipant.findUnique({
+      where: { consultationId_userId: { consultationId, userId } },
     });
     return !!row;
   }

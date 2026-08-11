@@ -3,21 +3,21 @@ import ChatRepo from "../repositories/chat.repository";
 import HttpError from "../utils/http-error";
 
 export default class ParticipantSvc {
-  static async list(userId: string, conversationId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async list(userId: string, consultationId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
-    return ParticipantRepo.list(conversationId);
+    return ParticipantRepo.list(consultationId);
   }
 
-  static async remove(userId: string, conversationId: string, targetUserId: string) {
-    const conversation = await ChatRepo.findConversationById(conversationId);
-    if (!conversation || conversation.userId !== userId) {
-      throw new HttpError("Conversation not found", 404);
+  static async remove(userId: string, consultationId: string, targetUserId: string) {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.userId !== userId) {
+      throw new HttpError("Consultation not found", 404);
     }
-    const exists = await ParticipantRepo.exists(conversationId, targetUserId);
+    const exists = await ParticipantRepo.exists(consultationId, targetUserId);
     if (!exists) throw new HttpError("Participant not found", 404);
-    return ParticipantRepo.remove(conversationId, targetUserId);
+    return ParticipantRepo.remove(consultationId, targetUserId);
   }
 }

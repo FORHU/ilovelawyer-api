@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.use(apiKeyMiddleware);
 
+router.get("/", asyncHandler(DocumentChunkCtrl.listByFilter));
 router.get("/:caseDocumentId", asyncHandler(DocumentChunkCtrl.list));
 
 export default router;
