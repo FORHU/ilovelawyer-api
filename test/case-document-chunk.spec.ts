@@ -15,7 +15,7 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
     await prisma.user.create({
       data: { id: userId, email: `test-${userId}@example.com`, username: `test-${userId}` },
     });
-    await prisma.caseDocument.create({
+    await prisma.document.create({
       data: { id: caseDocumentId, userId, name: "Test Document" },
     });
     await prisma.$executeRaw`
@@ -28,7 +28,7 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
 
   after(async () => {
     await prisma.$executeRaw`DELETE FROM "CaseDocumentChunk" WHERE "caseDocumentId" = ${caseDocumentId}`;
-    await prisma.caseDocument.delete({ where: { id: caseDocumentId } });
+    await prisma.document.delete({ where: { id: caseDocumentId } });
     await prisma.user.delete({ where: { id: userId } });
   });
 
@@ -49,11 +49,14 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
     expect(res.status).to.equal(404);
   });
 
-  it("returns chunks ordered by chunkIndex", async () => {
+  it("returns chunks ordered by chunkIndex, plus document metadata", async () => {
     const res = await request(app).get(`/api/v1/case-document/${caseDocumentId}`).set("x-api-key", CHAT_WONDER_API_KEY);
 
     expect(res.status).to.equal(200);
     expect(res.body.caseDocumentId).to.equal(caseDocumentId);
+    expect(res.body.name).to.equal("Test Document");
+    expect(res.body.caseId).to.equal(null);
+    expect(res.body.ragStatus).to.equal("PENDING");
     expect(res.body.chunks).to.have.length(2);
     expect(res.body.chunks[0].chunkIndex).to.equal(0);
     expect(res.body.chunks[0].chunkText).to.equal("First chunk of text");

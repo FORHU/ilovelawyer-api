@@ -4,7 +4,10 @@ import { OPENAI_API_KEY } from "../config";
 let _client: OpenAI | null = null;
 
 function getClient(): OpenAI {
-  if (!_client) _client = new OpenAI({ apiKey: OPENAI_API_KEY });
+  // Without an explicit timeout, the SDK default (10 min) plus its own retries let a single
+  // stalled batch stretch a document's extraction to tens of minutes with no observable
+  // progress — a 30s timeout plus a capped retry count fails fast instead.
+  if (!_client) _client = new OpenAI({ apiKey: OPENAI_API_KEY, timeout: 30_000, maxRetries: 3 });
   return _client;
 }
 

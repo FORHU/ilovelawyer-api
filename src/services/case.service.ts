@@ -1,7 +1,7 @@
 import CaseRepo, { CaseData } from "../repositories/case.repository";
 import HttpError from "../utils/http-error";
 import FileSvc from "./files.service";
-import UserDocumentRepo from "../repositories/user-document.repository";
+import DocumentRepo from "../repositories/document.repository";
 import DocumentExtractionSvc from "./document-extraction.service";
 import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
@@ -98,7 +98,7 @@ export default class CaseSvc {
         mimeType: documentData[i].metaData.mimeType,
       }));
 
-      return UserDocumentRepo.createManyAndReturn(userDocumentData, tx);
+      return DocumentRepo.createManyAndReturn(userDocumentData, tx);
     });
 
     // Dispatched after the transaction commits, not inside it — the rows must actually exist

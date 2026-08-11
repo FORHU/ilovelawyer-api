@@ -13,50 +13,50 @@ interface NewUserDocument {
   mimeType?: string;
 }
 
-export default class UserDocumentRepo {
+export default class DocumentRepo {
   static async create(userId: string, data: { name: string; fileId: string; caseId?: string }) {
-    return prisma.caseDocument.create({ data: { userId, ...data } });
+    return prisma.document.create({ data: { userId, ...data } });
   }
 
   static async createManyAndReturn(items: NewUserDocument[], client: DbClient = prisma) {
-    return client.caseDocument.createManyAndReturn({ data: items });
+    return client.document.createManyAndReturn({ data: items });
   }
 
   static async list(userId: string) {
-    return prisma.caseDocument.findMany({
+    return prisma.document.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
     });
   }
 
   static async listByCase(userId: string, caseId: string) {
-    return prisma.caseDocument.findMany({
+    return prisma.document.findMany({
       where: { userId, caseId },
       orderBy: { createdAt: "desc" },
     });
   }
 
   static async findById(id: string, userId: string) {
-    return prisma.caseDocument.findFirst({ where: { id, userId } });
+    return prisma.document.findFirst({ where: { id, userId } });
   }
 
   /** Unscoped by userId — used internally by extraction dispatch, which only ever receives an id
    * of a document it just created/confirmed itself, not a user-supplied id. */
   static async findByIdWithFile(id: string) {
-    return prisma.caseDocument.findUnique({ where: { id }, include: { file: true } });
+    return prisma.document.findUnique({ where: { id }, include: { file: true } });
   }
 
   static async update(id: string, userId: string, data: { name?: string; caseId?: string | null }) {
-    const result = await prisma.caseDocument.updateMany({ where: { id, userId }, data });
+    const result = await prisma.document.updateMany({ where: { id, userId }, data });
     return result.count > 0;
   }
 
   static async updateRagStatus(id: string, ragStatus: RagStatus) {
-    return prisma.caseDocument.update({ where: { id }, data: { ragStatus } });
+    return prisma.document.update({ where: { id }, data: { ragStatus } });
   }
 
   static async delete(id: string, userId: string) {
-    const result = await prisma.caseDocument.deleteMany({ where: { id, userId } });
+    const result = await prisma.document.deleteMany({ where: { id, userId } });
     return result.count > 0;
   }
 }

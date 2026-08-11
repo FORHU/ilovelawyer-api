@@ -1,5 +1,5 @@
 import prisma from "./src/lib/prisma";
-import UserDocumentRepo from "./src/repositories/user-document.repository";
+import DocumentRepo from "./src/repositories/document.repository";
 import { getObjectBuffer } from "./src/utils/s3";
 import { extractText } from "./src/utils/document-text-extraction";
 import { chunkText } from "./src/utils/chunking";
@@ -8,7 +8,7 @@ import { embedText } from "./src/utils/embedding";
 (async () => {
   const documentId = process.argv[2];
   try {
-    const doc = await UserDocumentRepo.findByIdWithFile(documentId);
+    const doc = await DocumentRepo.findByIdWithFile(documentId);
     console.log("doc:", doc?.name, doc?.mimeType, doc?.fileSize, doc?.file?.s3Key);
     console.time("s3");
     const buffer = await getObjectBuffer(doc!.file!.s3Key as string);
