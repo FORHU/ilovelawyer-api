@@ -7,6 +7,14 @@ import DocumentExtractionSvc from "./document-extraction.service";
 import { s3UrlForKey, getPresignedUploadUrl } from "../utils/s3";
 import HttpError from "../utils/http-error";
 
+/** Flattens the related File row's fileUrl onto the Document, matching the Swagger `UserDocument`
+ * contract (a top-level `fileUrl`, not a nested `file` object) — see docs/adr for the fileUrl gap
+ * this closes: fileUrl was declared in the contract but no query ever included the File relation. */
+export function mapDocumentToDto<T extends { file?: { fileUrl: string | null } | null }>(doc: T) {
+  const { file, ...rest } = doc;
+  return { ...rest, fileUrl: file?.fileUrl ?? null };
+}
+
 export default class DocumentSvc {
   /** Key branches on whether caseId is known at presign time (ADR 0011): case-scoped when it is,
    * consultation-scoped when only a consultationId (Consultation.id) is known, user-scoped
@@ -40,7 +48,7 @@ export default class DocumentSvc {
       consultationId: data.consultationId,
     });
     if (data.caseId || data.consultationId) void DocumentExtractionSvc.process(doc.id);
-    return doc;
+    return mapDocumentToDto(doc);
   }
 
   /** Bulk variant of `create()` — confirms several files uploaded to S3 in one transaction.
@@ -57,7 +65,7 @@ export default class DocumentSvc {
       s3Key: item.key,
     }));
 
-    const createdDocuments = await prisma.$transaction(async (tx) => {
+    const { createdDocuments, files } = await prisma.$transaction(async (tx) => {
       const files = await FilesRepo.createFile(filesToCreate, tx);
 
       const userDocumentData = files.map((file, i) => ({
@@ -68,32 +76,39 @@ export default class DocumentSvc {
         fileId: file.id,
       }));
 
-      return DocumentRepo.createManyAndReturn(userDocumentData, tx);
+      const createdDocuments = await DocumentRepo.createManyAndReturn(userDocumentData, tx);
+      return { createdDocuments, files };
     });
 
     if (caseId || consultationId) {
       for (const doc of createdDocuments) void DocumentExtractionSvc.process(doc.id);
     }
 
-    return createdDocuments;
+    // createManyAndReturn can't `include` the File relation (see repo note), so fileUrl is
+    // merged in here from the same-transaction `files`, which line up positionally with
+    // `createdDocuments` since both were built from the same ordered `items` input.
+    return createdDocuments.map((doc, i) => ({ ...doc, fileUrl: files[i].fileUrl ?? null }));
   }
 
   static async list(userId: string) {
-    return DocumentRepo.list(userId);
+    const docs = await DocumentRepo.list(userId);
+    return docs.map(mapDocumentToDto);
   }
 
   static async listByCase(userId: string, caseId: string) {
-    return DocumentRepo.listByCase(userId, caseId);
+    const docs = await DocumentRepo.listByCase(userId, caseId);
+    return docs.map(mapDocumentToDto);
   }
 
   static async listByConsultation(userId: string, consultationId: string) {
-    return DocumentRepo.listByConsultation(userId, consultationId);
+    const docs = await DocumentRepo.listByConsultation(userId, consultationId);
+    return docs.map(mapDocumentToDto);
   }
 
   static async getById(id: string, userId: string) {
     const doc = await DocumentRepo.findById(id, userId);
     if (!doc) throw new HttpError("Document not found", 404);
-    return doc;
+    return mapDocumentToDto(doc);
   }
 
   static async update(id: string, userId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {

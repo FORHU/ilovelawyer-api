@@ -86,17 +86,25 @@ export default class ChatCtrl {
 
   static async sendMessage(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const { message, sessionId, documentContext, caseDocumentId, caseId } = req.body;
+    const { message, sessionId, documentContext, caseDocumentId, caseId, documentIds } = req.body;
 
     const schema = Joi.object({
-      message: Joi.string().required(),
+      message: Joi.string().allow("").required(),
       sessionId: Joi.string().required(),
       documentContext: Joi.string().optional(),
       caseDocumentId: Joi.string().optional(),
       caseId: Joi.string().guid().optional(),
+      documentIds: Joi.array().items(Joi.string()).optional(),
+    }).custom((value, helpers) => {
+      // A file-only send (no typed text) is only valid when it's carrying at least one
+      // attachment — otherwise there's nothing for the AI to respond to.
+      if (!value.message.trim() && !value.documentIds?.length) {
+        return helpers.message({ custom: '"message" must not be empty unless "documentIds" is provided' });
+      }
+      return value;
     });
 
-    const { error } = schema.validate({ message, sessionId, documentContext, caseDocumentId, caseId });
+    const { error } = schema.validate({ message, sessionId, documentContext, caseDocumentId, caseId, documentIds });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -140,6 +148,7 @@ export default class ChatCtrl {
       },
       caseDocumentId,
       caseId,
+      documentIds,
     );
 
     res.end();

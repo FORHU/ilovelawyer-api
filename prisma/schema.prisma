@@ -121,6 +121,7 @@ model Message {
   timeline     MessageTimeline?
   mindMap      MessageMindMap?
   relatedCases MessageRelatedCases?
+  documents    Document[]
 
   @@index([consultationId])
   @@index([userId])
@@ -223,6 +224,7 @@ model Document {
   userId         String
   caseId         String?
   consultationId String?
+  messageId      String?
   name           String
   fileId         String?
   documentType   String?
@@ -234,12 +236,14 @@ model Document {
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   case         Case?               @relation(fields: [caseId], references: [id])
   consultation Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  message      Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
   file         File?               @relation(fields: [fileId], references: [id])
   chunks       CaseDocumentChunk[]
 
   @@index([userId])
   @@index([caseId])
   @@index([consultationId])
+  @@index([messageId])
 }
 
 enum RagStatus {
