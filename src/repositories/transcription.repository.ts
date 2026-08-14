@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma";
+import { RagStatus } from "@prisma/client";
 
 export default class TranscriptionRepo {
   static async findAllByUser(userId: string) {
@@ -32,6 +33,7 @@ export default class TranscriptionRepo {
     jobName?: string;
     status?: string;
     caseId?: string | null;
+    consultationId?: string | null;
   }) {
     return prisma.transcription.create({
       data: { userId, ...data },
@@ -47,6 +49,7 @@ export default class TranscriptionRepo {
     jobName?: string;
     status?: string;
     caseId?: string | null;
+    consultationId?: string | null;
   }) {
     return prisma.transcription.updateMany({
       where: { id, userId },
@@ -56,5 +59,15 @@ export default class TranscriptionRepo {
 
   static async delete(id: string, userId: string) {
     return prisma.transcription.deleteMany({ where: { id, userId } });
+  }
+
+  /** Unscoped by userId — ownership is already checked at the controller/service boundary
+   * before the chunk pipeline (a background-ish step, mirrors DocumentRepo.findByIdWithFile). */
+  static async findByIdAny(id: string) {
+    return prisma.transcription.findUnique({ where: { id } });
+  }
+
+  static async updateRagStatus(id: string, ragStatus: RagStatus) {
+    return prisma.transcription.update({ where: { id }, data: { ragStatus } });
   }
 }

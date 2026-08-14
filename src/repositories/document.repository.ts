@@ -15,7 +15,7 @@ interface NewUserDocument {
 }
 
 export default class DocumentRepo {
-  static async create(userId: string, data: { name: string; fileId: string; caseId?: string; consultationId?: string }) {
+  static async create(userId: string, data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string }) {
     return prisma.document.create({ data: { userId, ...data }, include: { file: true } });
   }
 

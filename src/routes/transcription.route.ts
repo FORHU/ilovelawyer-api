@@ -12,6 +12,7 @@ router.get("/:id", asyncHandler(TranscriptionCtrl.getById));
 router.post("/", asyncHandler(TranscriptionCtrl.create));
 router.post("/:id/start-job", asyncHandler(TranscriptionCtrl.startJob));
 router.get("/:id/poll-job", asyncHandler(TranscriptionCtrl.pollJob));
+router.post("/:id/chunk", asyncHandler(TranscriptionCtrl.chunk));
 router.patch("/:id", asyncHandler(TranscriptionCtrl.update));
 router.delete("/:id", asyncHandler(TranscriptionCtrl.delete));
 

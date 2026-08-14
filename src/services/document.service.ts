@@ -38,7 +38,7 @@ export default class DocumentSvc {
    * Extraction/embedding is dispatched when either caseId or consultationId is given — a bare
    * upload with neither (e.g. Document Analysis's "No Case" flow) stays un-embedded, since nothing
    * will ever query it via chat RAG and there's no reason to pay for that OpenAI call. */
-  static async create(userId: string, data: { key: string; name: string; caseId?: string; consultationId?: string }) {
+  static async create(userId: string, data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string }) {
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
     const doc = await DocumentRepo.create(userId, {
@@ -46,6 +46,7 @@ export default class DocumentSvc {
       fileId: file.id,
       caseId: data.caseId,
       consultationId: data.consultationId,
+      mimeType: data.contentType,
     });
     if (data.caseId || data.consultationId) void DocumentExtractionSvc.process(doc.id);
     return mapDocumentToDto(doc);
@@ -55,7 +56,7 @@ export default class DocumentSvc {
    * Extraction is dispatched when either caseId or consultationId is given. */
   static async createMany(
     userId: string,
-    items: { key: string; name: string }[],
+    items: { key: string; name: string; contentType?: string }[],
     caseId?: string,
     consultationId?: string,
   ) {
@@ -74,6 +75,7 @@ export default class DocumentSvc {
         consultationId,
         name: items[i].name,
         fileId: file.id,
+        mimeType: items[i].contentType,
       }));
 
       const createdDocuments = await DocumentRepo.createManyAndReturn(userDocumentData, tx);

@@ -29,6 +29,7 @@ export default class DocumentCtrl {
       Joi.object({
         key: Joi.string().required(),
         name: Joi.string().required(),
+        contentType: Joi.string().optional(),
         caseId: Joi.string().optional(),
         consultationId: Joi.string().optional(),
       }),
@@ -38,6 +39,7 @@ export default class DocumentCtrl {
             Joi.object({
               key: Joi.string().required(),
               name: Joi.string().required(),
+              contentType: Joi.string().optional(),
             }),
           )
           .min(1)

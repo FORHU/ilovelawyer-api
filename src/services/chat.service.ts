@@ -3,6 +3,7 @@ import ChatRepo from "../repositories/chat.repository";
 import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
+import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
@@ -182,7 +183,29 @@ export default class ChatSvc {
     const groundingContext = grounding
       ? await DocumentChunkSvc.formatGroundingContext(grounding)
       : "";
-    const resolvedContext = [caseContext, documentContext, groundingContext].filter(Boolean).join("\n\n");
+
+    // Transcript grounding (ADR 0013): a parallel, independent lookup — never merged/ranked
+    // together with Case Document grounding above. Same consultation → case priority shape, but
+    // no per-message single-transcript equivalent to caseDocumentId (nothing analogous is sent).
+    // Not part of `grounding`/CaseDocumentGrounding — chat-wonder's callback fetch only knows
+    // about Documents, so transcript content is inlined into resolvedContext text only.
+    const consultationTranscripts = await TranscriptionChunkSvc.relevantChunksForConsultation(
+      consultationId,
+      userInput,
+    );
+    let transcriptGrounding = consultationTranscripts.transcriptionIds.length
+      ? consultationTranscripts
+      : effectiveCaseId
+        ? await TranscriptionChunkSvc.relevantChunksForCase(effectiveCaseId, userInput)
+        : undefined;
+    if (transcriptGrounding && !transcriptGrounding.transcriptionIds.length) transcriptGrounding = undefined;
+    const transcriptContext = transcriptGrounding
+      ? await TranscriptionChunkSvc.formatGroundingContext(transcriptGrounding)
+      : "";
+
+    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext]
+      .filter(Boolean)
+      .join("\n\n");
 
     const cacheKey = responseCacheKey(
       consultationId,
