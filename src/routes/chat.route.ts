@@ -1,13 +1,14 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
+import resolveOrganization from "../middleware/resolve-organization.middleware";
 import ChatCtrl from "../controllers/chat.controller";
 import InviteCtrl from "../controllers/invite.controller";
 import ParticipantCtrl from "../controllers/participant.controller";
 
 const router = express.Router();
 
-router.use(validSession);
+router.use(validSession, asyncHandler(resolveOrganization));
 
 router.get("/session", asyncHandler(ChatCtrl.getSession));
 router.get("/consultations", asyncHandler(ChatCtrl.listConsultations));

@@ -14,11 +14,16 @@ export interface CaseData {
 }
 
 export default class CaseRepo {
-  static async create(userId: string, data: CaseData & { caseName: string }) {
+  /**
+   * userId is stamped for "created by" audit purposes only — every read/update/delete
+   * below scopes by organizationId, since a Case is a shared org resource once created.
+   */
+  static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {
     const { parties, ...caseFields } = data;
 
     return prisma.case.create({
       data: {
+        organizationId,
         userId,
         ...caseFields,
         parties: parties ? { create: parties } : undefined,
@@ -27,11 +32,11 @@ export default class CaseRepo {
     });
   }
 
-  static async list(userId: string, page: number, limit: number, search?: string) {
+  static async list(organizationId: string, page: number, limit: number, search?: string) {
     const skip = (page - 1) * limit;
 
     const where = {
-      userId,
+      organizationId,
       ...(search
         ? {
             OR: [
@@ -56,14 +61,14 @@ export default class CaseRepo {
     return { total, data: rows };
   }
 
-  static async findById(id: string, userId: string) {
-    return prisma.case.findFirst({ where: { id, userId }, include: { parties: true } });
+  static async findById(id: string, organizationId: string) {
+    return prisma.case.findFirst({ where: { id, organizationId }, include: { parties: true } });
   }
 
-  static async update(id: string, userId: string, data: CaseData) {
+  static async update(id: string, organizationId: string, data: CaseData) {
     const { parties, ...caseFields } = data;
 
-    const existing = await prisma.case.findFirst({ where: { id, userId }, select: { id: true } });
+    const existing = await prisma.case.findFirst({ where: { id, organizationId }, select: { id: true } });
     if (!existing) return false;
 
     await prisma.$transaction(async (tx) => {
@@ -80,8 +85,8 @@ export default class CaseRepo {
     return true;
   }
 
-  static async delete(id: string, userId: string) {
-    const result = await prisma.case.deleteMany({ where: { id, userId } });
+  static async delete(id: string, organizationId: string) {
+    const result = await prisma.case.deleteMany({ where: { id, organizationId } });
     return result.count > 0;
   }
 }

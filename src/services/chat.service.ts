@@ -53,42 +53,42 @@ function groundingCacheKey(grounding?: CaseDocumentGrounding): string {
 }
 
 export default class ChatSvc {
-  static async createConsultation(userId: string, title?: string, caseId?: string) {
+  static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
     if (caseId) {
-      // Throws 404 if the case doesn't exist or isn't owned by this user
-      await CaseSvc.getById(caseId, userId);
+      // Throws 404 if the case doesn't exist or isn't in this organization
+      await CaseSvc.getById(caseId, organizationId);
     }
-    return ChatRepo.createConsultation(userId, title, caseId);
+    return ChatRepo.createConsultation(organizationId, userId, title, caseId);
   }
 
-  static async listConsultations(userId: string, caseId?: string) {
-    return ChatRepo.listConsultations(userId, caseId);
+  static async listConsultations(organizationId: string, caseId?: string) {
+    return ChatRepo.listConsultations(organizationId, caseId);
   }
 
-  static async renameConsultation(userId: string, consultationId: string, title: string) {
-    await this.assertConsultationOwned(userId, consultationId);
+  static async renameConsultation(organizationId: string, consultationId: string, title: string) {
+    await this.assertConsultationOwned(organizationId, consultationId);
     return ChatRepo.updateConsultation(consultationId, title);
   }
 
-  static async assertConsultationOwned(userId: string, consultationId: string) {
+  static async assertConsultationOwned(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
     return consultation;
   }
 
-  static async deleteConsultation(userId: string, consultationId: string) {
+  static async deleteConsultation(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
     return ChatRepo.deleteConsultation(consultationId);
   }
 
-  static async listMessages(userId: string, consultationId: string) {
+  static async listMessages(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 
@@ -96,9 +96,9 @@ export default class ChatSvc {
     return messages.map((m) => ({ ...m, documents: m.documents.map(mapDocumentToDto) }));
   }
 
-  static async deleteMessage(userId: string, consultationId: string, messageId: string) {
+  static async deleteMessage(organizationId: string, consultationId: string, messageId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
     const message = await ChatRepo.findMessageById(messageId);
@@ -109,6 +109,7 @@ export default class ChatSvc {
   }
 
   static async sendMessage(
+    organizationId: string,
     userId: string,
     consultationId: string,
     sessionId: string,
@@ -121,7 +122,7 @@ export default class ChatSvc {
     documentIds?: string[],
   ) {
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 
@@ -129,7 +130,7 @@ export default class ChatSvc {
     // whose consultation was created without a case link.
     let effectiveCaseId = consultation.caseId ?? undefined;
     if (!effectiveCaseId && caseId) {
-      await CaseSvc.getById(caseId, userId); // ownership check
+      await CaseSvc.getById(caseId, organizationId); // ownership check
       effectiveCaseId = caseId;
     }
 
@@ -137,7 +138,7 @@ export default class ChatSvc {
     const userMessage = await ChatRepo.createMessage(consultationId, "user", userInput, userId);
 
     if (documentIds?.length) {
-      await DocumentRepo.linkToMessage(documentIds, userMessage.id, userId, consultationId);
+      await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
     }
 
     // content stays a stored empty string for a file-only send (see ADR) — everything the AI
@@ -152,7 +153,7 @@ export default class ChatSvc {
     // so edits to the Case's fields are picked up immediately rather than going stale.
     let caseRecord = consultation.case;
     if (!caseRecord && effectiveCaseId) {
-      caseRecord = await CaseSvc.getById(effectiveCaseId, userId);
+      caseRecord = await CaseSvc.getById(effectiveCaseId, organizationId);
     }
     const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
 
@@ -272,9 +273,9 @@ export default class ChatSvc {
     }
   }
 
-  static async getRelatedCases(userId: string, consultationId: string) {
+  static async getRelatedCases(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 

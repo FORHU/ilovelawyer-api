@@ -25,28 +25,28 @@ interface CaseWithParties {
 }
 
 export default class CaseSvc {
-  static async create(userId: string, data: CaseData & { caseName: string }) {
-    return CaseRepo.create(userId, data);
+  static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {
+    return CaseRepo.create(organizationId, userId, data);
   }
 
-  static async list(userId: string, page: number, limit: number, search?: string) {
-    return CaseRepo.list(userId, page, limit, search);
+  static async list(organizationId: string, page: number, limit: number, search?: string) {
+    return CaseRepo.list(organizationId, page, limit, search);
   }
 
-  static async getById(id: string, userId: string) {
-    const caseRecord = await CaseRepo.findById(id, userId);
+  static async getById(id: string, organizationId: string) {
+    const caseRecord = await CaseRepo.findById(id, organizationId);
     if (!caseRecord) throw new HttpError("Case not found", 404);
     return caseRecord;
   }
 
-  static async update(id: string, userId: string, data: CaseData) {
-    const updated = await CaseRepo.update(id, userId, data);
+  static async update(id: string, organizationId: string, data: CaseData) {
+    const updated = await CaseRepo.update(id, organizationId, data);
     if (!updated) throw new HttpError("Case not found", 404);
-    return CaseRepo.findById(id, userId);
+    return CaseRepo.findById(id, organizationId);
   }
 
-  static async delete(id: string, userId: string) {
-    const deleted = await CaseRepo.delete(id, userId);
+  static async delete(id: string, organizationId: string) {
+    const deleted = await CaseRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Case not found", 404);
   }
 
@@ -73,8 +73,11 @@ export default class CaseSvc {
     return lines.join("\n");
   }
 
-  static async handleCreateCaseWithDocument(caseData: { caseId: string; userId: string }, documentData: IncomingCaseDocument[]) {
-    await this.getById(caseData.caseId, caseData.userId);
+  static async handleCreateCaseWithDocument(
+    caseData: { caseId: string; organizationId: string; userId: string },
+    documentData: IncomingCaseDocument[],
+  ) {
+    await this.getById(caseData.caseId, caseData.organizationId);
 
     // fileUrl is derived from s3Key server-side, never accepted from the client (spoofing risk:
     // a client-supplied fileUrl could point a row at an S3 object it doesn't own).
@@ -89,6 +92,7 @@ export default class CaseSvc {
       const files = await FileSvc.createFile(filesToCreate, tx);
 
       const userDocumentData = files.map((file, i) => ({
+        organizationId: caseData.organizationId,
         userId: caseData.userId,
         caseId: caseData.caseId,
         name: file.filename ?? "",

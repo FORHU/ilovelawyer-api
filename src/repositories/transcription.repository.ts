@@ -2,30 +2,31 @@ import prisma from "../lib/prisma";
 import { RagStatus } from "@prisma/client";
 
 export default class TranscriptionRepo {
-  static async findAllByUser(userId: string) {
+  static async findAllByUser(organizationId: string) {
     return prisma.transcription.findMany({
-      where: { userId },
+      where: { organizationId },
       include: { audioFile: true },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  static async findAllByCase(userId: string, caseId: string) {
+  static async findAllByCase(organizationId: string, caseId: string) {
     return prisma.transcription.findMany({
-      where: { userId, caseId },
+      where: { organizationId, caseId },
       include: { audioFile: true },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  static async findById(id: string, userId: string) {
+  static async findById(id: string, organizationId: string) {
     return prisma.transcription.findFirst({
-      where: { id, userId },
+      where: { id, organizationId },
       include: { audioFile: true },
     });
   }
 
-  static async create(userId: string, data: {
+  /** userId is stamped for "created by" audit purposes only — reads/updates/deletes below scope by organizationId. */
+  static async create(organizationId: string, userId: string, data: {
     title?: string;
     audioFileId?: string;
     transcript?: string;
@@ -36,12 +37,12 @@ export default class TranscriptionRepo {
     consultationId?: string | null;
   }) {
     return prisma.transcription.create({
-      data: { userId, ...data },
+      data: { organizationId, userId, ...data },
       include: { audioFile: true },
     });
   }
 
-  static async update(id: string, userId: string, data: {
+  static async update(id: string, organizationId: string, data: {
     title?: string;
     audioFileId?: string;
     transcript?: string;
@@ -52,16 +53,16 @@ export default class TranscriptionRepo {
     consultationId?: string | null;
   }) {
     return prisma.transcription.updateMany({
-      where: { id, userId },
+      where: { id, organizationId },
       data,
     });
   }
 
-  static async delete(id: string, userId: string) {
-    return prisma.transcription.deleteMany({ where: { id, userId } });
+  static async delete(id: string, organizationId: string) {
+    return prisma.transcription.deleteMany({ where: { id, organizationId } });
   }
 
-  /** Unscoped by userId — ownership is already checked at the controller/service boundary
+  /** Unscoped — ownership is already checked at the controller/service boundary
    * before the chunk pipeline (a background-ish step, mirrors DocumentRepo.findByIdWithFile). */
   static async findByIdAny(id: string) {
     return prisma.transcription.findUnique({ where: { id } });

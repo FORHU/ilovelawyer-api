@@ -28,21 +28,21 @@ function getTranscribeClient() {
 }
 
 export default class TranscriptionSvc {
-  static async list(userId: string) {
-    return TranscriptionRepo.findAllByUser(userId);
+  static async list(organizationId: string) {
+    return TranscriptionRepo.findAllByUser(organizationId);
   }
 
-  static async listByCase(userId: string, caseId: string) {
-    return TranscriptionRepo.findAllByCase(userId, caseId);
+  static async listByCase(organizationId: string, caseId: string) {
+    return TranscriptionRepo.findAllByCase(organizationId, caseId);
   }
 
-  static async getById(id: string, userId: string) {
-    const item = await TranscriptionRepo.findById(id, userId);
+  static async getById(id: string, organizationId: string) {
+    const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
     return item;
   }
 
-  static async create(userId: string, data: {
+  static async create(organizationId: string, userId: string, data: {
     title?: string;
     audioFileId?: string;
     transcript?: string;
@@ -52,14 +52,14 @@ export default class TranscriptionSvc {
     caseId?: string | null;
     consultationId?: string | null;
   }) {
-    return TranscriptionRepo.create(userId, {
+    return TranscriptionRepo.create(organizationId, userId, {
       title: data.title ?? "Untitled Transcription",
       ...data,
     });
   }
 
-  static async startBatchJob(id: string, userId: string) {
-    const item = await TranscriptionRepo.findById(id, userId);
+  static async startBatchJob(id: string, organizationId: string) {
+    const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
 
     const s3Key = item.audioFile?.s3Key;
@@ -90,13 +90,13 @@ export default class TranscriptionSvc {
       );
     }
 
-    await TranscriptionRepo.update(id, userId, { jobName, status: "IN_PROGRESS" });
+    await TranscriptionRepo.update(id, organizationId, { jobName, status: "IN_PROGRESS" });
 
     return { jobName, status: "IN_PROGRESS" };
   }
 
-  static async pollJobStatus(id: string, userId: string) {
-    const item = await TranscriptionRepo.findById(id, userId);
+  static async pollJobStatus(id: string, organizationId: string) {
+    const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
     if (!item.jobName) throw new HttpError("No transcription job started for this record", 400);
 
@@ -120,43 +120,43 @@ export default class TranscriptionSvc {
 
     if (status === "COMPLETED" && job.Transcript?.TranscriptFileUri) {
       const transcriptText = await fetchTranscriptText(job.Transcript.TranscriptFileUri);
-      await TranscriptionRepo.update(id, userId, { status, transcript: transcriptText });
+      await TranscriptionRepo.update(id, organizationId, { status, transcript: transcriptText });
       return { status, transcript: transcriptText };
     }
 
     if (status === "FAILED") {
       logger.error("AWS Transcribe job failed", { transcriptionId: id, jobName: item.jobName, failureReason: job.FailureReason });
-      await TranscriptionRepo.update(id, userId, { status });
+      await TranscriptionRepo.update(id, organizationId, { status });
       return { status, failureReason: job.FailureReason };
     }
 
     return { status };
   }
 
-  static async update(id: string, userId: string, data: {
+  static async update(id: string, organizationId: string, data: {
     title?: string;
     transcript?: string;
     duration?: number;
     caseId?: string | null;
     consultationId?: string | null;
   }) {
-    const item = await TranscriptionRepo.findById(id, userId);
+    const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
-    await TranscriptionRepo.update(id, userId, data);
-    return TranscriptionRepo.findById(id, userId);
+    await TranscriptionRepo.update(id, organizationId, data);
+    return TranscriptionRepo.findById(id, organizationId);
   }
 
-  static async delete(id: string, userId: string) {
-    const item = await TranscriptionRepo.findById(id, userId);
+  static async delete(id: string, organizationId: string) {
+    const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
-    await TranscriptionRepo.delete(id, userId);
+    await TranscriptionRepo.delete(id, organizationId);
   }
 
   /** Chunk → embed → store the transcript text (ADR 0013), same shared pipeline the Case
    * Document RAG pipeline uses. Idempotent: re-running deletes and re-inserts fresh chunks.
-   * Ownership is checked here (userId-scoped findById); the pipeline itself operates unscoped. */
-  static async chunk(id: string, userId: string) {
-    const item = await TranscriptionRepo.findById(id, userId);
+   * Ownership is checked here (org-scoped findById); the pipeline itself operates unscoped. */
+  static async chunk(id: string, organizationId: string) {
+    const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
     return TranscriptionExtractionSvc.process(id);
   }
