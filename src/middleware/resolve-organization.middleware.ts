@@ -1,17 +1,8 @@
 import { Request, Response, NextFunction } from "express";
-import prisma from "../lib/prisma";
+import OrganizationSvc from "../services/organization.service";
 import HttpError from "../utils/http-error";
 
 const HEADER = "x-organization-id";
-
-async function loadMembership(organizationId: string, userId: string) {
-  const membership = await prisma.organizationMember.findUnique({
-    where: { organizationId_userId: { organizationId, userId } },
-    select: { role: true },
-  });
-  if (!membership) throw new HttpError("Not a member of this organization", 403);
-  return membership;
-}
 
 /**
  * Resolves the active organization for this request from the X-Organization-Id header
@@ -30,7 +21,7 @@ export default async function resolveOrganization(req: Request, _res: Response, 
     throw new HttpError("X-Organization-Id header is required", 400);
   }
 
-  const membership = await loadMembership(organizationId, req.user.userId);
+  const membership = await OrganizationSvc.requireMembership(organizationId, req.user.userId);
   req.organization = { id: organizationId, role: membership.role };
   next();
 }
@@ -46,7 +37,7 @@ export function resolveOrganizationFromParam(paramName = "id") {
     const organizationId = req.params[paramName];
     if (!organizationId) throw new HttpError(`Missing :${paramName} route param`, 400);
 
-    const membership = await loadMembership(organizationId, req.user.userId);
+    const membership = await OrganizationSvc.requireMembership(organizationId, req.user.userId);
     req.organization = { id: organizationId, role: membership.role };
     next();
   };
