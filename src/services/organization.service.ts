@@ -41,6 +41,13 @@ export default class OrganizationSvc {
     return OrganizationMemberRepo.list(organizationId);
   }
 
+  /** Resolves the caller's membership/role in an org, or throws 403 if they're not a member. */
+  static async requireMembership(organizationId: string, userId: string) {
+    const membership = await OrganizationMemberRepo.find(organizationId, userId);
+    if (!membership) throw new HttpError("Not a member of this organization", 403);
+    return membership;
+  }
+
   /** Invites an existing user by email. Only an OWNER can grant the OWNER role. */
   static async inviteMember(
     organizationId: string,
