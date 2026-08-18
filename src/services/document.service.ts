@@ -42,10 +42,14 @@ export default class DocumentSvc {
    * Extraction/embedding is queued when either caseId or consultationId is given — a bare
    * upload with neither (e.g. Document Analysis's "No Case" flow) stays un-embedded, since nothing
    * will ever query it via chat RAG and there's no reason to pay for that OpenAI call. */
-  static async create(userId: string, data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string }) {
+  static async create(
+    organizationId: string,
+    userId: string,
+    data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string },
+  ) {
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
-    const doc = await DocumentRepo.create(userId, {
+    const doc = await DocumentRepo.create(organizationId, userId, {
       name: data.name,
       fileId: file.id,
       caseId: data.caseId,
@@ -59,6 +63,7 @@ export default class DocumentSvc {
   /** Bulk variant of `create()` — confirms several files uploaded to S3 in one transaction.
    * Extraction is queued when either caseId or consultationId is given. */
   static async createMany(
+    organizationId: string,
     userId: string,
     items: { key: string; name: string; contentType?: string }[],
     caseId?: string,
@@ -74,6 +79,7 @@ export default class DocumentSvc {
       const files = await FilesRepo.createFile(filesToCreate, tx);
 
       const userDocumentData = files.map((file, i) => ({
+        organizationId,
         userId,
         caseId,
         consultationId,
@@ -95,35 +101,35 @@ export default class DocumentSvc {
     return createdDocuments.map((doc, i) => ({ ...doc, fileUrl: files[i].fileUrl ?? null }));
   }
 
-  static async list(userId: string) {
-    const docs = await DocumentRepo.list(userId);
+  static async list(organizationId: string) {
+    const docs = await DocumentRepo.list(organizationId);
     return docs.map(mapDocumentToDto);
   }
 
-  static async listByCase(userId: string, caseId: string) {
-    const docs = await DocumentRepo.listByCase(userId, caseId);
+  static async listByCase(organizationId: string, caseId: string) {
+    const docs = await DocumentRepo.listByCase(organizationId, caseId);
     return docs.map(mapDocumentToDto);
   }
 
-  static async listByConsultation(userId: string, consultationId: string) {
-    const docs = await DocumentRepo.listByConsultation(userId, consultationId);
+  static async listByConsultation(organizationId: string, consultationId: string) {
+    const docs = await DocumentRepo.listByConsultation(organizationId, consultationId);
     return docs.map(mapDocumentToDto);
   }
 
-  static async getById(id: string, userId: string) {
-    const doc = await DocumentRepo.findById(id, userId);
+  static async getById(id: string, organizationId: string) {
+    const doc = await DocumentRepo.findById(id, organizationId);
     if (!doc) throw new HttpError("Document not found", 404);
     return mapDocumentToDto(doc);
   }
 
-  static async update(id: string, userId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
-    const updated = await DocumentRepo.update(id, userId, data);
+  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
+    const updated = await DocumentRepo.update(id, organizationId, data);
     if (!updated) throw new HttpError("Document not found", 404);
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
   }
 
-  static async delete(id: string, userId: string) {
-    const deleted = await DocumentRepo.delete(id, userId);
+  static async delete(id: string, organizationId: string) {
+    const deleted = await DocumentRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Document not found", 404);
   }
 }

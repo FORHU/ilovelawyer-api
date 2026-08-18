@@ -17,10 +17,12 @@ import rsvpRoute from "./rsvp.route";
 import ttsRoute from "./tts.route";
 import healthRoute from "./health.route";
 import caseDocumentRoute from "./case-document.route";
+import organizationRoute from "./organization.route";
 
 const router = express.Router();
 
 router.use("/health", healthRoute);
+router.use("/organizations", organizationRoute);
 router.use("/case-document", caseDocumentRoute);
 router.use("/auth", authRoute);
 router.use("/chat", chatRoute);

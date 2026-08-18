@@ -3,6 +3,7 @@ import CalendarWatchChannelSvc from "../services/calendar-watch-channel.service"
 import EventSvc from "../services/event.service";
 import { refreshGoogleAccessToken } from "../utils/googleRefreshToken";
 import prisma from "../lib/prisma";
+import OrganizationMemberRepo from "../repositories/organization-member.repository";
 
 export default class CalendarWatchChannelCtrl {
   static async registerWatch(req: Request, res: Response) {
@@ -66,7 +67,12 @@ export default class CalendarWatchChannelCtrl {
 
     if (googleEvents.length === 0) return res.status(200).send("No events to sync");
 
-    await EventSvc.syncFromGoogleWebhook(channel.userId, googleEvents);
+    // No X-Organization-Id header on a Google-originated webhook — fall back to the
+    // channel owner's default org (see OrganizationMemberRepo.findPrimaryForUser).
+    const membership = await OrganizationMemberRepo.findPrimaryForUser(channel.userId);
+    if (!membership) return res.status(200).send("User has no organization");
+
+    await EventSvc.syncFromGoogleWebhook(membership.organizationId, channel.userId, googleEvents);
 
     return res.status(200).send("Synced");
   }

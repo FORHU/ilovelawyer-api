@@ -1,7 +1,12 @@
 import prisma from "../lib/prisma";
 
 export default class EventRepo {
-  static async findMany(userId: string, userEmail: string, filters: {
+  /**
+   * clientEmail matching lets an event be found by the client's email even though they're not
+   * an org member — kept as an OR alongside userId, but both are still nested inside a hard
+   * organizationId AND so a match can never cross an org boundary.
+   */
+  static async findMany(organizationId: string, userId: string, userEmail: string, filters: {
     startRange?: string;
     endRange?: string;
     excludeId?: string;
@@ -9,6 +14,7 @@ export default class EventRepo {
     limitOne?: boolean;
   } = {}) {
     const andConditions: any[] = [
+      { organizationId },
       {
         OR: [
           { userId },
@@ -32,10 +38,11 @@ export default class EventRepo {
     });
   }
 
-  static async findById(id: string, userId: string, userEmail: string) {
+  static async findById(id: string, organizationId: string, userId: string, userEmail: string) {
     return prisma.event.findFirst({
       where: {
         id,
+        organizationId,
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -47,10 +54,11 @@ export default class EventRepo {
     });
   }
 
-  static async findByGoogleEventId(googleEventId: string, userId: string, userEmail: string) {
+  static async findByGoogleEventId(googleEventId: string, organizationId: string, userId: string, userEmail: string) {
     return prisma.event.findFirst({
       where: {
         googleEventId,
+        organizationId,
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -59,7 +67,7 @@ export default class EventRepo {
     });
   }
 
-  static async create(userId: string, data: {
+  static async create(organizationId: string, userId: string, data: {
     title: string;
     type?: string;
     dateTime: Date;
@@ -69,13 +77,14 @@ export default class EventRepo {
     googleLink?: string;
     googleEventId?: string;
   }) {
-    return prisma.event.create({ data: { userId, ...data } });
+    return prisma.event.create({ data: { organizationId, userId, ...data } });
   }
 
-  static async updateById(id: string, userId: string, userEmail: string, data: object) {
+  static async updateById(id: string, organizationId: string, userId: string, userEmail: string, data: object) {
     return prisma.event.updateMany({
       where: {
         id,
+        organizationId,
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -85,10 +94,11 @@ export default class EventRepo {
     });
   }
 
-  static async updateByGoogleEventId(googleEventId: string, userId: string, userEmail: string, data: object) {
+  static async updateByGoogleEventId(googleEventId: string, organizationId: string, userId: string, userEmail: string, data: object) {
     return prisma.event.updateMany({
       where: {
         googleEventId,
+        organizationId,
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -98,31 +108,31 @@ export default class EventRepo {
     });
   }
 
-  static async upsertByGoogleEventId(userId: string, googleEventId: string, createData: any, updateData: any) {
+  static async upsertByGoogleEventId(organizationId: string, userId: string, googleEventId: string, createData: any, updateData: any) {
     return prisma.event.upsert({
       where: { googleEventId_userId: { googleEventId, userId } },
-      create: { userId, googleEventId, ...createData },
+      create: { organizationId, userId, googleEventId, ...createData },
       update: updateData,
     });
   }
 
-  static async deleteById(id: string, userId: string) {
-    return prisma.event.deleteMany({ where: { id, userId } });
+  static async deleteById(id: string, organizationId: string, userId: string) {
+    return prisma.event.deleteMany({ where: { id, organizationId, userId } });
   }
 
-  static async deleteByGoogleEventId(googleEventId: string, userId: string) {
-    return prisma.event.deleteMany({ where: { googleEventId, userId } });
+  static async deleteByGoogleEventId(googleEventId: string, organizationId: string, userId: string) {
+    return prisma.event.deleteMany({ where: { googleEventId, organizationId, userId } });
   }
 
-  static async deleteManyByGoogleEventIds(userId: string, googleEventIds: string[]) {
+  static async deleteManyByGoogleEventIds(organizationId: string, userId: string, googleEventIds: string[]) {
     return prisma.event.deleteMany({
-      where: { userId, googleEventId: { in: googleEventIds } },
+      where: { organizationId, userId, googleEventId: { in: googleEventIds } },
     });
   }
 
-  static async findFirstLocal(userId: string, title: string, dateTime: Date) {
+  static async findFirstLocal(organizationId: string, userId: string, title: string, dateTime: Date) {
     return prisma.event.findFirst({
-      where: { userId, googleEventId: null, title, dateTime },
+      where: { organizationId, userId, googleEventId: null, title, dateTime },
     });
   }
 }

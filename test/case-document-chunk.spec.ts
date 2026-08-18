@@ -8,6 +8,7 @@ import { CHAT_WONDER_API_KEY } from "../src/config";
 
 describe("GET /api/v1/case-document/:caseDocumentId", () => {
   const userId = crypto.randomUUID();
+  const organizationId = crypto.randomUUID();
   const caseDocumentId = crypto.randomUUID();
   const chunkIds = [crypto.randomUUID(), crypto.randomUUID()];
 
@@ -15,8 +16,11 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
     await prisma.user.create({
       data: { id: userId, email: `test-${userId}@example.com`, username: `test-${userId}` },
     });
+    await prisma.organization.create({
+      data: { id: organizationId, name: "Test Org", slug: `test-org-${organizationId}` },
+    });
     await prisma.document.create({
-      data: { id: caseDocumentId, userId, name: "Test Document" },
+      data: { id: caseDocumentId, userId, organizationId, name: "Test Document" },
     });
     await prisma.$executeRaw`
       INSERT INTO "CaseDocumentChunk" (id, "caseDocumentId", "chunkIndex", "chunkText", "charCount", "createdAt")
@@ -29,6 +33,8 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
   after(async () => {
     await prisma.$executeRaw`DELETE FROM "CaseDocumentChunk" WHERE "caseDocumentId" = ${caseDocumentId}`;
     await prisma.document.delete({ where: { id: caseDocumentId } });
+    // Cascades to the OrganizationMember row created implicitly if any test adds one.
+    await prisma.organization.delete({ where: { id: organizationId } });
     await prisma.user.delete({ where: { id: userId } });
   });
 

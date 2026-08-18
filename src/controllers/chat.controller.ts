@@ -16,7 +16,7 @@ export default class ChatCtrl {
     const { error, value } = schema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultations = await ChatSvc.listConsultations(req.user.userId, value.caseId);
+    const consultations = await ChatSvc.listConsultations(req.organization!.id, value.caseId);
     return res.status(200).json(consultations);
   }
 
@@ -28,7 +28,7 @@ export default class ChatCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultation = await ChatSvc.createConsultation(req.user.userId, value.title, value.caseId);
+    const consultation = await ChatSvc.createConsultation(req.organization!.id, req.user.userId, value.title, value.caseId);
     return res.status(201).json(consultation);
   }
 
@@ -37,24 +37,24 @@ export default class ChatCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultation = await ChatSvc.renameConsultation(req.user.userId, req.params.consultationId, value.title);
+    const consultation = await ChatSvc.renameConsultation(req.organization!.id, req.params.consultationId, value.title);
     return res.status(200).json(consultation);
   }
 
   static async deleteConsultation(req: Request, res: Response) {
-    await ChatSvc.deleteConsultation(req.user.userId, req.params.consultationId);
+    await ChatSvc.deleteConsultation(req.organization!.id, req.params.consultationId);
     return res.status(204).send();
   }
 
   static async listMessages(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const messages = await ChatSvc.listMessages(req.user.userId, consultationId);
+    const messages = await ChatSvc.listMessages(req.organization!.id, consultationId);
     return res.status(200).json(messages);
   }
 
   static async getRelatedCases(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const relatedCases = await ChatSvc.getRelatedCases(req.user.userId, consultationId);
+    const relatedCases = await ChatSvc.getRelatedCases(req.organization!.id, consultationId);
     return res.status(200).json({ relatedCases });
   }
 
@@ -69,7 +69,7 @@ export default class ChatCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     // Ownership check — throws 404 if missing / not owned.
-    await ChatSvc.assertConsultationOwned(req.user.userId, req.params.consultationId);
+    await ChatSvc.assertConsultationOwned(req.organization!.id, req.params.consultationId);
 
     const result = await DocumentChunkSvc.relevantChunksForConsultation(
       req.params.consultationId,
@@ -80,7 +80,7 @@ export default class ChatCtrl {
   }
 
   static async deleteMessage(req: Request, res: Response) {
-    await ChatSvc.deleteMessage(req.user.userId, req.params.consultationId, req.params.messageId);
+    await ChatSvc.deleteMessage(req.organization!.id, req.params.consultationId, req.params.messageId);
     return res.status(204).send();
   }
 
@@ -137,6 +137,7 @@ export default class ChatCtrl {
     };
 
     await ChatSvc.sendMessage(
+      req.organization!.id,
       req.user.userId,
       consultationId,
       sessionId,

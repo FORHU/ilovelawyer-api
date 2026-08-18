@@ -4,6 +4,7 @@ import { Prisma, RagStatus } from "@prisma/client";
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
 interface NewUserDocument {
+  organizationId: string;
   userId: string;
   caseId?: string;
   consultationId?: string;
@@ -15,8 +16,13 @@ interface NewUserDocument {
 }
 
 export default class DocumentRepo {
-  static async create(userId: string, data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string }) {
-    return prisma.document.create({ data: { userId, ...data }, include: { file: true } });
+  /** userId is stamped for "created by" audit purposes only — reads/updates/deletes below scope by organizationId. */
+  static async create(
+    organizationId: string,
+    userId: string,
+    data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string },
+  ) {
+    return prisma.document.create({ data: { organizationId, userId, ...data }, include: { file: true } });
   }
 
   /** No `include` here — createManyAndReturn only supports including relations under Prisma's
@@ -26,25 +32,25 @@ export default class DocumentRepo {
     return client.document.createManyAndReturn({ data: items });
   }
 
-  static async list(userId: string) {
+  static async list(organizationId: string) {
     return prisma.document.findMany({
-      where: { userId },
+      where: { organizationId },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
   }
 
-  static async listByCase(userId: string, caseId: string) {
+  static async listByCase(organizationId: string, caseId: string) {
     return prisma.document.findMany({
-      where: { userId, caseId },
+      where: { organizationId, caseId },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
   }
 
-  static async listByConsultation(userId: string, consultationId: string) {
+  static async listByConsultation(organizationId: string, consultationId: string) {
     return prisma.document.findMany({
-      where: { userId, consultationId },
+      where: { organizationId, consultationId },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
@@ -67,18 +73,18 @@ export default class DocumentRepo {
     });
   }
 
-  static async findById(id: string, userId: string) {
-    return prisma.document.findFirst({ where: { id, userId }, include: { file: true } });
+  static async findById(id: string, organizationId: string) {
+    return prisma.document.findFirst({ where: { id, organizationId }, include: { file: true } });
   }
 
   /** Links documents already uploaded (via presign + confirm) to the message they were sent
-   * alongside. Scoped to userId and consultationId so a caller can't link someone else's
-   * document, or one of their own from a different consultation, by guessing an id. */
-  static async linkToMessage(ids: string[], messageId: string, userId: string, consultationId: string) {
-    await prisma.document.updateMany({ where: { id: { in: ids }, userId, consultationId }, data: { messageId } });
+   * alongside. Scoped to organizationId and consultationId so a caller can't link someone else's
+   * document, or one from a different consultation, by guessing an id. */
+  static async linkToMessage(ids: string[], messageId: string, organizationId: string, consultationId: string) {
+    await prisma.document.updateMany({ where: { id: { in: ids }, organizationId, consultationId }, data: { messageId } });
   }
 
-  /** Unscoped by userId — used internally by extraction dispatch, which only ever receives an id
+  /** Unscoped by organizationId — used internally by extraction dispatch, which only ever receives an id
    * of a document it just created/confirmed itself, not a user-supplied id. */
   static async findByIdWithFile(id: string) {
     return prisma.document.findUnique({ where: { id }, include: { file: true } });
@@ -90,8 +96,8 @@ export default class DocumentRepo {
     return prisma.document.findFirst({ where: { consultationId }, orderBy: { createdAt: "desc" } });
   }
 
-  static async update(id: string, userId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
-    const result = await prisma.document.updateMany({ where: { id, userId }, data });
+  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
+    const result = await prisma.document.updateMany({ where: { id, organizationId }, data });
     return result.count > 0;
   }
 
@@ -99,8 +105,8 @@ export default class DocumentRepo {
     return prisma.document.update({ where: { id }, data: { ragStatus } });
   }
 
-  static async delete(id: string, userId: string) {
-    const result = await prisma.document.deleteMany({ where: { id, userId } });
+  static async delete(id: string, organizationId: string) {
+    const result = await prisma.document.deleteMany({ where: { id, organizationId } });
     return result.count > 0;
   }
 }

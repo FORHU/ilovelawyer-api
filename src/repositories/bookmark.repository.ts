@@ -2,7 +2,9 @@ import prisma from "../lib/prisma";
 import { BookmarkType } from "@prisma/client";
 
 export default class BookmarkRepo {
+  /** userId is stamped for "created by" audit purposes only — reads/deletes below scope by organizationId. */
   static async create(
+    organizationId: string,
     userId: string,
     data: {
       itemId: string;
@@ -15,29 +17,29 @@ export default class BookmarkRepo {
       facts?: string;
     },
   ) {
-    return prisma.bookmark.create({ data: { userId, ...data } });
+    return prisma.bookmark.create({ data: { organizationId, userId, ...data } });
   }
 
-  static async list(userId: string) {
+  static async list(organizationId: string) {
     return prisma.bookmark.findMany({
-      where: { userId },
+      where: { organizationId },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  static async findById(id: string, userId: string) {
-    return prisma.bookmark.findFirst({ where: { id, userId } });
+  static async findById(id: string, organizationId: string) {
+    return prisma.bookmark.findFirst({ where: { id, organizationId } });
   }
 
-  static async findByItemId(userId: string, itemId: string) {
+  static async findByItemId(organizationId: string, itemId: string) {
     return prisma.bookmark.findUnique({
-      where: { userId_itemId: { userId, itemId } },
+      where: { organizationId_itemId: { organizationId, itemId } },
       select: { id: true },
     });
   }
 
-  static async delete(id: string, userId: string) {
-    const result = await prisma.bookmark.deleteMany({ where: { id, userId } });
+  static async delete(id: string, organizationId: string) {
+    const result = await prisma.bookmark.deleteMany({ where: { id, organizationId } });
     return result.count > 0;
   }
 }

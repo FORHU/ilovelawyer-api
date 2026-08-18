@@ -1,0 +1,12 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello,</mj-text>
+        <mj-text>{{inviterName}} has added you to the "{{orgName}}" organization on ilovelawyer as a {{role}}.</mj-text>
+        <mj-button href="{{loginLink}}">Log in</mj-button>
+        <mj-text>Or copy and paste this link: {{loginLink}}</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
