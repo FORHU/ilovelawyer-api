@@ -36,6 +36,14 @@ router.patch(
   requireOrgRole(OrganizationRole.ADMIN),
   asyncHandler(OrganizationCtrl.changeMemberRole),
 );
+// Self-service leave, no role requirement — must be registered before the
+// wildcard :userId route below, or "me" would be captured as a userId and
+// routed to removeMember instead.
+router.delete(
+  "/:id/members/me",
+  asyncHandler(resolveOrganizationFromParam()),
+  asyncHandler(OrganizationCtrl.leave),
+);
 router.delete(
   "/:id/members/:userId",
   asyncHandler(resolveOrganizationFromParam()),

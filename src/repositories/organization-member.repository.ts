@@ -10,21 +10,19 @@ export default class OrganizationMemberRepo {
     });
   }
 
+  /** userId is globally unique (a user belongs to at most one org), so this also verifies
+   * the membership found actually belongs to the given organizationId. */
   static async find(organizationId: string, userId: string) {
-    return prisma.organizationMember.findUnique({
-      where: { organizationId_userId: { organizationId, userId } },
-    });
+    const membership = await prisma.organizationMember.findUnique({ where: { userId } });
+    return membership && membership.organizationId === organizationId ? membership : null;
   }
 
   /**
-   * A user's earliest/default org membership — for contexts with no X-Organization-Id header
-   * to resolve against, e.g. the Google Calendar webhook, which only carries a userId.
+   * A user's (guaranteed-singular) org membership — for contexts with no X-Organization-Id
+   * header to resolve against, e.g. the Google Calendar webhook, which only carries a userId.
    */
-  static async findPrimaryForUser(userId: string) {
-    return prisma.organizationMember.findFirst({
-      where: { userId },
-      orderBy: { createdAt: "asc" },
-    });
+  static async findAnyForUser(userId: string) {
+    return prisma.organizationMember.findUnique({ where: { userId } });
   }
 
   static async countByRole(organizationId: string, role: OrganizationRole) {
@@ -40,14 +38,14 @@ export default class OrganizationMemberRepo {
 
   static async updateRole(organizationId: string, userId: string, role: OrganizationRole) {
     return prisma.organizationMember.update({
-      where: { organizationId_userId: { organizationId, userId } },
+      where: { userId },
       data: { role },
     });
   }
 
   static async remove(organizationId: string, userId: string) {
     return prisma.organizationMember.delete({
-      where: { organizationId_userId: { organizationId, userId } },
+      where: { userId },
     });
   }
 }

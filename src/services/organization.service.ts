@@ -66,6 +66,14 @@ export default class OrganizationSvc {
     const existing = await OrganizationMemberRepo.find(organizationId, user.id);
     if (existing) throw new HttpError("User is already a member of this organization", 409);
 
+    const elsewhere = await OrganizationMemberRepo.findAnyForUser(user.id);
+    if (elsewhere) {
+      throw new HttpError(
+        "This user already belongs to another organization. They must leave it before joining a new one.",
+        409,
+      );
+    }
+
     const member = await OrganizationMemberRepo.add(organizationId, user.id, role);
 
     const [organization, inviter] = await Promise.all([
@@ -108,6 +116,25 @@ export default class OrganizationSvc {
     }
 
     await OrganizationMemberRepo.remove(organizationId, targetUserId);
+  }
+
+  /** Self-service: a member removes their own membership. A sole-member OWNER may leave
+   * freely (the Organization row is preserved, just ownerless — never cascade-deleted by
+   * this action). An OWNER who isn't the sole member can only leave once another OWNER
+   * exists (this app allows multiple OWNERs per org, same as changeMemberRole/removeMember
+   * — see assertNotLastOwner) — otherwise they must promote a teammate to OWNER first. */
+  static async leave(organizationId: string, userId: string) {
+    const membership = await OrganizationMemberRepo.find(organizationId, userId);
+    if (!membership) throw new HttpError("Not a member of this organization", 404);
+
+    if (membership.role === OrganizationRole.OWNER) {
+      const members = await OrganizationMemberRepo.list(organizationId);
+      if (members.length > 1) {
+        await this.assertNotLastOwner(organizationId);
+      }
+    }
+
+    await OrganizationMemberRepo.remove(organizationId, userId);
   }
 
   /** Throws if the org currently has exactly one OWNER — the caller is about to remove/demote them. */

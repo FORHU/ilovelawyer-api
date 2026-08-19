@@ -88,4 +88,9 @@ export default class OrganizationCtrl {
     await OrganizationSvc.removeMember(req.params.id, req.params.userId);
     return res.status(204).send();
   }
+
+  static async leave(req: Request, res: Response) {
+    await OrganizationSvc.leave(req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
 }

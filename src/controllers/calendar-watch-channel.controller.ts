@@ -67,9 +67,9 @@ export default class CalendarWatchChannelCtrl {
 
     if (googleEvents.length === 0) return res.status(200).send("No events to sync");
 
-    // No X-Organization-Id header on a Google-originated webhook — fall back to the
-    // channel owner's default org (see OrganizationMemberRepo.findPrimaryForUser).
-    const membership = await OrganizationMemberRepo.findPrimaryForUser(channel.userId);
+    // No X-Organization-Id header on a Google-originated webhook — resolve the
+    // channel owner's (guaranteed-singular) org membership directly.
+    const membership = await OrganizationMemberRepo.findAnyForUser(channel.userId);
     if (!membership) return res.status(200).send("User has no organization");
 
     await EventSvc.syncFromGoogleWebhook(membership.organizationId, channel.userId, googleEvents);
