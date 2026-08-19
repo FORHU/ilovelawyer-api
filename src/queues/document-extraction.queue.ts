@@ -1,7 +1,6 @@
-import { RedisClientType } from "redis";
 import DocumentExtractionSvc from "../services/document-extraction.service";
 import DocumentRepo from "../repositories/document.repository";
-import { createRedisWorkerClient, isRedisReady, redisClient } from "../lib/redis";
+import { createRedisWorkerClient, isRedisReady, redisClient, RedisWorkerClient } from "../lib/redis";
 import logger from "../utils/logger";
 
 const WAIT_KEY = "document-extraction:wait";
@@ -22,7 +21,7 @@ export default class DocumentExtractionQueue {
   private static running = false;
   private static active = 0;
   private static memoryWait: string[] = [];
-  private static blocker: RedisClientType | null = null;
+  private static blocker: RedisWorkerClient | null = null;
 
   static enqueue(documentId: string): void {
     this.enqueueMany([documentId]);
