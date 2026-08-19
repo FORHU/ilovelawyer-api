@@ -4,8 +4,8 @@ import { createRedisWorkerClient, isRedisReady, redisClient, RedisWorkerClient }
 import logger from "../utils/logger";
 
 const WAIT_KEY = "document-extraction:wait";
-/** Cap concurrent PDF parse + OpenAI embed jobs so a 1500-file confirm cannot OOM the process. */
-const CONCURRENCY = 3;
+/** One doc at a time: parallel PDFs OOM a small EC2 and blow the OpenAI 5M TPM cap. */
+const CONCURRENCY = 1;
 const BRPOP_SECONDS = 2;
 
 function sleep(ms: number) {
