@@ -1,11 +1,12 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
+import resolveOrganization from "../middleware/resolve-organization.middleware";
 import BookmarkCtrl from "../controllers/bookmark.controller";
 
 const router = express.Router();
 
-router.use(validSession);
+router.use(validSession, asyncHandler(resolveOrganization));
 
 router.get("/", asyncHandler(BookmarkCtrl.list));
 router.get("/check", asyncHandler(BookmarkCtrl.checkByItemId));

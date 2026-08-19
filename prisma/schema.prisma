@@ -51,6 +51,7 @@ model User {
   transcriptions           Transcription[]
   calendarWatchChannels    CalendarWatchChannel[]
   events                   Event[]
+  organizationMemberships  OrganizationMember[]
 }
 
 model Session {
@@ -86,13 +87,15 @@ enum Role {
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 model Consultation {
-  id        String   @id @default(uuid())
-  userId    String
-  caseId    String?
-  title     String?
-  createdAt DateTime @default(now())
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  caseId         String?
+  title          String?
+  createdAt      DateTime @default(now())
 
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case           Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
   messages       Message[]
   invites        ConsultationInvite[]
@@ -101,6 +104,7 @@ model Consultation {
   transcriptions Transcription[]
 
   @@index([userId])
+  @@index([organizationId])
   @@index([caseId])
 }
 
@@ -189,22 +193,25 @@ model ConsultationParticipant {
 // ── Case Management ────────────────────────────────────────────────────────────
 
 model Case {
-  id           String   @id @default(uuid())
-  userId       String
-  caseName     String
-  actionType   String?
-  jurisdiction String?
-  notes        String?  @db.Text
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  caseName       String
+  actionType     String?
+  jurisdiction   String?
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   documents      Document[]
   parties        Party[]
   consultations  Consultation[]
   transcriptions Transcription[]
 
   @@index([userId])
+  @@index([organizationId])
 }
 
 model Party {
@@ -223,6 +230,7 @@ model Party {
 model Document {
   id             String    @id @default(uuid())
   userId         String
+  organizationId String
   caseId         String?
   consultationId String?
   messageId      String?
@@ -235,6 +243,7 @@ model Document {
   createdAt      DateTime  @default(now())
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case         Case?               @relation(fields: [caseId], references: [id])
   consultation Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   message      Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
@@ -242,6 +251,7 @@ model Document {
   chunks       CaseDocumentChunk[]
 
   @@index([userId])
+  @@index([organizationId])
   @@index([caseId])
   @@index([consultationId])
   @@index([messageId])
@@ -290,22 +300,27 @@ model LegalSourceAnalysisCache {
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
 
 model Bookmark {
-  id        String       @id @default(uuid())
-  userId    String
-  itemId    String
-  title     String
-  reference String?
-  type      BookmarkType
-  url       String?
-  aiSummary String?      @db.Text
-  doctrine  String?      @db.Text
-  facts     String?      @db.Text
-  createdAt DateTime     @default(now())
+  id             String       @id @default(uuid())
+  userId         String
+  organizationId String
+  itemId         String
+  title          String
+  reference      String?
+  type           BookmarkType
+  url            String?
+  aiSummary      String?      @db.Text
+  doctrine       String?      @db.Text
+  facts          String?      @db.Text
+  createdAt      DateTime     @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, itemId])
+  // Uniqueness moves to the org: bookmarks are a shared resource, so two members bookmarking
+  // the same item should dedupe at the organization level, not per-user.
+  @@unique([organizationId, itemId])
   @@index([userId])
+  @@index([organizationId])
 }
 
 enum BookmarkType {
@@ -329,6 +344,7 @@ model CalendarWatchChannel {
 model Event {
   id                      String    @id @default(uuid())
   userId                  String
+  organizationId          String    @map("organization_id")
   title                   String
   type                    String    @default("Meeting")
   dateTime                DateTime  @map("date_time")
@@ -345,10 +361,12 @@ model Event {
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([googleEventId, userId], map: "events_google_event_id_user_id_key")
   @@index([userId])
+  @@index([organizationId])
   @@map("events")
 }
 
@@ -357,6 +375,7 @@ model Event {
 model Transcription {
   id             String    @id @default(uuid())
   userId         String
+  organizationId String
   caseId         String?
   consultationId String?
   audioFileId    String?
@@ -370,12 +389,14 @@ model Transcription {
   updatedAt      DateTime  @updatedAt
 
   user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case         Case?                @relation(fields: [caseId], references: [id])
   consultation Consultation?        @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   audioFile    File?                @relation(fields: [audioFileId], references: [id])
   chunks       TranscriptionChunk[]
 
   @@index([userId])
+  @@index([organizationId])
   @@index([caseId])
   @@index([consultationId])
 }
@@ -401,3 +422,40 @@ model TranscriptionChunk {
 // database but are intentionally not modeled here — they're owned by an external
 // ingestion pipeline. Query them via prisma.$queryRaw (see src/repositories/legal-rag.repository.ts)
 // using DATABASE_URL.
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members        OrganizationMember[]
+  cases          Case[]
+  documents      Document[]
+  consultations  Consultation[]
+  bookmarks      Bookmark[]
+  events         Event[]
+  transcriptions Transcription[]
+}
+
+model OrganizationMember {
+  id             String           @id @default(uuid())
+  organizationId String
+  userId         String           @unique
+  role           OrganizationRole @default(OWNER)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}

@@ -2,17 +2,44 @@ import { Request, Response } from "express";
 import Joi from "joi";
 import DocumentSvc from "../services/document.service";
 import HttpError from "../utils/http-error";
+import { DOCUMENT_UPLOAD_BATCH_MAX } from "../constants/document-upload.constants";
 
 export default class DocumentCtrl {
   static async presign(req: Request, res: Response) {
-    const schema = Joi.object({
-      filename: Joi.string().required(),
-      contentType: Joi.string().required(),
-      caseId: Joi.string().optional(),
-      consultationId: Joi.string().optional(),
-    });
+    const schema = Joi.alternatives().try(
+      Joi.object({
+        filename: Joi.string().required(),
+        contentType: Joi.string().required(),
+        caseId: Joi.string().optional(),
+        consultationId: Joi.string().optional(),
+      }),
+      Joi.object({
+        files: Joi.array()
+          .items(
+            Joi.object({
+              filename: Joi.string().required(),
+              contentType: Joi.string().required(),
+            }),
+          )
+          .min(1)
+          .max(DOCUMENT_UPLOAD_BATCH_MAX)
+          .required(),
+        caseId: Joi.string().optional(),
+        consultationId: Joi.string().optional(),
+      }),
+    );
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+
+    if (value.files) {
+      const items = await DocumentSvc.presignMany(
+        req.user.userId,
+        value.files,
+        value.caseId,
+        value.consultationId,
+      );
+      return res.status(200).json({ items });
+    }
 
     const result = await DocumentSvc.presign(
       req.user.userId,
@@ -43,6 +70,7 @@ export default class DocumentCtrl {
             }),
           )
           .min(1)
+          .max(DOCUMENT_UPLOAD_BATCH_MAX)
           .required(),
         caseId: Joi.string().optional(),
         consultationId: Joi.string().optional(),
@@ -53,6 +81,7 @@ export default class DocumentCtrl {
 
     if (value.items) {
       const docs = await DocumentSvc.createMany(
+        req.organization!.id,
         req.user.userId,
         value.items,
         value.caseId,
@@ -61,7 +90,7 @@ export default class DocumentCtrl {
       return res.status(201).json(docs);
     }
 
-    const doc = await DocumentSvc.create(req.user.userId, value);
+    const doc = await DocumentSvc.create(req.organization!.id, req.user.userId, value);
     return res.status(201).json(doc);
   }
 
@@ -69,21 +98,21 @@ export default class DocumentCtrl {
     const { caseId, consultationId } = req.query;
 
     if (caseId && typeof caseId === "string") {
-      const docs = await DocumentSvc.listByCase(req.user.userId, caseId);
+      const docs = await DocumentSvc.listByCase(req.organization!.id, caseId);
       return res.status(200).json(docs);
     }
 
     if (consultationId && typeof consultationId === "string") {
-      const docs = await DocumentSvc.listByConsultation(req.user.userId, consultationId);
+      const docs = await DocumentSvc.listByConsultation(req.organization!.id, consultationId);
       return res.status(200).json(docs);
     }
 
-    const docs = await DocumentSvc.list(req.user.userId);
+    const docs = await DocumentSvc.list(req.organization!.id);
     return res.status(200).json(docs);
   }
 
   static async getById(req: Request, res: Response) {
-    const doc = await DocumentSvc.getById(req.params.id, req.user.userId);
+    const doc = await DocumentSvc.getById(req.params.id, req.organization!.id);
     return res.status(200).json(doc);
   }
 
@@ -96,12 +125,12 @@ export default class DocumentCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    await DocumentSvc.update(req.params.id, req.user.userId, value);
+    await DocumentSvc.update(req.params.id, req.organization!.id, value);
     return res.status(204).send();
   }
 
   static async delete(req: Request, res: Response) {
-    await DocumentSvc.delete(req.params.id, req.user.userId);
+    await DocumentSvc.delete(req.params.id, req.organization!.id);
     return res.status(204).send();
   }
 }

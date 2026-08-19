@@ -26,23 +26,23 @@ function getEventStatus(e: any): string {
 }
 
 export default class EventSvc {
-  static async list(userId: string, userEmail: string, filters: {
+  static async list(organizationId: string, userId: string, userEmail: string, filters: {
     startRange?: string;
     endRange?: string;
     excludeId?: string;
     excludeStatus?: string;
     limitOne?: boolean;
   }) {
-    return EventRepo.findMany(userId, userEmail, filters);
+    return EventRepo.findMany(organizationId, userId, userEmail, filters);
   }
 
-  static async getById(id: string, userId: string, userEmail: string) {
-    const event = await EventRepo.findById(id, userId, userEmail);
+  static async getById(id: string, organizationId: string, userId: string, userEmail: string) {
+    const event = await EventRepo.findById(id, organizationId, userId, userEmail);
     if (!event) throw new HttpError("Event not found", 404);
     return event;
   }
 
-  static async create(userId: string, body: {
+  static async create(organizationId: string, userId: string, body: {
     title?: string;
     type?: string;
     date_time?: string;
@@ -54,7 +54,7 @@ export default class EventSvc {
     google_link?: string;
     google_event_id?: string;
   }) {
-    return EventRepo.create(userId, {
+    return EventRepo.create(organizationId, userId, {
       title: body.title || "Consultation",
       type: body.type || "Meeting",
       dateTime: new Date(body.date_time || body.dateTime || ""),
@@ -66,7 +66,7 @@ export default class EventSvc {
     });
   }
 
-  static async updateById(id: string, userId: string, userEmail: string, body: any) {
+  static async updateById(id: string, organizationId: string, userId: string, userEmail: string, body: any) {
     const data: any = {};
     if (body.status !== undefined) data.status = body.status;
     if (body.google_link !== undefined) data.googleLink = body.google_link;
@@ -81,12 +81,12 @@ export default class EventSvc {
     if (body.reminder_day_of_sent_at !== undefined) data.reminderDayOfSentAt = new Date(body.reminder_day_of_sent_at);
     if (body.lawyer_acknowledged_at !== undefined) data.lawyerAcknowledgedAt = new Date(body.lawyer_acknowledged_at);
 
-    const result = await EventRepo.updateById(id, userId, userEmail, data);
+    const result = await EventRepo.updateById(id, organizationId, userId, userEmail, data);
     if (result.count === 0) throw new HttpError("Event not found", 404);
     return { success: true };
   }
 
-  static async updateByGoogleEventId(googleEventId: string, userId: string, userEmail: string, body: any) {
+  static async updateByGoogleEventId(googleEventId: string, organizationId: string, userId: string, userEmail: string, body: any) {
     const data: any = {};
     if (body.status !== undefined) data.status = body.status;
     if (body.google_link !== undefined) data.googleLink = body.google_link;
@@ -96,19 +96,19 @@ export default class EventSvc {
     if (body.client_email !== undefined) data.clientEmail = body.client_email;
     if (body.notes !== undefined) data.notes = body.notes;
 
-    const result = await EventRepo.updateByGoogleEventId(googleEventId, userId, userEmail, data);
+    const result = await EventRepo.updateByGoogleEventId(googleEventId, organizationId, userId, userEmail, data);
     return { success: true, count: result.count };
   }
 
-  static async deleteById(id: string, userId: string) {
-    await EventRepo.deleteById(id, userId);
+  static async deleteById(id: string, organizationId: string, userId: string) {
+    await EventRepo.deleteById(id, organizationId, userId);
   }
 
-  static async deleteByGoogleEventId(googleEventId: string, userId: string) {
-    await EventRepo.deleteByGoogleEventId(googleEventId, userId);
+  static async deleteByGoogleEventId(googleEventId: string, organizationId: string, userId: string) {
+    await EventRepo.deleteByGoogleEventId(googleEventId, organizationId, userId);
   }
 
-  static async syncFromGoogleWebhook(userId: string, googleEvents: any[]) {
+  static async syncFromGoogleWebhook(organizationId: string, userId: string, googleEvents: any[]) {
     for (const ge of googleEvents) {
       if (ge.status === "cancelled") continue;
 
@@ -116,16 +116,17 @@ export default class EventSvc {
       const geTime = ge.start?.dateTime ?? ge.start?.date;
       if (!geTime) continue;
 
-      const localMatch = await EventRepo.findFirstLocal(userId, geTitle, new Date(geTime));
+      const localMatch = await EventRepo.findFirstLocal(organizationId, userId, geTitle, new Date(geTime));
 
       if (localMatch) {
-        await EventRepo.updateById(localMatch.id, userId, "", {
+        await EventRepo.updateById(localMatch.id, organizationId, userId, "", {
           googleEventId: ge.id,
           googleLink: ge.htmlLink ?? localMatch.googleLink,
           status: getEventStatus(ge),
         });
       } else {
         await EventRepo.upsertByGoogleEventId(
+          organizationId,
           userId,
           ge.id,
           {
@@ -151,7 +152,7 @@ export default class EventSvc {
       .map((e: any) => e.id);
 
     if (cancelledIds.length > 0) {
-      await EventRepo.deleteManyByGoogleEventIds(userId, cancelledIds);
+      await EventRepo.deleteManyByGoogleEventIds(organizationId, userId, cancelledIds);
     }
   }
 }
