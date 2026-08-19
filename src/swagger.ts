@@ -1499,7 +1499,7 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Documents"],
         summary:
-          "Record a Document row for a file already uploaded to S3 via a presigned PUT (see POST /documents/presign). Accepts either a single-document body or a batch body ({ items: [...] }); the batch form records several Document rows in one transaction and returns an array.",
+          "Record a Document row for a file already uploaded to S3 via a presigned PUT (see POST /documents/presign). Accepts either a single-document body or a batch body ({ items: [...] }, max 50); the batch form records several Document rows in one transaction and returns an array.",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
@@ -1523,6 +1523,7 @@ const swaggerSpec: OAS3Definition = {
                       items: {
                         type: "array",
                         minItems: 1,
+                        maxItems: 50,
                         items: {
                           type: "object",
                           required: ["key", "name"],
@@ -1563,42 +1564,77 @@ const swaggerSpec: OAS3Definition = {
     "/documents/presign": {
       post: {
         tags: ["Documents"],
-        summary: "Get a presigned S3 PUT URL to upload a document's bytes directly, bypassing the API",
+        summary: "Get a presigned S3 PUT URL to upload a document's bytes directly, bypassing the API. Accepts a single file or a batch ({ files: [...] }, max 50).",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
           content: {
             "application/json": {
               schema: {
-                type: "object",
-                required: ["filename", "contentType"],
-                properties: {
-                  filename: { type: "string" },
-                  contentType: { type: "string" },
-                  caseId: {
-                    type: "string",
-                    description:
-                      "Associate with a case (optional). When given, the returned key is scoped under documents/cases/{caseId}/, taking precedence over consultationId.",
+                oneOf: [
+                  {
+                    type: "object",
+                    required: ["filename", "contentType"],
+                    properties: {
+                      filename: { type: "string" },
+                      contentType: { type: "string" },
+                      caseId: {
+                        type: "string",
+                        description:
+                          "Associate with a case (optional). When given, the returned key is scoped under documents/cases/{caseId}/, taking precedence over consultationId.",
+                      },
+                      consultationId: {
+                        type: "string",
+                        description:
+                          "Associate with a consultation (optional). Ignored when caseId is given. When given (and caseId is not), the returned key is scoped under documents/consultations/{consultationId}/; when neither is given, under documents/users/{userId}/.",
+                      },
+                    },
                   },
-                  consultationId: {
-                    type: "string",
-                    description:
-                      "Associate with a consultation (optional). Ignored when caseId is given. When given (and caseId is not), the returned key is scoped under documents/consultations/{consultationId}/; when neither is given, under documents/users/{userId}/.",
+                  {
+                    type: "object",
+                    required: ["files"],
+                    properties: {
+                      files: {
+                        type: "array",
+                        minItems: 1,
+                        maxItems: 50,
+                        items: {
+                          type: "object",
+                          required: ["filename", "contentType"],
+                          properties: {
+                            filename: { type: "string" },
+                            contentType: { type: "string" },
+                          },
+                        },
+                      },
+                      caseId: { type: "string" },
+                      consultationId: { type: "string" },
+                    },
                   },
-                },
-              },
+                ],
+              } as object,
             },
           },
         },
         responses: {
           200: {
-            description: "Presigned upload URL and the S3 key to pass to POST /documents afterward",
+            description: "Presigned upload URL(s) and S3 key(s) to pass to POST /documents afterward",
             content: {
               "application/json": {
                 schema: {
-                  type: "object",
-                  properties: { uploadUrl: { type: "string" }, key: { type: "string" } },
-                },
+                  oneOf: [
+                    { type: "object", properties: { uploadUrl: { type: "string" }, key: { type: "string" } } },
+                    {
+                      type: "object",
+                      properties: {
+                        items: {
+                          type: "array",
+                          items: { type: "object", properties: { uploadUrl: { type: "string" }, key: { type: "string" } } },
+                        },
+                      },
+                    },
+                  ],
+                } as object,
               },
             },
           },
