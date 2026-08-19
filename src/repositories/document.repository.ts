@@ -56,11 +56,12 @@ export default class DocumentRepo {
     });
   }
 
-  /** PENDING docs that should be extracted — used to re-queue work after a process restart. */
+  /** PENDING/FAILED docs that should be extracted — re-queue after restart. FAILED is included
+   * so a 429/OOM does not permanently skip embedding. */
   static async listPendingForExtraction() {
     return prisma.document.findMany({
       where: {
-        ragStatus: "PENDING",
+        ragStatus: { in: ["PENDING", "FAILED"] },
         OR: [{ caseId: { not: null } }, { consultationId: { not: null } }],
       },
       select: { id: true },

@@ -17,7 +17,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isRateLimit(err: unknown): boolean {
+export function isRateLimit(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { status?: number; code?: string };
   return e.status === 429 || e.code === "rate_limit_exceeded";

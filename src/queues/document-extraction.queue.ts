@@ -31,7 +31,7 @@ export default class DocumentExtractionQueue {
     const ids = documentIds.filter(Boolean);
     if (ids.length === 0) return;
 
-    if (isRedisReady()) {
+    if (this.blocker?.isReady && isRedisReady()) {
       void redisClient.lPush(WAIT_KEY, ids).catch((err) => {
         logger.error("Failed to enqueue document extraction jobs", { err, count: ids.length });
         this.memoryWait.push(...ids);
@@ -64,7 +64,7 @@ export default class DocumentExtractionQueue {
       return [] as { id: string }[];
     });
     if (pending.length > 0) {
-      logger.info("Document extraction queue: re-queuing PENDING documents", { count: pending.length });
+      logger.info("Document extraction queue: re-queuing documents for extraction", { count: pending.length });
       this.enqueueMany(pending.map((doc) => doc.id));
     }
 

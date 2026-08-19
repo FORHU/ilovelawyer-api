@@ -4,7 +4,7 @@ import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import { chunkText } from "../utils/chunking";
-import { embedTexts } from "../utils/embedding";
+import { embedTexts, isRateLimit } from "../utils/embedding";
 import logger from "../utils/logger";
 
 // OpenAI accepts an array `input`, but a single request still needs to stay well under its
@@ -33,18 +33,26 @@ export default class DocumentExtractionSvc {
         return;
       }
 
+      if (doc.ragStatus !== "PENDING") {
+        await DocumentRepo.updateRagStatus(documentId, "PENDING");
+      }
+
+      logger.info("Document extraction: started", { documentId, name: doc.name });
+
       const buffer = await getObjectBuffer(doc.file.s3Key);
       const text = await extractText(buffer, doc.mimeType, doc.name);
       const trimmed = text.trim();
 
       // Empty extraction (e.g. a scanned/image-only PDF — no OCR) counts as failed, not ready.
       if (!trimmed) {
+        logger.warn("Document extraction: no text extracted", { documentId, name: doc.name });
         await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
 
       const chunks = chunkText(trimmed);
       if (chunks.length === 0) {
+        logger.warn("Document extraction: no chunks", { documentId, name: doc.name });
         await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
@@ -53,6 +61,8 @@ export default class DocumentExtractionSvc {
       for (let i = 0; i < chunks.length; i += EMBEDDING_BATCH_SIZE) {
         batches.push(chunks.slice(i, i + EMBEDDING_BATCH_SIZE));
       }
+
+      logger.info("Document extraction: embedding", { documentId, chunks: chunks.length, batches: batches.length });
 
       const embeddedChunks: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[] }[] = [];
       for (let i = 0; i < batches.length; i += EMBEDDING_CONCURRENCY) {
@@ -69,6 +79,11 @@ export default class DocumentExtractionSvc {
               embedding: groupEmbeddings[g][j],
             }),
           );
+        });
+        logger.info("Document extraction: embedding progress", {
+          documentId,
+          completedBatches: Math.min(i + EMBEDDING_CONCURRENCY, batches.length),
+          totalBatches: batches.length,
         });
       }
 
@@ -95,10 +110,14 @@ export default class DocumentExtractionSvc {
       }
 
       await DocumentRepo.updateRagStatus(documentId, "READY");
+      logger.info("Document extraction: ready", { documentId, name: doc.name, chunks: embeddedChunks.length });
     } catch (err) {
       logger.error("Document extraction failed", { err, documentId });
-      await DocumentRepo.updateRagStatus(documentId, "FAILED").catch((updateErr) => {
-        logger.error("Failed to mark document FAILED after extraction error", { updateErr, documentId });
+      // 429 is transient — leave PENDING so the next boot/retry can embed instead of
+      // permanently skipping RAG for this document.
+      const ragStatus = isRateLimit(err) ? "PENDING" : "FAILED";
+      await DocumentRepo.updateRagStatus(documentId, ragStatus).catch((updateErr) => {
+        logger.error("Failed to update ragStatus after extraction error", { updateErr, documentId, ragStatus });
       });
     }
   }
