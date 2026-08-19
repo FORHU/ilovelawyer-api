@@ -8,6 +8,14 @@ import { s3UrlForKey, getPresignedUploadUrl } from "../utils/s3";
 import HttpError from "../utils/http-error";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants/document-upload.constants";
 
+/** Flattens the related File row's fileUrl onto the Document, matching the Swagger `UserDocument`
+ * contract (a top-level `fileUrl`, not a nested `file` object) — see docs/adr for the fileUrl gap
+ * this closes: fileUrl was declared in the contract but no query ever included the File relation. */
+export function mapDocumentToDto<T extends { file?: { fileUrl: string | null } | null }>(doc: T) {
+  const { file, ...rest } = doc;
+  return { ...rest, fileUrl: file?.fileUrl ?? null };
+}
+
 export default class DocumentSvc {
   /** Key branches on whether caseId is known at presign time (ADR 0011): case-scoped when it is,
    * consultation-scoped when only a consultationId (Consultation.id) is known, user-scoped
@@ -88,7 +96,8 @@ export default class DocumentSvc {
         mimeType: items[i].contentType,
       }));
 
-      return DocumentRepo.createManyAndReturn(userDocumentData, tx);
+      const createdDocuments = await DocumentRepo.createManyAndReturn(userDocumentData, tx);
+      return { createdDocuments, files };
     }, { timeout: DOCUMENT_CONFIRM_TX_TIMEOUT_MS });
 
     if (caseId || consultationId) {

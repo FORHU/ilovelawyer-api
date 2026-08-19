@@ -449,7 +449,7 @@ model Organization {
 model OrganizationMember {
   id             String           @id @default(uuid())
   organizationId String
-  userId         String
+  userId         String           @unique
   role           OrganizationRole @default(OWNER)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
@@ -457,7 +457,5 @@ model OrganizationMember {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([organizationId, userId])
-  @@index([userId])
   @@index([organizationId])
 }
