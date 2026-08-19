@@ -19,6 +19,7 @@ export default class AuthRepo {
         data: {
           name: data.orgName,
           slug: data.slug,
+          createdById: user.id,
           members: { create: { userId: user.id, role: OrganizationRole.OWNER } },
         },
         include: { members: true },

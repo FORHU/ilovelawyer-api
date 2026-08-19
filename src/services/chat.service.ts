@@ -9,6 +9,7 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Re
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
+import CaseTimelineSvc from "./case-timeline.service";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
@@ -242,6 +243,9 @@ export default class ChatSvc {
     );
 
     if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
+    if (timeline && effectiveCaseId) {
+      await CaseTimelineSvc.promoteFromAi(effectiveCaseId, timeline, userId).catch(() => {});
+    }
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
     if (relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, relatedCases);
   }

@@ -56,6 +56,16 @@ export default class DocumentRepo {
     });
   }
 
+  /** Unscoped by organizationId — used internally by case-level services (refresh, strategy,
+   * snapshot, evidence intelligence) that already resolved case access themselves. */
+  static async listAllByCase(caseId: string) {
+    return prisma.document.findMany({
+      where: { caseId },
+      orderBy: { createdAt: "desc" },
+      include: { file: true },
+    });
+  }
+
   /** PENDING/FAILED docs that should be extracted — re-queue after restart. FAILED is included
    * so a 429/OOM does not permanently skip embedding. */
   static async listPendingForExtraction() {
@@ -104,6 +114,13 @@ export default class DocumentRepo {
 
   static async updateRagStatus(id: string, ragStatus: RagStatus) {
     return prisma.document.update({ where: { id }, data: { ragStatus } });
+  }
+
+  static async updateExtractionMeta(
+    id: string,
+    data: { pageCount?: number | null; extractionMethod?: string | null; ocrAttempted?: boolean; language?: string },
+  ) {
+    return prisma.document.update({ where: { id }, data });
   }
 
   static async delete(id: string, organizationId: string) {

@@ -18,7 +18,6 @@ import { embedText } from "./src/utils/embedding";
     const text = await extractText(buffer, doc!.mimeType!, doc!.name);
     console.timeEnd("extract");
     console.log("text length:", text.trim().length);
-    const chunks = chunkText(text.trim());
     console.log("chunks:", chunks.length);
   } catch (err: any) {
     console.error("ERROR message:", err?.message);

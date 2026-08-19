@@ -102,6 +102,14 @@ export function extractMindMap(text: string): MindMapItem | undefined {
 }
 
 /**
+ * Chat Wonder tagged JSON. Used by contradiction scan and other REST extracts
+ * that are not TIMELINE/MINDMAP-shaped.
+ */
+export function parseAiJson(str: string): unknown {
+  return safeJsonParse(str);
+}
+
+/**
  * Strips [TIMELINE]...[/TIMELINE] and [MINDMAP]...[/MINDMAP] blocks (closed or
  * left open by a streaming cutoff) from AI response text before it's stored/displayed.
  */

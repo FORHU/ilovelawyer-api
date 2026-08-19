@@ -31,7 +31,9 @@ export default class TranscriptionExtractionSvc {
       return { ragStatus: "FAILED", chunkCount: 0 };
     }
 
-    const chunks = chunkText(trimmed);
+    // Transcripts have no pages, so pageNumber is always null on these chunks — only the
+    // text is used below (embedTexts wants plain strings, chunkText now returns TextChunk[]).
+    const chunks = chunkText(trimmed).map((c) => c.text);
     if (chunks.length === 0) {
       await TranscriptionRepo.updateRagStatus(transcriptionId, "FAILED");
       return { ragStatus: "FAILED", chunkCount: 0 };

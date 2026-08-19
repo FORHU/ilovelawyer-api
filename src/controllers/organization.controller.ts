@@ -93,4 +93,12 @@ export default class OrganizationCtrl {
     await OrganizationSvc.leave(req.params.id, req.user.userId);
     return res.status(204).send();
   }
+
+  static async attachCase(req: Request, res: Response) {
+    const schema = Joi.object({ caseId: Joi.string().required() });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await OrganizationSvc.attachCase(req.params.id, value.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
 }

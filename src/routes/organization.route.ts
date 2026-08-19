@@ -51,4 +51,9 @@ router.delete(
   asyncHandler(OrganizationCtrl.removeMember),
 );
 
+// Case-attachment isn't gated by org role — OrganizationSvc.attachCase itself checks
+// edit access to the case being attached (see CaseAccess.assertCanEdit), not org
+// membership, so no resolveOrganizationFromParam/requireOrgRole here.
+router.post("/:id/cases", asyncHandler(OrganizationCtrl.attachCase));
+
 export default router;

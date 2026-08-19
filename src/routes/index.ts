@@ -17,7 +17,9 @@ import rsvpRoute from "./rsvp.route";
 import ttsRoute from "./tts.route";
 import healthRoute from "./health.route";
 import caseDocumentRoute from "./case-document.route";
+import terminalRoute from "./terminal.route";
 import organizationRoute from "./organization.route";
+import { jurisdictionRouter, integrationRouter } from "./jurisdiction.route";
 
 const router = express.Router();
 
@@ -40,5 +42,8 @@ router.use("/legal", legalRoute);
 router.use("/send-email", sendEmailRoute);
 router.use("/rsvp", rsvpRoute);
 router.use("/tts", ttsRoute);
+router.use("/terminal", terminalRoute);
+router.use("/jurisdictions", jurisdictionRouter);
+router.use("/integrations", integrationRouter);
 
 export default router;

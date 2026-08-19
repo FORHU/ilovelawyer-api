@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { OrganizationRole } from "@prisma/client";
+import { CasePermission } from "@prisma/client";
 
 export default class OrganizationRepo {
   /** Creates the org and its first membership (creator as OWNER) atomically. */
@@ -7,7 +7,8 @@ export default class OrganizationRepo {
     return prisma.organization.create({
       data: {
         ...data,
-        members: { create: { userId, role: OrganizationRole.OWNER } },
+        createdById: userId,
+        members: { create: { userId, role: "OWNER" } },
       },
       include: { members: true },
     });
@@ -32,5 +33,38 @@ export default class OrganizationRepo {
 
   static async update(id: string, data: { name?: string; slug?: string }) {
     return prisma.organization.update({ where: { id }, data });
+  }
+
+  // ── Case access / audit (ADR: per-case sharing within an org — see CaseAccess/AuditEvent) ──
+
+  static async attachCase(caseId: string, organizationId: string) {
+    return prisma.case.update({ where: { id: caseId }, data: { organizationId } });
+  }
+
+  static async grantCaseAccess(caseId: string, userId: string, permission: CasePermission) {
+    return prisma.caseAccess.upsert({
+      where: { caseId_userId: { caseId, userId } },
+      create: { caseId, userId, permission },
+      update: { permission },
+    });
+  }
+
+  static async listCaseAccess(caseId: string) {
+    return prisma.caseAccess.findMany({
+      where: { caseId },
+      include: { user: { select: { id: true, email: true, name: true, username: true } } },
+    });
+  }
+
+  static async listAudit(caseId: string) {
+    return prisma.auditEvent.findMany({
+      where: { caseId },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+  }
+
+  static async writeAudit(data: { caseId?: string; actorId?: string; action: string; payload?: object }) {
+    return prisma.auditEvent.create({ data });
   }
 }

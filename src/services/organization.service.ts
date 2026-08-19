@@ -1,7 +1,8 @@
-import { OrganizationRole } from "@prisma/client";
+import { CasePermission, OrganizationRole } from "@prisma/client";
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import AuthRepo from "../repositories/auth.repository";
+import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
 import { hasOrgRole } from "../utils/org-role";
 import { sendEmail } from "../utils/mailer";
@@ -141,5 +142,36 @@ export default class OrganizationSvc {
   private static async assertNotLastOwner(organizationId: string) {
     const ownerCount = await OrganizationMemberRepo.countByRole(organizationId, OrganizationRole.OWNER);
     if (ownerCount <= 1) throw new HttpError("Cannot remove the organization's last owner", 400);
+  }
+
+  // ── Case access / audit (per-case sharing within an org, independent of org role — gated
+  // by CaseAccess.assertCanEdit, same authorization the case's own routes use) ──────────────
+
+  /** Links an existing Case to this Organization. Requires edit access to the case itself
+   * (ownership, a granted CaseAccess row, or OWNER/ADMIN membership in the case's *current*
+   * org, if any) — not membership in the org being attached to. */
+  static async attachCase(organizationId: string, caseId: string, userId: string) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const org = await OrganizationRepo.findById(organizationId);
+    if (!org) throw new HttpError("Organization not found", 404);
+    const updated = await OrganizationRepo.attachCase(caseId, organizationId);
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "org.attach_case", payload: { organizationId } });
+    return updated;
+  }
+
+  static async grantAccess(caseId: string, actorId: string, userId: string, permission: CasePermission) {
+    await CaseAccess.assertCanEdit(caseId, actorId);
+    const access = await OrganizationRepo.grantCaseAccess(caseId, userId, permission);
+    await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.grant_access", payload: { userId, permission } });
+    return access;
+  }
+
+  static async teamAudit(caseId: string, userId: string) {
+    await CaseAccess.loadAccessibleCase(caseId, userId);
+    const [accesses, audit] = await Promise.all([
+      OrganizationRepo.listCaseAccess(caseId),
+      OrganizationRepo.listAudit(caseId),
+    ]);
+    return { accesses, audit };
   }
 }
