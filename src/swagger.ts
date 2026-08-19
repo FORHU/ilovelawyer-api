@@ -82,7 +82,12 @@ const swaggerSpec: OAS3Definition = {
           id: { type: "string" },
           consultationId: { type: "string" },
           role: { type: "string", enum: ["user", "assistant", "system"] },
-          content: { type: "string" },
+          content: { type: "string", description: "Empty when the message carries attachments but no typed text" },
+          documents: {
+            type: "array",
+            items: { $ref: "#/components/schemas/UserDocument" },
+            description: "Documents attached to this message, if any",
+          },
           createdAt: { type: "string", format: "date-time" },
         },
       },
@@ -230,12 +235,15 @@ const swaggerSpec: OAS3Definition = {
         properties: {
           id: { type: "string" },
           userId: { type: "string" },
+          caseId: { type: "string", nullable: true },
+          consultationId: { type: "string", nullable: true },
           title: { type: "string", nullable: true },
           audioFileId: { type: "string", nullable: true },
           transcript: { type: "string", nullable: true },
           duration: { type: "number", nullable: true },
           jobName: { type: "string", nullable: true },
           status: { type: "string", nullable: true },
+          ragStatus: { type: "string", enum: ["PENDING", "READY", "FAILED"] },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
         },
@@ -711,7 +719,11 @@ const swaggerSpec: OAS3Definition = {
                 type: "object",
                 required: ["message", "sessionId"],
                 properties: {
-                  message: { type: "string", example: "What is the penalty under R.A. 9262?" },
+                  message: {
+                    type: "string",
+                    example: "What is the penalty under R.A. 9262?",
+                    description: "May be an empty string only if documentIds carries at least one attachment",
+                  },
                   sessionId: { type: "string", description: "ChatWonder session ID from GET /chat/session" },
                   documentContext: { type: "string", description: "Optional extra context to pass to the AI, combined with Case context and legal-RAG retrieval" },
                   caseDocumentId: { type: "string", description: "Optional single document to ground on (skips case-wide ranking)" },
@@ -1522,6 +1534,7 @@ const swaggerSpec: OAS3Definition = {
                         },
                       },
                       caseId: { type: "string", description: "Associate all documents with a case (optional)" },
+                      consultationId: { type: "string", description: "Associate all documents with a consultation (optional)" },
                     },
                   },
                 ],
@@ -1710,6 +1723,8 @@ const swaggerSpec: OAS3Definition = {
                   audioFileId: { type: "string", format: "uuid" },
                   transcript: { type: "string" },
                   duration: { type: "number" },
+                  caseId: { type: "string", nullable: true },
+                  consultationId: { type: "string", nullable: true },
                 },
               },
             },
@@ -1748,6 +1763,8 @@ const swaggerSpec: OAS3Definition = {
                   title: { type: "string" },
                   transcript: { type: "string" },
                   duration: { type: "number" },
+                  caseId: { type: "string", nullable: true },
+                  consultationId: { type: "string", nullable: true },
                 },
               },
             },
@@ -1801,6 +1818,33 @@ const swaggerSpec: OAS3Definition = {
                   properties: {
                     status: { type: "string", enum: ["IN_PROGRESS", "COMPLETED", "FAILED"] },
                     transcript: { type: "string", nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/transcriptions/{id}/chunk": {
+      post: {
+        tags: ["Transcriptions"],
+        summary: "Chunk and embed this transcription's text for Case Chat retrieval (ADR 0013)",
+        description: "Reuses the same chunking (~2000 chars, ~300 char overlap) and embedding (text-embedding-3-small) pipeline as Case Document RAG, but scoped to Transcription.transcript instead of an uploaded file. Idempotent — re-calling deletes and re-inserts fresh chunks. Call this once the AWS Transcribe job reaches COMPLETED; chunking does not require caseId/consultationId to be set on the transcription first.",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Chunking result",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    ragStatus: { type: "string", enum: ["READY", "FAILED"] },
+                    chunkCount: { type: "number" },
                   },
                 },
               },

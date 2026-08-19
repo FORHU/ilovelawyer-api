@@ -5,6 +5,7 @@ import {
 } from "@aws-sdk/client-transcribe";
 import axios from "axios";
 import TranscriptionRepo from "../repositories/transcription.repository";
+import TranscriptionExtractionSvc from "./transcription-extraction.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_S3_BUCKET } from "../config";
@@ -49,6 +50,7 @@ export default class TranscriptionSvc {
     jobName?: string;
     status?: string;
     caseId?: string | null;
+    consultationId?: string | null;
   }) {
     return TranscriptionRepo.create(userId, {
       title: data.title ?? "Untitled Transcription",
@@ -136,6 +138,7 @@ export default class TranscriptionSvc {
     transcript?: string;
     duration?: number;
     caseId?: string | null;
+    consultationId?: string | null;
   }) {
     const item = await TranscriptionRepo.findById(id, userId);
     if (!item) throw new HttpError("Transcription not found", 404);
@@ -147,6 +150,15 @@ export default class TranscriptionSvc {
     const item = await TranscriptionRepo.findById(id, userId);
     if (!item) throw new HttpError("Transcription not found", 404);
     await TranscriptionRepo.delete(id, userId);
+  }
+
+  /** Chunk → embed → store the transcript text (ADR 0013), same shared pipeline the Case
+   * Document RAG pipeline uses. Idempotent: re-running deletes and re-inserts fresh chunks.
+   * Ownership is checked here (userId-scoped findById); the pipeline itself operates unscoped. */
+  static async chunk(id: string, userId: string) {
+    const item = await TranscriptionRepo.findById(id, userId);
+    if (!item) throw new HttpError("Transcription not found", 404);
+    return TranscriptionExtractionSvc.process(id);
   }
 }
 

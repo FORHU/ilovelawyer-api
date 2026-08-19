@@ -15,10 +15,13 @@ interface NewUserDocument {
 }
 
 export default class DocumentRepo {
-  static async create(userId: string, data: { name: string; fileId: string; caseId?: string; consultationId?: string }) {
-    return prisma.document.create({ data: { userId, ...data } });
+  static async create(userId: string, data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string }) {
+    return prisma.document.create({ data: { userId, ...data }, include: { file: true } });
   }
 
+  /** No `include` here — createManyAndReturn only supports including relations under Prisma's
+   * relationJoins preview feature, which this project doesn't enable. Callers already have the
+   * just-created File rows in scope (same transaction) and merge fileUrl in manually. */
   static async createManyAndReturn(items: NewUserDocument[], client: DbClient = prisma) {
     return client.document.createManyAndReturn({ data: items });
   }
@@ -27,6 +30,7 @@ export default class DocumentRepo {
     return prisma.document.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
+      include: { file: true },
     });
   }
 
@@ -34,6 +38,7 @@ export default class DocumentRepo {
     return prisma.document.findMany({
       where: { userId, caseId },
       orderBy: { createdAt: "desc" },
+      include: { file: true },
     });
   }
 
@@ -41,6 +46,7 @@ export default class DocumentRepo {
     return prisma.document.findMany({
       where: { userId, consultationId },
       orderBy: { createdAt: "desc" },
+      include: { file: true },
     });
   }
 
@@ -63,7 +69,14 @@ export default class DocumentRepo {
   }
 
   static async findById(id: string, userId: string) {
-    return prisma.document.findFirst({ where: { id, userId } });
+    return prisma.document.findFirst({ where: { id, userId }, include: { file: true } });
+  }
+
+  /** Links documents already uploaded (via presign + confirm) to the message they were sent
+   * alongside. Scoped to userId and consultationId so a caller can't link someone else's
+   * document, or one of their own from a different consultation, by guessing an id. */
+  static async linkToMessage(ids: string[], messageId: string, userId: string, consultationId: string) {
+    await prisma.document.updateMany({ where: { id: { in: ids }, userId, consultationId }, data: { messageId } });
   }
 
   /** Unscoped by userId — used internally by extraction dispatch, which only ever receives an id

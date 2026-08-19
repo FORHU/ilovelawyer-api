@@ -42,7 +42,7 @@ export default class DocumentSvc {
    * Extraction/embedding is queued when either caseId or consultationId is given — a bare
    * upload with neither (e.g. Document Analysis's "No Case" flow) stays un-embedded, since nothing
    * will ever query it via chat RAG and there's no reason to pay for that OpenAI call. */
-  static async create(userId: string, data: { key: string; name: string; caseId?: string; consultationId?: string }) {
+  static async create(userId: string, data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string }) {
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
     const doc = await DocumentRepo.create(userId, {
@@ -50,6 +50,7 @@ export default class DocumentSvc {
       fileId: file.id,
       caseId: data.caseId,
       consultationId: data.consultationId,
+      mimeType: data.contentType,
     });
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(doc.id);
     return doc;
@@ -59,7 +60,7 @@ export default class DocumentSvc {
    * Extraction is queued when either caseId or consultationId is given. */
   static async createMany(
     userId: string,
-    items: { key: string; name: string }[],
+    items: { key: string; name: string; contentType?: string }[],
     caseId?: string,
     consultationId?: string,
   ) {
@@ -69,7 +70,7 @@ export default class DocumentSvc {
       s3Key: item.key,
     }));
 
-    const createdDocuments = await prisma.$transaction(async (tx) => {
+    const { createdDocuments, files } = await prisma.$transaction(async (tx) => {
       const files = await FilesRepo.createFile(filesToCreate, tx);
 
       const userDocumentData = files.map((file, i) => ({
@@ -78,6 +79,7 @@ export default class DocumentSvc {
         consultationId,
         name: items[i].name,
         fileId: file.id,
+        mimeType: items[i].contentType,
       }));
 
       return DocumentRepo.createManyAndReturn(userDocumentData, tx);
@@ -87,25 +89,31 @@ export default class DocumentSvc {
       DocumentExtractionQueue.enqueueMany(createdDocuments.map((doc) => doc.id));
     }
 
-    return createdDocuments;
+    // createManyAndReturn can't `include` the File relation (see repo note), so fileUrl is
+    // merged in here from the same-transaction `files`, which line up positionally with
+    // `createdDocuments` since both were built from the same ordered `items` input.
+    return createdDocuments.map((doc, i) => ({ ...doc, fileUrl: files[i].fileUrl ?? null }));
   }
 
   static async list(userId: string) {
-    return DocumentRepo.list(userId);
+    const docs = await DocumentRepo.list(userId);
+    return docs.map(mapDocumentToDto);
   }
 
   static async listByCase(userId: string, caseId: string) {
-    return DocumentRepo.listByCase(userId, caseId);
+    const docs = await DocumentRepo.listByCase(userId, caseId);
+    return docs.map(mapDocumentToDto);
   }
 
   static async listByConsultation(userId: string, consultationId: string) {
-    return DocumentRepo.listByConsultation(userId, consultationId);
+    const docs = await DocumentRepo.listByConsultation(userId, consultationId);
+    return docs.map(mapDocumentToDto);
   }
 
   static async getById(id: string, userId: string) {
     const doc = await DocumentRepo.findById(id, userId);
     if (!doc) throw new HttpError("Document not found", 404);
-    return doc;
+    return mapDocumentToDto(doc);
   }
 
   static async update(id: string, userId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {

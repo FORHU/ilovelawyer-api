@@ -1,7 +1,10 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
+import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
+import TranscriptionChunkSvc from "./transcription-chunk.service";
+import { mapDocumentToDto } from "./document.service";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
@@ -11,6 +14,12 @@ const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
 const TITLE_MAX_CHARS    = 60;                // max title length (matches frontend truncation)
 const TITLE_INPUT_CHARS  = 500;              // how much of the user message to feed the title prompt
+
+// Used in place of the user's message text (title generation, AI prompt, cache key) when a
+// message carries attachments but no typed text — content itself stays a stored empty string
+// (see ADR: locale-independent "no content" signal for the frontend to render nothing), so this
+// fixed, non-localized stand-in is what the AI actually sees instead.
+const ATTACHMENT_ONLY_PROMPT = "The user attached one or more documents without any additional message. Review the attached document(s) and respond accordingly.";
 
 function messageHash(text: string): string {
   return createHash("md5").update(text.trim().toLowerCase()).digest("hex");
@@ -83,7 +92,8 @@ export default class ChatSvc {
       throw new HttpError("Consultation not found", 404);
     }
 
-    return ChatRepo.listMessagesByConsultation(consultationId);
+    const messages = await ChatRepo.listMessagesByConsultation(consultationId);
+    return messages.map((m) => ({ ...m, documents: m.documents.map(mapDocumentToDto) }));
   }
 
   static async deleteMessage(userId: string, consultationId: string, messageId: string) {
@@ -108,6 +118,7 @@ export default class ChatSvc {
     onSessionRotated?: (newSessionId: string) => void,
     caseDocumentId?: string,
     caseId?: string,
+    documentIds?: string[],
   ) {
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
     if (!consultation || consultation.userId !== userId) {
@@ -125,8 +136,16 @@ export default class ChatSvc {
     const needsTitle = consultation.title === null;
     const userMessage = await ChatRepo.createMessage(consultationId, "user", userInput, userId);
 
+    if (documentIds?.length) {
+      await DocumentRepo.linkToMessage(documentIds, userMessage.id, userId, consultationId);
+    }
+
+    // content stays a stored empty string for a file-only send (see ADR) — everything the AI
+    // and title generation actually see substitutes in a fixed stand-in instead.
+    const effectiveUserInput = userInput.trim() ? userInput : ATTACHMENT_ONLY_PROMPT;
+
     if (needsTitle) {
-      ChatSvc.generateAndSaveTitle(consultationId, userInput).catch(() => {});
+      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput).catch(() => {});
     }
 
     // Re-derived from the live Case row on every message (not cached on the consultation),
@@ -164,7 +183,29 @@ export default class ChatSvc {
     const groundingContext = grounding
       ? await DocumentChunkSvc.formatGroundingContext(grounding)
       : "";
-    const resolvedContext = [caseContext, documentContext, groundingContext].filter(Boolean).join("\n\n");
+
+    // Transcript grounding (ADR 0013): a parallel, independent lookup — never merged/ranked
+    // together with Case Document grounding above. Same consultation → case priority shape, but
+    // no per-message single-transcript equivalent to caseDocumentId (nothing analogous is sent).
+    // Not part of `grounding`/CaseDocumentGrounding — chat-wonder's callback fetch only knows
+    // about Documents, so transcript content is inlined into resolvedContext text only.
+    const consultationTranscripts = await TranscriptionChunkSvc.relevantChunksForConsultation(
+      consultationId,
+      userInput,
+    );
+    let transcriptGrounding = consultationTranscripts.transcriptionIds.length
+      ? consultationTranscripts
+      : effectiveCaseId
+        ? await TranscriptionChunkSvc.relevantChunksForCase(effectiveCaseId, userInput)
+        : undefined;
+    if (transcriptGrounding && !transcriptGrounding.transcriptionIds.length) transcriptGrounding = undefined;
+    const transcriptContext = transcriptGrounding
+      ? await TranscriptionChunkSvc.formatGroundingContext(transcriptGrounding)
+      : "";
+
+    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext]
+      .filter(Boolean)
+      .join("\n\n");
 
     const cacheKey = responseCacheKey(
       consultationId,
@@ -181,7 +222,7 @@ export default class ChatSvc {
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
     } else {
-      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, grounding);
+      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, grounding, effectiveCaseId);
       fullResponse = result.content;
       relatedCases = result.relatedCases;
       redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
@@ -217,9 +258,10 @@ export default class ChatSvc {
     resolvedContext: string,
     onSessionRotated?: (newSessionId: string) => void,
     grounding?: CaseDocumentGrounding,
+    caseId?: string,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await getChatWonderSessionId();
@@ -227,7 +269,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId);
     }
   }
 

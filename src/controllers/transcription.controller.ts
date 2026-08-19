@@ -9,6 +9,7 @@ const createSchema = Joi.object({
   transcript: Joi.string().optional(),
   duration: Joi.number().optional(),
   caseId: Joi.string().allow(null).optional(),
+  consultationId: Joi.string().allow(null).optional(),
 });
 
 const updateSchema = Joi.object({
@@ -16,6 +17,7 @@ const updateSchema = Joi.object({
   transcript: Joi.string().optional(),
   duration: Joi.number().optional(),
   caseId: Joi.string().allow(null).optional(),
+  consultationId: Joi.string().allow(null).optional(),
 });
 
 export default class TranscriptionCtrl {
@@ -63,5 +65,10 @@ export default class TranscriptionCtrl {
   static async delete(req: Request, res: Response) {
     await TranscriptionSvc.delete(req.params.id, req.user.userId);
     return res.status(204).send();
+  }
+
+  static async chunk(req: Request, res: Response) {
+    const result = await TranscriptionSvc.chunk(req.params.id, req.user.userId);
+    return res.status(200).json(result);
   }
 }

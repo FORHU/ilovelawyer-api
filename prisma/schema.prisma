@@ -10,24 +10,24 @@ datasource db {
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 model User {
-  id                  String    @id @default(uuid())
-  email               String    @unique
-  password            String?
-  name                String?
-  username            String    @unique
-  role                Role      @default(USER)
-  lastLoginAt         DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  provider            String?
-  googleId            String?   @unique
-  googleAccessToken   String?
-  googleRefreshToken  String?
-  avatarId            String?
-  isEmailVerified     Boolean   @default(false)
-  onboardingCompleted Boolean   @default(false)
-  otpCode             String?
-  otpExpiry           DateTime?
+  id                         String    @id @default(uuid())
+  email                      String    @unique
+  password                   String?
+  name                       String?
+  username                   String    @unique
+  role                       Role      @default(USER)
+  lastLoginAt                DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+  provider                   String?
+  googleId                   String?   @unique
+  googleAccessToken          String?
+  googleRefreshToken         String?
+  avatarId                   String?
+  isEmailVerified            Boolean   @default(false)
+  onboardingCompleted        Boolean   @default(false)
+  otpCode                    String?
+  otpExpiry                  DateTime?
   emailVerificationOtp       String?
   emailVerificationOtpExpiry DateTime?
 
@@ -65,14 +65,14 @@ model Session {
 }
 
 model File {
-  id        String    @id @default(uuid())
-  filename  String?
-  fileUrl   String?
-  s3Key     String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-  metaData  Json?
+  id             String          @id @default(uuid())
+  filename       String?
+  fileUrl        String?
+  s3Key          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  deletedAt      DateTime?
+  metaData       Json?
   users          User[]
   transcriptions Transcription[]
   caseDocuments  Document[]
@@ -92,12 +92,13 @@ model Consultation {
   title     String?
   createdAt DateTime @default(now())
 
-  user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case         Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
-  messages     Message[]
-  invites      ConsultationInvite[]
-  participants ConsultationParticipant[]
-  documents    Document[]
+  user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case           Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  messages       Message[]
+  invites        ConsultationInvite[]
+  participants   ConsultationParticipant[]
+  documents      Document[]
+  transcriptions Transcription[]
 
   @@index([userId])
   @@index([caseId])
@@ -114,13 +115,14 @@ model Message {
   userId          String?
   parentMessageId String?
 
-  consultation Consultation     @relation(fields: [consultationId], references: [id], onDelete: Cascade)
-  user         User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
-  parent       Message?         @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
-  replies      Message[]        @relation("MessageThread")
+  consultation Consultation         @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  user         User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parent       Message?             @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  replies      Message[]            @relation("MessageThread")
   timeline     MessageTimeline?
   mindMap      MessageMindMap?
   relatedCases MessageRelatedCases?
+  documents    Document[]
 
   @@index([consultationId])
   @@index([userId])
@@ -187,19 +189,19 @@ model ConsultationParticipant {
 // ── Case Management ────────────────────────────────────────────────────────────
 
 model Case {
-  id            String   @id @default(uuid())
-  userId        String
-  caseName      String
-  actionType    String?
-  jurisdiction  String?
-  notes         String?  @db.Text
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(uuid())
+  userId       String
+  caseName     String
+  actionType   String?
+  jurisdiction String?
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents     Document[]
-  parties       Party[]
-  consultations Consultation[]
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents      Document[]
+  parties        Party[]
+  consultations  Consultation[]
   transcriptions Transcription[]
 
   @@index([userId])
@@ -223,6 +225,7 @@ model Document {
   userId         String
   caseId         String?
   consultationId String?
+  messageId      String?
   name           String
   fileId         String?
   documentType   String?
@@ -234,12 +237,14 @@ model Document {
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   case         Case?               @relation(fields: [caseId], references: [id])
   consultation Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  message      Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
   file         File?               @relation(fields: [fileId], references: [id])
   chunks       CaseDocumentChunk[]
 
   @@index([userId])
   @@index([caseId])
   @@index([consultationId])
+  @@index([messageId])
 }
 
 enum RagStatus {
@@ -350,28 +355,49 @@ model Event {
 // ── Transcription ─────────────────────────────────────────────────────────────
 
 model Transcription {
-  id           String   @id @default(uuid())
-  userId       String
-  caseId       String?
-  audioFileId  String?
-  title        String?
-  transcript   String?  @db.Text
-  duration     Float?
-  jobName      String?
-  status       String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String    @id @default(uuid())
+  userId         String
+  caseId         String?
+  consultationId String?
+  audioFileId    String?
+  title          String?
+  transcript     String?   @db.Text
+  duration       Float?
+  jobName        String?
+  status         String?
+  ragStatus      RagStatus @default(PENDING)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case      Case? @relation(fields: [caseId], references: [id])
-  audioFile File? @relation(fields: [audioFileId], references: [id])
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case         Case?                @relation(fields: [caseId], references: [id])
+  consultation Consultation?        @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  audioFile    File?                @relation(fields: [audioFileId], references: [id])
+  chunks       TranscriptionChunk[]
 
   @@index([userId])
   @@index([caseId])
+  @@index([consultationId])
+}
+
+// Transcription chunk + embedding store (ADR 0013) — structurally identical to
+// CaseDocumentChunk, but FK'd to Transcription instead of Document: a Transcription is a
+// distinct, audio-derived kind of thing, not a Document, per this app's own glossary.
+model TranscriptionChunk {
+  id              String                       @id @default(uuid())
+  transcriptionId String
+  chunkIndex      Int
+  chunkText       String
+  charCount       Int
+  embedding       Unsupported("vector(1536)")?
+  createdAt       DateTime                     @default(now())
+
+  transcription Transcription @relation(fields: [transcriptionId], references: [id], onDelete: Cascade)
+
+  @@index([transcriptionId])
 }
 
 // Legal RAG tables (documents, document_chunks, ingestion_runs) live in this same
 // database but are intentionally not modeled here — they're owned by an external
 // ingestion pipeline. Query them via prisma.$queryRaw (see src/repositories/legal-rag.repository.ts)
 // using DATABASE_URL.
-

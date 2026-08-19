@@ -38,7 +38,7 @@ export default class ChatRepo {
     return prisma.message.findMany({
       where: { consultationId },
       orderBy: { createdAt: "asc" },
-      include: { timeline: true, mindMap: true, relatedCases: true },
+      include: { timeline: true, mindMap: true, relatedCases: true, documents: { include: { file: true } } },
     });
   }
 
