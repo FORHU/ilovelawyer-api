@@ -32,6 +32,7 @@ export default class EventSvc {
     excludeId?: string;
     excludeStatus?: string;
     limitOne?: boolean;
+    caseId?: string;
   }) {
     return EventRepo.findMany(userId, userEmail, filters);
   }
@@ -53,6 +54,10 @@ export default class EventSvc {
     status?: string;
     google_link?: string;
     google_event_id?: string;
+    caseId?: string;
+    case_id?: string;
+    dateSource?: string;
+    date_source?: string;
   }) {
     return EventRepo.create(userId, {
       title: body.title || "Consultation",
@@ -63,6 +68,8 @@ export default class EventSvc {
       status: body.status || "pending",
       googleLink: body.google_link || undefined,
       googleEventId: body.google_event_id || undefined,
+      caseId: body.caseId || body.case_id || undefined,
+      dateSource: body.dateSource || body.date_source || "calendar",
     });
   }
 
@@ -80,6 +87,8 @@ export default class EventSvc {
     if (body.reminder_day_before_sent_at !== undefined) data.reminderDayBeforeSentAt = new Date(body.reminder_day_before_sent_at);
     if (body.reminder_day_of_sent_at !== undefined) data.reminderDayOfSentAt = new Date(body.reminder_day_of_sent_at);
     if (body.lawyer_acknowledged_at !== undefined) data.lawyerAcknowledgedAt = new Date(body.lawyer_acknowledged_at);
+    if (body.caseId !== undefined || body.case_id !== undefined) data.caseId = body.caseId || body.case_id || null;
+    if (body.dateSource !== undefined || body.date_source !== undefined) data.dateSource = body.dateSource || body.date_source;
 
     const result = await EventRepo.updateById(id, userId, userEmail, data);
     if (result.count === 0) throw new HttpError("Event not found", 404);

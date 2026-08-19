@@ -10,6 +10,7 @@ interface NewChunk {
   chunkText: string;
   charCount: number;
   embedding: number[];
+  pageNumber?: number | null;
 }
 
 export interface DocumentChunkRow {
@@ -37,7 +38,7 @@ function parseVector(text: string | null): number[] | null {
 // PDF) — one round-trip per row blows past Prisma's interactive-transaction timeout, so rows are
 // batched into multi-row VALUES statements instead.
 const INSERT_BATCH_SIZE = 500;
-const COLUMNS_PER_ROW = 6;
+const COLUMNS_PER_ROW = 7;
 
 // Rows per SELECT page when reading chunks back out with embeddings included — see
 // findByDocument for why this needs to be paged rather than a single query.
@@ -57,7 +58,7 @@ export default class DocumentChunkRepo {
       batch.forEach((chunk, row) => {
         const base = row * COLUMNS_PER_ROW;
         placeholders.push(
-          `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}::vector, now())`,
+          `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}::vector, $${base + 7}, now())`,
         );
         params.push(
           crypto.randomUUID(),
@@ -66,11 +67,12 @@ export default class DocumentChunkRepo {
           chunk.chunkText,
           chunk.charCount,
           `[${chunk.embedding.join(",")}]`,
+          chunk.pageNumber ?? null,
         );
       });
 
       await client.$executeRawUnsafe(
-        `INSERT INTO "CaseDocumentChunk" (id, "caseDocumentId", "chunkIndex", "chunkText", "charCount", embedding, "createdAt")
+        `INSERT INTO "CaseDocumentChunk" (id, "caseDocumentId", "chunkIndex", "chunkText", "charCount", embedding, "pageNumber", "createdAt")
          VALUES ${placeholders.join(", ")}`,
         ...params,
       );
@@ -94,10 +96,10 @@ export default class DocumentChunkRepo {
   static async findTextsByIds(
     ids: string[],
     client: DbClient = prisma,
-  ): Promise<{ id: string; caseDocumentId: string; chunkText: string; chunkIndex: number }[]> {
+  ): Promise<{ id: string; caseDocumentId: string; chunkText: string; chunkIndex: number; pageNumber: number | null }[]> {
     if (ids.length === 0) return [];
-    const rows = await client.$queryRaw<{ id: string; caseDocumentId: string; chunkText: string; chunkIndex: number }[]>`
-      SELECT id, "caseDocumentId", "chunkText", "chunkIndex"
+    const rows = await client.$queryRaw<{ id: string; caseDocumentId: string; chunkText: string; chunkIndex: number; pageNumber: number | null }[]>`
+      SELECT id, "caseDocumentId", "chunkText", "chunkIndex", "pageNumber"
       FROM "CaseDocumentChunk"
       WHERE id IN (${Prisma.join(ids)})
     `;
