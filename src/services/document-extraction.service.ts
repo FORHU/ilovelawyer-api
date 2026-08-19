@@ -21,8 +21,8 @@ const EMBEDDING_CONCURRENCY = 5;
 export default class DocumentExtractionSvc {
   /**
    * Extraction → chunking → embedding → storage pipeline for a Case Document (ADR 0010).
-   * Dispatched fire-and-forget by the confirm/PATCH/bulk-confirm call sites once a document is
-   * linked to a case — never throws, always resolves ragStatus to READY or FAILED.
+   * Pulled by `DocumentExtractionQueue` after confirm/PATCH/bulk-confirm — never throws,
+   * always resolves ragStatus to READY or FAILED.
    */
   static async process(documentId: string): Promise<void> {
     try {

@@ -3,6 +3,7 @@ import Joi from "joi";
 import CaseSvc, { IncomingCaseDocument } from "../services/case.service";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import HttpError from "../utils/http-error";
+import { DOCUMENT_UPLOAD_BATCH_MAX } from "../constants/document-upload.constants";
 import { PartyInput } from "../repositories/case.repository";
 
 const ACTION_TYPES = ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"];
@@ -109,7 +110,7 @@ export default class CaseCtrl {
 
     const schema = Joi.object({
       caseId: Joi.string().required(),
-      documentData: Joi.array().min(1).items(Joi.object({
+      documentData: Joi.array().min(1).max(DOCUMENT_UPLOAD_BATCH_MAX).items(Joi.object({
         filename: Joi.string().required(),
         s3Key: Joi.string().required(),
         metaData: Joi.object({

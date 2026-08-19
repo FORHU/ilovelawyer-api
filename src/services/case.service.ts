@@ -2,9 +2,10 @@ import CaseRepo, { CaseData } from "../repositories/case.repository";
 import HttpError from "../utils/http-error";
 import FileSvc from "./files.service";
 import DocumentRepo from "../repositories/document.repository";
-import DocumentExtractionSvc from "./document-extraction.service";
+import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
+import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants/document-upload.constants";
 
 export interface IncomingCaseDocument {
   filename: string;
@@ -103,11 +104,11 @@ export default class CaseSvc {
       }));
 
       return DocumentRepo.createManyAndReturn(userDocumentData, tx);
-    });
+    }, { timeout: DOCUMENT_CONFIRM_TX_TIMEOUT_MS });
 
-    // Dispatched after the transaction commits, not inside it — the rows must actually exist
-    // before extraction tries to read/update them.
-    for (const doc of createdDocuments) void DocumentExtractionSvc.process(doc.id);
+    // Enqueued after the transaction commits — rows must exist before a worker reads them.
+    // Extraction runs through DocumentExtractionQueue (concurrency 3), not 1:1 with confirm size.
+    DocumentExtractionQueue.enqueueMany(createdDocuments.map((doc) => doc.id));
 
     return createdDocuments;
   }
