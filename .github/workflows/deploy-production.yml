@@ -140,16 +140,6 @@ jobs:
           source: ilovelawyer-api.env
           target: /home/ec2-user/
 
-      - name: Copy Caddyfile to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: deploy/Caddyfile
-          target: /home/ec2-user/
-          strip_components: 1
-
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -183,18 +173,4 @@ jobs:
               --env-file /home/ec2-user/ilovelawyer-api.env \
               -p 127.0.0.1:3001:3001 \
               "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG"
-
-            docker pull --platform linux/arm64 caddy:2
-            if docker inspect caddy >/dev/null 2>&1; then
-              docker start caddy
-              docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-            else
-              docker run -d --name caddy --restart unless-stopped \
-                --network host \
-                --platform linux/arm64 \
-                -v /home/ec2-user/Caddyfile:/etc/caddy/Caddyfile:ro \
-                -v caddy_data:/data \
-                -v caddy_config:/config \
-                caddy:2
-            fi
             docker image prune -f
