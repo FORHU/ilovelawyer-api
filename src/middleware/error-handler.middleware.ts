@@ -3,6 +3,12 @@ import { MulterError } from "multer";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
+function isEntityTooLarge(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { status?: number; type?: string };
+  return e.status === 413 || e.type === "entity.too.large";
+}
+
 export default function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {
   // A streaming response (e.g. chat) may already have sent headers/content before failing
   // partway through; calling res.json()/res.status() at that point throws ERR_HTTP_HEADERS_SENT
@@ -23,6 +29,11 @@ export default function errorHandler(err: unknown, _req: Request, res: Response,
   if (err instanceof MulterError) {
     const statusCode = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
     return res.status(statusCode).json({ message: err.message });
+  }
+
+  // express.json() rejects oversized bodies as http-errors 413 (not HttpError / MulterError).
+  if (isEntityTooLarge(err)) {
+    return res.status(413).json({ message: "Request body too large" });
   }
 
   logger.error(err instanceof Error ? err.message : "Unknown error", { err });
