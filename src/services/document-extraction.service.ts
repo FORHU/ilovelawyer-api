@@ -16,7 +16,7 @@ const EMBEDDING_BATCH_SIZE = 100;
 // took 45+ minutes with no observable progress. A small concurrency window keeps the request
 // count bounded (unlike firing everything at once) while cutting wall-clock time roughly
 // proportionally.
-const EMBEDDING_CONCURRENCY = 5;
+const EMBEDDING_CONCURRENCY = 2;
 
 export default class DocumentExtractionSvc {
   /**
