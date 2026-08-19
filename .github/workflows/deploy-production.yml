@@ -170,6 +170,7 @@ jobs:
 
             docker run --rm \
               --platform linux/arm64 \
+              --network host \
               --entrypoint npx \
               -v /home/ec2-user/ilovelawyer-api.env:/app/.env:ro \
               "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG" \
