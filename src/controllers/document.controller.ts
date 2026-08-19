@@ -2,17 +2,44 @@ import { Request, Response } from "express";
 import Joi from "joi";
 import DocumentSvc from "../services/document.service";
 import HttpError from "../utils/http-error";
+import { DOCUMENT_UPLOAD_BATCH_MAX } from "../constants/document-upload.constants";
 
 export default class DocumentCtrl {
   static async presign(req: Request, res: Response) {
-    const schema = Joi.object({
-      filename: Joi.string().required(),
-      contentType: Joi.string().required(),
-      caseId: Joi.string().optional(),
-      consultationId: Joi.string().optional(),
-    });
+    const schema = Joi.alternatives().try(
+      Joi.object({
+        filename: Joi.string().required(),
+        contentType: Joi.string().required(),
+        caseId: Joi.string().optional(),
+        consultationId: Joi.string().optional(),
+      }),
+      Joi.object({
+        files: Joi.array()
+          .items(
+            Joi.object({
+              filename: Joi.string().required(),
+              contentType: Joi.string().required(),
+            }),
+          )
+          .min(1)
+          .max(DOCUMENT_UPLOAD_BATCH_MAX)
+          .required(),
+        caseId: Joi.string().optional(),
+        consultationId: Joi.string().optional(),
+      }),
+    );
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+
+    if (value.files) {
+      const items = await DocumentSvc.presignMany(
+        req.user.userId,
+        value.files,
+        value.caseId,
+        value.consultationId,
+      );
+      return res.status(200).json({ items });
+    }
 
     const result = await DocumentSvc.presign(
       req.user.userId,
@@ -41,6 +68,7 @@ export default class DocumentCtrl {
             }),
           )
           .min(1)
+          .max(DOCUMENT_UPLOAD_BATCH_MAX)
           .required(),
         caseId: Joi.string().optional(),
         consultationId: Joi.string().optional(),

@@ -1,4 +1,4 @@
-import { createClient } from "redis";
+import { createClient, RedisClientType } from "redis";
 import { REDIS_URL } from "../config";
 
 const client = createClient({
@@ -10,6 +10,17 @@ const client = createClient({
 
 client.connect().catch(() => {});
 client.on("error", () => {});
+
+/** Blocking commands (BRPOP) need their own connection — they would otherwise stall cache reads. */
+export function createRedisWorkerClient(): RedisClientType {
+  return client.duplicate();
+}
+
+export function isRedisReady(): boolean {
+  return client.isReady;
+}
+
+export { client as redisClient };
 
 export const redis = {
   async ping(): Promise<boolean> {
