@@ -65,6 +65,8 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
       order: Number.isFinite(row.order) ? Number(row.order) : panels.length,
       width: clampRatio(row.width),
       height: clampRatio(row.height),
+      x: Number.isFinite(Number(row.x)) ? clampRatio(row.x) : undefined,
+      y: Number.isFinite(Number(row.y)) ? clampRatio(row.y) : undefined,
     });
   }
 
