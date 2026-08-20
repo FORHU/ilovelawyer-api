@@ -21,6 +21,10 @@ export interface PanelLayout {
   order: number;
   width: number;
   height: number;
+  /** Left edge as a 0–1 fraction of the workspace. Independent of other panes. */
+  x?: number;
+  /** Top edge as a 0–1 fraction of the workspace. Independent of other panes. */
+  y?: number;
 }
 
 export interface WorkspaceLayout {
