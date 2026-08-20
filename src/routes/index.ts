@@ -17,6 +17,7 @@ import rsvpRoute from "./rsvp.route";
 import ttsRoute from "./tts.route";
 import healthRoute from "./health.route";
 import caseDocumentRoute from "./case-document.route";
+import modelSettingsRoute from "./model-settings.route";
 
 const router = express.Router();
 
@@ -38,5 +39,6 @@ router.use("/legal", legalRoute);
 router.use("/send-email", sendEmailRoute);
 router.use("/rsvp", rsvpRoute);
 router.use("/tts", ttsRoute);
+router.use("/model-settings", modelSettingsRoute);
 
 export default router;
