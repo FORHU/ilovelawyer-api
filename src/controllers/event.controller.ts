@@ -10,7 +10,7 @@ async function getUserEmail(userId: string): Promise<string> {
 
 export default class EventCtrl {
   static async list(req: Request, res: Response) {
-    const { startRange, endRange, excludeId, excludeStatus, limitOne } = req.query;
+    const { startRange, endRange, excludeId, excludeStatus, limitOne, caseId } = req.query;
     const email = await getUserEmail(req.user.userId);
     const events = await EventSvc.list(req.organization!.id, req.user.userId, email, {
       startRange: startRange as string | undefined,
@@ -18,6 +18,7 @@ export default class EventCtrl {
       excludeId: excludeId as string | undefined,
       excludeStatus: excludeStatus as string | undefined,
       limitOne: limitOne === "true",
+      caseId: caseId as string | undefined,
     });
     return res.status(200).json({ events });
   }

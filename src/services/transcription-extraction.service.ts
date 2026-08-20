@@ -40,7 +40,7 @@ export default class TranscriptionExtractionSvc {
     try {
       const batches: string[][] = [];
       for (let i = 0; i < chunks.length; i += EMBEDDING_BATCH_SIZE) {
-        batches.push(chunks.slice(i, i + EMBEDDING_BATCH_SIZE));
+        batches.push(chunks.slice(i, i + EMBEDDING_BATCH_SIZE).map((c) => c.text));
       }
 
       const embeddedChunks: { transcriptionId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[] }[] = [];

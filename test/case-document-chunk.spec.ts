@@ -17,7 +17,7 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
       data: { id: userId, email: `test-${userId}@example.com`, username: `test-${userId}` },
     });
     await prisma.organization.create({
-      data: { id: organizationId, name: "Test Org", slug: `test-org-${organizationId}` },
+      data: { id: organizationId, name: "Test Org", slug: `test-org-${organizationId}`, createdById: userId },
     });
     await prisma.document.create({
       data: { id: caseDocumentId, userId, organizationId, name: "Test Document" },

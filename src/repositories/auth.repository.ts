@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { OrganizationRole } from "@prisma/client";
+import { OrgRole } from "@prisma/client";
 
 export default class AuthRepo {
   /** Creates the user and their first organization (as OWNER) atomically — used at signup. */
@@ -19,7 +19,8 @@ export default class AuthRepo {
         data: {
           name: data.orgName,
           slug: data.slug,
-          members: { create: { userId: user.id, role: OrganizationRole.OWNER } },
+          createdById: user.id,
+          members: { create: { userId: user.id, role: OrgRole.OWNER } },
         },
         include: { members: true },
       });
