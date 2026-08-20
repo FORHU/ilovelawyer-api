@@ -47,6 +47,7 @@ describe("Legal Terminal — workspace catalog", () => {
       "chat",
       "mindMap",
       "procedure",
+      "risk",
     ]);
   });
 
@@ -59,6 +60,17 @@ describe("Legal Terminal — workspace catalog", () => {
       "SOLO",
     );
     expect(layout.panels.find((p) => p.id === "mindMap")?.visible).to.equal(false);
+  });
+
+  it("appends risk as hidden when an old layout omits it", () => {
+    const layout = normalizeLayout(
+      {
+        preset: "PANE_2",
+        panels: [{ id: "command", visible: true, order: 0, width: 1, height: 1 }],
+      },
+      "SOLO",
+    );
+    expect(layout.panels.find((p) => p.id === "risk")?.visible).to.equal(false);
   });
 
   it("keeps freeform pane positions when saving a workspace", () => {

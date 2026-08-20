@@ -7,6 +7,7 @@ export const PANEL_IDS = [
   "mindMap",
   "redTeam",
   "procedure",
+  "risk",
   "teamAudit",
 ] as const;
 
@@ -107,6 +108,14 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     description: "Deadlines and filing checklist",
   },
   {
+    id: "risk",
+    label: "Risk Analysis",
+    phase: "P1",
+    defaultHidden: false,
+    minSku: "SOLO",
+    description: "Overall and liability risk meters from case signals",
+  },
+  {
     id: "teamAudit",
     label: "Team & Audit",
     phase: "P5",
@@ -135,9 +144,9 @@ export function defaultPanelIdsForPreset(preset: PresetValue): PanelId[] {
     case "PANE_2":
       return ["command", "evidence"];
     case "PANE_4":
-      return ["command", "evidence", "law", "chat"];
+      return ["command", "evidence", "law", "chat", "risk"];
     case "PANE_6":
-      return ["command", "evidence", "law", "mindMap", "procedure", "chat"];
+      return ["command", "evidence", "law", "mindMap", "procedure", "chat", "risk"];
     default:
       return ["command", "evidence"];
   }
