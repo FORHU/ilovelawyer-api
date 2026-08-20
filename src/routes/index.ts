@@ -20,6 +20,7 @@ import caseDocumentRoute from "./case-document.route";
 import terminalRoute from "./terminal.route";
 import organizationRoute from "./organization.route";
 import { jurisdictionRouter, integrationRouter } from "./jurisdiction.route";
+import modelSettingsRoute from "./model-settings.route";
 
 const router = express.Router();
 
@@ -45,5 +46,6 @@ router.use("/tts", ttsRoute);
 router.use("/terminal", terminalRoute);
 router.use("/jurisdictions", jurisdictionRouter);
 router.use("/integrations", integrationRouter);
+router.use("/model-settings", modelSettingsRoute);
 
 export default router;

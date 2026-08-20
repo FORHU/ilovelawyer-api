@@ -781,3 +781,20 @@ model IntegrationConnector {
   @@index([userId])
   @@index([organizationId])
 }
+
+// ── Model Settings ────────────────────────────────────────────────────────────
+// Centralized, live-editable model selection for chat-wonder-v2-api's legal-ai
+// tools (GPT vs. DeepSeek). chat-wonder-v2-api reads these at runtime instead of
+// its own .env, falling back to .env only if this service is unreachable. See
+// chat-wonder-v2-api's docs/plans/deepseek-provider-flexibility-plan.md.
+
+model ModelSetting {
+  id              String   @id @default(uuid())
+  toolName        String   @unique
+  description     String?
+  currentModel    String
+  availableModels Json
+  locked          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
