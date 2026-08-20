@@ -2051,6 +2051,47 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
+
+    "/terminal/catalog": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "Panel catalog, presets, and SKU-gated availability",
+        security: [{ bearerAuth: [] }],
+        responses: { 200: { description: "Catalog" } },
+      },
+    },
+    "/terminal/workspaces": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "List saved terminal workspaces",
+        security: [{ bearerAuth: [] }],
+        responses: { 200: { description: "Workspaces" } },
+      },
+      post: {
+        tags: ["Legal Terminal"],
+        summary: "Save a named workspace (preset + layout JSON)",
+        security: [{ bearerAuth: [] }],
+        responses: { 201: { description: "Created" } },
+      },
+    },
+    "/my-cases/{caseId}/snapshot": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "Case command snapshot for all terminal panels",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "Snapshot" } },
+      },
+    },
+    "/my-cases/{caseId}/refresh": {
+      post: {
+        tags: ["Legal Terminal"],
+        summary: "Re-extract pending docs, rescan contradictions, promote AI timeline",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "Refreshed snapshot" } },
+      },
+    },
   },
 };
 

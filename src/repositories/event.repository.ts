@@ -7,6 +7,7 @@ export default class EventRepo {
     excludeId?: string;
     excludeStatus?: string;
     limitOne?: boolean;
+    caseId?: string;
   } = {}) {
     const andConditions: any[] = [
       {
@@ -21,6 +22,7 @@ export default class EventRepo {
     if (filters.endRange) andConditions.push({ dateTime: { lte: new Date(filters.endRange) } });
     if (filters.excludeId) andConditions.push({ id: { not: filters.excludeId } });
     if (filters.excludeStatus) andConditions.push({ status: { not: filters.excludeStatus } });
+    if (filters.caseId) andConditions.push({ caseId: filters.caseId });
 
     return prisma.event.findMany({
       where: { AND: andConditions },
@@ -68,6 +70,8 @@ export default class EventRepo {
     status?: string;
     googleLink?: string;
     googleEventId?: string;
+    caseId?: string;
+    dateSource?: string;
   }) {
     return prisma.event.create({ data: { userId, ...data } });
   }

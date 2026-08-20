@@ -37,6 +37,13 @@ export default class DocumentRepo {
     });
   }
 
+  static async listAllByCase(caseId: string) {
+    return prisma.document.findMany({
+      where: { caseId },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
   static async listByConsultation(userId: string, consultationId: string) {
     return prisma.document.findMany({
       where: { userId, consultationId },
@@ -44,14 +51,21 @@ export default class DocumentRepo {
     });
   }
 
-  /** PENDING docs that should be extracted — used to re-queue work after a process restart. */
+  /** PENDING/FAILED docs that should be extracted — re-queue after restart. FAILED is included
+   * so a 429/OOM does not permanently skip embedding. */
   static async listPendingForExtraction() {
     return prisma.document.findMany({
       where: {
-        ragStatus: "PENDING",
+        ragStatus: { in: ["PENDING", "FAILED"] },
         OR: [{ caseId: { not: null } }, { consultationId: { not: null } }],
       },
       select: { id: true },
+    });
+  }
+
+  static async countPendingExtractionByCase(caseId: string) {
+    return prisma.document.count({
+      where: { caseId, ragStatus: "PENDING" },
     });
   }
 
@@ -84,6 +98,13 @@ export default class DocumentRepo {
 
   static async updateRagStatus(id: string, ragStatus: RagStatus) {
     return prisma.document.update({ where: { id }, data: { ragStatus } });
+  }
+
+  static async updateExtractionMeta(
+    id: string,
+    data: { pageCount?: number | null; extractionMethod?: string | null; ocrAttempted?: boolean; language?: string },
+  ) {
+    return prisma.document.update({ where: { id }, data });
   }
 
   static async delete(id: string, userId: string) {
