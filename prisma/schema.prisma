@@ -302,6 +302,8 @@ model CaseDocumentChunk {
   caseDocument Document @relation(fields: [caseDocumentId], references: [id], onDelete: Cascade)
 
   @@index([caseDocumentId])
+  // HNSW cosine index on embedding is in SQL (Prisma cannot declare pgvector opclasses):
+  // CaseDocumentChunk_embedding_hnsw_idx — see 20260820133000_add_case_document_chunk_embedding_hnsw
 }
 
 // ── Legal Source Analysis Cache ───────────────────────────────────────────────
