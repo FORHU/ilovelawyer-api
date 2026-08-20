@@ -78,6 +78,12 @@ export default class DocumentRepo {
     });
   }
 
+  static async countPendingExtractionByCase(caseId: string) {
+    return prisma.document.count({
+      where: { caseId, ragStatus: "PENDING" },
+    });
+  }
+
   static async countReadyByConsultation(consultationId: string) {
     return prisma.document.count({
       where: { consultationId, ragStatus: "READY" },
