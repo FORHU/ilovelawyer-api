@@ -51,9 +51,48 @@ export function extractTimeline(text: string): TimelineItem[] | undefined {
 }
 
 function isMindMapShape(v: unknown): v is MindMapItem {
-  if (!v || typeof v !== "object") return false;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
   const anyV: any = v;
   return Boolean(anyV.id || anyV.nodes || anyV.label || anyV.children);
+}
+
+/** Unwraps Chat Wonder / LLM wrappers (`mindMap`, `root`) down to a renderable tree. */
+export function normalizeMindMap(v: unknown): MindMapItem | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const anyV: any = v;
+  const nested = anyV.mindMap ?? anyV.mindmap ?? anyV.mind_map;
+  const tree =
+    nested && typeof nested === "object" && !Array.isArray(nested)
+      ? nested
+      : anyV.root && typeof anyV.root === "object" && !Array.isArray(anyV.root) &&
+          (anyV.root.label || anyV.root.id || anyV.root.children)
+        ? anyV.root
+        : anyV;
+  if (!isMindMapShape(tree)) return undefined;
+  return tree as MindMapItem;
+}
+
+/**
+ * Chat Wonder legal persona emits `[STRUCTURED_DATA]{"timeline":[...],"mindMap":{...}}`
+ * after `__END__` (see chat-wonder-v2-api `_generate_structured_data`). Not the older
+ * `[MINDMAP]...[/MINDMAP]` inline tags.
+ */
+export function parseStructuredDataPayload(raw: string): {
+  timeline?: TimelineItem[];
+  mindMap?: MindMapItem;
+} {
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+  const anyV = parsed as any;
+  const timeline =
+    Array.isArray(anyV.timeline) && anyV.timeline.length > 0
+      ? (anyV.timeline as TimelineItem[])
+      : undefined;
+
+  const nested = anyV.mindMap ?? anyV.mindmap ?? anyV.mind_map;
+  const mindMap = nested ? normalizeMindMap(nested) : normalizeMindMap(parsed);
+  return { timeline, mindMap };
 }
 
 /**
@@ -96,9 +135,15 @@ export function extractMindMap(text: string): MindMapItem | undefined {
     .trim();
 
   const parsed = safeJsonParse(cleaned);
-  if (isMindMapShape(parsed)) return parsed as MindMapItem;
+  return normalizeMindMap(parsed);
+}
 
-  return undefined;
+/**
+ * Chat Wonder tagged JSON. Used by contradiction scan and other REST extracts
+ * that are not TIMELINE/MINDMAP-shaped.
+ */
+export function parseAiJson(str: string): unknown {
+  return safeJsonParse(str);
 }
 
 /**
@@ -108,7 +153,9 @@ export function extractMindMap(text: string): MindMapItem | undefined {
 export function stripStructuredBlocks(text: string): string {
   let cleaned = text
     .replace(/\[TIMELINE\][\s\S]*?\[\/TIMELINE\]/gi, "")
-    .replace(/\[MINDMAP\][\s\S]*?\[\/MINDMAP\]/gi, "");
+    .replace(/\[MINDMAP\][\s\S]*?\[\/MINDMAP\]/gi, "")
+    .replace(/\[STRUCTURED_DATA\][\s\S]*?(?:\[DONE\]|$)/gi, "")
+    .replace(/\[DONE\]/gi, "");
 
   const startTags = [/\[TIMELINE\]/i, /\[MINDMAP\]/i];
   let firstTagIdx = -1;

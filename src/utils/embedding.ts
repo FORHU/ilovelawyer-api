@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { OPENAI_API_KEY } from "../config";
+import { EMBEDDING_CHAR_CAP } from "./chunking";
 
 let _client: OpenAI | null = null;
 
@@ -43,7 +44,7 @@ export async function embedText(text: string): Promise<number[]> {
  * tens of thousands of chunks, and issuing that many concurrent HTTP requests exhausts local
  * sockets and OpenAI's rate limit alike. */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const input = texts.map((text) => text.trim().slice(0, 8000));
+  const input = texts.map((text) => text.trim().slice(0, EMBEDDING_CHAR_CAP));
   const maxAttempts = 8;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
