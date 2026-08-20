@@ -39,7 +39,26 @@ describe("Legal Terminal — workspace catalog", () => {
   });
 
   it("lists every catalog panel", () => {
-    expect(PANEL_CATALOG.map((p) => p.id)).to.include.members(["command", "evidence", "law", "dates", "chat", "procedure"]);
+    expect(PANEL_CATALOG.map((p) => p.id)).to.include.members([
+      "command",
+      "evidence",
+      "law",
+      "dates",
+      "chat",
+      "mindMap",
+      "procedure",
+    ]);
+  });
+
+  it("appends mindMap as hidden when an old layout omits it", () => {
+    const layout = normalizeLayout(
+      {
+        preset: "PANE_2",
+        panels: [{ id: "command", visible: true, order: 0, width: 1, height: 1 }],
+      },
+      "SOLO",
+    );
+    expect(layout.panels.find((p) => p.id === "mindMap")?.visible).to.equal(false);
   });
 });
 

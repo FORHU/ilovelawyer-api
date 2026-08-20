@@ -8,7 +8,7 @@ import { mapDocumentToDto } from "./document.service";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
-import { extractTimeline, extractMindMap, stripStructuredBlocks } from "../utils/response-parser";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem } from "../utils/response-parser";
 import CaseTimelineSvc from "./case-timeline.service";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
@@ -215,23 +215,42 @@ export default class ChatSvc {
       resolvedContext,
       groundingCacheKey(grounding),
     );
-    const cached = await redis.get<{ content: string; relatedCases: RelatedCase[] }>(cacheKey);
+    const cached = await redis.get<{
+      content: string;
+      relatedCases: RelatedCase[];
+      mindMap?: MindMapItem;
+      timeline?: TimelineItem[];
+    }>(cacheKey);
+    // Map-generation turns used to cache text-only replies (the mind map arrives on a
+    // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
+    const wantsMindMap = /visual strategy map|mind\s*map/i.test(userInput);
+    const useCache = Boolean(cached) && (!wantsMindMap || cached?.mindMap);
 
     let fullResponse: string;
     let relatedCases: RelatedCase[];
-    if (cached) {
+    let streamedMindMap: MindMapItem | undefined;
+    let streamedTimeline: TimelineItem[] | undefined;
+    if (useCache && cached) {
       onChunk(cached.content);
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
+      streamedMindMap = cached.mindMap;
+      streamedTimeline = cached.timeline;
     } else {
       const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, grounding, effectiveCaseId);
       fullResponse = result.content;
       relatedCases = result.relatedCases;
-      redis.set(cacheKey, { content: fullResponse, relatedCases }, RESPONSE_CACHE_TTL);
+      streamedMindMap = result.mindMap;
+      streamedTimeline = result.timeline;
+      redis.set(
+        cacheKey,
+        { content: fullResponse, relatedCases, mindMap: streamedMindMap, timeline: streamedTimeline },
+        RESPONSE_CACHE_TTL,
+      );
     }
 
-    const timeline = extractTimeline(fullResponse);
-    const mindMap = extractMindMap(fullResponse);
+    const timeline = streamedTimeline ?? extractTimeline(fullResponse);
+    const mindMap = streamedMindMap ?? extractMindMap(fullResponse);
     const cleanedContent = stripStructuredBlocks(fullResponse);
 
     const assistantMessage = await ChatRepo.createMessage(
