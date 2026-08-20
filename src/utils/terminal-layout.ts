@@ -58,7 +58,7 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     const entry = PANEL_CATALOG.find((p) => p.id === row.id);
     if (!entry || !skuAllowsPanel(sku, entry.minSku)) continue;
     seen.add(row.id);
-    const visible = row.id === "redTeam" ? false : Boolean(row.visible);
+    const visible = row.id === "redTeam" || row.id === "dates" ? false : Boolean(row.visible);
     panels.push({
       id: row.id,
       visible,

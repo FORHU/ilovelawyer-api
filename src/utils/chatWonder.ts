@@ -2,9 +2,10 @@ import axios from "axios";
 import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
-import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG } from "../constants/chatWonder.constants";
+import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
+import { parseStructuredDataPayload, MindMapItem, TimelineItem } from "./response-parser";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -165,6 +166,9 @@ export interface ChatWonderStreamResult {
    * see chat-wonder-v2-api's legal_citations.py::select_related_cases). Sent as a
    * dedicated [RELATED_CASES] frame; empty for non-legal-persona replies. */
   relatedCases: RelatedCase[];
+  /** From Chat Wonder's post-`__END__` `[STRUCTURED_DATA]` frame (legal persona). */
+  mindMap?: MindMapItem;
+  timeline?: TimelineItem[];
 }
 
 export function streamChatWonderMessage(
@@ -180,6 +184,9 @@ export function streamChatWonderMessage(
     let sourcesDropped = false;
     let settled = false;
     let relatedCases: RelatedCase[] = [];
+    let structuredMindMap: MindMapItem | undefined;
+    let structuredTimeline: TimelineItem[] | undefined;
+    let postEndTimer: ReturnType<typeof setTimeout> | undefined;
     const resolved = normalizeGrounding(grounding);
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
     // the time onopen fires, instead of waiting on this serially after the socket is up.
@@ -196,23 +203,35 @@ export function streamChatWonderMessage(
     const finish = () => {
       if (settled) return;
       settled = true;
+      if (postEndTimer) clearTimeout(postEndTimer);
       try {
         ws.close();
       } catch {
         // already closing
       }
-      resolve({ content: accumulated, relatedCases });
+      resolve({
+        content: accumulated,
+        relatedCases,
+        mindMap: structuredMindMap,
+        timeline: structuredTimeline,
+      });
     };
 
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
+      if (postEndTimer) clearTimeout(postEndTimer);
       try {
         ws.close();
       } catch {
         // already closing
       }
       reject(err);
+    };
+
+    const armPostEndWait = () => {
+      if (postEndTimer) return;
+      postEndTimer = setTimeout(() => finish(), STRUCTURED_DATA_WAIT_MS);
     };
 
     ws.onopen = () => {
@@ -252,8 +271,28 @@ export function streamChatWonderMessage(
 
       let message = typeof event.data === "string" ? event.data : String(event.data);
 
-      if (message === "__END__") {
+      // Legal persona: `__END__` unlocks the text stream, then a second LLM call
+      // emits `[STRUCTURED_DATA]` (timeline + mind map) and `[DONE]` (the_server.py).
+      // Closing on `__END__` used to drop the map even though /message already had text.
+      if (message === "[DONE]" || message.trim() === "[DONE]") {
         finish();
+        return;
+      }
+
+      const structuredIdx = message.indexOf("[STRUCTURED_DATA]");
+      if (structuredIdx !== -1) {
+        let payload = message.slice(structuredIdx + "[STRUCTURED_DATA]".length);
+        const doneIdx = payload.indexOf("[DONE]");
+        if (doneIdx !== -1) payload = payload.slice(0, doneIdx);
+        const parsed = parseStructuredDataPayload(payload);
+        if (parsed.mindMap) structuredMindMap = parsed.mindMap;
+        if (parsed.timeline) structuredTimeline = parsed.timeline;
+        if (doneIdx !== -1) finish();
+        return;
+      }
+
+      if (message === "__END__") {
+        armPostEndWait();
         return;
       }
 
@@ -302,12 +341,13 @@ export function streamChatWonderMessage(
         onChunk(message);
       }
 
-      if (isFinal) finish();
+      if (isFinal) armPostEndWait();
     };
 
     ws.onerror = () => {
       if (settled) return;
       settled = true;
+      if (postEndTimer) clearTimeout(postEndTimer);
       reject(new HttpError("Chat Wonder connection error", 503));
     };
 

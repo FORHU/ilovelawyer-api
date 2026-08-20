@@ -4,6 +4,7 @@ export const PANEL_IDS = [
   "law",
   "dates",
   "chat",
+  "mindMap",
   "redTeam",
   "procedure",
   "teamAudit",
@@ -63,11 +64,11 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
   },
   {
     id: "dates",
-    label: "Key Dates",
+    label: "Timeline",
     phase: "P1",
-    defaultHidden: false,
+    defaultHidden: true,
     minSku: "SOLO",
-    description: "Key dates and calendar events linked to the case",
+    description: "Folded into Evidence & Timeline — not shown as its own pane",
   },
   {
     id: "chat",
@@ -76,6 +77,14 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: false,
     minSku: "SOLO",
     description: "Consultation chat, demoted from the home screen",
+  },
+  {
+    id: "mindMap",
+    label: "Visual Strategy Map",
+    phase: "P1",
+    defaultHidden: false,
+    minSku: "SOLO",
+    description: "Case strategy mind map generated from the consultation",
   },
   {
     id: "redTeam",
@@ -124,7 +133,7 @@ export function defaultPanelIdsForPreset(preset: PresetValue): PanelId[] {
     case "PANE_4":
       return ["command", "evidence", "law", "chat"];
     case "PANE_6":
-      return ["command", "evidence", "law", "dates", "procedure", "chat"];
+      return ["command", "evidence", "law", "mindMap", "procedure", "chat"];
     default:
       return ["command", "evidence"];
   }
