@@ -3,20 +3,9 @@ import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { getObjectBuffer } from "../utils/s3";
 import { extractPages } from "../utils/document-text-extraction";
-import { chunkPages } from "../utils/chunking";
+import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
 import { embedTexts, isRateLimit } from "../utils/embedding";
 import logger from "../utils/logger";
-
-// OpenAI accepts an array `input`, but a single request still needs to stay well under its
-// token/size limits — batching keeps a document with tens of thousands of chunks (e.g. a 50MB
-// PDF) from either firing thousands of concurrent connections or one oversized request.
-const EMBEDDING_BATCH_SIZE = 100;
-
-// A 50MB PDF can chunk into 30k+ pieces (300+ batches) — running those strictly sequentially
-// took 45+ minutes with no observable progress. A small concurrency window keeps the request
-// count bounded (unlike firing everything at once) while cutting wall-clock time roughly
-// proportionally.
-const EMBEDDING_CONCURRENCY = 2;
 
 export default class DocumentExtractionSvc {
   /**
@@ -56,26 +45,43 @@ export default class DocumentExtractionSvc {
         return;
       }
 
-      const chunks = chunkPages(trimmedPages);
+      const totalChars = trimmedPages.reduce((sum, page) => sum + page.text.length, 0);
+      const profile = resolveChunkingProfile({
+        pageCount: pages.length,
+        totalChars,
+        fileSizeBytes: doc.fileSize ?? null,
+      });
+      const chunks = chunkPages(trimmedPages, profile);
       if (chunks.length === 0) {
         logger.warn("Document extraction: no chunks", { documentId, name: doc.name });
         await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
 
+      const embeddingBatchSize = profile.embeddingBatchSize;
+      const embeddingConcurrency = profile.embeddingConcurrency;
       const batches: string[][] = [];
-      for (let i = 0; i < chunks.length; i += EMBEDDING_BATCH_SIZE) {
-        batches.push(chunks.slice(i, i + EMBEDDING_BATCH_SIZE).map((c) => c.text));
+      for (let i = 0; i < chunks.length; i += embeddingBatchSize) {
+        batches.push(chunks.slice(i, i + embeddingBatchSize).map((c) => c.text));
       }
 
-      logger.info("Document extraction: embedding", { documentId, chunks: chunks.length, batches: batches.length });
+      logger.info("Document extraction: embedding", {
+        documentId,
+        chunks: chunks.length,
+        batches: batches.length,
+        tier: profile.tier,
+        chunkSize: profile.chunkSize,
+        fileSizeBytes: doc.fileSize,
+        pageCount: pages.length,
+        totalChars,
+      });
 
       const embeddedChunks: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[]; pageNumber: number | null }[] = [];
-      for (let i = 0; i < batches.length; i += EMBEDDING_CONCURRENCY) {
-        const group = batches.slice(i, i + EMBEDDING_CONCURRENCY);
+      for (let i = 0; i < batches.length; i += embeddingConcurrency) {
+        const group = batches.slice(i, i + embeddingConcurrency);
         const groupEmbeddings = await Promise.all(group.map((batch) => embedTexts(batch)));
         group.forEach((batch, g) => {
-          const baseChunkIndex = (i + g) * EMBEDDING_BATCH_SIZE;
+          const baseChunkIndex = (i + g) * embeddingBatchSize;
           batch.forEach((chunk, j) =>
             embeddedChunks.push({
               caseDocumentId: documentId,
@@ -89,8 +95,9 @@ export default class DocumentExtractionSvc {
         });
         logger.info("Document extraction: embedding progress", {
           documentId,
-          completedBatches: Math.min(i + EMBEDDING_CONCURRENCY, batches.length),
+          completedBatches: Math.min(i + embeddingConcurrency, batches.length),
           totalBatches: batches.length,
+          tier: profile.tier,
         });
       }
 
@@ -101,7 +108,7 @@ export default class DocumentExtractionSvc {
           await DocumentChunkRepo.deleteByDocument(documentId, tx);
           await DocumentChunkRepo.insertMany(embeddedChunks, tx);
         },
-        { timeout: 120_000 },
+        { timeout: Math.min(600_000, Math.max(120_000, chunks.length * 40)) },
       );
 
       const { chunkCount, embeddedCount } = await DocumentChunkRepo.verify(documentId);
@@ -119,18 +126,9 @@ export default class DocumentExtractionSvc {
       await DocumentRepo.updateRagStatus(documentId, "READY");
       logger.info("Document extraction: ready", { documentId, name: doc.name, chunks: embeddedChunks.length });
 
-      const caseId = doc.caseId;
-      if (caseId) {
-        const EvidenceIntelligenceSvc = (await import("./evidence-intelligence.service")).default;
-        const CaseStrategySvc = (await import("./case-strategy.service")).default;
-        void EvidenceIntelligenceSvc.scanContradictions(caseId)
-          .catch((err) => {
-            logger.warn("Post-extraction contradiction scan failed", { err, caseId });
-          })
-          .then(() => CaseStrategySvc.generateFromDocuments(caseId))
-          .catch((err) => {
-            logger.warn("Post-extraction case strategy failed", { err, caseId });
-          });
+      if (doc.caseId) {
+        const { scheduleCasePostExtraction } = await import("../queues/case-post-extraction");
+        scheduleCasePostExtraction(doc.caseId);
       }
     } catch (err) {
       logger.error("Document extraction failed", { err, documentId });
