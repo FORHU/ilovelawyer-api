@@ -76,4 +76,7 @@ router.get("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.getReconstru
 router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.generateReconstruction));
 router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));
 
+router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
+router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));
+
 export default router;

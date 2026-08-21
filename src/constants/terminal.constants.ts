@@ -110,10 +110,10 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
   {
     id: "redTeam",
     label: "Red Team",
-    phase: "P1",
+    phase: "P3",
     defaultHidden: true,
     minSku: "SOLO",
-    description: "Reserved until SCL lands — hidden by default",
+    description: "Adversarial threat assessment — opposing counsel's likely attacks on this case, generated on demand",
   },
   {
     id: "procedure",

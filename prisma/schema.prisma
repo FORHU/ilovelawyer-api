@@ -232,10 +232,11 @@ model Case {
   procedureItems ProcedureItem[]
   accesses       CaseAccess[]
   auditEvents    AuditEvent[]
-  findings       CaseFinding[]
-  witnesses      Witness[]
-  damageClaims   DamageClaim[]
-  reconstruction CaseReconstruction?
+  findings          CaseFinding[]
+  witnesses         Witness[]
+  damageClaims      DamageClaim[]
+  reconstruction    CaseReconstruction?
+  redTeamAssessment RedTeamAssessment?
 
   @@index([userId])
   @@index([organizationId])
@@ -739,6 +740,21 @@ model CaseReconstruction {
   id        String   @id @default(uuid())
   caseId    String   @unique
   narrative String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+// The "Red Team" panel — an adversarial threat assessment generated from the case's own
+// structured findings (Legal Issues, Weaknesses, Contradictions, Witnesses, Damages), not
+// from raw document text. One assessment per case, regenerated in place. No manual edit,
+// unlike CaseReconstruction — this is meant to be read as opposing counsel's own commentary,
+// not something the lawyer rewrites in their own voice.
+model RedTeamAssessment {
+  id        String   @id @default(uuid())
+  caseId    String   @unique
+  content   String   @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -1,7 +1,7 @@
 import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
-import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
+import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { buildCaseReconstructionPrompt } from "../constants/case-reconstruction.constants";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import HttpError from "../utils/http-error";
@@ -44,22 +44,22 @@ Use only these excerpts and the attached case documents.
 ${pack.text || "(no indexed text)"}
 `;
 
+    // A single blocking REST call (callChatWonderRest) waits for the entire response before
+    // returning — a multi-paragraph narrative can take long enough to generate that
+    // Cloudflare's edge proxy (in front of Chat Wonder) times the connection out (524) before
+    // it finishes, independent of any timeout set in this app's own HTTP client. The
+    // streaming WS path avoids that — same fix as RedTeamSvc.generate.
+    const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
     let sessionId = await getChatWonderSessionId();
-    let payload: { response?: string; intermediate_response?: string };
+    let result: { content: string };
     try {
-      payload = await callChatWonderRest(prompt, sessionId, {
-        caseDocumentIds: ready.map((d) => d.id),
-        caseDocumentChunkIds: pack.chunkIds,
-      });
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding);
     } catch {
       sessionId = await getChatWonderSessionId();
-      payload = await callChatWonderRest(prompt, sessionId, {
-        caseDocumentIds: ready.map((d) => d.id),
-        caseDocumentChunkIds: pack.chunkIds,
-      });
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding);
     }
 
-    const narrative = cleanNarrative(String(payload.response || payload.intermediate_response || ""));
+    const narrative = cleanNarrative(result.content);
     logger.info("Chat Wonder case reconstruction reply", { caseId, readyCount: ready.length, narrativeChars: narrative.length });
     if (!narrative) throw new HttpError("Chat Wonder returned no reconstruction text", 502);
 

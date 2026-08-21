@@ -12,6 +12,7 @@ import CaseFindingSvc from "../services/case-finding.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
+import RedTeamSvc from "../services/red-team.service";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
 
@@ -373,6 +374,16 @@ export default class CaseTerminalCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseReconstructionSvc.update(req.params.caseId, req.user.userId, value.narrative);
+    return res.status(200).json(result);
+  }
+
+  static async getRedTeam(req: Request, res: Response) {
+    const result = await RedTeamSvc.get(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async generateRedTeam(req: Request, res: Response) {
+    const result = await RedTeamSvc.generate(req.params.caseId, req.user.userId);
     return res.status(200).json(result);
   }
 }
