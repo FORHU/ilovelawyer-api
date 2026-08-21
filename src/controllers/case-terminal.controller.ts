@@ -8,11 +8,18 @@ import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CitationCheckSvc from "../services/citation-check.service";
 import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
 import OrganizationSvc from "../services/organization.service";
+import CaseFindingSvc from "../services/case-finding.service";
+import WitnessSvc from "../services/witness.service";
+import DamageClaimSvc from "../services/damage-claim.service";
+import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import HttpError from "../utils/http-error";
+import { FindingCategory } from "@prisma/client";
 
 const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
 const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
+const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
+const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
 
 export default class CaseTerminalCtrl {
   static async snapshot(req: Request, res: Response) {
@@ -243,5 +250,129 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await OrganizationSvc.grantAccess(req.params.caseId, req.user.userId, value.userId, value.permission);
     return res.status(201).json(result);
+  }
+
+  static async listFindings(req: Request, res: Response) {
+    const schema = Joi.object({ category: Joi.string().valid(...FINDING_CATEGORIES).optional() });
+    const { error, value } = schema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseFindingSvc.list(req.params.caseId, req.user.userId, value.category as FindingCategory | undefined);
+    return res.status(200).json(result);
+  }
+
+  static async createFinding(req: Request, res: Response) {
+    const schema = Joi.object({
+      category: Joi.string().valid(...FINDING_CATEGORIES).required(),
+      label: Joi.string().required(),
+      notes: Joi.string().allow("").optional(),
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseFindingSvc.create(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async updateFinding(req: Request, res: Response) {
+    const schema = Joi.object({
+      label: Joi.string().optional(),
+      notes: Joi.string().allow("").optional(),
+    }).min(1);
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseFindingSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteFinding(req: Request, res: Response) {
+    await CaseFindingSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async listWitnesses(req: Request, res: Response) {
+    const result = await WitnessSvc.list(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async createWitness(req: Request, res: Response) {
+    const schema = Joi.object({
+      name: Joi.string().required(),
+      role: Joi.string().allow("").optional(),
+      contact: Joi.string().allow("").optional(),
+      notes: Joi.string().allow("").optional(),
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await WitnessSvc.create(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async updateWitness(req: Request, res: Response) {
+    const schema = Joi.object({
+      name: Joi.string().optional(),
+      role: Joi.string().allow("").optional(),
+      contact: Joi.string().allow("").optional(),
+      notes: Joi.string().allow("").optional(),
+    }).min(1);
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await WitnessSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteWitness(req: Request, res: Response) {
+    await WitnessSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async listDamages(req: Request, res: Response) {
+    const result = await DamageClaimSvc.list(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async createDamage(req: Request, res: Response) {
+    const schema = Joi.object({
+      category: Joi.string().valid(...DAMAGE_CATEGORIES).required(),
+      description: Joi.string().allow("").optional(),
+      amount: Joi.number().min(0).optional().allow(null),
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await DamageClaimSvc.create(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async updateDamage(req: Request, res: Response) {
+    const schema = Joi.object({
+      category: Joi.string().valid(...DAMAGE_CATEGORIES).optional(),
+      description: Joi.string().allow("").optional(),
+      amount: Joi.number().min(0).optional().allow(null),
+    }).min(1);
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await DamageClaimSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteDamage(req: Request, res: Response) {
+    await DamageClaimSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async getReconstruction(req: Request, res: Response) {
+    const result = await CaseReconstructionSvc.get(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async generateReconstruction(req: Request, res: Response) {
+    const result = await CaseReconstructionSvc.generate(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async updateReconstruction(req: Request, res: Response) {
+    const schema = Joi.object({ narrative: Joi.string().required() });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseReconstructionSvc.update(req.params.caseId, req.user.userId, value.narrative);
+    return res.status(200).json(result);
   }
 }

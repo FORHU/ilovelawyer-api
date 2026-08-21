@@ -237,6 +237,10 @@ model Case {
   procedureItems ProcedureItem[]
   accesses       CaseAccess[]
   auditEvents    AuditEvent[]
+  findings       CaseFinding[]
+  witnesses      Witness[]
+  damageClaims   DamageClaim[]
+  reconstruction CaseReconstruction?
 
   @@index([userId])
   @@index([organizationId])
@@ -684,6 +688,87 @@ model ProcedureItem {
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+}
+
+// ── Case Findings, Witnesses, Damages, Reconstruction ──────────────────────────
+
+enum FindingCategory {
+  LEGAL_ISSUE
+  WEAKNESS
+  STRENGTH
+  ATTACK_STRATEGY
+  DEFENSE_STRATEGY
+}
+
+// A short strategic-assessment entry, categorized by FindingCategory. Backs five Terminal
+// panels (Legal Issues / Weaknesses / Strengths / Attack Strategies / Defense Strategies)
+// from one table, mirroring how ProcedureItem.kind already distinguishes STRATEGY vs TODO.
+// `notes === AI_FINDING_NOTE` ("AI") marks AI-authored rows — same discriminator convention
+// as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
+// manually-created rows (different/no notes) are left alone.
+model CaseFinding {
+  id        String           @id @default(uuid())
+  caseId    String
+  category  FindingCategory
+  label     String
+  notes     String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([caseId, category])
+}
+
+model Witness {
+  id        String   @id @default(uuid())
+  caseId    String
+  name      String
+  role      String?
+  contact   String?
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+enum DamageCategory {
+  ACTUAL
+  MORAL
+  EXEMPLARY
+  ATTORNEYS_FEES
+  OTHER
+}
+
+model DamageClaim {
+  id          String         @id @default(uuid())
+  caseId      String
+  category    DamageCategory
+  description String?        @db.Text
+  amount      Float?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+// One narrative per Case (not a list, unlike CaseFinding) — regenerated in place by AI on
+// demand (a dedicated action, not bundled into the general Refresh, since long-form
+// generation is a heavier/slower single call) and editable afterward by the lawyer.
+model CaseReconstruction {
+  id        String   @id @default(uuid())
+  caseId    String   @unique
+  narrative String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 }
 
 model Organization {
