@@ -26,7 +26,7 @@ describe("Legal Terminal — workspace catalog", () => {
     expect(layout.panels.find((p) => p.id === "teamAudit")).to.equal(undefined);
   });
 
-  it("forces redTeam hidden even if the client sends visible true", () => {
+  it("lets redTeam be shown when the client requests it (unlike the permanently-folded dates panel)", () => {
     const layout = normalizeLayout(
       {
         preset: "PANE_4",
@@ -34,7 +34,18 @@ describe("Legal Terminal — workspace catalog", () => {
       },
       "SOLO",
     );
-    expect(layout.panels.find((p) => p.id === "redTeam")?.visible).to.equal(false);
+    expect(layout.panels.find((p) => p.id === "redTeam")?.visible).to.equal(true);
+  });
+
+  it("still forces dates hidden even if the client sends visible true", () => {
+    const layout = normalizeLayout(
+      {
+        preset: "PANE_4",
+        panels: [{ id: "dates", visible: true, order: 0, width: 1, height: 1 }],
+      },
+      "SOLO",
+    );
+    expect(layout.panels.find((p) => p.id === "dates")?.visible).to.equal(false);
     expect(layout.panels.some((p) => p.visible)).to.equal(true);
   });
 

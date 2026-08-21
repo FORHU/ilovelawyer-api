@@ -10,6 +10,7 @@ import CaseFindingRepo from "../repositories/case-finding.repository";
 import WitnessRepo from "../repositories/witness.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
+import RedTeamRepo from "../repositories/red-team.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 
@@ -33,6 +34,7 @@ export default class CaseSnapshotSvc {
       witnesses,
       damages,
       reconstruction,
+      redTeamAssessment,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -49,6 +51,7 @@ export default class CaseSnapshotSvc {
       WitnessRepo.list(caseId),
       DamageClaimRepo.list(caseId),
       CaseReconstructionRepo.get(caseId),
+      RedTeamRepo.get(caseId),
     ]);
 
     const now = new Date();
@@ -92,6 +95,7 @@ export default class CaseSnapshotSvc {
       witnesses,
       damages,
       reconstruction,
+      redTeamAssessment,
       riskAnalysis: scoreCaseRisks({
         risks,
         contradictions,
