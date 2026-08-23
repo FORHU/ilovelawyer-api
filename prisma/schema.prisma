@@ -87,6 +87,7 @@ model File {
   users          User[]
   transcriptions Transcription[]
   caseDocuments  Document[]
+  caseReconstructions CaseReconstruction[]
 }
 
 enum Role {
@@ -737,13 +738,27 @@ model DamageClaim {
 // demand (a dedicated action, not bundled into the general Refresh, since long-form
 // generation is a heavier/slower single call) and editable afterward by the lawyer.
 model CaseReconstruction {
-  id        String   @id @default(uuid())
-  caseId    String   @unique
-  narrative String   @db.Text
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String    @id @default(uuid())
+  caseId            String    @unique
+  narrative         String    @db.Text
+  // "For the court" and "from the other side" registers (PDF's Narrative Engine window) —
+  // nullable since a reconstruction generated before this field existed has narrative only.
+  narrativeCourt    String?   @db.Text
+  narrativeOpposing String?   @db.Text
+  // Qualitative "what this doesn't explain" list — deliberately not a coverage percentage,
+  // which isn't honestly groundable given the prompt only sees a sampled excerpt pack.
+  gaps              String[]  @default([])
+  // Audio narration (General/narrative register only) — async AWS Polly job, same
+  // start-job/poll-status shape as Transcription's AWS Transcribe integration.
+  audioFileId       String?
+  audioJobName      String?
+  audioStatus       String?
+  audioStaleAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case      Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  audioFile File? @relation(fields: [audioFileId], references: [id])
 }
 
 // The "Red Team" panel — an adversarial threat assessment generated from the case's own
