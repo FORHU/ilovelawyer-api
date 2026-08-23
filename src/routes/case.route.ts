@@ -76,6 +76,8 @@ router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage
 router.get("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.getReconstruction));
 router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.generateReconstruction));
 router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));
+router.post("/:caseId/reconstruction/audio", asyncHandler(CaseTerminalCtrl.generateReconstructionAudio));
+router.get("/:caseId/reconstruction/audio/poll", asyncHandler(CaseTerminalCtrl.pollReconstructionAudio));
 
 router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
 router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));

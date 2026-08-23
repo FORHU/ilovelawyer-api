@@ -12,6 +12,7 @@ import CaseFindingSvc from "../services/case-finding.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
+import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import RedTeamSvc from "../services/red-team.service";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
@@ -370,10 +371,24 @@ export default class CaseTerminalCtrl {
   }
 
   static async updateReconstruction(req: Request, res: Response) {
-    const schema = Joi.object({ narrative: Joi.string().required() });
+    const schema = Joi.object({
+      narrative: Joi.string().optional(),
+      narrativeCourt: Joi.string().allow("").optional(),
+      narrativeOpposing: Joi.string().allow("").optional(),
+    }).min(1);
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
-    const result = await CaseReconstructionSvc.update(req.params.caseId, req.user.userId, value.narrative);
+    const result = await CaseReconstructionSvc.update(req.params.caseId, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async generateReconstructionAudio(req: Request, res: Response) {
+    const result = await CaseReconstructionAudioSvc.startAudioJob(req.params.caseId, req.user.userId);
+    return res.status(202).json(result);
+  }
+
+  static async pollReconstructionAudio(req: Request, res: Response) {
+    const result = await CaseReconstructionAudioSvc.pollAudioJob(req.params.caseId, req.user.userId);
     return res.status(200).json(result);
   }
 
