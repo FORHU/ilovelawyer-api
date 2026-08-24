@@ -161,6 +161,7 @@ export default class DocumentChunkSvc {
   static async formatGroundingContext(
     grounding: { caseDocumentIds: string[]; caseDocumentChunkIds?: string[] },
     charCap = 12_000,
+    scope?: { caseId?: string; consultationId?: string },
   ): Promise<string> {
     if (!grounding.caseDocumentIds.length) return "";
 
@@ -173,14 +174,27 @@ export default class DocumentChunkSvc {
     const rows = await DocumentChunkRepo.findTextsByIds(chunkIds);
     if (!rows.length) return "";
 
+    const allowedDocIds = new Set(grounding.caseDocumentIds);
     const docs = await prisma.document.findMany({
-      where: { id: { in: [...new Set(rows.map((r) => r.caseDocumentId))] } },
+      where: {
+        id: { in: [...allowedDocIds] },
+        ...(scope?.caseId || scope?.consultationId
+          ? {
+              OR: [
+                ...(scope.caseId ? [{ caseId: scope.caseId }] : []),
+                ...(scope.consultationId ? [{ consultationId: scope.consultationId }] : []),
+              ],
+            }
+          : {}),
+      },
       select: { id: true, name: true },
     });
     const nameById = new Map(docs.map((d) => [d.id, d.name]));
+    const scopedDocIds = new Set(docs.map((d) => d.id));
 
     const byDoc = new Map<string, string[]>();
     for (const row of rows) {
+      if (!scopedDocIds.has(row.caseDocumentId) || !allowedDocIds.has(row.caseDocumentId)) continue;
       const list = byDoc.get(row.caseDocumentId) ?? [];
       list.push(row.chunkText);
       byDoc.set(row.caseDocumentId, list);
