@@ -4,8 +4,8 @@ import { createRedisWorkerClient, isRedisReady, redisClient, RedisWorkerClient }
 import logger from "../utils/logger";
 
 const WAIT_KEY = "document-extraction:wait";
-/** One doc at a time: parallel PDFs OOM a small EC2 and blow the OpenAI 5M TPM cap. */
-const CONCURRENCY = 1;
+/** Cap concurrent PDF parse + OpenAI embed jobs so a 1500-file confirm cannot OOM the process. */
+const CONCURRENCY = 3;
 const BRPOP_SECONDS = 2;
 
 function sleep(ms: number) {
@@ -31,7 +31,7 @@ export default class DocumentExtractionQueue {
     const ids = documentIds.filter(Boolean);
     if (ids.length === 0) return;
 
-    if (this.blocker?.isReady && isRedisReady()) {
+    if (isRedisReady()) {
       void redisClient.lPush(WAIT_KEY, ids).catch((err) => {
         logger.error("Failed to enqueue document extraction jobs", { err, count: ids.length });
         this.memoryWait.push(...ids);
@@ -64,7 +64,7 @@ export default class DocumentExtractionQueue {
       return [] as { id: string }[];
     });
     if (pending.length > 0) {
-      logger.info("Document extraction queue: re-queuing documents for extraction", { count: pending.length });
+      logger.info("Document extraction queue: re-queuing PENDING documents", { count: pending.length });
       this.enqueueMany(pending.map((doc) => doc.id));
     }
 

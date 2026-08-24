@@ -2,7 +2,7 @@ import axios from "axios";
 import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
-import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
+import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, MINDMAP_RULE } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
 import { parseStructuredDataPayload, MindMapItem, TimelineItem } from "./response-parser";
@@ -177,6 +177,10 @@ export function streamChatWonderMessage(
   onChunk: (text: string) => void,
   documentContext?: string,
   grounding?: CaseDocumentGrounding | string,
+  /** Mind Map is case-only (ilovelawyer-app/CONTEXT.md) — MINDMAP_RULE is only appended to
+   * user_input when this is set, so chat-wonder is never told the tag format for a general
+   * (no-Case) Consultation. */
+  caseId?: string,
 ): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
@@ -247,7 +251,7 @@ export function streamChatWonderMessage(
             case_document_chunk_ids?: string[];
           } = {
             type: "chat",
-            user_input: withLegalTag(userInput),
+            user_input: withLegalTag(userInput) + (caseId ? MINDMAP_RULE : ""),
             session_id: sessionId,
             use_full_legal_chain: false,
           };
