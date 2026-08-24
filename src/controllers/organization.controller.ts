@@ -74,6 +74,21 @@ export default class OrganizationCtrl {
     return res.status(201).json(result);
   }
 
+  static async getMyInvite(req: Request, res: Response) {
+    const result = await OrganizationSvc.getPendingInviteForUser(req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async acceptInvite(req: Request, res: Response) {
+    const result = await OrganizationSvc.acceptInvite(req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async declineInvite(req: Request, res: Response) {
+    await OrganizationSvc.declineInvite(req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
   static async changeMemberRole(req: Request, res: Response) {
     const schema = Joi.object({ role: roleSchema.required() });
 
@@ -85,7 +100,7 @@ export default class OrganizationCtrl {
   }
 
   static async removeMember(req: Request, res: Response) {
-    await OrganizationSvc.removeMember(req.params.id, req.params.userId);
+    await OrganizationSvc.removeMember(req.params.id, req.organization!.role, req.user.userId, req.params.userId);
     return res.status(204).send();
   }
 

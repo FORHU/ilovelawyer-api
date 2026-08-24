@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { CasePermission } from "@prisma/client";
+import { CasePermission, OrganizationMemberStatus } from "@prisma/client";
 
 export default class OrganizationRepo {
   /** Creates the org and its first membership (creator as OWNER) atomically. */
@@ -22,12 +22,13 @@ export default class OrganizationRepo {
     return prisma.organization.findUnique({ where: { id } });
   }
 
-  /** Orgs the given user belongs to, with their role in each. */
+  /** Orgs the given user is an ACCEPTED member of, with their role in each. A PENDING
+   * invite doesn't count as belonging yet — see OrganizationMemberRepo.findPendingForUser. */
   static async listForUser(userId: string) {
     return prisma.organization.findMany({
-      where: { members: { some: { userId } } },
+      where: { members: { some: { userId, status: OrganizationMemberStatus.ACCEPTED } } },
       orderBy: { createdAt: "asc" },
-      include: { members: { where: { userId }, select: { role: true } } },
+      include: { members: { where: { userId, status: OrganizationMemberStatus.ACCEPTED }, select: { role: true } } },
     });
   }
 

@@ -62,6 +62,10 @@ model User {
   caseAccesses            CaseAccess[]
   integrationConnectors   IntegrationConnector[]
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
+  tenantId                String?
+  tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
 }
 
 model Session {
@@ -504,6 +508,11 @@ enum RiskStatus {
   ACCEPTED
 }
 
+enum OrganizationMemberStatus {
+  PENDING
+  ACCEPTED
+}
+
 enum CasePermission {
   VIEW
   EDIT
@@ -820,20 +829,37 @@ model Organization {
   events         Event[]
   transcriptions Transcription[]
   connectors     IntegrationConnector[]
+  tenantId       String?
+  tenant         Tenant?                @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([createdById])
+  @@index([tenantId])
+}
+
+model Tenant {
+  id            String         @id @default(uuid())
+  code          String         @unique
+  name          String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  users         User[]
+  organizations Organization[]
 }
 
 // userId is globally unique — a user belongs to at most one Organization (see
 // OrganizationMemberRepo's find()/findAnyForUser() comment; multi-org membership
 // isn't supported yet).
 model OrganizationMember {
-  id             String           @id @default(uuid())
+  id             String                   @id @default(uuid())
   organizationId String
-  userId         String           @unique
-  role           OrganizationRole @default(OWNER)
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  userId         String                   @unique
+  role           OrganizationRole         @default(OWNER)
+  // Invited members start PENDING until they accept; the owner created alongside a new
+  // organization (see OrganizationRepo.create) is never invited, so it defaults straight
+  // to ACCEPTED.
+  status         OrganizationMemberStatus @default(ACCEPTED)
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)

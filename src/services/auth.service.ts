@@ -2,13 +2,11 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../repositories/auth.repository";
-import OrganizationRepo from "../repositories/organization.repository";
 import loginToken from "../utils/loginToken";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
-import { slugify } from "../utils/slug";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
 import {
   BCRYPT_SALT_ROUNDS,
@@ -27,7 +25,7 @@ function generateOtpCode(): string {
 }
 
 export default class AuthSvc {
-  static async signup(username: string, email: string, password: string, name: string, orgName: string) {
+  static async signup(username: string, email: string, password: string, name: string) {
     const existingUser = await AuthRepo.findByEmail(email);
     if (existingUser) {
       throw new HttpError("Email already in use", 409);
@@ -39,19 +37,8 @@ export default class AuthSvc {
     }
 
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-    const slug = await AuthSvc.generateUniqueSlug(orgName);
 
-    return AuthRepo.createUserWithOrganization({ username, email, password: hashedPassword, name, orgName, slug });
-  }
-
-  /** Resolves slug collisions the same way createGoogleUser resolves username collisions. */
-  private static async generateUniqueSlug(orgName: string): Promise<string> {
-    const base = slugify(orgName);
-    let slug = base;
-    while (await OrganizationRepo.findBySlug(slug)) {
-      slug = `${base}-${Math.floor(1000 + Math.random() * 9000)}`;
-    }
-    return slug;
+    return AuthRepo.createUser({ username, email, password: hashedPassword, name });
   }
 
   static async login(email: string, password: string, remember = false) {

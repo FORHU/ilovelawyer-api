@@ -12,7 +12,7 @@ export default class CaseAccess {
         OR: [
           { userId },
           { accesses: { some: { userId } } },
-          { organization: { members: { some: { userId } } } },
+          { organization: { members: { some: { userId, status: "ACCEPTED" } } } },
         ],
       },
       include: { parties: true },
@@ -28,7 +28,7 @@ export default class CaseAccess {
         OR: [
           { userId },
           { accesses: { some: { userId, permission: { in: EDIT_PERMS } } } },
-          { organization: { members: { some: { userId, role: { in: ["OWNER", "ADMIN"] } } } } },
+          { organization: { members: { some: { userId, status: "ACCEPTED", role: { in: ["OWNER", "ADMIN"] } } } } },
         ],
       },
       select: { id: true, userId: true },

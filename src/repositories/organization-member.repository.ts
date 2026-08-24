@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { OrganizationRole } from "@prisma/client";
+import { OrganizationRole, OrganizationMemberStatus } from "@prisma/client";
 
 export default class OrganizationMemberRepo {
   static async list(organizationId: string) {
@@ -11,7 +11,9 @@ export default class OrganizationMemberRepo {
   }
 
   /** userId is globally unique (a user belongs to at most one org), so this also verifies
-   * the membership found actually belongs to the given organizationId. */
+   * the membership found actually belongs to the given organizationId. Returns a membership
+   * regardless of status (PENDING or ACCEPTED) — callers that need to gate on acceptance
+   * (e.g. requireMembership) must check `.status` themselves. */
   static async find(organizationId: string, userId: string) {
     const membership = await prisma.organizationMember.findUnique({ where: { userId } });
     return membership && membership.organizationId === organizationId ? membership : null;
@@ -25,13 +27,28 @@ export default class OrganizationMemberRepo {
     return prisma.organizationMember.findUnique({ where: { userId } });
   }
 
+  /** The caller's own pending invite, if any — used by the accept/decline endpoints, which
+   * aren't scoped to an already-known organizationId. */
+  static async findPendingForUser(userId: string) {
+    const membership = await prisma.organizationMember.findUnique({
+      where: { userId },
+      include: { organization: true },
+    });
+    return membership && membership.status === OrganizationMemberStatus.PENDING ? membership : null;
+  }
+
   static async countByRole(organizationId: string, role: OrganizationRole) {
     return prisma.organizationMember.count({ where: { organizationId, role } });
   }
 
-  static async add(organizationId: string, userId: string, role: OrganizationRole) {
+  static async add(
+    organizationId: string,
+    userId: string,
+    role: OrganizationRole,
+    status: OrganizationMemberStatus = OrganizationMemberStatus.ACCEPTED,
+  ) {
     return prisma.organizationMember.create({
-      data: { organizationId, userId, role },
+      data: { organizationId, userId, role, status },
       include: { user: { select: { id: true, name: true, email: true, username: true } } },
     });
   }
@@ -40,6 +57,13 @@ export default class OrganizationMemberRepo {
     return prisma.organizationMember.update({
       where: { userId },
       data: { role },
+    });
+  }
+
+  static async updateStatus(userId: string, status: OrganizationMemberStatus) {
+    return prisma.organizationMember.update({
+      where: { userId },
+      data: { status },
     });
   }
 

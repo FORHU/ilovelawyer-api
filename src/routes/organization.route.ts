@@ -13,6 +13,12 @@ router.use(validSession);
 router.post("/", asyncHandler(OrganizationCtrl.create));
 router.get("/", asyncHandler(OrganizationCtrl.list));
 
+// The caller's own pending invite. Deliberately not gated by resolveOrganizationFromParam
+// (which requires an already-ACCEPTED membership) — a pending invitee has none yet.
+router.get("/invites/me", asyncHandler(OrganizationCtrl.getMyInvite));
+router.post("/invites/:id/accept", asyncHandler(OrganizationCtrl.acceptInvite));
+router.post("/invites/:id/decline", asyncHandler(OrganizationCtrl.declineInvite));
+
 // Everything below acts on a specific org named in the URL, so membership is
 // resolved from :id (not the X-Organization-Id header used by resource routes).
 router.get("/:id", asyncHandler(resolveOrganizationFromParam()), asyncHandler(OrganizationCtrl.getById));
@@ -51,9 +57,9 @@ router.delete(
   asyncHandler(OrganizationCtrl.removeMember),
 );
 
-// Case-attachment isn't gated by org role — OrganizationSvc.attachCase itself checks
-// edit access to the case being attached (see CaseAccess.assertCanEdit), not org
-// membership, so no resolveOrganizationFromParam/requireOrgRole here.
-router.post("/:id/cases", asyncHandler(OrganizationCtrl.attachCase));
+// Case-attachment requires the caller to be a member of the target org (not a
+// specific role — OrganizationSvc.attachCase itself checks edit access on the case
+// being attached, see CaseAccess.assertCanEdit), so no requireOrgRole here.
+router.post("/:id/cases", asyncHandler(resolveOrganizationFromParam()), asyncHandler(OrganizationCtrl.attachCase));
 
 export default router;

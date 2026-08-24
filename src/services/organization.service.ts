@@ -1,4 +1,4 @@
-import { CasePermission, OrganizationRole } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus } from "@prisma/client";
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import AuthRepo from "../repositories/auth.repository";
@@ -17,10 +17,13 @@ export default class OrganizationSvc {
     return OrganizationRepo.createWithOwner(userId, data);
   }
 
+  /** Orgs the given user is an ACCEPTED member of, with their role in each. A PENDING
+   * invite doesn't count as belonging yet — see OrganizationMemberRepo.findPendingForUser. */
   static async listForUser(userId: string) {
     const orgs = await OrganizationRepo.listForUser(userId);
-    // Each org was fetched with `members` pre-filtered to this user (see repo), so it's
-    // always exactly one row — flatten it into a plain `role` field for the response.
+    // Each org was fetched with `members` pre-filtered to this user and ACCEPTED status
+    // (see repo), so it's always exactly one row — flatten it into a plain `role` field.
+    // A PENDING invite deliberately doesn't show up here; see getPendingInviteForUser.
     return orgs.map(({ members, ...org }) => ({ ...org, role: members[0]?.role }));
   }
 
@@ -42,14 +45,19 @@ export default class OrganizationSvc {
     return OrganizationMemberRepo.list(organizationId);
   }
 
-  /** Resolves the caller's membership/role in an org, or throws 403 if they're not a member. */
+  /** Resolves the caller's membership/role in an org, or throws 403 if they're not a member.
+   * A PENDING invite doesn't count — the invitee has no access until they accept it. */
   static async requireMembership(organizationId: string, userId: string) {
     const membership = await OrganizationMemberRepo.find(organizationId, userId);
     if (!membership) throw new HttpError("Not a member of this organization", 403);
+    if (membership.status === OrganizationMemberStatus.PENDING) {
+      throw new HttpError("Your invite to this organization is still pending", 403);
+    }
     return membership;
   }
 
-  /** Invites an existing user by email. Only an OWNER can grant the OWNER role. */
+  /** Invites an existing user by email. The invitee lands as PENDING until they accept —
+   * only an OWNER can grant the OWNER role. */
   static async inviteMember(
     organizationId: string,
     actingRole: OrganizationRole,
@@ -65,17 +73,23 @@ export default class OrganizationSvc {
     if (!user) throw new HttpError("No user found with this email", 404);
 
     const existing = await OrganizationMemberRepo.find(organizationId, user.id);
-    if (existing) throw new HttpError("User is already a member of this organization", 409);
+    if (existing) {
+      const message =
+        existing.status === OrganizationMemberStatus.PENDING
+          ? "User already has a pending invite to this organization"
+          : "User is already a member of this organization";
+      throw new HttpError(message, 409);
+    }
 
     const elsewhere = await OrganizationMemberRepo.findAnyForUser(user.id);
     if (elsewhere) {
       throw new HttpError(
-        "This user already belongs to another organization. They must leave it before joining a new one.",
+        "This user already belongs to (or has a pending invite from) another organization. They must leave/decline it before joining a new one.",
         409,
       );
     }
 
-    const member = await OrganizationMemberRepo.add(organizationId, user.id, role);
+    const member = await OrganizationMemberRepo.add(organizationId, user.id, role, OrganizationMemberStatus.PENDING);
 
     const [organization, inviter] = await Promise.all([
       OrganizationRepo.findById(organizationId),
@@ -87,9 +101,30 @@ export default class OrganizationSvc {
       role,
       loginLink: `${CLIENT_URL[0]}/login`,
     });
-    await sendEmail({ to: email, subject: `You've been added to ${organization?.name}`, html });
+    await sendEmail({ to: email, subject: `You've been invited to join ${organization?.name}`, html });
 
     return member;
+  }
+
+  /** The caller's own pending invite, if any (a user can have at most one, org-wide). */
+  static async getPendingInviteForUser(userId: string) {
+    return OrganizationMemberRepo.findPendingForUser(userId);
+  }
+
+  static async acceptInvite(organizationId: string, userId: string) {
+    const membership = await OrganizationMemberRepo.find(organizationId, userId);
+    if (!membership || membership.status !== OrganizationMemberStatus.PENDING) {
+      throw new HttpError("No pending invite found for this organization", 404);
+    }
+    return OrganizationMemberRepo.updateStatus(userId, OrganizationMemberStatus.ACCEPTED);
+  }
+
+  static async declineInvite(organizationId: string, userId: string) {
+    const membership = await OrganizationMemberRepo.find(organizationId, userId);
+    if (!membership || membership.status !== OrganizationMemberStatus.PENDING) {
+      throw new HttpError("No pending invite found for this organization", 404);
+    }
+    await OrganizationMemberRepo.remove(organizationId, userId);
   }
 
   /** Changes a member's role. Guards against granting OWNER without being one, and against demoting the last OWNER. */
@@ -108,9 +143,19 @@ export default class OrganizationSvc {
     return OrganizationMemberRepo.updateRole(organizationId, targetUserId, role);
   }
 
-  static async removeMember(organizationId: string, targetUserId: string) {
+  /** Removes a member. Only an OWNER may remove an ADMIN or another OWNER (an ADMIN may
+   * only remove MANAGER/MEMBER); self-removal must go through leave() instead. */
+  static async removeMember(organizationId: string, actingRole: OrganizationRole, actingUserId: string, targetUserId: string) {
+    if (actingUserId === targetUserId) {
+      throw new HttpError("Use the leave organization action to remove yourself", 400);
+    }
+
     const target = await OrganizationMemberRepo.find(organizationId, targetUserId);
     if (!target) throw new HttpError("Member not found", 404);
+
+    if (hasOrgRole(target.role, OrganizationRole.ADMIN) && !hasOrgRole(actingRole, OrganizationRole.OWNER)) {
+      throw new HttpError("Only an owner can remove an admin or owner", 403);
+    }
 
     if (target.role === OrganizationRole.OWNER) {
       await this.assertNotLastOwner(organizationId);
