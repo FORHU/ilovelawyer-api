@@ -1,14 +1,15 @@
 import prisma from "../lib/prisma";
-import { CasePermission, OrgRole, PackageSku } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
 
 export default class OrganizationRepo {
+  /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically. */
   static async create(createdById: string, name: string, slug: string, packageSku: PackageSku = "PROFESSIONAL") {
     return prisma.$transaction(async (tx) => {
       const org = await tx.organization.create({
         data: { name, slug, packageSku, createdById },
       });
       await tx.organizationMember.create({
-        data: { organizationId: org.id, userId: createdById, role: "OWNER" },
+        data: { organizationId: org.id, userId: createdById, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },
       });
       return tx.organization.findUniqueOrThrow({
         where: { id: org.id },
@@ -25,11 +26,13 @@ export default class OrganizationRepo {
     return prisma.organization.findUnique({ where: { id } });
   }
 
+  /** Orgs the given user is an ACCEPTED member of, with their role in each. A PENDING
+   * invite doesn't count as belonging yet — see OrganizationMemberRepo.findPendingForUser. */
   static async listForUser(userId: string) {
     return prisma.organization.findMany({
-      where: { members: { some: { userId } } },
-      include: { members: true },
-      orderBy: { createdAt: "desc" },
+      where: { members: { some: { userId, status: OrganizationMemberStatus.ACCEPTED } } },
+      orderBy: { createdAt: "asc" },
+      include: { members: { where: { userId, status: OrganizationMemberStatus.ACCEPTED }, select: { role: true } } },
     });
   }
 
@@ -40,16 +43,8 @@ export default class OrganizationRepo {
     });
   }
 
-  static async addMember(organizationId: string, userId: string, role: OrgRole) {
-    return prisma.organizationMember.upsert({
-      where: { organizationId_userId: { organizationId, userId } },
-      create: { organizationId, userId, role },
-      update: { role },
-    });
-  }
-
-  static async removeMember(organizationId: string, userId: string) {
-    return prisma.organizationMember.deleteMany({ where: { organizationId, userId } });
+  static async update(id: string, data: { name?: string; slug?: string }) {
+    return prisma.organization.update({ where: { id }, data });
   }
 
   static async grantCaseAccess(caseId: string, userId: string, permission: CasePermission) {

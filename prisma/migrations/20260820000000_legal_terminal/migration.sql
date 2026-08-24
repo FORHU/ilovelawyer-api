@@ -1,3 +1,11 @@
+-- NOTE: This migration originally also created its own Organization/OrganizationMember
+-- tables (with an OrgRole enum) from before the org-multitenancy feature existed on
+-- `add_organizations` (20260817000000). That migration builds the real Organization/
+-- OrganizationMember design (slug, OrganizationRole enum, backfill) and already ran
+-- first, so the duplicate CREATE TYPE "OrgRole", CREATE TABLE "Organization" /
+-- "OrganizationMember", and the duplicate Case.organizationId column/index/FK have been
+-- removed from this file to avoid "already exists" failures.
+
 -- CreateEnum
 CREATE TYPE "PackageSku" AS ENUM ('SOLO', 'PROFESSIONAL', 'ENTERPRISE');
 
@@ -12,9 +20,6 @@ CREATE TYPE "RiskSeverity" AS ENUM ('FATAL', 'MAJOR', 'UNVERIFIED', 'MISSING_EVI
 
 -- CreateEnum
 CREATE TYPE "RiskStatus" AS ENUM ('OPEN', 'CONFIRMED', 'ACCEPTED');
-
--- CreateEnum
-CREATE TYPE "OrgRole" AS ENUM ('OWNER', 'PARTNER', 'ASSOCIATE', 'PARALEGAL', 'MEMBER');
 
 -- CreateEnum
 CREATE TYPE "CasePermission" AS ENUM ('VIEW', 'EDIT', 'ADMIN');
@@ -33,7 +38,6 @@ ALTER TABLE "User" ADD COLUMN "packageSku" "PackageSku" NOT NULL DEFAULT 'SOLO';
 ALTER TABLE "User" ADD COLUMN "preferredLanguage" TEXT NOT NULL DEFAULT 'en';
 
 -- AlterTable Case
-ALTER TABLE "Case" ADD COLUMN "organizationId" TEXT;
 ALTER TABLE "Case" ADD COLUMN "language" TEXT NOT NULL DEFAULT 'en';
 ALTER TABLE "Case" ADD COLUMN "lastRefreshedAt" TIMESTAMP(3);
 
@@ -196,28 +200,6 @@ CREATE TABLE "ProcedureItem" (
 );
 
 -- CreateTable
-CREATE TABLE "Organization" (
-    "id" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "packageSku" "PackageSku" NOT NULL DEFAULT 'PROFESSIONAL',
-    "createdById" TEXT NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "Organization_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "OrganizationMember" (
-    "organizationId" TEXT NOT NULL,
-    "userId" TEXT NOT NULL,
-    "role" "OrgRole" NOT NULL DEFAULT 'MEMBER',
-    "joinedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "OrganizationMember_pkey" PRIMARY KEY ("organizationId","userId")
-);
-
--- CreateTable
 CREATE TABLE "CaseAccess" (
     "id" TEXT NOT NULL,
     "caseId" TEXT NOT NULL,
@@ -282,8 +264,6 @@ CREATE INDEX "ProceduralDeadline_caseId_idx" ON "ProceduralDeadline"("caseId");
 CREATE UNIQUE INDEX "ProceduralDeadlineConfirmation_deadlineId_userId_key" ON "ProceduralDeadlineConfirmation"("deadlineId", "userId");
 CREATE INDEX "ProceduralDeadlineConfirmation_deadlineId_idx" ON "ProceduralDeadlineConfirmation"("deadlineId");
 CREATE INDEX "ProcedureItem_caseId_idx" ON "ProcedureItem"("caseId");
-CREATE INDEX "Organization_createdById_idx" ON "Organization"("createdById");
-CREATE INDEX "OrganizationMember_userId_idx" ON "OrganizationMember"("userId");
 CREATE UNIQUE INDEX "CaseAccess_caseId_userId_key" ON "CaseAccess"("caseId", "userId");
 CREATE INDEX "CaseAccess_userId_idx" ON "CaseAccess"("userId");
 CREATE INDEX "AuditEvent_caseId_idx" ON "AuditEvent"("caseId");
@@ -291,11 +271,9 @@ CREATE INDEX "AuditEvent_actorId_idx" ON "AuditEvent"("actorId");
 CREATE UNIQUE INDEX "JurisdictionModule_code_key" ON "JurisdictionModule"("code");
 CREATE INDEX "IntegrationConnector_userId_idx" ON "IntegrationConnector"("userId");
 CREATE INDEX "IntegrationConnector_organizationId_idx" ON "IntegrationConnector"("organizationId");
-CREATE INDEX "Case_organizationId_idx" ON "Case"("organizationId");
 CREATE INDEX "events_case_id_idx" ON "events"("case_id");
 
 -- AddForeignKey
-ALTER TABLE "Case" ADD CONSTRAINT "Case_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "events" ADD CONSTRAINT "events_case_id_fkey" FOREIGN KEY ("case_id") REFERENCES "Case"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "TerminalWorkspace" ADD CONSTRAINT "TerminalWorkspace_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "CaseTimelineEvent" ADD CONSTRAINT "CaseTimelineEvent_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "Case"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -308,9 +286,6 @@ ALTER TABLE "ProceduralDeadline" ADD CONSTRAINT "ProceduralDeadline_caseId_fkey"
 ALTER TABLE "ProceduralDeadlineConfirmation" ADD CONSTRAINT "ProceduralDeadlineConfirmation_deadlineId_fkey" FOREIGN KEY ("deadlineId") REFERENCES "ProceduralDeadline"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "ProceduralDeadlineConfirmation" ADD CONSTRAINT "ProceduralDeadlineConfirmation_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "ProcedureItem" ADD CONSTRAINT "ProcedureItem_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "Case"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "Organization" ADD CONSTRAINT "Organization_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "OrganizationMember" ADD CONSTRAINT "OrganizationMember_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "OrganizationMember" ADD CONSTRAINT "OrganizationMember_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "CaseAccess" ADD CONSTRAINT "CaseAccess_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "Case"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "CaseAccess" ADD CONSTRAINT "CaseAccess_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "AuditEvent" ADD CONSTRAINT "AuditEvent_caseId_fkey" FOREIGN KEY ("caseId") REFERENCES "Case"("id") ON DELETE SET NULL ON UPDATE CASCADE;

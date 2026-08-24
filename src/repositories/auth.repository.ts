@@ -1,30 +1,9 @@
 import prisma from "../lib/prisma";
-import { OrgRole } from "@prisma/client";
 
 export default class AuthRepo {
-  /** Creates the user and their first organization (as OWNER) atomically — used at signup. */
-  static async createUserWithOrganization(data: {
-    username: string;
-    email: string;
-    password: string;
-    name: string;
-    orgName: string;
-    slug: string;
-  }) {
-    return prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: { username: data.username, email: data.email, password: data.password, name: data.name },
-      });
-      const organization = await tx.organization.create({
-        data: {
-          name: data.orgName,
-          slug: data.slug,
-          createdById: user.id,
-          members: { create: { userId: user.id, role: OrgRole.OWNER } },
-        },
-        include: { members: true },
-      });
-      return { user, organization };
+  static async createUser(data: { username: string; email: string; password: string; name: string }) {
+    return prisma.user.create({
+      data: { username: data.username, email: data.email, password: data.password, name: data.name },
     });
   }
 

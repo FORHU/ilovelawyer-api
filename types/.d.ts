@@ -1,4 +1,4 @@
-import { OrgRole } from "@prisma/client";
+import { OrganizationRole } from "@prisma/client";
 
 declare global {
   namespace Express {
@@ -14,7 +14,7 @@ declare global {
       /** Set by resolve-organization.middleware from the X-Organization-Id header. */
       organization?: {
         id: string;
-        role: OrgRole;
+        role: OrganizationRole;
       };
     }
 

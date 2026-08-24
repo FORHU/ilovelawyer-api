@@ -78,5 +78,12 @@
     "prisma": "^5.20.0",
     "supertest": "^6.3.3",
     "ts-node": "^10.9.1"
+  },
+  "allowScripts": {
+    "@prisma/client@5.22.0": true,
+    "@prisma/engines@5.22.0": true,
+    "@scarf/scarf@1.4.0": true,
+    "bcrypt@5.1.1": true,
+    "prisma@5.22.0": true
   }
 }
