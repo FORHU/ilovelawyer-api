@@ -58,13 +58,17 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     const entry = PANEL_CATALOG.find((p) => p.id === row.id);
     if (!entry || !skuAllowsPanel(sku, entry.minSku)) continue;
     seen.add(row.id);
-    const visible = row.id === "redTeam" || row.id === "dates" ? false : Boolean(row.visible);
+    // "dates" is permanently folded into Evidence & Timeline (TerminalPanelBody renders it as
+    // null) — redTeam is a real, addable panel now, not force-hidden the way it used to be.
+    const visible = row.id === "dates" ? false : Boolean(row.visible);
     panels.push({
       id: row.id,
       visible,
       order: Number.isFinite(row.order) ? Number(row.order) : panels.length,
       width: clampRatio(row.width),
       height: clampRatio(row.height),
+      x: Number.isFinite(Number(row.x)) ? clampRatio(row.x) : undefined,
+      y: Number.isFinite(Number(row.y)) ? clampRatio(row.y) : undefined,
     });
   }
 

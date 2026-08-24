@@ -47,6 +47,15 @@ export async function getPresignedUploadUrl(key: string, contentType: string): P
   return getSignedUrl(client, command, { expiresIn: PRESIGN_EXPIRY_SECONDS });
 }
 
+const GET_PRESIGN_EXPIRY_SECONDS = 3600;
+
+/** The bucket has no public-read policy, so File.fileUrl (a bare S3 URL) 403s in a browser —
+ * this signs a short-lived GET on read instead. Local signature computation only, no AWS call. */
+export function getPresignedGetUrl(key: string, expiresIn: number = GET_PRESIGN_EXPIRY_SECONDS): Promise<string> {
+  const command = new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key });
+  return getSignedUrl(client, command, { expiresIn });
+}
+
 /** Downloads an object's full contents into memory — used by document extraction to read an
  * uploaded Case Document's bytes back out of S3 for text extraction. */
 export async function getObjectBuffer(key: string): Promise<Buffer> {

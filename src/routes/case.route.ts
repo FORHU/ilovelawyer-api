@@ -58,4 +58,28 @@ router.patch("/:caseId/procedure/items/:id", asyncHandler(CaseTerminalCtrl.updat
 router.get("/:caseId/team", asyncHandler(CaseTerminalCtrl.teamAudit));
 router.post("/:caseId/access", asyncHandler(CaseTerminalCtrl.grantAccess));
 
+router.get("/:caseId/findings", asyncHandler(CaseTerminalCtrl.listFindings));
+router.post("/:caseId/findings", asyncHandler(CaseTerminalCtrl.createFinding));
+router.patch("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.updateFinding));
+router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFinding));
+
+router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
+router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
+router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
+router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
+
+router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
+router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
+router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage));
+router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
+
+router.get("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.getReconstruction));
+router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.generateReconstruction));
+router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));
+router.post("/:caseId/reconstruction/audio", asyncHandler(CaseTerminalCtrl.generateReconstructionAudio));
+router.get("/:caseId/reconstruction/audio/poll", asyncHandler(CaseTerminalCtrl.pollReconstructionAudio));
+
+router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
+router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));
+
 export default router;

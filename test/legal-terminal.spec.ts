@@ -26,7 +26,7 @@ describe("Legal Terminal — workspace catalog", () => {
     expect(layout.panels.find((p) => p.id === "teamAudit")).to.equal(undefined);
   });
 
-  it("forces redTeam hidden even if the client sends visible true", () => {
+  it("lets redTeam be shown when the client requests it (unlike the permanently-folded dates panel)", () => {
     const layout = normalizeLayout(
       {
         preset: "PANE_4",
@@ -34,7 +34,18 @@ describe("Legal Terminal — workspace catalog", () => {
       },
       "SOLO",
     );
-    expect(layout.panels.find((p) => p.id === "redTeam")?.visible).to.equal(false);
+    expect(layout.panels.find((p) => p.id === "redTeam")?.visible).to.equal(true);
+  });
+
+  it("still forces dates hidden even if the client sends visible true", () => {
+    const layout = normalizeLayout(
+      {
+        preset: "PANE_4",
+        panels: [{ id: "dates", visible: true, order: 0, width: 1, height: 1 }],
+      },
+      "SOLO",
+    );
+    expect(layout.panels.find((p) => p.id === "dates")?.visible).to.equal(false);
     expect(layout.panels.some((p) => p.visible)).to.equal(true);
   });
 
@@ -59,6 +70,24 @@ describe("Legal Terminal — workspace catalog", () => {
       "SOLO",
     );
     expect(layout.panels.find((p) => p.id === "mindMap")?.visible).to.equal(false);
+  });
+
+  it("keeps freeform pane positions when saving a workspace", () => {
+    const layout = normalizeLayout(
+      {
+        preset: "PANE_4",
+        panels: [
+          { id: "command", visible: true, order: 0, width: 0.4, height: 0.5, x: 0.1, y: 0.2 },
+          { id: "evidence", visible: true, order: 1, width: 0.45, height: 0.4, x: 0.5, y: 0.05 },
+        ],
+      },
+      "SOLO",
+    );
+    const command = layout.panels.find((p) => p.id === "command");
+    expect(command?.x).to.equal(0.1);
+    expect(command?.y).to.equal(0.2);
+    expect(command?.width).to.equal(0.4);
+    expect(command?.height).to.equal(0.5);
   });
 });
 

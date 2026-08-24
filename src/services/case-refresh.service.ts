@@ -3,6 +3,7 @@ import DocumentRepo from "../repositories/document.repository";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import EvidenceIntelligenceSvc from "./evidence-intelligence.service";
 import CaseStrategySvc from "./case-strategy.service";
+import CaseFindingAiSvc from "./case-finding-ai.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import prisma from "../lib/prisma";
 import ChatRepo from "../repositories/chat.repository";
@@ -22,6 +23,9 @@ export default class CaseRefreshSvc {
     await EvidenceIntelligenceSvc.scanContradictions(caseId, userId).catch(() => []);
     await CaseStrategySvc.generateFromDocuments(caseId, userId).catch((err) => {
       logger.warn("Chat Wonder case strategy failed", { err, caseId });
+    });
+    await CaseFindingAiSvc.generateFromDocuments(caseId, userId).catch((err) => {
+      logger.warn("Chat Wonder case finding generation failed", { err, caseId });
     });
 
     const consultations = await prisma.consultation.findMany({

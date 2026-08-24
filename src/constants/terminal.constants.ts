@@ -8,6 +8,15 @@ export const PANEL_IDS = [
   "redTeam",
   "procedure",
   "teamAudit",
+  "contradictions",
+  "legalIssues",
+  "weaknesses",
+  "strengths",
+  "attackStrategy",
+  "defenseStrategy",
+  "witnesses",
+  "damages",
+  "caseReconstruction",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -21,6 +30,10 @@ export interface PanelLayout {
   order: number;
   width: number;
   height: number;
+  /** Left edge as a 0–1 fraction of the workspace. Independent of other panes. */
+  x?: number;
+  /** Top edge as a 0–1 fraction of the workspace. Independent of other panes. */
+  y?: number;
 }
 
 export interface WorkspaceLayout {
@@ -53,6 +66,14 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: false,
     minSku: "SOLO",
     description: "Documents, source links, case timeline",
+  },
+  {
+    id: "contradictions",
+    label: "Contradictions",
+    phase: "P1",
+    defaultHidden: false,
+    minSku: "SOLO",
+    description: "Cross-document contradictions found by the evidence scan, split out of Evidence & Timeline",
   },
   {
     id: "law",
@@ -89,10 +110,10 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
   {
     id: "redTeam",
     label: "Red Team",
-    phase: "P1",
+    phase: "P3",
     defaultHidden: true,
     minSku: "SOLO",
-    description: "Reserved until SCL lands — hidden by default",
+    description: "Adversarial threat assessment — opposing counsel's likely attacks on this case, generated on demand",
   },
   {
     id: "procedure",
@@ -109,6 +130,70 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: false,
     minSku: "PROFESSIONAL",
     description: "Assignments, approvals, audit trail",
+  },
+  {
+    id: "legalIssues",
+    label: "Legal Issues",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "The legal questions/causes of action raised by the case — manually entered or AI-generated from documents",
+  },
+  {
+    id: "weaknesses",
+    label: "Weaknesses",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Points that hurt this case's persuasive strength — manually entered or AI-generated from documents",
+  },
+  {
+    id: "strengths",
+    label: "Strengths",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Points that help this case's persuasive strength — manually entered or AI-generated from documents",
+  },
+  {
+    id: "attackStrategy",
+    label: "Attack Strategies",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Affirmative moves to advance this case — manually entered or AI-generated from documents",
+  },
+  {
+    id: "defenseStrategy",
+    label: "Defense Strategies",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Moves to protect this case's position — manually entered or AI-generated from documents",
+  },
+  {
+    id: "witnesses",
+    label: "Witnesses",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Witness roster: name, role, contact, notes",
+  },
+  {
+    id: "damages",
+    label: "Damages & Remedies",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Claimed damages by category: actual, moral, exemplary, attorney's fees, other",
+  },
+  {
+    id: "caseReconstruction",
+    label: "Case Reconstruction",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "AI-generated chronological narrative of the case, editable afterward",
   },
 ];
 
