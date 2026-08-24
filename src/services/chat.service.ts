@@ -2,16 +2,23 @@ import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
 import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
+import DocumentRepo from "../repositories/document.repository";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem } from "../utils/response-parser";
 import CaseTimelineSvc from "./case-timeline.service";
+import { documentBelongsToScope } from "../utils/case-document-scope";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
 const TITLE_MAX_CHARS    = 60;                // max title length (matches frontend truncation)
 const TITLE_INPUT_CHARS  = 500;              // how much of the user message to feed the title prompt
+const CHAT_WONDER_SESSION_TTL_S = 60 * 60;   // match chat-wonder's in-memory session TTL
+
+function chatWonderSessionKey(consultationId: string): string {
+  return `chatwonder:session:${consultationId}`;
+}
 
 function messageHash(text: string): string {
   return createHash("md5").update(text.trim().toLowerCase()).digest("hex");
@@ -102,7 +109,7 @@ export default class ChatSvc {
   static async sendMessage(
     userId: string,
     consultationId: string,
-    sessionId: string,
+    requestedSessionId: string,
     userInput: string,
     onChunk: (text: string) => void,
     documentContext?: string,
@@ -123,6 +130,13 @@ export default class ChatSvc {
       effectiveCaseId = caseId;
     }
 
+    // One Chat Wonder session per consultation. The client caches a single session_id for
+    // the whole app; reusing it across cases leaks prior-case document text via session history.
+    const sessionId = await ChatSvc.resolveChatWonderSession(consultationId);
+    if (sessionId !== requestedSessionId) {
+      onSessionRotated?.(sessionId);
+    }
+
     const needsTitle = consultation.title === null;
     const userMessage = await ChatRepo.createMessage(consultationId, "user", userInput, userId);
 
@@ -139,12 +153,19 @@ export default class ChatSvc {
     const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
 
     // Grounding priority:
-    // 1. Explicit caseDocumentId on this message (single-doc ranking)
+    // 1. Explicit caseDocumentId on this message (single-doc ranking) — only if it belongs
+    //    to this consultation or case. A client-supplied id from another case must not rank.
     // 2. READY docs attached to this consultation (consultation-specific data source)
     // 3. Case id (consultation or message body) → rank READY docs under that case
     let grounding: CaseDocumentGrounding | undefined;
-    if (caseDocumentId) {
-      grounding = await DocumentChunkSvc.relevantChunksForDocument(caseDocumentId, userInput);
+    const scopedDocumentId = await ChatSvc.scopedCaseDocumentId(
+      caseDocumentId,
+      userId,
+      consultationId,
+      effectiveCaseId,
+    );
+    if (scopedDocumentId) {
+      grounding = await DocumentChunkSvc.relevantChunksForDocument(scopedDocumentId, userInput);
       if (!grounding.caseDocumentIds.length) grounding = undefined;
     } else {
       const consultationDocs = await DocumentChunkSvc.relevantChunksForConsultation(
@@ -163,7 +184,10 @@ export default class ChatSvc {
     // for its callback fetch, but that often fails in local/staging (ILOVELAWYER_API_BASE points
     // at production with a mismatched API key) — inlining keeps analysis working either way.
     const groundingContext = grounding
-      ? await DocumentChunkSvc.formatGroundingContext(grounding)
+      ? await DocumentChunkSvc.formatGroundingContext(grounding, 12_000, {
+          caseId: effectiveCaseId,
+          consultationId,
+        })
       : "";
     const resolvedContext = [caseContext, documentContext, groundingContext].filter(Boolean).join("\n\n");
 
@@ -195,7 +219,15 @@ export default class ChatSvc {
       streamedMindMap = cached.mindMap;
       streamedTimeline = cached.timeline;
     } else {
-      const result = await ChatSvc.streamWithSessionRetry(sessionId, userInput, onChunk, resolvedContext, onSessionRotated, grounding);
+      const result = await ChatSvc.streamWithSessionRetry(
+        consultationId,
+        sessionId,
+        userInput,
+        onChunk,
+        resolvedContext,
+        onSessionRotated,
+        grounding,
+      );
       fullResponse = result.content;
       relatedCases = result.relatedCases;
       streamedMindMap = result.mindMap;
@@ -234,6 +266,7 @@ export default class ChatSvc {
    * Wonder sends for this case (see the_server.py's chat_stream handler), before any real
    * content — so retrying from scratch here can't cause onChunk to double-emit content. */
   private static async streamWithSessionRetry(
+    consultationId: string,
     sessionId: string,
     userInput: string,
     onChunk: (text: string) => void,
@@ -245,13 +278,42 @@ export default class ChatSvc {
       return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
-      const freshSessionId = await getChatWonderSessionId();
+      const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
       // Report the rotation before streaming starts, so the caller (ChatCtrl) can still
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
       return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding);
     }
+  }
+
+  /** One Chat Wonder session per consultation so case-document history cannot leak across cases. */
+  private static async resolveChatWonderSession(consultationId: string): Promise<string> {
+    const stored = await redis.get<string>(chatWonderSessionKey(consultationId));
+    if (typeof stored === "string" && stored.length > 0) {
+      await redis.set(chatWonderSessionKey(consultationId), stored, CHAT_WONDER_SESSION_TTL_S);
+      return stored;
+    }
+    return ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
+  }
+
+  private static async storeChatWonderSession(consultationId: string, sessionId: string): Promise<string> {
+    await redis.set(chatWonderSessionKey(consultationId), sessionId, CHAT_WONDER_SESSION_TTL_S);
+    return sessionId;
+  }
+
+  /** Ignore a client-supplied document id unless it belongs to this consultation or case. */
+  private static async scopedCaseDocumentId(
+    caseDocumentId: string | undefined,
+    userId: string,
+    consultationId: string,
+    caseId?: string,
+  ): Promise<string | undefined> {
+    if (!caseDocumentId) return undefined;
+    const doc = await DocumentRepo.findById(caseDocumentId, userId);
+    if (!doc) return undefined;
+    if (!documentBelongsToScope(doc, { userId, consultationId, caseId })) return undefined;
+    return doc.id;
   }
 
   static async getRelatedCases(userId: string, consultationId: string) {
