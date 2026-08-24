@@ -1,5 +1,5 @@
 -- DropIndex
-DROP INDEX "CaseDocumentChunk_embedding_hnsw_idx";
+DROP INDEX IF EXISTS "CaseDocumentChunk_embedding_hnsw_idx";
 
 -- CreateTable
 CREATE TABLE "ModelSetting" (
