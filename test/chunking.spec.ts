@@ -57,17 +57,36 @@ describe("chunkText", () => {
     expect(chunks.length).to.be.greaterThan(1);
     expect(chunks.every((c) => c.text.length <= 2_000)).to.equal(true);
   });
+
+  it("makes each paragraph its own chunk", () => {
+    const text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
+    const chunks = chunkText(text, 1, { chunkSize: 2_000, overlap: 300 });
+    expect(chunks.map((c) => c.text)).to.deep.equal([
+      "First paragraph.",
+      "Second paragraph.",
+      "Third paragraph.",
+    ]);
+  });
 });
 
 describe("chunkPages", () => {
-  it("picks a profile from page count when none is passed", () => {
+  it("produces one chunk per paragraph regardless of tier", () => {
     const pages = Array.from({ length: 1000 }, (_, i) => ({
       pageNumber: i + 1,
       text: "Whereas the parties agree.\n\n".repeat(80),
     }));
-    const adaptive = chunkPages(pages);
+    const chunks = chunkPages(pages);
+    expect(chunks.length).to.equal(1000 * 80);
+  });
+
+  it("still hard-cuts an oversize paragraph, and a wider tier cuts it less", () => {
+    const pages = Array.from({ length: 1000 }, (_, i) => ({
+      pageNumber: i + 1,
+      text: "a".repeat(5_000),
+    }));
+    const adaptive = chunkPages(pages); // bulk tier: chunkSize 6_000, paragraph fits whole
     const tight = chunkPages(pages, { chunkSize: 2_000, overlap: 300 });
-    expect(adaptive.length).to.be.greaterThan(10);
+    expect(adaptive.length).to.equal(1000);
     expect(adaptive.length).to.be.lessThan(tight.length);
   });
 });
