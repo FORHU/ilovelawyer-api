@@ -5,13 +5,17 @@ const TEXTRACT_SYNC_MAX_BYTES = 5 * 1024 * 1024;
 
 type TextractBlock = { BlockType?: string; Text?: string };
 
-export async function ocrPdf(buffer: Buffer): Promise<string> {
+/** Runs AWS Textract's synchronous DetectDocumentText on raw document bytes — a single-page
+ * PDF (the scanned-PDF fallback in document-text-extraction.ts) or a JPEG/PNG image (the
+ * image-upload extraction path). Textract's sync API accepts both directly, no conversion
+ * needed either way. */
+export async function ocrDocument(buffer: Buffer): Promise<string> {
   if (!AWS_ACCESS_KEY || !AWS_SECRET_ACCESS_KEY) {
     logger.warn("OCR skipped: AWS credentials not configured");
     return "";
   }
   if (buffer.length > TEXTRACT_SYNC_MAX_BYTES) {
-    logger.warn("OCR skipped: PDF exceeds Textract sync limit", { bytes: buffer.length });
+    logger.warn("OCR skipped: document exceeds Textract sync limit", { bytes: buffer.length });
     return "";
   }
 
