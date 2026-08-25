@@ -1,0 +1,11 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Your ilovelawyer account has been blocked. You won't be able to sign in until an admin unblocks it.</mj-text>
+        <mj-text>If you believe this was a mistake, please contact support.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

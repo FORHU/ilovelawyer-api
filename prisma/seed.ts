@@ -21,7 +21,7 @@ async function main() {
     where: { email },
     update: {
       role: "ADMIN",
-      approvalStatus: "APPROVED",
+      approvalStatus: "ACTIVE",
       isEmailVerified: true,
     },
     create: {
@@ -31,7 +31,7 @@ async function main() {
       name: "Admin",
       role: "ADMIN",
       isEmailVerified: true,
-      approvalStatus: "APPROVED",
+      approvalStatus: "ACTIVE",
     },
   });
 

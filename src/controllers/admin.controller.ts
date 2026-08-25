@@ -22,4 +22,19 @@ export default class AdminCtrl {
     const user = await AdminSvc.deny(req.params.id, value.reason || undefined);
     return res.status(200).json(user);
   }
+
+  static async reactivateUser(req: Request, res: Response) {
+    const user = await AdminSvc.reactivate(req.params.id);
+    return res.status(200).json(user);
+  }
+
+  static async blockUser(req: Request, res: Response) {
+    const user = await AdminSvc.block(req.params.id);
+    return res.status(200).json(user);
+  }
+
+  static async unblockUser(req: Request, res: Response) {
+    const user = await AdminSvc.unblock(req.params.id);
+    return res.status(200).json(user);
+  }
 }

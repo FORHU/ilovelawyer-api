@@ -11,5 +11,8 @@ router.use(validSession, requireAdmin);
 router.get("/users", asyncHandler(AdminCtrl.listUsers));
 router.post("/users/:id/approve", asyncHandler(AdminCtrl.approveUser));
 router.post("/users/:id/deny", asyncHandler(AdminCtrl.denyUser));
+router.post("/users/:id/reactivate", asyncHandler(AdminCtrl.reactivateUser));
+router.post("/users/:id/block", asyncHandler(AdminCtrl.blockUser));
+router.post("/users/:id/unblock", asyncHandler(AdminCtrl.unblockUser));
 
 export default router;
