@@ -68,7 +68,7 @@ export function resolveChunkingProfile(input: ChunkingInput): ChunkingProfile {
   };
 }
 
-/** Paragraph-boundary-aware chunker (ADR 0010). Oversize paragraphs are hard-cut, never dropped. */
+/** One-paragraph-per-chunk (ADR 0010). Oversize paragraphs are hard-cut, never dropped. */
 export function chunkText(
   text: string,
   pageNumber: number | null = null,
@@ -116,27 +116,17 @@ function chunkParagraphs(
   }
 
   const chunks: TextChunk[] = [];
-  let current = "";
-
-  const flush = () => {
-    if (current.trim().length > 0) chunks.push({ text: current.trim(), pageNumber });
-    current = current.slice(-stepOverlap);
-  };
 
   for (const paragraph of paragraphs) {
     if (paragraph.length > size) {
-      flush();
-      current = "";
       for (let i = 0; i < paragraph.length; i += size - stepOverlap) {
         chunks.push({ text: paragraph.slice(i, i + size), pageNumber });
       }
       continue;
     }
 
-    if (current && `${current}\n\n${paragraph}`.length > size) flush();
-    current = current ? `${current}\n\n${paragraph}` : paragraph;
+    chunks.push({ text: paragraph, pageNumber });
   }
 
-  if (current.trim().length > 0) chunks.push({ text: current.trim(), pageNumber });
   return chunks;
 }
