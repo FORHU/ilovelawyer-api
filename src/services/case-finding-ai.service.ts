@@ -2,7 +2,7 @@ import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import CaseFindingRepo from "../repositories/case-finding.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
-import { buildCaseFindingPrompt } from "../constants/case-finding.constants";
+import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import logger from "../utils/logger";
@@ -12,10 +12,12 @@ import logger from "../utils/logger";
 export default class CaseFindingAiSvc {
   static async generateFromDocuments(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
+    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
     if (ready.length < 1) return CaseFindingRepo.list(caseId);
 
+    const buildCaseFindingPrompt = getCaseFindingPromptBuilder(jurisdiction);
     const pack = await buildFactExcerptPack(ready);
     const prompt = `${buildCaseFindingPrompt(ready)}
 

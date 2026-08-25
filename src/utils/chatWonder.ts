@@ -2,7 +2,8 @@ import axios from "axios";
 import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
-import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, MINDMAP_RULE } from "../constants/chatWonder.constants";
+import { Jurisdiction } from "../types/jurisdiction";
+import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
 import { parseStructuredDataPayload, MindMapItem, TimelineItem } from "./response-parser";
@@ -45,6 +46,10 @@ export async function callChatWonderRest(
   prompt: string,
   sessionId: string,
   grounding?: CaseDocumentGrounding | string,
+  // Additive, currently ignored by chat-wonder-v2-api — wired ahead of that service adding
+  // jurisdiction-aware tool routing. See UK_PERSONA_PENDING in
+  // legal/uk/legal-knowledge/uk-legal-knowledge.provider.ts for what's still pending there.
+  jurisdiction?: Jurisdiction,
 ): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
   const resolved = normalizeGrounding(grounding);
   const payload: {
@@ -52,10 +57,12 @@ export async function callChatWonderRest(
     user_input: string;
     case_document_ids?: string[];
     case_document_chunk_ids?: string[];
+    jurisdiction?: Jurisdiction;
   } = {
     session_id: sessionId,
     user_input: prompt,
   };
+  if (jurisdiction) payload.jurisdiction = jurisdiction;
   // Lets Chat Wonder pull chunks itself via GET /api/v1/case-document/:caseDocumentId
   // instead of us inlining the full document text into the prompt. Chunk ids are ranked
   // by embedding similarity when not already provided — see relevantChunkIdsFor.
@@ -181,6 +188,9 @@ export function streamChatWonderMessage(
    * user_input when this is set, so chat-wonder is never told the tag format for a general
    * (no-Case) Consultation. */
   caseId?: string,
+  // Additive, currently ignored by chat-wonder-v2-api — see callChatWonderRest's jurisdiction
+  // param above for why this is here.
+  jurisdiction?: Jurisdiction,
 ): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
@@ -249,6 +259,7 @@ export function streamChatWonderMessage(
             document_context?: string;
             case_document_ids?: string[];
             case_document_chunk_ids?: string[];
+            jurisdiction?: Jurisdiction;
           } = {
             type: "chat",
             user_input: withLegalTag(userInput) + (caseId ? MINDMAP_RULE : ""),
@@ -257,6 +268,9 @@ export function streamChatWonderMessage(
           };
           if (documentContext) {
             payload.document_context = documentContext;
+          }
+          if (jurisdiction) {
+            payload.jurisdiction = jurisdiction;
           }
           // Always send case_document_ids (including []) so chat-wonder replaces
           // session-scoped active_case_documents instead of keeping prior-case docs.

@@ -3,6 +3,7 @@ import Joi from "joi";
 import AuthSvc from "../services/auth.service";
 import HttpError from "../utils/http-error";
 import { REFRESH_TOKEN_COOKIE, setRefreshTokenCookie, clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
+import { resolveJurisdictionFromRequest } from "../utils/jurisdiction-host";
 
 export default class AuthCtrl {
   static async signup(req: Request, res: Response) {
@@ -44,7 +45,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.login(email, password, !!remember);
+    const { user, accessToken, refreshToken } = await AuthSvc.login(email, password, !!remember, resolveJurisdictionFromRequest(req));
     setRefreshTokenCookie(res, refreshToken, !!remember);
 
     return res.status(200).json({ user, accessToken });
@@ -56,7 +57,10 @@ export default class AuthCtrl {
       throw new HttpError("Invalid or expired refresh token", 401);
     }
 
-    const { accessToken, refreshToken: newRefreshToken, remember } = await AuthSvc.refresh(refreshToken);
+    const { accessToken, refreshToken: newRefreshToken, remember } = await AuthSvc.refresh(
+      refreshToken,
+      resolveJurisdictionFromRequest(req),
+    );
     setRefreshTokenCookie(res, newRefreshToken, remember);
 
     return res.status(200).json({ accessToken });
@@ -85,7 +89,11 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.loginWithGoogle(idToken, remember ?? true);
+    const { user, accessToken, refreshToken } = await AuthSvc.loginWithGoogle(
+      idToken,
+      remember ?? true,
+      resolveJurisdictionFromRequest(req),
+    );
     setRefreshTokenCookie(res, refreshToken, remember ?? true);
 
     return res.status(200).json({ user, accessToken });

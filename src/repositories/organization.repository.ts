@@ -1,12 +1,14 @@
 import prisma from "../lib/prisma";
-import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku, Jurisdiction } from "@prisma/client";
 
 export default class OrganizationRepo {
-  /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically. */
-  static async create(createdById: string, name: string, slug: string, packageSku: PackageSku = "PROFESSIONAL") {
+  /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically.
+   * `jurisdiction` must already be trusted-resolved by the caller (see
+   * resolveJurisdictionFromRequest) — this layer just persists whatever it's given. */
+  static async create(createdById: string, name: string, slug: string, packageSku: PackageSku = "PROFESSIONAL", jurisdiction: Jurisdiction = "PH") {
     return prisma.$transaction(async (tx) => {
       const org = await tx.organization.create({
-        data: { name, slug, packageSku, createdById },
+        data: { name, slug, packageSku, jurisdiction, createdById },
       });
       await tx.organizationMember.create({
         data: { organizationId: org.id, userId: createdById, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },

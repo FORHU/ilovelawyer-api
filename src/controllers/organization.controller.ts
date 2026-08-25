@@ -3,6 +3,7 @@ import Joi from "joi";
 import { OrganizationRole } from "@prisma/client";
 import OrganizationSvc from "../services/organization.service";
 import HttpError from "../utils/http-error";
+import { resolveJurisdictionFromRequest } from "../utils/jurisdiction-host";
 
 const slugSchema = Joi.string()
   .trim()
@@ -21,7 +22,15 @@ export default class OrganizationCtrl {
     });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
-    const result = await OrganizationSvc.create(req.user.userId, value.name, value.packageSku);
+
+    // Jurisdiction is never accepted from the client — the Joi schema above doesn't even
+    // allow a `jurisdiction` key, so a body trying to smuggle one in already 400s above.
+    // The authoritative jurisdiction comes from which frontend domain (ph./uk.) this signup
+    // request actually originated from.
+    const jurisdiction = resolveJurisdictionFromRequest(req);
+    if (!jurisdiction) throw new HttpError("Unable to determine jurisdiction from request origin", 400);
+
+    const result = await OrganizationSvc.create(req.user.userId, value.name, value.packageSku, jurisdiction);
     return res.status(201).json(result);
   }
 

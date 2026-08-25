@@ -2,7 +2,7 @@ import CaseAccess from "../utils/case-access";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import RedTeamRepo from "../repositories/red-team.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
-import { buildRedTeamPrompt } from "../constants/red-team.constants";
+import { getRedTeamPromptBuilder } from "../legal/prompt-registry";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import logger from "../utils/logger";
@@ -46,8 +46,10 @@ export default class RedTeamSvc {
    * sent to Chat Wonder, so it can't reach past what's already been reviewed and entered. */
   static async generate(caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
     const snapshot = await CaseSnapshotSvc.get(caseId, userId);
 
+    const buildRedTeamPrompt = getRedTeamPromptBuilder(jurisdiction);
     const prompt = buildRedTeamPrompt({
       caseName: snapshot.case.caseName,
       actionType: snapshot.case.actionType,

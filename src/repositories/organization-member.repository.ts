@@ -13,18 +13,27 @@ export default class OrganizationMemberRepo {
   /** userId is globally unique (a user belongs to at most one org), so this also verifies
    * the membership found actually belongs to the given organizationId. Returns a membership
    * regardless of status (PENDING or ACCEPTED) — callers that need to gate on acceptance
-   * (e.g. requireMembership) must check `.status` themselves. */
+   * (e.g. requireMembership) must check `.status` themselves. Includes the organization's
+   * jurisdiction so requireMembership can populate TenantContext without a second query. */
   static async find(organizationId: string, userId: string) {
-    const membership = await prisma.organizationMember.findUnique({ where: { userId } });
+    const membership = await prisma.organizationMember.findUnique({
+      where: { userId },
+      include: { organization: { select: { jurisdiction: true } } },
+    });
     return membership && membership.organizationId === organizationId ? membership : null;
   }
 
   /**
    * A user's (guaranteed-singular) org membership — for contexts with no X-Organization-Id
    * header to resolve against, e.g. the Google Calendar webhook, which only carries a userId.
+   * Includes the organization's jurisdiction so login-time jurisdiction-exclusivity checks
+   * (see AuthSvc.assertJurisdictionAccess) don't need a second query.
    */
   static async findAnyForUser(userId: string) {
-    return prisma.organizationMember.findUnique({ where: { userId } });
+    return prisma.organizationMember.findUnique({
+      where: { userId },
+      include: { organization: { select: { jurisdiction: true } } },
+    });
   }
 
   /** The caller's own pending invite, if any — used by the accept/decline endpoints, which

@@ -3,8 +3,10 @@ import prisma from "../lib/prisma";
 import LegalSourceCacheRepo from "../repositories/legal-source-cache.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
-import { EMPTY_PLACEHOLDER, SOURCE_ANALYSIS_PROMPT } from "../constants/legalSourceCache.constants";
+import { EMPTY_PLACEHOLDER } from "../constants/legalSourceCache.constants";
+import { getSourceAnalysisPromptTemplate } from "../legal/prompt-registry";
 import { normalizeKeyword, cleanAiText, normalizeLetterSpacing, extractYearHint, extractRagSearchTerms } from "../utils/legalSourceCache.utils";
+import { Jurisdiction } from "../types/jurisdiction";
 
 interface RagMatch {
   id: bigint;
@@ -61,31 +63,34 @@ async function getSharedSessionId(): Promise<string> {
 }
 
 export default class LegalSourceCacheSvc {
-  static async analyze(rawKeyword: string) {
+  static async analyze(rawKeyword: string, jurisdiction: Jurisdiction) {
     if (!rawKeyword.trim()) throw new HttpError("keyword is required", 400);
 
     const normalizedKeyword = normalizeKeyword(rawKeyword);
     if (!normalizedKeyword) throw new HttpError("keyword is invalid after normalization", 400);
 
-    // Tier 1: cache hit
-    const cached = await LegalSourceCacheRepo.findByNormalizedKeyword(normalizedKeyword);
+    // Tier 1: cache hit — scoped to this jurisdiction, never shared across PH/UK.
+    const cached = await LegalSourceCacheRepo.findByNormalizedKeyword(normalizedKeyword, jurisdiction);
     if (cached && !cached.markdownContent.includes(EMPTY_PLACEHOLDER)) {
       return { item_id: cached.id, type: "keyword_analysis", title: cached.title, url: cached.sourceUrl ?? "", text_content: cached.markdownContent, formatted_markdown: cached.markdownContent, cached: true };
     }
 
-    // Tier 2: RAG DB match
-    const ragDoc = await findInRagDb(rawKeyword);
-    if (ragDoc) {
-      const markdownContent = normalizeLetterSpacing(ragDoc.formatted_markdown?.trim() || ragDoc.concise_summary?.trim() || "");
-      if (markdownContent) {
-        const title = ragDoc.title || rawKeyword;
-        const persisted = await LegalSourceCacheRepo.upsert({ rawKeyword, normalizedKeyword, title, markdownContent, rawResponse: markdownContent, sourceUrl: ragDoc.source_url });
-        return { item_id: persisted.id, type: "keyword_analysis", title: persisted.title, url: persisted.sourceUrl ?? "", text_content: persisted.markdownContent, formatted_markdown: persisted.markdownContent, cached: false };
+    // Tier 2: RAG DB match — the `documents` corpus is a PH-only ingested case-law/statute
+    // database (see CONTEXT.md). Never consult it for a UK query; skip straight to Tier 3.
+    if (jurisdiction === "PH") {
+      const ragDoc = await findInRagDb(rawKeyword);
+      if (ragDoc) {
+        const markdownContent = normalizeLetterSpacing(ragDoc.formatted_markdown?.trim() || ragDoc.concise_summary?.trim() || "");
+        if (markdownContent) {
+          const title = ragDoc.title || rawKeyword;
+          const persisted = await LegalSourceCacheRepo.upsert({ rawKeyword, normalizedKeyword, jurisdiction, title, markdownContent, rawResponse: markdownContent, sourceUrl: ragDoc.source_url });
+          return { item_id: persisted.id, type: "keyword_analysis", title: persisted.title, url: persisted.sourceUrl ?? "", text_content: persisted.markdownContent, formatted_markdown: persisted.markdownContent, cached: false };
+        }
       }
     }
 
     // Tier 3: Chat Wonder generation
-    const prompt = SOURCE_ANALYSIS_PROMPT.replace("{{KEYWORD}}", rawKeyword);
+    const prompt = getSourceAnalysisPromptTemplate(jurisdiction).replace("{{KEYWORD}}", rawKeyword);
     let sessionId = await getSharedSessionId();
     let chatPayload: { response?: string; intermediate_response?: string; source_metadata?: unknown };
 
@@ -106,6 +111,7 @@ export default class LegalSourceCacheSvc {
     const persisted = await LegalSourceCacheRepo.upsert({
       rawKeyword,
       normalizedKeyword,
+      jurisdiction,
       title: rawKeyword,
       markdownContent,
       rawResponse,
