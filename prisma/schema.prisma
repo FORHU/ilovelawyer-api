@@ -9,10 +9,18 @@ datasource db {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
+// State machine (admin-driven except the initial PENDING on signup):
+//   PENDING  --approve-->    ACTIVE
+//   PENDING  --deny-->       DENIED
+//   DENIED   --reactivate--> ACTIVE
+//   ACTIVE   --block-->      BLOCKED
+//   BLOCKED  --unblock-->    ACTIVE
+// No other transitions are valid — see AdminSvc, which rejects any attempt outside these edges.
 enum ApprovalStatus {
   PENDING
-  APPROVED
+  ACTIVE
   DENIED
+  BLOCKED
 }
 
 model User {
