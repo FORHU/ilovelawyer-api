@@ -1,8 +1,11 @@
 import prisma from "../lib/prisma";
+import { ApprovalStatus } from "@prisma/client";
 
 export default class AuthRepo {
-  static async createUser(username: string, email: string, password: string) {
-    return prisma.user.create({ data: { username, email, password } });
+  static async createUser(data: { username: string; email: string; password: string; name: string }) {
+    return prisma.user.create({
+      data: { username: data.username, email: data.email, password: data.password, name: data.name },
+    });
   }
 
   static async findByEmail(email: string) {
@@ -19,6 +22,8 @@ export default class AuthRepo {
         name: true,
         role: true,
         isEmailVerified: true,
+        approvalStatus: true,
+        denialReason: true,
         onboardingCompleted: true,
         provider: true,
         avatarId: true,
@@ -48,6 +53,8 @@ export default class AuthRepo {
         name: true,
         role: true,
         isEmailVerified: true,
+        approvalStatus: true,
+        denialReason: true,
         onboardingCompleted: true,
         provider: true,
         avatarId: true,
@@ -203,6 +210,46 @@ export default class AuthRepo {
         emailVerificationCode: null,
         emailVerificationExpiry: null,
         emailVerificationAttempts: 0,
+      },
+    });
+  }
+
+  static async listAllUsers() {
+    return prisma.user.findMany({
+      // Admins manage regular signups here, not other admin accounts.
+      where: { role: "USER" },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        role: true,
+        provider: true,
+        isEmailVerified: true,
+        approvalStatus: true,
+        createdAt: true,
+        lastLoginAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  static async setApprovalStatus(userId: string, status: ApprovalStatus, reason: string | null) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { approvalStatus: status, denialReason: status === "DENIED" ? reason : null },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        role: true,
+        provider: true,
+        isEmailVerified: true,
+        approvalStatus: true,
+        denialReason: true,
+        createdAt: true,
+        lastLoginAt: true,
       },
     });
   }

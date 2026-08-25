@@ -6,25 +6,27 @@ import { REFRESH_TOKEN_COOKIE, setRefreshTokenCookie, clearRefreshTokenCookie } 
 
 export default class AuthCtrl {
   static async signup(req: Request, res: Response) {
-    const { username, email, password } = req.body;
+    const { username, email, password, name } = req.body;
 
     const schema = Joi.object({
       username: Joi.string().required(),
       email: Joi.string().email().required(),
       password: Joi.string().min(8).required(),
+      name: Joi.string().trim().max(120).allow(""),
     });
 
-    const { error } = schema.validate({ username, email, password });
+    const { error } = schema.validate({ username, email, password, name });
     if (error) {
       throw new HttpError(error.message, 400);
     }
 
-    const user = await AuthSvc.signup(username, email, password);
+    const user = await AuthSvc.signup(username, email, password, name);
 
     return res.status(201).json({
       id: user.id,
       username: user.username,
       email: user.email,
+      name: user.name,
     });
   }
 

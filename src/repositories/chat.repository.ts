@@ -4,13 +4,14 @@ import { TimelineItem, MindMapItem } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
-  static async createConsultation(userId: string, title?: string, caseId?: string) {
-    return prisma.consultation.create({ data: { userId, title, caseId } });
+  /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
+  static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
+    return prisma.consultation.create({ data: { organizationId, userId, title, caseId } });
   }
 
-  static async listConsultations(userId: string, caseId?: string) {
+  static async listConsultations(organizationId: string, caseId?: string) {
     return prisma.consultation.findMany({
-      where: { userId, ...(caseId ? { caseId } : {}) },
+      where: { organizationId, ...(caseId ? { caseId } : {}) },
       orderBy: { createdAt: "desc" },
     });
   }

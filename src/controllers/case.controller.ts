@@ -53,7 +53,7 @@ export default class CaseCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.create(req.user.userId, normalizeCaseBody(value) as {
+    const result = await CaseSvc.create(req.organization!.id, req.user.userId, normalizeCaseBody(value) as {
       caseName: string;
       actionType?: string;
       jurisdiction?: string;
@@ -73,12 +73,12 @@ export default class CaseCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.list(req.user.userId, value.page, value.limit, value.search);
+    const result = await CaseSvc.list(req.organization!.id, value.page, value.limit, value.search);
     return res.status(200).json(result);
   }
 
   static async getById(req: Request, res: Response) {
-    const result = await CaseSvc.getById(req.params.id, req.user.userId);
+    const result = await CaseSvc.getById(req.params.id, req.organization!.id);
     return res.status(200).json(result);
   }
 
@@ -97,12 +97,12 @@ export default class CaseCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.update(req.params.id, req.user.userId, normalizeCaseBody(value));
+    const result = await CaseSvc.update(req.params.id, req.organization!.id, normalizeCaseBody(value));
     return res.status(200).json(result);
   }
 
   static async delete(req: Request, res: Response) {
-    await CaseSvc.delete(req.params.id, req.user.userId);
+    await CaseSvc.delete(req.params.id, req.organization!.id);
     return res.status(204).send();
   }
 
@@ -130,9 +130,10 @@ export default class CaseCtrl {
     const { error, value } = schema.validate(input);
     if (error) throw new HttpError(error.message, 400);
 
-    const caseData: { caseId: string; userId: string } = {
+    const caseData: { caseId: string; organizationId: string; userId: string } = {
       caseId: value.caseId,
-      userId: req.user.userId
+      organizationId: req.organization!.id,
+      userId: req.user.userId,
     };
 
     const documentData: IncomingCaseDocument[] = value.documentData.map((doc: any) => ({
@@ -156,8 +157,8 @@ export default class CaseCtrl {
     const { error, value } = schema.validate(req.body, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    // Ownership check — throws 404 if the case is missing or not owned by this user.
-    await CaseSvc.getById(req.params.caseId, req.user.userId);
+    // Ownership check — throws 404 if the case is missing or not in this organization.
+    await CaseSvc.getById(req.params.caseId, req.organization!.id);
 
     const result = await DocumentChunkSvc.relevantChunksForCase(
       req.params.caseId,

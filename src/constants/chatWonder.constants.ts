@@ -25,3 +25,7 @@ Rules:
   JSON block renders as a diagram; everything outside the tag is shown to the user as ordinary text,
   and the tag itself is stripped out before they see it.
 - If the user did not ask for a visual map, do not include this tag at all.`;
+
+/** Legal persona sends `__END__` first, then `[STRUCTURED_DATA]` (timeline + mind map)
+ * on a second LLM call, then `[DONE]`. Wait this long after `__END__` for that frame. */
+export const STRUCTURED_DATA_WAIT_MS = 45_000;

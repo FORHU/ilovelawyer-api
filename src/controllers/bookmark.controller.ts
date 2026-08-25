@@ -20,7 +20,7 @@ export default class BookmarkCtrl {
     const { error, value } = bookmarkSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const bookmark = await BookmarkSvc.create(req.user.userId, {
+    const bookmark = await BookmarkSvc.create(req.organization!.id, req.user.userId, {
       ...value,
       type: value.type as BookmarkType,
     });
@@ -28,24 +28,24 @@ export default class BookmarkCtrl {
   }
 
   static async list(req: Request, res: Response) {
-    const bookmarks = await BookmarkSvc.list(req.user.userId);
+    const bookmarks = await BookmarkSvc.list(req.organization!.id);
     return res.status(200).json(bookmarks);
   }
 
   static async getById(req: Request, res: Response) {
-    const bookmark = await BookmarkSvc.getById(req.params.id, req.user.userId);
+    const bookmark = await BookmarkSvc.getById(req.params.id, req.organization!.id);
     return res.status(200).json(bookmark);
   }
 
   static async checkByItemId(req: Request, res: Response) {
     const { itemId } = req.query;
     if (!itemId || typeof itemId !== "string") throw new HttpError("itemId query param is required", 400);
-    const result = await BookmarkSvc.checkByItemId(req.user.userId, itemId);
+    const result = await BookmarkSvc.checkByItemId(req.organization!.id, itemId);
     return res.status(200).json(result);
   }
 
   static async delete(req: Request, res: Response) {
-    await BookmarkSvc.delete(req.params.id, req.user.userId);
+    await BookmarkSvc.delete(req.params.id, req.organization!.id);
     return res.status(204).send();
   }
 }

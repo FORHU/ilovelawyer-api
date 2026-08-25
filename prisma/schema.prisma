@@ -9,23 +9,46 @@ datasource db {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
+// State machine (admin-driven except the initial PENDING on signup):
+//   PENDING  --approve-->    ACTIVE
+//   PENDING  --deny-->       DENIED
+//   DENIED   --reactivate--> ACTIVE
+//   ACTIVE   --block-->      BLOCKED
+//   BLOCKED  --unblock-->    ACTIVE
+// No other transitions are valid — see AdminSvc, which rejects any attempt outside these edges.
+enum ApprovalStatus {
+  PENDING
+  ACTIVE
+  DENIED
+  BLOCKED
+}
+
 model User {
-  id                         String    @id @default(uuid())
-  email                      String    @unique
-  password                   String?
-  name                       String?
-  username                   String    @unique
-  role                       Role      @default(USER)
-  lastLoginAt                DateTime?
-  createdAt                  DateTime  @default(now())
-  updatedAt                  DateTime  @updatedAt
-  provider                   String?
-  googleId                   String?   @unique
-  googleAccessToken          String?
-  googleRefreshToken         String?
-  avatarId                   String?
-  isEmailVerified            Boolean   @default(false)
-  onboardingCompleted        Boolean   @default(false)
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  password           String?
+  name               String?
+  username           String    @unique
+  role               Role      @default(USER)
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  provider           String?
+  googleId           String?   @unique
+  googleAccessToken  String?
+  googleRefreshToken String?
+  avatarId           String?
+  tenantId           String?
+  isEmailVerified    Boolean   @default(false)
+
+  // Independent of Email Verification and of login itself — a new User starts PENDING
+  // regardless of signup method. Login still succeeds for a PENDING/DENIED user (they
+  // need a session to finish solo/org setup and to see /account-pending); the frontend's
+  // protected-route guard is what keeps them out of the real app. denialReason is
+  // admin-authored, optional, shown to the user in the denial email/page.
+  approvalStatus             ApprovalStatus @default(PENDING)
+  denialReason               String?
+  onboardingCompleted        Boolean        @default(false)
   otpCode                    String?
   otpExpiry                  DateTime?
   emailVerificationOtp       String?
@@ -45,12 +68,26 @@ model User {
   messages                 Message[]
   createdInvites           ConsultationInvite[]
   consultationParticipants ConsultationParticipant[]
-  cases                    Case[]
-  documents                Document[]
-  bookmarks                Bookmark[]
-  transcriptions           Transcription[]
-  calendarWatchChannels    CalendarWatchChannel[]
-  events                   Event[]
+  packageSku               PackageSku                @default(SOLO)
+  preferredLanguage        String                    @default("en")
+
+  cases                   Case[]
+  documents               Document[]
+  bookmarks               Bookmark[]
+  transcriptions          Transcription[]
+  calendarWatchChannels   CalendarWatchChannel[]
+  events                  Event[]
+  terminalWorkspaces      TerminalWorkspace[]
+  organizationMemberships OrganizationMember[]
+  createdOrganizations    Organization[]                   @relation("OrgCreator")
+  ownedRisks              CaseRisk[]
+  auditEvents             AuditEvent[]
+  caseAccesses            CaseAccess[]
+  integrationConnectors   IntegrationConnector[]
+  deadlineConfirmations   ProceduralDeadlineConfirmation[]
+  tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
 }
 
 model Session {
@@ -65,17 +102,18 @@ model Session {
 }
 
 model File {
-  id             String          @id @default(uuid())
-  filename       String?
-  fileUrl        String?
-  s3Key          String?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  deletedAt      DateTime?
-  metaData       Json?
-  users          User[]
-  transcriptions Transcription[]
-  caseDocuments  Document[]
+  id                  String               @id @default(uuid())
+  filename            String?
+  fileUrl             String?
+  s3Key               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  deletedAt           DateTime?
+  metaData            Json?
+  users               User[]
+  transcriptions      Transcription[]
+  caseDocuments       Document[]
+  caseReconstructions CaseReconstruction[]
 }
 
 enum Role {
@@ -83,16 +121,24 @@ enum Role {
   ADMIN
 }
 
+enum PackageSku {
+  SOLO
+  PROFESSIONAL
+  ENTERPRISE
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 model Consultation {
-  id        String   @id @default(uuid())
-  userId    String
-  caseId    String?
-  title     String?
-  createdAt DateTime @default(now())
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  caseId         String?
+  title          String?
+  createdAt      DateTime @default(now())
 
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case           Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
   messages       Message[]
   invites        ConsultationInvite[]
@@ -101,6 +147,7 @@ model Consultation {
   transcriptions Transcription[]
 
   @@index([userId])
+  @@index([organizationId])
   @@index([caseId])
 }
 
@@ -189,22 +236,42 @@ model ConsultationParticipant {
 // ── Case Management ────────────────────────────────────────────────────────────
 
 model Case {
-  id           String   @id @default(uuid())
-  userId       String
-  caseName     String
-  actionType   String?
-  jurisdiction String?
-  notes        String?  @db.Text
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String    @id @default(uuid())
+  userId          String
+  organizationId  String?
+  caseName        String
+  actionType      String?
+  jurisdiction    String?
+  language        String    @default("en")
+  notes           String?   @db.Text
+  lastRefreshedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents      Document[]
-  parties        Party[]
-  consultations  Consultation[]
-  transcriptions Transcription[]
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  documents         Document[]
+  parties           Party[]
+  consultations     Consultation[]
+  transcriptions    Transcription[]
+  events            Event[]
+  timelineEvents    CaseTimelineEvent[]
+  risks             CaseRisk[]
+  evidenceMatrix    EvidenceMatrixItem[]
+  contradictions    EvidenceContradiction[]
+  citationChecks    CitationCheck[]
+  deadlines         ProceduralDeadline[]
+  procedureItems    ProcedureItem[]
+  accesses          CaseAccess[]
+  auditEvents       AuditEvent[]
+  findings          CaseFinding[]
+  witnesses         Witness[]
+  damageClaims      DamageClaim[]
+  reconstruction    CaseReconstruction?
+  redTeamAssessment RedTeamAssessment?
 
   @@index([userId])
+  @@index([organizationId])
 }
 
 model Party {
@@ -221,20 +288,26 @@ model Party {
 // ── Case Documents ───────────────────────────────────────────────────────────
 
 model Document {
-  id             String    @id @default(uuid())
-  userId         String
-  caseId         String?
-  consultationId String?
-  messageId      String?
-  name           String
-  fileId         String?
-  documentType   String?
-  fileSize       Int?
-  mimeType       String?
-  ragStatus      RagStatus @default(PENDING)
-  createdAt      DateTime  @default(now())
+  id               String    @id @default(uuid())
+  userId           String
+  organizationId   String
+  caseId           String?
+  consultationId   String?
+  messageId        String?
+  name             String
+  fileId           String?
+  documentType     String?
+  fileSize         Int?
+  mimeType         String?
+  ragStatus        RagStatus @default(PENDING)
+  language         String    @default("en")
+  pageCount        Int?
+  extractionMethod String?
+  ocrAttempted     Boolean   @default(false)
+  createdAt        DateTime  @default(now())
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case         Case?               @relation(fields: [caseId], references: [id])
   consultation Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   message      Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
@@ -242,6 +315,7 @@ model Document {
   chunks       CaseDocumentChunk[]
 
   @@index([userId])
+  @@index([organizationId])
   @@index([caseId])
   @@index([consultationId])
   @@index([messageId])
@@ -264,12 +338,17 @@ model CaseDocumentChunk {
   chunkIndex     Int
   chunkText      String
   charCount      Int
+  pageNumber     Int?
   embedding      Unsupported("vector(1536)")?
   createdAt      DateTime                     @default(now())
 
   caseDocument Document @relation(fields: [caseDocumentId], references: [id], onDelete: Cascade)
+  // HNSW cosine index on embedding is in SQL (Prisma cannot declare pgvector opclasses):
+  // CaseDocumentChunk_embedding_hnsw_idx — see 20260820133000_add_case_document_chunk_embedding_hnsw
 
   @@index([caseDocumentId])
+  // HNSW cosine index on embedding is in SQL (Prisma cannot declare pgvector opclasses):
+  // CaseDocumentChunk_embedding_hnsw_idx — see 20260820133000_add_case_document_chunk_embedding_hnsw
 }
 
 // ── Legal Source Analysis Cache ───────────────────────────────────────────────
@@ -290,22 +369,27 @@ model LegalSourceAnalysisCache {
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
 
 model Bookmark {
-  id        String       @id @default(uuid())
-  userId    String
-  itemId    String
-  title     String
-  reference String?
-  type      BookmarkType
-  url       String?
-  aiSummary String?      @db.Text
-  doctrine  String?      @db.Text
-  facts     String?      @db.Text
-  createdAt DateTime     @default(now())
+  id             String       @id @default(uuid())
+  userId         String
+  organizationId String
+  itemId         String
+  title          String
+  reference      String?
+  type           BookmarkType
+  url            String?
+  aiSummary      String?      @db.Text
+  doctrine       String?      @db.Text
+  facts          String?      @db.Text
+  createdAt      DateTime     @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, itemId])
+  // Uniqueness moves to the org: bookmarks are a shared resource, so two members bookmarking
+  // the same item should dedupe at the organization level, not per-user.
+  @@unique([organizationId, itemId])
   @@index([userId])
+  @@index([organizationId])
 }
 
 enum BookmarkType {
@@ -329,6 +413,7 @@ model CalendarWatchChannel {
 model Event {
   id                      String    @id @default(uuid())
   userId                  String
+  organizationId          String    @map("organization_id")
   title                   String
   type                    String    @default("Meeting")
   dateTime                DateTime  @map("date_time")
@@ -342,13 +427,19 @@ model Event {
   reminderDayOfSentAt     DateTime? @map("reminder_day_of_sent_at")
   lawyerAcknowledgedAt    DateTime? @map("lawyer_acknowledged_at")
   clientFeedback          String?   @map("client_feedback") @db.Text
+  caseId                  String?   @map("case_id")
+  dateSource              String?   @map("date_source")
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  case         Case?        @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
   @@unique([googleEventId, userId], map: "events_google_event_id_user_id_key")
   @@index([userId])
+  @@index([organizationId])
+  @@index([caseId])
   @@map("events")
 }
 
@@ -357,6 +448,7 @@ model Event {
 model Transcription {
   id             String    @id @default(uuid())
   userId         String
+  organizationId String
   caseId         String?
   consultationId String?
   audioFileId    String?
@@ -370,12 +462,14 @@ model Transcription {
   updatedAt      DateTime  @updatedAt
 
   user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case         Case?                @relation(fields: [caseId], references: [id])
   consultation Consultation?        @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   audioFile    File?                @relation(fields: [audioFileId], references: [id])
   chunks       TranscriptionChunk[]
 
   @@index([userId])
+  @@index([organizationId])
   @@index([caseId])
   @@index([consultationId])
 }
@@ -401,3 +495,472 @@ model TranscriptionChunk {
 // database but are intentionally not modeled here — they're owned by an external
 // ingestion pipeline. Query them via prisma.$queryRaw (see src/repositories/legal-rag.repository.ts)
 // using DATABASE_URL.
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+// ── Model Settings ────────────────────────────────────────────────────────────
+// Centralized, live-editable model selection for chat-wonder-v2-api's legal-ai
+// tools (GPT vs. DeepSeek). chat-wonder-v2-api reads these at runtime instead of
+// its own .env, falling back to .env only if this service is unreachable. See
+// chat-wonder-v2-api's docs/plans/deepseek-provider-flexibility-plan.md.
+
+model ModelSetting {
+  id              String   @id @default(uuid())
+  toolName        String   @unique
+  description     String?
+  currentModel    String
+  availableModels Json
+  locked          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ── Legal Terminal ────────────────────────────────────────────────────────────
+
+enum WorkspacePreset {
+  PANE_1
+  PANE_2
+  PANE_4
+  PANE_6
+}
+
+enum TimelineSource {
+  AI
+  LAWYER
+  CALENDAR
+}
+
+enum RiskSeverity {
+  FATAL
+  MAJOR
+  UNVERIFIED
+  MISSING_EVIDENCE
+  DEADLINE
+}
+
+enum RiskStatus {
+  OPEN
+  CONFIRMED
+  ACCEPTED
+}
+
+enum OrganizationMemberStatus {
+  PENDING
+  ACCEPTED
+}
+
+enum CasePermission {
+  VIEW
+  EDIT
+  ADMIN
+}
+
+enum CitationValidityStatus {
+  VALID
+  INVALID
+  UNVERIFIED
+  ADVERSE
+}
+
+enum ConnectorType {
+  DMS
+  EMAIL
+  CALENDAR
+  EFILING
+  LEGAL_DATABASE
+}
+
+enum ConnectorStatus {
+  DISCONNECTED
+  CONNECTED
+  ERROR
+}
+
+model TerminalWorkspace {
+  id         String          @id @default(uuid())
+  userId     String
+  name       String
+  preset     WorkspacePreset
+  layoutJson Json
+  isLastUsed Boolean         @default(false)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model CaseTimelineEvent {
+  id          String         @id @default(uuid())
+  caseId      String
+  title       String
+  occurredOn  DateTime?
+  description String?        @db.Text
+  status      String         @default("pending")
+  source      TimelineSource @default(LAWYER)
+  documentId  String?
+  chunkId     String?
+  pageNumber  Int?
+  createdBy   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([documentId])
+}
+
+model CaseRisk {
+  id          String       @id @default(uuid())
+  caseId      String
+  title       String
+  description String?      @db.Text
+  severity    RiskSeverity
+  status      RiskStatus   @default(OPEN)
+  ownerUserId String?
+  documentId  String?
+  chunkId     String?
+  pageNumber  Int?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  case  Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  owner User? @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
+  @@index([ownerUserId])
+}
+
+model EvidenceMatrixItem {
+  id            String   @id @default(uuid())
+  caseId        String
+  documentId    String
+  authenticity  String   @default("unverified")
+  admissibility String   @default("unverified")
+  probative     String   @default("unverified")
+  originalFile  Boolean  @default(true)
+  needsVerify   Boolean  @default(true)
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, documentId])
+  @@index([caseId])
+}
+
+model EvidenceContradiction {
+  id              String   @id @default(uuid())
+  caseId          String
+  kind            String
+  leftDocumentId  String
+  rightDocumentId String
+  leftExcerpt     String   @db.Text
+  rightExcerpt    String   @db.Text
+  factKey         String
+  leftValue       String
+  rightValue      String
+  confidence      Float    @default(0.5)
+  createdAt       DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+model CitationCheck {
+  id             String                 @id @default(uuid())
+  caseId         String
+  quotedText     String                 @db.Text
+  citedReference String?
+  sourceUrl      String?
+  officialText   String?                @db.Text
+  status         CitationValidityStatus @default(UNVERIFIED)
+  notes          String?                @db.Text
+  checkedAt      DateTime               @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+model ProceduralDeadline {
+  id               String   @id @default(uuid())
+  caseId           String
+  label            String
+  ruleCode         String
+  triggerDate      DateTime
+  computedDueDate  DateTime
+  ruleSource       String
+  serviceMethod    String?
+  calculationNotes String   @db.Text
+  status           String   @default("pending")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  case          Case                             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  confirmations ProceduralDeadlineConfirmation[]
+
+  @@index([caseId])
+}
+
+model ProceduralDeadlineConfirmation {
+  id         String   @id @default(uuid())
+  deadlineId String
+  userId     String
+  confirmed  Boolean
+  note       String?
+  createdAt  DateTime @default(now())
+
+  deadline ProceduralDeadline @relation(fields: [deadlineId], references: [id], onDelete: Cascade)
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([deadlineId, userId])
+  @@index([deadlineId])
+}
+
+model ProcedureItem {
+  id        String   @id @default(uuid())
+  caseId    String
+  kind      String
+  label     String
+  done      Boolean  @default(false)
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+// ── Case Findings, Witnesses, Damages, Reconstruction ──────────────────────────
+
+enum FindingCategory {
+  LEGAL_ISSUE
+  WEAKNESS
+  STRENGTH
+  ATTACK_STRATEGY
+  DEFENSE_STRATEGY
+}
+
+// A short strategic-assessment entry, categorized by FindingCategory. Backs five Terminal
+// panels (Legal Issues / Weaknesses / Strengths / Attack Strategies / Defense Strategies)
+// from one table, mirroring how ProcedureItem.kind already distinguishes STRATEGY vs TODO.
+// `notes === AI_FINDING_NOTE` ("AI") marks AI-authored rows — same discriminator convention
+// as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
+// manually-created rows (different/no notes) are left alone.
+model CaseFinding {
+  id        String          @id @default(uuid())
+  caseId    String
+  category  FindingCategory
+  label     String
+  notes     String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([caseId, category])
+}
+
+model Witness {
+  id        String   @id @default(uuid())
+  caseId    String
+  name      String
+  role      String?
+  contact   String?
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+enum DamageCategory {
+  ACTUAL
+  MORAL
+  EXEMPLARY
+  ATTORNEYS_FEES
+  OTHER
+}
+
+model DamageClaim {
+  id          String         @id @default(uuid())
+  caseId      String
+  category    DamageCategory
+  description String?        @db.Text
+  amount      Float?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+// One narrative per Case (not a list, unlike CaseFinding) — regenerated in place by AI on
+// demand (a dedicated action, not bundled into the general Refresh, since long-form
+// generation is a heavier/slower single call) and editable afterward by the lawyer.
+model CaseReconstruction {
+  id                String    @id @default(uuid())
+  caseId            String    @unique
+  narrative         String    @db.Text
+  // "For the court" and "from the other side" registers (PDF's Narrative Engine window) —
+  // nullable since a reconstruction generated before this field existed has narrative only.
+  narrativeCourt    String?   @db.Text
+  narrativeOpposing String?   @db.Text
+  // Qualitative "what this doesn't explain" list — deliberately not a coverage percentage,
+  // which isn't honestly groundable given the prompt only sees a sampled excerpt pack.
+  gaps              String[]  @default([])
+  // Audio narration (General/narrative register only) — async AWS Polly job, same
+  // start-job/poll-status shape as Transcription's AWS Transcribe integration.
+  audioFileId       String?
+  audioJobName      String?
+  audioStatus       String?
+  audioStaleAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  case      Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  audioFile File? @relation(fields: [audioFileId], references: [id])
+}
+
+// The "Red Team" panel — an adversarial threat assessment generated from the case's own
+// structured findings (Legal Issues, Weaknesses, Contradictions, Witnesses, Damages), not
+// from raw document text. One assessment per case, regenerated in place. No manual edit,
+// unlike CaseReconstruction — this is meant to be read as opposing counsel's own commentary,
+// not something the lawyer rewrites in their own voice.
+model RedTeamAssessment {
+  id        String   @id @default(uuid())
+  caseId    String   @unique
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+model Organization {
+  id          String     @id @default(uuid())
+  name        String
+  slug        String     @unique
+  packageSku  PackageSku @default(PROFESSIONAL)
+  createdById String
+  tenantId    String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  createdBy      User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  tenant         Tenant?                @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  members        OrganizationMember[]
+  cases          Case[]
+  documents      Document[]
+  consultations  Consultation[]
+  bookmarks      Bookmark[]
+  events         Event[]
+  transcriptions Transcription[]
+  connectors     IntegrationConnector[]
+
+  @@index([createdById])
+  @@index([tenantId])
+}
+
+model Tenant {
+  id            String         @id @default(uuid())
+  code          String         @unique
+  name          String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  users         User[]
+  organizations Organization[]
+}
+
+// userId is globally unique — a user belongs to at most one Organization (see
+// OrganizationMemberRepo's find()/findAnyForUser() comment; multi-org membership
+// isn't supported yet).
+model OrganizationMember {
+  id             String                   @id @default(uuid())
+  organizationId String
+  userId         String                   @unique
+  role           OrganizationRole         @default(OWNER)
+  // Invited members start PENDING until they accept; the owner created alongside a new
+  // organization (see OrganizationRepo.create) is never invited, so it defaults straight
+  // to ACCEPTED.
+  status         OrganizationMemberStatus @default(ACCEPTED)
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model CaseAccess {
+  id         String         @id @default(uuid())
+  caseId     String
+  userId     String
+  permission CasePermission @default(VIEW)
+  createdAt  DateTime       @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, userId])
+  @@index([userId])
+}
+
+model AuditEvent {
+  id        String   @id @default(uuid())
+  caseId    String?
+  actorId   String?
+  action    String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  case  Case? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
+  @@index([actorId])
+}
+
+model JurisdictionModule {
+  id         String   @id @default(uuid())
+  code       String   @unique
+  name       String
+  enabled    Boolean  @default(true)
+  language   String   @default("en")
+  configJson Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model IntegrationConnector {
+  id             String          @id @default(uuid())
+  userId         String?
+  organizationId String?
+  type           ConnectorType
+  status         ConnectorStatus @default(DISCONNECTED)
+  configJson     Json?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId])
+}

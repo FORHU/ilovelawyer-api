@@ -1,0 +1,13 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello,</mj-text>
+        <mj-text>{{inviterName}} has invited you to join the "{{orgName}}" organization on ilovelawyer as a {{role}}.</mj-text>
+        <mj-text>Log in and accept the invite from your Organization page to get access.</mj-text>
+        <mj-button href="{{loginLink}}">Log in</mj-button>
+        <mj-text>Or copy and paste this link: {{loginLink}}</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

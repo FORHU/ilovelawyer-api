@@ -17,16 +17,23 @@ import rsvpRoute from "./rsvp.route";
 import ttsRoute from "./tts.route";
 import healthRoute from "./health.route";
 import caseDocumentRoute from "./case-document.route";
+import terminalRoute from "./terminal.route";
+import organizationRoute from "./organization.route";
+import { jurisdictionRouter, integrationRouter } from "./jurisdiction.route";
+import modelSettingsRoute from "./model-settings.route";
+import adminRoute from "./admin.route";
 
 const router = express.Router();
 
 router.use("/health", healthRoute);
+router.use("/organizations", organizationRoute);
 router.use("/case-document", caseDocumentRoute);
 router.use("/auth", authRoute);
 router.use("/chat", chatRoute);
 router.use("/legal-rag", legalRagRoute);
 router.use("/files", filesRoute);
 router.use("/users", usersRoute);
+router.use("/admin", adminRoute);
 router.use("/my-cases", caseRoute);
 router.use("/bookmarks", bookmarkRoute);
 router.use("/documents", userDocumentRoute);
@@ -38,5 +45,9 @@ router.use("/legal", legalRoute);
 router.use("/send-email", sendEmailRoute);
 router.use("/rsvp", rsvpRoute);
 router.use("/tts", ttsRoute);
+router.use("/terminal", terminalRoute);
+router.use("/jurisdictions", jurisdictionRouter);
+router.use("/integrations", integrationRouter);
+router.use("/model-settings", modelSettingsRoute);
 
 export default router;
