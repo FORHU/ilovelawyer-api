@@ -1,0 +1,10 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Thanks for signing up for ilovelawyer. Your account is now awaiting admin approval — we'll email you as soon as it's reviewed, and you won't be able to access the app until then.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

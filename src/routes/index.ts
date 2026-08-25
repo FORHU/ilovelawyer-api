@@ -21,6 +21,7 @@ import terminalRoute from "./terminal.route";
 import organizationRoute from "./organization.route";
 import { jurisdictionRouter, integrationRouter } from "./jurisdiction.route";
 import modelSettingsRoute from "./model-settings.route";
+import adminRoute from "./admin.route";
 
 const router = express.Router();
 
@@ -32,6 +33,7 @@ router.use("/chat", chatRoute);
 router.use("/legal-rag", legalRagRoute);
 router.use("/files", filesRoute);
 router.use("/users", usersRoute);
+router.use("/admin", adminRoute);
 router.use("/my-cases", caseRoute);
 router.use("/bookmarks", bookmarkRoute);
 router.use("/documents", userDocumentRoute);

@@ -1,0 +1,46 @@
+import bcrypt from "bcrypt";
+import prisma from "../src/lib/prisma";
+import { SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD } from "../src/config";
+import { BCRYPT_SALT_ROUNDS } from "../src/constants/auth.constants";
+
+// Bootstraps the first admin account. Necessary because Admin Approval has no bootstrap
+// path otherwise: a brand-new User starts PENDING, and PENDING users can't approve
+// anyone — including themselves — from the admin app. Runs automatically after
+// `prisma migrate reset` (see package.json's `prisma.seed`), or on demand via
+// `npm run prisma:seed`. Idempotent — upserts on email, safe to re-run.
+async function main() {
+  if (!SEED_ADMIN_EMAIL || !SEED_ADMIN_PASSWORD) {
+    throw new Error("SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD must be set in .env to seed the admin account");
+  }
+
+  const email = SEED_ADMIN_EMAIL;
+  const password = SEED_ADMIN_PASSWORD;
+  const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
+
+  const admin = await prisma.user.upsert({
+    where: { email },
+    update: {
+      role: "ADMIN",
+      approvalStatus: "APPROVED",
+      isEmailVerified: true,
+    },
+    create: {
+      username: "admin",
+      email,
+      password: hashedPassword,
+      name: "Admin",
+      role: "ADMIN",
+      isEmailVerified: true,
+      approvalStatus: "APPROVED",
+    },
+  });
+
+  console.log(`Seeded admin user: ${admin.email} (password: ${password} if newly created)`);
+}
+
+main()
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());

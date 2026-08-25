@@ -38,7 +38,14 @@ export default class AuthSvc {
 
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
-    return AuthRepo.createUser({ username, email, password: hashedPassword, name });
+    const user = await AuthRepo.createUser({ username, email, password: hashedPassword, name });
+
+    // Sent immediately, before email verification — the user should know to expect the
+    // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
+    const html = await renderTemplate("signup-pending", { name: user.name || "there" });
+    await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
+
+    return user;
   }
 
   static async login(email: string, password: string, remember = false) {
@@ -188,6 +195,11 @@ export default class AuthSvc {
       }
 
       user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined);
+
+      // Same as password signup — sent once, right at account creation. Returning
+      // Google users (the `else` branch) never hit this again.
+      const html = await renderTemplate("signup-pending", { name: user.name || "there" });
+      await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
     } else {
       await AuthRepo.updateLastLogin(user.id);
     }
