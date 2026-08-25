@@ -1,4 +1,4 @@
-import { CasePermission, OrganizationRole, OrganizationMemberStatus } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import AuthRepo from "../repositories/auth.repository";
@@ -7,14 +7,22 @@ import HttpError from "../utils/http-error";
 import { hasOrgRole } from "../utils/org-role";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import { slugify } from "../utils/slug";
 import { CLIENT_URL } from "../config";
 
 export default class OrganizationSvc {
-  static async create(userId: string, data: { name: string; slug: string }) {
-    const existing = await OrganizationRepo.findBySlug(data.slug);
-    if (existing) throw new HttpError("An organization with this slug already exists", 409);
+  static async create(userId: string, name: string, packageSku?: PackageSku) {
+    const slug = await OrganizationSvc.generateUniqueSlug(name);
+    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL");
+  }
 
-    return OrganizationRepo.createWithOwner(userId, data);
+  private static async generateUniqueSlug(name: string): Promise<string> {
+    const base = slugify(name);
+    let slug = base;
+    while (await OrganizationRepo.findBySlug(slug)) {
+      slug = `${base}-${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+    return slug;
   }
 
   /** Orgs the given user is an ACCEPTED member of, with their role in each. A PENDING
@@ -27,8 +35,8 @@ export default class OrganizationSvc {
     return orgs.map(({ members, ...org }) => ({ ...org, role: members[0]?.role }));
   }
 
-  static async getById(id: string) {
-    const org = await OrganizationRepo.findById(id);
+  static async getById(id: string, userId: string) {
+    const org = await OrganizationRepo.findByIdForUser(id, userId);
     if (!org) throw new HttpError("Organization not found", 404);
     return org;
   }
@@ -197,7 +205,7 @@ export default class OrganizationSvc {
    * org, if any) — not membership in the org being attached to. */
   static async attachCase(organizationId: string, caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
-    const org = await OrganizationRepo.findById(organizationId);
+    const org = await OrganizationRepo.findByIdForUser(organizationId, userId);
     if (!org) throw new HttpError("Organization not found", 404);
     const updated = await OrganizationRepo.attachCase(caseId, organizationId);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "org.attach_case", payload: { organizationId } });

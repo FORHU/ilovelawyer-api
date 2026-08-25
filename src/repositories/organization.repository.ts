@@ -1,16 +1,20 @@
 import prisma from "../lib/prisma";
-import { CasePermission, OrganizationMemberStatus } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
 
 export default class OrganizationRepo {
-  /** Creates the org and its first membership (creator as OWNER) atomically. */
-  static async createWithOwner(userId: string, data: { name: string; slug: string }) {
-    return prisma.organization.create({
-      data: {
-        ...data,
-        createdById: userId,
-        members: { create: { userId, role: "OWNER" } },
-      },
-      include: { members: true },
+  /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically. */
+  static async create(createdById: string, name: string, slug: string, packageSku: PackageSku = "PROFESSIONAL") {
+    return prisma.$transaction(async (tx) => {
+      const org = await tx.organization.create({
+        data: { name, slug, packageSku, createdById },
+      });
+      await tx.organizationMember.create({
+        data: { organizationId: org.id, userId: createdById, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },
+      });
+      return tx.organization.findUniqueOrThrow({
+        where: { id: org.id },
+        include: { members: true },
+      });
     });
   }
 
@@ -20,6 +24,13 @@ export default class OrganizationRepo {
 
   static async findById(id: string) {
     return prisma.organization.findUnique({ where: { id } });
+  }
+
+  static async findByIdForUser(id: string, userId: string) {
+    return prisma.organization.findFirst({
+      where: { id, members: { some: { userId } } },
+      include: { members: { include: { user: { select: { id: true, email: true, name: true, username: true } } } } },
+    });
   }
 
   /** Orgs the given user is an ACCEPTED member of, with their role in each. A PENDING
