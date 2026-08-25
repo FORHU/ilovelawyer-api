@@ -2,7 +2,7 @@ import axios from "axios";
 import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
-import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, MINDMAP_RULE } from "../constants/chatWonder.constants";
+import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
 import { parseStructuredDataPayload, MindMapItem, TimelineItem } from "./response-parser";

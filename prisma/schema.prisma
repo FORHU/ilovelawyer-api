@@ -9,23 +9,38 @@ datasource db {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  DENIED
+}
+
 model User {
-  id                         String    @id @default(uuid())
-  email                      String    @unique
-  password                   String?
-  name                       String?
-  username                   String    @unique
-  role                       Role      @default(USER)
-  lastLoginAt                DateTime?
-  createdAt                  DateTime  @default(now())
-  updatedAt                  DateTime  @updatedAt
-  provider                   String?
-  googleId                   String?   @unique
-  googleAccessToken          String?
-  googleRefreshToken         String?
-  avatarId                   String?
-  isEmailVerified            Boolean   @default(false)
-  onboardingCompleted        Boolean   @default(false)
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  password           String?
+  name               String?
+  username           String    @unique
+  role               Role      @default(USER)
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  provider           String?
+  googleId           String?   @unique
+  googleAccessToken  String?
+  googleRefreshToken String?
+  avatarId           String?
+  tenantId           String?
+  isEmailVerified    Boolean   @default(false)
+
+  // Independent of Email Verification and of login itself — a new User starts PENDING
+  // regardless of signup method. Login still succeeds for a PENDING/DENIED user (they
+  // need a session to finish solo/org setup and to see /account-pending); the frontend's
+  // protected-route guard is what keeps them out of the real app. denialReason is
+  // admin-authored, optional, shown to the user in the denial email/page.
+  approvalStatus             ApprovalStatus @default(PENDING)
+  denialReason               String?
+  onboardingCompleted        Boolean        @default(false)
   otpCode                    String?
   otpExpiry                  DateTime?
   emailVerificationOtp       String?
@@ -62,7 +77,7 @@ model User {
   caseAccesses            CaseAccess[]
   integrationConnectors   IntegrationConnector[]
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
-  tenantId                Tenant?
+  tenant                  Tenant?                          @relation(fields: [tenantId], references: [id])
 }
 
 model Session {
@@ -77,17 +92,17 @@ model Session {
 }
 
 model File {
-  id             String          @id @default(uuid())
-  filename       String?
-  fileUrl        String?
-  s3Key          String?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  deletedAt      DateTime?
-  metaData       Json?
-  users          User[]
-  transcriptions Transcription[]
-  caseDocuments  Document[]
+  id                  String               @id @default(uuid())
+  filename            String?
+  fileUrl             String?
+  s3Key               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  deletedAt           DateTime?
+  metaData            Json?
+  users               User[]
+  transcriptions      Transcription[]
+  caseDocuments       Document[]
   caseReconstructions CaseReconstruction[]
 }
 
@@ -223,22 +238,22 @@ model Case {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  documents      Document[]
-  parties        Party[]
-  consultations  Consultation[]
-  transcriptions Transcription[]
-  events         Event[]
-  timelineEvents CaseTimelineEvent[]
-  risks          CaseRisk[]
-  evidenceMatrix EvidenceMatrixItem[]
-  contradictions EvidenceContradiction[]
-  citationChecks CitationCheck[]
-  deadlines      ProceduralDeadline[]
-  procedureItems ProcedureItem[]
-  accesses       CaseAccess[]
-  auditEvents    AuditEvent[]
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  documents         Document[]
+  parties           Party[]
+  consultations     Consultation[]
+  transcriptions    Transcription[]
+  events            Event[]
+  timelineEvents    CaseTimelineEvent[]
+  risks             CaseRisk[]
+  evidenceMatrix    EvidenceMatrixItem[]
+  contradictions    EvidenceContradiction[]
+  citationChecks    CitationCheck[]
+  deadlines         ProceduralDeadline[]
+  procedureItems    ProcedureItem[]
+  accesses          CaseAccess[]
+  auditEvents       AuditEvent[]
   findings          CaseFinding[]
   witnesses         Witness[]
   damageClaims      DamageClaim[]
@@ -730,13 +745,13 @@ enum FindingCategory {
 // as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
 // manually-created rows (different/no notes) are left alone.
 model CaseFinding {
-  id        String           @id @default(uuid())
+  id        String          @id @default(uuid())
   caseId    String
   category  FindingCategory
   label     String
   notes     String?
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -829,10 +844,12 @@ model Organization {
   slug        String     @unique
   packageSku  PackageSku @default(PROFESSIONAL)
   createdById String
+  tenantId    String?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
   createdBy      User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  tenant         Tenant?                @relation(fields: [tenantId], references: [id])
   members        OrganizationMember[]
   cases          Case[]
   connectors     IntegrationConnector[]
@@ -840,14 +857,17 @@ model Organization {
   consultations  Consultation[]
   bookmarks      Bookmark[]
   transcriptions Transcription[]
-  tenantId       Tenant?
 
   @@index([createdById])
 }
 
 model Tenant {
-   id          String     @id @default(uuid())
-  name        String
+  id   String @id @default(uuid())
+  code String @unique
+  name String
+
+  users         User[]
+  organizations Organization[]
 }
 
 model OrganizationMember {

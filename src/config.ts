@@ -47,3 +47,5 @@ export const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET as string;
 export const AWS_REGION = process.env.AWS_REGION as string;
 export const CLOUDFRONT_URL = process.env.CLOUDFRONT_URL as string;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY as string;
+export const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL as string;
+export const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD as string;
