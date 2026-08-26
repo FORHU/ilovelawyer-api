@@ -34,9 +34,11 @@ export default class CaseReconstructionSvc {
 
   /** A dedicated action, not folded into CaseRefreshSvc.refresh — narrative generation is a
    * heavier, slower single-shot call than the short tagged-list prompts refresh already runs,
-   * so it's the lawyer's call when to (re)generate rather than happening on every refresh. */
-  static async generate(caseId: string, userId: string) {
-    await CaseAccess.assertCanEdit(caseId, userId);
+   * so it's the lawyer's call when to (re)generate rather than happening on every refresh.
+   * userId is optional so case-post-extraction.ts's background job can call this once
+   * documents finish indexing — same pattern as CaseStrategySvc.generateFromDocuments. */
+  static async generate(caseId: string, userId?: string) {
+    if (userId) await CaseAccess.assertCanEdit(caseId, userId);
     const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));

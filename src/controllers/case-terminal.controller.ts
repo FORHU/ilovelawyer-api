@@ -13,6 +13,7 @@ import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
+import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
@@ -386,6 +387,9 @@ export default class CaseTerminalCtrl {
 
   static async generateReconstructionAudio(req: Request, res: Response) {
     const result = await CaseReconstructionAudioSvc.startAudioJob(req.params.caseId, req.user.userId);
+    // Poll to completion server-side too — same queue case-post-extraction.ts's auto-generation
+    // uses — so it finishes even if nobody keeps this case's audio panel open to poll it.
+    CaseReconstructionAudioQueue.enqueue(req.params.caseId);
     return res.status(202).json(result);
   }
 
