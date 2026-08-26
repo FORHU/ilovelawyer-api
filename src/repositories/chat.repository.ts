@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
-import { MessageRole, Prisma } from "@prisma/client";
-import { TimelineItem, MindMapItem } from "../utils/response-parser";
+import { MessageRole, Prisma, AudioOverviewStatus } from "@prisma/client";
+import { TimelineItem, MindMapItem, AudioOverviewTurn } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
@@ -90,5 +90,34 @@ export default class ChatRepo {
 
   static async deleteMessage(messageId: string) {
     return prisma.message.delete({ where: { id: messageId } });
+  }
+
+  static async saveAudioOverview(messageId: string, turns: AudioOverviewTurn[], voiceHostA: string, voiceHostB: string) {
+    return prisma.messageAudioOverview.create({
+      data: { messageId, turns: turns as unknown as Prisma.InputJsonValue, voiceHostA, voiceHostB },
+    });
+  }
+
+  static async findAudioOverviewByMessageId(messageId: string) {
+    return prisma.messageAudioOverview.findUnique({
+      where: { messageId },
+      include: { audioFile: true },
+    });
+  }
+
+  static async updateAudioOverviewAudio(
+    messageId: string,
+    data: { audioFileId?: string; audioStatus?: AudioOverviewStatus },
+  ) {
+    return prisma.messageAudioOverview.update({ where: { messageId }, data });
+  }
+
+  /** Re-queued on server start by AudioOverviewQueue — rows a prior process left stuck
+   * mid-render (crash/redeploy) rather than ever reaching COMPLETED/FAILED. */
+  static async listInProgressAudioOverviews() {
+    return prisma.messageAudioOverview.findMany({
+      where: { audioStatus: "IN_PROGRESS" },
+      select: { messageId: true },
+    });
   }
 }
