@@ -44,7 +44,9 @@ function titleCacheKey(userMessage: string, jurisdiction: Jurisdiction): string 
 }
 
 /** Redis key for a cached chat-wonder reply.
- * Includes consultationId so two chats with the same prompt/docs don't share answers. */
+ * Includes consultationId so two chats with the same prompt/docs don't share answers. Doesn't
+ * need jurisdiction added: a Consultation belongs to one Organization, whose jurisdiction is
+ * fixed, so consultationId alone already pins it. */
 function responseCacheKey(
   consultationId: string,
   userMessage: string,
