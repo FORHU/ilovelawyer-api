@@ -1,4 +1,4 @@
-import { OrganizationRole } from "@prisma/client";
+import { OrganizationRole, Jurisdiction } from "@prisma/client";
 
 declare global {
   namespace Express {
@@ -11,10 +11,13 @@ declare global {
       user: {
         userId: string;
       };
-      /** Set by resolve-organization.middleware from the X-Organization-Id header. */
+      /** Set by resolve-organization.middleware from the X-Organization-Id header.
+       * `jurisdiction` is the org's persisted, authoritative jurisdiction — see
+       * utils/tenant-context.ts for the preferred way to read it. */
       organization?: {
         id: string;
         role: OrganizationRole;
+        jurisdiction: Jurisdiction;
       };
     }
 

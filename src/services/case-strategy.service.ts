@@ -2,7 +2,7 @@ import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
-import { buildCaseStrategyPrompt } from "../constants/case-strategy.constants";
+import { getCaseStrategyPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseStrategy } from "../utils/case-strategy-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import CaseTimelineSvc from "./case-timeline.service";
@@ -11,10 +11,12 @@ import logger from "../utils/logger";
 export default class CaseStrategySvc {
   static async generateFromDocuments(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
+    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
     if (ready.length < 1) return ProceduralDeadlineRepo.listProcedureItems(caseId);
 
+    const buildCaseStrategyPrompt = getCaseStrategyPromptBuilder(jurisdiction);
     const pack = await buildFactExcerptPack(ready);
     const prompt = `${buildCaseStrategyPrompt(ready)}
 

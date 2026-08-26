@@ -1,8 +1,10 @@
 import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
+import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
-import DocumentRepo from "../repositories/document.repository";
+import TranscriptionChunkSvc from "./transcription-chunk.service";
+import { mapDocumentToDto } from "./document.service";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
@@ -10,6 +12,8 @@ import logger from "../utils/logger";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem, AudioOverviewTurn } from "../utils/response-parser";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
+import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
+import { Jurisdiction } from "../types/jurisdiction";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import { getPresignedGetUrl } from "../utils/s3";
@@ -17,8 +21,13 @@ import { getPresignedGetUrl } from "../utils/s3";
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
 const TITLE_MAX_CHARS    = 60;                // max title length (matches frontend truncation)
-const TITLE_INPUT_CHARS  = 500;              // how much of the user message to feed the title prompt
 const CHAT_WONDER_SESSION_TTL_S = 60 * 60;   // match chat-wonder's in-memory session TTL
+
+// Used in place of the user's message text (title generation, AI prompt, cache key) when a
+// message carries attachments but no typed text — content itself stays a stored empty string
+// (see ADR: locale-independent "no content" signal for the frontend to render nothing), so this
+// fixed, non-localized stand-in is what the AI actually sees instead.
+const ATTACHMENT_ONLY_PROMPT = "The user attached one or more documents without any additional message. Review the attached document(s) and respond accordingly.";
 
 function chatWonderSessionKey(consultationId: string): string {
   return `chatwonder:session:${consultationId}`;
@@ -28,8 +37,10 @@ function messageHash(text: string): string {
   return createHash("md5").update(text.trim().toLowerCase()).digest("hex");
 }
 
-function titleCacheKey(userMessage: string): string {
-  return `title:prompt:${messageHash(userMessage.slice(0, 500))}`;
+// Jurisdiction is part of the cache key so a UK request never gets served a title generated
+// under the PH prompt (or vice versa) for the same message text.
+function titleCacheKey(userMessage: string, jurisdiction: Jurisdiction): string {
+  return `title:prompt:${jurisdiction}:${messageHash(userMessage.slice(0, 500))}`;
 }
 
 /** Redis key for a cached chat-wonder reply.
@@ -56,51 +67,52 @@ function groundingCacheKey(grounding?: CaseDocumentGrounding): string {
 }
 
 export default class ChatSvc {
-  static async createConsultation(userId: string, title?: string, caseId?: string) {
+  static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
     if (caseId) {
-      // Throws 404 if the case doesn't exist or isn't owned by this user
-      await CaseSvc.getById(caseId, userId);
+      // Throws 404 if the case doesn't exist or isn't in this organization
+      await CaseSvc.getById(caseId, organizationId);
     }
-    return ChatRepo.createConsultation(userId, title, caseId);
+    return ChatRepo.createConsultation(organizationId, userId, title, caseId);
   }
 
-  static async listConsultations(userId: string, caseId?: string) {
-    return ChatRepo.listConsultations(userId, caseId);
+  static async listConsultations(organizationId: string, caseId?: string) {
+    return ChatRepo.listConsultations(organizationId, caseId);
   }
 
-  static async renameConsultation(userId: string, consultationId: string, title: string) {
-    await this.assertConsultationOwned(userId, consultationId);
+  static async renameConsultation(organizationId: string, consultationId: string, title: string) {
+    await this.assertConsultationOwned(organizationId, consultationId);
     return ChatRepo.updateConsultation(consultationId, title);
   }
 
-  static async assertConsultationOwned(userId: string, consultationId: string) {
+  static async assertConsultationOwned(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
     return consultation;
   }
 
-  static async deleteConsultation(userId: string, consultationId: string) {
+  static async deleteConsultation(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
     return ChatRepo.deleteConsultation(consultationId);
   }
 
-  static async listMessages(userId: string, consultationId: string) {
+  static async listMessages(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 
-    return ChatRepo.listMessagesByConsultation(consultationId);
+    const messages = await ChatRepo.listMessagesByConsultation(consultationId);
+    return messages.map((m) => ({ ...m, documents: m.documents.map(mapDocumentToDto) }));
   }
 
-  static async deleteMessage(userId: string, consultationId: string, messageId: string) {
+  static async deleteMessage(organizationId: string, consultationId: string, messageId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
     const message = await ChatRepo.findMessageById(messageId);
@@ -111,6 +123,8 @@ export default class ChatSvc {
   }
 
   static async sendMessage(
+    organizationId: string,
+    jurisdiction: Jurisdiction,
     userId: string,
     consultationId: string,
     requestedSessionId: string,
@@ -120,9 +134,10 @@ export default class ChatSvc {
     onSessionRotated?: (newSessionId: string) => void,
     caseDocumentId?: string,
     caseId?: string,
+    documentIds?: string[],
   ) {
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 
@@ -130,7 +145,7 @@ export default class ChatSvc {
     // whose consultation was created without a case link.
     let effectiveCaseId = consultation.caseId ?? undefined;
     if (!effectiveCaseId && caseId) {
-      await CaseSvc.getById(caseId, userId); // ownership check
+      await CaseSvc.getById(caseId, organizationId); // ownership check
       effectiveCaseId = caseId;
     }
 
@@ -144,15 +159,23 @@ export default class ChatSvc {
     const needsTitle = consultation.title === null;
     const userMessage = await ChatRepo.createMessage(consultationId, "user", userInput, userId);
 
+    if (documentIds?.length) {
+      await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
+    }
+
+    // content stays a stored empty string for a file-only send (see ADR) — everything the AI
+    // and title generation actually see substitutes in a fixed stand-in instead.
+    const effectiveUserInput = userInput.trim() ? userInput : ATTACHMENT_ONLY_PROMPT;
+
     if (needsTitle) {
-      ChatSvc.generateAndSaveTitle(consultationId, userInput).catch(() => {});
+      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, jurisdiction).catch(() => {});
     }
 
     // Re-derived from the live Case row on every message (not cached on the consultation),
     // so edits to the Case's fields are picked up immediately rather than going stale.
     let caseRecord = consultation.case;
     if (!caseRecord && effectiveCaseId) {
-      caseRecord = await CaseSvc.getById(effectiveCaseId, userId);
+      caseRecord = await CaseSvc.getById(effectiveCaseId, organizationId);
     }
     const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
 
@@ -193,7 +216,29 @@ export default class ChatSvc {
           consultationId,
         })
       : "";
-    const resolvedContext = [caseContext, documentContext, groundingContext].filter(Boolean).join("\n\n");
+
+    // Transcript grounding (ADR 0013): a parallel, independent lookup — never merged/ranked
+    // together with Case Document grounding above. Same consultation → case priority shape, but
+    // no per-message single-transcript equivalent to caseDocumentId (nothing analogous is sent).
+    // Not part of `grounding`/CaseDocumentGrounding — chat-wonder's callback fetch only knows
+    // about Documents, so transcript content is inlined into resolvedContext text only.
+    const consultationTranscripts = await TranscriptionChunkSvc.relevantChunksForConsultation(
+      consultationId,
+      userInput,
+    );
+    let transcriptGrounding = consultationTranscripts.transcriptionIds.length
+      ? consultationTranscripts
+      : effectiveCaseId
+        ? await TranscriptionChunkSvc.relevantChunksForCase(effectiveCaseId, userInput)
+        : undefined;
+    if (transcriptGrounding && !transcriptGrounding.transcriptionIds.length) transcriptGrounding = undefined;
+    const transcriptContext = transcriptGrounding
+      ? await TranscriptionChunkSvc.formatGroundingContext(transcriptGrounding)
+      : "";
+
+    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext]
+      .filter(Boolean)
+      .join("\n\n");
 
     const cacheKey = responseCacheKey(
       consultationId,
@@ -240,6 +285,8 @@ export default class ChatSvc {
         resolvedContext,
         onSessionRotated,
         grounding,
+        undefined,
+        jurisdiction,
       );
       fullResponse = result.content;
       relatedCases = result.relatedCases;
@@ -306,9 +353,11 @@ export default class ChatSvc {
     resolvedContext: string,
     onSessionRotated?: (newSessionId: string) => void,
     grounding?: CaseDocumentGrounding,
+    caseId?: string,
+    jurisdiction?: Jurisdiction,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, jurisdiction);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
@@ -316,7 +365,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, jurisdiction);
     }
   }
 
@@ -349,9 +398,9 @@ export default class ChatSvc {
     return doc.id;
   }
 
-  static async getRelatedCases(userId: string, consultationId: string) {
+  static async getRelatedCases(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.userId !== userId) {
+    if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 
@@ -363,8 +412,8 @@ export default class ChatSvc {
    * (see sendMessage's audioOverview handling above) — the separate, explicit "Generate
    * Audio" action from the grilling session's plan, never auto-triggered from script
    * generation. Enqueues onto AudioOverviewQueue and returns immediately. */
-  static async startAudioOverviewAudio(userId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationOwned(userId, consultationId);
+  static async startAudioOverviewAudio(organizationId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationOwned(organizationId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
@@ -377,8 +426,8 @@ export default class ChatSvc {
     return { status: "IN_PROGRESS" as const };
   }
 
-  static async pollAudioOverviewAudio(userId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationOwned(userId, consultationId);
+  static async pollAudioOverviewAudio(organizationId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationOwned(organizationId, consultationId);
     const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
     if (!row) throw new HttpError("No Audio Overview script for this message", 404);
 
@@ -392,14 +441,11 @@ export default class ChatSvc {
     return { status: "IN_PROGRESS" as const };
   }
 
-  static buildTitlePrompt(userMessage: string): string {
-    return (
-      `Create a concise title for a Philippine legal consultation.\n` +
-      `Format: [Legal Area]: [Specific Issue] — for example: "Philippine Labor Law: Illegal Dismissal", "Family Code: Custody Rights", "Criminal Law: Estafa"\n` +
-      `Rules: plain text only, no markdown, no quotes, no trailing period, max ${TITLE_MAX_CHARS} characters.\n` +
-      `User asked: ${userMessage.slice(0, TITLE_INPUT_CHARS)}\n` +
-      `Output only the title, nothing else.`
-    );
+  /** jurisdiction defaults to PH to preserve scripts/backfill-titles.ts's existing single-arg
+   * call signature — callers that know the tenant's actual jurisdiction (generateAndSaveTitle
+   * below) must pass it explicitly. */
+  static buildTitlePrompt(userMessage: string, jurisdiction: Jurisdiction = "PH"): string {
+    return getChatTitlePromptBuilder(jurisdiction)(userMessage);
   }
 
   static parseTitle(raw: string): string {
@@ -414,13 +460,14 @@ export default class ChatSvc {
   private static async generateAndSaveTitle(
     consultationId: string,
     userMessage: string,
+    jurisdiction: Jurisdiction,
   ): Promise<void> {
-    const cacheKey = titleCacheKey(userMessage);
+    const cacheKey = titleCacheKey(userMessage, jurisdiction);
 
     let title = await redis.get<string>(cacheKey);
 
     if (!title) {
-      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage));
+      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, jurisdiction));
       if (!raw) return;
       title = ChatSvc.parseTitle(raw);
       if (!title) return;
