@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import { MessageRole, Prisma } from "@prisma/client";
-import { TimelineItem, MindMapItem } from "../utils/response-parser";
+import { TimelineItem, MindMapItem, AudioOverviewTurn } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
@@ -38,7 +38,7 @@ export default class ChatRepo {
     return prisma.message.findMany({
       where: { consultationId },
       orderBy: { createdAt: "asc" },
-      include: { timeline: true, mindMap: true, relatedCases: true },
+      include: { timeline: true, mindMap: true, audioOverview: true, relatedCases: true },
     });
   }
 
@@ -66,6 +66,37 @@ export default class ChatRepo {
     });
   }
 
+  static async saveAudioOverview(
+    messageId: string,
+    turns: AudioOverviewTurn[],
+    voiceHostA: string,
+    voiceHostB: string,
+  ) {
+    return prisma.messageAudioOverview.create({
+      data: { messageId, turns: turns as unknown as Prisma.InputJsonValue, voiceHostA, voiceHostB },
+    });
+  }
+
+  static async findAudioOverviewByMessageId(messageId: string) {
+    return prisma.messageAudioOverview.findUnique({ where: { messageId }, include: { audioFile: true } });
+  }
+
+  static async updateAudioOverviewAudio(
+    messageId: string,
+    data: { audioFileId?: string; audioStatus: "IN_PROGRESS" | "COMPLETED" | "FAILED" },
+  ) {
+    return prisma.messageAudioOverview.update({ where: { messageId }, data });
+  }
+
+  /** Re-queued on boot by AudioOverviewQueue — same "resume work a crash/restart interrupted"
+   * reasoning as DocumentExtractionQueue's listPendingForExtraction. */
+  static async listInProgressAudioOverviews() {
+    return prisma.messageAudioOverview.findMany({
+      where: { audioStatus: "IN_PROGRESS" },
+      select: { messageId: true },
+    });
+  }
+
   static async saveRelatedCases(messageId: string, items: RelatedCase[]) {
     return prisma.messageRelatedCases.create({
       data: { messageId, items: items as unknown as Prisma.InputJsonValue },
@@ -75,7 +106,7 @@ export default class ChatRepo {
   static async findMessageById(messageId: string) {
     return prisma.message.findUnique({
       where: { id: messageId },
-      include: { timeline: true, mindMap: true, relatedCases: true },
+      include: { timeline: true, mindMap: true, audioOverview: true, relatedCases: true },
     });
   }
 

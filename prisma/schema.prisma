@@ -10,24 +10,24 @@ datasource db {
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 model User {
-  id                  String    @id @default(uuid())
-  email               String    @unique
-  password            String?
-  name                String?
-  username            String    @unique
-  role                Role      @default(USER)
-  lastLoginAt         DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  provider            String?
-  googleId            String?   @unique
-  googleAccessToken   String?
-  googleRefreshToken  String?
-  avatarId            String?
-  isEmailVerified     Boolean   @default(false)
-  onboardingCompleted Boolean   @default(false)
-  otpCode             String?
-  otpExpiry           DateTime?
+  id                         String    @id @default(uuid())
+  email                      String    @unique
+  password                   String?
+  name                       String?
+  username                   String    @unique
+  role                       Role      @default(USER)
+  lastLoginAt                DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+  provider                   String?
+  googleId                   String?   @unique
+  googleAccessToken          String?
+  googleRefreshToken         String?
+  avatarId                   String?
+  isEmailVerified            Boolean   @default(false)
+  onboardingCompleted        Boolean   @default(false)
+  otpCode                    String?
+  otpExpiry                  DateTime?
   emailVerificationOtp       String?
   emailVerificationOtpExpiry DateTime?
 
@@ -45,23 +45,23 @@ model User {
   messages                 Message[]
   createdInvites           ConsultationInvite[]
   consultationParticipants ConsultationParticipant[]
-  packageSku               PackageSku @default(SOLO)
-  preferredLanguage        String     @default("en")
+  packageSku               PackageSku                @default(SOLO)
+  preferredLanguage        String                    @default("en")
 
-  cases                    Case[]
-  documents                Document[]
-  bookmarks                Bookmark[]
-  transcriptions           Transcription[]
-  calendarWatchChannels    CalendarWatchChannel[]
-  events                   Event[]
-  terminalWorkspaces       TerminalWorkspace[]
-  organizationMemberships  OrganizationMember[]
-  createdOrganizations     Organization[]        @relation("OrgCreator")
-  ownedRisks               CaseRisk[]
-  auditEvents              AuditEvent[]
-  caseAccesses             CaseAccess[]
-  integrationConnectors    IntegrationConnector[]
-  deadlineConfirmations    ProceduralDeadlineConfirmation[]
+  cases                   Case[]
+  documents               Document[]
+  bookmarks               Bookmark[]
+  transcriptions          Transcription[]
+  calendarWatchChannels   CalendarWatchChannel[]
+  events                  Event[]
+  terminalWorkspaces      TerminalWorkspace[]
+  organizationMemberships OrganizationMember[]
+  createdOrganizations    Organization[]                   @relation("OrgCreator")
+  ownedRisks              CaseRisk[]
+  auditEvents             AuditEvent[]
+  caseAccesses            CaseAccess[]
+  integrationConnectors   IntegrationConnector[]
+  deadlineConfirmations   ProceduralDeadlineConfirmation[]
 }
 
 model Session {
@@ -76,18 +76,19 @@ model Session {
 }
 
 model File {
-  id        String    @id @default(uuid())
-  filename  String?
-  fileUrl   String?
-  s3Key     String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-  metaData  Json?
-  users          User[]
-  transcriptions Transcription[]
-  caseDocuments  Document[]
+  id                  String                 @id @default(uuid())
+  filename            String?
+  fileUrl             String?
+  s3Key               String?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  deletedAt           DateTime?
+  metaData            Json?
+  users               User[]
+  transcriptions      Transcription[]
+  caseDocuments       Document[]
   caseReconstructions CaseReconstruction[]
+  audioOverviews      MessageAudioOverview[]
 }
 
 enum Role {
@@ -132,13 +133,14 @@ model Message {
   userId          String?
   parentMessageId String?
 
-  consultation Consultation     @relation(fields: [consultationId], references: [id], onDelete: Cascade)
-  user         User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
-  parent       Message?         @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
-  replies      Message[]        @relation("MessageThread")
-  timeline     MessageTimeline?
-  mindMap      MessageMindMap?
-  relatedCases MessageRelatedCases?
+  consultation  Consultation          @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  user          User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parent        Message?              @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  replies       Message[]             @relation("MessageThread")
+  timeline      MessageTimeline?
+  mindMap       MessageMindMap?
+  audioOverview MessageAudioOverview?
+  relatedCases  MessageRelatedCases?
 
   @@index([consultationId])
   @@index([userId])
@@ -161,6 +163,26 @@ model MessageMindMap {
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+model MessageAudioOverview {
+  id          String               @id @default(uuid())
+  messageId   String               @unique
+  turns       Json
+  voiceHostA  String
+  voiceHostB  String
+  audioFileId String?
+  audioStatus AudioOverviewStatus?
+  createdAt   DateTime             @default(now())
+
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  audioFile File?   @relation(fields: [audioFileId], references: [id])
+}
+
+enum AudioOverviewStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
 }
 
 model MessageRelatedCases {
@@ -205,34 +227,34 @@ model ConsultationParticipant {
 // ── Case Management ────────────────────────────────────────────────────────────
 
 model Case {
-  id             String   @id @default(uuid())
-  userId         String
-  organizationId String?
-  caseName       String
-  actionType     String?
-  jurisdiction   String?
-  language       String   @default("en")
-  notes          String?  @db.Text
+  id              String    @id @default(uuid())
+  userId          String
+  organizationId  String?
+  caseName        String
+  actionType      String?
+  jurisdiction    String?
+  language        String    @default("en")
+  notes           String?   @db.Text
   lastRefreshedAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization?     @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  documents      Document[]
-  parties        Party[]
-  consultations  Consultation[]
-  transcriptions Transcription[]
-  events         Event[]
-  timelineEvents CaseTimelineEvent[]
-  risks          CaseRisk[]
-  evidenceMatrix EvidenceMatrixItem[]
-  contradictions EvidenceContradiction[]
-  citationChecks CitationCheck[]
-  deadlines      ProceduralDeadline[]
-  procedureItems ProcedureItem[]
-  accesses       CaseAccess[]
-  auditEvents    AuditEvent[]
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  documents         Document[]
+  parties           Party[]
+  consultations     Consultation[]
+  transcriptions    Transcription[]
+  events            Event[]
+  timelineEvents    CaseTimelineEvent[]
+  risks             CaseRisk[]
+  evidenceMatrix    EvidenceMatrixItem[]
+  contradictions    EvidenceContradiction[]
+  citationChecks    CitationCheck[]
+  deadlines         ProceduralDeadline[]
+  procedureItems    ProcedureItem[]
+  accesses          CaseAccess[]
+  auditEvents       AuditEvent[]
   findings          CaseFinding[]
   witnesses         Witness[]
   damageClaims      DamageClaim[]
@@ -257,21 +279,21 @@ model Party {
 // ── Case Documents ───────────────────────────────────────────────────────────
 
 model Document {
-  id             String    @id @default(uuid())
-  userId         String
-  caseId         String?
-  consultationId String?
-  name           String
-  fileId         String?
-  documentType   String?
-  fileSize       Int?
-  mimeType       String?
-  ragStatus          RagStatus @default(PENDING)
-  language           String    @default("en")
-  pageCount          Int?
-  extractionMethod   String?
-  ocrAttempted       Boolean   @default(false)
-  createdAt          DateTime  @default(now())
+  id               String    @id @default(uuid())
+  userId           String
+  caseId           String?
+  consultationId   String?
+  name             String
+  fileId           String?
+  documentType     String?
+  fileSize         Int?
+  mimeType         String?
+  ragStatus        RagStatus @default(PENDING)
+  language         String    @default("en")
+  pageCount        Int?
+  extractionMethod String?
+  ocrAttempted     Boolean   @default(false)
+  createdAt        DateTime  @default(now())
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   case         Case?               @relation(fields: [caseId], references: [id])
@@ -306,10 +328,10 @@ model CaseDocumentChunk {
   createdAt      DateTime                     @default(now())
 
   caseDocument Document @relation(fields: [caseDocumentId], references: [id], onDelete: Cascade)
-
-  @@index([caseDocumentId])
   // HNSW cosine index on embedding is in SQL (Prisma cannot declare pgvector opclasses):
   // CaseDocumentChunk_embedding_hnsw_idx — see 20260820133000_add_case_document_chunk_embedding_hnsw
+
+  @@index([caseDocumentId])
 }
 
 // ── Legal Source Analysis Cache ───────────────────────────────────────────────
@@ -399,17 +421,17 @@ model Event {
 // ── Transcription ─────────────────────────────────────────────────────────────
 
 model Transcription {
-  id           String   @id @default(uuid())
-  userId       String
-  caseId       String?
-  audioFileId  String?
-  title        String?
-  transcript   String?  @db.Text
-  duration     Float?
-  jobName      String?
-  status       String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id          String   @id @default(uuid())
+  userId      String
+  caseId      String?
+  audioFileId String?
+  title       String?
+  transcript  String?  @db.Text
+  duration    Float?
+  jobName     String?
+  status      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   user      User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   case      Case? @relation(fields: [caseId], references: [id])
@@ -506,14 +528,14 @@ enum ConnectorStatus {
 }
 
 model TerminalWorkspace {
-  id         String           @id @default(uuid())
+  id         String          @id @default(uuid())
   userId     String
   name       String
   preset     WorkspacePreset
   layoutJson Json
-  isLastUsed Boolean          @default(false)
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
+  isLastUsed Boolean         @default(false)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -563,17 +585,17 @@ model CaseRisk {
 }
 
 model EvidenceMatrixItem {
-  id             String   @id @default(uuid())
-  caseId         String
-  documentId     String
-  authenticity   String   @default("unverified")
-  admissibility  String   @default("unverified")
-  probative      String   @default("unverified")
-  originalFile   Boolean  @default(true)
-  needsVerify    Boolean  @default(true)
-  notes          String?  @db.Text
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(uuid())
+  caseId        String
+  documentId    String
+  authenticity  String   @default("unverified")
+  admissibility String   @default("unverified")
+  probative     String   @default("unverified")
+  originalFile  Boolean  @default(true)
+  needsVerify   Boolean  @default(true)
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -601,15 +623,15 @@ model EvidenceContradiction {
 }
 
 model CitationCheck {
-  id             String                  @id @default(uuid())
+  id             String                 @id @default(uuid())
   caseId         String
-  quotedText     String                  @db.Text
+  quotedText     String                 @db.Text
   citedReference String?
   sourceUrl      String?
-  officialText   String?                 @db.Text
-  status         CitationValidityStatus  @default(UNVERIFIED)
-  notes          String?                 @db.Text
-  checkedAt      DateTime                @default(now())
+  officialText   String?                @db.Text
+  status         CitationValidityStatus @default(UNVERIFIED)
+  notes          String?                @db.Text
+  checkedAt      DateTime               @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -630,8 +652,8 @@ model ProceduralDeadline {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  case           Case                               @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  confirmations  ProceduralDeadlineConfirmation[]
+  case          Case                             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  confirmations ProceduralDeadlineConfirmation[]
 
   @@index([caseId])
 }
@@ -683,13 +705,13 @@ enum FindingCategory {
 // as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
 // manually-created rows (different/no notes) are left alone.
 model CaseFinding {
-  id        String           @id @default(uuid())
+  id        String          @id @default(uuid())
   caseId    String
   category  FindingCategory
   label     String
   notes     String?
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -784,10 +806,10 @@ model Organization {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  createdBy   User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
-  members     OrganizationMember[]
-  cases       Case[]
-  connectors  IntegrationConnector[]
+  createdBy  User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  members    OrganizationMember[]
+  cases      Case[]
+  connectors IntegrationConnector[]
 
   @@index([createdById])
 }
@@ -835,14 +857,14 @@ model AuditEvent {
 }
 
 model JurisdictionModule {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  name      String
-  enabled   Boolean  @default(true)
-  language  String   @default("en")
+  id         String   @id @default(uuid())
+  code       String   @unique
+  name       String
+  enabled    Boolean  @default(true)
+  language   String   @default("en")
   configJson Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model IntegrationConnector {
@@ -861,4 +883,3 @@ model IntegrationConnector {
   @@index([userId])
   @@index([organizationId])
 }
-

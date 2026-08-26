@@ -84,6 +84,24 @@ export default class ChatCtrl {
     return res.status(204).send();
   }
 
+  static async generateAudioOverviewAudio(req: Request, res: Response) {
+    const result = await ChatSvc.startAudioOverviewAudio(
+      req.user.userId,
+      req.params.consultationId,
+      req.params.messageId,
+    );
+    return res.status(200).json(result);
+  }
+
+  static async pollAudioOverviewAudio(req: Request, res: Response) {
+    const result = await ChatSvc.pollAudioOverviewAudio(
+      req.user.userId,
+      req.params.consultationId,
+      req.params.messageId,
+    );
+    return res.status(200).json(result);
+  }
+
   static async sendMessage(req: Request, res: Response) {
     const { consultationId } = req.params;
     const { message, sessionId, documentContext, caseDocumentId, caseId } = req.body;

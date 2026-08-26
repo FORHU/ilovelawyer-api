@@ -19,6 +19,14 @@ router.get("/consultations/:consultationId/related-cases", asyncHandler(ChatCtrl
 router.post("/consultations/:consultationId/relevant-chunks", asyncHandler(ChatCtrl.relevantChunks));
 router.post("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.sendMessage));
 router.delete("/consultations/:consultationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
+router.post(
+  "/consultations/:consultationId/messages/:messageId/audio-overview/audio",
+  asyncHandler(ChatCtrl.generateAudioOverviewAudio),
+);
+router.get(
+  "/consultations/:consultationId/messages/:messageId/audio-overview/audio/poll",
+  asyncHandler(ChatCtrl.pollAudioOverviewAudio),
+);
 
 // Invites
 router.post("/consultations/:consultationId/invites", asyncHandler(InviteCtrl.create));

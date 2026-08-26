@@ -17,6 +17,11 @@ export interface MindMapItem {
   children: MindMapItem[];
 }
 
+export interface AudioOverviewTurn {
+  speaker: "HOST_A" | "HOST_B";
+  text: string;
+}
+
 /**
  * Extracts a timeline from AI responses.
  * Supports: [TIMELINE]...[/TIMELINE] JSON wrapper, an unclosed tag (streaming cutoff),
@@ -93,6 +98,32 @@ export function parseStructuredDataPayload(raw: string): {
   const nested = anyV.mindMap ?? anyV.mindmap ?? anyV.mind_map;
   const mindMap = nested ? normalizeMindMap(nested) : normalizeMindMap(parsed);
   return { timeline, mindMap };
+}
+
+/**
+ * Chat Wonder's dedicated `[AUDIO_OVERVIEW_DATA]{"turns":[...]}` frame (the_server.py's
+ * `_generate_audio_overview_script`, gated by `_wants_audio_overview` — only sent when the
+ * hidden Audio Overview trigger message asked for it, unlike STRUCTURED_DATA which is
+ * unconditional). Always its own clean frame, never inline-embedded in the streamed answer
+ * text the way [MINDMAP]/[TIMELINE] are, so — unlike extractMindMap below — this doesn't need
+ * to tolerate a streaming-cutoff partial tag.
+ */
+export function parseAudioOverviewPayload(raw: string): AudioOverviewTurn[] | undefined {
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const turns = (parsed as { turns?: unknown }).turns;
+  if (!Array.isArray(turns) || turns.length === 0) return undefined;
+  const valid = turns.filter((t): t is AudioOverviewTurn => {
+    const anyT: any = t;
+    return (
+      !!anyT &&
+      typeof anyT === "object" &&
+      (anyT.speaker === "HOST_A" || anyT.speaker === "HOST_B") &&
+      typeof anyT.text === "string" &&
+      anyT.text.trim().length > 0
+    );
+  });
+  return valid.length > 0 ? valid : undefined;
 }
 
 /**
