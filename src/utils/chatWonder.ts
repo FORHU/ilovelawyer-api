@@ -2,8 +2,9 @@ import axios from "axios";
 import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
+import logger from "./logger";
 import { Jurisdiction } from "../types/jurisdiction";
-import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
+import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, LEGAL_TAG_UK, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
 import { parseStructuredDataPayload, parseAudioOverviewPayload, MindMapItem, TimelineItem, AudioOverviewTurn } from "./response-parser";
@@ -46,9 +47,8 @@ export async function callChatWonderRest(
   prompt: string,
   sessionId: string,
   grounding?: CaseDocumentGrounding | string,
-  // Additive, currently ignored by chat-wonder-v2-api — wired ahead of that service adding
-  // jurisdiction-aware tool routing. See UK_PERSONA_PENDING in
-  // legal/uk/legal-knowledge/uk-legal-knowledge.provider.ts for what's still pending there.
+  // Routes to chat-wonder-v2-api's `legal_uk` persona (its own UK tool whitelist and prompt)
+  // instead of the PH-only default — see the_server.py::process_persona.
   jurisdiction?: Jurisdiction,
 ): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
   const resolved = normalizeGrounding(grounding);
@@ -77,6 +77,7 @@ export async function callChatWonderRest(
         : []);
   }
 
+  logger.info("Chat Wonder REST payload", { url: `${CHAT_WONDER_API_URL}/chat`, ...payload });
   const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload);
   return data;
 }
@@ -113,12 +114,17 @@ export interface RelatedCase {
 
 function stripLegalTag(input: string): string {
   const lower = input.toLowerCase();
-  if (!lower.startsWith(LEGAL_TAG)) return input;
-  return input.slice(LEGAL_TAG.length).trimStart();
+  if (lower.startsWith(LEGAL_TAG_UK)) return input.slice(LEGAL_TAG_UK.length).trimStart();
+  if (lower.startsWith(LEGAL_TAG)) return input.slice(LEGAL_TAG.length).trimStart();
+  return input;
 }
 
-function withLegalTag(input: string): string {
-  return `${LEGAL_TAG} ${stripLegalTag(input)}`;
+// Picks the tag directly instead of relying on the separate `jurisdiction` payload field —
+// the_server.py::process_persona checks this tag first, before its jurisdiction fallback, so
+// this alone determines legal vs. legal_uk with no dependency on that field being read correctly.
+function withLegalTag(input: string, jurisdiction?: Jurisdiction): string {
+  const tag = jurisdiction === "UK" ? LEGAL_TAG_UK : LEGAL_TAG;
+  return `${tag} ${stripLegalTag(input)}`;
 }
 
 export async function generateTitleViaWs(prompt: string): Promise<string> {
@@ -191,8 +197,8 @@ export function streamChatWonderMessage(
    * user_input when this is set, so chat-wonder is never told the tag format for a general
    * (no-Case) Consultation. */
   caseId?: string,
-  // Additive, currently ignored by chat-wonder-v2-api — see callChatWonderRest's jurisdiction
-  // param above for why this is here.
+  // Selects LEGAL_TAG vs. LEGAL_TAG_UK in withLegalTag below — not forwarded as a payload
+  // field (see that function's comment for why the tag alone is enough).
   jurisdiction?: Jurisdiction,
 ): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
@@ -264,18 +270,14 @@ export function streamChatWonderMessage(
             document_context?: string;
             case_document_ids?: string[];
             case_document_chunk_ids?: string[];
-            jurisdiction?: Jurisdiction;
           } = {
             type: "chat",
-            user_input: withLegalTag(userInput) + (caseId ? MINDMAP_RULE : ""),
+            user_input: withLegalTag(userInput, jurisdiction) + (caseId ? MINDMAP_RULE : ""),
             session_id: sessionId,
             use_full_legal_chain: false,
           };
           if (documentContext) {
             payload.document_context = documentContext;
-          }
-          if (jurisdiction) {
-            payload.jurisdiction = jurisdiction;
           }
           // Always send case_document_ids (including []) so chat-wonder replaces
           // session-scoped active_case_documents instead of keeping prior-case docs.
@@ -284,6 +286,13 @@ export function streamChatWonderMessage(
           if (resolved) {
             payload.case_document_chunk_ids = chunkIds;
           }
+          // document_context can be the full text of one or more case documents — logged as a
+          // length, not inline, so one chatty turn doesn't blow up combined.log.
+          logger.info("Chat Wonder WS payload", {
+            url: CHAT_WONDER_WS_URL,
+            ...payload,
+            document_context: payload.document_context ? `[${payload.document_context.length} chars]` : undefined,
+          });
           ws.send(JSON.stringify(payload));
         })
         .catch((err) => fail(err instanceof Error ? err : new Error(String(err))));

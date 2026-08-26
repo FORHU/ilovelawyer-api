@@ -1,6 +1,11 @@
 export const SESSION_RETRIES = 3;
 export const RETRY_DELAY_MS = 1000;
 export const LEGAL_TAG = "[legal ai]";
+/** the_server.py::process_persona checks this exact tag before falling back to the
+ * `jurisdiction` request field — sending it directly picks the `legal_uk` persona (its own
+ * UK tool whitelist and prompt) without depending on that field at all. See
+ * streamChatWonderMessage's withLegalTag, which picks between this and LEGAL_TAG. */
+export const LEGAL_TAG_UK = "[legal ai uk]";
 /** Legal persona sends `__END__` first, then `[STRUCTURED_DATA]` (timeline + mind map)
  * on a second LLM call, then `[DONE]`. Wait this long after `__END__` for that frame. */
 export const STRUCTURED_DATA_WAIT_MS = 45_000;

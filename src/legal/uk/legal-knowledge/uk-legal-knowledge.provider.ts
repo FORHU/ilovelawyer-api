@@ -64,14 +64,11 @@ export class UKLegalKnowledgeProvider implements LegalKnowledgeProvider {
   }
 }
 
-/**
- * The live AI consultation chat (chat.service.ts -> chatWonder.ts) is grounded through the
- * external chat-wonder-v2-api service, which has no jurisdiction-aware tool routing yet (its
- * search_jurisprudence/search_republic_acts/get_case/get_republic_act MCP tools are PH-only,
- * "juris.ph"). This is a separate repo, not covered by this codebase. The `jurisdiction` field
- * added to its request payloads (see chatWonder.ts) is additive plumbing only — this flag marks
- * that chat-wonder-v2-api itself has not yet been updated to consume it or provide a UK persona.
- * Structured AI features (red-team, case-finding, case-reconstruction, case-strategy, chat
- * titles) are unaffected — those already route through prompt-registry.ts's UK builders.
- */
-export const UK_PERSONA_PENDING = true;
+// The live AI consultation chat (chat.service.ts -> chatWonder.ts) is grounded through the
+// external chat-wonder-v2-api service (a separate repo, not covered by this codebase). Its
+// the_server.py::process_persona reads the `jurisdiction` field this service sends (see
+// chatWonder.ts) and routes UK requests to a dedicated `legal_uk` persona — its own UK tool
+// whitelist (case_law_search, legislation_*, parliament_*, hmrc_*, ...) and prompt
+// (resources/prompts/legal_prompt_uk.txt), not the PH-only juris.ph tools. Structured AI
+// features (red-team, case-finding, case-reconstruction, case-strategy, chat titles) are
+// separate from this and already route through prompt-registry.ts's UK builders.
