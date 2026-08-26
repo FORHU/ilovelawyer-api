@@ -32,6 +32,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.0",
+    "ffmpeg-static": "^5.3.0",
     "google-auth-library": "^10.7.0",
     "handlebars": "^4.7.8",
     "helmet": "^7.0.0",

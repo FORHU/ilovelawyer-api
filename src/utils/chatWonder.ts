@@ -5,7 +5,7 @@ import HttpError from "./http-error";
 import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
-import { parseStructuredDataPayload, MindMapItem, TimelineItem } from "./response-parser";
+import { parseStructuredDataPayload, parseAudioOverviewPayload, MindMapItem, TimelineItem, AudioOverviewTurn } from "./response-parser";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -169,6 +169,9 @@ export interface ChatWonderStreamResult {
   /** From Chat Wonder's post-`__END__` `[STRUCTURED_DATA]` frame (legal persona). */
   mindMap?: MindMapItem;
   timeline?: TimelineItem[];
+  /** From Chat Wonder's post-`__END__` `[AUDIO_OVERVIEW_DATA]` frame — only present when the
+   * turn's user_input matched the_server.py's `_wants_audio_overview` trigger check. */
+  audioOverview?: AudioOverviewTurn[];
 }
 
 export function streamChatWonderMessage(
@@ -190,6 +193,7 @@ export function streamChatWonderMessage(
     let relatedCases: RelatedCase[] = [];
     let structuredMindMap: MindMapItem | undefined;
     let structuredTimeline: TimelineItem[] | undefined;
+    let audioOverviewTurns: AudioOverviewTurn[] | undefined;
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
     const resolved = normalizeGrounding(grounding);
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
@@ -218,6 +222,7 @@ export function streamChatWonderMessage(
         relatedCases,
         mindMap: structuredMindMap,
         timeline: structuredTimeline,
+        audioOverview: audioOverviewTurns,
       });
     };
 
@@ -291,6 +296,18 @@ export function streamChatWonderMessage(
         const parsed = parseStructuredDataPayload(payload);
         if (parsed.mindMap) structuredMindMap = parsed.mindMap;
         if (parsed.timeline) structuredTimeline = parsed.timeline;
+        if (doneIdx !== -1) finish();
+        return;
+      }
+
+      // Only ever sent when this turn's input matched the_server.py's audio-overview
+      // trigger check — absent on every other legal turn, unlike STRUCTURED_DATA above.
+      const audioOverviewIdx = message.indexOf("[AUDIO_OVERVIEW_DATA]");
+      if (audioOverviewIdx !== -1) {
+        let payload = message.slice(audioOverviewIdx + "[AUDIO_OVERVIEW_DATA]".length);
+        const doneIdx = payload.indexOf("[DONE]");
+        if (doneIdx !== -1) payload = payload.slice(0, doneIdx);
+        audioOverviewTurns = parseAudioOverviewPayload(payload);
         if (doneIdx !== -1) finish();
         return;
       }

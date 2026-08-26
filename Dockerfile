@@ -13,7 +13,9 @@ RUN npx prisma generate
 RUN npm run build
 
 FROM node:22-alpine AS runner
-RUN apk add --no-cache openssl
+# ffmpeg — Audio Overview's turn-by-turn Polly clips are merged with it (concat demuxer, no
+# re-encoding) rather than naive Buffer concatenation, which glitches at each stitch point.
+RUN apk add --no-cache openssl ffmpeg
 WORKDIR /app
 
 ENV NODE_ENV=production

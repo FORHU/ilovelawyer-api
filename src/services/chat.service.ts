@@ -6,9 +6,13 @@ import DocumentRepo from "../repositories/document.repository";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
-import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem } from "../utils/response-parser";
+import logger from "../utils/logger";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem, AudioOverviewTurn } from "../utils/response-parser";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
+import { voicePairForCase } from "../utils/audio-overview-voices";
+import AudioOverviewQueue from "../queues/audio-overview.queue";
+import { getPresignedGetUrl } from "../utils/s3";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
@@ -202,22 +206,31 @@ export default class ChatSvc {
       relatedCases: RelatedCase[];
       mindMap?: MindMapItem;
       timeline?: TimelineItem[];
+      audioOverview?: AudioOverviewTurn[];
     }>(cacheKey);
     // Map-generation turns used to cache text-only replies (the mind map arrives on a
     // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
     const wantsMindMap = /visual strategy map|mind\s*map/i.test(userInput);
-    const useCache = Boolean(cached) && (!wantsMindMap || cached?.mindMap);
+    // Same trigger check as the_server.py's _wants_audio_overview. Unlike mind map, Audio
+    // Overview is meant to produce a fresh script on every explicit generate click (the tile's
+    // onClick always calls this) — so it must never read from the response cache, only skip
+    // writing to it would still leave the very next click hitting the stale entry from this one.
+    const wantsAudioOverview = /audio overview/i.test(userInput);
+    const useCache =
+      Boolean(cached) && !wantsAudioOverview && (!wantsMindMap || cached?.mindMap);
 
     let fullResponse: string;
     let relatedCases: RelatedCase[];
     let streamedMindMap: MindMapItem | undefined;
     let streamedTimeline: TimelineItem[] | undefined;
+    let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     if (useCache && cached) {
       onChunk(cached.content);
       fullResponse = cached.content;
       relatedCases = cached.relatedCases;
       streamedMindMap = cached.mindMap;
       streamedTimeline = cached.timeline;
+      streamedAudioOverview = cached.audioOverview;
     } else {
       const result = await ChatSvc.streamWithSessionRetry(
         consultationId,
@@ -232,15 +245,26 @@ export default class ChatSvc {
       relatedCases = result.relatedCases;
       streamedMindMap = result.mindMap;
       streamedTimeline = result.timeline;
+      streamedAudioOverview = result.audioOverview;
       redis.set(
         cacheKey,
-        { content: fullResponse, relatedCases, mindMap: streamedMindMap, timeline: streamedTimeline },
+        {
+          content: fullResponse,
+          relatedCases,
+          mindMap: streamedMindMap,
+          timeline: streamedTimeline,
+          audioOverview: streamedAudioOverview,
+        },
         RESPONSE_CACHE_TTL,
       );
     }
 
     const timeline = streamedTimeline ?? extractTimeline(fullResponse);
     const mindMap = streamedMindMap ?? extractMindMap(fullResponse);
+    // No text-fallback re-parse here, unlike timeline/mindMap above — audioOverview only ever
+    // arrives as Chat Wonder's dedicated [AUDIO_OVERVIEW_DATA] frame (see chatWonder.ts),
+    // never inline in fullResponse, so there's nothing to re-extract from it.
+    const audioOverview = streamedAudioOverview;
     const cleanedContent = stripStructuredBlocks(fullResponse);
 
     const assistantMessage = await ChatRepo.createMessage(
@@ -256,6 +280,15 @@ export default class ChatSvc {
       await CaseTimelineSvc.promoteFromAi(effectiveCaseId, timeline, userId).catch(() => {});
     }
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
+    if (audioOverview) {
+      const { hostA, hostB } = voicePairForCase(effectiveCaseId ?? consultationId);
+      // By this point the assistant's text has already streamed to the client — a failure
+      // here (e.g. the MessageAudioOverview migration not applied yet) must never take the
+      // already-delivered response down with it, same reasoning as promoteFromAi's .catch above.
+      await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB).catch((err) => {
+        logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
+      });
+    }
     if (relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, relatedCases);
   }
 
@@ -324,6 +357,39 @@ export default class ChatSvc {
 
     const message = await ChatRepo.findLatestAssistantMessage(consultationId);
     return message?.relatedCases?.items ?? [];
+  }
+
+  /** Starts rendering the audio for a message's already-generated Audio Overview script
+   * (see sendMessage's audioOverview handling above) — the separate, explicit "Generate
+   * Audio" action from the grilling session's plan, never auto-triggered from script
+   * generation. Enqueues onto AudioOverviewQueue and returns immediately. */
+  static async startAudioOverviewAudio(userId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationOwned(userId, consultationId);
+    const message = await ChatRepo.findMessageById(messageId);
+    if (!message || message.consultationId !== consultationId) {
+      throw new HttpError("Message not found", 404);
+    }
+    const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
+    if (!row) throw new HttpError("No Audio Overview script for this message yet", 404);
+
+    await ChatRepo.updateAudioOverviewAudio(messageId, { audioStatus: "IN_PROGRESS" });
+    AudioOverviewQueue.enqueue(messageId);
+    return { status: "IN_PROGRESS" as const };
+  }
+
+  static async pollAudioOverviewAudio(userId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationOwned(userId, consultationId);
+    const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
+    if (!row) throw new HttpError("No Audio Overview script for this message", 404);
+
+    if (row.audioStatus === "COMPLETED" && row.audioFile?.s3Key) {
+      return {
+        status: "COMPLETED" as const,
+        audioFile: { id: row.audioFile.id, fileUrl: await getPresignedGetUrl(row.audioFile.s3Key) },
+      };
+    }
+    if (row.audioStatus === "FAILED") return { status: "FAILED" as const };
+    return { status: "IN_PROGRESS" as const };
   }
 
   static buildTitlePrompt(userMessage: string): string {
