@@ -102,18 +102,19 @@ model Session {
 }
 
 model File {
-  id                  String               @id @default(uuid())
+  id                  String                 @id @default(uuid())
   filename            String?
   fileUrl             String?
   s3Key               String?
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
   deletedAt           DateTime?
   metaData            Json?
   users               User[]
   transcriptions      Transcription[]
   caseDocuments       Document[]
   caseReconstructions CaseReconstruction[]
+  audioOverviews      MessageAudioOverview[]
 }
 
 enum Role {
@@ -166,10 +167,11 @@ model Message {
   user         User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
   parent       Message?             @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
   replies      Message[]            @relation("MessageThread")
-  timeline     MessageTimeline?
-  mindMap      MessageMindMap?
-  relatedCases MessageRelatedCases?
-  documents    Document[]
+  timeline      MessageTimeline?
+  mindMap       MessageMindMap?
+  relatedCases  MessageRelatedCases?
+  audioOverview MessageAudioOverview?
+  documents     Document[]
 
   @@index([consultationId])
   @@index([userId])
@@ -201,6 +203,28 @@ model MessageRelatedCases {
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+// Restored after the tenant-implementation merge dropped the model declaration while its
+// migration (20260825153126_) stayed applied — see ChatRepo's audio-overview methods.
+model MessageAudioOverview {
+  id          String               @id @default(uuid())
+  messageId   String               @unique
+  turns       Json
+  voiceHostA  String
+  voiceHostB  String
+  audioFileId String?
+  audioStatus AudioOverviewStatus?
+  createdAt   DateTime             @default(now())
+
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  audioFile File?   @relation(fields: [audioFileId], references: [id])
+}
+
+enum AudioOverviewStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
 }
 
 enum MessageRole {

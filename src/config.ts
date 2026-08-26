@@ -49,3 +49,8 @@ export const CLOUDFRONT_URL = process.env.CLOUDFRONT_URL as string;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY as string;
 export const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL as string;
 export const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD as string;
+/** Defaults to relying on PATH (works in the Docker image — `apk add ffmpeg` puts it there).
+ * Override locally when a fresh install's PATH change hasn't propagated to the running shell
+ * yet (a Windows/winget quirk, not something restarting nodemon alone fixes) — point this at
+ * the binary directly instead. */
+export const FFMPEG_PATH = process.env.FFMPEG_PATH || "ffmpeg";
