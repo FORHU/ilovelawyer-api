@@ -86,7 +86,7 @@ export default class ChatCtrl {
 
   static async generateAudioOverviewAudio(req: Request, res: Response) {
     const result = await ChatSvc.startAudioOverviewAudio(
-      req.user.userId,
+      req.organization!.id,
       req.params.consultationId,
       req.params.messageId,
     );
@@ -95,7 +95,7 @@ export default class ChatCtrl {
 
   static async pollAudioOverviewAudio(req: Request, res: Response) {
     const result = await ChatSvc.pollAudioOverviewAudio(
-      req.user.userId,
+      req.organization!.id,
       req.params.consultationId,
       req.params.messageId,
     );
@@ -156,6 +156,7 @@ export default class ChatCtrl {
 
     await ChatSvc.sendMessage(
       req.organization!.id,
+      req.organization!.jurisdiction,
       req.user.userId,
       consultationId,
       sessionId,

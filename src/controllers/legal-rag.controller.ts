@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import Joi from "joi";
 import LegalRagSvc from "../services/legal-rag.service";
 import HttpError from "../utils/http-error";
+import { getTenantContext } from "../utils/tenant-context";
+import { getLegalKnowledgeProvider } from "../legal/legal-knowledge.registry";
 
 export default class LegalRagCtrl {
   static async categories(req: Request, res: Response) {
@@ -9,12 +11,14 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+
     if (value.category) {
-      const subcategories = await LegalRagSvc.getSubcategories(value.category);
+      const subcategories = await provider.getSubcategories(value.category);
       return res.status(200).json({ subcategories });
     }
 
-    const categories = await LegalRagSvc.getCategories();
+    const categories = await provider.getCategories();
     return res.status(200).json({ categories });
   }
 
@@ -32,13 +36,15 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await LegalRagSvc.list(value);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const result = await provider.list(value);
 
     return res.status(200).json(result);
   }
 
-  static async librarySections(_req: Request, res: Response) {
-    const sections = await LegalRagSvc.getLibrarySections();
+  static async librarySections(req: Request, res: Response) {
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const sections = await provider.getLibrarySections();
     return res.status(200).json({ sections });
   }
 
@@ -53,7 +59,8 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const results = await LegalRagSvc.vectorSearch(value.embedding, value.limit, value.offset, value.minSimilarity);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const results = await provider.vectorSearch(value.embedding, value.limit, value.offset, value.minSimilarity);
     return res.status(200).json({ results });
   }
 
@@ -69,7 +76,8 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const related = await LegalRagSvc.getRelated(id, value.limit);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const related = await provider.getRelated(id, value.limit);
     return res.status(200).json({ related });
   }
 
@@ -117,14 +125,16 @@ export default class LegalRagCtrl {
       throw new HttpError("Invalid case law document ID", 400);
     }
 
-    const doc = await LegalRagSvc.getById(id);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const doc = await provider.getById(id);
     return res.status(200).json(doc);
   }
 
   static async getSourcePageDoc(req: Request, res: Response) {
     const { itemId } = req.params;
     const titleHint = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
-    const doc = await LegalRagSvc.getSourcePageDoc(itemId, titleHint);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const doc = await provider.getSourcePageDoc(itemId, titleHint);
     return res.status(200).json(doc);
   }
 
@@ -137,7 +147,8 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const results = await LegalRagSvc.search(value.q, value.limit);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const results = await provider.search(value.q, value.limit);
     return res.status(200).json(results);
   }
 }

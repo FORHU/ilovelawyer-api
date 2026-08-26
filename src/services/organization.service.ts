@@ -1,4 +1,4 @@
-import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku, Jurisdiction } from "@prisma/client";
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import AuthRepo from "../repositories/auth.repository";
@@ -11,9 +11,9 @@ import { slugify } from "../utils/slug";
 import { CLIENT_URL } from "../config";
 
 export default class OrganizationSvc {
-  static async create(userId: string, name: string, packageSku?: PackageSku) {
+  static async create(userId: string, name: string, packageSku: PackageSku | undefined, jurisdiction: Jurisdiction) {
     const slug = await OrganizationSvc.generateUniqueSlug(name);
-    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL");
+    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", jurisdiction);
   }
 
   private static async generateUniqueSlug(name: string): Promise<string> {

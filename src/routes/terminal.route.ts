@@ -1,12 +1,16 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
+import resolveOrganization from "../middleware/resolve-organization.middleware";
 import TerminalWorkspaceCtrl from "../controllers/terminal-workspace.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
 
 const router = express.Router();
 
-router.use(validSession);
+// resolveOrganization added so /procedure-rules can resolve the caller's tenant jurisdiction
+// (see CaseTerminalCtrl.procedureRules) — the frontend already sends X-Organization-Id on
+// every authenticated request once an org is active, so this is a no-op for the other routes.
+router.use(validSession, asyncHandler(resolveOrganization));
 
 router.get("/catalog", asyncHandler(TerminalWorkspaceCtrl.catalog));
 router.get("/metrics", asyncHandler(TerminalWorkspaceCtrl.metrics));

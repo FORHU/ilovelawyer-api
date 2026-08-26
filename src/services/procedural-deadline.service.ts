@@ -1,12 +1,13 @@
 import CaseAccess from "../utils/case-access";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
-import { computePhilippineDeadline, listDeadlineRules } from "../utils/ph-deadline";
+import { getDeadlineEngine } from "../legal/deadline-engine.registry";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
+import { Jurisdiction } from "../types/jurisdiction";
 
 export default class ProceduralDeadlineSvc {
-  static rules() {
-    return listDeadlineRules();
+  static rules(jurisdiction: Jurisdiction) {
+    return getDeadlineEngine(jurisdiction).listRules();
   }
 
   static async list(caseId: string, userId: string) {
@@ -27,12 +28,8 @@ export default class ProceduralDeadlineSvc {
     const triggerDate = new Date(body.triggerDate);
     if (Number.isNaN(triggerDate.getTime())) throw new HttpError("Invalid triggerDate", 400);
 
-    let computation;
-    try {
-      computation = computePhilippineDeadline(body.ruleCode, triggerDate);
-    } catch (err) {
-      throw new HttpError((err as Error).message, 400);
-    }
+    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
+    const computation = getDeadlineEngine(jurisdiction).calculate(body.ruleCode, triggerDate);
 
     const row = await ProceduralDeadlineRepo.create(caseId, {
       label: computation.rule.label,

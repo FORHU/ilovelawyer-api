@@ -22,7 +22,7 @@ export default async function resolveOrganization(req: Request, _res: Response, 
   }
 
   const membership = await OrganizationSvc.requireMembership(organizationId, req.user.userId);
-  req.organization = { id: organizationId, role: membership.role };
+  req.organization = { id: organizationId, role: membership.role, jurisdiction: membership.organization.jurisdiction };
   next();
 }
 
@@ -38,7 +38,7 @@ export function resolveOrganizationFromParam(paramName = "id") {
     if (!organizationId) throw new HttpError(`Missing :${paramName} route param`, 400);
 
     const membership = await OrganizationSvc.requireMembership(organizationId, req.user.userId);
-    req.organization = { id: organizationId, role: membership.role };
+    req.organization = { id: organizationId, role: membership.role, jurisdiction: membership.organization.jurisdiction };
     next();
   };
 }

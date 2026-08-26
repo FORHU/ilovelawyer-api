@@ -2,11 +2,13 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../repositories/auth.repository";
+import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import loginToken from "../utils/loginToken";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import type { Jurisdiction } from "../types/jurisdiction";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
 import {
   BCRYPT_SALT_ROUNDS,
@@ -48,7 +50,26 @@ export default class AuthSvc {
     return user;
   }
 
-  static async login(email: string, password: string, remember = false) {
+  /** A user's account is exclusive to whichever jurisdiction their organization was created
+   * under — signing in from the other jurisdiction's domain with the same account must be
+   * rejected outright, not silently redirected post-login (see app/(protected)/layout.tsx on
+   * the frontend for the older, looser redirect-based behavior this replaces at the trust
+   * boundary). A user with no organization yet (verified but never finished onboarding) or an
+   * unresolved request origin (non-subdomain host, e.g. local tooling) has nothing to conflict
+   * with, so both are let through. 409, not 403 — unified-auth.tsx's sign-in handler already
+   * treats a 403 from login() as "email not verified" and redirects to the OTP screen, which
+   * would be wrong here (the email *is* verified) and would loop back into a verify-otp 400. */
+  private static async assertJurisdictionAccess(userId: string, requestJurisdiction: Jurisdiction | null) {
+    if (!requestJurisdiction) return;
+    const membership = await OrganizationMemberRepo.findAnyForUser(userId);
+    if (!membership || membership.organization.jurisdiction === requestJurisdiction) return;
+    throw new HttpError(
+      `This account belongs to the ${membership.organization.jurisdiction} jurisdiction and cannot sign in from ${requestJurisdiction}.`,
+      409,
+    );
+  }
+
+  static async login(email: string, password: string, remember = false, requestJurisdiction: Jurisdiction | null = null) {
     const user = await AuthRepo.findByEmail(email);
     if (!user || !user.password) {
       throw new HttpError("Invalid email or password", 401);
@@ -62,6 +83,8 @@ export default class AuthSvc {
     if (!user.isEmailVerified) {
       throw new HttpError("Email not verified", 403);
     }
+
+    await AuthSvc.assertJurisdictionAccess(user.id, requestJurisdiction);
 
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
@@ -148,7 +171,7 @@ export default class AuthSvc {
     };
   }
 
-  static async refresh(refreshToken: string) {
+  static async refresh(refreshToken: string, requestJurisdiction: Jurisdiction | null = null) {
     let payload: { userId: string; remember?: boolean };
     try {
       payload = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET) as { userId: string; remember?: boolean };
@@ -159,6 +182,24 @@ export default class AuthSvc {
     const session = await AuthRepo.findByRefreshToken(refreshToken);
     if (!session) {
       throw new HttpError("Invalid or expired refresh token", 401);
+    }
+
+    // Without this, a refreshToken cookie left over on the "wrong" jurisdiction's subdomain
+    // (e.g. from testing before this account's org existed, or before jurisdictions were
+    // exclusive) would silently resume the session there — app/(auth)/layout.tsx's
+    // redirect-if-authed check on /login redeems exactly this cookie, so a stale cross-
+    // jurisdiction session would auto-login and immediately bounce through the older
+    // window.location redirect in app/(protected)/layout.tsx instead of ever showing the
+    // sign-in form. Reusing the same 401/message as an actually-invalid token is deliberate:
+    // every caller of refreshAccessToken() already treats any failure as "not logged in
+    // here", so no frontend branching is needed — see assertJurisdictionAccess above for why
+    // login()/loginWithGoogle() use 409 instead. The token isn't deleted on this path (unlike
+    // a normal rotation below) — it's still good for a refresh from its actual jurisdiction.
+    if (requestJurisdiction) {
+      const membership = await OrganizationMemberRepo.findAnyForUser(payload.userId);
+      if (membership && membership.organization.jurisdiction !== requestJurisdiction) {
+        throw new HttpError("Invalid or expired refresh token", 401);
+      }
     }
 
     await AuthRepo.deleteByRefreshToken(refreshToken);
@@ -175,7 +216,7 @@ export default class AuthSvc {
     await AuthRepo.deleteByRefreshToken(refreshToken);
   }
 
-  static async loginWithGoogle(idToken: string, remember = true) {
+  static async loginWithGoogle(idToken: string, remember = true, requestJurisdiction: Jurisdiction | null = null) {
     const { googleId, email, name, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
@@ -201,6 +242,7 @@ export default class AuthSvc {
       const html = await renderTemplate("signup-pending", { name: user.name || "there" });
       await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
     } else {
+      await AuthSvc.assertJurisdictionAccess(user.id, requestJurisdiction);
       await AuthRepo.updateLastLogin(user.id);
     }
 

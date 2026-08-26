@@ -16,6 +16,7 @@ import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.se
 import RedTeamSvc from "../services/red-team.service";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
+import { getTenantContext } from "../utils/tenant-context";
 
 const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
 const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
@@ -176,8 +177,9 @@ export default class CaseTerminalCtrl {
     return res.status(201).json(result);
   }
 
-  static async procedureRules(_req: Request, res: Response) {
-    return res.status(200).json(ProceduralDeadlineSvc.rules());
+  static async procedureRules(req: Request, res: Response) {
+    const { jurisdiction } = getTenantContext(req);
+    return res.status(200).json(ProceduralDeadlineSvc.rules(jurisdiction));
   }
 
   static async procedure(req: Request, res: Response) {

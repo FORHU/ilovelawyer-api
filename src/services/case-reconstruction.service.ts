@@ -2,7 +2,7 @@ import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
-import { buildCaseReconstructionPrompt } from "../constants/case-reconstruction.constants";
+import { getCaseReconstructionPromptBuilder } from "../legal/prompt-registry";
 import { extractRegisterNarratives, extractReconstructionGaps } from "../utils/case-reconstruction-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import HttpError from "../utils/http-error";
@@ -37,10 +37,12 @@ export default class CaseReconstructionSvc {
    * so it's the lawyer's call when to (re)generate rather than happening on every refresh. */
   static async generate(caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
     if (ready.length < 1) throw new HttpError("No indexed documents to reconstruct from yet", 422);
 
+    const buildCaseReconstructionPrompt = getCaseReconstructionPromptBuilder(jurisdiction);
     const pack = await buildFactExcerptPack(ready);
     const prompt = `${buildCaseReconstructionPrompt(ready)}
 

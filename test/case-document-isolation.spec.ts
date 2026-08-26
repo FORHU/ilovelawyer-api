@@ -12,6 +12,7 @@ function vectorLiteral(primary: number): string {
 
 describe("Case document embedding isolation", () => {
   const userId = crypto.randomUUID();
+  const orgId = crypto.randomUUID();
   const caseAId = crypto.randomUUID();
   const caseBId = crypto.randomUUID();
   const docAId = crypto.randomUUID();
@@ -23,16 +24,19 @@ describe("Case document embedding isolation", () => {
     await prisma.user.create({
       data: { id: userId, email: `iso-${userId}@example.com`, username: `iso-${userId}` },
     });
+    await prisma.organization.create({
+      data: { id: orgId, name: "Isolation Org", slug: `iso-org-${orgId}`, createdById: userId },
+    });
     await prisma.case.createMany({
       data: [
-        { id: caseAId, userId, caseName: "Isolation Case A" },
-        { id: caseBId, userId, caseName: "Isolation Case B" },
+        { id: caseAId, userId, organizationId: orgId, caseName: "Isolation Case A" },
+        { id: caseBId, userId, organizationId: orgId, caseName: "Isolation Case B" },
       ],
     });
     await prisma.document.createMany({
       data: [
-        { id: docAId, userId, caseId: caseAId, name: "A.pdf", ragStatus: "READY" },
-        { id: docBId, userId, caseId: caseBId, name: "B.pdf", ragStatus: "READY" },
+        { id: docAId, userId, organizationId: orgId, caseId: caseAId, name: "A.pdf", ragStatus: "READY" },
+        { id: docBId, userId, organizationId: orgId, caseId: caseBId, name: "B.pdf", ragStatus: "READY" },
       ],
     });
 
@@ -62,6 +66,7 @@ describe("Case document embedding isolation", () => {
     );
     await prisma.document.deleteMany({ where: { id: { in: [docAId, docBId] } } });
     await prisma.case.deleteMany({ where: { id: { in: [caseAId, caseBId] } } });
+    await prisma.organization.delete({ where: { id: orgId } });
     await prisma.user.delete({ where: { id: userId } });
   });
 

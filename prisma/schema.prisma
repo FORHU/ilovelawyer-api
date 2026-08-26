@@ -354,16 +354,21 @@ model CaseDocumentChunk {
 // ── Legal Source Analysis Cache ───────────────────────────────────────────────
 
 model LegalSourceAnalysisCache {
-  id                String   @id @default(uuid())
+  id                String       @id @default(uuid())
   rawKeyword        String
-  normalizedKeyword String   @unique
+  normalizedKeyword String
+  jurisdiction      Jurisdiction @default(PH)
   title             String
-  markdownContent   String   @db.Text
-  rawResponse       String   @db.Text
+  markdownContent   String       @db.Text
+  rawResponse       String       @db.Text
   sourceUrl         String?
   metadataJson      Json?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  // Same keyword can be cached separately per jurisdiction — a UK org's "unfair dismissal"
+  // query must never be served the PH-analyzed cache entry for the same normalized keyword.
+  @@unique([normalizedKeyword, jurisdiction])
 }
 
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
@@ -857,6 +862,7 @@ model Organization {
   name        String
   slug        String     @unique
   packageSku  PackageSku @default(PROFESSIONAL)
+  jurisdiction Jurisdiction @default(PH)
   createdById String
   tenantId    String?
   createdAt   DateTime   @default(now())
@@ -935,6 +941,14 @@ model AuditEvent {
 
   @@index([caseId])
   @@index([actorId])
+}
+
+// The tenant-authoritative jurisdiction. Belongs to Organization, never to User — see
+// Organization.jurisdiction below. Unrelated to JurisdictionModule (a dormant, unused
+// admin feature-flag scaffold) and to Case.jurisdiction (free-text court/venue field).
+enum Jurisdiction {
+  PH
+  UK
 }
 
 model JurisdictionModule {
