@@ -50,4 +50,13 @@ export default class CaseReconstructionRepo {
   static async updateAudio(caseId: string, data: ReconstructionAudioUpdate) {
     return prisma.caseReconstruction.update({ where: { caseId }, data });
   }
+
+  /** Re-queued on server start by CaseReconstructionAudioQueue — rows a prior process left
+   * stuck mid-poll (crash/redeploy) rather than ever reaching COMPLETED/FAILED. */
+  static async listInProgressAudio() {
+    return prisma.caseReconstruction.findMany({
+      where: { audioStatus: "IN_PROGRESS" },
+      select: { caseId: true },
+    });
+  }
 }

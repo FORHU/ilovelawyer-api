@@ -40,8 +40,10 @@ export default class CaseReconstructionAudioSvc {
   /** Audio narrates the General/narrative register only — see the plan's scope decision:
    * extending Polly synthesis to the Court/Opposing registers too would triple per-case
    * audio cost with no request behind it yet. */
-  static async startAudioJob(caseId: string, userId: string) {
-    await CaseAccess.assertCanEdit(caseId, userId);
+  /** userId is optional so case-post-extraction.ts's background job can auto-start narration
+   * right after CaseReconstructionSvc.generate — same pattern as generate() itself. */
+  static async startAudioJob(caseId: string, userId?: string) {
+    if (userId) await CaseAccess.assertCanEdit(caseId, userId);
     const row = await CaseReconstructionRepo.get(caseId);
     if (!row) throw new HttpError("Case reconstruction not found — generate one first", 404);
     if (!row.narrative) throw new HttpError("No narrative to narrate yet", 400);
@@ -71,8 +73,10 @@ export default class CaseReconstructionAudioSvc {
     return { jobName: taskId, status: "IN_PROGRESS" };
   }
 
-  static async pollAudioJob(caseId: string, userId: string) {
-    await CaseAccess.loadAccessibleCase(caseId, userId);
+  /** userId is optional so CaseReconstructionAudioQueue's background poll loop can call this
+   * without a request-bound user — same pattern as startAudioJob. */
+  static async pollAudioJob(caseId: string, userId?: string) {
+    if (userId) await CaseAccess.loadAccessibleCase(caseId, userId);
     const row = await CaseReconstructionRepo.get(caseId);
     if (!row) throw new HttpError("Case reconstruction not found", 404);
     if (!row.audioJobName) throw new HttpError("No audio job started for this reconstruction", 400);

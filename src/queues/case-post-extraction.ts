@@ -1,4 +1,5 @@
 import DocumentRepo from "../repositories/document.repository";
+import CaseReconstructionAudioQueue from "./case-reconstruction-audio.queue";
 import logger from "../utils/logger";
 
 /** Wait until a bulk upload burst stops finishing files, then run case-level AI once. */
@@ -35,12 +36,24 @@ async function runWhenIdle(caseId: string): Promise<void> {
     const EvidenceIntelligenceSvc = (await import("../services/evidence-intelligence.service"))
       .default;
     const CaseStrategySvc = (await import("../services/case-strategy.service")).default;
+    const CaseReconstructionSvc = (await import("../services/case-reconstruction.service")).default;
+    const CaseReconstructionAudioSvc = (await import("../services/case-reconstruction-audio.service")).default;
     await EvidenceIntelligenceSvc.scanContradictions(caseId).catch((err) => {
       logger.warn("Post-extraction contradiction scan failed", { err, caseId });
     });
     await CaseStrategySvc.generateFromDocuments(caseId).catch((err) => {
       logger.warn("Post-extraction case strategy failed", { err, caseId });
     });
+    // Narrative must exist before Polly has anything to narrate — sequential, not
+    // Promise.all'd with the two calls above. Polly synthesis itself is async (no completion
+    // webhook), so startAudioJob only kicks the job off — CaseReconstructionAudioQueue is what
+    // actually polls it to COMPLETED/FAILED without waiting on a viewer to open the case.
+    await CaseReconstructionSvc.generate(caseId)
+      .then(() => CaseReconstructionAudioSvc.startAudioJob(caseId))
+      .then(() => CaseReconstructionAudioQueue.enqueue(caseId))
+      .catch((err) => {
+        logger.warn("Post-extraction case reconstruction/audio failed", { err, caseId });
+      });
   } catch (err) {
     logger.warn("Case post-extraction scheduler failed", { err, caseId });
   }
