@@ -34,7 +34,9 @@ async function synthesizeTurn(text: string, voiceId: string): Promise<Buffer> {
       // The DB column is a plain string (Prisma has no enum matching Polly's VoiceId union),
       // but it only ever holds a value this service itself wrote from VOICE_POOL — safe cast.
       VoiceId: voiceId as VoiceId,
-      Engine: "neural",
+      // Generative, not Neural — noticeably less robotic-sounding, and every voice in
+      // VOICE_POOL is confirmed Generative-capable (see that file's comment).
+      Engine: "generative",
     }),
   );
   const stream = result.AudioStream;

@@ -17,6 +17,7 @@ export const PANEL_IDS = [
   "witnesses",
   "damages",
   "caseReconstruction",
+  "audioOverview",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -194,6 +195,14 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: true,
     minSku: "SOLO",
     description: "AI-generated chronological narrative of the case, editable afterward",
+  },
+  {
+    id: "audioOverview",
+    label: "Audio Overview",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Two-host podcast-style discussion of the case, generated on demand and rendered to speech",
   },
 ];
 

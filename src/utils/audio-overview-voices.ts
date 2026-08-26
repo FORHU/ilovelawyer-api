@@ -1,10 +1,14 @@
 import { createHash } from "crypto";
 import type { VoiceId } from "@aws-sdk/client-polly";
 
-// AWS Polly neural English voices only — same "no Filipino/Tagalog voice, deferred work"
-// constraint case-reconstruction-audio.service.ts already documented. A mix of voices so a
-// randomly-picked pair reads as two distinct people, not two similar-sounding ones.
-const VOICE_POOL: VoiceId[] = ["Joanna", "Matthew", "Kendra", "Justin", "Ivy", "Kevin"];
+// AWS Polly Generative-engine English voices only (see audio-overview-audio.service.ts's
+// synthesizeTurn, which requests Engine: "generative") — same "no Filipino/Tagalog voice,
+// deferred work" constraint case-reconstruction-audio.service.ts already documented. Every
+// entry here is confirmed via Polly's DescribeVoices (Engine: "generative", en-US) to be both
+// Generative-capable and an adult voice — the previous Neural-only pool included Justin/Ivy/
+// Kevin, which AWS designates as child voices, an odd fit for two hosts discussing a legal
+// analysis. A mix of voices so a randomly-picked pair reads as two distinct people.
+const VOICE_POOL: VoiceId[] = ["Joanna", "Matthew", "Danielle", "Ruth", "Salli", "Stephen", "Tiffany"];
 
 export interface AudioOverviewVoicePair {
   hostA: VoiceId;
