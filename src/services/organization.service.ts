@@ -2,6 +2,7 @@ import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku,
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import AuthRepo from "../repositories/auth.repository";
+import TenantRepo from "../repositories/tenant.repository";
 import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
 import { hasOrgRole } from "../utils/org-role";
@@ -13,7 +14,8 @@ import { CLIENT_URL } from "../config";
 export default class OrganizationSvc {
   static async create(userId: string, name: string, packageSku: PackageSku | undefined, jurisdiction: Jurisdiction) {
     const slug = await OrganizationSvc.generateUniqueSlug(name);
-    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", jurisdiction);
+    const tenantId = await TenantRepo.findIdByJurisdiction(jurisdiction);
+    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", jurisdiction, tenantId);
   }
 
   private static async generateUniqueSlug(name: string): Promise<string> {

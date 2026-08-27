@@ -21,7 +21,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const user = await AuthSvc.signup(username, email, password, name);
+    const user = await AuthSvc.signup(username, email, password, name, resolveJurisdictionFromRequest(req));
 
     return res.status(201).json({
       id: user.id,

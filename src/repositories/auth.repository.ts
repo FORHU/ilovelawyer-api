@@ -2,9 +2,9 @@ import prisma from "../lib/prisma";
 import { ApprovalStatus, Prisma } from "@prisma/client";
 
 export default class AuthRepo {
-  static async createUser(data: { username: string; email: string; password: string; name: string }) {
+  static async createUser(data: { username: string; email: string; password: string; name: string; tenantId?: string | null }) {
     return prisma.user.create({
-      data: { username: data.username, email: data.email, password: data.password, name: data.name },
+      data: { username: data.username, email: data.email, password: data.password, name: data.name, tenantId: data.tenantId },
     });
   }
 
@@ -89,7 +89,7 @@ export default class AuthRepo {
     return prisma.user.findUnique({ where: { googleId } });
   }
 
-  static async createGoogleUser(email: string, googleId: string, name?: string) {
+  static async createGoogleUser(email: string, googleId: string, name?: string, tenantId?: string | null) {
     const base = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
     let username = base;
     while (await prisma.user.findUnique({ where: { username } })) {
@@ -105,6 +105,7 @@ export default class AuthRepo {
         provider: "google",
         isEmailVerified: true,
         lastLoginAt: new Date(),
+        tenantId,
       },
     });
   }
