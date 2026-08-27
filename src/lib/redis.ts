@@ -50,4 +50,14 @@ export const redis = {
       await client.set(key, JSON.stringify(value), { EX: ttlSeconds });
     } catch {}
   },
+
+  /** Monotonic counter for cache-busting a family of keys at once (see `admin.service.ts`). */
+  async incr(key: string): Promise<number> {
+    if (!client.isReady) return 0;
+    try {
+      return await client.incr(key);
+    } catch {
+      return 0;
+    }
+  },
 };

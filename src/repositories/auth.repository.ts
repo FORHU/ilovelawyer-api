@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { ApprovalStatus } from "@prisma/client";
+import { ApprovalStatus, Prisma } from "@prisma/client";
 
 export default class AuthRepo {
   static async createUser(data: { username: string; email: string; password: string; name: string }) {
@@ -214,24 +214,54 @@ export default class AuthRepo {
     });
   }
 
-  static async listAllUsers() {
-    return prisma.user.findMany({
-      // Admins manage regular signups here, not other admin accounts.
-      where: { role: "USER" },
-      select: {
-        id: true,
-        name: true,
-        username: true,
-        email: true,
-        role: true,
-        provider: true,
-        isEmailVerified: true,
-        approvalStatus: true,
-        createdAt: true,
-        lastLoginAt: true,
-      },
-      orderBy: { createdAt: "desc" },
-    });
+  static async listUsers(params: {
+    page: number;
+    limit: number;
+    sortBy: "name" | "email" | "createdAt" | "lastLoginAt";
+    sortDir: "asc" | "desc";
+    q?: string;
+  }) {
+    const { page, limit, sortBy, sortDir, q } = params;
+
+    // Admins manage regular signups here, not other admin accounts.
+    const where: Prisma.UserWhereInput = {
+      role: "USER",
+      ...(q
+        ? {
+            OR: [
+              { name: { contains: q, mode: "insensitive" } },
+              { username: { contains: q, mode: "insensitive" } },
+              { email: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const select = {
+      id: true,
+      name: true,
+      username: true,
+      email: true,
+      role: true,
+      provider: true,
+      isEmailVerified: true,
+      approvalStatus: true,
+      createdAt: true,
+      lastLoginAt: true,
+    } as const;
+
+    const [data, total] = await prisma.$transaction([
+      prisma.user.findMany({
+        where,
+        select,
+        orderBy: { [sortBy]: sortDir },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.user.count({ where }),
+    ]);
+
+    return { data, total };
   }
 
   static async setApprovalStatus(userId: string, status: ApprovalStatus, reason: string | null) {
