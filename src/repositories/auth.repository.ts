@@ -243,6 +243,7 @@ export default class AuthRepo {
       username: true,
       email: true,
       role: true,
+      tenant: { select: { name: true } },
       provider: true,
       isEmailVerified: true,
       approvalStatus: true,
