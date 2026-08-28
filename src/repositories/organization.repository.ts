@@ -1,28 +1,28 @@
 import prisma from "../lib/prisma";
-import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku, Jurisdiction } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
 
 export default class OrganizationRepo {
   /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically.
-   * `jurisdiction` must already be trusted-resolved by the caller (see
-   * resolveJurisdictionFromRequest) — this layer just persists whatever it's given. */
+   * `tenantId` must already be trusted-resolved by the caller (see
+   * resolveTenantCodeFromRequest / TenantRepo.findIdByCode) — this layer just persists
+   * whatever it's given. */
   static async create(
     createdById: string,
     name: string,
     slug: string,
     packageSku: PackageSku = "PROFESSIONAL",
-    jurisdiction: Jurisdiction = "PH",
-    tenantId?: string | null,
+    tenantId: string,
   ) {
     return prisma.$transaction(async (tx) => {
       const org = await tx.organization.create({
-        data: { name, slug, packageSku, jurisdiction, createdById, tenantId },
+        data: { name, slug, packageSku, createdById, tenantId },
       });
       await tx.organizationMember.create({
         data: { organizationId: org.id, userId: createdById, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },
       });
       return tx.organization.findUniqueOrThrow({
         where: { id: org.id },
-        include: { members: true },
+        include: { members: true, tenant: { select: { code: true } } },
       });
     });
   }
@@ -38,7 +38,10 @@ export default class OrganizationRepo {
   static async findByIdForUser(id: string, userId: string) {
     return prisma.organization.findFirst({
       where: { id, members: { some: { userId } } },
-      include: { members: { include: { user: { select: { id: true, email: true, name: true, username: true } } } } },
+      include: {
+        members: { include: { user: { select: { id: true, email: true, name: true, username: true } } } },
+        tenant: { select: { code: true } },
+      },
     });
   }
 
@@ -48,7 +51,10 @@ export default class OrganizationRepo {
     return prisma.organization.findMany({
       where: { members: { some: { userId, status: OrganizationMemberStatus.ACCEPTED } } },
       orderBy: { createdAt: "asc" },
-      include: { members: { where: { userId, status: OrganizationMemberStatus.ACCEPTED }, select: { role: true } } },
+      include: {
+        members: { where: { userId, status: OrganizationMemberStatus.ACCEPTED }, select: { role: true } },
+        tenant: { select: { code: true } },
+      },
     });
   }
 

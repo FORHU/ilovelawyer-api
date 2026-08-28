@@ -1,4 +1,4 @@
-import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku, Jurisdiction } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import AuthRepo from "../repositories/auth.repository";
@@ -10,12 +10,16 @@ import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import { slugify } from "../utils/slug";
 import { CLIENT_URL } from "../config";
+import { TenantCode } from "../types/tenant-code";
 
 export default class OrganizationSvc {
-  static async create(userId: string, name: string, packageSku: PackageSku | undefined, jurisdiction: Jurisdiction) {
+  static async create(userId: string, name: string, packageSku: PackageSku | undefined, tenantCode: TenantCode) {
     const slug = await OrganizationSvc.generateUniqueSlug(name);
-    const tenantId = await TenantRepo.findIdByJurisdiction(jurisdiction);
-    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", jurisdiction, tenantId);
+    const tenantId = await TenantRepo.findIdByCode(tenantCode);
+    // The controller already validated tenantCode resolved to something — a miss here means
+    // the Tenant seed row itself is missing, a server misconfiguration, not a client error.
+    if (!tenantId) throw new HttpError(`No Tenant seeded for code "${tenantCode}"`, 500);
+    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", tenantId);
   }
 
   private static async generateUniqueSlug(name: string): Promise<string> {

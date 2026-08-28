@@ -179,8 +179,8 @@ export default class CaseTerminalCtrl {
   }
 
   static async procedureRules(req: Request, res: Response) {
-    const { jurisdiction } = getTenantContext(req);
-    return res.status(200).json(ProceduralDeadlineSvc.rules(jurisdiction));
+    const { tenantCode } = getTenantContext(req);
+    return res.status(200).json(ProceduralDeadlineSvc.rules(tenantCode));
   }
 
   static async procedure(req: Request, res: Response) {

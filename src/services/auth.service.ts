@@ -9,7 +9,7 @@ import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
-import type { Jurisdiction } from "../types/jurisdiction";
+import type { TenantCode } from "../types/tenant-code";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
 import {
   BCRYPT_SALT_ROUNDS,
@@ -28,7 +28,7 @@ function generateOtpCode(): string {
 }
 
 export default class AuthSvc {
-  static async signup(username: string, email: string, password: string, name: string, requestJurisdiction: Jurisdiction | null = null) {
+  static async signup(username: string, email: string, password: string, name: string, requestTenantCode: TenantCode | null = null) {
     const existingUser = await AuthRepo.findByEmail(email);
     if (existingUser) {
       throw new HttpError("Email already in use", 409);
@@ -43,8 +43,8 @@ export default class AuthSvc {
 
     // Unlike Organization creation, an unresolved origin (local dev, direct API calls)
     // never blocks signup — the account is just created without a Tenant link, same as
-    // login/refresh's existing "let it through" handling of unresolved jurisdiction.
-    const tenantId = requestJurisdiction ? await TenantRepo.findIdByJurisdiction(requestJurisdiction) : null;
+    // login/refresh's existing "let it through" handling of an unresolved Tenant code.
+    const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
 
     const user = await AuthRepo.createUser({ username, email, password: hashedPassword, name, tenantId });
 
@@ -56,8 +56,8 @@ export default class AuthSvc {
     return user;
   }
 
-  /** A user's account is exclusive to whichever jurisdiction their organization was created
-   * under — signing in from the other jurisdiction's domain with the same account must be
+  /** A user's account is exclusive to whichever Tenant their organization was created
+   * under — signing in from the other Tenant's domain with the same account must be
    * rejected outright, not silently redirected post-login (see app/(protected)/layout.tsx on
    * the frontend for the older, looser redirect-based behavior this replaces at the trust
    * boundary). A user with no organization yet (verified but never finished onboarding) or an
@@ -65,17 +65,17 @@ export default class AuthSvc {
    * with, so both are let through. 409, not 403 — unified-auth.tsx's sign-in handler already
    * treats a 403 from login() as "email not verified" and redirects to the OTP screen, which
    * would be wrong here (the email *is* verified) and would loop back into a verify-otp 400. */
-  private static async assertJurisdictionAccess(userId: string, requestJurisdiction: Jurisdiction | null) {
-    if (!requestJurisdiction) return;
+  private static async assertTenantAccess(userId: string, requestTenantCode: TenantCode | null) {
+    if (!requestTenantCode) return;
     const membership = await OrganizationMemberRepo.findAnyForUser(userId);
-    if (!membership || membership.organization.jurisdiction === requestJurisdiction) return;
+    if (!membership || membership.organization.tenant.code === requestTenantCode) return;
     throw new HttpError(
-      `This account belongs to the ${membership.organization.jurisdiction} jurisdiction and cannot sign in from ${requestJurisdiction}.`,
+      `This account belongs to the ${membership.organization.tenant.code} tenant and cannot sign in from ${requestTenantCode}.`,
       409,
     );
   }
 
-  static async login(email: string, password: string, remember = false, requestJurisdiction: Jurisdiction | null = null) {
+  static async login(email: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
     const user = await AuthRepo.findByEmail(email);
     if (!user || !user.password) {
       throw new HttpError("Invalid email or password", 401);
@@ -90,7 +90,7 @@ export default class AuthSvc {
       throw new HttpError("Email not verified", 403);
     }
 
-    await AuthSvc.assertJurisdictionAccess(user.id, requestJurisdiction);
+    await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
 
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
@@ -177,7 +177,7 @@ export default class AuthSvc {
     };
   }
 
-  static async refresh(refreshToken: string, requestJurisdiction: Jurisdiction | null = null) {
+  static async refresh(refreshToken: string, requestTenantCode: TenantCode | null = null) {
     let payload: { userId: string; remember?: boolean };
     try {
       payload = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET) as { userId: string; remember?: boolean };
@@ -190,20 +190,20 @@ export default class AuthSvc {
       throw new HttpError("Invalid or expired refresh token", 401);
     }
 
-    // Without this, a refreshToken cookie left over on the "wrong" jurisdiction's subdomain
-    // (e.g. from testing before this account's org existed, or before jurisdictions were
+    // Without this, a refreshToken cookie left over on the "wrong" Tenant's subdomain
+    // (e.g. from testing before this account's org existed, or before Tenants were
     // exclusive) would silently resume the session there — app/(auth)/layout.tsx's
     // redirect-if-authed check on /login redeems exactly this cookie, so a stale cross-
-    // jurisdiction session would auto-login and immediately bounce through the older
+    // tenant session would auto-login and immediately bounce through the older
     // window.location redirect in app/(protected)/layout.tsx instead of ever showing the
     // sign-in form. Reusing the same 401/message as an actually-invalid token is deliberate:
     // every caller of refreshAccessToken() already treats any failure as "not logged in
-    // here", so no frontend branching is needed — see assertJurisdictionAccess above for why
+    // here", so no frontend branching is needed — see assertTenantAccess above for why
     // login()/loginWithGoogle() use 409 instead. The token isn't deleted on this path (unlike
-    // a normal rotation below) — it's still good for a refresh from its actual jurisdiction.
-    if (requestJurisdiction) {
+    // a normal rotation below) — it's still good for a refresh from its actual tenant.
+    if (requestTenantCode) {
       const membership = await OrganizationMemberRepo.findAnyForUser(payload.userId);
-      if (membership && membership.organization.jurisdiction !== requestJurisdiction) {
+      if (membership && membership.organization.tenant.code !== requestTenantCode) {
         throw new HttpError("Invalid or expired refresh token", 401);
       }
     }
@@ -222,7 +222,7 @@ export default class AuthSvc {
     await AuthRepo.deleteByRefreshToken(refreshToken);
   }
 
-  static async loginWithGoogle(idToken: string, remember = true, requestJurisdiction: Jurisdiction | null = null) {
+  static async loginWithGoogle(idToken: string, remember = true, requestTenantCode: TenantCode | null = null) {
     const { googleId, email, name, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
@@ -242,7 +242,7 @@ export default class AuthSvc {
       }
 
       // Same lenient handling as password signup — see the comment there.
-      const tenantId = requestJurisdiction ? await TenantRepo.findIdByJurisdiction(requestJurisdiction) : null;
+      const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
       user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined, tenantId);
 
       // Same as password signup — sent once, right at account creation. Returning
@@ -250,7 +250,7 @@ export default class AuthSvc {
       const html = await renderTemplate("signup-pending", { name: user.name || "there" });
       await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
     } else {
-      await AuthSvc.assertJurisdictionAccess(user.id, requestJurisdiction);
+      await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);
     }
 

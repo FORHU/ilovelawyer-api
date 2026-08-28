@@ -46,13 +46,15 @@ export default class RedTeamSvc {
    * sent to Chat Wonder, so it can't reach past what's already been reviewed and entered. */
   static async generate(caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
-    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
+    const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const snapshot = await CaseSnapshotSvc.get(caseId, userId);
 
-    const buildRedTeamPrompt = getRedTeamPromptBuilder(jurisdiction);
+    const buildRedTeamPrompt = getRedTeamPromptBuilder(tenantCode);
     const prompt = buildRedTeamPrompt({
       caseName: snapshot.case.caseName,
       actionType: snapshot.case.actionType,
+      // Case.jurisdiction is the case's own free-text court/venue field — unrelated to the
+      // tenantCode above (which only selects which PH/UK prompt template to render).
       jurisdiction: snapshot.case.jurisdiction,
       parties: snapshot.case.parties,
       legalIssues: snapshot.findings.filter((f) => f.category === "LEGAL_ISSUE").map((f) => f.label),

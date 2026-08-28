@@ -54,7 +54,7 @@ function getRule(code: string): UKDeadlineRule | undefined {
  * 2.8's "clear days" counting rules and must not be treated as one until reviewed.
  */
 export class UKDeadlineEngine implements DeadlineEngine {
-  readonly jurisdiction = "UK" as const;
+  readonly tenantCode = "UK" as const;
 
   listRules(): DeadlineRuleSummary[] {
     return UK_DEADLINE_RULES;

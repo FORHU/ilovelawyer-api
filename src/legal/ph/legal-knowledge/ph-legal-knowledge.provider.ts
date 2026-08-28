@@ -4,7 +4,7 @@ import { LegalKnowledgeProvider } from "../../legal-knowledge-provider";
 
 /** Thin adapter over the existing PH-only LegalRagSvc/LegalSourceCacheSvc — no new logic. */
 export class PHLegalKnowledgeProvider implements LegalKnowledgeProvider {
-  readonly jurisdiction = "PH" as const;
+  readonly tenantCode = "PH" as const;
   readonly corpusAvailable = true;
 
   getCategories() {

@@ -163,10 +163,10 @@ model Message {
   userId          String?
   parentMessageId String?
 
-  consultation Consultation         @relation(fields: [consultationId], references: [id], onDelete: Cascade)
-  user         User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
-  parent       Message?             @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
-  replies      Message[]            @relation("MessageThread")
+  consultation  Consultation          @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  user          User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parent        Message?              @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  replies       Message[]             @relation("MessageThread")
   timeline      MessageTimeline?
   mindMap       MessageMindMap?
   relatedCases  MessageRelatedCases?
@@ -369,30 +369,32 @@ model CaseDocumentChunk {
   caseDocument Document @relation(fields: [caseDocumentId], references: [id], onDelete: Cascade)
   // HNSW cosine index on embedding is in SQL (Prisma cannot declare pgvector opclasses):
   // CaseDocumentChunk_embedding_hnsw_idx — see 20260820133000_add_case_document_chunk_embedding_hnsw
-
-  @@index([caseDocumentId])
   // HNSW cosine index on embedding is in SQL (Prisma cannot declare pgvector opclasses):
   // CaseDocumentChunk_embedding_hnsw_idx — see 20260820133000_add_case_document_chunk_embedding_hnsw
+
+  @@index([caseDocumentId])
 }
 
 // ── Legal Source Analysis Cache ───────────────────────────────────────────────
 
 model LegalSourceAnalysisCache {
-  id                String       @id @default(uuid())
+  id                String   @id @default(uuid())
   rawKeyword        String
   normalizedKeyword String
-  jurisdiction      Jurisdiction @default(PH)
+  tenantId          String
   title             String
-  markdownContent   String       @db.Text
-  rawResponse       String       @db.Text
+  markdownContent   String   @db.Text
+  rawResponse       String   @db.Text
   sourceUrl         String?
   metadataJson      Json?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  // Same keyword can be cached separately per jurisdiction — a UK org's "unfair dismissal"
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  // Same keyword can be cached separately per tenant — a UK org's "unfair dismissal"
   // query must never be served the PH-analyzed cache entry for the same normalized keyword.
-  @@unique([normalizedKeyword, jurisdiction])
+  @@unique([normalizedKeyword, tenantId])
 }
 
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
@@ -886,14 +888,13 @@ model Organization {
   name        String
   slug        String     @unique
   packageSku  PackageSku @default(PROFESSIONAL)
-  jurisdiction Jurisdiction @default(PH)
   createdById String
-  tenantId    String?
+  tenantId    String
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
   createdBy      User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
-  tenant         Tenant?                @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   members        OrganizationMember[]
   cases          Case[]
   documents      Document[]
@@ -908,13 +909,14 @@ model Organization {
 }
 
 model Tenant {
-  id            String         @id @default(uuid())
-  code          String         @unique
-  name          String
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  users         User[]
-  organizations Organization[]
+  id                        String                     @id @default(uuid())
+  code                      String                     @unique
+  name                      String
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  users                     User[]
+  organizations             Organization[]
+  legalSourceAnalysisCaches LegalSourceAnalysisCache[]
 }
 
 // userId is globally unique — a user belongs to at most one Organization (see
@@ -965,14 +967,6 @@ model AuditEvent {
 
   @@index([caseId])
   @@index([actorId])
-}
-
-// The tenant-authoritative jurisdiction. Belongs to Organization, never to User — see
-// Organization.jurisdiction below. Unrelated to JurisdictionModule (a dormant, unused
-// admin feature-flag scaffold) and to Case.jurisdiction (free-text court/venue field).
-enum Jurisdiction {
-  PH
-  UK
 }
 
 model JurisdictionModule {

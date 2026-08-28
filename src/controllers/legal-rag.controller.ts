@@ -11,7 +11,7 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
 
     if (value.category) {
       const subcategories = await provider.getSubcategories(value.category);
@@ -36,14 +36,14 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
     const result = await provider.list(value);
 
     return res.status(200).json(result);
   }
 
   static async librarySections(req: Request, res: Response) {
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
     const sections = await provider.getLibrarySections();
     return res.status(200).json({ sections });
   }
@@ -59,7 +59,7 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
     const results = await provider.vectorSearch(value.embedding, value.limit, value.offset, value.minSimilarity);
     return res.status(200).json({ results });
   }
@@ -76,7 +76,7 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
     const related = await provider.getRelated(id, value.limit);
     return res.status(200).json({ related });
   }
@@ -125,7 +125,7 @@ export default class LegalRagCtrl {
       throw new HttpError("Invalid case law document ID", 400);
     }
 
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
     const doc = await provider.getById(id);
     return res.status(200).json(doc);
   }
@@ -133,7 +133,7 @@ export default class LegalRagCtrl {
   static async getSourcePageDoc(req: Request, res: Response) {
     const { itemId } = req.params;
     const titleHint = typeof req.query.title === "string" ? req.query.title.trim() : undefined;
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
     const doc = await provider.getSourcePageDoc(itemId, titleHint);
     return res.status(200).json(doc);
   }
@@ -147,7 +147,7 @@ export default class LegalRagCtrl {
     const { error, value } = schema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const provider = getLegalKnowledgeProvider(getTenantContext(req).jurisdiction);
+    const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
     const results = await provider.search(value.q, value.limit);
     return res.status(200).json(results);
   }
