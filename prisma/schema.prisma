@@ -171,6 +171,7 @@ model Message {
   mindMap       MessageMindMap?
   relatedCases  MessageRelatedCases?
   audioOverview MessageAudioOverview?
+  reasoning     MessageReasoning?
   documents     Document[]
 
   @@index([consultationId])
@@ -219,6 +220,20 @@ model MessageAudioOverview {
 
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   audioFile File?   @relation(fields: [audioFileId], references: [id])
+}
+
+// The legal/legal_uk "how I reached this answer" trace — see
+// docs/handoffs/handoff-legal-reasoning-trace-integration-2026-08-28.md (chat-wonder-v2-api).
+// Absent for many messages by design (no tool calls that turn, or silent generation
+// failure on chat-wonder's side) — its absence is not itself an error condition here.
+model MessageReasoning {
+  id              String   @id @default(uuid())
+  messageId       String   @unique
+  reasoning       String   @db.Text
+  citationReasons Json
+  createdAt       DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }
 
 enum AudioOverviewStatus {
