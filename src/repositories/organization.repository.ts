@@ -5,10 +5,17 @@ export default class OrganizationRepo {
   /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically.
    * `jurisdiction` must already be trusted-resolved by the caller (see
    * resolveJurisdictionFromRequest) — this layer just persists whatever it's given. */
-  static async create(createdById: string, name: string, slug: string, packageSku: PackageSku = "PROFESSIONAL", jurisdiction: Jurisdiction = "PH") {
+  static async create(
+    createdById: string,
+    name: string,
+    slug: string,
+    packageSku: PackageSku = "PROFESSIONAL",
+    jurisdiction: Jurisdiction = "PH",
+    tenantId?: string | null,
+  ) {
     return prisma.$transaction(async (tx) => {
       const org = await tx.organization.create({
-        data: { name, slug, packageSku, jurisdiction, createdById },
+        data: { name, slug, packageSku, jurisdiction, createdById, tenantId },
       });
       await tx.organizationMember.create({
         data: { organizationId: org.id, userId: createdById, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },

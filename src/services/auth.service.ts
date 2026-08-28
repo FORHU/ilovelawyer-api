@@ -3,6 +3,7 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
+import TenantRepo from "../repositories/tenant.repository";
 import loginToken from "../utils/loginToken";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
@@ -27,7 +28,7 @@ function generateOtpCode(): string {
 }
 
 export default class AuthSvc {
-  static async signup(username: string, email: string, password: string, name: string) {
+  static async signup(username: string, email: string, password: string, name: string, requestJurisdiction: Jurisdiction | null = null) {
     const existingUser = await AuthRepo.findByEmail(email);
     if (existingUser) {
       throw new HttpError("Email already in use", 409);
@@ -40,7 +41,12 @@ export default class AuthSvc {
 
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
-    const user = await AuthRepo.createUser({ username, email, password: hashedPassword, name });
+    // Unlike Organization creation, an unresolved origin (local dev, direct API calls)
+    // never blocks signup — the account is just created without a Tenant link, same as
+    // login/refresh's existing "let it through" handling of unresolved jurisdiction.
+    const tenantId = requestJurisdiction ? await TenantRepo.findIdByJurisdiction(requestJurisdiction) : null;
+
+    const user = await AuthRepo.createUser({ username, email, password: hashedPassword, name, tenantId });
 
     // Sent immediately, before email verification — the user should know to expect the
     // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
@@ -235,7 +241,9 @@ export default class AuthSvc {
         throw new HttpError("Email already registered with a different sign-in method", 409);
       }
 
-      user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined);
+      // Same lenient handling as password signup — see the comment there.
+      const tenantId = requestJurisdiction ? await TenantRepo.findIdByJurisdiction(requestJurisdiction) : null;
+      user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined, tenantId);
 
       // Same as password signup — sent once, right at account creation. Returning
       // Google users (the `else` branch) never hit this again.

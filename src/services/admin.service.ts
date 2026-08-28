@@ -3,6 +3,18 @@ import AuthRepo from "../repositories/auth.repository";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import { redis } from "../lib/redis";
+
+const USERS_LIST_CACHE_TTL_S = 60;
+const USERS_LIST_VERSION_KEY = "admin:users:version";
+
+export interface ListUsersParams {
+  page: number;
+  limit: number;
+  sortBy: "name" | "email" | "createdAt" | "lastLoginAt";
+  sortDir: "asc" | "desc";
+  q?: string;
+}
 
 // State machine (see schema.prisma's ApprovalStatus comment for the full diagram):
 //   PENDING  --approve-->    ACTIVE
@@ -28,8 +40,21 @@ const TRANSITIONS: Record<string, TransitionSpec> = {
 };
 
 export default class AdminSvc {
-  static async listUsers() {
-    return AuthRepo.listAllUsers();
+  static async listUsers(params: ListUsersParams) {
+    const version = (await redis.get<number>(USERS_LIST_VERSION_KEY)) ?? 0;
+    const cacheKey = `admin:users:v${version}:${JSON.stringify(params)}`;
+
+    const cached = await redis.get<{ data: unknown; total: number }>(cacheKey);
+    if (cached) return cached;
+
+    const result = await AuthRepo.listUsers(params);
+    await redis.set(cacheKey, result, USERS_LIST_CACHE_TTL_S);
+    return result;
+  }
+
+  /** Orphans every cached users-list page in one write, instead of scanning/deleting each cache key. */
+  private static bustUsersListCache() {
+    return redis.incr(USERS_LIST_VERSION_KEY);
   }
 
   private static async transition(action: keyof typeof TRANSITIONS, userId: string, reason?: string) {
@@ -45,6 +70,7 @@ export default class AdminSvc {
     }
 
     const updated = await AuthRepo.setApprovalStatus(userId, spec.to, spec.to === "DENIED" ? (reason ?? null) : null);
+    await AdminSvc.bustUsersListCache();
 
     const html = await renderTemplate(spec.template, { name: user.name || "there", reason: reason ?? "" });
     await sendEmail({ to: user.email, subject: spec.subject, html });

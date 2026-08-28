@@ -19,6 +19,11 @@ _Avoid_: "auth token" (ambiguous between this and Refresh Token)
 **Refresh Token**:
 Longer-lived JWT used only to mint a new Access Token once it expires. Persisted in a Session row (unlike the Access Token) so it can be revoked before its natural expiry — that's what makes Logout possible. Rotated on every use: refreshing deletes the old Session/token and creates a new one, rather than reusing the same Refresh Token until its original expiry.
 
+**Tenant**:
+A deployment-region boundary (`code`: "PH", "UK", ...), resolved from the request's subdomain. An Organization belongs to at most one Tenant; a User has an optional direct Tenant link, used only for a solo practitioner not yet in an Organization. See `docs/adr/0002-tenant-region-boundary.md`.
+_Avoid_: confusing with **TenantContext** (`utils/tenant-context.ts`) — an unrelated per-request value (userId + organizationId + role + jurisdiction) resolved from organization membership. Despite the name, TenantContext does not reference the Tenant model at all.
+_Status: assigned from the request's Origin host at both signup (`User.tenantId` — password signup and first-time Google signup, via `TenantRepo.findIdByJurisdiction`) and Organization creation (`Organization.tenantId`). Signup leaves `tenantId` null if the origin doesn't resolve to a known Tenant (e.g. local dev, direct API calls) rather than rejecting the request; Organization creation still hard-rejects an unresolved origin, unchanged from before._
+
 **Email Verification**:
 A blocking gate on password-based Signup: a User's `isEmailVerified` flag starts `false` and Login is refused until it's flipped `true` by successfully completing OTP verification. Not required for Google signups — Google has already verified the email, so `isEmailVerified` is set `true` at account creation.
 _Avoid_: "OTP" alone as the name of the gate (OTP is the mechanism — the one-time code — not the gate itself; the gate is Email Verification)
