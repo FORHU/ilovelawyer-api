@@ -57,4 +57,18 @@ export default class CaseAccess {
     }
     return record.organization.jurisdiction;
   }
+
+  /**
+   * Deadlines default to requiring two independent confirmations (a second-pair-of-eyes
+   * safety check). A SOLO-package organization has exactly one seat, so that bar can never be
+   * met by design — solo cases require only one confirmation instead of two. Call only after
+   * assertCanEdit/loadAccessibleCase has already authorized the caller for this caseId.
+   */
+  static async requiredConfirmations(caseId: string): Promise<number> {
+    const record = await prisma.case.findUnique({
+      where: { id: caseId },
+      select: { organization: { select: { packageSku: true } } },
+    });
+    return record?.organization?.packageSku === "SOLO" ? 1 : 2;
+  }
 }

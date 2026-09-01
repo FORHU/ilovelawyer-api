@@ -11,6 +11,7 @@ import WitnessRepo from "../repositories/witness.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import RedTeamRepo from "../repositories/red-team.repository";
+import CaseGraphRepo from "../repositories/case-graph.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 
@@ -35,6 +36,8 @@ export default class CaseSnapshotSvc {
       damages,
       reconstruction,
       redTeamAssessment,
+      staleness,
+      requiredConfirmations,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -52,6 +55,8 @@ export default class CaseSnapshotSvc {
       DamageClaimRepo.list(caseId),
       CaseReconstructionRepo.get(caseId),
       RedTeamRepo.get(caseId),
+      CaseGraphRepo.listStaleForCase(caseId),
+      CaseAccess.requiredConfirmations(caseId),
     ]);
 
     const now = new Date();
@@ -89,13 +94,14 @@ export default class CaseSnapshotSvc {
       fatalRisks,
       evidence: { matrix: evidenceMatrix, contradictions },
       law: { citations },
-      procedure: { deadlines, items: procedureItems },
+      procedure: { deadlines, items: procedureItems, requiredConfirmations },
       teamAudit: { accesses, audit },
       findings,
       witnesses,
       damages,
       reconstruction,
       redTeamAssessment,
+      staleness,
       riskAnalysis: scoreCaseRisks({
         risks,
         contradictions,

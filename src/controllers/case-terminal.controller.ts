@@ -193,11 +193,17 @@ export default class CaseTerminalCtrl {
       ruleCode: Joi.string().required(),
       triggerDate: Joi.string().required(),
       serviceMethod: Joi.string().optional(),
+      sourceTimelineEventId: Joi.string().optional(),
     });
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await ProceduralDeadlineSvc.create(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
+  }
+
+  static async recomputeDeadline(req: Request, res: Response) {
+    const result = await ProceduralDeadlineSvc.recompute(req.params.caseId, req.params.deadlineId, req.user.userId);
+    return res.status(200).json(result);
   }
 
   static async confirmDeadline(req: Request, res: Response) {
