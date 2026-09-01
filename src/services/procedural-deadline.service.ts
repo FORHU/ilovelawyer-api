@@ -83,8 +83,8 @@ export default class ProceduralDeadlineSvc {
       if (event?.occurredOn) triggerDate = event.occurredOn;
     }
 
-    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
-    const computation = getDeadlineEngine(jurisdiction).calculate(deadline.ruleCode, triggerDate);
+    const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    const computation = getDeadlineEngine(tenantCode).calculate(deadline.ruleCode, triggerDate);
 
     const row = await ProceduralDeadlineRepo.updateComputed(deadlineId, {
       triggerDate: computation.triggerDate,
