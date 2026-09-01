@@ -13,7 +13,7 @@ import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, Ti
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
-import { Jurisdiction } from "../types/jurisdiction";
+import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import { getPresignedGetUrl } from "../utils/s3";
@@ -37,15 +37,15 @@ function messageHash(text: string): string {
   return createHash("md5").update(text.trim().toLowerCase()).digest("hex");
 }
 
-// Jurisdiction is part of the cache key so a UK request never gets served a title generated
+// TenantCode is part of the cache key so a UK request never gets served a title generated
 // under the PH prompt (or vice versa) for the same message text.
-function titleCacheKey(userMessage: string, jurisdiction: Jurisdiction): string {
-  return `title:prompt:${jurisdiction}:${messageHash(userMessage.slice(0, 500))}`;
+function titleCacheKey(userMessage: string, tenantCode: TenantCode): string {
+  return `title:prompt:${tenantCode}:${messageHash(userMessage.slice(0, 500))}`;
 }
 
 /** Redis key for a cached chat-wonder reply.
  * Includes consultationId so two chats with the same prompt/docs don't share answers. Doesn't
- * need jurisdiction added: a Consultation belongs to one Organization, whose jurisdiction is
+ * need tenantCode added: a Consultation belongs to one Organization, whose tenantCode is
  * fixed, so consultationId alone already pins it. */
 function responseCacheKey(
   consultationId: string,
@@ -126,7 +126,7 @@ export default class ChatSvc {
 
   static async sendMessage(
     organizationId: string,
-    jurisdiction: Jurisdiction,
+    tenantCode: TenantCode,
     userId: string,
     consultationId: string,
     requestedSessionId: string,
@@ -170,7 +170,7 @@ export default class ChatSvc {
     const effectiveUserInput = userInput.trim() ? userInput : ATTACHMENT_ONLY_PROMPT;
 
     if (needsTitle) {
-      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, jurisdiction).catch(() => {});
+      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode).catch(() => {});
     }
 
     // Re-derived from the live Case row on every message (not cached on the consultation),
@@ -291,7 +291,7 @@ export default class ChatSvc {
         onSessionRotated,
         grounding,
         undefined,
-        jurisdiction,
+        tenantCode,
       );
       fullResponse = result.content;
       relatedCases = result.relatedCases;
@@ -372,10 +372,10 @@ export default class ChatSvc {
     onSessionRotated?: (newSessionId: string) => void,
     grounding?: CaseDocumentGrounding,
     caseId?: string,
-    jurisdiction?: Jurisdiction,
+    tenantCode?: TenantCode,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, jurisdiction);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
@@ -383,7 +383,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, jurisdiction);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode);
     }
   }
 
@@ -459,11 +459,11 @@ export default class ChatSvc {
     return { status: "IN_PROGRESS" as const };
   }
 
-  /** jurisdiction defaults to PH to preserve scripts/backfill-titles.ts's existing single-arg
-   * call signature — callers that know the tenant's actual jurisdiction (generateAndSaveTitle
+  /** tenantCode defaults to PH to preserve scripts/backfill-titles.ts's existing single-arg
+   * call signature — callers that know the tenant's actual tenantCode (generateAndSaveTitle
    * below) must pass it explicitly. */
-  static buildTitlePrompt(userMessage: string, jurisdiction: Jurisdiction = "PH"): string {
-    return getChatTitlePromptBuilder(jurisdiction)(userMessage);
+  static buildTitlePrompt(userMessage: string, tenantCode: TenantCode = "PH"): string {
+    return getChatTitlePromptBuilder(tenantCode)(userMessage);
   }
 
   static parseTitle(raw: string): string {
@@ -478,14 +478,14 @@ export default class ChatSvc {
   private static async generateAndSaveTitle(
     consultationId: string,
     userMessage: string,
-    jurisdiction: Jurisdiction,
+    tenantCode: TenantCode,
   ): Promise<void> {
-    const cacheKey = titleCacheKey(userMessage, jurisdiction);
+    const cacheKey = titleCacheKey(userMessage, tenantCode);
 
     let title = await redis.get<string>(cacheKey);
 
     if (!title) {
-      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, jurisdiction));
+      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode));
       if (!raw) return;
       title = ChatSvc.parseTitle(raw);
       if (!title) return;

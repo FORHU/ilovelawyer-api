@@ -5,7 +5,7 @@ import HttpError from "../../../utils/http-error";
 /** Thin adapter over the existing, unchanged PH deadline math in utils/ph-deadline.ts —
  * zero regression risk, logic untouched. */
 export class PHDeadlineEngine implements DeadlineEngine {
-  readonly jurisdiction = "PH" as const;
+  readonly tenantCode = "PH" as const;
 
   listRules(): DeadlineRuleSummary[] {
     return listDeadlineRules();

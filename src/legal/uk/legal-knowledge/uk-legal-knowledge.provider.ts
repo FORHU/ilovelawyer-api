@@ -10,11 +10,11 @@ import { LegalKnowledgeProvider } from "../../legal-knowledge-provider";
  *
  * analyzeKeyword is the one exception: LegalSourceCacheSvc already generates a UK answer via the
  * UK prompt template (legal/uk/prompts/legal-source-cache.prompt.ts, LEGAL_REVIEW_REQUIRED) and
- * never touches the PH corpus for a UK query, so it's real, jurisdiction-safe functionality —
+ * never touches the PH corpus for a UK query, so it's real, tenantCode-safe functionality —
  * not fabricated, not a PH fallback — and stays available here.
  */
 export class UKLegalKnowledgeProvider implements LegalKnowledgeProvider {
-  readonly jurisdiction = "UK" as const;
+  readonly tenantCode = "UK" as const;
   readonly corpusAvailable = false;
 
   // async so every corpus method rejects with a Promise (matching the interface's Promise-based
@@ -66,7 +66,7 @@ export class UKLegalKnowledgeProvider implements LegalKnowledgeProvider {
 
 // The live AI consultation chat (chat.service.ts -> chatWonder.ts) is grounded through the
 // external chat-wonder-v2-api service (a separate repo, not covered by this codebase). Its
-// the_server.py::process_persona reads the `jurisdiction` field this service sends (see
+// the_server.py::process_persona reads the `tenantCode` field this service sends (see
 // chatWonder.ts) and routes UK requests to a dedicated `legal_uk` persona — its own UK tool
 // whitelist (case_law_search, legislation_*, parliament_*, hmrc_*, ...) and prompt
 // (resources/prompts/legal_prompt_uk.txt), not the PH-only juris.ph tools. Structured AI

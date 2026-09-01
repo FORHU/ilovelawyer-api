@@ -156,7 +156,7 @@ export default class ChatCtrl {
 
     await ChatSvc.sendMessage(
       req.organization!.id,
-      req.organization!.jurisdiction,
+      req.organization!.tenantCode,
       req.user.userId,
       consultationId,
       sessionId,

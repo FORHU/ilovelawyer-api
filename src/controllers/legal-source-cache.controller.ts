@@ -9,8 +9,8 @@ export default class LegalSourceCacheCtrl {
     const { error, value } = Joi.object({ keyword: Joi.string().required() }).validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const { jurisdiction } = getTenantContext(req);
-    const result = await LegalSourceCacheSvc.analyze(value.keyword, jurisdiction);
+    const { tenantCode } = getTenantContext(req);
+    const result = await LegalSourceCacheSvc.analyze(value.keyword, tenantCode);
     return res.status(200).json(result);
   }
 }

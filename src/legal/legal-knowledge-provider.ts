@@ -1,18 +1,18 @@
-import { Jurisdiction } from "../types/jurisdiction";
+import { TenantCode } from "../types/tenant-code";
 import LegalRagSvc from "../services/legal-rag.service";
 import LegalSourceCacheSvc from "../services/legal-source-cache.service";
 
 /**
- * One jurisdiction's legal-research surface: the PH-only ingested case-law/statute corpus
+ * One tenantCode's legal-research surface: the PH-only ingested case-law/statute corpus
  * (categories, browse, search, getById, ...) plus AI-assisted keyword analysis. Selected by
- * jurisdiction only (see legal/legal-knowledge.registry.ts) — never by client input, and never
- * falls back to another jurisdiction's corpus.
+ * tenantCode only (see legal/legal-knowledge.registry.ts) — never by client input, and never
+ * falls back to another tenantCode's corpus.
  */
 export interface LegalKnowledgeProvider {
-  readonly jurisdiction: Jurisdiction;
+  readonly tenantCode: TenantCode;
   /** Whether the raw corpus-backed methods below (everything except analyzeKeyword) are
-   * available for this jurisdiction. False means those methods reject rather than returning
-   * another jurisdiction's data. */
+   * available for this tenantCode. False means those methods reject rather than returning
+   * another tenantCode's data. */
   readonly corpusAvailable: boolean;
 
   getCategories(): ReturnType<typeof LegalRagSvc.getCategories>;
@@ -31,7 +31,7 @@ export interface LegalKnowledgeProvider {
   getSourcePageDoc(itemId: string, titleHint?: string): ReturnType<typeof LegalRagSvc.getSourcePageDoc>;
 
   /**
-   * AI-assisted keyword analysis. Already jurisdiction-safe today via LegalSourceCacheSvc (its
+   * AI-assisted keyword analysis. Already tenantCode-safe today via LegalSourceCacheSvc (its
    * Tier 2 RAG-corpus lookup is already skipped for non-PH jurisdictions — see that service),
    * so both providers delegate to it directly rather than gating it behind corpusAvailable.
    */

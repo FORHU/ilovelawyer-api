@@ -22,9 +22,9 @@ export default class CitationCheckSvc {
     if (!officialText && body.legalRagId) {
       // The legalRagId corpus is PH-only (see legal/legal-knowledge-provider.ts) — never read it
       // for a non-PH case, even though the id itself isn't secret/tenant-scoped data.
-      const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
-      if (jurisdiction !== "PH") {
-        throw new HttpError("legalRagId citations require the PH case-law corpus, not available for this case's jurisdiction", 400);
+      const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+      if (tenantCode !== "PH") {
+        throw new HttpError("legalRagId citations require the PH case-law corpus, not available for this case's tenantCode", 400);
       }
       const id = BigInt(body.legalRagId);
       const doc = await LegalRagRepo.findById(id).catch(() => null);

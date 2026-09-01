@@ -8,8 +8,11 @@ export default class AuthRepo {
     });
   }
 
+  /** Includes the user's Tenant code/name — used to tell a duplicate-signup attempt whether
+   * (and where) the existing account actually belongs (see AuthSvc.signup / loginWithGoogle).
+   * Harmless extra field for every other caller (login, forgotPassword). */
   static async findByEmail(email: string) {
-    return prisma.user.findUnique({ where: { email } });
+    return prisma.user.findUnique({ where: { email }, include: { tenant: { select: { code: true, name: true } } } });
   }
 
   static async findById(id: string) {

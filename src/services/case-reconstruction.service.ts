@@ -39,12 +39,12 @@ export default class CaseReconstructionSvc {
    * documents finish indexing — same pattern as CaseStrategySvc.generateFromDocuments. */
   static async generate(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
-    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
+    const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
     if (ready.length < 1) throw new HttpError("No indexed documents to reconstruct from yet", 422);
 
-    const buildCaseReconstructionPrompt = getCaseReconstructionPromptBuilder(jurisdiction);
+    const buildCaseReconstructionPrompt = getCaseReconstructionPromptBuilder(tenantCode);
     const pack = await buildFactExcerptPack(ready);
     const prompt = `${buildCaseReconstructionPrompt(ready)}
 

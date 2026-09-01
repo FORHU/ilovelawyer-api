@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import OrganizationSvc from "../services/organization.service";
 import HttpError from "../utils/http-error";
+import { asTenantCode } from "../types/tenant-code";
 
 const HEADER = "x-organization-id";
 
@@ -22,7 +23,7 @@ export default async function resolveOrganization(req: Request, _res: Response, 
   }
 
   const membership = await OrganizationSvc.requireMembership(organizationId, req.user.userId);
-  req.organization = { id: organizationId, role: membership.role, jurisdiction: membership.organization.jurisdiction };
+  req.organization = { id: organizationId, role: membership.role, tenantCode: asTenantCode(membership.organization.tenant.code) };
   next();
 }
 
@@ -38,7 +39,7 @@ export function resolveOrganizationFromParam(paramName = "id") {
     if (!organizationId) throw new HttpError(`Missing :${paramName} route param`, 400);
 
     const membership = await OrganizationSvc.requireMembership(organizationId, req.user.userId);
-    req.organization = { id: organizationId, role: membership.role, jurisdiction: membership.organization.jurisdiction };
+    req.organization = { id: organizationId, role: membership.role, tenantCode: asTenantCode(membership.organization.tenant.code) };
     next();
   };
 }

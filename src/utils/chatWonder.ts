@@ -3,7 +3,7 @@ import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import logger from "./logger";
-import { Jurisdiction } from "../types/jurisdiction";
+import { TenantCode } from "../types/tenant-code";
 import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, LEGAL_TAG_UK, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
@@ -49,7 +49,7 @@ export async function callChatWonderRest(
   grounding?: CaseDocumentGrounding | string,
   // Routes to chat-wonder-v2-api's `legal_uk` persona (its own UK tool whitelist and prompt)
   // instead of the PH-only default — see the_server.py::process_persona.
-  jurisdiction?: Jurisdiction,
+  tenantCode?: TenantCode,
 ): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
   const resolved = normalizeGrounding(grounding);
   const payload: {
@@ -57,12 +57,14 @@ export async function callChatWonderRest(
     user_input: string;
     case_document_ids?: string[];
     case_document_chunk_ids?: string[];
-    jurisdiction?: Jurisdiction;
+    // Wire field name is `jurisdiction` — chat-wonder-v2-api's own contract (the_server.py::
+    // process_persona), unrelated to our internal TenantCode rename.
+    jurisdiction?: TenantCode;
   } = {
     session_id: sessionId,
     user_input: prompt,
   };
-  if (jurisdiction) payload.jurisdiction = jurisdiction;
+  if (tenantCode) payload.jurisdiction = tenantCode;
   // Lets Chat Wonder pull chunks itself via GET /api/v1/case-document/:caseDocumentId
   // instead of us inlining the full document text into the prompt. Chunk ids are ranked
   // by embedding similarity when not already provided — see relevantChunkIdsFor.
@@ -122,8 +124,8 @@ function stripLegalTag(input: string): string {
 // Picks the tag directly instead of relying on the separate `jurisdiction` payload field —
 // the_server.py::process_persona checks this tag first, before its jurisdiction fallback, so
 // this alone determines legal vs. legal_uk with no dependency on that field being read correctly.
-function withLegalTag(input: string, jurisdiction?: Jurisdiction): string {
-  const tag = jurisdiction === "UK" ? LEGAL_TAG_UK : LEGAL_TAG;
+function withLegalTag(input: string, tenantCode?: TenantCode): string {
+  const tag = tenantCode === "UK" ? LEGAL_TAG_UK : LEGAL_TAG;
   return `${tag} ${stripLegalTag(input)}`;
 }
 
@@ -203,7 +205,7 @@ export function streamChatWonderMessage(
   caseId?: string,
   // Selects LEGAL_TAG vs. LEGAL_TAG_UK in withLegalTag below — not forwarded as a payload
   // field (see that function's comment for why the tag alone is enough).
-  jurisdiction?: Jurisdiction,
+  tenantCode?: TenantCode,
 ): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
@@ -278,7 +280,7 @@ export function streamChatWonderMessage(
             case_document_chunk_ids?: string[];
           } = {
             type: "chat",
-            user_input: withLegalTag(userInput, jurisdiction) + (caseId ? MINDMAP_RULE : ""),
+            user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
             session_id: sessionId,
             use_full_legal_chain: false,
           };

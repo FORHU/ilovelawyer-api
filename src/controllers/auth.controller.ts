@@ -3,7 +3,7 @@ import Joi from "joi";
 import AuthSvc from "../services/auth.service";
 import HttpError from "../utils/http-error";
 import { REFRESH_TOKEN_COOKIE, setRefreshTokenCookie, clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
-import { resolveJurisdictionFromRequest } from "../utils/jurisdiction-host";
+import { resolveTenantCodeFromRequest } from "../utils/tenant-host";
 
 export default class AuthCtrl {
   static async signup(req: Request, res: Response) {
@@ -21,7 +21,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const user = await AuthSvc.signup(username, email, password, name, resolveJurisdictionFromRequest(req));
+    const user = await AuthSvc.signup(username, email, password, name, resolveTenantCodeFromRequest(req));
 
     return res.status(201).json({
       id: user.id,
@@ -45,7 +45,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.login(email, password, !!remember, resolveJurisdictionFromRequest(req));
+    const { user, accessToken, refreshToken } = await AuthSvc.login(email, password, !!remember, resolveTenantCodeFromRequest(req));
     setRefreshTokenCookie(res, refreshToken, !!remember);
 
     return res.status(200).json({ user, accessToken });
@@ -59,7 +59,7 @@ export default class AuthCtrl {
 
     const { accessToken, refreshToken: newRefreshToken, remember } = await AuthSvc.refresh(
       refreshToken,
-      resolveJurisdictionFromRequest(req),
+      resolveTenantCodeFromRequest(req),
     );
     setRefreshTokenCookie(res, newRefreshToken, remember);
 
@@ -92,7 +92,7 @@ export default class AuthCtrl {
     const { user, accessToken, refreshToken } = await AuthSvc.loginWithGoogle(
       idToken,
       remember ?? true,
-      resolveJurisdictionFromRequest(req),
+      resolveTenantCodeFromRequest(req),
     );
     setRefreshTokenCookie(res, refreshToken, remember ?? true);
 
