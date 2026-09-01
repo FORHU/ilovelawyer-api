@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import { MessageRole, Prisma, AudioOverviewStatus } from "@prisma/client";
-import { TimelineItem, MindMapItem, AudioOverviewTurn } from "../utils/response-parser";
+import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
@@ -43,8 +43,9 @@ export default class ChatRepo {
         timeline: true,
         mindMap: true,
         relatedCases: true,
-        documents: { include: { file: true } },
         audioOverview: true,
+        reasoning: true,
+        documents: { include: { file: true } },
       },
     });
   }
@@ -82,7 +83,17 @@ export default class ChatRepo {
   static async findMessageById(messageId: string) {
     return prisma.message.findUnique({
       where: { id: messageId },
-      include: { timeline: true, mindMap: true, relatedCases: true },
+      include: { timeline: true, mindMap: true, relatedCases: true, reasoning: true },
+    });
+  }
+
+  static async saveReasoning(messageId: string, data: ReasoningExplanation) {
+    return prisma.messageReasoning.create({
+      data: {
+        messageId,
+        reasoning: data.reasoning,
+        citationReasons: data.citation_reasons as unknown as Prisma.InputJsonValue,
+      },
     });
   }
 

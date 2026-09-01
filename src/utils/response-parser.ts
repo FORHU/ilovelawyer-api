@@ -22,6 +22,16 @@ export interface AudioOverviewTurn {
   text: string;
 }
 
+export interface CitationReason {
+  title: string;
+  why_cited: string;
+}
+
+export interface ReasoningExplanation {
+  reasoning: string;
+  citation_reasons: CitationReason[];
+}
+
 /**
  * Extracts a timeline from AI responses.
  * Supports: [TIMELINE]...[/TIMELINE] JSON wrapper, an unclosed tag (streaming cutoff),
@@ -124,6 +134,27 @@ export function parseAudioOverviewPayload(raw: string): AudioOverviewTurn[] | un
     );
   });
   return valid.length > 0 ? valid : undefined;
+}
+
+/**
+ * Chat Wonder's `{"type":"reasoning","session_id":...,"data":{...}}` typed WebSocket
+ * message (see chat-wonder-v2-api's `_generate_reasoning_explanation` /
+ * docs/handoffs/handoff-legal-reasoning-trace-integration-2026-08-28.md). Unlike
+ * STRUCTURED_DATA/AUDIO_OVERVIEW_DATA, this isn't a `[TAG]`-prefixed string frame — the
+ * whole WebSocket message is valid JSON on its own, so the caller passes the already-
+ * parsed `.data` field here, not a raw string to extract from.
+ */
+export function parseReasoningPayload(data: unknown): ReasoningExplanation | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const anyV = data as any;
+  if (typeof anyV.reasoning !== "string" || !anyV.reasoning.trim()) return undefined;
+  const citation_reasons: CitationReason[] = Array.isArray(anyV.citation_reasons)
+    ? anyV.citation_reasons.filter(
+        (c: any): c is CitationReason =>
+          !!c && typeof c === "object" && typeof c.title === "string" && typeof c.why_cited === "string",
+      )
+    : [];
+  return { reasoning: anyV.reasoning, citation_reasons };
 }
 
 /**

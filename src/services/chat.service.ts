@@ -9,7 +9,7 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Re
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem, AudioOverviewTurn } from "../utils/response-parser";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
@@ -254,6 +254,7 @@ export default class ChatSvc {
       mindMap?: MindMapItem;
       timeline?: TimelineItem[];
       audioOverview?: AudioOverviewTurn[];
+      reasoning?: ReasoningExplanation;
     }>(cacheKey);
     // Map-generation turns used to cache text-only replies (the mind map arrives on a
     // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
@@ -271,6 +272,7 @@ export default class ChatSvc {
     let streamedMindMap: MindMapItem | undefined;
     let streamedTimeline: TimelineItem[] | undefined;
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
+    let streamedReasoning: ReasoningExplanation | undefined;
     if (useCache && cached) {
       onChunk(cached.content);
       fullResponse = cached.content;
@@ -278,6 +280,7 @@ export default class ChatSvc {
       streamedMindMap = cached.mindMap;
       streamedTimeline = cached.timeline;
       streamedAudioOverview = cached.audioOverview;
+      streamedReasoning = cached.reasoning;
     } else {
       const result = await ChatSvc.streamWithSessionRetry(
         consultationId,
@@ -295,6 +298,7 @@ export default class ChatSvc {
       streamedMindMap = result.mindMap;
       streamedTimeline = result.timeline;
       streamedAudioOverview = result.audioOverview;
+      streamedReasoning = result.reasoning;
       redis.set(
         cacheKey,
         {
@@ -303,6 +307,7 @@ export default class ChatSvc {
           mindMap: streamedMindMap,
           timeline: streamedTimeline,
           audioOverview: streamedAudioOverview,
+          reasoning: streamedReasoning,
         },
         RESPONSE_CACHE_TTL,
       );
@@ -314,6 +319,9 @@ export default class ChatSvc {
     // arrives as Chat Wonder's dedicated [AUDIO_OVERVIEW_DATA] frame (see chatWonder.ts),
     // never inline in fullResponse, so there's nothing to re-extract from it.
     const audioOverview = streamedAudioOverview;
+    // No text-fallback re-parse for reasoning either — same as audioOverview above, it only
+    // ever arrives as chat-wonder's dedicated typed WebSocket message, never inline in text.
+    const reasoning = streamedReasoning;
     const cleanedContent = stripStructuredBlocks(fullResponse);
 
     const assistantMessage = await ChatRepo.createMessage(
@@ -336,6 +344,14 @@ export default class ChatSvc {
       // already-delivered response down with it, same reasoning as promoteFromAi's .catch above.
       await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB).catch((err) => {
         logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
+      });
+    }
+    if (reasoning) {
+      // Same reasoning as audioOverview's .catch above: the assistant's text has already
+      // streamed to the client, so a failure here (e.g. this migration not yet applied)
+      // must never take the already-delivered response down with it.
+      await ChatRepo.saveReasoning(assistantMessage.id, reasoning).catch((err) => {
+        logger.error("Failed to persist reasoning explanation", { err, messageId: assistantMessage.id });
       });
     }
     if (relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, relatedCases);

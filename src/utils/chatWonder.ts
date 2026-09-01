@@ -7,7 +7,7 @@ import { TenantCode } from "../types/tenant-code";
 import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, LEGAL_TAG_UK, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
-import { parseStructuredDataPayload, parseAudioOverviewPayload, MindMapItem, TimelineItem, AudioOverviewTurn } from "./response-parser";
+import { parseStructuredDataPayload, parseAudioOverviewPayload, parseReasoningPayload, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "./response-parser";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -187,6 +187,10 @@ export interface ChatWonderStreamResult {
   /** From Chat Wonder's post-`__END__` `[AUDIO_OVERVIEW_DATA]` frame — only present when the
    * turn's user_input matched the_server.py's `_wants_audio_overview` trigger check. */
   audioOverview?: AudioOverviewTurn[];
+  /** From Chat Wonder's post-`__END__` `{"type":"reasoning",...}` typed message (legal/legal_uk
+   * only) — absent whenever that turn made no tool calls, or generation failed silently on
+   * chat-wonder's side. Absence is the normal case for many turns, not an error. */
+  reasoning?: ReasoningExplanation;
 }
 
 export function streamChatWonderMessage(
@@ -212,6 +216,7 @@ export function streamChatWonderMessage(
     let structuredMindMap: MindMapItem | undefined;
     let structuredTimeline: TimelineItem[] | undefined;
     let audioOverviewTurns: AudioOverviewTurn[] | undefined;
+    let reasoningExplanation: ReasoningExplanation | undefined;
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
     const resolved = normalizeGrounding(grounding);
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
@@ -241,6 +246,7 @@ export function streamChatWonderMessage(
         mindMap: structuredMindMap,
         timeline: structuredTimeline,
         audioOverview: audioOverviewTurns,
+        reasoning: reasoningExplanation,
       });
     };
 
@@ -304,6 +310,23 @@ export function streamChatWonderMessage(
       if (settled) return;
 
       let message = typeof event.data === "string" ? event.data : String(event.data);
+
+      // The one typed-envelope frame on this socket — the whole message is valid JSON on
+      // its own (see chat-wonder-v2-api's the_server.py, the "reasoning" send_text call),
+      // unlike every other frame here which is a `[TAG]`-prefixed string. Must be checked
+      // before any of the string-based branches below, since JSON.parse would throw (and
+      // is caught) for all of those.
+      let reasoningEnvelope: any = null;
+      try {
+        reasoningEnvelope = JSON.parse(message);
+      } catch {
+        reasoningEnvelope = null;
+      }
+      if (reasoningEnvelope && reasoningEnvelope.type === "reasoning") {
+        const parsed = parseReasoningPayload(reasoningEnvelope.data);
+        if (parsed) reasoningExplanation = parsed;
+        return;
+      }
 
       // Legal persona: `__END__` unlocks the text stream, then a second LLM call
       // emits `[STRUCTURED_DATA]` (timeline + mind map) and `[DONE]` (the_server.py).

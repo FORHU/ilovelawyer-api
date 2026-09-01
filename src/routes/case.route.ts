@@ -52,6 +52,7 @@ router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
 router.get("/:caseId/procedure", asyncHandler(CaseTerminalCtrl.procedure));
 router.post("/:caseId/procedure/deadlines", asyncHandler(CaseTerminalCtrl.createDeadline));
 router.post("/:caseId/procedure/deadlines/:deadlineId/confirm", asyncHandler(CaseTerminalCtrl.confirmDeadline));
+router.post("/:caseId/procedure/deadlines/:deadlineId/recompute", asyncHandler(CaseTerminalCtrl.recomputeDeadline));
 router.post("/:caseId/procedure/items", asyncHandler(CaseTerminalCtrl.createProcedureItem));
 router.patch("/:caseId/procedure/items/:id", asyncHandler(CaseTerminalCtrl.updateProcedureItem));
 

@@ -32,6 +32,13 @@ export default class ProceduralDeadlineRepo {
     });
   }
 
+  static async updateComputed(
+    id: string,
+    data: { triggerDate: Date; computedDueDate: Date; calculationNotes: string },
+  ) {
+    return prisma.proceduralDeadline.update({ where: { id }, data });
+  }
+
   static async confirm(deadlineId: string, userId: string, confirmed: boolean, note?: string) {
     return prisma.proceduralDeadlineConfirmation.upsert({
       where: { deadlineId_userId: { deadlineId, userId } },
