@@ -308,6 +308,8 @@ model Case {
   damageClaims      DamageClaim[]
   reconstruction    CaseReconstruction?
   redTeamAssessment RedTeamAssessment?
+  graphNodes        CaseGraphNode[]
+  graphEdges        CaseGraphEdge[]
 
   @@index([userId])
   @@index([organizationId])
@@ -894,6 +896,54 @@ model RedTeamAssessment {
   updatedAt DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+// ── Case Graph (Phase A: dependency tracking + staleness, no auto-recompute) ───────────────
+//
+// Deliberately just two node types for now (TIMELINE_EVENT, PROCEDURAL_DEADLINE) proving one
+// real edge — CaseTimelineEvent -> ProceduralDeadline. Extending to Document/CaseFinding/etc.
+// is a follow-up migration once this slice is validated, not part of this change. Linking is
+// always explicit (a service call), never inferred — matches this codebase's existing
+// hand-wired reactive style (CaseRefreshSvc, scheduleCasePostExtraction), not a generic
+// Prisma-hook/event-bus mechanism.
+enum CaseGraphNodeType {
+  TIMELINE_EVENT
+  PROCEDURAL_DEADLINE
+}
+
+model CaseGraphNode {
+  id          String            @id @default(uuid())
+  caseId      String
+  nodeType    CaseGraphNodeType
+  refId       String
+  staleAt     DateTime?
+  staleReason String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  case          Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  outgoingEdges CaseGraphEdge[] @relation("CaseGraphEdgeSource")
+  incomingEdges CaseGraphEdge[] @relation("CaseGraphEdgeTarget")
+
+  @@unique([nodeType, refId])
+  @@index([caseId])
+}
+
+model CaseGraphEdge {
+  id           String   @id @default(uuid())
+  caseId       String
+  sourceNodeId String
+  targetNodeId String
+  kind         String
+  createdAt    DateTime @default(now())
+
+  case   Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  source CaseGraphNode @relation("CaseGraphEdgeSource", fields: [sourceNodeId], references: [id], onDelete: Cascade)
+  target CaseGraphNode @relation("CaseGraphEdgeTarget", fields: [targetNodeId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceNodeId, targetNodeId, kind])
+  @@index([caseId])
+  @@index([targetNodeId])
 }
 
 model Organization {

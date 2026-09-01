@@ -1,9 +1,11 @@
 import CaseAccess from "../utils/case-access";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
+import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import { getDeadlineEngine } from "../legal/deadline-engine.registry";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import { Jurisdiction } from "../types/jurisdiction";
+import CaseGraphSvc from "./case-graph.service";
 
 export default class ProceduralDeadlineSvc {
   static rules(jurisdiction: Jurisdiction) {
@@ -22,7 +24,7 @@ export default class ProceduralDeadlineSvc {
   static async create(
     caseId: string,
     userId: string,
-    body: { ruleCode: string; triggerDate: string; serviceMethod?: string },
+    body: { ruleCode: string; triggerDate: string; serviceMethod?: string; sourceTimelineEventId?: string },
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const triggerDate = new Date(body.triggerDate);
@@ -40,11 +42,61 @@ export default class ProceduralDeadlineSvc {
       serviceMethod: body.serviceMethod ?? null,
       calculationNotes: computation.calculationNotes,
     });
+
+    if (body.sourceTimelineEventId) {
+      const sourceEvent = await CaseTimelineRepo.findById(body.sourceTimelineEventId, caseId);
+      if (!sourceEvent) throw new HttpError("sourceTimelineEventId not found on this case", 400);
+      await CaseGraphSvc.linkNodes(
+        caseId,
+        "TIMELINE_EVENT",
+        sourceEvent.id,
+        "PROCEDURAL_DEADLINE",
+        row.id,
+        "TRIGGERS_DEADLINE",
+      );
+    }
+
     await OrganizationRepo.writeAudit({
       caseId,
       actorId: userId,
       action: "deadline.create",
       payload: { id: row.id, due: row.computedDueDate },
+    });
+    return row;
+  }
+
+  /**
+   * Re-runs the same deterministic calculation as create(), using the linked source timeline
+   * event's current date if this deadline was created with one (falling back to its own stored
+   * triggerDate otherwise), then clears the graph staleness flag. Never runs automatically —
+   * only ever called explicitly, same as create().
+   */
+  static async recompute(caseId: string, deadlineId: string, userId: string) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const deadline = await ProceduralDeadlineRepo.findById(deadlineId, caseId);
+    if (!deadline) throw new HttpError("Deadline not found", 404);
+
+    const source = await CaseGraphSvc.findIncomingSource("PROCEDURAL_DEADLINE", deadlineId);
+    let triggerDate = deadline.triggerDate;
+    if (source?.nodeType === "TIMELINE_EVENT") {
+      const event = await CaseTimelineRepo.findById(source.refId, caseId);
+      if (event?.occurredOn) triggerDate = event.occurredOn;
+    }
+
+    const jurisdiction = await CaseAccess.resolveJurisdiction(caseId);
+    const computation = getDeadlineEngine(jurisdiction).calculate(deadline.ruleCode, triggerDate);
+
+    const row = await ProceduralDeadlineRepo.updateComputed(deadlineId, {
+      triggerDate: computation.triggerDate,
+      computedDueDate: computation.computedDueDate,
+      calculationNotes: computation.calculationNotes,
+    });
+    await CaseGraphSvc.clearStale("PROCEDURAL_DEADLINE", deadlineId);
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId: userId,
+      action: "deadline.recompute",
+      payload: { id: deadlineId, due: row.computedDueDate },
     });
     return row;
   }
@@ -56,6 +108,7 @@ export default class ProceduralDeadlineSvc {
     const confirmation = await ProceduralDeadlineRepo.confirm(deadlineId, userId, confirmed, note);
     const refreshed = await ProceduralDeadlineRepo.findById(deadlineId, caseId);
     const confirms = (refreshed?.confirmations ?? []).filter((c) => c.confirmed);
+    const requiredConfirmations = await CaseAccess.requiredConfirmations(caseId);
     await OrganizationRepo.writeAudit({
       caseId,
       actorId: userId,
@@ -64,7 +117,8 @@ export default class ProceduralDeadlineSvc {
     });
     return {
       confirmation,
-      dualConfirmed: confirms.length >= 2,
+      dualConfirmed: confirms.length >= requiredConfirmations,
+      requiredConfirmations,
       confirmCount: confirms.length,
       deadline: refreshed,
     };

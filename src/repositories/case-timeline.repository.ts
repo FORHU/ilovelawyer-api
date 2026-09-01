@@ -54,6 +54,10 @@ export default class CaseTimelineRepo {
     return this.list(caseId);
   }
 
+  static async findById(id: string, caseId: string) {
+    return prisma.caseTimelineEvent.findFirst({ where: { id, caseId } });
+  }
+
   static async update(id: string, caseId: string, data: Partial<TimelineInput>) {
     const existing = await prisma.caseTimelineEvent.findFirst({ where: { id, caseId } });
     if (!existing) return null;
