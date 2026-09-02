@@ -52,6 +52,18 @@ export default class ChatCtrl {
     return res.status(200).json(messages);
   }
 
+  static async listReasoning(req: Request, res: Response) {
+    const schema = Joi.object({
+      consultationId: Joi.string().guid(),
+      caseId: Joi.string().guid(),
+    }).xor("consultationId", "caseId");
+    const { error, value } = schema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+
+    const reasoning = await ChatSvc.listReasoning(req.organization!.id, value.consultationId, value.caseId);
+    return res.status(200).json(reasoning);
+  }
+
   static async getRelatedCases(req: Request, res: Response) {
     const { consultationId } = req.params;
     const relatedCases = await ChatSvc.getRelatedCases(req.organization!.id, consultationId);

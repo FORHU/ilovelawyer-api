@@ -12,6 +12,7 @@ router.use(validSession, asyncHandler(resolveOrganization));
 
 router.get("/session", asyncHandler(ChatCtrl.getSession));
 router.get("/consultations", asyncHandler(ChatCtrl.listConsultations));
+router.get("/reasoning", asyncHandler(ChatCtrl.listReasoning));
 router.post("/consultations", asyncHandler(ChatCtrl.createConsultation));
 router.patch("/consultations/:consultationId", asyncHandler(ChatCtrl.renameConsultation));
 router.delete("/consultations/:consultationId", asyncHandler(ChatCtrl.deleteConsultation));
