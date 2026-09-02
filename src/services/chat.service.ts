@@ -416,6 +416,17 @@ export default class ChatSvc {
     return doc.id;
   }
 
+  /** The legal/legal_uk SCL "Why This Answer" trace, scoped to one consultation or every
+   * consultation under one case — caller guarantees exactly one of the two is set. */
+  static async listReasoning(organizationId: string, consultationId?: string, caseId?: string) {
+    if (consultationId) {
+      await ChatSvc.assertConsultationOwned(organizationId, consultationId);
+      return ChatRepo.listReasoningByConsultation(consultationId);
+    }
+    await CaseSvc.getById(caseId!, organizationId);
+    return ChatRepo.listReasoningByCase(caseId!);
+  }
+
   static async getRelatedCases(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
     if (!consultation || consultation.organizationId !== organizationId) {

@@ -137,4 +137,21 @@ export default class ChatRepo {
       select: { messageId: true },
     });
   }
+
+  static async listReasoningByConsultation(consultationId: string) {
+    return prisma.messageReasoning.findMany({
+      where: { message: { consultationId } },
+      orderBy: { createdAt: "asc" },
+      include: { message: { select: { id: true, consultationId: true, createdAt: true } } },
+    });
+  }
+
+  /** Spans every consultation linked to the case, not just one — a case can have several. */
+  static async listReasoningByCase(caseId: string) {
+    return prisma.messageReasoning.findMany({
+      where: { message: { consultation: { caseId } } },
+      orderBy: { createdAt: "asc" },
+      include: { message: { select: { id: true, consultationId: true, createdAt: true } } },
+    });
+  }
 }
