@@ -414,6 +414,62 @@ model LegalSourceAnalysisCache {
   @@unique([normalizedKeyword, tenantId])
 }
 
+// ── Law (juris.ph write-through cache) ────────────────────────────────────────
+//
+// One row per juris.ph document (jurisSourceId is juris.ph's deterministic UUIDv5).
+// LawSvc.search is local-first: it searches these rows and only calls juris.ph on a
+// miss, inserting any returned item we don't already have. `tenantId`
+// is the legal system the law belongs to, resolved from the *source* (juris.ph ⇒ PH),
+// never from the caller. `rawJson` keeps the verbatim juris.ph item as a backstop; every
+// other column is projected from it so the fallback query and the admin table can read
+// it without parsing JSON.
+model Law {
+  id            String      @id @default(uuid())
+  jurisSourceId String      @unique
+  category      LawCategory
+  tenantId      String
+
+  // Relevance of this law to the most recent query that surfaced it — updated on
+  // re-search, the only field a dedup hit touches (see LawSvc.search).
+  score Float?
+
+  title String // case_title (jurisprudence) | title (republic-acts)
+  year  Int?
+  tags  String[]
+
+  // jurisprudence only
+  caseNumber      String?
+  caseType        String?
+  division        String?
+  ponente         String?
+  decisionDate    DateTime?
+  facts           String?   @db.Text
+  disposition     String?   @db.Text
+  legalRulesCited String[]
+
+  // republic-acts only
+  raNumber String?
+  summary  String? @db.Text
+
+  jurisUrl  String
+  pdfUrl    String?
+  sourceUrl String?
+  rawJson   Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([category, tenantId])
+  @@index([year])
+}
+
+enum LawCategory {
+  JURISPRUDENCE
+  REPUBLIC_ACT
+}
+
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
 
 model Bookmark {
@@ -982,6 +1038,7 @@ model Tenant {
   users                     User[]
   organizations             Organization[]
   legalSourceAnalysisCaches LegalSourceAnalysisCache[]
+  laws                      Law[]
 }
 
 // userId is globally unique — a user belongs to at most one Organization (see
