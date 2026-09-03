@@ -9,6 +9,10 @@ const router = express.Router();
 router.use(validSession, requireAdmin);
 
 router.get("/users", asyncHandler(AdminCtrl.listUsers));
+
+router.get("/law/search", asyncHandler(AdminCtrl.searchLaw));
+router.get("/law", asyncHandler(AdminCtrl.listLaw));
+
 router.post("/users/:id/approve", asyncHandler(AdminCtrl.approveUser));
 router.post("/users/:id/deny", asyncHandler(AdminCtrl.denyUser));
 router.post("/users/:id/reactivate", asyncHandler(AdminCtrl.reactivateUser));
