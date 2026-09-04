@@ -24,6 +24,15 @@ const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
 const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
 const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
+const PRIVILEGE_STATUSES = ["NONE", "ATTORNEY_CLIENT", "WORK_PRODUCT"];
+const HEARSAY_CATEGORIES = [
+  "DIRECT_EVIDENCE",
+  "BUSINESS_RECORD",
+  "PRESENT_SENSE_IMPRESSION",
+  "EXCITED_UTTERANCE",
+  "OTHER_EXCEPTION",
+  "NOT_APPLICABLE",
+];
 
 export default class CaseTerminalCtrl {
   static async snapshot(req: Request, res: Response) {
@@ -137,6 +146,13 @@ export default class CaseTerminalCtrl {
       originalFile: Joi.boolean().optional(),
       needsVerify: Joi.boolean().optional(),
       notes: Joi.string().allow("").optional(),
+      privilegeStatus: Joi.string()
+        .valid(...PRIVILEGE_STATUSES)
+        .optional(),
+      hearsayCategory: Joi.string()
+        .valid(...HEARSAY_CATEGORIES)
+        .optional(),
+      sponsoringWitnessId: Joi.string().optional().allow(null),
     }).min(1);
     const { error, value } = schema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
@@ -147,6 +163,34 @@ export default class CaseTerminalCtrl {
       value,
     );
     return res.status(200).json(result);
+  }
+
+  static async addCustodyEvent(req: Request, res: Response) {
+    const schema = Joi.object({
+      custodianName: Joi.string().required(),
+      action: Joi.string().required(),
+      occurredAt: Joi.date().iso().required(),
+      notes: Joi.string().allow("").optional(),
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await EvidenceIntelligenceSvc.addCustodyEvent(
+      req.params.caseId,
+      req.user.userId,
+      req.params.documentId,
+      value,
+    );
+    return res.status(201).json(result);
+  }
+
+  static async deleteCustodyEvent(req: Request, res: Response) {
+    await EvidenceIntelligenceSvc.deleteCustodyEvent(
+      req.params.caseId,
+      req.user.userId,
+      req.params.documentId,
+      req.params.eventId,
+    );
+    return res.status(204).send();
   }
 
   static async scanContradictions(req: Request, res: Response) {
