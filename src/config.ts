@@ -39,8 +39,10 @@ export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
 export const CHAT_WONDER_API_URL = (process.env.CHAT_WONDER_API_URL || "").replace(/\/+$/, "");
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
-/** juris.ph public search API (jurisprudence + republic-acts). Trailing slash trimmed — see LawSvc / juris-ph.ts. */
-export const JURIS_PH_API_URL = (process.env.JURIS_PH_API_URL || "https://juris.ph/api/v1").replace(/\/+$/, "");
+/** juris.ph public API root (no version/segment). juris-ph.ts appends `/v1/...` for the
+ * search API and `/qdrant/<collection>/...` for the scroll + retrieve endpoints. Trailing
+ * slash trimmed. */
+export const JURIS_PH_API_URL = (process.env.JURIS_PH_API_URL || "https://juris.ph/api").replace(/\/+$/, "");
 /** Shared secret Chat Wonder sends back to us via `x-api-key` when it calls our API (e.g. to fetch case document chunks). */
 export const CHAT_WONDER_API_KEY = process.env.CHAT_WONDER_API_KEY as string;
 export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;

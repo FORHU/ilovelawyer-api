@@ -11,5 +11,7 @@ const router = express.Router();
 router.use(validSession, asyncHandler(resolveOrganization));
 
 router.get("/search", asyncHandler(LawCtrl.search));
+router.get("/browse", asyncHandler(LawCtrl.browse));
+router.get("/document", asyncHandler(LawCtrl.getDocument));
 
 export default router;
