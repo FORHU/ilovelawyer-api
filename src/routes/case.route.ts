@@ -43,6 +43,8 @@ router.delete("/:caseId/risks/:id", asyncHandler(CaseTerminalCtrl.deleteRisk));
 
 router.get("/:caseId/evidence", asyncHandler(CaseTerminalCtrl.evidence));
 router.put("/:caseId/evidence/matrix/:documentId", asyncHandler(CaseTerminalCtrl.upsertMatrix));
+router.post("/:caseId/evidence/matrix/:documentId/custody", asyncHandler(CaseTerminalCtrl.addCustodyEvent));
+router.delete("/:caseId/evidence/matrix/:documentId/custody/:eventId", asyncHandler(CaseTerminalCtrl.deleteCustodyEvent));
 router.post("/:caseId/evidence/contradictions/scan", asyncHandler(CaseTerminalCtrl.scanContradictions));
 router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl.traces));
 

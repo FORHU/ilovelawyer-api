@@ -742,23 +742,58 @@ model CaseRisk {
   @@index([ownerUserId])
 }
 
-model EvidenceMatrixItem {
-  id            String   @id @default(uuid())
-  caseId        String
-  documentId    String
-  authenticity  String   @default("unverified")
-  admissibility String   @default("unverified")
-  probative     String   @default("unverified")
-  originalFile  Boolean  @default(true)
-  needsVerify   Boolean  @default(true)
-  notes         String?  @db.Text
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+enum PrivilegeStatus {
+  NONE
+  ATTORNEY_CLIENT
+  WORK_PRODUCT
+}
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+enum HearsayCategory {
+  DIRECT_EVIDENCE
+  BUSINESS_RECORD
+  PRESENT_SENSE_IMPRESSION
+  EXCITED_UTTERANCE
+  OTHER_EXCEPTION
+  NOT_APPLICABLE
+}
+
+model EvidenceMatrixItem {
+  id                  String          @id @default(uuid())
+  caseId              String
+  documentId          String
+  authenticity        String          @default("unverified")
+  admissibility       String          @default("unverified")
+  probative           String          @default("unverified")
+  originalFile        Boolean         @default(true)
+  needsVerify         Boolean         @default(true)
+  notes               String?         @db.Text
+  privilegeStatus     PrivilegeStatus @default(NONE)
+  hearsayCategory     HearsayCategory @default(NOT_APPLICABLE)
+  sponsoringWitnessId String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  case              Case                   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sponsoringWitness Witness?               @relation(fields: [sponsoringWitnessId], references: [id], onDelete: SetNull)
+  custodyEvents     EvidenceCustodyEvent[]
 
   @@unique([caseId, documentId])
   @@index([caseId])
+  @@index([sponsoringWitnessId])
+}
+
+model EvidenceCustodyEvent {
+  id                   String   @id @default(uuid())
+  evidenceMatrixItemId String
+  custodianName        String
+  action               String
+  occurredAt           DateTime
+  notes                String?  @db.Text
+  createdAt            DateTime @default(now())
+
+  evidenceMatrixItem EvidenceMatrixItem @relation(fields: [evidenceMatrixItemId], references: [id], onDelete: Cascade)
+
+  @@index([evidenceMatrixItemId])
 }
 
 model EvidenceContradiction {
@@ -887,7 +922,8 @@ model Witness {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sponsoredEvidence EvidenceMatrixItem[]
 
   @@index([caseId])
 }

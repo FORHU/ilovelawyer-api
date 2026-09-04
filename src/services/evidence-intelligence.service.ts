@@ -2,6 +2,7 @@ import CaseAccess from "../utils/case-access";
 import EvidenceRepo from "../repositories/evidence.repository";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
+import WitnessRepo from "../repositories/witness.repository";
 import { extractFacts, findContradictions, ContradictionHit } from "../utils/fact-extract";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
@@ -10,6 +11,7 @@ import { buildContradictionPrompt } from "../constants/contradiction-scan.consta
 import { extractContradictionHits, uniqueContradictionHits } from "../utils/contradiction-scan";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import logger from "../utils/logger";
+import { PrivilegeStatus, HearsayCategory } from "@prisma/client";
 
 export default class EvidenceIntelligenceSvc {
   static async list(caseId: string, userId: string) {
@@ -32,14 +34,59 @@ export default class EvidenceIntelligenceSvc {
       originalFile?: boolean;
       needsVerify?: boolean;
       notes?: string | null;
+      privilegeStatus?: PrivilegeStatus;
+      hearsayCategory?: HearsayCategory;
+      sponsoringWitnessId?: string | null;
     },
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     if (!docs.some((d) => d.id === documentId)) throw new HttpError("Document not found on this case", 404);
+    if (data.sponsoringWitnessId) {
+      const witnesses = await WitnessRepo.list(caseId);
+      if (!witnesses.some((w) => w.id === data.sponsoringWitnessId)) {
+        throw new HttpError("Witness not found on this case", 404);
+      }
+    }
     const row = await EvidenceRepo.upsertMatrix(caseId, documentId, data);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "evidence.matrix.upsert", payload: { documentId } });
     return row;
+  }
+
+  static async addCustodyEvent(
+    caseId: string,
+    userId: string,
+    documentId: string,
+    data: { custodianName: string; action: string; occurredAt: Date; notes?: string | null },
+  ) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    if (!docs.some((d) => d.id === documentId)) throw new HttpError("Document not found on this case", 404);
+    const matrixItem = await EvidenceRepo.upsertMatrix(caseId, documentId, {});
+    const event = await EvidenceRepo.addCustodyEvent(matrixItem.id, data);
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId: userId,
+      action: "evidence.custody.add",
+      payload: { documentId, custodianName: data.custodianName },
+    });
+    return event;
+  }
+
+  static async deleteCustodyEvent(caseId: string, userId: string, documentId: string, eventId: string) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    if (!docs.some((d) => d.id === documentId)) throw new HttpError("Document not found on this case", 404);
+    const matrixItem = await EvidenceRepo.findMatrixItem(caseId, documentId);
+    if (!matrixItem) throw new HttpError("Evidence item not found for this document", 404);
+    const deleted = await EvidenceRepo.deleteCustodyEvent(matrixItem.id, eventId);
+    if (!deleted) throw new HttpError("Custody event not found", 404);
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId: userId,
+      action: "evidence.custody.delete",
+      payload: { documentId, eventId },
+    });
   }
 
   static async scanContradictions(caseId: string, userId?: string) {
