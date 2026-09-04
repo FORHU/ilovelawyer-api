@@ -52,6 +52,42 @@ export default class LawRepo {
     return prisma.law.findMany({ where: { jurisSourceId: { in: jurisSourceIds } } });
   }
 
+  /** One full row by juris id — for the detail endpoint (LawSvc.getDocument). */
+  static async findByJurisSourceId(jurisSourceId: string) {
+    return prisma.law.findUnique({ where: { jurisSourceId } });
+  }
+
+  /** Store a document's detail: create the row if it's new (base + detail), otherwise merge the
+   * detail columns into the existing row. Keyed by jurisSourceId. */
+  static async upsertWithDetail(base: Prisma.LawCreateManyInput, detail: Prisma.LawUpdateInput) {
+    return prisma.law.upsert({
+      where: { jurisSourceId: base.jurisSourceId },
+      create: { ...base, ...detail } as Prisma.LawUncheckedCreateInput,
+      update: detail,
+    });
+  }
+
+  // ── browse-page cache (LawBrowsePage) ──────────────────────────────────────
+  static async findBrowsePage(pageKey: string) {
+    return prisma.lawBrowsePage.findUnique({ where: { pageKey } });
+  }
+
+  static async saveBrowsePage(data: {
+    pageKey: string;
+    filterKey: string;
+    isFirstPage: boolean;
+    jurisIds: string[];
+    hasMore: boolean;
+    nextCursor: string | null;
+  }) {
+    const { pageKey, ...rest } = data;
+    return prisma.lawBrowsePage.upsert({
+      where: { pageKey },
+      create: { pageKey, ...rest },
+      update: { ...rest, fetchedAt: new Date() },
+    });
+  }
+
   /** Primary lookup for LawSvc.search — plain ILIKE over the stored rows, PH tenant,
    * given category. juris.ph is only consulted when this returns nothing. */
   static async localSearch(params: { category: LawCategory; q: string; limit: number }) {

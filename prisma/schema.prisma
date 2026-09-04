@@ -416,13 +416,19 @@ model LegalSourceAnalysisCache {
 
 // ── Law (juris.ph write-through cache) ────────────────────────────────────────
 //
-// One row per juris.ph document (jurisSourceId is juris.ph's deterministic UUIDv5).
-// LawSvc.search is local-first: it searches these rows and only calls juris.ph on a
-// miss, inserting any returned item we don't already have. `tenantId`
+// One row per juris.ph document (jurisSourceId is juris.ph's deterministic UUIDv5, and the
+// same id whether the row arrived via search or browse). LawSvc.search is local-first —
+// it searches these rows and only calls juris.ph on a miss; LawSvc.browse proxies juris.ph's
+// facet scroll. Both write through every returned item we don't already have. `tenantId`
 // is the legal system the law belongs to, resolved from the *source* (juris.ph ⇒ PH),
 // never from the caller. `rawJson` keeps the verbatim juris.ph item as a backstop; every
 // other column is projected from it so the fallback query and the admin table can read
 // it without parsing JSON.
+//
+// The `detail*` columns below hold the fuller juris.ph `retrieve` payload (sections,
+// reasoning, citations, ...). They're populated lazily by LawSvc.getDocument: null until the
+// first time that document's detail page is opened, then filled and never re-fetched.
+// `detailFetchedAt` is the single "detail is complete" flag — check it, not individual fields.
 model Law {
   id            String      @id @default(uuid())
   jurisSourceId String      @unique
@@ -456,6 +462,30 @@ model Law {
   sourceUrl String?
   rawJson   Json
 
+  // ── lazily-fetched detail (juris.ph retrieve) — see model comment ──
+  detailFetchedAt DateTime?
+  keywords        String[]
+
+  // republic-acts detail
+  sections                 Json?
+  keyProvisions            String[]
+  dateEnacted              String?
+  legislativeAgendaPurpose String?  @db.Text
+  affectedLawsAmendments   String?  @db.Text
+  principalAuthors         String?
+  coAuthors                String?
+
+  // jurisprudence detail
+  proceduralHistory    String?  @db.Text
+  courtReasoning       String?  @db.Text
+  legalIssues          String[]
+  parties              Json?
+  judges               Json?
+  sanctionsAndPenalties Json?
+  relatedCasesCited    String[]
+  citedGrNumbers       String[]
+  citedRaNumbers       String[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -468,6 +498,25 @@ model Law {
 enum LawCategory {
   JURISPRUDENCE
   REPUBLIC_ACT
+}
+
+// ── LawBrowsePage (juris.ph browse-page cache) ────────────────────────────────
+//
+// One row per (facet filter + pagination cursor) that has been fetched from juris.ph's
+// scroll API, capturing that page's exact contents and order (`jurisIds`, all written
+// through to Law). LawSvc.browse serves a page straight from here — no juris.ph call —
+// when the row exists (first pages age out after BROWSE_CACHE_TTL_MS; deeper pages are
+// historical and never expire). `pageKey` is sha256(filterKey + cursor) so the unique
+// index stays small even when a cursor's `seenIds` list grows large.
+model LawBrowsePage {
+  id          String   @id @default(uuid())
+  pageKey     String   @unique
+  filterKey   String
+  isFirstPage Boolean
+  jurisIds    String[]
+  hasMore     Boolean
+  nextCursor  String?
+  fetchedAt   DateTime @default(now())
 }
 
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
