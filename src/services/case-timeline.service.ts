@@ -6,12 +6,7 @@ import { TimelineItem } from "../utils/response-parser";
 import OrganizationRepo from "../repositories/organization.repository";
 import { ParsedKeyDate } from "../utils/case-strategy-parse";
 import CaseGraphSvc from "./case-graph.service";
-
-function parseOccurredOn(value?: string | null): Date | null {
-  if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
+import { parseOccurredOn } from "../utils/case-timeline.utils";
 
 export default class CaseTimelineSvc {
   static async list(caseId: string, userId: string) {

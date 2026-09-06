@@ -1,16 +1,8 @@
 import { parseAiJson } from "./response-parser";
+import { stripChatWonderNoise } from "./chat-wonder-noise";
 
 const MAX_GAPS = 8;
 const MAX_GAP_LABEL = 160;
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .trim();
-}
 
 /** Extracts the raw prose between `[TAG]...[/TAG]` (or, if unclosed, up to the next
  * `[SOME_TAG]`/end of string — same fallback shape as case-finding-parse.ts's

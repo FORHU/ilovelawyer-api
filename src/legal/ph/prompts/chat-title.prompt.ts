@@ -1,4 +1,5 @@
-const TITLE_MAX_CHARS = 60;
+import { TITLE_MAX_CHARS } from "../../../constants";
+
 const TITLE_INPUT_CHARS = 500;
 
 export function buildPHChatTitlePrompt(userMessage: string): string {

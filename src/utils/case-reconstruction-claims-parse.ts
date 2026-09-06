@@ -1,4 +1,5 @@
 import { parseAiJson } from "./response-parser";
+import { stripChatWonderNoise } from "./chat-wonder-noise";
 
 export type ReconstructionClaimCategory = "GROUNDED" | "INFERENCE" | "UNSUPPORTED";
 
@@ -17,15 +18,6 @@ const MAX_ITEMS = 30;
 const MAX_TEXT = 500;
 const MAX_LABEL = 200;
 const VALID_CATEGORIES = new Set<string>(["GROUNDED", "INFERENCE", "UNSUPPORTED"]);
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .trim();
-}
 
 /** `undefined` = no [CLAIMS] block found/parseable — distinct from an empty array, which means
  * the model produced the block but found nothing worth flagging. Mirrors extractRedTeamClaims'

@@ -7,28 +7,8 @@ import logger from "../utils/logger";
 import { AWS_S3_BUCKET } from "../config";
 import { getPresignedGetUrl } from "../utils/s3";
 import { getPollyClient } from "../utils/polly";
-
-// Fixed voice for v1 — AWS Polly has no Filipino/Tagalog voice at all, and narrative
-// generation has no language parameter yet, so mapping voice to Display Language is
-// deferred work rather than a v1 blocker. See docs/adr context in the plan this shipped from.
-const VOICE_ID = "Joanna";
-const OUTPUT_PREFIX = "case-reconstruction-audio/";
-
-/** Polly's own OutputUri is the authoritative, guaranteed-correct link to what it wrote —
- * trust it directly rather than reconstructing the key from OutputS3KeyPrefix + TaskId
- * (undocumented separator convention, not worth guessing). This just extracts a bucket-
- * relative s3Key from it for the File row, matching this codebase's File.s3Key convention;
- * fileUrl (the only field <audio src> actually needs) is Polly's OutputUri unmodified. */
-function keyFromOutputUri(outputUri: string, bucket: string): string {
-  try {
-    const url = new URL(outputUri);
-    let path = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
-    if (path.startsWith(`${bucket}/`)) path = path.slice(bucket.length + 1);
-    return path;
-  } catch {
-    return outputUri;
-  }
-}
+import { keyFromOutputUri } from "../utils/case-reconstruction-audio.utils";
+import { CASE_RECONSTRUCTION_AUDIO_VOICE_ID, CASE_RECONSTRUCTION_AUDIO_OUTPUT_PREFIX } from "../constants";
 
 export default class CaseReconstructionAudioSvc {
   /** Audio narrates the General/narrative register only — see the plan's scope decision:
@@ -50,10 +30,10 @@ export default class CaseReconstructionAudioSvc {
         new StartSpeechSynthesisTaskCommand({
           Text: row.narrative,
           OutputFormat: "mp3",
-          VoiceId: VOICE_ID,
+          VoiceId: CASE_RECONSTRUCTION_AUDIO_VOICE_ID,
           Engine: "neural",
           OutputS3BucketName: AWS_S3_BUCKET,
-          OutputS3KeyPrefix: OUTPUT_PREFIX,
+          OutputS3KeyPrefix: CASE_RECONSTRUCTION_AUDIO_OUTPUT_PREFIX,
         }),
       );
       taskId = result.SynthesisTask?.TaskId ?? "";

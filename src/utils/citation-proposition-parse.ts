@@ -1,5 +1,6 @@
 import { CitationPropositionType } from "@prisma/client";
 import { parseAiJson } from "./response-parser";
+import { stripChatWonderNoise } from "./chat-wonder-noise";
 
 export interface ParsedProposition {
   type: CitationPropositionType;
@@ -7,15 +8,6 @@ export interface ParsedProposition {
 }
 
 const MAX_REASONING = 300;
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .trim();
-}
 
 /** `null` = no [PROPOSITION] block found/parseable, or the model's `type` wasn't recognized —
  * callers should leave propositionType unset rather than guess. The prompt's own UNSUPPORTED

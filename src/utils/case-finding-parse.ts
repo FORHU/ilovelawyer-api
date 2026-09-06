@@ -1,5 +1,6 @@
 import { FindingCategory } from "@prisma/client";
 import { parseAiJson } from "./response-parser";
+import { stripChatWonderNoise } from "./chat-wonder-noise";
 
 const TAGS: Record<FindingCategory, string> = {
   LEGAL_ISSUE: "LEGAL_ISSUES",
@@ -12,15 +13,6 @@ const TAGS: Record<FindingCategory, string> = {
 const MAX_ITEMS = 8;
 const MAX_LABEL = 160;
 const MAX_SOURCE_LABEL = 200;
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .trim();
-}
 
 export interface ParsedCaseFinding {
   category: FindingCategory;

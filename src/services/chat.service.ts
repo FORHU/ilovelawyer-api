@@ -1,4 +1,3 @@
-import { createHash } from "crypto";
 import ChatRepo from "../repositories/chat.repository";
 import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
@@ -18,56 +17,8 @@ import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import { getPresignedGetUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
-
-const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
-const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
-const TITLE_MAX_CHARS    = 60;                // max title length (matches frontend truncation)
-const CHAT_WONDER_SESSION_TTL_S = 60 * 60;   // match chat-wonder's in-memory session TTL
-
-// Used in place of the user's message text (title generation, AI prompt, cache key) when a
-// message carries attachments but no typed text — content itself stays a stored empty string
-// (see ADR: locale-independent "no content" signal for the frontend to render nothing), so this
-// fixed, non-localized stand-in is what the AI actually sees instead.
-const ATTACHMENT_ONLY_PROMPT = "The user attached one or more documents without any additional message. Review the attached document(s) and respond accordingly.";
-
-function chatWonderSessionKey(consultationId: string): string {
-  return `chatwonder:session:${consultationId}`;
-}
-
-function messageHash(text: string): string {
-  return createHash("md5").update(text.trim().toLowerCase()).digest("hex");
-}
-
-// TenantCode is part of the cache key so a UK request never gets served a title generated
-// under the PH prompt (or vice versa) for the same message text.
-function titleCacheKey(userMessage: string, tenantCode: TenantCode): string {
-  return `title:prompt:${tenantCode}:${messageHash(userMessage.slice(0, 500))}`;
-}
-
-/** Redis key for a cached chat-wonder reply.
- * Includes consultationId so two chats with the same prompt/docs don't share answers. Doesn't
- * need tenantCode added: a Consultation belongs to one Organization, whose tenantCode is
- * fixed, so consultationId alone already pins it. */
-function responseCacheKey(
-  consultationId: string,
-  userMessage: string,
-  resolvedContext: string,
-  groundingKey: string,
-): string {
-  return `chat:response:${messageHash(
-    [consultationId, userMessage.trim().toLowerCase(), resolvedContext, groundingKey].join("\0"),
-  )}`;
-}
-
-/** Compact fingerprint of which docs/chunks grounded this turn — part of responseCacheKey.
- * Built from the ranking result (doc ids + chunk ids), not stored separately in Redis. */
-function groundingCacheKey(grounding?: CaseDocumentGrounding): string {
-  if (!grounding?.caseDocumentIds.length) return "";
-  return [
-    grounding.caseDocumentIds.slice().sort().join(","),
-    (grounding.caseDocumentChunkIds ?? []).join(","),
-  ].join("|");
-}
+import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT } from "../constants";
+import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 
 export default class ChatSvc {
   static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {

@@ -1,21 +1,11 @@
 import { CONTRADICTION_FACT_KEYS, CONTRADICTION_KINDS } from "../constants";
 import type { ContradictionHit } from "./fact-extract";
 import { parseAiJson } from "./response-parser";
+import { stripChatWonderNoise } from "./chat-wonder-noise";
 
 const FACT_KEY_SET = new Set<string>(CONTRADICTION_FACT_KEYS);
 const KIND_SET = new Set<string>(CONTRADICTION_KINDS);
 const MAX_EXCERPT = 500;
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .replace(/\[TIMELINE\][\s\S]*?\[\/TIMELINE\]/gi, "")
-    .replace(/\[MINDMAP\][\s\S]*?\[\/MINDMAP\]/gi, "")
-    .trim();
-}
 
 /**
  * Pulls the [CONTRADICTIONS] JSON array out of a Chat Wonder reply.
@@ -23,7 +13,7 @@ function stripChatWonderNoise(text: string): string {
  * An empty array means the model explicitly found none.
  */
 export function extractContradictionHits(text: string, allowedDocumentIds?: Set<string>): ContradictionHit[] | undefined {
-  const cleaned = stripChatWonderNoise(text);
+  const cleaned = stripChatWonderNoise(text, ["TIMELINE", "MINDMAP"]);
   const closed = cleaned.match(/\[CONTRADICTIONS\]([\s\S]*?)\[\/CONTRADICTIONS\]/i);
   let jsonStr = "";
   if (closed) {

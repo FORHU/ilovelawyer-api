@@ -6,24 +6,7 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
-
-export interface IncomingCaseDocument {
-  filename: string;
-  s3Key: string;
-  metaData: {
-    documentType?: string;
-    fileSize: number;
-    mimeType: string;
-  };
-}
-
-interface CaseWithParties {
-  caseName: string;
-  actionType?: string | null;
-  jurisdiction?: string | null;
-  notes?: string | null;
-  parties?: { name: string; designation: string }[];
-}
+import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
 
 export default class CaseSvc {
   static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {

@@ -1,5 +1,6 @@
 // LEGAL_REVIEW_REQUIRED: see ../../ph/prompts/chat-title.prompt.ts for the PH counterpart.
-const TITLE_MAX_CHARS = 60;
+import { TITLE_MAX_CHARS } from "../../../constants";
+
 const TITLE_INPUT_CHARS = 500;
 
 export function buildUKChatTitlePrompt(userMessage: string): string {

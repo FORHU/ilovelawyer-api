@@ -1,5 +1,6 @@
 import { CitationTreatment } from "@prisma/client";
 import { parseAiJson } from "./response-parser";
+import { stripChatWonderNoise } from "./chat-wonder-noise";
 
 export interface ExtractedCitation {
   caseNumber: string | null;
@@ -12,15 +13,6 @@ export interface ExtractedCitation {
 const MAX_ITEMS = 10;
 const MAX_EXCERPT = 400;
 const VALID_TREATMENTS = new Set<string>(["FOLLOWED", "DISTINGUISHED", "ABANDONED", "OVERRULED", "CITED"]);
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .trim();
-}
 
 /** `undefined` = no [CITATIONS] block found/parseable at all — distinct from an empty array,
  * which means the model looked and found nothing. Mirrors extractCaseFindings' shape. */

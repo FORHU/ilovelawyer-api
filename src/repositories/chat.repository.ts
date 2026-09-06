@@ -16,6 +16,13 @@ export default class ChatRepo {
     });
   }
 
+  /** Lean id-only listing for CaseRefreshSvc, which only needs to walk each consultation's
+   * messages — not scoped by organizationId since the caller already went through
+   * CaseAccess.assertCanEdit for this caseId. */
+  static async listConsultationIdsByCase(caseId: string) {
+    return prisma.consultation.findMany({ where: { caseId }, select: { id: true } });
+  }
+
   static async findConsultationById(consultationId: string) {
     return prisma.consultation.findUnique({ where: { id: consultationId } });
   }

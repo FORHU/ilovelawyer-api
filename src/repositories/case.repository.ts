@@ -89,4 +89,10 @@ export default class CaseRepo {
     const result = await prisma.case.deleteMany({ where: { id, organizationId } });
     return result.count > 0;
   }
+
+  /** Stamped at the end of a full CaseRefreshSvc.refresh run — not scoped by organizationId
+   * since the caller already went through CaseAccess.assertCanEdit for this caseId. */
+  static async markRefreshed(id: string) {
+    return prisma.case.update({ where: { id }, data: { lastRefreshedAt: new Date() } });
+  }
 }

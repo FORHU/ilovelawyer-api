@@ -1,8 +1,9 @@
 import { Request, Response } from "express";
-import CaseSvc, { IncomingCaseDocument } from "../services/case.service";
+import CaseSvc from "../services/case.service";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import HttpError from "../utils/http-error";
 import { PartyInput } from "../repositories/case.repository";
+import { IncomingCaseDocument } from "../types/case.types";
 import { normalizeCaseBody } from "../utils/case.utils";
 import {
   createCaseSchema,

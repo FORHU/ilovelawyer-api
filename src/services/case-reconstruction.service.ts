@@ -10,23 +10,7 @@ import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
-
-// Per-register cap — each of the three narratives gets its own budget rather than sharing one,
-// since the prompt now asks for three separate stories in one response instead of one.
-const MAX_NARRATIVE_CHARS = 12000;
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .trim();
-}
-
-function cleanRegister(text: string): string {
-  return stripChatWonderNoise(text).slice(0, MAX_NARRATIVE_CHARS);
-}
+import { cleanRegister } from "../utils/case-reconstruction.utils";
 
 export default class CaseReconstructionSvc {
   static async get(caseId: string, userId: string) {

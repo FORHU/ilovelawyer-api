@@ -1,20 +1,9 @@
 import { parseAiJson } from "./response-parser";
+import { stripChatWonderNoise } from "./chat-wonder-noise";
 
 const MAX_ITEMS = { STRATEGY: 8, TODO: 12, DATES: 20 };
 const MAX_LABEL = 160;
 const MAX_SOURCE_LABEL = 200;
-
-function stripChatWonderNoise(text: string): string {
-  return text
-    .replace(/__END__$/g, "")
-    .replace(/\[Sources\][\s\S]*$/i, "")
-    .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
-    .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
-    .replace(/\[CONTRADICTIONS\][\s\S]*?\[\/CONTRADICTIONS\]/gi, "")
-    .replace(/\[TIMELINE\][\s\S]*?\[\/TIMELINE\]/gi, "")
-    .replace(/\[MINDMAP\][\s\S]*?\[\/MINDMAP\]/gi, "")
-    .trim();
-}
 
 export interface ParsedKeyDate {
   title: string;
@@ -37,7 +26,7 @@ export interface ParsedCaseStrategy {
  * Empty arrays = model found nothing to recommend.
  */
 export function extractCaseStrategy(text: string): ParsedCaseStrategy | undefined {
-  const cleaned = stripChatWonderNoise(text);
+  const cleaned = stripChatWonderNoise(text, ["CONTRADICTIONS", "TIMELINE", "MINDMAP"]);
   const strategy = extractItemList(cleaned, "STRATEGY");
   const todos = extractItemList(cleaned, "TODOS");
   const dates = extractDateList(cleaned);

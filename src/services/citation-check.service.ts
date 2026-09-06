@@ -11,18 +11,7 @@ import { classifyProposition } from "../utils/citation-proposition";
 import { detectPinpoint } from "../utils/citation-pinpoint";
 import HttpError from "../utils/http-error";
 import { TenantCode } from "../types/tenant-code";
-
-export interface ResolvedAuthority {
-  lawId: string;
-  title: string;
-  jurisUrl: string;
-}
-
-interface ResolvedCitationAuthority {
-  lawId: string | null;
-  confidence: number | null;
-  authority: ResolvedAuthority | null;
-}
+import { ResolvedCitationAuthority } from "../types/citation-check.types";
 
 export default class CitationCheckSvc {
   static async list(caseId: string, userId: string) {
