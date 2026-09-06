@@ -1,49 +1,52 @@
 import AudioOverviewAudioSvc from "../services/audio-overview-audio.service";
 import ChatRepo from "../repositories/chat.repository";
-import { createRedisWorkerClient, isRedisReady, redisClient, RedisWorkerClient } from "../lib/redis";
+import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
+import { AUDIO_OVERVIEW_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
 
-const WAIT_KEY = "audio-overview:wait";
+// Generous ceiling for a long multi-turn script's Polly synthesis + ffmpeg merge — renewed
+// well before expiry (see withVisibilityHeartbeat) so this is a safety margin, not a real limit.
+const VISIBILITY_TIMEOUT_SECONDS = 600;
+
 // One render job at a time across the whole server — each one already runs up to
 // TURN_SYNTHESIS_CONCURRENCY Polly calls internally plus an ffmpeg process; running several
 // full Audio Overview jobs at once would multiply both the Polly rate-limit pressure and the
 // ffmpeg/memory footprint for no real benefit (there's no user-facing reason two renders need
 // to race each other). Same reasoning DocumentExtractionQueue used for CONCURRENCY = 1.
 const CONCURRENCY = 1;
-const BRPOP_SECONDS = 2;
+
+interface WaitItem {
+  messageId: string;
+  /** null for the enqueue-failed in-memory fallback or a re-queued-on-boot row — nothing to
+   * delete/ack for those. */
+  receiptHandle: string | null;
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Redis list queue for Audio Overview rendering (script → Polly synthesis → ffmpeg merge →
- * S3). The "Generate Audio" action only ever LPUSHes a messageId; a single worker slot BRPOPs
- * and runs AudioOverviewAudioSvc.process. Exact same shape as DocumentExtractionQueue,
- * including the in-memory fallback when Redis is down — see that file's own comment for why
- * this shape (not a fire-and-forget in-process promise) is the right one for real background
- * work that must survive the request that kicked it off.
+ * SQS queue for Audio Overview rendering (script → Polly synthesis → ffmpeg merge → S3). The
+ * "Generate Audio" action sends a messageId; a single worker slot long-polls and runs
+ * AudioOverviewAudioSvc.process. Exact same shape as DocumentExtractionQueue, including the
+ * in-memory fallback when an enqueue send fails — see that file's own comment for why this
+ * shape (not a fire-and-forget in-process promise) is the right one for real background work
+ * that must survive the request that kicked it off.
  */
 export default class AudioOverviewQueue {
   private static running = false;
   private static active = 0;
-  private static memoryWait: string[] = [];
-  private static blocker: RedisWorkerClient | null = null;
+  private static memoryWait: WaitItem[] = [];
 
   static enqueue(messageId: string): void {
     if (!messageId) return;
 
-    if (this.blocker?.isReady && isRedisReady()) {
-      void redisClient.lPush(WAIT_KEY, [messageId]).catch((err) => {
-        logger.error("Failed to enqueue Audio Overview render job", { err, messageId });
-        this.memoryWait.push(messageId);
-        this.pump();
-      });
-      return;
-    }
-
-    this.memoryWait.push(messageId);
-    this.pump();
+    sendMessage(AUDIO_OVERVIEW_QUEUE_URL, messageId).catch((err) => {
+      logger.error("Failed to enqueue Audio Overview render job", { err, messageId });
+      this.memoryWait.push({ messageId, receiptHandle: null });
+      this.pump();
+    });
   }
 
   static start(): void {
@@ -53,21 +56,14 @@ export default class AudioOverviewQueue {
   }
 
   private static async run(): Promise<void> {
-    try {
-      this.blocker = createRedisWorkerClient();
-      await this.blocker.connect();
-    } catch (err) {
-      logger.error("Audio Overview queue: Redis worker connection failed; using in-memory fallback", { err });
-      this.blocker = null;
-    }
-
     const pending = await ChatRepo.listInProgressAudioOverviews().catch((err) => {
       logger.error("Audio Overview queue: failed to load IN_PROGRESS rows", { err });
       return [] as { messageId: string }[];
     });
     if (pending.length > 0) {
       logger.info("Audio Overview queue: re-queuing interrupted renders", { count: pending.length });
-      for (const row of pending) this.enqueue(row.messageId);
+      this.memoryWait.push(...pending.map((row) => ({ messageId: row.messageId, receiptHandle: null })));
+      this.pump();
     }
 
     logger.info("Audio Overview queue started", { concurrency: CONCURRENCY });
@@ -77,20 +73,16 @@ export default class AudioOverviewQueue {
 
   private static async fetchLoop(): Promise<void> {
     while (this.running) {
-      if (!this.blocker?.isReady || this.active + this.memoryWait.length >= CONCURRENCY) {
+      const available = CONCURRENCY - this.active - this.memoryWait.length;
+      if (available <= 0) {
         await sleep(200);
         continue;
       }
 
-      try {
-        const popped = await this.blocker.brPop(WAIT_KEY, BRPOP_SECONDS);
-        if (popped?.element) {
-          this.memoryWait.push(popped.element);
-          this.pump();
-        }
-      } catch (err) {
-        logger.error("Audio Overview queue: BRPOP failed", { err });
-        await sleep(1000);
+      const messages = await receiveMessages(AUDIO_OVERVIEW_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
+      if (messages.length > 0) {
+        this.memoryWait.push(...messages.map((m) => ({ messageId: m.body, receiptHandle: m.receiptHandle })));
+        this.pump();
       }
     }
   }
@@ -99,17 +91,28 @@ export default class AudioOverviewQueue {
     if (!this.running) return;
 
     while (this.active < CONCURRENCY && this.memoryWait.length > 0) {
-      const messageId = this.memoryWait.shift();
-      if (!messageId) break;
-      this.runOne(messageId);
+      const item = this.memoryWait.shift();
+      if (!item) break;
+      this.runOne(item);
     }
   }
 
-  private static runOne(messageId: string): void {
+  private static runOne(item: WaitItem): void {
     this.active += 1;
-    void AudioOverviewAudioSvc.process(messageId).finally(() => {
-      this.active -= 1;
-      this.pump();
-    });
+    void withVisibilityHeartbeat(AUDIO_OVERVIEW_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
+      AudioOverviewAudioSvc.process(item.messageId),
+    )
+      .catch((err) => {
+        logger.error("Audio Overview queue: job failed", { err, messageId: item.messageId });
+      })
+      .finally(async () => {
+        if (item.receiptHandle) {
+          await deleteMessage(AUDIO_OVERVIEW_QUEUE_URL, item.receiptHandle).catch((err) => {
+            logger.error("Audio Overview queue: failed to delete message", { err, messageId: item.messageId });
+          });
+        }
+        this.active -= 1;
+        this.pump();
+      });
   }
 }

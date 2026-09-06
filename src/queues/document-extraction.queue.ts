@@ -1,27 +1,36 @@
 import DocumentExtractionSvc from "../services/document-extraction.service";
 import DocumentRepo from "../repositories/document.repository";
-import { createRedisWorkerClient, isRedisReady, redisClient, RedisWorkerClient } from "../lib/redis";
+import { sendMessageBatch, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
+import { DOCUMENT_EXTRACTION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
 
-const WAIT_KEY = "document-extraction:wait";
 /** One doc at a time: parallel PDFs OOM a small EC2 and blow the OpenAI 5M TPM cap. */
 const CONCURRENCY = 1;
-const BRPOP_SECONDS = 2;
+// Generous ceiling for a large multi-page PDF's extraction + embedding — renewed well before
+// expiry (see withVisibilityHeartbeat) so this is a safety margin, not a real limit.
+const VISIBILITY_TIMEOUT_SECONDS = 600;
+
+interface WaitItem {
+  documentId: string;
+  /** null for an item that was never actually an SQS message (the enqueue-failed fallback, or
+   * a PENDING doc re-queued from the DB on boot) — nothing to delete/ack for those. */
+  receiptHandle: string | null;
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Redis list queue for case-document extraction. Confirm endpoints only LPUSH ids;
- * a small worker pool BRPOPs and runs `DocumentExtractionSvc.process` one at a time
- * per slot. If Redis is down, jobs fall back to an in-memory list with the same cap.
+ * SQS queue for case-document extraction. Confirm endpoints send a message per document id;
+ * a small worker pool long-polls and runs `DocumentExtractionSvc.process` one at a time per
+ * slot. If a send fails (network blip, misconfigured queue), the job falls back to an
+ * in-memory list with the same concurrency cap rather than being silently dropped.
  */
 export default class DocumentExtractionQueue {
   private static running = false;
   private static active = 0;
-  private static memoryWait: string[] = [];
-  private static blocker: RedisWorkerClient | null = null;
+  private static memoryWait: WaitItem[] = [];
 
   static enqueue(documentId: string): void {
     this.enqueueMany([documentId]);
@@ -31,17 +40,11 @@ export default class DocumentExtractionQueue {
     const ids = documentIds.filter(Boolean);
     if (ids.length === 0) return;
 
-    if (this.blocker?.isReady && isRedisReady()) {
-      void redisClient.lPush(WAIT_KEY, ids).catch((err) => {
-        logger.error("Failed to enqueue document extraction jobs", { err, count: ids.length });
-        this.memoryWait.push(...ids);
-        this.pump();
-      });
-      return;
-    }
-
-    this.memoryWait.push(...ids);
-    this.pump();
+    sendMessageBatch(DOCUMENT_EXTRACTION_QUEUE_URL, ids).catch((err) => {
+      logger.error("Failed to enqueue document extraction jobs", { err, count: ids.length });
+      this.memoryWait.push(...ids.map((documentId) => ({ documentId, receiptHandle: null })));
+      this.pump();
+    });
   }
 
   static start(): void {
@@ -51,21 +54,14 @@ export default class DocumentExtractionQueue {
   }
 
   private static async run(): Promise<void> {
-    try {
-      this.blocker = createRedisWorkerClient();
-      await this.blocker.connect();
-    } catch (err) {
-      logger.error("Document extraction queue: Redis worker connection failed; using in-memory fallback", { err });
-      this.blocker = null;
-    }
-
     const pending = await DocumentRepo.listPendingForExtraction().catch((err) => {
       logger.error("Document extraction queue: failed to load PENDING documents", { err });
       return [] as { id: string }[];
     });
     if (pending.length > 0) {
       logger.info("Document extraction queue: re-queuing documents for extraction", { count: pending.length });
-      this.enqueueMany(pending.map((doc) => doc.id));
+      this.memoryWait.push(...pending.map((doc) => ({ documentId: doc.id, receiptHandle: null })));
+      this.pump();
     }
 
     logger.info("Document extraction queue started", { concurrency: CONCURRENCY });
@@ -75,20 +71,16 @@ export default class DocumentExtractionQueue {
 
   private static async fetchLoop(): Promise<void> {
     while (this.running) {
-      if (!this.blocker?.isReady || this.active + this.memoryWait.length >= CONCURRENCY) {
+      const available = CONCURRENCY - this.active - this.memoryWait.length;
+      if (available <= 0) {
         await sleep(200);
         continue;
       }
 
-      try {
-        const popped = await this.blocker.brPop(WAIT_KEY, BRPOP_SECONDS);
-        if (popped?.element) {
-          this.memoryWait.push(popped.element);
-          this.pump();
-        }
-      } catch (err) {
-        logger.error("Document extraction queue: BRPOP failed", { err });
-        await sleep(1000);
+      const messages = await receiveMessages(DOCUMENT_EXTRACTION_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
+      if (messages.length > 0) {
+        this.memoryWait.push(...messages.map((m) => ({ documentId: m.body, receiptHandle: m.receiptHandle })));
+        this.pump();
       }
     }
   }
@@ -97,17 +89,28 @@ export default class DocumentExtractionQueue {
     if (!this.running) return;
 
     while (this.active < CONCURRENCY && this.memoryWait.length > 0) {
-      const documentId = this.memoryWait.shift();
-      if (!documentId) break;
-      this.runOne(documentId);
+      const item = this.memoryWait.shift();
+      if (!item) break;
+      this.runOne(item);
     }
   }
 
-  private static runOne(documentId: string): void {
+  private static runOne(item: WaitItem): void {
     this.active += 1;
-    void DocumentExtractionSvc.process(documentId).finally(() => {
-      this.active -= 1;
-      this.pump();
-    });
+    void withVisibilityHeartbeat(DOCUMENT_EXTRACTION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
+      DocumentExtractionSvc.process(item.documentId),
+    )
+      .catch((err) => {
+        logger.error("Document extraction queue: job failed", { err, documentId: item.documentId });
+      })
+      .finally(async () => {
+        if (item.receiptHandle) {
+          await deleteMessage(DOCUMENT_EXTRACTION_QUEUE_URL, item.receiptHandle).catch((err) => {
+            logger.error("Document extraction queue: failed to delete message", { err, documentId: item.documentId });
+          });
+        }
+        this.active -= 1;
+        this.pump();
+      });
   }
 }

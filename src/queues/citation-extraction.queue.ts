@@ -1,21 +1,28 @@
 import CitationExtractionSvc from "../services/citation-extraction.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
-import { createRedisWorkerClient, isRedisReady, redisClient, RedisWorkerClient } from "../lib/redis";
+import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
+import { CITATION_EXTRACTION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
 
-const WAIT_KEY = "citation-extraction:wait";
 // Bounds simultaneous PDF-fetch+LLM jobs across every app instance — this codebase has no
 // general LLM cost/rate control, so this cap is also the de facto spend limiter for a
 // recursive, user-triggered feature. See docs/plan (Citation Map).
 const CONCURRENCY = 3;
-const BRPOP_SECONDS = 2;
+// A single PDF-fetch + one LLM call — comfortably under this, renewed well before expiry.
+const VISIBILITY_TIMEOUT_SECONDS = 180;
+
+interface WaitItem {
+  lawId: string;
+  /** null for the enqueue-failed in-memory fallback — nothing to delete/ack for those. */
+  receiptHandle: string | null;
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Redis list queue for citation extraction (one-shot job: fetch decision PDF, run the LLM
+ * SQS queue for citation extraction (one-shot job: fetch decision PDF, run the LLM
  * extraction, persist CitationEdge rows), mirroring DocumentExtractionQueue's shape. Unlike
  * that queue, there's no restart-recovery re-enqueue here — a job interrupted mid-flight simply
  * never stamps `Law.citationsExtractedAt`, so the row still reads as "not yet extracted" and a
@@ -24,23 +31,16 @@ function sleep(ms: number) {
 export default class CitationExtractionQueue {
   private static running = false;
   private static active = 0;
-  private static memoryWait: string[] = [];
-  private static blocker: RedisWorkerClient | null = null;
+  private static memoryWait: WaitItem[] = [];
 
   static enqueue(lawId: string): void {
     if (!lawId) return;
 
-    if (this.blocker?.isReady && isRedisReady()) {
-      void redisClient.lPush(WAIT_KEY, [lawId]).catch((err) => {
-        logger.error("Failed to enqueue citation extraction job", { err, lawId });
-        this.memoryWait.push(lawId);
-        this.pump();
-      });
-      return;
-    }
-
-    this.memoryWait.push(lawId);
-    this.pump();
+    sendMessage(CITATION_EXTRACTION_QUEUE_URL, lawId).catch((err) => {
+      logger.error("Failed to enqueue citation extraction job", { err, lawId });
+      this.memoryWait.push({ lawId, receiptHandle: null });
+      this.pump();
+    });
   }
 
   static start(): void {
@@ -50,14 +50,6 @@ export default class CitationExtractionQueue {
   }
 
   private static async run(): Promise<void> {
-    try {
-      this.blocker = createRedisWorkerClient();
-      await this.blocker.connect();
-    } catch (err) {
-      logger.error("Citation extraction queue: Redis worker connection failed; using in-memory fallback", { err });
-      this.blocker = null;
-    }
-
     logger.info("Citation extraction queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
@@ -65,20 +57,16 @@ export default class CitationExtractionQueue {
 
   private static async fetchLoop(): Promise<void> {
     while (this.running) {
-      if (!this.blocker?.isReady || this.active + this.memoryWait.length >= CONCURRENCY) {
+      const available = CONCURRENCY - this.active - this.memoryWait.length;
+      if (available <= 0) {
         await sleep(200);
         continue;
       }
 
-      try {
-        const popped = await this.blocker.brPop(WAIT_KEY, BRPOP_SECONDS);
-        if (popped?.element) {
-          this.memoryWait.push(popped.element);
-          this.pump();
-        }
-      } catch (err) {
-        logger.error("Citation extraction queue: BRPOP failed", { err });
-        await sleep(1000);
+      const messages = await receiveMessages(CITATION_EXTRACTION_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
+      if (messages.length > 0) {
+        this.memoryWait.push(...messages.map((m) => ({ lawId: m.body, receiptHandle: m.receiptHandle })));
+        this.pump();
       }
     }
   }
@@ -87,28 +75,35 @@ export default class CitationExtractionQueue {
     if (!this.running) return;
 
     while (this.active < CONCURRENCY && this.memoryWait.length > 0) {
-      const lawId = this.memoryWait.shift();
-      if (!lawId) break;
-      this.runOne(lawId);
+      const item = this.memoryWait.shift();
+      if (!item) break;
+      this.runOne(item);
     }
   }
 
-  private static runOne(lawId: string): void {
+  private static runOne(item: WaitItem): void {
     this.active += 1;
     // The controller already called AiGenerationLockSvc.begin before enqueueing (that's what
     // stops a duplicate enqueue for the same lawId) — this job just needs to close it out.
-    CitationExtractionSvc.expand(lawId)
-      .then(() => AiGenerationLockSvc.finish(lawId, "citationExpand", "DONE"))
+    withVisibilityHeartbeat(CITATION_EXTRACTION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
+      CitationExtractionSvc.expand(item.lawId),
+    )
+      .then(() => AiGenerationLockSvc.finish(item.lawId, "citationExpand", "DONE"))
       .catch((err) => {
-        logger.error("Citation extraction queue: job failed", { err, lawId });
+        logger.error("Citation extraction queue: job failed", { err, lawId: item.lawId });
         return AiGenerationLockSvc.finish(
-          lawId,
+          item.lawId,
           "citationExpand",
           "FAILED",
           err instanceof Error ? err.message : String(err),
         ).catch(() => {});
       })
-      .finally(() => {
+      .finally(async () => {
+        if (item.receiptHandle) {
+          await deleteMessage(CITATION_EXTRACTION_QUEUE_URL, item.receiptHandle).catch((err) => {
+            logger.error("Citation extraction queue: failed to delete message", { err, lawId: item.lawId });
+          });
+        }
         this.active -= 1;
         this.pump();
       });
