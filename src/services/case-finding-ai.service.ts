@@ -5,6 +5,7 @@ import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder"
 import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
 
 // Mirrors CaseStrategySvc.generateFromDocuments — same prompt->parse->replace-AI-rows shape,
@@ -12,6 +13,10 @@ import logger from "../utils/logger";
 export default class CaseFindingAiSvc {
   static async generateFromDocuments(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
+    return AiGenerationLockSvc.run(caseId, "caseFinding", () => CaseFindingAiSvc.generateFromDocumentsInner(caseId));
+  }
+
+  private static async generateFromDocumentsInner(caseId: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
@@ -30,16 +35,20 @@ ${pack.text || "(no indexed text)"}
     let sessionId = await getChatWonderSessionId();
     let payload: { response?: string; intermediate_response?: string };
     try {
-      payload = await callChatWonderRest(prompt, sessionId, {
-        caseDocumentIds: ready.map((d) => d.id),
-        caseDocumentChunkIds: pack.chunkIds,
-      });
+      payload = await callChatWonderRest(
+        prompt,
+        sessionId,
+        { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds },
+        tenantCode,
+      );
     } catch {
       sessionId = await getChatWonderSessionId();
-      payload = await callChatWonderRest(prompt, sessionId, {
-        caseDocumentIds: ready.map((d) => d.id),
-        caseDocumentChunkIds: pack.chunkIds,
-      });
+      payload = await callChatWonderRest(
+        prompt,
+        sessionId,
+        { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds },
+        tenantCode,
+      );
     }
 
     const text = String(payload.response || payload.intermediate_response || "");

@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { AI_PROCEDURE_NOTE } from "../constants/case-strategy.constants";
+import { AI_PROCEDURE_NOTE } from "../constants";
 
 export default class ProceduralDeadlineRepo {
   static async list(caseId: string) {
@@ -55,12 +55,21 @@ export default class ProceduralDeadlineRepo {
     return prisma.procedureItem.create({ data: { caseId, ...data } });
   }
 
-  static async replaceAiProcedureItems(caseId: string, items: { kind: string; label: string }[]) {
+  static async replaceAiProcedureItems(
+    caseId: string,
+    items: { kind: string; label: string; sourceLabel: string | null }[],
+  ) {
     await prisma.$transaction(async (tx) => {
       await tx.procedureItem.deleteMany({ where: { caseId, notes: AI_PROCEDURE_NOTE } });
       if (items.length === 0) return;
       await tx.procedureItem.createMany({
-        data: items.map((item) => ({ caseId, kind: item.kind, label: item.label, notes: AI_PROCEDURE_NOTE })),
+        data: items.map((item) => ({
+          caseId,
+          kind: item.kind,
+          label: item.label,
+          sourceLabel: item.sourceLabel,
+          notes: AI_PROCEDURE_NOTE,
+        })),
       });
     });
     return this.listProcedureItems(caseId);

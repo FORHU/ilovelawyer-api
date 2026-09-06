@@ -6,7 +6,7 @@ import FilesRepo from "../repositories/files.repository";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { s3UrlForKey, getPresignedUploadUrl } from "../utils/s3";
 import HttpError from "../utils/http-error";
-import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants/document-upload.constants";
+import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 
 /** Flattens the related File row's fileUrl onto the Document, matching the Swagger `UserDocument`
  * contract (a top-level `fileUrl`, not a nested `file` object) — see docs/adr for the fileUrl gap

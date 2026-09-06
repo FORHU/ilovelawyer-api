@@ -45,7 +45,7 @@ Reply with these five blocks and nothing else. No markdown, no [Sources], no rel
 []
 [/DEFENSE_STRATEGY]
 
-Every block is JSON strings only (not objects). Max 160 characters per string, max 8 items per block.
+Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. "label" is the finding itself (max 160 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this finding is drawn from — null if it isn't tied to one specific document. Max 8 items per block.
 If none: leave the array empty.
 `;
 }

@@ -1,24 +1,7 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import TranscriptionSvc from "../services/transcription.service";
 import HttpError from "../utils/http-error";
-
-const createSchema = Joi.object({
-  title: Joi.string().optional(),
-  audioFileId: Joi.string().uuid().optional(),
-  transcript: Joi.string().optional(),
-  duration: Joi.number().optional(),
-  caseId: Joi.string().allow(null).optional(),
-  consultationId: Joi.string().allow(null).optional(),
-});
-
-const updateSchema = Joi.object({
-  title: Joi.string().optional(),
-  transcript: Joi.string().optional(),
-  duration: Joi.number().optional(),
-  caseId: Joi.string().allow(null).optional(),
-  consultationId: Joi.string().allow(null).optional(),
-});
+import { createTranscriptionSchema, updateTranscriptionSchema } from "../validation/transcription.validation";
 
 export default class TranscriptionCtrl {
   static async list(req: Request, res: Response) {
@@ -39,7 +22,7 @@ export default class TranscriptionCtrl {
   }
 
   static async create(req: Request, res: Response) {
-    const { error, value } = createSchema.validate(req.body);
+    const { error, value } = createTranscriptionSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const item = await TranscriptionSvc.create(req.organization!.id, req.user.userId, value);
     return res.status(201).json(item);
@@ -56,7 +39,7 @@ export default class TranscriptionCtrl {
   }
 
   static async update(req: Request, res: Response) {
-    const { error, value } = updateSchema.validate(req.body);
+    const { error, value } = updateTranscriptionSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const item = await TranscriptionSvc.update(req.params.id, req.organization!.id, value);
     return res.status(200).json(item);

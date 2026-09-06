@@ -3,8 +3,10 @@ import CaseSnapshotSvc from "./case-snapshot.service";
 import RedTeamRepo from "../repositories/red-team.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getRedTeamPromptBuilder } from "../legal/prompt-registry";
+import { extractRedTeamClaims } from "../utils/red-team-claims-parse";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
+import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
 
 // A real 4-section threat assessment (procedural attacks + 3-5 cross-exam questions +
@@ -29,6 +31,10 @@ function cleanContent(text: string): string {
     .replace(/\[Sources\][\s\S]*$/i, "")
     .replace(/\[RELATED_QUERIES\][\s\S]*?\[\/RELATED_QUERIES\]/gi, "")
     .replace(/\[RELATED_CASES\][\s\S]*$/i, "")
+    // [CLAIMS] is extracted separately (extractRedTeamClaims) before this runs — the lawyer
+    // reads the assessment prose, never the raw attribution JSON.
+    .replace(/\[CLAIMS\][\s\S]*?\[\/CLAIMS\]/gi, "")
+    .replace(/\[CLAIMS\][\s\S]*$/gi, "")
     .trim();
   return truncateGracefully(stripped, MAX_CONTENT_CHARS);
 }
@@ -46,6 +52,10 @@ export default class RedTeamSvc {
    * sent to Chat Wonder, so it can't reach past what's already been reviewed and entered. */
   static async generate(caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    return AiGenerationLockSvc.run(caseId, "redTeam", () => RedTeamSvc.generateInner(caseId, userId));
+  }
+
+  private static async generateInner(caseId: string, userId: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const snapshot = await CaseSnapshotSvc.get(caseId, userId);
 
@@ -81,17 +91,24 @@ export default class RedTeamSvc {
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {});
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {});
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
     }
 
+    // Extracted from the raw reply before cleanContent strips the [CLAIMS] block out of it.
+    const claims = extractRedTeamClaims(result.content);
+
     const content = cleanContent(result.content);
-    logger.info("Chat Wonder red team assessment reply", { caseId, contentChars: content.length });
+    logger.info("Chat Wonder red team assessment reply", {
+      caseId,
+      contentChars: content.length,
+      claimCount: claims?.length ?? 0,
+    });
     if (!content) throw new HttpError("Chat Wonder returned no assessment text", 502);
 
-    const row = await RedTeamRepo.upsert(caseId, content);
+    const row = await RedTeamRepo.upsert(caseId, content, claims);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "redTeam.generate", payload: { id: row.id } });
     return row;
   }

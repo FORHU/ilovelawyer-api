@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import { TimelineSource } from "@prisma/client";
-import { AI_KEY_DATE_STATUS } from "../constants/case-strategy.constants";
+import { AI_KEY_DATE_STATUS } from "../constants";
 
 export interface TimelineInput {
   title: string;

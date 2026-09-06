@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
+import OrganizationRepo from "../repositories/organization.repository";
 import { getObjectBuffer } from "../utils/s3";
 import { extractPages } from "../utils/document-text-extraction";
 import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
@@ -127,6 +128,16 @@ export default class DocumentExtractionSvc {
       logger.info("Document extraction: ready", { documentId, name: doc.name, chunks: embeddedChunks.length });
 
       if (doc.caseId) {
+        // Best-effort — must never bubble into the outer catch and flip an already-READY
+        // document back to FAILED just because the audit-log insert failed.
+        await OrganizationRepo.writeAudit({
+          caseId: doc.caseId,
+          action: "document.ready",
+          payload: { id: documentId, name: doc.name },
+        }).catch((auditErr) => {
+          logger.warn("Failed to write document.ready audit event", { auditErr, documentId });
+        });
+
         const { scheduleCasePostExtraction } = await import("../queues/case-post-extraction");
         scheduleCasePostExtraction(doc.caseId);
       }

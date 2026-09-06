@@ -1,4 +1,4 @@
-import { PH_DEADLINE_RULES, PH_FIXED_HOLIDAYS, PH_VARIABLE_HOLIDAYS, DeadlineRule } from "../constants/ph-holidays.constants";
+import { PH_DEADLINE_RULES, PH_FIXED_HOLIDAYS, PH_VARIABLE_HOLIDAYS, DeadlineRule } from "../constants";
 
 export interface DeadlineComputation {
   rule: DeadlineRule;

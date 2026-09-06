@@ -37,7 +37,7 @@ Reply with these three blocks and nothing else. No markdown, no [Sources], no re
 []
 [/DATES]
 
-STRATEGY and TODOS are JSON strings only (not objects). Max 120 characters per string.
+STRATEGY and TODOS are JSON arrays of objects: {"label": "...", "sourceLabel": "..."}. "label" is the item itself (max 120 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this item is drawn from — null if it isn't tied to one specific document (e.g. a general strategic move).
 DATES is JSON objects with exactly:
 - title: short event name copied from the documents
 - date: YYYY-MM-DD as written or clearly implied in the text

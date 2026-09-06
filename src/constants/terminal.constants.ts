@@ -5,6 +5,7 @@ export const PANEL_IDS = [
   "dates",
   "chat",
   "mindMap",
+  "citationMap",
   "redTeam",
   "procedure",
   "teamAudit",
@@ -107,6 +108,14 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: false,
     minSku: "SOLO",
     description: "Case strategy mind map generated from the consultation",
+  },
+  {
+    id: "citationMap",
+    label: "Citation Map",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Network graph of the case's cited jurisprudence, expandable into what those decisions cite — Philippine jurisdiction only",
   },
   {
     id: "redTeam",

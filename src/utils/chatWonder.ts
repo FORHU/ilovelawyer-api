@@ -4,7 +4,7 @@ import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import logger from "./logger";
 import { TenantCode } from "../types/tenant-code";
-import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, LEGAL_TAG_UK, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
+import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, LEGAL_TAG_UK, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
 import { parseStructuredDataPayload, parseAudioOverviewPayload, parseReasoningPayload, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "./response-parser";

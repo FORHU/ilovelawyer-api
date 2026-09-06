@@ -12,8 +12,11 @@ import DamageClaimRepo from "../repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import RedTeamRepo from "../repositories/red-team.repository";
 import CaseGraphRepo from "../repositories/case-graph.repository";
+import ChatRepo from "../repositories/chat.repository";
+import LawRepo from "../repositories/law.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
+import { isMindMapStale } from "../utils/mind-map-staleness";
 
 export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
@@ -38,6 +41,7 @@ export default class CaseSnapshotSvc {
       redTeamAssessment,
       staleness,
       requiredConfirmations,
+      latestMindMap,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -57,6 +61,7 @@ export default class CaseSnapshotSvc {
       RedTeamRepo.get(caseId),
       CaseGraphRepo.listStaleForCase(caseId),
       CaseAccess.requiredConfirmations(caseId),
+      ChatRepo.findLatestMindMapCreatedAtForCase(caseId),
     ]);
 
     const now = new Date();
@@ -66,6 +71,20 @@ export default class CaseSnapshotSvc {
       ?? null;
     const nextDate = nextEvent ?? nextTimeline;
     const fatalRisks = risks.filter((r) => r.severity === "FATAL" && r.status === "OPEN");
+
+    // Separate from citation validity (does the quote match the source): does the cited
+    // authority itself exist? Same resolution engine Citation Map uses (resolvedLawId is
+    // populated at check time by CitationCheckSvc, or lazily by CitationMapSvc.getSeed).
+    const resolvedLawIds = citations.map((c) => c.resolvedLawId).filter((id): id is string => !!id);
+    const resolvedLaws = await LawRepo.findManyByIds(resolvedLawIds);
+    const lawById = new Map(resolvedLaws.map((law) => [law.id, law]));
+    const citationsWithAuthority = citations.map((citation) => {
+      const law = citation.resolvedLawId ? lawById.get(citation.resolvedLawId) : undefined;
+      return {
+        ...citation,
+        resolvedAuthority: law ? { lawId: law.id, title: law.title, jurisUrl: law.jurisUrl } : null,
+      };
+    });
 
     return {
       case: caseRecord,
@@ -93,7 +112,7 @@ export default class CaseSnapshotSvc {
       nextDate,
       fatalRisks,
       evidence: { matrix: evidenceMatrix, contradictions },
-      law: { citations },
+      law: { citations: citationsWithAuthority },
       procedure: { deadlines, items: procedureItems, requiredConfirmations },
       teamAudit: { accesses, audit },
       findings,
@@ -102,6 +121,10 @@ export default class CaseSnapshotSvc {
       reconstruction,
       redTeamAssessment,
       staleness,
+      mindMap: {
+        lastGeneratedAt: latestMindMap?.createdAt ?? null,
+        isStale: isMindMapStale(latestMindMap?.createdAt ?? null, audit[0]?.createdAt ?? null),
+      },
       riskAnalysis: scoreCaseRisks({
         risks,
         contradictions,

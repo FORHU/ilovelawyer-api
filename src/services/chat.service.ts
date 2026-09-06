@@ -17,6 +17,7 @@ import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import { getPresignedGetUrl } from "../utils/s3";
+import AiGenerationLockSvc from "./ai-generation-lock.service";
 
 const TITLE_CACHE_TTL    = 60 * 60 * 24 * 7; // 7 days
 const RESPONSE_CACHE_TTL = 60 * 15;          // 15 minutes
@@ -282,17 +283,26 @@ export default class ChatSvc {
       streamedAudioOverview = cached.audioOverview;
       streamedReasoning = cached.reasoning;
     } else {
-      const result = await ChatSvc.streamWithSessionRetry(
-        consultationId,
-        sessionId,
-        userInput,
-        onChunk,
-        resolvedContext,
-        onSessionRotated,
-        grounding,
-        undefined,
-        tenantCode,
-      );
+      // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
+      // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
+      // untouched, since there's no "duplicate generate" concern for two different questions.
+      const generationKind = wantsMindMap ? "mindMap" : wantsAudioOverview ? "audioOverviewScript" : null;
+      const runStream = () =>
+        ChatSvc.streamWithSessionRetry(
+          consultationId,
+          sessionId,
+          userInput,
+          onChunk,
+          resolvedContext,
+          onSessionRotated,
+          grounding,
+          undefined,
+          tenantCode,
+        );
+      const result =
+        generationKind && effectiveCaseId
+          ? await AiGenerationLockSvc.run(effectiveCaseId, generationKind, runStream)
+          : await runStream();
       fullResponse = result.content;
       relatedCases = result.relatedCases;
       streamedMindMap = result.mindMap;

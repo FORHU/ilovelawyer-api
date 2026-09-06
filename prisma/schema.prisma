@@ -476,23 +476,70 @@ model Law {
   coAuthors                String?
 
   // jurisprudence detail
-  proceduralHistory    String?  @db.Text
-  courtReasoning       String?  @db.Text
-  legalIssues          String[]
-  parties              Json?
-  judges               Json?
+  proceduralHistory     String?  @db.Text
+  courtReasoning        String?  @db.Text
+  legalIssues           String[]
+  parties               Json?
+  judges                Json?
   sanctionsAndPenalties Json?
-  relatedCasesCited    String[]
-  citedGrNumbers       String[]
-  citedRaNumbers       String[]
+  relatedCasesCited     String[]
+  citedGrNumbers        String[]
+  citedRaNumbers        String[]
+
+  // Set once citation extraction has been attempted for this decision (successfully or not) —
+  // distinguishes "genuinely cites nothing we could find" from "never tried," so the Citation
+  // Map never silently re-runs a completed (if empty) extraction. See CitationExtractionSvc.
+  citationsExtractedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
+  citedFrom      CitationEdge[]  @relation("CitedFrom")
+  citedTo        CitationEdge[]  @relation("CitedTo")
+  citationChecks CitationCheck[] @relation("ResolvedLaw")
+
   @@index([category, tenantId])
   @@index([year])
+}
+
+// ── Citation Map ──────────────────────────────────────────────────────────────
+// Shared, tenant-scoped cache of "Law A cites Law B" — extracted once per Law via LLM
+// (CitationExtractionSvc) and reused by every case/tenant that ever explores that decision,
+// since a case's citations don't change once the decision is final. See docs/plan for the
+// full design: this is a v1 for Philippine jurisprudence, no full-text source exists upstream
+// (juris.ph is search-only), so extraction is best-effort against a fetched/parsed PDF with a
+// summary fallback — `confidence` on the resolved `toLaw` reflects that.
+model CitationEdge {
+  id             String            @id @default(uuid())
+  fromLawId      String
+  toLawId        String?
+  toRawReference String? // best-effort case number/title when resolution to a Law row fails
+  toRawTitle     String?
+  treatment      CitationTreatment
+  // Populated for UK edges from the UK Legal MCP's citations_network grouping ("case",
+  // "legislation", "si", "eu") — that source gives no judicial-treatment signal (see
+  // `treatment`'s comment on this model's usage in CitationExtractionSvc vs.
+  // UkCitationNetworkSvc), so this carries the distinction it actually supports instead. Left
+  // null for PH edges, which have no equivalent typing.
+  citationType   String?
+  excerpt        String?           @db.Text
+  confidence     Float? // resolution confidence for toLawId; null when unresolved
+  createdAt      DateTime          @default(now())
+
+  fromLaw Law  @relation("CitedFrom", fields: [fromLawId], references: [id], onDelete: Cascade)
+  toLaw   Law? @relation("CitedTo", fields: [toLawId], references: [id], onDelete: SetNull)
+
+  @@index([fromLawId])
+}
+
+enum CitationTreatment {
+  FOLLOWED
+  DISTINGUISHED
+  ABANDONED
+  OVERRULED
+  CITED
 }
 
 enum LawCategory {
@@ -875,9 +922,33 @@ model CitationCheck {
   notes          String?                @db.Text
   checkedAt      DateTime               @default(now())
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  // Lazily resolved the first time this case's Citation Map is opened — matches citedReference's
+  // free text against the Law corpus (see resolveCitationToLaw). Null until resolution is
+  // attempted or when no confident match exists; resolutionConfidence is null in both cases too.
+  resolvedLawId        String?
+  resolutionConfidence Float?
+
+  // Pinpoint reference (e.g. "para. 4" or "p. 15") — lawyer-entered, or auto-detected for UK
+  // via a live search of the resolved judgment's actual text (see grepJudgment); never a guess.
+  pinpoint String?
+
+  // How quotedText relates to officialText — QUOTED needs no LLM call (a plain text match
+  // already answers it, see citation-validity.ts's containsQuote); PARAPHRASED/INFERRED come
+  // from a short classification call only when the quote isn't a clean match. Null when there's
+  // no officialText to classify against at all.
+  propositionType CitationPropositionType?
+
+  case        Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  resolvedLaw Law? @relation("ResolvedLaw", fields: [resolvedLawId], references: [id], onDelete: SetNull)
 
   @@index([caseId])
+  @@index([resolvedLawId])
+}
+
+enum CitationPropositionType {
+  QUOTED
+  PARAPHRASED
+  INFERRED
 }
 
 model ProceduralDeadline {
@@ -916,14 +987,18 @@ model ProceduralDeadlineConfirmation {
 }
 
 model ProcedureItem {
-  id        String   @id @default(uuid())
-  caseId    String
-  kind      String
-  label     String
-  done      Boolean  @default(false)
-  notes     String?  @db.Text
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid())
+  caseId      String
+  kind        String
+  label       String
+  done        Boolean  @default(false)
+  notes       String?  @db.Text
+  // Which source document an AI-generated STRATEGY/TODO item is grounded in (see
+  // CaseStrategySvc, case-strategy-parse.ts). Null for lawyer-entered items and for AI items
+  // the model didn't attribute to a specific document.
+  sourceLabel String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -947,13 +1022,17 @@ enum FindingCategory {
 // as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
 // manually-created rows (different/no notes) are left alone.
 model CaseFinding {
-  id        String          @id @default(uuid())
-  caseId    String
-  category  FindingCategory
-  label     String
-  notes     String?
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  id          String          @id @default(uuid())
+  caseId      String
+  category    FindingCategory
+  label       String
+  notes       String?
+  // Which source document an AI-generated finding is grounded in (see CaseFindingAiSvc,
+  // case-finding-parse.ts). Null for lawyer-entered findings and for AI findings the model
+  // didn't attribute to a specific document.
+  sourceLabel String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -1013,6 +1092,12 @@ model CaseReconstruction {
   // Qualitative "what this doesn't explain" list — deliberately not a coverage percentage,
   // which isn't honestly groundable given the prompt only sees a sampled excerpt pack.
   gaps              String[]  @default([])
+  // Claim-level attribution for `narrative` only (the General register — the one that isn't
+  // reframed/redacted like Court/Opposing) — same shape and matching approach as
+  // RedTeamAssessment.claims (see extractReconstructionClaims): a verbatim-substring quote
+  // matched back onto the text at render time. Cleared whenever `narrative` is hand-edited
+  // (see CaseReconstructionSvc.update) since a stale claim would otherwise mismatch silently.
+  claims            Json?
   // Audio narration (General/narrative register only) — async AWS Polly job, same
   // start-job/poll-status shape as Transcription's AWS Transcribe integration.
   audioFileId       String?
@@ -1035,6 +1120,11 @@ model RedTeamAssessment {
   id        String   @id @default(uuid())
   caseId    String   @unique
   content   String   @db.Text
+  // Claim-level attribution (RedTeamClaim[] from red-team-claims-parse.ts) — which sentences
+  // are grounded in a specific case-data item vs. AI inference vs. flagged unsupported. Matched
+  // back onto `content` at render time (components/shared/attributed-text.tsx); `content`
+  // itself is never modified, so this stays valid even across future edits/regenerations.
+  claims    Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1202,4 +1292,31 @@ model IntegrationConnector {
 
   @@index([userId])
   @@index([organizationId])
+}
+
+// ── AI generation locks ─────────────────────────────────────────────────────────
+// Generic "is a generation currently running" marker, shared by every Chat-Wonder-backed
+// Generate/Refresh/Scan action (Red Team, Case Reconstruction, Contradictions, the global
+// case refresh, Mind Map, Audio Overview's script step, and PH Citation Map's per-node
+// expand). Without this, a page refresh mid-generation looks idle even though the server-side
+// call is still running, inviting a duplicate click. `subjectId` is deliberately not a
+// relation — it's a caseId for the case-level kinds above, a Law.id for citationExpand — this
+// is a generic lock, not a domain entity. See AiGenerationLockSvc.
+model AiGenerationJob {
+  id         String             @id @default(uuid())
+  subjectId  String
+  kind       String
+  status     AiGenerationStatus @default(IN_PROGRESS)
+  startedAt  DateTime           @default(now())
+  finishedAt DateTime?
+  error      String?
+
+  @@unique([subjectId, kind])
+  @@index([subjectId])
+}
+
+enum AiGenerationStatus {
+  IN_PROGRESS
+  DONE
+  FAILED
 }

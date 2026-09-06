@@ -2,6 +2,7 @@ import { parseAiJson } from "./response-parser";
 
 const MAX_ITEMS = { STRATEGY: 8, TODO: 12, DATES: 20 };
 const MAX_LABEL = 160;
+const MAX_SOURCE_LABEL = 200;
 
 function stripChatWonderNoise(text: string): string {
   return text
@@ -20,9 +21,14 @@ export interface ParsedKeyDate {
   date: string;
 }
 
+export interface ParsedStrategyItem {
+  label: string;
+  sourceLabel: string | null;
+}
+
 export interface ParsedCaseStrategy {
-  strategy: string[];
-  todos: string[];
+  strategy: ParsedStrategyItem[];
+  todos: ParsedStrategyItem[];
   dates: ParsedKeyDate[];
 }
 
@@ -32,8 +38,8 @@ export interface ParsedCaseStrategy {
  */
 export function extractCaseStrategy(text: string): ParsedCaseStrategy | undefined {
   const cleaned = stripChatWonderNoise(text);
-  const strategy = extractStringList(cleaned, "STRATEGY");
-  const todos = extractStringList(cleaned, "TODOS");
+  const strategy = extractItemList(cleaned, "STRATEGY");
+  const todos = extractItemList(cleaned, "TODOS");
   const dates = extractDateList(cleaned);
   if (strategy === undefined && todos === undefined && dates === undefined) return undefined;
   return {
@@ -43,19 +49,19 @@ export function extractCaseStrategy(text: string): ParsedCaseStrategy | undefine
   };
 }
 
-function extractStringList(text: string, tag: string): string[] | undefined {
+function extractItemList(text: string, tag: string): ParsedStrategyItem[] | undefined {
   const parsed = extractTaggedArray(text, tag);
   if (!parsed) return parsed === undefined ? undefined : [];
 
-  const labels: string[] = [];
+  const items: ParsedStrategyItem[] = [];
   const seen = new Set<string>();
   for (const row of parsed) {
-    const label = normalizeLabel(row);
-    if (!label || seen.has(label.toLowerCase())) continue;
-    seen.add(label.toLowerCase());
-    labels.push(label);
+    const item = normalizeItem(row);
+    if (!item.label || seen.has(item.label.toLowerCase())) continue;
+    seen.add(item.label.toLowerCase());
+    items.push(item);
   }
-  return labels;
+  return items;
 }
 
 function extractDateList(text: string): ParsedKeyDate[] | undefined {
@@ -110,6 +116,19 @@ function normalizeLabel(row: unknown): string {
       .slice(0, MAX_LABEL);
   }
   return "";
+}
+
+function normalizeItem(row: unknown): ParsedStrategyItem {
+  if (typeof row === "string") {
+    return { label: row.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL), sourceLabel: null };
+  }
+  if (row && typeof row === "object" && "label" in row) {
+    const r = row as { label: unknown; sourceLabel?: unknown };
+    const label = String(r.label).replace(/\s+/g, " ").trim().slice(0, MAX_LABEL);
+    const sourceLabel = typeof r.sourceLabel === "string" ? r.sourceLabel.trim().slice(0, MAX_SOURCE_LABEL) || null : null;
+    return { label, sourceLabel };
+  }
+  return { label: "", sourceLabel: null };
 }
 
 function normalizeIsoDate(value: unknown): string | null {

@@ -18,7 +18,7 @@ import {
   EMAIL_VERIFICATION_EXPIRY_MS,
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
-} from "../constants/auth.constants";
+} from "../constants";
 
 function generateOtpCode(): string {
   return crypto

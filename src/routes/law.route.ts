@@ -14,4 +14,7 @@ router.get("/search", asyncHandler(LawCtrl.search));
 router.get("/browse", asyncHandler(LawCtrl.browse));
 router.get("/document", asyncHandler(LawCtrl.getDocument));
 
+router.post("/:lawId/citations/expand", asyncHandler(LawCtrl.expandCitations));
+router.get("/:lawId/citations", asyncHandler(LawCtrl.getCitations));
+
 export default router;

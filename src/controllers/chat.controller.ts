@@ -1,9 +1,15 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import ChatSvc from "../services/chat.service";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import { getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
+import {
+  listConsultationsSchema,
+  createConsultationSchema,
+  renameConsultationSchema,
+  relevantChunksSchema,
+  sendMessageSchema,
+} from "../validation/chat.validation";
 
 export default class ChatCtrl {
   static async getSession(_req: Request, res: Response) {
@@ -12,8 +18,7 @@ export default class ChatCtrl {
   }
 
   static async listConsultations(req: Request, res: Response) {
-    const schema = Joi.object({ caseId: Joi.string().guid().optional() });
-    const { error, value } = schema.validate(req.query);
+    const { error, value } = listConsultationsSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
     const consultations = await ChatSvc.listConsultations(req.organization!.id, value.caseId);
@@ -21,11 +26,7 @@ export default class ChatCtrl {
   }
 
   static async createConsultation(req: Request, res: Response) {
-    const schema = Joi.object({
-      title: Joi.string().optional(),
-      caseId: Joi.string().guid().optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createConsultationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     const consultation = await ChatSvc.createConsultation(req.organization!.id, req.user.userId, value.title, value.caseId);
@@ -33,8 +34,7 @@ export default class ChatCtrl {
   }
 
   static async renameConsultation(req: Request, res: Response) {
-    const schema = Joi.object({ title: Joi.string().required() });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = renameConsultationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     const consultation = await ChatSvc.renameConsultation(req.organization!.id, req.params.consultationId, value.title);
@@ -60,12 +60,7 @@ export default class ChatCtrl {
 
   /** Rank READY consultation-document chunks for a query — payload for chat-wonder grounding. */
   static async relevantChunks(req: Request, res: Response) {
-    const schema = Joi.object({
-      query: Joi.string().trim().min(1).required(),
-      limit: Joi.number().integer().min(1).max(100).default(20),
-    });
-
-    const { error, value } = schema.validate(req.body, { convert: true });
+    const { error, value } = relevantChunksSchema.validate(req.body, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
     // Ownership check — throws 404 if missing / not owned.
@@ -106,23 +101,7 @@ export default class ChatCtrl {
     const { consultationId } = req.params;
     const { message, sessionId, documentContext, caseDocumentId, caseId, documentIds } = req.body;
 
-    const schema = Joi.object({
-      message: Joi.string().allow("").required(),
-      sessionId: Joi.string().required(),
-      documentContext: Joi.string().optional(),
-      caseDocumentId: Joi.string().optional(),
-      caseId: Joi.string().guid().optional(),
-      documentIds: Joi.array().items(Joi.string()).optional(),
-    }).custom((value, helpers) => {
-      // A file-only send (no typed text) is only valid when it's carrying at least one
-      // attachment — otherwise there's nothing for the AI to respond to.
-      if (!value.message.trim() && !value.documentIds?.length) {
-        return helpers.message({ custom: '"message" must not be empty unless "documentIds" is provided' });
-      }
-      return value;
-    });
-
-    const { error } = schema.validate({ message, sessionId, documentContext, caseDocumentId, caseId, documentIds });
+    const { error } = sendMessageSchema.validate({ message, sessionId, documentContext, caseDocumentId, caseId, documentIds });
     if (error) {
       throw new HttpError(error.message, 400);
     }

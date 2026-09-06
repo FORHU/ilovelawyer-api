@@ -1,14 +1,21 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import LegalRagSvc from "../services/legal-rag.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
 import { getLegalKnowledgeProvider } from "../legal/legal-knowledge.registry";
+import {
+  legalRagCategoriesSchema,
+  legalRagListSchema,
+  legalRagVectorSearchSchema,
+  legalRagGetRelatedSchema,
+  legalRagFormatDocumentSchema,
+  legalRagFormatDocumentsSchema,
+  legalRagSearchSchema,
+} from "../validation/legal-rag.validation";
 
 export default class LegalRagCtrl {
   static async categories(req: Request, res: Response) {
-    const schema = Joi.object({ category: Joi.string().optional() });
-    const { error, value } = schema.validate(req.query);
+    const { error, value } = legalRagCategoriesSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
     const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
@@ -23,17 +30,7 @@ export default class LegalRagCtrl {
   }
 
   static async list(req: Request, res: Response) {
-    const schema = Joi.object({
-      page: Joi.number().integer().min(1).default(1),
-      limit: Joi.number().integer().min(1).max(100).default(20),
-      category: Joi.string().optional(),
-      subcategory: Joi.string().optional(),
-      noSubcategory: Joi.boolean().optional(),
-      year: Joi.number().integer().optional(),
-      search: Joi.string().optional(),
-    });
-
-    const { error, value } = schema.validate(req.query, { convert: true });
+    const { error, value } = legalRagListSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
     const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
@@ -49,14 +46,7 @@ export default class LegalRagCtrl {
   }
 
   static async vectorSearch(req: Request, res: Response) {
-    const schema = Joi.object({
-      embedding: Joi.array().items(Joi.number()).min(1).required(),
-      limit: Joi.number().integer().min(1).max(100).default(10),
-      offset: Joi.number().integer().min(0).default(0),
-      minSimilarity: Joi.number().min(0).max(1).default(0.3),
-    });
-
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = legalRagVectorSearchSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
@@ -70,10 +60,7 @@ export default class LegalRagCtrl {
       throw new HttpError("Invalid case law document ID", 400);
     }
 
-    const schema = Joi.object({
-      limit: Joi.number().integer().min(1).max(20).default(5),
-    });
-    const { error, value } = schema.validate(req.query, { convert: true });
+    const { error, value } = legalRagGetRelatedSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
     const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);
@@ -87,11 +74,7 @@ export default class LegalRagCtrl {
       throw new HttpError("Invalid case law document ID", 400);
     }
 
-    const schema = Joi.object({
-      force: Joi.boolean().default(false),
-      generate_title: Joi.boolean().default(true),
-    });
-    const { error, value } = schema.validate(req.query, { convert: true });
+    const { error, value } = legalRagFormatDocumentSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
     const data = await LegalRagSvc.formatDocument(id, { force: value.force, generateTitle: value.generate_title });
@@ -99,14 +82,7 @@ export default class LegalRagCtrl {
   }
 
   static async formatDocuments(req: Request, res: Response) {
-    const schema = Joi.object({
-      force: Joi.boolean().default(false),
-      all: Joi.boolean().default(false),
-      generate_title: Joi.boolean().default(true),
-      limit: Joi.number().integer().min(1).optional(),
-      delay: Joi.number().min(0).optional(),
-    });
-    const { error, value } = schema.validate(req.query, { convert: true });
+    const { error, value } = legalRagFormatDocumentsSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
     const data = await LegalRagSvc.formatDocuments({
@@ -139,12 +115,7 @@ export default class LegalRagCtrl {
   }
 
   static async search(req: Request, res: Response) {
-    const schema = Joi.object({
-      q: Joi.string().min(2).required(),
-      limit: Joi.number().integer().min(1).max(20).default(5),
-    });
-
-    const { error, value } = schema.validate(req.query, { convert: true });
+    const { error, value } = legalRagSearchSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
     const provider = getLegalKnowledgeProvider(getTenantContext(req).tenantCode);

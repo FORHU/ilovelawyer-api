@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { PackageSku, WorkspacePreset } from "@prisma/client";
 import TerminalWorkspaceRepo from "../repositories/terminal-workspace.repository";
 import CaseRiskRepo from "../repositories/case-risk.repository";
-import { PANEL_CATALOG, skuAllowsPanel, defaultPresetForSku } from "../constants/terminal.constants";
+import { PANEL_CATALOG, skuAllowsPanel, defaultPresetForSku } from "../constants";
 import { buildDefaultLayout, normalizeLayout } from "../utils/terminal-layout";
 import HttpError from "../utils/http-error";
 import prisma from "../lib/prisma";

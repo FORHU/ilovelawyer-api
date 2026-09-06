@@ -1,4 +1,4 @@
-import { CONTRADICTION_FACT_KEYS, CONTRADICTION_KINDS } from "../constants/contradiction-scan.constants";
+import { CONTRADICTION_FACT_KEYS, CONTRADICTION_KINDS } from "../constants";
 import type { ContradictionHit } from "./fact-extract";
 import { parseAiJson } from "./response-parser";
 

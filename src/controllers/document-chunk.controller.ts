@@ -1,12 +1,11 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import HttpError from "../utils/http-error";
+import { listChunksByDocumentSchema, listChunksByFilterSchema } from "../validation/document-chunk.validation";
 
 export default class DocumentChunkCtrl {
   static async list(req: Request, res: Response) {
-    const schema = Joi.object({ caseDocumentId: Joi.string().required() });
-    const { error, value } = schema.validate(req.params);
+    const { error, value } = listChunksByDocumentSchema.validate(req.params);
     if (error) throw new HttpError(error.message, 400);
 
     const result = await DocumentChunkSvc.listByDocument(value.caseDocumentId);
@@ -14,11 +13,7 @@ export default class DocumentChunkCtrl {
   }
 
   static async listByFilter(req: Request, res: Response) {
-    const schema = Joi.object({
-      caseId: Joi.string(),
-      consultationId: Joi.string(),
-    }).xor("caseId", "consultationId");
-    const { error, value } = schema.validate(req.query);
+    const { error, value } = listChunksByFilterSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
     const result = await DocumentChunkSvc.listByCaseOrConsultation(value);

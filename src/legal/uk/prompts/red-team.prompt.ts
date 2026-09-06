@@ -2,7 +2,7 @@
 // procedure (Civil Procedure Rules) and company/commercial law framing — not yet validated by
 // a UK-qualified lawyer. Output block structure must stay identical to the PH version (see
 // ../../ph/prompts/red-team.prompt.ts) since both feed the same downstream markdown renderer.
-import type { RedTeamPromptData } from "../../ph/prompts/red-team.prompt";
+import type { RedTeamPromptData } from "../../ph/prompts";
 
 function bulletList(items: string[]): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "(none recorded)";
@@ -85,5 +85,19 @@ Attack the core [Legal Issues]. If the user relies on a specific line of authori
 Review the [Damages & Remedies]. Ruthlessly evaluate the likelihood of the court awarding these amounts (e.g. the duty to mitigate, remoteness of damage, high bar for exemplary/punitive damages in England & Wales). Provide a deterministic "Risk of Total Loss" percentage (0-100%) and advise on the lowest settlement offer the user should accept to avoid a catastrophic loss at trial.
 
 If a section's underlying data is empty ("(none recorded)"), say so plainly rather than inventing content for it.
+
+CLAIM ATTRIBUTION
+After the assessment above, also output a [CLAIMS] block: a JSON array classifying the load-bearing sentences you wrote, so a lawyer can see at a glance what's grounded in the case data above versus your own inference.
+
+For each entry:
+- "text": an exact, verbatim substring copied character-for-character from the assessment above — never paraphrase or summarize it. This is matched back against the text, so it must match exactly.
+- "category": one of "GROUNDED" (directly based on a specific item in [Legal Issues], [Evidence & Timeline], [Contradictions], [Weaknesses], [Witnesses], or [Damages & Remedies] above), "INFERENCE" (a reasonable deduction you made that is not directly one of those items), or "UNSUPPORTED" (a claim included for completeness that is not actually backed by the data given).
+- "sourceLabel": for GROUNDED only, the exact label/name/excerpt of the specific item above that it is based on (e.g. one of the [Weaknesses] bullets verbatim, or a witness name). Null for INFERENCE and UNSUPPORTED.
+
+Cover only load-bearing factual/legal claims — not every sentence (skip connective prose, headers, and rhetorical framing). Cap at 30 entries.
+
+[CLAIMS]
+[{"text": "...", "category": "GROUNDED", "sourceLabel": "..."}]
+[/CLAIMS]
 `;
 }

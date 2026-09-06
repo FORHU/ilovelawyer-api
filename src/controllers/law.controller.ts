@@ -1,40 +1,14 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import LawSvc, { parseLawCategory } from "../services/law.service";
+import LawRepo from "../repositories/law.repository";
+import CitationEdgeRepo from "../repositories/citation-edge.repository";
+import CitationExtractionQueue from "../queues/citation-extraction.queue";
+import UkCitationNetworkSvc from "../services/uk-citation-network.service";
+import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
-import { JURIS_PH_CASE_TYPES, JURIS_PH_TOPICS } from "../utils/juris-ph";
-
-const lawSearchSchema = Joi.object({
-  category: Joi.string().valid("jurisprudence", "republic-acts").required(),
-  q: Joi.string().trim().min(1).max(300).required(),
-  limit: Joi.number().integer().min(1).max(20).default(5),
-});
-
-const lawDocumentSchema = Joi.object({
-  category: Joi.string().valid("jurisprudence", "republic-acts").required(),
-  id: Joi.string().trim().min(1).max(200).required(),
-});
-
-const lawBrowseSchema = Joi.object({
-  category: Joi.string().valid("jurisprudence", "republic-acts").required(),
-  // jurisprudence-only; ignored (rejected) for republic-acts.
-  caseType: Joi.string()
-    .valid(...JURIS_PH_CASE_TYPES)
-    .optional(),
-  // csv, e.g. "criminal,labor"
-  topics: Joi.string()
-    .custom((raw: string, helpers) => {
-      const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
-      const bad = list.find((t) => !(JURIS_PH_TOPICS as readonly string[]).includes(t));
-      if (bad) return helpers.error("any.invalid", { bad });
-      return list;
-    })
-    .optional(),
-  year: Joi.number().integer().min(1900).max(2100).optional(),
-  cursor: Joi.string().max(20000).optional(),
-  limit: Joi.number().integer().min(1).max(20).default(20),
-});
+import { assertCitationsAvailable } from "../utils/law.utils";
+import { lawSearchSchema, lawDocumentSchema, lawBrowseSchema } from "../validation/law.validation";
 
 export default class LawCtrl {
   /**
@@ -108,5 +82,50 @@ export default class LawCtrl {
       id: value.id,
     });
     return res.status(200).json(result);
+  }
+
+  /**
+   * POST /api/law/:lawId/citations/expand — enqueues citation extraction for this decision
+   * (a PDF-fetch chained with an LLM call, plausibly 10-30s+, so this is fire-and-forget +
+   * poll rather than a blocking request — see CitationExtractionQueue / getCitations below).
+   * Returns cached edges immediately, with no enqueue, if extraction already ran.
+   */
+  static async expandCitations(req: Request, res: Response) {
+    const tenantCode = assertCitationsAvailable(req);
+    const law = await LawRepo.findById(req.params.lawId);
+    if (!law) throw new HttpError("Law not found", 404);
+
+    if (law.citationsExtractedAt) {
+      const edges = await CitationEdgeRepo.listByFromLaw(law.id);
+      return res.status(200).json({ status: "DONE", edges });
+    }
+
+    // UK: citations_network is a real, structured answer from the MCP, not an LLM inference —
+    // ~15 lightweight HTTP calls, fast enough to run inline. PH: PDF-fetch + LLM call,
+    // plausibly 10-30s+, so it stays fire-and-forget + poll via the queue.
+    if (tenantCode === "UK") {
+      const edges = await AiGenerationLockSvc.run(law.id, "citationExpand", () => UkCitationNetworkSvc.expand(law.id));
+      return res.status(200).json({ status: "DONE", edges });
+    }
+
+    // begin (not run) — the actual work happens later in the queue worker, which calls finish
+    // when it completes (citation-extraction.queue.ts). This is what stops two clicks (or a
+    // refresh + a re-click) before the first job finishes from enqueueing the same lawId twice.
+    await AiGenerationLockSvc.begin(law.id, "citationExpand");
+    CitationExtractionQueue.enqueue(law.id);
+    return res.status(202).json({ status: "IN_PROGRESS", edges: [] });
+  }
+
+  /** GET /api/law/:lawId/citations — poll endpoint for the job kicked off by expandCitations.
+   * Only meaningful after an expand call; polling a decision that was never expanded reads as
+   * IN_PROGRESS even though nothing is running — the frontend's poll flow always calls expand
+   * first, so this doesn't arise in practice. */
+  static async getCitations(req: Request, res: Response) {
+    assertCitationsAvailable(req);
+    const law = await LawRepo.findById(req.params.lawId);
+    if (!law) throw new HttpError("Law not found", 404);
+
+    const edges = await CitationEdgeRepo.listByFromLaw(law.id);
+    return res.status(200).json({ status: law.citationsExtractedAt ? "DONE" : "IN_PROGRESS", edges });
   }
 }

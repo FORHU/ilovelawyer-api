@@ -1,24 +1,18 @@
-import { PollyClient, StartSpeechSynthesisTaskCommand, GetSpeechSynthesisTaskCommand } from "@aws-sdk/client-polly";
+import { StartSpeechSynthesisTaskCommand, GetSpeechSynthesisTaskCommand } from "@aws-sdk/client-polly";
 import CaseAccess from "../utils/case-access";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import FilesRepo from "../repositories/files.repository";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_S3_BUCKET } from "../config";
+import { AWS_S3_BUCKET } from "../config";
 import { getPresignedGetUrl } from "../utils/s3";
+import { getPollyClient } from "../utils/polly";
 
 // Fixed voice for v1 — AWS Polly has no Filipino/Tagalog voice at all, and narrative
 // generation has no language parameter yet, so mapping voice to Display Language is
 // deferred work rather than a v1 blocker. See docs/adr context in the plan this shipped from.
 const VOICE_ID = "Joanna";
 const OUTPUT_PREFIX = "case-reconstruction-audio/";
-
-function getPollyClient() {
-  return new PollyClient({
-    region: AWS_REGION,
-    credentials: { accessKeyId: AWS_ACCESS_KEY, secretAccessKey: AWS_SECRET_ACCESS_KEY },
-  });
-}
 
 /** Polly's own OutputUri is the authoritative, guaranteed-correct link to what it wrote —
  * trust it directly rather than reconstructing the key from OutputS3KeyPrefix + TaskId

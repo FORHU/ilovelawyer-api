@@ -1,17 +1,21 @@
 import { TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
-import { buildRedTeamPrompt } from "./ph/prompts/red-team.prompt";
-import { buildUKRedTeamPrompt } from "./uk/prompts/red-team.prompt";
-import { buildCaseFindingPrompt } from "./ph/prompts/case-finding.prompt";
-import { buildUKCaseFindingPrompt } from "./uk/prompts/case-finding.prompt";
-import { buildCaseReconstructionPrompt } from "./ph/prompts/case-reconstruction.prompt";
-import { buildUKCaseReconstructionPrompt } from "./uk/prompts/case-reconstruction.prompt";
-import { buildCaseStrategyPrompt } from "./ph/prompts/case-strategy.prompt";
-import { buildUKCaseStrategyPrompt } from "./uk/prompts/case-strategy.prompt";
-import { PH_SOURCE_ANALYSIS_PROMPT } from "./ph/prompts/legal-source-cache.prompt";
-import { UK_SOURCE_ANALYSIS_PROMPT } from "./uk/prompts/legal-source-cache.prompt";
-import { buildPHChatTitlePrompt } from "./ph/prompts/chat-title.prompt";
-import { buildUKChatTitlePrompt } from "./uk/prompts/chat-title.prompt";
+import {
+  buildRedTeamPrompt,
+  buildCaseFindingPrompt,
+  buildCaseReconstructionPrompt,
+  buildCaseStrategyPrompt,
+  PH_SOURCE_ANALYSIS_PROMPT,
+  buildPHChatTitlePrompt,
+} from "./ph/prompts";
+import {
+  buildUKRedTeamPrompt,
+  buildUKCaseFindingPrompt,
+  buildUKCaseReconstructionPrompt,
+  buildUKCaseStrategyPrompt,
+  UK_SOURCE_ANALYSIS_PROMPT,
+  buildUKChatTitlePrompt,
+} from "./uk/prompts";
 
 /** Every getter below selects strictly by tenantCode — never by client input — and throws
  * rather than falling back to another tenantCode's prompt when unmapped. */

@@ -30,6 +30,7 @@ router.post("/:caseId/relevant-chunks", asyncHandler(CaseCtrl.relevantChunks));
 
 router.get("/:caseId/snapshot", asyncHandler(CaseTerminalCtrl.snapshot));
 router.post("/:caseId/refresh", asyncHandler(CaseTerminalCtrl.refresh));
+router.get("/:caseId/ai-jobs/:kind", asyncHandler(CaseTerminalCtrl.getAiJobStatus));
 
 router.get("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.listTimeline));
 router.post("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.createTimeline));
@@ -50,6 +51,7 @@ router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl
 
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
 router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
+router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
 
 router.get("/:caseId/procedure", asyncHandler(CaseTerminalCtrl.procedure));
 router.post("/:caseId/procedure/deadlines", asyncHandler(CaseTerminalCtrl.createDeadline));

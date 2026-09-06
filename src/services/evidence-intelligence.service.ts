@@ -7,11 +7,13 @@ import { extractFacts, findContradictions, ContradictionHit } from "../utils/fac
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
-import { buildContradictionPrompt } from "../constants/contradiction-scan.constants";
+import { buildContradictionPrompt } from "../constants";
 import { extractContradictionHits, uniqueContradictionHits } from "../utils/contradiction-scan";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import logger from "../utils/logger";
 import { PrivilegeStatus, HearsayCategory } from "@prisma/client";
+import { TenantCode } from "../types/tenant-code";
+import AiGenerationLockSvc from "./ai-generation-lock.service";
 
 export default class EvidenceIntelligenceSvc {
   static async list(caseId: string, userId: string) {
@@ -89,8 +91,17 @@ export default class EvidenceIntelligenceSvc {
     });
   }
 
+  /** Wrapped at this shared level (not the controller) so both the Contradictions panel's own
+   * "Scan" button and the global case-refresh action — which both call this method — protect
+   * each other: whichever calls first wins the lock, the other gets a clean 409 instead of the
+   * two racing. */
   static async scanContradictions(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
+    return AiGenerationLockSvc.run(caseId, "contradictions", () => EvidenceIntelligenceSvc.scanContradictionsInner(caseId));
+  }
+
+  private static async scanContradictionsInner(caseId: string) {
+    const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY");
 
@@ -98,7 +109,7 @@ export default class EvidenceIntelligenceSvc {
     let hits = regexHits;
 
     try {
-      const llmHits = await scanWithChatWonder(ready);
+      const llmHits = await scanWithChatWonder(ready, tenantCode);
       // undefined = missing/unparseable block → keep regex. [] = model found none → show none.
       if (llmHits) hits = uniqueContradictionHits(llmHits);
     } catch (err) {
@@ -149,7 +160,7 @@ async function scanWithRegex(ready: ReadyDoc[]): Promise<ContradictionHit[]> {
   return hits;
 }
 
-async function scanWithChatWonder(ready: ReadyDoc[]): Promise<ContradictionHit[] | undefined> {
+async function scanWithChatWonder(ready: ReadyDoc[], tenantCode: TenantCode): Promise<ContradictionHit[] | undefined> {
   if (ready.length < 1) return undefined;
 
   const caseDocumentIds = ready.map((doc) => doc.id);
@@ -170,10 +181,10 @@ ${pack.text || "(no indexed text)"}
   let payload: { response?: string; intermediate_response?: string };
 
   try {
-    payload = await callChatWonderRest(prompt, sessionId, grounding);
+    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode);
   } catch {
     sessionId = await getChatWonderSessionId();
-    payload = await callChatWonderRest(prompt, sessionId, grounding);
+    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode);
   }
 
   const text = String(payload.response || payload.intermediate_response || "");

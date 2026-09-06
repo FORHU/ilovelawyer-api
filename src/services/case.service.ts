@@ -5,7 +5,7 @@ import DocumentRepo from "../repositories/document.repository";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
-import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants/document-upload.constants";
+import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 
 export interface IncomingCaseDocument {
   filename: string;

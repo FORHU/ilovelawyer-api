@@ -3,7 +3,7 @@ import HttpError from "../utils/http-error";
 import { redis } from "../lib/redis";
 import { embedText } from "../utils/embedding";
 import { CHAT_WONDER_API_URL } from "../config";
-import { LIBRARY_SECTIONS } from "../constants/library-sections.constants";
+import { LIBRARY_SECTIONS } from "../constants";
 
 const CACHE_TTL_S  = 60 * 60;
 const CACHE_TTL_MS = CACHE_TTL_S * 1000;

@@ -11,6 +11,7 @@ const TAGS: Record<FindingCategory, string> = {
 
 const MAX_ITEMS = 8;
 const MAX_LABEL = 160;
+const MAX_SOURCE_LABEL = 200;
 
 function stripChatWonderNoise(text: string): string {
   return text
@@ -24,6 +25,7 @@ function stripChatWonderNoise(text: string): string {
 export interface ParsedCaseFinding {
   category: FindingCategory;
   label: string;
+  sourceLabel: string | null;
 }
 
 /** `undefined` = no tagged blocks found/parseable at all. Empty array = the model found
@@ -34,18 +36,23 @@ export function extractCaseFindings(text: string): ParsedCaseFinding[] | undefin
   let anyTagFound = false;
 
   for (const category of Object.keys(TAGS) as FindingCategory[]) {
-    const items = extractStringList(cleaned, TAGS[category]);
+    const items = extractItemList(cleaned, TAGS[category]);
     if (items === undefined) continue;
     anyTagFound = true;
-    for (const label of items.slice(0, MAX_ITEMS)) {
-      results.push({ category, label });
+    for (const item of items.slice(0, MAX_ITEMS)) {
+      results.push({ category, label: item.label, sourceLabel: item.sourceLabel });
     }
   }
 
   return anyTagFound ? results : undefined;
 }
 
-function extractStringList(text: string, tag: string): string[] | undefined {
+interface ParsedItem {
+  label: string;
+  sourceLabel: string | null;
+}
+
+function extractItemList(text: string, tag: string): ParsedItem[] | undefined {
   const re = new RegExp(`\\[${tag}\\]([\\s\\S]*?)\\[\\/${tag}\\]`, "i");
   const closed = text.match(re);
   let jsonStr = "";
@@ -63,24 +70,26 @@ function extractStringList(text: string, tag: string): string[] | undefined {
   const parsed = parseAiJson(jsonStr);
   if (!Array.isArray(parsed)) return undefined;
 
-  const labels: string[] = [];
+  const items: ParsedItem[] = [];
   const seen = new Set<string>();
   for (const row of parsed) {
-    const label = normalizeLabel(row);
-    if (!label || seen.has(label.toLowerCase())) continue;
-    seen.add(label.toLowerCase());
-    labels.push(label);
+    const item = normalizeItem(row);
+    if (!item.label || seen.has(item.label.toLowerCase())) continue;
+    seen.add(item.label.toLowerCase());
+    items.push(item);
   }
-  return labels;
+  return items;
 }
 
-function normalizeLabel(row: unknown): string {
-  if (typeof row === "string") return row.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL);
-  if (row && typeof row === "object" && "label" in row) {
-    return String((row as { label: unknown }).label)
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, MAX_LABEL);
+function normalizeItem(row: unknown): ParsedItem {
+  if (typeof row === "string") {
+    return { label: row.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL), sourceLabel: null };
   }
-  return "";
+  if (row && typeof row === "object" && "label" in row) {
+    const r = row as { label: unknown; sourceLabel?: unknown };
+    const label = String(r.label).replace(/\s+/g, " ").trim().slice(0, MAX_LABEL);
+    const sourceLabel = typeof r.sourceLabel === "string" ? r.sourceLabel.trim().slice(0, MAX_SOURCE_LABEL) || null : null;
+    return { label, sourceLabel };
+  }
+  return { label: "", sourceLabel: null };
 }

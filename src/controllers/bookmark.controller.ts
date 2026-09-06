@@ -1,19 +1,8 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import BookmarkSvc from "../services/bookmark.service";
 import HttpError from "../utils/http-error";
 import { BookmarkType } from "@prisma/client";
-
-const bookmarkSchema = Joi.object({
-  itemId: Joi.string().required(),
-  title: Joi.string().required(),
-  type: Joi.string().valid("case", "source").required(),
-  reference: Joi.string().optional(),
-  url: Joi.string().uri().optional(),
-  aiSummary: Joi.string().optional(),
-  doctrine: Joi.string().optional(),
-  facts: Joi.string().optional(),
-});
+import { bookmarkSchema } from "../validation/bookmark.validation";
 
 export default class BookmarkCtrl {
   static async create(req: Request, res: Response) {

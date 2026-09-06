@@ -4,9 +4,11 @@ import CaseReconstructionRepo from "../repositories/case-reconstruction.reposito
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getCaseReconstructionPromptBuilder } from "../legal/prompt-registry";
 import { extractRegisterNarratives, extractReconstructionGaps } from "../utils/case-reconstruction-parse";
+import { extractReconstructionClaims } from "../utils/case-reconstruction-claims-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
+import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
 
 // Per-register cap — each of the three narratives gets its own budget rather than sharing one,
@@ -39,6 +41,10 @@ export default class CaseReconstructionSvc {
    * documents finish indexing — same pattern as CaseStrategySvc.generateFromDocuments. */
   static async generate(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
+    return AiGenerationLockSvc.run(caseId, "caseReconstruction", () => CaseReconstructionSvc.generateInner(caseId, userId));
+  }
+
+  private static async generateInner(caseId: string, userId?: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
@@ -63,14 +69,17 @@ ${pack.text || "(no indexed text)"}
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
     }
 
     const registers = extractRegisterNarratives(result.content);
     const gaps = extractReconstructionGaps(result.content) ?? [];
+    // Only meaningful alongside a well-formed [NARRATIVE] block — the untagged fallback below
+    // has no reliable text for a [CLAIMS] block's quotes to be matched against anyway.
+    const claims = registers ? extractReconstructionClaims(result.content) : undefined;
 
     // Fall back to treating the whole cleaned response as the general narrative if the model
     // didn't use the expected tags — mirrors how CaseStrategySvc tolerates an untagged reply
@@ -81,8 +90,9 @@ ${pack.text || "(no indexed text)"}
           narrativeCourt: registers.court ? cleanRegister(registers.court) : null,
           narrativeOpposing: registers.opposing ? cleanRegister(registers.opposing) : null,
           gaps,
+          claims,
         }
-      : { narrative: cleanRegister(result.content), narrativeCourt: null, narrativeOpposing: null, gaps };
+      : { narrative: cleanRegister(result.content), narrativeCourt: null, narrativeOpposing: null, gaps, claims: undefined };
 
     logger.info("Chat Wonder case reconstruction reply", {
       caseId,
@@ -91,6 +101,7 @@ ${pack.text || "(no indexed text)"}
       hasCourtVersion: !!data.narrativeCourt,
       hasOpposingVersion: !!data.narrativeOpposing,
       gapCount: gaps.length,
+      claimCount: claims?.length ?? 0,
     });
     if (!data.narrative) throw new HttpError("Chat Wonder returned no reconstruction text", 502);
 

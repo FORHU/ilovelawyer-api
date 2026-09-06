@@ -3,17 +3,14 @@ import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import { Request, Response } from "express";
 import Joi from "joi";
-import { PollyClient, SynthesizeSpeechCommand, OutputFormat, VoiceId } from "@aws-sdk/client-polly";
-import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION } from "../config";
+import { SynthesizeSpeechCommand, OutputFormat, VoiceId } from "@aws-sdk/client-polly";
 import HttpError from "../utils/http-error";
+import { getPollyClient } from "../utils/polly";
 
 const router = express.Router();
 router.use(validSession);
 
-const polly = new PollyClient({
-  region: AWS_REGION,
-  credentials: { accessKeyId: AWS_ACCESS_KEY, secretAccessKey: AWS_SECRET_ACCESS_KEY },
-});
+const polly = getPollyClient();
 
 router.post("/polly", asyncHandler(async (req: Request, res: Response) => {
   const schema = Joi.object({

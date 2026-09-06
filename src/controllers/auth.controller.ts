@@ -1,22 +1,24 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import AuthSvc from "../services/auth.service";
 import HttpError from "../utils/http-error";
 import { REFRESH_TOKEN_COOKIE, setRefreshTokenCookie, clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
 import { resolveTenantCodeFromRequest } from "../utils/tenant-host";
+import {
+  signupSchema,
+  loginSchema,
+  googleLoginSchema,
+  forgotPasswordSchema,
+  validateResetTokenSchema,
+  resetPasswordSchema,
+  sendOtpSchema,
+  verifyOtpSchema,
+} from "../validation/auth.validation";
 
 export default class AuthCtrl {
   static async signup(req: Request, res: Response) {
     const { username, email, password, name } = req.body;
 
-    const schema = Joi.object({
-      username: Joi.string().required(),
-      email: Joi.string().email().required(),
-      password: Joi.string().min(8).required(),
-      name: Joi.string().trim().max(120).allow(""),
-    });
-
-    const { error } = schema.validate({ username, email, password, name });
+    const { error } = signupSchema.validate({ username, email, password, name });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -34,13 +36,7 @@ export default class AuthCtrl {
   static async login(req: Request, res: Response) {
     const { email, password, remember } = req.body;
 
-    const schema = Joi.object({
-      email: Joi.string().email().required(),
-      password: Joi.string().min(8).required(),
-      remember: Joi.boolean().optional(),
-    });
-
-    const { error } = schema.validate({ email, password, remember });
+    const { error } = loginSchema.validate({ email, password, remember });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -79,12 +75,7 @@ export default class AuthCtrl {
   static async google(req: Request, res: Response) {
     const { idToken, remember } = req.body;
 
-    const schema = Joi.object({
-      idToken: Joi.string().required(),
-      remember: Joi.boolean().optional(),
-    });
-
-    const { error } = schema.validate({ idToken, remember });
+    const { error } = googleLoginSchema.validate({ idToken, remember });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -107,11 +98,7 @@ export default class AuthCtrl {
   static async forgotPassword(req: Request, res: Response) {
     const { email } = req.body;
 
-    const schema = Joi.object({
-      email: Joi.string().email().required(),
-    });
-
-    const { error } = schema.validate({ email });
+    const { error } = forgotPasswordSchema.validate({ email });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -124,11 +111,7 @@ export default class AuthCtrl {
   static async validateResetToken(req: Request, res: Response) {
     const { token } = req.query;
 
-    const schema = Joi.object({
-      token: Joi.string().required(),
-    });
-
-    const { error } = schema.validate({ token });
+    const { error } = validateResetTokenSchema.validate({ token });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -141,12 +124,7 @@ export default class AuthCtrl {
   static async resetPassword(req: Request, res: Response) {
     const { token, password } = req.body;
 
-    const schema = Joi.object({
-      token: Joi.string().required(),
-      password: Joi.string().min(8).required(),
-    });
-
-    const { error } = schema.validate({ token, password });
+    const { error } = resetPasswordSchema.validate({ token, password });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -160,11 +138,7 @@ export default class AuthCtrl {
   static async sendOtp(req: Request, res: Response) {
     const { email } = req.body;
 
-    const schema = Joi.object({
-      email: Joi.string().email().required(),
-    });
-
-    const { error } = schema.validate({ email });
+    const { error } = sendOtpSchema.validate({ email });
     if (error) {
       throw new HttpError(error.message, 400);
     }
@@ -177,12 +151,7 @@ export default class AuthCtrl {
   static async verifyOtp(req: Request, res: Response) {
     const { email, code } = req.body;
 
-    const schema = Joi.object({
-      email: Joi.string().email().required(),
-      code: Joi.string().length(6).required(),
-    });
-
-    const { error } = schema.validate({ email, code });
+    const { error } = verifyOtpSchema.validate({ email, code });
     if (error) {
       throw new HttpError(error.message, 400);
     }

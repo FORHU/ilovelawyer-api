@@ -7,7 +7,7 @@ import {
   PresetValue,
   skuAllowsPanel,
   WorkspaceLayout,
-} from "../constants/terminal.constants";
+} from "../constants";
 
 function isPanelId(value: unknown): value is PanelId {
   return typeof value === "string" && (PANEL_IDS as readonly string[]).includes(value);

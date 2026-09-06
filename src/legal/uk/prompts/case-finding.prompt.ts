@@ -1,6 +1,7 @@
 // LEGAL_REVIEW_REQUIRED: see ../../ph/prompts/case-finding.prompt.ts for the PH counterpart —
 // output block structure must stay identical, only the legal framing differs.
-export const AI_FINDING_NOTE = "AI";
+// AI_FINDING_NOTE lives in ../../../constants/case-finding.constants — this file used to
+// redeclare its own (unused) copy; use the shared one instead.
 
 export function buildUKCaseFindingPrompt(docs: { id: string; name: string }[]): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
@@ -47,7 +48,7 @@ Reply with these five blocks and nothing else. No markdown, no [Sources], no rel
 []
 [/DEFENSE_STRATEGY]
 
-Every block is JSON strings only (not objects). Max 160 characters per string, max 8 items per block.
+Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. "label" is the finding itself (max 160 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this finding is drawn from — null if it isn't tied to one specific document. Max 8 items per block.
 If none: leave the array empty.
 `;
 }

@@ -10,12 +10,20 @@ import ChatRepo from "../repositories/chat.repository";
 import { TimelineItem } from "../utils/response-parser";
 import OrganizationRepo from "../repositories/organization.repository";
 import CaseSnapshotSvc from "./case-snapshot.service";
+import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
 
 export default class CaseRefreshSvc {
   static async refresh(caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    // Own outer lock, purely to stop a double-click on "Refresh analysis" itself — the
+    // sub-calls below each hold their own lock too (contradictions/caseStrategy/caseFinding),
+    // so a 409 from one of those (e.g. Contradictions already running standalone) is caught by
+    // the existing .catch() blocks below and just skips that piece, same as any other failure.
+    return AiGenerationLockSvc.run(caseId, "caseRefresh", () => CaseRefreshSvc.refreshInner(caseId, userId));
+  }
 
+  private static async refreshInner(caseId: string, userId: string) {
     const docs = await DocumentRepo.listAllByCase(caseId);
     const pending = docs.filter((d) => d.ragStatus === "PENDING" || d.ragStatus === "FAILED");
     if (pending.length) DocumentExtractionQueue.enqueueMany(pending.map((d) => d.id));

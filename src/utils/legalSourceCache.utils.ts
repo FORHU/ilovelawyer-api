@@ -1,4 +1,4 @@
-import { KNOWN_CODES } from "../constants/legalSourceCache.constants";
+import { KNOWN_CODES } from "../constants";
 
 export function normalizeKeyword(input: string): string {
   return input

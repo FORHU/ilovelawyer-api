@@ -1,31 +1,8 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import AdminSvc from "../services/admin.service";
 import LawSvc, { parseLawCategory } from "../services/law.service";
 import HttpError from "../utils/http-error";
-
-const listUsersSchema = Joi.object({
-  page: Joi.number().integer().min(1).default(1),
-  limit: Joi.number().integer().min(1).max(100).default(20),
-  sortBy: Joi.string().valid("name", "email", "createdAt", "lastLoginAt").default("createdAt"),
-  sortDir: Joi.string().valid("asc", "desc").default("desc"),
-  q: Joi.string().trim().max(200).optional(),
-});
-
-const lawSearchSchema = Joi.object({
-  category: Joi.string().valid("jurisprudence", "republic-acts").required(),
-  q: Joi.string().trim().min(1).max(300).required(),
-  limit: Joi.number().integer().min(1).max(20).default(5),
-});
-
-const listLawsSchema = Joi.object({
-  category: Joi.string().valid("jurisprudence", "republic-acts").optional(),
-  q: Joi.string().trim().max(300).optional(),
-  page: Joi.number().integer().min(1).default(1),
-  limit: Joi.number().integer().min(1).max(100).default(20),
-  sortBy: Joi.string().valid("year", "createdAt").default("createdAt"),
-  sortDir: Joi.string().valid("asc", "desc").default("desc"),
-});
+import { listUsersSchema, denyUserSchema, lawSearchSchema, listLawsSchema } from "../validation/admin.validation";
 
 export default class AdminCtrl {
   static async listUsers(req: Request, res: Response) {
@@ -50,8 +27,7 @@ export default class AdminCtrl {
   }
 
   static async denyUser(req: Request, res: Response) {
-    const schema = Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
-    const { error, value } = schema.validate(req.body ?? {});
+    const { error, value } = denyUserSchema.validate(req.body ?? {});
     if (error) throw new HttpError(error.message, 400);
 
     const user = await AdminSvc.deny(req.params.id, value.reason || undefined);

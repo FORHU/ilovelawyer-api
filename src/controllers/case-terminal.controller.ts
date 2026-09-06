@@ -1,11 +1,12 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import CaseSnapshotSvc from "../services/case-snapshot.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseRiskSvc from "../services/case-risk.service";
 import CaseRefreshSvc from "../services/case-refresh.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CitationCheckSvc from "../services/citation-check.service";
+import CitationMapSvc from "../services/citation-map.service";
+import UkCitationMapSvc from "../services/uk-citation-map.service";
 import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
 import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
@@ -15,24 +16,33 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import AiGenerationLockSvc from "../services/ai-generation-lock.service";
+import { AI_GENERATION_KINDS, AiGenerationKind } from "../constants";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
 import { getTenantContext } from "../utils/tenant-context";
-
-const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
-const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
-const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
-const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
-const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
-const PRIVILEGE_STATUSES = ["NONE", "ATTORNEY_CLIENT", "WORK_PRODUCT"];
-const HEARSAY_CATEGORIES = [
-  "DIRECT_EVIDENCE",
-  "BUSINESS_RECORD",
-  "PRESENT_SENSE_IMPRESSION",
-  "EXCITED_UTTERANCE",
-  "OTHER_EXCEPTION",
-  "NOT_APPLICABLE",
-];
+import {
+  createTimelineSchema,
+  updateTimelineSchema,
+  createRiskSchema,
+  updateRiskSchema,
+  upsertMatrixSchema,
+  addCustodyEventSchema,
+  checkCitationSchema,
+  createDeadlineSchema,
+  confirmDeadlineSchema,
+  createProcedureItemSchema,
+  updateProcedureItemSchema,
+  grantAccessSchema,
+  listFindingsSchema,
+  createFindingSchema,
+  updateFindingSchema,
+  createWitnessSchema,
+  updateWitnessSchema,
+  createDamageSchema,
+  updateDamageSchema,
+  updateReconstructionSchema,
+} from "../validation/case-terminal.validation";
 
 export default class CaseTerminalCtrl {
   static async snapshot(req: Request, res: Response) {
@@ -45,40 +55,33 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  /** GET /api/my-cases/:caseId/ai-jobs/:kind — polled by every case-scoped Generate/Refresh/
+   * Scan button so a page load can tell "already running" from "idle" regardless of who
+   * triggered it or when (see AiGenerationJob). Citation Map's PH/UK expand has its own
+   * existing status endpoint instead (GET /api/law/:lawId/citations) — not scoped by caseId. */
+  static async getAiJobStatus(req: Request, res: Response) {
+    const kind = req.params.kind as string;
+    if (!(AI_GENERATION_KINDS as readonly string[]).includes(kind)) {
+      throw new HttpError(`Unknown AI generation kind: ${kind}`, 400);
+    }
+    const result = await AiGenerationLockSvc.getStatusForCase(req.params.caseId, req.user.userId, kind as AiGenerationKind);
+    return res.status(200).json(result);
+  }
+
   static async listTimeline(req: Request, res: Response) {
     const result = await CaseTimelineSvc.list(req.params.caseId, req.user.userId);
     return res.status(200).json(result);
   }
 
   static async createTimeline(req: Request, res: Response) {
-    const schema = Joi.object({
-      title: Joi.string().required(),
-      occurredOn: Joi.date().iso().optional().allow(null),
-      description: Joi.string().allow("").optional(),
-      status: Joi.string().valid("completed", "pending", "active").optional(),
-      source: Joi.string().valid(...TIMELINE_SOURCES).optional(),
-      documentId: Joi.string().optional().allow(null),
-      chunkId: Joi.string().optional().allow(null),
-      pageNumber: Joi.number().integer().min(1).optional().allow(null),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createTimelineSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseTimelineSvc.create(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
   }
 
   static async updateTimeline(req: Request, res: Response) {
-    const schema = Joi.object({
-      title: Joi.string().optional(),
-      occurredOn: Joi.date().iso().optional().allow(null),
-      description: Joi.string().allow("").optional(),
-      status: Joi.string().valid("completed", "pending", "active").optional(),
-      source: Joi.string().valid(...TIMELINE_SOURCES).optional(),
-      documentId: Joi.string().optional().allow(null),
-      chunkId: Joi.string().optional().allow(null),
-      pageNumber: Joi.number().integer().min(1).optional().allow(null),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateTimelineSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseTimelineSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
@@ -95,34 +98,14 @@ export default class CaseTerminalCtrl {
   }
 
   static async createRisk(req: Request, res: Response) {
-    const schema = Joi.object({
-      title: Joi.string().required(),
-      description: Joi.string().allow("").optional(),
-      severity: Joi.string().valid(...RISK_SEVERITIES).required(),
-      status: Joi.string().valid(...RISK_STATUSES).optional(),
-      ownerUserId: Joi.string().optional().allow(null),
-      documentId: Joi.string().optional().allow(null),
-      chunkId: Joi.string().optional().allow(null),
-      pageNumber: Joi.number().integer().min(1).optional().allow(null),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createRiskSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseRiskSvc.create(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
   }
 
   static async updateRisk(req: Request, res: Response) {
-    const schema = Joi.object({
-      title: Joi.string().optional(),
-      description: Joi.string().allow("").optional(),
-      severity: Joi.string().valid(...RISK_SEVERITIES).optional(),
-      status: Joi.string().valid(...RISK_STATUSES).optional(),
-      ownerUserId: Joi.string().optional().allow(null),
-      documentId: Joi.string().optional().allow(null),
-      chunkId: Joi.string().optional().allow(null),
-      pageNumber: Joi.number().integer().min(1).optional().allow(null),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateRiskSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseRiskSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
@@ -139,22 +122,7 @@ export default class CaseTerminalCtrl {
   }
 
   static async upsertMatrix(req: Request, res: Response) {
-    const schema = Joi.object({
-      authenticity: Joi.string().optional(),
-      admissibility: Joi.string().optional(),
-      probative: Joi.string().optional(),
-      originalFile: Joi.boolean().optional(),
-      needsVerify: Joi.boolean().optional(),
-      notes: Joi.string().allow("").optional(),
-      privilegeStatus: Joi.string()
-        .valid(...PRIVILEGE_STATUSES)
-        .optional(),
-      hearsayCategory: Joi.string()
-        .valid(...HEARSAY_CATEGORIES)
-        .optional(),
-      sponsoringWitnessId: Joi.string().optional().allow(null),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = upsertMatrixSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await EvidenceIntelligenceSvc.upsertMatrix(
       req.params.caseId,
@@ -166,13 +134,7 @@ export default class CaseTerminalCtrl {
   }
 
   static async addCustodyEvent(req: Request, res: Response) {
-    const schema = Joi.object({
-      custodianName: Joi.string().required(),
-      action: Joi.string().required(),
-      occurredAt: Joi.date().iso().required(),
-      notes: Joi.string().allow("").optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = addCustodyEventSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await EvidenceIntelligenceSvc.addCustodyEvent(
       req.params.caseId,
@@ -208,15 +170,23 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  /** Citation Map covers PH (juris.ph) and UK (UK Legal MCP) — every other tenantCode gets a
+   * 501, same defense-in-depth pattern as LawCtrl.search; the frontend gates the panel the same
+   * way via config/tenant-codes. */
+  static async citationMap(req: Request, res: Response) {
+    const { tenantCode } = getTenantContext(req);
+    if (tenantCode !== "PH" && tenantCode !== "UK") {
+      throw new HttpError("Citation Map is not available for this jurisdiction — coming soon", 501);
+    }
+    const result =
+      tenantCode === "UK"
+        ? await UkCitationMapSvc.getSeed(req.params.caseId, req.user.userId)
+        : await CitationMapSvc.getSeed(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
   static async checkCitation(req: Request, res: Response) {
-    const schema = Joi.object({
-      quotedText: Joi.string().required(),
-      citedReference: Joi.string().optional(),
-      sourceUrl: Joi.string().optional(),
-      officialText: Joi.string().optional(),
-      legalRagId: Joi.string().optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = checkCitationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CitationCheckSvc.check(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
@@ -233,13 +203,7 @@ export default class CaseTerminalCtrl {
   }
 
   static async createDeadline(req: Request, res: Response) {
-    const schema = Joi.object({
-      ruleCode: Joi.string().required(),
-      triggerDate: Joi.string().required(),
-      serviceMethod: Joi.string().optional(),
-      sourceTimelineEventId: Joi.string().optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createDeadlineSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await ProceduralDeadlineSvc.create(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
@@ -251,11 +215,7 @@ export default class CaseTerminalCtrl {
   }
 
   static async confirmDeadline(req: Request, res: Response) {
-    const schema = Joi.object({
-      confirmed: Joi.boolean().required(),
-      note: Joi.string().optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = confirmDeadlineSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await ProceduralDeadlineSvc.confirm(
       req.params.caseId,
@@ -268,24 +228,14 @@ export default class CaseTerminalCtrl {
   }
 
   static async createProcedureItem(req: Request, res: Response) {
-    const schema = Joi.object({
-      kind: Joi.string().required(),
-      label: Joi.string().required(),
-      notes: Joi.string().optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createProcedureItemSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await ProceduralDeadlineSvc.createItem(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
   }
 
   static async updateProcedureItem(req: Request, res: Response) {
-    const schema = Joi.object({
-      done: Joi.boolean().optional(),
-      notes: Joi.string().optional(),
-      label: Joi.string().optional(),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateProcedureItemSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await ProceduralDeadlineSvc.updateItem(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
@@ -297,42 +247,28 @@ export default class CaseTerminalCtrl {
   }
 
   static async grantAccess(req: Request, res: Response) {
-    const schema = Joi.object({
-      userId: Joi.string().required(),
-      permission: Joi.string().valid("VIEW", "EDIT", "ADMIN").required(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = grantAccessSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await OrganizationSvc.grantAccess(req.params.caseId, req.user.userId, value.userId, value.permission);
     return res.status(201).json(result);
   }
 
   static async listFindings(req: Request, res: Response) {
-    const schema = Joi.object({ category: Joi.string().valid(...FINDING_CATEGORIES).optional() });
-    const { error, value } = schema.validate(req.query);
+    const { error, value } = listFindingsSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseFindingSvc.list(req.params.caseId, req.user.userId, value.category as FindingCategory | undefined);
     return res.status(200).json(result);
   }
 
   static async createFinding(req: Request, res: Response) {
-    const schema = Joi.object({
-      category: Joi.string().valid(...FINDING_CATEGORIES).required(),
-      label: Joi.string().required(),
-      notes: Joi.string().allow("").optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createFindingSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseFindingSvc.create(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
   }
 
   static async updateFinding(req: Request, res: Response) {
-    const schema = Joi.object({
-      label: Joi.string().optional(),
-      notes: Joi.string().allow("").optional(),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateFindingSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseFindingSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
@@ -349,26 +285,14 @@ export default class CaseTerminalCtrl {
   }
 
   static async createWitness(req: Request, res: Response) {
-    const schema = Joi.object({
-      name: Joi.string().required(),
-      role: Joi.string().allow("").optional(),
-      contact: Joi.string().allow("").optional(),
-      notes: Joi.string().allow("").optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createWitnessSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await WitnessSvc.create(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
   }
 
   static async updateWitness(req: Request, res: Response) {
-    const schema = Joi.object({
-      name: Joi.string().optional(),
-      role: Joi.string().allow("").optional(),
-      contact: Joi.string().allow("").optional(),
-      notes: Joi.string().allow("").optional(),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateWitnessSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await WitnessSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
@@ -385,24 +309,14 @@ export default class CaseTerminalCtrl {
   }
 
   static async createDamage(req: Request, res: Response) {
-    const schema = Joi.object({
-      category: Joi.string().valid(...DAMAGE_CATEGORIES).required(),
-      description: Joi.string().allow("").optional(),
-      amount: Joi.number().min(0).optional().allow(null),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createDamageSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await DamageClaimSvc.create(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
   }
 
   static async updateDamage(req: Request, res: Response) {
-    const schema = Joi.object({
-      category: Joi.string().valid(...DAMAGE_CATEGORIES).optional(),
-      description: Joi.string().allow("").optional(),
-      amount: Joi.number().min(0).optional().allow(null),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateDamageSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await DamageClaimSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
@@ -424,12 +338,7 @@ export default class CaseTerminalCtrl {
   }
 
   static async updateReconstruction(req: Request, res: Response) {
-    const schema = Joi.object({
-      narrative: Joi.string().optional(),
-      narrativeCourt: Joi.string().allow("").optional(),
-      narrativeOpposing: Joi.string().allow("").optional(),
-    }).min(1);
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateReconstructionSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseReconstructionSvc.update(req.params.caseId, req.user.userId, value);
     return res.status(200).json(result);

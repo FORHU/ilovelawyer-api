@@ -74,6 +74,16 @@ export default class ChatRepo {
     });
   }
 
+  /** Case-wide, not per-consultation — a case can have multiple threads, each with its own
+   * map; this answers "was any map for this case regenerated recently" for staleness checks. */
+  static async findLatestMindMapCreatedAtForCase(caseId: string) {
+    return prisma.messageMindMap.findFirst({
+      where: { message: { consultation: { caseId } } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+  }
+
   static async saveRelatedCases(messageId: string, items: RelatedCase[]) {
     return prisma.messageRelatedCases.create({
       data: { messageId, items: items as unknown as Prisma.InputJsonValue },

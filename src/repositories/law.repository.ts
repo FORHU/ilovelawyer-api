@@ -24,6 +24,14 @@ export default class LawRepo {
     return tenantId;
   }
 
+  /** UK Citation Map rows (sourced from the UK Legal MCP, not juris.ph) resolve to the UK
+   * tenant the same way PH rows resolve to PH — see resolveUkCitationToLaw. */
+  static async resolveUkTenantId(): Promise<string> {
+    const tenantId = await TenantRepo.findIdByCode("UK");
+    if (!tenantId) throw new HttpError('No Tenant seeded for code "UK"', 500);
+    return tenantId;
+  }
+
   /** jurisSourceId -> our row id, for the subset of the given ids we already store. */
   static async findStoredIds(jurisSourceIds: string[]): Promise<Map<string, string>> {
     if (jurisSourceIds.length === 0) return new Map();
@@ -32,6 +40,12 @@ export default class LawRepo {
       select: { id: true, jurisSourceId: true },
     });
     return new Map(rows.map((r) => [r.jurisSourceId, r.id]));
+  }
+
+  /** Single-row equivalent of createMany, for a UK citation resolved one at a time
+   * (resolveUkCitationToLaw) rather than the PH search's batch write-through. */
+  static async create(data: Prisma.LawUncheckedCreateInput) {
+    return prisma.law.create({ data });
   }
 
   static async createMany(data: Prisma.LawCreateManyInput[]): Promise<void> {
@@ -86,6 +100,21 @@ export default class LawRepo {
       create: { pageKey, ...rest },
       update: { ...rest, fetchedAt: new Date() },
     });
+  }
+
+  static async findById(id: string) {
+    return prisma.law.findUnique({ where: { id } });
+  }
+
+  static async findManyByIds(ids: string[]) {
+    if (ids.length === 0) return [];
+    return prisma.law.findMany({ where: { id: { in: ids } } });
+  }
+
+  /** Stamped once citation extraction has been attempted (successfully or not) — see
+   * CitationExtractionSvc.expand and the schema comment on Law.citationsExtractedAt. */
+  static async markCitationsExtracted(id: string): Promise<void> {
+    await prisma.law.update({ where: { id }, data: { citationsExtractedAt: new Date() } });
   }
 
   /** Primary lookup for LawSvc.search — plain ILIKE over the stored rows, PH tenant,

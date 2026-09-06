@@ -1,7 +1,7 @@
 // LEGAL_REVIEW_REQUIRED: see ../../ph/prompts/case-strategy.prompt.ts for the PH counterpart —
 // output block structure must stay identical, only the legal framing differs.
-export const AI_PROCEDURE_NOTE = "AI";
-export const AI_KEY_DATE_STATUS = "key_date";
+// AI_PROCEDURE_NOTE/AI_KEY_DATE_STATUS live in ../../../constants/case-strategy.constants — this
+// file used to redeclare its own (unused) copies; use the shared ones instead.
 
 export function buildUKCaseStrategyPrompt(docs: { id: string; name: string }[]): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
@@ -39,7 +39,7 @@ Reply with these three blocks and nothing else. No markdown, no [Sources], no re
 []
 [/DATES]
 
-STRATEGY and TODOS are JSON strings only (not objects). Max 120 characters per string.
+STRATEGY and TODOS are JSON arrays of objects: {"label": "...", "sourceLabel": "..."}. "label" is the item itself (max 120 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this item is drawn from — null if it isn't tied to one specific document (e.g. a general strategic move).
 DATES is JSON objects with exactly:
 - title: short event name copied from the documents
 - date: YYYY-MM-DD as written or clearly implied in the text

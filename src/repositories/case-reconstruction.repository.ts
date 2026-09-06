@@ -1,11 +1,14 @@
 import prisma from "../lib/prisma";
 import { getPresignedGetUrl } from "../utils/s3";
+import type { ReconstructionClaim } from "../utils/case-reconstruction-claims-parse";
+import { Prisma } from "@prisma/client";
 
 export interface ReconstructionUpsertData {
   narrative: string;
   narrativeCourt?: string | null;
   narrativeOpposing?: string | null;
   gaps?: string[];
+  claims?: ReconstructionClaim[] | undefined;
 }
 
 export interface ReconstructionEditData {
@@ -31,10 +34,12 @@ export default class CaseReconstructionRepo {
   }
 
   static async upsert(caseId: string, data: ReconstructionUpsertData) {
+    const { claims, ...rest } = data;
+    const claimsJson = claims ? (claims as unknown as Prisma.InputJsonValue) : Prisma.JsonNull;
     return prisma.caseReconstruction.upsert({
       where: { caseId },
-      create: { caseId, ...data },
-      update: data,
+      create: { caseId, ...rest, claims: claimsJson },
+      update: { ...rest, claims: claimsJson },
     });
   }
 
@@ -44,7 +49,11 @@ export default class CaseReconstructionRepo {
   static async updateFields(caseId: string, data: ReconstructionEditData) {
     const existing = await prisma.caseReconstruction.findUnique({ where: { caseId }, select: { id: true } });
     if (!existing) return null;
-    return prisma.caseReconstruction.update({ where: { caseId }, data });
+    // Hand-editing the narrative invalidates any claims matched against its old text — a
+    // verbatim-substring match against the new text would either silently miss (safe) or, worse,
+    // land on a coincidentally-matching but now-wrong sentence. Clearing is the safer default.
+    const claimsUpdate = data.narrative !== undefined ? { claims: Prisma.JsonNull } : {};
+    return prisma.caseReconstruction.update({ where: { caseId }, data: { ...data, ...claimsUpdate } });
   }
 
   static async updateAudio(caseId: string, data: ReconstructionAudioUpdate) {

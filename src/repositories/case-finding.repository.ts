@@ -1,11 +1,12 @@
 import prisma from "../lib/prisma";
 import { FindingCategory } from "@prisma/client";
-import { AI_FINDING_NOTE } from "../constants/case-finding.constants";
+import { AI_FINDING_NOTE } from "../constants";
 
 export interface FindingInput {
   category: FindingCategory;
   label: string;
   notes?: string | null;
+  sourceLabel?: string | null;
 }
 
 export default class CaseFindingRepo {
@@ -34,12 +35,21 @@ export default class CaseFindingRepo {
   /** Replaces every AI-authored row (notes === AI_FINDING_NOTE) with a fresh AI-generated
    * batch, in one category at a time — mirrors ProceduralDeadlineRepo.replaceAiProcedureItems.
    * Manually-created findings are untouched. */
-  static async replaceAiFindings(caseId: string, items: { category: FindingCategory; label: string }[]) {
+  static async replaceAiFindings(
+    caseId: string,
+    items: { category: FindingCategory; label: string; sourceLabel: string | null }[],
+  ) {
     await prisma.$transaction(async (tx) => {
       await tx.caseFinding.deleteMany({ where: { caseId, notes: AI_FINDING_NOTE } });
       if (items.length === 0) return;
       await tx.caseFinding.createMany({
-        data: items.map((item) => ({ caseId, category: item.category, label: item.label, notes: AI_FINDING_NOTE })),
+        data: items.map((item) => ({
+          caseId,
+          category: item.category,
+          label: item.label,
+          sourceLabel: item.sourceLabel,
+          notes: AI_FINDING_NOTE,
+        })),
       });
     });
     return this.list(caseId);

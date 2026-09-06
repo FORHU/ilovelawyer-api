@@ -43,6 +43,10 @@ export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
  * search API and `/qdrant/<collection>/...` for the scroll + retrieve endpoints. Trailing
  * slash trimmed. */
 export const JURIS_PH_API_URL = (process.env.JURIS_PH_API_URL || "https://juris.ph/api").replace(/\/+$/, "");
+/** UK Legal MCP — public, unauthenticated, stateless JSON-RPC over HTTP (see ADR-0003 in
+ * chat-wonder-v2-api, which already calls this same server from the AI chat's tool loop).
+ * uk-legal-mcp.ts posts `tools/call` requests directly at this one endpoint. */
+export const UK_LEGAL_MCP_URL = process.env.UK_LEGAL_MCP_URL || "https://uk-legal-mcp.fly.dev/mcp";
 /** Shared secret Chat Wonder sends back to us via `x-api-key` when it calls our API (e.g. to fetch case document chunks). */
 export const CHAT_WONDER_API_KEY = process.env.CHAT_WONDER_API_KEY as string;
 export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;

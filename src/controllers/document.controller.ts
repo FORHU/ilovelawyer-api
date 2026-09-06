@@ -1,34 +1,11 @@
 import { Request, Response } from "express";
-import Joi from "joi";
 import DocumentSvc from "../services/document.service";
 import HttpError from "../utils/http-error";
-import { DOCUMENT_UPLOAD_BATCH_MAX } from "../constants/document-upload.constants";
+import { presignDocumentSchema, createDocumentSchema, updateDocumentSchema } from "../validation/document.validation";
 
 export default class DocumentCtrl {
   static async presign(req: Request, res: Response) {
-    const schema = Joi.alternatives().try(
-      Joi.object({
-        filename: Joi.string().required(),
-        contentType: Joi.string().required(),
-        caseId: Joi.string().optional(),
-        consultationId: Joi.string().optional(),
-      }),
-      Joi.object({
-        files: Joi.array()
-          .items(
-            Joi.object({
-              filename: Joi.string().required(),
-              contentType: Joi.string().required(),
-            }),
-          )
-          .min(1)
-          .max(DOCUMENT_UPLOAD_BATCH_MAX)
-          .required(),
-        caseId: Joi.string().optional(),
-        consultationId: Joi.string().optional(),
-      }),
-    );
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = presignDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     if (value.files) {
@@ -52,31 +29,7 @@ export default class DocumentCtrl {
   }
 
   static async create(req: Request, res: Response) {
-    const schema = Joi.alternatives().try(
-      Joi.object({
-        key: Joi.string().required(),
-        name: Joi.string().required(),
-        contentType: Joi.string().optional(),
-        caseId: Joi.string().optional(),
-        consultationId: Joi.string().optional(),
-      }),
-      Joi.object({
-        items: Joi.array()
-          .items(
-            Joi.object({
-              key: Joi.string().required(),
-              name: Joi.string().required(),
-              contentType: Joi.string().optional(),
-            }),
-          )
-          .min(1)
-          .max(DOCUMENT_UPLOAD_BATCH_MAX)
-          .required(),
-        caseId: Joi.string().optional(),
-        consultationId: Joi.string().optional(),
-      }),
-    );
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     if (value.items) {
@@ -117,12 +70,7 @@ export default class DocumentCtrl {
   }
 
   static async update(req: Request, res: Response) {
-    const schema = Joi.object({
-      name: Joi.string().optional(),
-      caseId: Joi.string().allow(null).optional(),
-      consultationId: Joi.string().allow(null).optional(),
-    });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     await DocumentSvc.update(req.params.id, req.organization!.id, value);

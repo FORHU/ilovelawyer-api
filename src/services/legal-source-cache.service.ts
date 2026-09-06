@@ -3,7 +3,7 @@ import prisma from "../lib/prisma";
 import LegalSourceCacheRepo from "../repositories/legal-source-cache.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
-import { EMPTY_PLACEHOLDER } from "../constants/legalSourceCache.constants";
+import { EMPTY_PLACEHOLDER } from "../constants";
 import { getSourceAnalysisPromptTemplate } from "../legal/prompt-registry";
 import { normalizeKeyword, cleanAiText, normalizeLetterSpacing, extractYearHint, extractRagSearchTerms } from "../utils/legalSourceCache.utils";
 import { TenantCode } from "../types/tenant-code";

@@ -24,8 +24,18 @@ Each narrative: 4 to 10 paragraphs, plain prose, no headings, no bullet lists, n
 ## DOCUMENTS
 ${list}
 
+CLAIM ATTRIBUTION
+After the four blocks below, also output a [CLAIMS] block: a JSON array classifying the load-bearing sentences of the NARRATIVE (the first block only — not the court or opposing versions), so a lawyer can see at a glance what's drawn directly from a document versus your own inference.
+
+For each entry:
+- "text": an exact, verbatim substring copied character-for-character from the NARRATIVE block above — never paraphrase or summarize it. This is matched back against the text, so it must match exactly.
+- "category": one of "GROUNDED" (directly stated in one of the documents listed above), "INFERENCE" (a reasonable deduction you made that isn't directly stated), or "UNSUPPORTED" (included for narrative completeness but not actually backed by the documents).
+- "sourceLabel": for GROUNDED only, the exact document name from the DOCUMENTS list above that this sentence is drawn from. Null for INFERENCE and UNSUPPORTED.
+
+Cover only load-bearing factual claims — not every sentence (skip connective prose and scene-setting). Cap at 30 entries.
+
 ## OUTPUT
-Reply with exactly these four blocks and nothing else — no preamble, no closing remarks, no text outside the blocks.
+Reply with exactly these five blocks and nothing else — no preamble, no closing remarks, no text outside the blocks.
 
 [NARRATIVE]
 ...
@@ -42,6 +52,10 @@ Reply with exactly these four blocks and nothing else — no preamble, no closin
 [GAPS]
 []
 [/GAPS]
+
+[CLAIMS]
+[{"text": "...", "category": "GROUNDED", "sourceLabel": "..."}]
+[/CLAIMS]
 
 GAPS is a JSON array of short strings (max 160 characters each, max 8 items) — not a percentage, not an object. If nothing is missing, leave it empty.
 `;

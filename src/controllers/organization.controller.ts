@@ -1,27 +1,18 @@
 import { Request, Response } from "express";
-import Joi from "joi";
-import { OrganizationRole } from "@prisma/client";
 import OrganizationSvc from "../services/organization.service";
 import HttpError from "../utils/http-error";
 import { resolveTenantCodeFromRequest } from "../utils/tenant-host";
-
-const slugSchema = Joi.string()
-  .trim()
-  .lowercase()
-  .pattern(/^[a-z0-9]+(-[a-z0-9]+)*$/)
-  .min(2)
-  .max(60);
-
-const roleSchema = Joi.string().valid(...Object.values(OrganizationRole));
+import {
+  createOrganizationSchema,
+  updateOrganizationSchema,
+  inviteMemberSchema,
+  changeMemberRoleSchema,
+  attachCaseToOrganizationSchema,
+} from "../validation/organization.validation";
 
 export default class OrganizationCtrl {
   static async create(req: Request, res: Response) {
-    const schema = Joi.object({
-      name: Joi.string().trim().min(1).max(120).required(),
-      packageSku: Joi.string().valid("SOLO", "PROFESSIONAL", "ENTERPRISE").optional(),
-    });
-
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = createOrganizationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     // Tenant is never accepted from the client — the Joi schema above doesn't even
@@ -46,12 +37,7 @@ export default class OrganizationCtrl {
   }
 
   static async update(req: Request, res: Response) {
-    const schema = Joi.object({
-      name: Joi.string().trim().min(1).max(120).optional(),
-      slug: slugSchema.optional(),
-    }).min(1);
-
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = updateOrganizationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     const result = await OrganizationSvc.update(req.params.id, value);
@@ -64,12 +50,7 @@ export default class OrganizationCtrl {
   }
 
   static async inviteMember(req: Request, res: Response) {
-    const schema = Joi.object({
-      email: Joi.string().trim().email().required(),
-      role: roleSchema.default(OrganizationRole.MEMBER),
-    });
-
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = inviteMemberSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     const result = await OrganizationSvc.inviteMember(
@@ -98,9 +79,7 @@ export default class OrganizationCtrl {
   }
 
   static async changeMemberRole(req: Request, res: Response) {
-    const schema = Joi.object({ role: roleSchema.required() });
-
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = changeMemberRoleSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     const result = await OrganizationSvc.changeMemberRole(req.params.id, req.organization!.role, req.params.userId, value.role);
@@ -118,8 +97,7 @@ export default class OrganizationCtrl {
   }
 
   static async attachCase(req: Request, res: Response) {
-    const schema = Joi.object({ caseId: Joi.string().required() });
-    const { error, value } = schema.validate(req.body);
+    const { error, value } = attachCaseToOrganizationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await OrganizationSvc.attachCase(req.params.id, value.caseId, req.user.userId);
     return res.status(200).json(result);

@@ -19,7 +19,10 @@ function normalize(text: string): string {
     .trim();
 }
 
-function containsQuote(official: string, quote: string): boolean {
+/** Exported for citation-proposition.ts — a quote that passes this check is classified QUOTED
+ * without needing an LLM call; only quotes that fail it need the harder paraphrased-vs-inferred
+ * judgment call. */
+export function containsQuote(official: string, quote: string): boolean {
   const hay = normalize(official);
   const needle = normalize(quote);
   if (needle.length < 12) return hay.includes(needle);
