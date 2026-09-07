@@ -13,17 +13,22 @@ export default class CaseClaimSvc {
   static async create(caseId: string, userId: string, data: CaseClaimInput) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await CaseClaimRepo.create(caseId, data);
-    await CaseGraphSvc.ensureNode(caseId, "CLAIM", row.id);
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "claim.create", payload: { id: row.id } });
+    await Promise.all([
+      CaseGraphSvc.ensureNode(caseId, "CLAIM", row.id),
+      OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "claim.create", payload: { id: row.id } }),
+    ]);
     return row;
   }
+    
 
   static async update(caseId: string, id: string, userId: string, data: Partial<CaseClaimInput>) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await CaseClaimRepo.update(id, caseId, data);
     if (!row) throw new HttpError("Claim not found", 404);
-    await CaseGraphSvc.markStale(caseId, "CLAIM", id, "Claim updated");
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "claim.update", payload: { id } });
+    await Promise.all([
+      CaseGraphSvc.ensureNode(caseId, "CLAIM", id),
+      OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "claim.update", payload: { id } }),
+    ]);
     return row;
   }
 
