@@ -41,6 +41,14 @@ export default class CaseGraphRepo {
     return prisma.caseGraphEdge.findMany({ where: { caseId } });
   }
 
+  /** Nodes for a case, optionally narrowed to a set of nodeTypes — used by CaseGraphViewSvc to
+   * pull just the node slice a given view_type needs (e.g. TIMELINE_EVENT+PROCEDURAL_DEADLINE). */
+  static async listNodesForCase(caseId: string, nodeTypes?: CaseGraphNodeType[]) {
+    return prisma.caseGraphNode.findMany({
+      where: { caseId, ...(nodeTypes ? { nodeType: { in: nodeTypes } } : {}) },
+    });
+  }
+
   static async markNodesStale(nodeIds: string[], reason: string) {
     if (nodeIds.length === 0) return;
     await prisma.caseGraphNode.updateMany({

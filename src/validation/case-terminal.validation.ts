@@ -14,6 +14,8 @@ const HEARSAY_CATEGORIES = [
   "OTHER_EXCEPTION",
   "NOT_APPLICABLE",
 ];
+const CASE_EDGE_RELATION_TYPES = ["SUPPORTS", "CONTRADICTS", "CITES", "PROVES", "REFUTES", "SPONSORS"];
+const GRAPH_VIEW_TYPES = ["timeline", "witnesses", "contradictions", "issues"];
 
 export const createTimelineSchema = Joi.object({
   title: Joi.string().required(),
@@ -194,3 +196,18 @@ export const updateReconstructionSchema = Joi.object({
   narrativeCourt: Joi.string().allow("").optional(),
   narrativeOpposing: Joi.string().allow("").optional(),
 }).min(1);
+
+export const createCaseEdgeSchema = Joi.object({
+  sourceEntityId: Joi.string().required(),
+  targetEntityId: Joi.string().required(),
+  relationType: Joi.string()
+    .valid(...CASE_EDGE_RELATION_TYPES)
+    .required(),
+  metadata: Joi.object().optional(),
+});
+
+export const graphViewSchema = Joi.object({
+  view_type: Joi.string()
+    .valid(...GRAPH_VIEW_TYPES)
+    .required(),
+});

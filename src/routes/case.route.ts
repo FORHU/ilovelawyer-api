@@ -4,6 +4,7 @@ import validSession from "../middleware/valid-session.middleware";
 import resolveOrganization from "../middleware/resolve-organization.middleware";
 import CaseCtrl from "../controllers/case.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
+import CaseEdgeCtrl from "../controllers/case-edge.controller";
 
 const router = express.Router();
 
@@ -52,6 +53,12 @@ router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
 router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
 router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
+
+router.get("/:caseId/graph-view", asyncHandler(CaseTerminalCtrl.graphView));
+
+router.get("/:caseId/edges", asyncHandler(CaseEdgeCtrl.list));
+router.post("/:caseId/edges", asyncHandler(CaseEdgeCtrl.create));
+router.delete("/:caseId/edges/:id", asyncHandler(CaseEdgeCtrl.delete));
 
 router.get("/:caseId/procedure", asyncHandler(CaseTerminalCtrl.procedure));
 router.post("/:caseId/procedure/deadlines", asyncHandler(CaseTerminalCtrl.createDeadline));

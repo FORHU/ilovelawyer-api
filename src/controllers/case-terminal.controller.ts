@@ -17,6 +17,7 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import CaseGraphViewSvc, { GraphViewType } from "../services/case-graph-view.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import { AI_GENERATION_KINDS, AiGenerationKind } from "../constants";
 import HttpError from "../utils/http-error";
@@ -45,6 +46,7 @@ import {
   createClaimSchema,
   updateClaimSchema,
   updateReconstructionSchema,
+  graphViewSchema,
 } from "../validation/case-terminal.validation";
 
 export default class CaseTerminalCtrl {
@@ -381,6 +383,16 @@ export default class CaseTerminalCtrl {
 
   static async pollReconstructionAudio(req: Request, res: Response) {
     const result = await CaseReconstructionAudioSvc.pollAudioJob(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** GET /api/my-cases/:caseId/graph-view?view_type=timeline|witnesses|contradictions|issues —
+   * a standardized {nodes, edges} projection of the case graph, one shared source for panels
+   * that used to each slice CaseSnapshotSvc's payload independently. */
+  static async graphView(req: Request, res: Response) {
+    const { error, value } = graphViewSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseGraphViewSvc.get(req.params.caseId, req.user.userId, value.view_type as GraphViewType);
     return res.status(200).json(result);
   }
 
