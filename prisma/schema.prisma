@@ -311,6 +311,7 @@ model Case {
   redTeamAssessment RedTeamAssessment?
   graphNodes        CaseGraphNode[]
   graphEdges        CaseGraphEdge[]
+  edges             CaseEdge[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1186,9 +1187,11 @@ model CaseGraphNode {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
-  case          Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  outgoingEdges CaseGraphEdge[] @relation("CaseGraphEdgeSource")
-  incomingEdges CaseGraphEdge[] @relation("CaseGraphEdgeTarget")
+  case              Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  outgoingEdges     CaseGraphEdge[] @relation("CaseGraphEdgeSource")
+  incomingEdges     CaseGraphEdge[] @relation("CaseGraphEdgeTarget")
+  outgoingCaseEdges CaseEdge[]      @relation("CaseEdgeSource")
+  incomingCaseEdges CaseEdge[]      @relation("CaseEdgeTarget")
 
   @@unique([nodeType, refId])
   @@index([caseId])
@@ -1209,6 +1212,61 @@ model CaseGraphEdge {
   @@unique([sourceNodeId, targetNodeId, kind])
   @@index([caseId])
   @@index([targetNodeId])
+}
+
+// Evidentiary/argumentation links between CaseGraphNode entities (the canonical node registry
+// from Phase B, above) — "this witness statement CONTRADICTS that timeline event", "this
+// document PROVES this claim". Deliberately a separate table from CaseGraphEdge: that one is
+// Phase A/B's dependency+staleness engine with a free-form `kind`, walked only for recompute
+// closure; this one backs the Mind Map/citation-map UI, has a closed relation vocabulary the
+// UI renders distinctly, and carries per-edge metadata (e.g. the citation/quote backing a
+// CITES link). A deleted node cascades here at the FK level, and CaseEdgeSvc.archiveForNode
+// snapshots the row into CaseEdgeArchive first — see that service for why this is an explicit
+// call plus a DB trigger rather than either alone.
+enum CaseEdgeRelationType {
+  SUPPORTS
+  CONTRADICTS
+  CITES
+  PROVES
+  REFUTES
+  SPONSORS
+}
+
+model CaseEdge {
+  id             String               @id @default(uuid())
+  caseId         String
+  sourceEntityId String
+  targetEntityId String
+  relationType   CaseEdgeRelationType
+  metadata       Json                 @default("{}")
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  case         Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceEntity CaseGraphNode @relation("CaseEdgeSource", fields: [sourceEntityId], references: [id], onDelete: Cascade)
+  targetEntity CaseGraphNode @relation("CaseEdgeTarget", fields: [targetEntityId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceEntityId, targetEntityId, relationType])
+  @@index([caseId])
+  @@index([targetEntityId])
+}
+
+// Snapshot of a CaseEdge row taken by the archive_case_edge() trigger the instant before a
+// cascade delete (node removed, or its Case removed) would otherwise erase it — see the
+// migration SQL for the trigger and CaseEdgeSvc for the read path. No FKs back to the live
+// tables: by the time a row lands here, the entity/case it referenced may already be gone.
+model CaseEdgeArchive {
+  id             String               @id @default(uuid())
+  caseId         String
+  sourceEntityId String
+  targetEntityId String
+  relationType   CaseEdgeRelationType
+  metadata       Json
+  createdAt      DateTime
+  updatedAt      DateTime
+  archivedAt     DateTime             @default(now())
+
+  @@index([caseId])
 }
 
 model Organization {
