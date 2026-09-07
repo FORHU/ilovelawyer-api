@@ -12,6 +12,7 @@ import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
+import CaseClaimSvc from "../services/case-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
@@ -41,6 +42,8 @@ import {
   updateWitnessSchema,
   createDamageSchema,
   updateDamageSchema,
+  createClaimSchema,
+  updateClaimSchema,
   updateReconstructionSchema,
 } from "../validation/case-terminal.validation";
 
@@ -324,6 +327,30 @@ export default class CaseTerminalCtrl {
 
   static async deleteDamage(req: Request, res: Response) {
     await DamageClaimSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async listClaims(req: Request, res: Response) {
+    const result = await CaseClaimSvc.list(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async createClaim(req: Request, res: Response) {
+    const { error, value } = createClaimSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseClaimSvc.create(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async updateClaim(req: Request, res: Response) {
+    const { error, value } = updateClaimSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseClaimSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteClaim(req: Request, res: Response) {
+    await CaseClaimSvc.delete(req.params.caseId, req.params.id, req.user.userId);
     return res.status(204).send();
   }
 

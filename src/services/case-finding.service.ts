@@ -3,6 +3,7 @@ import CaseFindingRepo, { FindingInput } from "../repositories/case-finding.repo
 import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
+import CaseGraphSvc from "./case-graph.service";
 
 export default class CaseFindingSvc {
   static async list(caseId: string, userId: string, category?: FindingCategory) {
@@ -13,6 +14,7 @@ export default class CaseFindingSvc {
   static async create(caseId: string, userId: string, data: FindingInput) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await CaseFindingRepo.create(caseId, data);
+    await CaseGraphSvc.ensureNode(caseId, "FINDING", row.id);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.create", payload: { id: row.id, category: row.category } });
     return row;
   }
@@ -21,6 +23,7 @@ export default class CaseFindingSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await CaseFindingRepo.update(id, caseId, data);
     if (!row) throw new HttpError("Finding not found", 404);
+    await CaseGraphSvc.markStale(caseId, "FINDING", id, "Finding updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.update", payload: { id } });
     return row;
   }

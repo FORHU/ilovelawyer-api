@@ -177,6 +177,18 @@ export const updateDamageSchema = Joi.object({
   amount: Joi.number().min(0).optional().allow(null),
 }).min(1);
 
+export const createClaimSchema = Joi.object({
+  title: Joi.string().required(),
+  causeOfAction: Joi.string().allow("").optional(),
+  description: Joi.string().allow("").optional(),
+});
+
+export const updateClaimSchema = Joi.object({
+  title: Joi.string().optional(),
+  causeOfAction: Joi.string().allow("").optional(),
+  description: Joi.string().allow("").optional(),
+}).min(1);
+
 export const updateReconstructionSchema = Joi.object({
   narrative: Joi.string().optional(),
   narrativeCourt: Joi.string().allow("").optional(),
