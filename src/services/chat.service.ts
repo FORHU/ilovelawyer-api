@@ -61,7 +61,9 @@ export default class ChatSvc {
     }
 
     const messages = await ChatRepo.listMessagesByConsultation(consultationId);
-    return messages.map((m) => ({ ...m, documents: m.documents.map(mapDocumentToDto) }));
+    return Promise.all(
+      messages.map(async (m) => ({ ...m, documents: await Promise.all(m.documents.map(mapDocumentToDto)) })),
+    );
   }
 
   static async deleteMessage(organizationId: string, consultationId: string, messageId: string) {

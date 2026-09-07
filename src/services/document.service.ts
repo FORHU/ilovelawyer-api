@@ -4,16 +4,21 @@ import prisma from "../lib/prisma";
 import DocumentRepo from "../repositories/document.repository";
 import FilesRepo from "../repositories/files.repository";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
-import { s3UrlForKey, getPresignedUploadUrl } from "../utils/s3";
+import { s3UrlForKey, getPresignedUploadUrl, getPresignedGetUrl } from "../utils/s3";
 import HttpError from "../utils/http-error";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 
 /** Flattens the related File row's fileUrl onto the Document, matching the Swagger `UserDocument`
  * contract (a top-level `fileUrl`, not a nested `file` object) — see docs/adr for the fileUrl gap
- * this closes: fileUrl was declared in the contract but no query ever included the File relation. */
-export function mapDocumentToDto<T extends { file?: { fileUrl: string | null } | null }>(doc: T) {
+ * this closes: fileUrl was declared in the contract but no query ever included the File relation.
+ * The bucket has no public-read policy (see utils/s3.ts), so a bare File.fileUrl 403s in a
+ * browser — signed here into a short-lived GET the same way audio playback URLs already are
+ * (chat.service.ts's pollAudioOverviewAudio). Falls back to the bare fileUrl when there's no
+ * s3Key to sign (pre-migration rows, if any). */
+export async function mapDocumentToDto<T extends { file?: { fileUrl: string | null; s3Key: string | null } | null }>(doc: T) {
   const { file, ...rest } = doc;
-  return { ...rest, fileUrl: file?.fileUrl ?? null };
+  const fileUrl = file?.s3Key ? await getPresignedGetUrl(file.s3Key) : (file?.fileUrl ?? null);
+  return { ...rest, fileUrl };
 }
 
 export default class DocumentSvc {
@@ -107,22 +112,27 @@ export default class DocumentSvc {
     // createManyAndReturn can't `include` the File relation (see repo note), so fileUrl is
     // merged in here from the same-transaction `files`, which line up positionally with
     // `createdDocuments` since both were built from the same ordered `items` input.
-    return createdDocuments.map((doc, i) => ({ ...doc, fileUrl: files[i].fileUrl ?? null }));
+    return Promise.all(
+      createdDocuments.map(async (doc, i) => {
+        const { s3Key, fileUrl } = files[i];
+        return { ...doc, fileUrl: s3Key ? await getPresignedGetUrl(s3Key) : (fileUrl ?? null) };
+      }),
+    );
   }
 
   static async list(organizationId: string) {
     const docs = await DocumentRepo.list(organizationId);
-    return docs.map(mapDocumentToDto);
+    return Promise.all(docs.map(mapDocumentToDto));
   }
 
   static async listByCase(organizationId: string, caseId: string) {
     const docs = await DocumentRepo.listByCase(organizationId, caseId);
-    return docs.map(mapDocumentToDto);
+    return Promise.all(docs.map(mapDocumentToDto));
   }
 
   static async listByConsultation(organizationId: string, consultationId: string) {
     const docs = await DocumentRepo.listByConsultation(organizationId, consultationId);
-    return docs.map(mapDocumentToDto);
+    return Promise.all(docs.map(mapDocumentToDto));
   }
 
   static async getById(id: string, organizationId: string) {
