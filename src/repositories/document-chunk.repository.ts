@@ -129,45 +129,61 @@ export default class DocumentChunkRepo {
     return rows.map((row) => row.id);
   }
 
-  /** Same ranking as `findRelevantByCase`, but scoped to READY documents attached to a consultation. */
+  /** Same ranking + per-document floor as `findRelevantByCase`, but scoped to READY documents
+   * attached to a consultation. */
   static async findRelevantByConsultation(
     consultationId: string,
     queryEmbedding: number[],
-    limit = 20,
+    perDocumentFloor = 3,
     client: DbClient = prisma,
   ): Promise<{ id: string; caseDocumentId: string }[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
     return client.$queryRaw<{ id: string; caseDocumentId: string }[]>`
-      SELECT c.id, c."caseDocumentId"
-      FROM "CaseDocumentChunk" c
-      INNER JOIN "Document" d ON d.id = c."caseDocumentId"
-      WHERE d."consultationId" = ${consultationId}
-        AND d."ragStatus" = 'READY'
-        AND c.embedding IS NOT NULL
-      ORDER BY c.embedding <=> ${vectorLiteral}::vector
-      LIMIT ${limit}
+      WITH ranked AS (
+        SELECT c.id, c."caseDocumentId",
+               ROW_NUMBER() OVER (
+                 PARTITION BY c."caseDocumentId"
+                 ORDER BY c.embedding <=> ${vectorLiteral}::vector
+               ) AS doc_rank
+        FROM "CaseDocumentChunk" c
+        INNER JOIN "Document" d ON d.id = c."caseDocumentId"
+        WHERE d."consultationId" = ${consultationId}
+          AND d."ragStatus" = 'READY'
+          AND c.embedding IS NOT NULL
+      )
+      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank <= ${perDocumentFloor}
     `;
   }
 
-  /** Same ranking as `findRelevantByDocument`, but across every READY document under a case.
+  /** Same ranking as `findRelevantByDocument`, but across every READY document under a case —
+   * with a per-document floor so a case with many documents doesn't let a few large/textually-
+   * similar documents crowd out every chunk slot from smaller or less-similar-worded ones. Each
+   * READY document contributes up to `perDocumentFloor` of its own best-ranked chunks (or all of
+   * them, if it has fewer); there is no further global top-K cut on top of that, so overall size
+   * is bounded by `formatGroundingContext`'s char cap downstream, not by a chunk count here.
    * Returns chunk id + owning document id so callers can build chat-wonder's
    * `case_document_ids` + `case_document_chunk_ids` payload. */
   static async findRelevantByCase(
     caseId: string,
     queryEmbedding: number[],
-    limit = 20,
+    perDocumentFloor = 3,
     client: DbClient = prisma,
   ): Promise<{ id: string; caseDocumentId: string }[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
     return client.$queryRaw<{ id: string; caseDocumentId: string }[]>`
-      SELECT c.id, c."caseDocumentId"
-      FROM "CaseDocumentChunk" c
-      INNER JOIN "Document" d ON d.id = c."caseDocumentId"
-      WHERE d."caseId" = ${caseId}
-        AND d."ragStatus" = 'READY'
-        AND c.embedding IS NOT NULL
-      ORDER BY c.embedding <=> ${vectorLiteral}::vector
-      LIMIT ${limit}
+      WITH ranked AS (
+        SELECT c.id, c."caseDocumentId",
+               ROW_NUMBER() OVER (
+                 PARTITION BY c."caseDocumentId"
+                 ORDER BY c.embedding <=> ${vectorLiteral}::vector
+               ) AS doc_rank
+        FROM "CaseDocumentChunk" c
+        INNER JOIN "Document" d ON d.id = c."caseDocumentId"
+        WHERE d."caseId" = ${caseId}
+          AND d."ragStatus" = 'READY'
+          AND c.embedding IS NOT NULL
+      )
+      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank <= ${perDocumentFloor}
     `;
   }
 

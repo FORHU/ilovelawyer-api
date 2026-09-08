@@ -6,7 +6,14 @@ import { embedText } from "../utils/embedding";
 import { RagStatus } from "@prisma/client";
 
 const CACHE_TTL_S = 300; // 5 minutes
-const DEFAULT_CASE_CHUNK_LIMIT = 20;
+// Per-document chunk floor, not a case-wide chunk count — see findRelevantByCase's docstring.
+// A flat case-wide count (the old DEFAULT_CASE_CHUNK_LIMIT = 20) let a case with many documents
+// silently exclude whole documents whose chunks didn't win a case-wide top-K slot.
+const DEFAULT_PER_DOCUMENT_CHUNK_FLOOR = 3;
+// Unrelated to the floor above — this is a single document's own top-K when it's the sole
+// grounding source (relevantChunksForDocument), where the "many documents crowd out a few"
+// failure mode this plan targets doesn't apply.
+const DEFAULT_SINGLE_DOCUMENT_CHUNK_LIMIT = 20;
 const cacheKey = (caseDocumentId: string) => `case_document_chunks:${caseDocumentId}`;
 const filterCacheKey = (filter: { caseId?: string; consultationId?: string }) =>
   filter.caseId ? `case_document_chunks:case:${filter.caseId}` : `case_document_chunks:consultation:${filter.consultationId}`;
@@ -87,49 +94,54 @@ export default class DocumentChunkSvc {
   static async relevantChunksForCase(
     caseId: string,
     query: string,
-    limit = DEFAULT_CASE_CHUNK_LIMIT,
+    perDocumentFloor = DEFAULT_PER_DOCUMENT_CHUNK_FLOOR,
   ): Promise<RelevantCaseChunks> {
-    return DocumentChunkSvc.relevantChunksForScope({ caseId }, query, limit);
+    return DocumentChunkSvc.relevantChunksForScope({ caseId }, query, perDocumentFloor);
   }
 
   /** Same as `relevantChunksForCase`, but for documents attached to a consultation. */
   static async relevantChunksForConsultation(
     consultationId: string,
     query: string,
-    limit = DEFAULT_CASE_CHUNK_LIMIT,
+    perDocumentFloor = DEFAULT_PER_DOCUMENT_CHUNK_FLOOR,
   ): Promise<RelevantCaseChunks> {
-    return DocumentChunkSvc.relevantChunksForScope({ consultationId }, query, limit);
+    return DocumentChunkSvc.relevantChunksForScope({ consultationId }, query, perDocumentFloor);
   }
 
   private static async relevantChunksForScope(
     scope: { caseId: string } | { consultationId: string },
     query: string,
-    limit: number,
+    perDocumentFloor: number,
   ): Promise<RelevantCaseChunks> {
     const where =
       "caseId" in scope
         ? { caseId: scope.caseId, ragStatus: "READY" as const }
         : { consultationId: scope.consultationId, ragStatus: "READY" as const };
 
+    // Every READY document in scope must end up in caseDocumentIds regardless of whether the
+    // relevance ranking below picked any of its chunks — the ranking governs what's pre-filled
+    // as chunk ids, not which documents chat-wonder is allowed to know about/fetch on its own.
+    const readyDocs = await prisma.document.findMany({
+      where,
+      select: { id: true },
+      orderBy: { createdAt: "desc" },
+    });
+    const readyDocIds = readyDocs.map((d) => d.id);
+    if (!readyDocIds.length) return { caseDocumentIds: [], caseDocumentChunkIds: [] };
+
     try {
       const queryEmbedding = await embedText(query);
       const rows =
         "caseId" in scope
-          ? await DocumentChunkRepo.findRelevantByCase(scope.caseId, queryEmbedding, limit)
-          : await DocumentChunkRepo.findRelevantByConsultation(scope.consultationId, queryEmbedding, limit);
-      const caseDocumentIds = [...new Set(rows.map((r) => r.caseDocumentId))];
+          ? await DocumentChunkRepo.findRelevantByCase(scope.caseId, queryEmbedding, perDocumentFloor)
+          : await DocumentChunkRepo.findRelevantByConsultation(scope.consultationId, queryEmbedding, perDocumentFloor);
       return {
-        caseDocumentIds,
+        caseDocumentIds: readyDocIds,
         caseDocumentChunkIds: rows.map((r) => r.id),
       };
     } catch {
-      const docs = await prisma.document.findMany({
-        where,
-        select: { id: true },
-        orderBy: { createdAt: "desc" },
-      });
       return {
-        caseDocumentIds: docs.map((d) => d.id),
+        caseDocumentIds: readyDocIds,
         caseDocumentChunkIds: [],
       };
     }
@@ -139,7 +151,7 @@ export default class DocumentChunkSvc {
   static async relevantChunksForDocument(
     caseDocumentId: string,
     query: string,
-    limit = DEFAULT_CASE_CHUNK_LIMIT,
+    limit = DEFAULT_SINGLE_DOCUMENT_CHUNK_LIMIT,
   ): Promise<RelevantCaseChunks> {
     try {
       const queryEmbedding = await embedText(query);
