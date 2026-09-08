@@ -142,6 +142,7 @@ model Consultation {
   organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case           Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
   messages       Message[]
+  messageGroups  MessageGroup[]
   invites        ConsultationInvite[]
   participants   ConsultationParticipant[]
   documents      Document[]
@@ -162,11 +163,17 @@ model Message {
   createdAt       DateTime    @default(now())
   userId          String?
   parentMessageId String?
+  // Set only when this reply is one topic of a split, multi-topic answer (see
+  // MessageGroup) — null for every ordinary, unsplit message.
+  groupId         String?
+  groupOrder      Int?
+  groupTitle      String?
 
   consultation  Consultation          @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user          User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   parent        Message?              @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
   replies       Message[]             @relation("MessageThread")
+  group         MessageGroup?         @relation(fields: [groupId], references: [id], onDelete: SetNull)
   timeline      MessageTimeline?
   mindMap       MessageMindMap?
   relatedCases  MessageRelatedCases?
@@ -177,6 +184,21 @@ model Message {
   @@index([consultationId])
   @@index([userId])
   @@index([parentMessageId])
+  @@index([groupId])
+}
+
+// One AI turn split into several topical Message rows (see docs on MessageGroup
+// handoff) — each sibling row is its own chat bubble, ordered by groupOrder. A turn
+// that wasn't split has no MessageGroup at all; its Message.groupId stays null.
+model MessageGroup {
+  id             String   @id @default(uuid())
+  consultationId String
+  createdAt      DateTime @default(now())
+
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  messages     Message[]
+
+  @@index([consultationId])
 }
 
 model MessageTimeline {

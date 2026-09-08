@@ -8,7 +8,7 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Re
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { extractTimeline, extractMindMap, stripStructuredBlocks, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
@@ -286,14 +286,47 @@ export default class ChatSvc {
     // ever arrives as chat-wonder's dedicated typed WebSocket message, never inline in text.
     const reasoning = streamedReasoning;
     const cleanedContent = stripStructuredBlocks(fullResponse);
+    // Purely local text parsing (the reply's own markdown headings) — no chat-wonder
+    // involvement, no second AI call. See response-parser.ts's splitIntoTopics for why.
+    const topics = splitIntoTopics(cleanedContent);
 
-    const assistantMessage = await ChatRepo.createMessage(
-      consultationId,
-      "assistant",
-      cleanedContent,
-      undefined,
-      userMessage.id,
-    );
+    // A split reply becomes several sibling assistant Messages under one new
+    // MessageGroup — one bubble per topic — instead of the usual single row. The
+    // structured extras below (timeline/mindMap/audioOverview/reasoning/relatedCases)
+    // still describe the whole turn, so they anchor to the LAST topic message, not the
+    // first: ChatRepo.findLatestAssistantMessage (CaseHubWidget's related-cases lookup)
+    // picks the assistant message with the greatest createdAt in the whole consultation,
+    // and only the last-created topic message satisfies that once a turn is split.
+    let assistantMessage: Awaited<ReturnType<typeof ChatRepo.createMessage>>;
+    if (topics && topics.length > 1) {
+      const group = await ChatRepo.createMessageGroup(consultationId);
+      // Created sequentially (not Promise.all) so createdAt strictly increases in
+      // groupOrder order — the frontend transcript sorts by createdAt, not groupOrder.
+      const topicMessages: Awaited<ReturnType<typeof ChatRepo.createMessage>>[] = [];
+      for (const [index, topic] of topics.entries()) {
+        topicMessages.push(
+          await ChatRepo.createMessage(
+            consultationId,
+            "assistant",
+            topic.content,
+            undefined,
+            userMessage.id,
+            group.id,
+            index,
+            topic.title,
+          ),
+        );
+      }
+      assistantMessage = topicMessages[topicMessages.length - 1];
+    } else {
+      assistantMessage = await ChatRepo.createMessage(
+        consultationId,
+        "assistant",
+        cleanedContent,
+        undefined,
+        userMessage.id,
+      );
+    }
 
     if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
     if (timeline && effectiveCaseId) {
