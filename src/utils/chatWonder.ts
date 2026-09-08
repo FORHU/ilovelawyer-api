@@ -375,6 +375,18 @@ export function streamChatWonderMessage(
         return;
       }
 
+      // Live-only glass-box research-trace frames (see the_server.py's/legal_responses_chain.py's
+      // '[TRACE]' yields, sent as their own standalone WS message each, never mixed with prose).
+      // Forwarded via onChunk so the app's live trace UI can render them as they arrive, but
+      // deliberately excluded from `accumulated` — they aren't part of the AI's answer and must
+      // never survive into the persisted transcript (unlike [MINDMAP]/[TIMELINE], which the
+      // frontend strips only for the *live* bubble because the backend's own response-parser
+      // still needs to see them once to extract structured data before persisting the rest).
+      if (message.startsWith("[TRACE]")) {
+        onChunk(message);
+        return;
+      }
+
       // Note whether this frame carries the terminator so it can still get its
       // [RELATED_CASES]/[Sources] stripped below instead of being flushed raw —
       // Chat Wonder often ships the tag and __END__ together in the final frame.
