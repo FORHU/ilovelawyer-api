@@ -33,6 +33,18 @@ export default class DocumentRepo {
     return client.document.createManyAndReturn({ data: items });
   }
 
+  /** Lightweight id/name/category lookup for the case-document manifest sent to chat-wonder-v2-api
+   * (see docs/adr/0005 — a document not selected into the model's context still needs to be known
+   * to exist). No organizationId scoping: callers already resolve `ids` from an
+   * organization-scoped grounding query, so this is a cheap batch fetch, not an access check. */
+  static async findManifestByIds(ids: string[]) {
+    if (!ids.length) return [];
+    return prisma.document.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true, category: true },
+    });
+  }
+
   static async list(organizationId: string) {
     return prisma.document.findMany({
       where: { organizationId },
