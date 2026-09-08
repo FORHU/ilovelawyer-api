@@ -2,6 +2,7 @@ import DamageClaimRepo, { DamageClaimInput } from "../repositories/damage-claim.
 import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
+import CaseGraphSvc from "./case-graph.service";
 
 export default class DamageClaimSvc {
   static async list(caseId: string, userId: string) {
@@ -12,6 +13,7 @@ export default class DamageClaimSvc {
   static async create(caseId: string, userId: string, data: DamageClaimInput) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await DamageClaimRepo.create(caseId, data);
+    await CaseGraphSvc.ensureNode(caseId, "DAMAGE_CLAIM", row.id);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.create", payload: { id: row.id, category: row.category } });
     return row;
   }
@@ -20,6 +22,7 @@ export default class DamageClaimSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await DamageClaimRepo.update(id, caseId, data);
     if (!row) throw new HttpError("Damage claim not found", 404);
+    await CaseGraphSvc.markStale(caseId, "DAMAGE_CLAIM", id, "Damage claim updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.update", payload: { id } });
     return row;
   }

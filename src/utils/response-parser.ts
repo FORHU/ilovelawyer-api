@@ -32,6 +32,11 @@ export interface ReasoningExplanation {
   citation_reasons: CitationReason[];
 }
 
+export interface TopicSection {
+  title: string;
+  content: string;
+}
+
 /**
  * Extracts a timeline from AI responses.
  * Supports: [TIMELINE]...[/TIMELINE] JSON wrapper, an unclosed tag (streaming cutoff),
@@ -137,6 +142,44 @@ export function parseAudioOverviewPayload(raw: string): AudioOverviewTurn[] | un
 }
 
 /**
+ * Splits a finished, cleaned assistant reply into topic sections for MessageGroup — purely
+ * local text parsing, no AI call and no chat-wonder involvement (that path was tried and
+ * dropped; see the MessageGroup handoff notes). Uses the reply's own markdown headings as
+ * topic boundaries, the same way a human would skim it: prefer top-level (`# `) headings when
+ * there are at least two of them (a multi-topic overview, each topic getting its own `#`);
+ * otherwise fall back to second-level (`## `) headings when there are at least two of *those*
+ * (a single-topic answer broken into `##` subsections, e.g. "Case overview" with several
+ * `## `-headed parts) — never both levels at once, or a document that nests `##` subsections
+ * *inside* each `#` topic would get shredded into one bubble per subsection instead of per
+ * topic. Returns undefined (no split) for anything without a clear multi-section structure,
+ * which is the normal case for a short or single-topic answer.
+ */
+export function splitIntoTopics(content: string): TopicSection[] | undefined {
+  const h1Count = (content.match(/^#\s+.+$/gm) || []).length;
+  const level = h1Count >= 2 ? 1 : (content.match(/^##\s+.+$/gm) || []).length >= 2 ? 2 : 0;
+  if (level === 0) return undefined;
+
+  const splitPoint = level === 1 ? /\n(?=#\s+)/g : /\n(?=##\s+)/g;
+
+  const sections = content
+    .split(splitPoint)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  if (sections.length < 2) return undefined;
+
+  // Matches either level for the TITLE specifically (not the split-boundary regex above):
+  // when splitting on `##`, the first section still opens with the document's lone `#` title
+  // rather than a `##` line, and should show that as its title, not the "Topic N" fallback.
+  const headingLine = /^#{1,2}\s+(.+)$/m;
+
+  return sections.map((section, index) => {
+    const headingMatch = section.match(headingLine);
+    const title = headingMatch?.[1]?.replace(/\*\*/g, "").trim() || `Topic ${index + 1}`;
+    return { title, content: section };
+  });
+}
+
+/**
  * Chat Wonder's `{"type":"reasoning","session_id":...,"data":{...}}` typed WebSocket
  * message (see chat-wonder-v2-api's `_generate_reasoning_explanation` /
  * docs/handoffs/handoff-legal-reasoning-trace-integration-2026-08-28.md). Unlike
@@ -209,17 +252,25 @@ export function parseAiJson(str: string): unknown {
 }
 
 /**
- * Strips [TIMELINE]...[/TIMELINE] and [MINDMAP]...[/MINDMAP] blocks (closed or
- * left open by a streaming cutoff) from AI response text before it's stored/displayed.
+ * Strips [TIMELINE]...[/TIMELINE], [MINDMAP]...[/MINDMAP], and [TRACE]...[/TRACE] blocks
+ * (closed or left open by a streaming cutoff) from AI response text before it's stored/
+ * displayed. [TRACE] frames (the_server.py's glass-box research-step events — see
+ * streaming_run_function_chain) are forwarded to the client as plain chunks the same way
+ * [TIMELINE]/[MINDMAP] are — chatWonder.ts has no special handling for them either, they're
+ * purely a display-layer concern — so without stripping them here, raw trace JSON gets baked
+ * into the persisted Message.content forever (the live-streaming bubble already strips them
+ * via mind-map-parser.ts's own copy of this function; this is what keeps the *saved* copy
+ * clean once the turn settles and the transcript re-renders from history instead).
  */
 export function stripStructuredBlocks(text: string): string {
   let cleaned = text
     .replace(/\[TIMELINE\][\s\S]*?\[\/TIMELINE\]/gi, "")
     .replace(/\[MINDMAP\][\s\S]*?\[\/MINDMAP\]/gi, "")
+    .replace(/\[TRACE\][\s\S]*?\[\/TRACE\]/gi, "")
     .replace(/\[STRUCTURED_DATA\][\s\S]*?(?:\[DONE\]|$)/gi, "")
     .replace(/\[DONE\]/gi, "");
 
-  const startTags = [/\[TIMELINE\]/i, /\[MINDMAP\]/i];
+  const startTags = [/\[TIMELINE\]/i, /\[MINDMAP\]/i, /\[TRACE\]/i];
   let firstTagIdx = -1;
   for (const tag of startTags) {
     const idx = cleaned.search(tag);

@@ -142,6 +142,7 @@ model Consultation {
   organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case           Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
   messages       Message[]
+  messageGroups  MessageGroup[]
   invites        ConsultationInvite[]
   participants   ConsultationParticipant[]
   documents      Document[]
@@ -162,11 +163,17 @@ model Message {
   createdAt       DateTime    @default(now())
   userId          String?
   parentMessageId String?
+  // Set only when this reply is one topic of a split, multi-topic answer (see
+  // MessageGroup) — null for every ordinary, unsplit message.
+  groupId         String?
+  groupOrder      Int?
+  groupTitle      String?
 
   consultation  Consultation          @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user          User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   parent        Message?              @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
   replies       Message[]             @relation("MessageThread")
+  group         MessageGroup?         @relation(fields: [groupId], references: [id], onDelete: SetNull)
   timeline      MessageTimeline?
   mindMap       MessageMindMap?
   relatedCases  MessageRelatedCases?
@@ -177,6 +184,21 @@ model Message {
   @@index([consultationId])
   @@index([userId])
   @@index([parentMessageId])
+  @@index([groupId])
+}
+
+// One AI turn split into several topical Message rows (see docs on MessageGroup
+// handoff) — each sibling row is its own chat bubble, ordered by groupOrder. A turn
+// that wasn't split has no MessageGroup at all; its Message.groupId stays null.
+model MessageGroup {
+  id             String   @id @default(uuid())
+  consultationId String
+  createdAt      DateTime @default(now())
+
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  messages     Message[]
+
+  @@index([consultationId])
 }
 
 model MessageTimeline {
@@ -306,10 +328,12 @@ model Case {
   findings          CaseFinding[]
   witnesses         Witness[]
   damageClaims      DamageClaim[]
+  claims            CaseClaim[]
   reconstruction    CaseReconstruction?
   redTeamAssessment RedTeamAssessment?
   graphNodes        CaseGraphNode[]
   graphEdges        CaseGraphEdge[]
+  edges             CaseEdge[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1079,6 +1103,23 @@ model DamageClaim {
   @@index([caseId])
 }
 
+// A legal claim/cause of action being pursued (e.g. "Breach of Contract", "Negligence") —
+// distinct from DamageClaim, which is a monetary damages line item sought under one or more
+// of these claims, not the legal theory itself.
+model CaseClaim {
+  id            String   @id @default(uuid())
+  caseId        String
+  title         String
+  causeOfAction String?
+  description   String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
 // One narrative per Case (not a list, unlike CaseFinding) — regenerated in place by AI on
 // demand (a dedicated action, not bundled into the general Refresh, since long-form
 // generation is a heavier/slower single call) and editable afterward by the lawyer.
@@ -1134,15 +1175,29 @@ model RedTeamAssessment {
 
 // ── Case Graph (Phase A: dependency tracking + staleness, no auto-recompute) ───────────────
 //
-// Deliberately just two node types for now (TIMELINE_EVENT, PROCEDURAL_DEADLINE) proving one
-// real edge — CaseTimelineEvent -> ProceduralDeadline. Extending to Document/CaseFinding/etc.
-// is a follow-up migration once this slice is validated, not part of this change. Linking is
+// Phase A proved one real edge — CaseTimelineEvent -> ProceduralDeadline — with just
+// TIMELINE_EVENT/PROCEDURAL_DEADLINE. Phase B (this) registers the rest of a case's canonical,
+// lawyer/AI-authored entities as nodes so panels beyond the Terminal (e.g. Mind Map, Evidence
+// Matrix) can key off one shared identity per entity instead of re-deriving it, and so a future
+// edge between any two of them costs nothing beyond a service call. WITNESS/DAMAGE_CLAIM/
+// FINDING/CLAIM are actively registered (see WitnessSvc/DamageClaimSvc/CaseFindingSvc/
+// CaseClaimSvc — ensureNode on create, markStale on update). DOCUMENT and PARTY are declared
+// for a complete vocabulary but not yet wired: Document's creation path is shared across
+// case/consultation/no-case uploads with no single safe insertion point, and Party is fully
+// replaced (delete-all + recreate) on every Case edit, which can't hold a stable refId across
+// edits — both need their own follow-up once there's a real edge that needs them. Linking is
 // always explicit (a service call), never inferred — matches this codebase's existing
 // hand-wired reactive style (CaseRefreshSvc, scheduleCasePostExtraction), not a generic
 // Prisma-hook/event-bus mechanism.
 enum CaseGraphNodeType {
   TIMELINE_EVENT
   PROCEDURAL_DEADLINE
+  WITNESS
+  DOCUMENT
+  PARTY
+  DAMAGE_CLAIM
+  FINDING
+  CLAIM
 }
 
 model CaseGraphNode {
@@ -1155,9 +1210,11 @@ model CaseGraphNode {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
-  case          Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  outgoingEdges CaseGraphEdge[] @relation("CaseGraphEdgeSource")
-  incomingEdges CaseGraphEdge[] @relation("CaseGraphEdgeTarget")
+  case              Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  outgoingEdges     CaseGraphEdge[] @relation("CaseGraphEdgeSource")
+  incomingEdges     CaseGraphEdge[] @relation("CaseGraphEdgeTarget")
+  outgoingCaseEdges CaseEdge[]      @relation("CaseEdgeSource")
+  incomingCaseEdges CaseEdge[]      @relation("CaseEdgeTarget")
 
   @@unique([nodeType, refId])
   @@index([caseId])
@@ -1178,6 +1235,61 @@ model CaseGraphEdge {
   @@unique([sourceNodeId, targetNodeId, kind])
   @@index([caseId])
   @@index([targetNodeId])
+}
+
+// Evidentiary/argumentation links between CaseGraphNode entities (the canonical node registry
+// from Phase B, above) — "this witness statement CONTRADICTS that timeline event", "this
+// document PROVES this claim". Deliberately a separate table from CaseGraphEdge: that one is
+// Phase A/B's dependency+staleness engine with a free-form `kind`, walked only for recompute
+// closure; this one backs the Mind Map/citation-map UI, has a closed relation vocabulary the
+// UI renders distinctly, and carries per-edge metadata (e.g. the citation/quote backing a
+// CITES link). A deleted node cascades here at the FK level, and CaseEdgeSvc.archiveForNode
+// snapshots the row into CaseEdgeArchive first — see that service for why this is an explicit
+// call plus a DB trigger rather than either alone.
+enum CaseEdgeRelationType {
+  SUPPORTS
+  CONTRADICTS
+  CITES
+  PROVES
+  REFUTES
+  SPONSORS
+}
+
+model CaseEdge {
+  id             String               @id @default(uuid())
+  caseId         String
+  sourceEntityId String
+  targetEntityId String
+  relationType   CaseEdgeRelationType
+  metadata       Json                 @default("{}")
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  case         Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceEntity CaseGraphNode @relation("CaseEdgeSource", fields: [sourceEntityId], references: [id], onDelete: Cascade)
+  targetEntity CaseGraphNode @relation("CaseEdgeTarget", fields: [targetEntityId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceEntityId, targetEntityId, relationType])
+  @@index([caseId])
+  @@index([targetEntityId])
+}
+
+// Snapshot of a CaseEdge row taken by the archive_case_edge() trigger the instant before a
+// cascade delete (node removed, or its Case removed) would otherwise erase it — see the
+// migration SQL for the trigger and CaseEdgeSvc for the read path. No FKs back to the live
+// tables: by the time a row lands here, the entity/case it referenced may already be gone.
+model CaseEdgeArchive {
+  id             String               @id @default(uuid())
+  caseId         String
+  sourceEntityId String
+  targetEntityId String
+  relationType   CaseEdgeRelationType
+  metadata       Json
+  createdAt      DateTime
+  updatedAt      DateTime
+  archivedAt     DateTime             @default(now())
+
+  @@index([caseId])
 }
 
 model Organization {

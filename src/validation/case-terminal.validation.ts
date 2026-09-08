@@ -14,6 +14,8 @@ const HEARSAY_CATEGORIES = [
   "OTHER_EXCEPTION",
   "NOT_APPLICABLE",
 ];
+const CASE_EDGE_RELATION_TYPES = ["SUPPORTS", "CONTRADICTS", "CITES", "PROVES", "REFUTES", "SPONSORS"];
+const GRAPH_VIEW_TYPES = ["timeline", "witnesses", "contradictions", "issues"];
 
 export const createTimelineSchema = Joi.object({
   title: Joi.string().required(),
@@ -177,8 +179,35 @@ export const updateDamageSchema = Joi.object({
   amount: Joi.number().min(0).optional().allow(null),
 }).min(1);
 
+export const createClaimSchema = Joi.object({
+  title: Joi.string().required(),
+  causeOfAction: Joi.string().allow("").optional(),
+  description: Joi.string().allow("").optional(),
+});
+
+export const updateClaimSchema = Joi.object({
+  title: Joi.string().optional(),
+  causeOfAction: Joi.string().allow("").optional(),
+  description: Joi.string().allow("").optional(),
+}).min(1);
+
 export const updateReconstructionSchema = Joi.object({
   narrative: Joi.string().optional(),
   narrativeCourt: Joi.string().allow("").optional(),
   narrativeOpposing: Joi.string().allow("").optional(),
 }).min(1);
+
+export const createCaseEdgeSchema = Joi.object({
+  sourceEntityId: Joi.string().required(),
+  targetEntityId: Joi.string().required(),
+  relationType: Joi.string()
+    .valid(...CASE_EDGE_RELATION_TYPES)
+    .required(),
+  metadata: Joi.object().optional(),
+});
+
+export const graphViewSchema = Joi.object({
+  view_type: Joi.string()
+    .valid(...GRAPH_VIEW_TYPES)
+    .required(),
+});

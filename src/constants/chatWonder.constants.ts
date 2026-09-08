@@ -1,14 +1,25 @@
 export const SESSION_RETRIES = 3;
 export const RETRY_DELAY_MS = 1000;
+/** GET /session-id has no work to do beyond opening a session — if Chat Wonder is unreachable
+ * this should fail fast so SESSION_RETRIES actually retries within a bounded time instead of
+ * each attempt hanging indefinitely (axios has no default timeout). */
+export const CHAT_WONDER_SESSION_TIMEOUT_MS = 10_000;
+/** callChatWonderRest has no server-sent progress (unlike the WS path), so a stalled or
+ * unresponsive Chat Wonder call previously hung forever — axios sets no timeout by default.
+ * Kept just under Cloudflare's ~100s edge timeout (see case-reconstruction.service.ts's
+ * comment on the 524 this same blocking-REST pattern produces for longer generations) so a
+ * dead connection fails on our side with a clear error instead of a raw proxy timeout. */
+export const CHAT_WONDER_REST_TIMEOUT_MS = 90_000;
 export const LEGAL_TAG = "[legal ai]";
 /** the_server.py::process_persona checks this exact tag before falling back to the
  * `jurisdiction` request field — sending it directly picks the `legal_uk` persona (its own
  * UK tool whitelist and prompt) without depending on that field at all. See
  * streamChatWonderMessage's withLegalTag, which picks between this and LEGAL_TAG. */
 export const LEGAL_TAG_UK = "[legal ai uk]";
-/** Legal persona sends `__END__` first, then `[STRUCTURED_DATA]` (timeline + mind map)
- * on a second LLM call, then `[DONE]`. Wait this long after `__END__` for that frame. */
-export const STRUCTURED_DATA_WAIT_MS = 45_000;
+/** Legal persona sends `__END__` first, then runs `[STRUCTURED_DATA]` (timeline + mind
+ * map), reasoning, and (when triggered) audio overview as concurrent lightweight LLM
+ * calls before `[DONE]`. Wait this long after `__END__` for all of that. */
+export const STRUCTURED_DATA_WAIT_MS = 60_000;
 
 // Case-only feature (ilovelawyer-app/CONTEXT.md's Mind Map entry) — only ever appended when
 // the message belongs to a case-linked Conversation. See streamChatWonderMessage's `caseId`

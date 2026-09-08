@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
@@ -165,6 +166,12 @@ export default class DocumentExtractionSvc {
       // permanently skipping RAG for this document.
       const ragStatus = isRateLimit(err) ? "PENDING" : "FAILED";
       await DocumentRepo.updateRagStatus(documentId, ragStatus).catch((updateErr) => {
+        // P2025: the document was deleted (or its user/org cascaded away) while extraction
+        // was still in flight — expected race with delete, not a real failure to surface.
+        if (updateErr instanceof Prisma.PrismaClientKnownRequestError && updateErr.code === "P2025") {
+          logger.info("Skipped ragStatus update: document no longer exists", { documentId, ragStatus });
+          return;
+        }
         logger.error("Failed to update ragStatus after extraction error", { updateErr, documentId, ragStatus });
       });
     }

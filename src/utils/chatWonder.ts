@@ -4,7 +4,16 @@ import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import logger from "./logger";
 import { TenantCode } from "../types/tenant-code";
-import { SESSION_RETRIES, RETRY_DELAY_MS, LEGAL_TAG, LEGAL_TAG_UK, MINDMAP_RULE, STRUCTURED_DATA_WAIT_MS } from "../constants";
+import {
+  SESSION_RETRIES,
+  RETRY_DELAY_MS,
+  LEGAL_TAG,
+  LEGAL_TAG_UK,
+  MINDMAP_RULE,
+  STRUCTURED_DATA_WAIT_MS,
+  CHAT_WONDER_SESSION_TIMEOUT_MS,
+  CHAT_WONDER_REST_TIMEOUT_MS,
+} from "../constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import { embedText } from "./embedding";
 import { parseStructuredDataPayload, parseAudioOverviewPayload, parseReasoningPayload, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "./response-parser";
@@ -80,14 +89,18 @@ export async function callChatWonderRest(
   }
 
   logger.info("Chat Wonder REST payload", { url: `${CHAT_WONDER_API_URL}/chat`, ...payload });
-  const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload);
+  const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload, {
+    timeout: CHAT_WONDER_REST_TIMEOUT_MS,
+  });
   return data;
 }
 
 export async function getChatWonderSessionId(): Promise<string> {
   for (let attempt = 1; attempt <= SESSION_RETRIES; attempt++) {
     try {
-      const { data } = await axios.get(`${CHAT_WONDER_API_URL}/session-id`);
+      const { data } = await axios.get(`${CHAT_WONDER_API_URL}/session-id`, {
+        timeout: CHAT_WONDER_SESSION_TIMEOUT_MS,
+      });
       if (!data?.session_id) {
         throw new Error("Chat Wonder returned no session_id");
       }

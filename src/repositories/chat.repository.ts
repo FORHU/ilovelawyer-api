@@ -63,10 +63,19 @@ export default class ChatRepo {
     content: string,
     userId?: string,
     parentMessageId?: string,
+    groupId?: string,
+    groupOrder?: number,
+    groupTitle?: string,
   ) {
     return prisma.message.create({
-      data: { consultationId, role, content, userId, parentMessageId },
+      data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle },
     });
+  }
+
+  /** One row per split, multi-topic AI reply — see MessageGroup. Created before the topic
+   * Message rows themselves, since they each need its id as their groupId. */
+  static async createMessageGroup(consultationId: string) {
+    return prisma.messageGroup.create({ data: { consultationId } });
   }
 
   static async saveTimeline(messageId: string, items: TimelineItem[]) {

@@ -12,10 +12,12 @@ import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
+import CaseClaimSvc from "../services/case-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import CaseGraphViewSvc, { GraphViewType } from "../services/case-graph-view.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import { AI_GENERATION_KINDS, AiGenerationKind } from "../constants";
 import HttpError from "../utils/http-error";
@@ -41,7 +43,10 @@ import {
   updateWitnessSchema,
   createDamageSchema,
   updateDamageSchema,
+  createClaimSchema,
+  updateClaimSchema,
   updateReconstructionSchema,
+  graphViewSchema,
 } from "../validation/case-terminal.validation";
 
 export default class CaseTerminalCtrl {
@@ -327,6 +332,30 @@ export default class CaseTerminalCtrl {
     return res.status(204).send();
   }
 
+  static async listClaims(req: Request, res: Response) {
+    const result = await CaseClaimSvc.list(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async createClaim(req: Request, res: Response) {
+    const { error, value } = createClaimSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseClaimSvc.create(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async updateClaim(req: Request, res: Response) {
+    const { error, value } = updateClaimSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseClaimSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteClaim(req: Request, res: Response) {
+    await CaseClaimSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
   static async getReconstruction(req: Request, res: Response) {
     const result = await CaseReconstructionSvc.get(req.params.caseId, req.user.userId);
     return res.status(200).json(result);
@@ -354,6 +383,16 @@ export default class CaseTerminalCtrl {
 
   static async pollReconstructionAudio(req: Request, res: Response) {
     const result = await CaseReconstructionAudioSvc.pollAudioJob(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** GET /api/my-cases/:caseId/graph-view?view_type=timeline|witnesses|contradictions|issues —
+   * a standardized {nodes, edges} projection of the case graph, one shared source for panels
+   * that used to each slice CaseSnapshotSvc's payload independently. */
+  static async graphView(req: Request, res: Response) {
+    const { error, value } = graphViewSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseGraphViewSvc.get(req.params.caseId, req.user.userId, value.view_type as GraphViewType);
     return res.status(200).json(result);
   }
 
