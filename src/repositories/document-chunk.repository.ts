@@ -136,8 +136,10 @@ export default class DocumentChunkRepo {
     queryEmbedding: number[],
     perDocumentFloor = 3,
     client: DbClient = prisma,
+    startRank = 1,
   ): Promise<{ id: string; caseDocumentId: string }[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
+    const endRank = startRank + perDocumentFloor - 1;
     return client.$queryRaw<{ id: string; caseDocumentId: string }[]>`
       WITH ranked AS (
         SELECT c.id, c."caseDocumentId",
@@ -151,7 +153,7 @@ export default class DocumentChunkRepo {
           AND d."ragStatus" = 'READY'
           AND c.embedding IS NOT NULL
       )
-      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank <= ${perDocumentFloor}
+      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank BETWEEN ${startRank} AND ${endRank}
     `;
   }
 
@@ -162,14 +164,21 @@ export default class DocumentChunkRepo {
    * them, if it has fewer); there is no further global top-K cut on top of that, so overall size
    * is bounded by `formatGroundingContext`'s char cap downstream, not by a chunk count here.
    * Returns chunk id + owning document id so callers can build chat-wonder's
-   * `case_document_ids` + `case_document_chunk_ids` payload. */
+   * `case_document_ids` + `case_document_chunk_ids` payload.
+   *
+   * `startRank` pages further down each document's own ranking (1-based, inclusive) — the
+   * initial call uses the default (rank 1..perDocumentFloor); a follow-up "load more relevant
+   * chunks" call passes `startRank = perDocumentFloor + 1` (etc.) to fetch the next slice
+   * per document instead of re-returning the same top chunks. */
   static async findRelevantByCase(
     caseId: string,
     queryEmbedding: number[],
     perDocumentFloor = 3,
     client: DbClient = prisma,
+    startRank = 1,
   ): Promise<{ id: string; caseDocumentId: string }[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
+    const endRank = startRank + perDocumentFloor - 1;
     return client.$queryRaw<{ id: string; caseDocumentId: string }[]>`
       WITH ranked AS (
         SELECT c.id, c."caseDocumentId",
@@ -183,7 +192,7 @@ export default class DocumentChunkRepo {
           AND d."ragStatus" = 'READY'
           AND c.embedding IS NOT NULL
       )
-      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank <= ${perDocumentFloor}
+      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank BETWEEN ${startRank} AND ${endRank}
     `;
   }
 

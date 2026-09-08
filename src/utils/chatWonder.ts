@@ -15,6 +15,7 @@ import {
   CHAT_WONDER_REST_TIMEOUT_MS,
 } from "../constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
+import DocumentRepo from "../repositories/document.repository";
 import { embedText } from "./embedding";
 import { parseStructuredDataPayload, parseAudioOverviewPayload, parseReasoningPayload, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "./response-parser";
 
@@ -38,6 +39,21 @@ async function relevantChunkIdsFor(caseDocumentId: string, query: string): Promi
     return await DocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding);
   } catch {
     return DocumentChunkRepo.findIdsByDocument(caseDocumentId);
+  }
+}
+
+/** Every attached document's id/name/category, regardless of whether its chunks were selected
+ * into this turn's context — see docs/adr/0005. Lets chat-wonder-v2-api tell the model an
+ * exhibit exists (and fetch it on demand via get_case_document) even when it didn't make the
+ * relevance/budget cut. Best-effort: a lookup failure returns [] rather than failing the turn. */
+async function manifestFor(caseDocumentIds: string[]): Promise<{ id: string; name: string; category: string | null }[]> {
+  if (!caseDocumentIds.length) return [];
+  try {
+    const docs = await DocumentRepo.findManifestByIds(caseDocumentIds);
+    return docs.map((d) => ({ id: d.id, name: d.name, category: d.category ?? null }));
+  } catch (err) {
+    logger.warn("Chat Wonder case document manifest lookup failed", { err });
+    return [];
   }
 }
 
@@ -66,6 +82,7 @@ export async function callChatWonderRest(
     user_input: string;
     case_document_ids?: string[];
     case_document_chunk_ids?: string[];
+    case_document_manifest?: { id: string; name: string; category: string | null }[];
     // Wire field name is `jurisdiction` — chat-wonder-v2-api's own contract (the_server.py::
     // process_persona), unrelated to our internal TenantCode rename.
     jurisdiction?: TenantCode;
@@ -86,6 +103,7 @@ export async function callChatWonderRest(
       (resolved.caseDocumentIds.length === 1
         ? await relevantChunkIdsFor(resolved.caseDocumentIds[0], prompt)
         : []);
+    payload.case_document_manifest = await manifestFor(resolved.caseDocumentIds);
   }
 
   logger.info("Chat Wonder REST payload", { url: `${CHAT_WONDER_API_URL}/chat`, ...payload });
@@ -261,6 +279,7 @@ export function streamChatWonderMessage(
           ? relevantChunkIdsFor(resolved.caseDocumentIds[0], userInput)
           : Promise.resolve<string[]>([])
       : Promise.resolve<string[]>([]);
+    const manifestPromise = manifestFor(resolved?.caseDocumentIds ?? []);
 
     const finish = () => {
       if (settled) return;
@@ -299,8 +318,8 @@ export function streamChatWonderMessage(
     };
 
     ws.onopen = () => {
-      chunkIdsPromise
-        .then((chunkIds) => {
+      Promise.all([chunkIdsPromise, manifestPromise])
+        .then(([chunkIds, manifest]) => {
           const payload: {
             type: string;
             user_input: string;
@@ -309,6 +328,7 @@ export function streamChatWonderMessage(
             document_context?: string;
             case_document_ids?: string[];
             case_document_chunk_ids?: string[];
+            case_document_manifest?: { id: string; name: string; category: string | null }[];
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -324,6 +344,7 @@ export function streamChatWonderMessage(
           payload.case_document_ids = resolved?.caseDocumentIds ?? [];
           if (resolved) {
             payload.case_document_chunk_ids = chunkIds;
+            payload.case_document_manifest = manifest;
           }
           // document_context can be the full text of one or more case documents — logged as a
           // length, not inline, so one chatty turn doesn't blow up combined.log.
