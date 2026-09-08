@@ -129,6 +129,12 @@ export default class DocumentRepo {
     return prisma.document.update({ where: { id }, data });
   }
 
+  /** AI-assigned category (Chat Wonder), distinct from the user-supplied `documentType` —
+   * best-effort, so a null/undefined category here just leaves the column unset. */
+  static async updateCategory(id: string, category: string) {
+    return prisma.document.update({ where: { id }, data: { category } });
+  }
+
   static async delete(id: string, organizationId: string) {
     const result = await prisma.document.deleteMany({ where: { id, organizationId } });
     return result.count > 0;

@@ -6,6 +6,7 @@ import { getObjectBuffer } from "../utils/s3";
 import { extractPages } from "../utils/document-text-extraction";
 import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
 import { embedTexts, isRateLimit } from "../utils/embedding";
+import { categorizeDocument } from "../utils/chatWonder";
 import logger from "../utils/logger";
 
 export default class DocumentExtractionSvc {
@@ -45,6 +46,16 @@ export default class DocumentExtractionSvc {
         await DocumentRepo.updateRagStatus(documentId, "FAILED");
         return;
       }
+
+      // Kicked off now (not awaited) so it runs alongside chunking/embedding below rather
+      // than adding its own latency to the pipeline — independent of chunk storage, so a
+      // failure here (already swallowed inside categorizeDocument) never affects ragStatus.
+      // Sliced to what Chat Wonder's categorization prompt actually reads (first 3000
+      // chars) so a large document doesn't ship its full text over the wire for nothing.
+      const categoryPromise = categorizeDocument(
+        trimmedPages.map((p) => p.text).join("\n\n").slice(0, 3000),
+        doc.name,
+      );
 
       const totalChars = trimmedPages.reduce((sum, page) => sum + page.text.length, 0);
       const profile = resolveChunkingProfile({
@@ -126,6 +137,13 @@ export default class DocumentExtractionSvc {
 
       await DocumentRepo.updateRagStatus(documentId, "READY");
       logger.info("Document extraction: ready", { documentId, name: doc.name, chunks: embeddedChunks.length });
+
+      const category = await categoryPromise;
+      if (category) {
+        await DocumentRepo.updateCategory(documentId, category).catch((categoryErr) => {
+          logger.warn("Failed to save document category", { categoryErr, documentId });
+        });
+      }
 
       if (doc.caseId) {
         // Best-effort — must never bubble into the outer catch and flip an already-READY

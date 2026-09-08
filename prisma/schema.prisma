@@ -338,6 +338,7 @@ model Document {
   name             String
   fileId           String?
   documentType     String?
+  category         String?
   fileSize         Int?
   mimeType         String?
   ragStatus        RagStatus @default(PENDING)

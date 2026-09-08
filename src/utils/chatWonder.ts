@@ -102,6 +102,24 @@ export async function getChatWonderSessionId(): Promise<string> {
   throw new HttpError("Could not initialize chat session. Chat Wonder may be unreachable.", 503);
 }
 
+/** AI-assigned category for an uploaded case document — a short, free-form label Chat
+ * Wonder picks itself (no fixed taxonomy, never user-supplied). Best-effort: any failure
+ * (Chat Wonder unreachable, malformed response) returns null rather than throwing, so a
+ * categorization miss never fails the extraction pipeline that calls this alongside it. */
+export async function categorizeDocument(text: string, filename: string): Promise<string | null> {
+  try {
+    const { data } = await axios.post(`${CHAT_WONDER_API_URL}/api/legal/categorize-document`, {
+      text,
+      filename,
+    });
+    const category = typeof data?.category === "string" ? data.category.trim() : "";
+    return category || null;
+  } catch (err) {
+    logger.warn("Chat Wonder document categorization failed", { err, filename });
+    return null;
+  }
+}
+
 export interface RelatedCase {
   type: string;
   title: string | null;
