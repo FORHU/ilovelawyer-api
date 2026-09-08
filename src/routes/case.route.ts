@@ -78,6 +78,11 @@ router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
 router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage));
 router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
 
+router.get("/:caseId/claims", asyncHandler(CaseTerminalCtrl.listClaims));
+router.post("/:caseId/claims", asyncHandler(CaseTerminalCtrl.createClaim));
+router.patch("/:caseId/claims/:id", asyncHandler(CaseTerminalCtrl.updateClaim));
+router.delete("/:caseId/claims/:id", asyncHandler(CaseTerminalCtrl.deleteClaim));
+
 router.get("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.getReconstruction));
 router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.generateReconstruction));
 router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));

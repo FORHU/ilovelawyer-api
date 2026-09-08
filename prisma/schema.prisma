@@ -306,6 +306,7 @@ model Case {
   findings          CaseFinding[]
   witnesses         Witness[]
   damageClaims      DamageClaim[]
+  claims            CaseClaim[]
   reconstruction    CaseReconstruction?
   redTeamAssessment RedTeamAssessment?
   graphNodes        CaseGraphNode[]
@@ -1078,6 +1079,23 @@ model DamageClaim {
   @@index([caseId])
 }
 
+// A legal claim/cause of action being pursued (e.g. "Breach of Contract", "Negligence") —
+// distinct from DamageClaim, which is a monetary damages line item sought under one or more
+// of these claims, not the legal theory itself.
+model CaseClaim {
+  id            String   @id @default(uuid())
+  caseId        String
+  title         String
+  causeOfAction String?
+  description   String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
 // One narrative per Case (not a list, unlike CaseFinding) — regenerated in place by AI on
 // demand (a dedicated action, not bundled into the general Refresh, since long-form
 // generation is a heavier/slower single call) and editable afterward by the lawyer.
@@ -1133,15 +1151,29 @@ model RedTeamAssessment {
 
 // ── Case Graph (Phase A: dependency tracking + staleness, no auto-recompute) ───────────────
 //
-// Deliberately just two node types for now (TIMELINE_EVENT, PROCEDURAL_DEADLINE) proving one
-// real edge — CaseTimelineEvent -> ProceduralDeadline. Extending to Document/CaseFinding/etc.
-// is a follow-up migration once this slice is validated, not part of this change. Linking is
+// Phase A proved one real edge — CaseTimelineEvent -> ProceduralDeadline — with just
+// TIMELINE_EVENT/PROCEDURAL_DEADLINE. Phase B (this) registers the rest of a case's canonical,
+// lawyer/AI-authored entities as nodes so panels beyond the Terminal (e.g. Mind Map, Evidence
+// Matrix) can key off one shared identity per entity instead of re-deriving it, and so a future
+// edge between any two of them costs nothing beyond a service call. WITNESS/DAMAGE_CLAIM/
+// FINDING/CLAIM are actively registered (see WitnessSvc/DamageClaimSvc/CaseFindingSvc/
+// CaseClaimSvc — ensureNode on create, markStale on update). DOCUMENT and PARTY are declared
+// for a complete vocabulary but not yet wired: Document's creation path is shared across
+// case/consultation/no-case uploads with no single safe insertion point, and Party is fully
+// replaced (delete-all + recreate) on every Case edit, which can't hold a stable refId across
+// edits — both need their own follow-up once there's a real edge that needs them. Linking is
 // always explicit (a service call), never inferred — matches this codebase's existing
 // hand-wired reactive style (CaseRefreshSvc, scheduleCasePostExtraction), not a generic
 // Prisma-hook/event-bus mechanism.
 enum CaseGraphNodeType {
   TIMELINE_EVENT
   PROCEDURAL_DEADLINE
+  WITNESS
+  DOCUMENT
+  PARTY
+  DAMAGE_CLAIM
+  FINDING
+  CLAIM
 }
 
 model CaseGraphNode {
