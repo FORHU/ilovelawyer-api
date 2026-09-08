@@ -32,7 +32,7 @@ export default class DocumentExtractionSvc {
       logger.info("Document extraction: started", { documentId, name: doc.name });
 
       const buffer = await getObjectBuffer(doc.file.s3Key);
-      const { pages, method, ocrAttempted } = await extractPages(buffer, doc.mimeType, doc.name);
+      const { pages, method, ocrAttempted } = await extractPages(buffer, doc.mimeType, doc.name, doc.file.s3Key);
       const trimmedPages = pages.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text.length > 0);
 
       await DocumentRepo.updateExtractionMeta(documentId, {
@@ -53,10 +53,21 @@ export default class DocumentExtractionSvc {
       // failure here (already swallowed inside categorizeDocument) never affects ragStatus.
       // Sliced to what Chat Wonder's categorization prompt actually reads (first 3000
       // chars) so a large document doesn't ship its full text over the wire for nothing.
-      const categoryPromise = categorizeDocument(
-        trimmedPages.map((p) => p.text).join("\n\n").slice(0, 3000),
-        doc.name,
-      );
+      // Skipped entirely when the client already supplied a category (e.g. uploaded straight
+      // into a folder) — that choice must stick, not get silently overwritten once this resolves.
+      let categoryPromise: Promise<string | null>;
+      if (doc.category?.trim()) {
+        logger.info("Document extraction: skipping auto-categorization, category already set", {
+          documentId,
+          category: doc.category,
+        });
+        categoryPromise = Promise.resolve(null);
+      } else {
+        categoryPromise = categorizeDocument(
+          trimmedPages.map((p) => p.text).join("\n\n").slice(0, 3000),
+          doc.name,
+        );
+      }
 
       const totalChars = trimmedPages.reduce((sum, page) => sum + page.text.length, 0);
       const profile = resolveChunkingProfile({

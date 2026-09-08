@@ -5,6 +5,9 @@ export interface IncomingCaseDocument {
     documentType?: string;
     fileSize: number;
     mimeType: string;
+    /** Client-supplied when uploaded directly into a folder — see DocumentExtractionSvc.process,
+     * which skips the chat-wonder auto-categorization call when this is already set. */
+    category?: string;
   };
 }
 

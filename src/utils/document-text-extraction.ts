@@ -1,7 +1,7 @@
 import { PDFParse } from "pdf-parse";
 import mammoth from "mammoth";
 import ExcelJS from "exceljs";
-import { ocrDocument } from "./ocr";
+import { ocrDocument, ocrPdfFromS3 } from "./ocr";
 import logger from "./logger";
 
 type DocType = "pdf" | "docx" | "image" | "xlsx";
@@ -101,6 +101,7 @@ export async function extractPages(
   buffer: Buffer,
   mimeType?: string | null,
   filename?: string,
+  s3Key?: string | null,
 ): Promise<{ pages: ExtractedPage[]; method: "text" | "ocr" | "mixed"; ocrAttempted: boolean }> {
   const type = resolveType(mimeType, filename);
   if (type === "docx") {
@@ -128,9 +129,15 @@ export async function extractPages(
   if (joined) return { pages, method: "text", ocrAttempted: false };
 
   logger.info("Document extraction: empty PDF text, attempting OCR");
-  const ocrText = await ocrDocument(buffer);
-  if (ocrText.trim()) {
-    return { pages: pagesFromText(ocrText), method: "ocr", ocrAttempted: true };
+  // Case Documents (confirmed uploads) always have an s3Key — use the async, S3-based path,
+  // since sync Textract rejects multi-page PDFs and caps out at 5MB. Callers without one (e.g.
+  // law-fulltext.ts, which OCRs an externally-fetched PDF that was never stored in our S3) fall
+  // back to the byte-based sync call — more limited (single-page, small), but still better than
+  // skipping OCR outright for a source this code has no other way to hand Textract.
+  const ocrPages = s3Key ? await ocrPdfFromS3(s3Key) : pagesFromText(await ocrDocument(buffer));
+  const ocrJoined = ocrPages.map((p) => p.text).join("\n").trim();
+  if (ocrJoined) {
+    return { pages: ocrPages, method: "ocr", ocrAttempted: true };
   }
   return { pages, method: "text", ocrAttempted: true };
 }

@@ -13,6 +13,7 @@ interface NewUserDocument {
   documentType?: string;
   fileSize?: number;
   mimeType?: string;
+  category?: string;
 }
 
 export default class DocumentRepo {

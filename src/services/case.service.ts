@@ -84,6 +84,7 @@ export default class CaseSvc {
         documentType: documentData[i].metaData.documentType,
         fileSize: documentData[i].metaData.fileSize,
         mimeType: documentData[i].metaData.mimeType,
+        category: documentData[i].metaData.category,
       }));
 
       return DocumentRepo.createManyAndReturn(userDocumentData, tx);

@@ -52,6 +52,7 @@ export const createCaseWithDocumentSchema = Joi.object({
           documentType: Joi.string().optional(),
           fileSize: Joi.number().integer().positive().required(),
           mimeType: Joi.string().required(),
+          category: Joi.string().trim().max(200).optional(),
         }).required(),
       }),
     )
