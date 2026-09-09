@@ -72,6 +72,15 @@ export default class AiGenerationQueue {
 
   static start(): void {
     if (this.running) return;
+    // receiveMessages() swallows its own errors (by design — see lib/sqs.ts) and returns [],
+    // so an empty/missing queue URL (e.g. a deploy that shipped before the AI_GENERATION_QUEUE_URL
+    // secret existed) would otherwise make fetchLoop spin on ReceiveMessageCommand with no
+    // backoff at all, burning CPU/sockets on the same process as every other queue's worker
+    // instead of just quietly doing nothing.
+    if (!AI_GENERATION_QUEUE_URL) {
+      logger.error("AI generation queue: AI_GENERATION_QUEUE_URL is not set, refusing to start");
+      return;
+    }
     this.running = true;
     void this.run();
   }
