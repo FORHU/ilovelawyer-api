@@ -31,8 +31,22 @@ export default class DocumentExtractionSvc {
 
       logger.info("Document extraction: started", { documentId, name: doc.name });
 
+      // Stage timings — the only way to tell "this document is slow because of OCR/rate
+      // limiting/queue backlog" apart from each other after the fact, since none of that
+      // showed up as elapsed time anywhere before this.
+      const tStart = Date.now();
       const buffer = await getObjectBuffer(doc.file.s3Key);
+      const tDownloaded = Date.now();
       const { pages, method, ocrAttempted } = await extractPages(buffer, doc.mimeType, doc.name, doc.file.s3Key);
+      const tExtracted = Date.now();
+      logger.info("Document extraction: timing (download, extract)", {
+        documentId,
+        downloadMs: tDownloaded - tStart,
+        extractMs: tExtracted - tDownloaded,
+        method,
+        ocrAttempted,
+        pageCount: pages.length,
+      });
       const trimmedPages = pages.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text.length > 0);
 
       await DocumentRepo.updateExtractionMeta(documentId, {
@@ -76,6 +90,7 @@ export default class DocumentExtractionSvc {
         fileSizeBytes: doc.fileSize ?? null,
       });
       const chunks = chunkPages(trimmedPages, profile);
+      const tChunked = Date.now();
       if (chunks.length === 0) {
         logger.warn("Document extraction: no chunks", { documentId, name: doc.name });
         await DocumentRepo.updateRagStatus(documentId, "FAILED");
@@ -125,6 +140,8 @@ export default class DocumentExtractionSvc {
         });
       }
 
+      const tEmbedded = Date.now();
+
       // Default interactive-transaction timeout (5s) is tuned for small transactions; a document
       // with tens of thousands of chunks needs the storage step to run considerably longer.
       await prisma.$transaction(
@@ -134,6 +151,15 @@ export default class DocumentExtractionSvc {
         },
         { timeout: Math.min(600_000, Math.max(120_000, chunks.length * 40)) },
       );
+      const tStored = Date.now();
+      logger.info("Document extraction: timing (chunk, embed, store)", {
+        documentId,
+        chunkMs: tChunked - tExtracted,
+        embedMs: tEmbedded - tChunked,
+        storeMs: tStored - tEmbedded,
+        totalMs: tStored - tStart,
+        chunks: chunks.length,
+      });
 
       const { chunkCount, embeddedCount } = await DocumentChunkRepo.verify(documentId);
       if (chunkCount !== embeddedChunks.length || embeddedCount !== chunkCount) {

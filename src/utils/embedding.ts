@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { OPENAI_API_KEY } from "../config";
 import { EMBEDDING_CHAR_CAP } from "./chunking";
+import logger from "./logger";
 
 let _client: OpenAI | null = null;
 
@@ -56,7 +57,11 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
       return res.data.map((d) => d.embedding);
     } catch (err) {
       if (!isRateLimit(err) || attempt === maxAttempts) throw err;
-      await sleep(retryAfterMs(err, attempt));
+      const waitMs = retryAfterMs(err, attempt);
+      // Previously silent — a document stuck behind repeated 429s looked identical in the
+      // logs to one just taking a while to embed. This is the only place that latency shows up.
+      logger.warn("embedTexts: rate limited, retrying", { attempt, maxAttempts, waitMs, chunks: texts.length });
+      await sleep(waitMs);
     }
   }
 
