@@ -1,7 +1,7 @@
 import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
-import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
+import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getCaseStrategyPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseStrategy } from "../utils/case-strategy-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
@@ -31,26 +31,17 @@ Use only these excerpts and the attached case documents.
 ${pack.text || "(no indexed text)"}
 `;
 
+    const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
     let sessionId = await getChatWonderSessionId();
-    let payload: { response?: string; intermediate_response?: string };
+    let result: { content: string };
     try {
-      payload = await callChatWonderRest(
-        prompt,
-        sessionId,
-        { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds },
-        tenantCode,
-      );
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
     } catch {
       sessionId = await getChatWonderSessionId();
-      payload = await callChatWonderRest(
-        prompt,
-        sessionId,
-        { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds },
-        tenantCode,
-      );
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
     }
 
-    const text = String(payload.response || payload.intermediate_response || "");
+    const text = result.content;
     const parsed = extractCaseStrategy(text);
     logger.info("Chat Wonder case strategy reply", {
       caseId,
