@@ -9,6 +9,16 @@ const CONCURRENCY = 1;
 // Generous ceiling for a large multi-page PDF's extraction + embedding — renewed well before
 // expiry (see withVisibilityHeartbeat) so this is a safety margin, not a real limit.
 const VISIBILITY_TIMEOUT_SECONDS = 600;
+// Hard ceiling on a single job, independent of whatever it's actually doing. Nothing this
+// pipeline calls (S3, Prisma, Textract's own poll loop, OpenAI embeddings) has a matching outer
+// timeout of its own — a single hung call (observed: stuck before extraction's own first log
+// line, almost certainly the initial DocumentRepo.findByIdWithFile lookup or the S3 download)
+// pins `active` at CONCURRENCY forever, which — since CONCURRENCY is 1 — silently and
+// permanently stops the *entire* queue from pulling any further work, with no error logged
+// anywhere. Set comfortably above the ~10-minute Textract OCR poll ceiling (TEXTRACT_ASYNC_
+// MAX_POLL_ATTEMPTS * TEXTRACT_ASYNC_POLL_INTERVAL_MS) so a legitimately slow scanned PDF is
+// never mistaken for a hang.
+const JOB_HARD_TIMEOUT_MS = 15 * 60_000;
 
 interface WaitItem {
   documentId: string;
@@ -97,9 +107,41 @@ export default class DocumentExtractionQueue {
 
   private static runOne(item: WaitItem): void {
     this.active += 1;
-    void withVisibilityHeartbeat(DOCUMENT_EXTRACTION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
+    // Guards against releasing the slot twice — once from the hard-timeout race below, and
+    // again later if the real job eventually settles on its own after all.
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.active -= 1;
+      this.pump();
+    };
+
+    const job = withVisibilityHeartbeat(DOCUMENT_EXTRACTION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
       DocumentExtractionSvc.process(item.documentId),
-    )
+    );
+
+    // Races the real job against a hard ceiling — see JOB_HARD_TIMEOUT_MS. This can't cancel a
+    // genuinely stuck native/network call underneath `job` (JS has no way to do that), so if it
+    // does eventually settle, the `.finally()` below still runs and cleans up normally (deleting
+    // the message, or — since `released` is already true — being a no-op on `release()`). If it
+    // never settles, the SQS message was never deleted, so its own visibility timeout expiring
+    // naturally hands it to a fresh attempt later — this is purely about not letting one stuck
+    // job block every other document in every other case in the meantime.
+    const timedOut = new Promise<true>((resolve) => setTimeout(() => resolve(true), JOB_HARD_TIMEOUT_MS));
+    // Both branches of .then() resolve to false (not just the fulfilled one) so a rejection
+    // from `job` can never make this race itself reject — that path is already fully handled
+    // below via job.catch(), this is purely "did the real job settle in time, one way or another".
+    void Promise.race([job.then(() => false as const, () => false as const), timedOut]).then((didTimeOut) => {
+      if (!didTimeOut) return;
+      logger.error("Document extraction queue: job exceeded hard timeout, releasing worker slot", {
+        documentId: item.documentId,
+        timeoutMs: JOB_HARD_TIMEOUT_MS,
+      });
+      release();
+    });
+
+    job
       .catch((err) => {
         logger.error("Document extraction queue: job failed", { err, documentId: item.documentId });
       })
@@ -109,8 +151,7 @@ export default class DocumentExtractionQueue {
             logger.error("Document extraction queue: failed to delete message", { err, documentId: item.documentId });
           });
         }
-        this.active -= 1;
-        this.pump();
+        release();
       });
   }
 }
