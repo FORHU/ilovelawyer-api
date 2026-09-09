@@ -55,11 +55,21 @@ export default class AiGenerationLockSvc {
 
   /**
    * Wraps an existing generate/scan function: begin → run → finish(DONE) on success,
-   * finish(FAILED) + rethrow on error. Every AI-generation call site uses this instead of
-   * calling Chat Wonder directly.
+   * finish(FAILED) + rethrow on error. Every synchronous (request-thread) AI-generation call
+   * site uses this instead of calling Chat Wonder directly.
    */
   static async run<T>(subjectId: string, kind: AiGenerationKind, fn: () => Promise<T>): Promise<T> {
     await this.begin(subjectId, kind);
+    return this.finishWith(subjectId, kind, fn);
+  }
+
+  /**
+   * Same run→finish(DONE)/finish(FAILED) wrapping as `run`, minus the `begin()` call — for a
+   * job whose IN_PROGRESS row was already created synchronously (e.g. by a controller, before
+   * handing off to AiGenerationQueue) and just needs the actual work run and the lock closed
+   * out. Calling `run` here instead would throw 409 against the row `begin()` just created.
+   */
+  static async finishWith<T>(subjectId: string, kind: AiGenerationKind, fn: () => Promise<T>): Promise<T> {
     try {
       const result = await fn();
       await this.finish(subjectId, kind, "DONE");

@@ -14,13 +14,21 @@ import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
 
 export default class CaseRefreshSvc {
-    static async refresh(caseId: string, userId: string) {
+    /** Fast, synchronous half of a queued refresh — access check + claiming the
+     * AiGenerationJob row — called from the controller before handing off to
+     * AiGenerationQueue, so a 403/409 surfaces immediately instead of after an enqueue. */
+    static async beginQueued(caseId: string, userId: string): Promise<void> {
         await CaseAccess.assertCanEdit(caseId, userId);
         // Own outer lock, purely to stop a double-click on "Refresh analysis" itself — the
         // sub-calls below each hold their own lock too (contradictions/caseStrategy/caseFinding),
         // so a 409 from one of those (e.g. Contradictions already running standalone) is caught by
         // the existing .catch() blocks below and just skips that piece, same as any other failure.
-        return AiGenerationLockSvc.run(caseId, "caseRefresh", () =>
+        await AiGenerationLockSvc.begin(caseId, "caseRefresh");
+    }
+
+    /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
+    static async runQueued(caseId: string, userId: string): Promise<void> {
+        await AiGenerationLockSvc.finishWith(caseId, "caseRefresh", () =>
             CaseRefreshSvc.refreshInner(caseId, userId),
         );
     }

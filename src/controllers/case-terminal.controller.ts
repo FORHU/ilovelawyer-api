@@ -19,6 +19,7 @@ import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.qu
 import RedTeamSvc from "../services/red-team.service";
 import CaseGraphViewSvc, { GraphViewType } from "../services/case-graph-view.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
+import AiGenerationQueue from "../queues/ai-generation.queue";
 import { AI_GENERATION_KINDS, AiGenerationKind } from "../constants";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
@@ -55,9 +56,18 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  /** Queued via AiGenerationQueue (SQS) rather than run inline — the refresh chains three
+   * sequential Chat Wonder calls, previously all inside this request. beginQueued does the
+   * fast synchronous part (access check + claiming the AiGenerationJob row) so a 403/409
+   * still surfaces immediately; the Terminal's existing ai-jobs poll (useAiJobStatus) picks up
+   * completion and auto-refreshes the snapshot without any frontend change. */
   static async refresh(req: Request, res: Response) {
-    const result = await CaseRefreshSvc.refresh(req.params.caseId, req.user.userId);
-    return res.status(200).json(result);
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseRefreshSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseRefresh", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseRefresh");
+    return res.status(202).json(status);
   }
 
   /** GET /api/my-cases/:caseId/ai-jobs/:kind — polled by every case-scoped Generate/Refresh/
@@ -361,9 +371,16 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. The automatic
+   * post-upload generation in queues/case-post-extraction.ts is unaffected: it calls
+   * CaseReconstructionSvc.generate() directly (synchronous), not this endpoint. */
   static async generateReconstruction(req: Request, res: Response) {
-    const result = await CaseReconstructionSvc.generate(req.params.caseId, req.user.userId);
-    return res.status(200).json(result);
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseReconstructionSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseReconstruction", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstruction");
+    return res.status(202).json(status);
   }
 
   static async updateReconstruction(req: Request, res: Response) {
@@ -401,8 +418,13 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
   static async generateRedTeam(req: Request, res: Response) {
-    const result = await RedTeamSvc.generate(req.params.caseId, req.user.userId);
-    return res.status(200).json(result);
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await RedTeamSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "redTeam", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "redTeam");
+    return res.status(202).json(status);
   }
 }

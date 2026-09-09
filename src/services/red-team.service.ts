@@ -50,9 +50,17 @@ export default class RedTeamSvc {
    * prompt is built entirely from CaseSnapshotSvc.get(), matching "Zero Hallucination: base
    * attacks ONLY on the data provided in the prompt." No grounding/case-document-ids are
    * sent to Chat Wonder, so it can't reach past what's already been reviewed and entered. */
-  static async generate(caseId: string, userId: string) {
+  /** Fast, synchronous half of a queued generate — access check + claiming the
+   * AiGenerationJob row — called from the controller before handing off to
+   * AiGenerationQueue, so a 403/409 surfaces immediately instead of after an enqueue. */
+  static async beginQueued(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
-    return AiGenerationLockSvc.run(caseId, "redTeam", () => RedTeamSvc.generateInner(caseId, userId));
+    await AiGenerationLockSvc.begin(caseId, "redTeam");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
+  static async runQueued(caseId: string, userId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "redTeam", () => RedTeamSvc.generateInner(caseId, userId));
   }
 
   private static async generateInner(caseId: string, userId: string) {

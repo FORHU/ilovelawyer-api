@@ -28,6 +28,24 @@ export default class CaseReconstructionSvc {
     return AiGenerationLockSvc.run(caseId, "caseReconstruction", () => CaseReconstructionSvc.generateInner(caseId, userId));
   }
 
+  /** Fast, synchronous half of a queued generate — access check + claiming the
+   * AiGenerationJob row — called from the controller before handing off to
+   * AiGenerationQueue, so a 403/409 surfaces immediately instead of after an enqueue. Unlike
+   * `generate`, only used by the lawyer-triggered HTTP endpoint — case-post-extraction.ts's
+   * automatic post-upload generation keeps calling `generate` directly, since it awaits the
+   * finished narrative before chaining CaseReconstructionAudioSvc.startAudioJob. */
+  static async beginQueued(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.begin(caseId, "caseReconstruction");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
+  static async runQueued(caseId: string, userId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "caseReconstruction", () =>
+      CaseReconstructionSvc.generateInner(caseId, userId),
+    );
+  }
+
   private static async generateInner(caseId: string, userId?: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);

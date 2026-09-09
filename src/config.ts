@@ -59,6 +59,9 @@ export const DOCUMENT_EXTRACTION_QUEUE_URL = process.env.DOCUMENT_EXTRACTION_QUE
 export const CITATION_EXTRACTION_QUEUE_URL = process.env.CITATION_EXTRACTION_QUEUE_URL as string;
 export const AUDIO_OVERVIEW_QUEUE_URL = process.env.AUDIO_OVERVIEW_QUEUE_URL as string;
 export const CASE_RECONSTRUCTION_AUDIO_QUEUE_URL = process.env.CASE_RECONSTRUCTION_AUDIO_QUEUE_URL as string;
+/** Shared by every lawyer-triggered Legal Terminal Generate/Refresh action (Refresh Analysis,
+ * Red Team, Case Reconstruction) — see queues/ai-generation.queue.ts. */
+export const AI_GENERATION_QUEUE_URL = process.env.AI_GENERATION_QUEUE_URL as string;
 export const CLOUDFRONT_URL = process.env.CLOUDFRONT_URL as string;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY as string;
 export const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL as string;

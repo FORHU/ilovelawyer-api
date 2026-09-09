@@ -2131,9 +2131,11 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Legal Terminal"],
         summary: "Re-extract pending docs, rescan contradictions, promote AI timeline",
+        description:
+          "Queued (AiGenerationQueue / SQS) rather than run inline — returns immediately once the job is claimed. Poll GET /my-cases/{caseId}/ai-jobs/caseRefresh for completion.",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }],
-        responses: { 200: { description: "Refreshed snapshot" } },
+        responses: { 202: { description: "Refresh queued — AiGenerationJob status (IN_PROGRESS)" } },
       },
     },
   },
