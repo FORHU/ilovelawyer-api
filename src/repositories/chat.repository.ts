@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { MessageRole, Prisma, AudioOverviewStatus } from "@prisma/client";
+import { MessageRole, MessageStatus, Prisma, AudioOverviewStatus } from "@prisma/client";
 import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
@@ -66,9 +66,30 @@ export default class ChatRepo {
     groupId?: string,
     groupOrder?: number,
     groupTitle?: string,
+    // Defaults to COMPLETE via the schema — only an assistant turn whose structured extras are
+    // still being written by MessagePersistenceQueue is created "PENDING".
+    status?: MessageStatus,
   ) {
     return prisma.message.create({
-      data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle },
+      data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle, status },
+    });
+  }
+
+  /** Bulk status flip for an assistant turn's row(s) once MessagePersistenceQueue finishes
+   * (COMPLETE) or gives up (FAILED). No-op on an empty list. */
+  static async setMessagesStatus(messageIds: string[], status: MessageStatus) {
+    if (messageIds.length === 0) return;
+    return prisma.message.updateMany({ where: { id: { in: messageIds } }, data: { status } });
+  }
+
+  /** Any assistant row still PENDING well after it was created was orphaned by a process that
+   * died mid-persist — its content is already saved, only the extras were lost. Flip it to
+   * COMPLETE on boot so the frontend stops polling it. The age cutoff keeps this from touching
+   * a sibling instance's genuinely in-flight turn. */
+  static async completeStalePendingMessages(olderThanMs = 5 * 60_000) {
+    return prisma.message.updateMany({
+      where: { role: "assistant", status: "PENDING", createdAt: { lt: new Date(Date.now() - olderThanMs) } },
+      data: { status: "COMPLETE" },
     });
   }
 
@@ -78,15 +99,24 @@ export default class ChatRepo {
     return prisma.messageGroup.create({ data: { consultationId } });
   }
 
+  // save* are upserts (not creates) so MessagePersistenceQueue re-running a job — its SQS
+  // message can redeliver after a crash between writing and acking — updates the same row
+  // instead of hitting the messageId @unique constraint.
   static async saveTimeline(messageId: string, items: TimelineItem[]) {
-    return prisma.messageTimeline.create({
-      data: { messageId, items: items as unknown as Prisma.InputJsonValue },
+    const items_ = items as unknown as Prisma.InputJsonValue;
+    return prisma.messageTimeline.upsert({
+      where: { messageId },
+      create: { messageId, items: items_ },
+      update: { items: items_ },
     });
   }
 
   static async saveMindMap(messageId: string, data: MindMapItem) {
-    return prisma.messageMindMap.create({
-      data: { messageId, data: data as unknown as Prisma.InputJsonValue },
+    const data_ = data as unknown as Prisma.InputJsonValue;
+    return prisma.messageMindMap.upsert({
+      where: { messageId },
+      create: { messageId, data: data_ },
+      update: { data: data_ },
     });
   }
 
@@ -101,8 +131,11 @@ export default class ChatRepo {
   }
 
   static async saveRelatedCases(messageId: string, items: RelatedCase[]) {
-    return prisma.messageRelatedCases.create({
-      data: { messageId, items: items as unknown as Prisma.InputJsonValue },
+    const items_ = items as unknown as Prisma.InputJsonValue;
+    return prisma.messageRelatedCases.upsert({
+      where: { messageId },
+      create: { messageId, items: items_ },
+      update: { items: items_ },
     });
   }
 
@@ -114,21 +147,15 @@ export default class ChatRepo {
   }
 
   static async saveReasoning(messageId: string, data: ReasoningExplanation) {
-    return prisma.messageReasoning.create({
-      data: {
-        messageId,
-        reasoning: data.reasoning,
-        citationReasons: data.citation_reasons as unknown as Prisma.InputJsonValue,
-      },
+    const fields = {
+      reasoning: data.reasoning,
+      citationReasons: data.citation_reasons as unknown as Prisma.InputJsonValue,
+    };
+    return prisma.messageReasoning.upsert({
+      where: { messageId },
+      create: { messageId, ...fields },
+      update: fields,
     });
-  }
-
-  /** Whether this user turn already has its assistant reply persisted — the idempotency
-   * check for MessagePersistenceQueue, whose SQS message can redeliver if a prior worker
-   * crashed after saving but before acking. A split reply persists several sibling rows all
-   * sharing this parentMessageId; finding any one of them means the turn is done. */
-  static async findAssistantReplyByParent(parentMessageId: string) {
-    return prisma.message.findFirst({ where: { parentMessageId, role: "assistant" }, select: { id: true } });
   }
 
   static async findLatestAssistantMessage(consultationId: string) {
@@ -144,8 +171,11 @@ export default class ChatRepo {
   }
 
   static async saveAudioOverview(messageId: string, turns: AudioOverviewTurn[], voiceHostA: string, voiceHostB: string) {
-    return prisma.messageAudioOverview.create({
-      data: { messageId, turns: turns as unknown as Prisma.InputJsonValue, voiceHostA, voiceHostB },
+    const fields = { turns: turns as unknown as Prisma.InputJsonValue, voiceHostA, voiceHostB };
+    return prisma.messageAudioOverview.upsert({
+      where: { messageId },
+      create: { messageId, ...fields },
+      update: fields,
     });
   }
 

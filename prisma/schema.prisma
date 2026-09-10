@@ -168,6 +168,11 @@ model Message {
   groupId         String?
   groupOrder      Int?
   groupTitle      String?
+  // PENDING only while MessagePersistenceQueue is still attaching this assistant turn's
+  // structured extras (timeline / mind map / audio overview / reasoning / related cases)
+  // after the reply streamed — flips to COMPLETE when they land, FAILED if that job errors.
+  // Defaults to COMPLETE so every user row and every pre-existing row needs no backfill.
+  status          MessageStatus @default(COMPLETE)
 
   consultation  Consultation          @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user          User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -268,6 +273,12 @@ enum MessageRole {
   user
   assistant
   system
+}
+
+enum MessageStatus {
+  PENDING
+  COMPLETE
+  FAILED
 }
 
 model ConsultationInvite {

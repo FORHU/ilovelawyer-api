@@ -277,102 +277,91 @@ export default class ChatSvc {
       );
     }
 
-    // The reply has fully streamed to the client by this point. Persisting it (topic split,
-    // MessageGroup, timeline/mind-map/audio-overview/reasoning/related-cases) is handed to
-    // MessagePersistenceQueue so ChatCtrl's res.end() fires on the last token instead of
-    // after every write. An enqueue-send failure falls back to persisting in-process (see the
-    // queue's memoryWait path), so a turn is never dropped.
+    // The reply has fully streamed to the client. Create the assistant Message row(s) NOW,
+    // synchronously — cheap (local text parse + a couple of inserts) and it means a crash can
+    // never lose an already-delivered reply. They're marked PENDING; MessagePersistenceQueue
+    // then attaches the slower / failure-prone structured extras (case-timeline promote, mind
+    // map, audio overview, reasoning, related cases) and flips the status to COMPLETE (FAILED
+    // if that job errors). The frontend polls GET .../messages until the status settles.
+    const cleanedContent = stripStructuredBlocks(fullResponse);
+    const topics = splitIntoTopics(cleanedContent);
+    let assistantMessages: Awaited<ReturnType<typeof ChatRepo.createMessage>>[];
+    if (topics && topics.length > 1) {
+      const group = await ChatRepo.createMessageGroup(consultationId);
+      // Sequential (not Promise.all) so createdAt strictly increases in groupOrder order —
+      // the frontend transcript sorts by createdAt.
+      assistantMessages = [];
+      for (const [index, topic] of topics.entries()) {
+        assistantMessages.push(
+          await ChatRepo.createMessage(
+            consultationId, "assistant", topic.content, undefined, userMessage.id, group.id, index, topic.title, "PENDING",
+          ),
+        );
+      }
+    } else {
+      assistantMessages = [
+        await ChatRepo.createMessage(
+          consultationId, "assistant", cleanedContent, undefined, userMessage.id, undefined, undefined, undefined, "PENDING",
+        ),
+      ];
+    }
+
     MessagePersistenceQueue.enqueue({
       consultationId,
-      parentMessageId: userMessage.id,
+      // Extras anchor to the LAST topic row (greatest createdAt — see findLatestAssistantMessage).
+      lastAssistantMessageId: assistantMessages[assistantMessages.length - 1].id,
+      assistantMessageIds: assistantMessages.map((m) => m.id),
       effectiveCaseId: effectiveCaseId ?? null,
       userId,
-      fullResponse,
-      relatedCases,
-      mindMap: streamedMindMap,
-      timeline: streamedTimeline,
+      // Resolve the text-fallback here so the payload carries final values (Chat Wonder's
+      // dedicated frames win; otherwise re-parse from the reply text — mindMap/timeline only).
+      timeline: streamedTimeline ?? extractTimeline(fullResponse),
+      mindMap: streamedMindMap ?? extractMindMap(fullResponse),
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
+      relatedCases,
     });
   }
 
   /**
-   * Persists a chat turn's assistant reply after it has already streamed to the client —
-   * lifted out of sendMessage and run from MessagePersistenceQueue. A failure in any single
-   * write here can no longer take an already-delivered response down with it (it's off the
-   * request entirely now), but the same per-write .catch guards are kept so one bad write
-   * doesn't abort the rest.
-   *
-   * Idempotent: the queue's SQS message redelivers if a worker crashed after saving but
-   * before acking, and a split reply (several sibling rows) must not be persisted twice.
+   * Attaches an assistant turn's structured extras after the reply already streamed and its
+   * Message row(s) were created (PENDING) by sendMessage — run from MessagePersistenceQueue.
+   * On success the row(s) flip to COMPLETE; on any failure to FAILED, so the frontend's poll
+   * always terminates. Idempotent: the SQS message can redeliver after a crash, and every
+   * ChatRepo.save* it calls is an upsert.
    */
   static async persistAssistantTurn(p: AssistantTurnPayload): Promise<void> {
-    if (await ChatRepo.findAssistantReplyByParent(p.parentMessageId)) {
-      logger.info("Message persistence: assistant turn already persisted, skipping", {
-        parentMessageId: p.parentMessageId,
+    const last = await ChatRepo.findMessageById(p.lastAssistantMessageId);
+    if (!last) {
+      logger.warn("Message persistence: target assistant message is gone, skipping", {
+        messageId: p.lastAssistantMessageId,
       });
       return;
     }
+    if (last.status !== "PENDING") return; // a prior attempt already finalized this turn
 
-    // audioOverview/reasoning have no text-fallback re-parse (unlike timeline/mindMap) — they
-    // only ever arrive as Chat Wonder's own dedicated frames, never inline in fullResponse.
-    const timeline = p.timeline ?? extractTimeline(p.fullResponse);
-    const mindMap = p.mindMap ?? extractMindMap(p.fullResponse);
-    const audioOverview = p.audioOverview;
-    const reasoning = p.reasoning;
-    const cleanedContent = stripStructuredBlocks(p.fullResponse);
-    const topics = splitIntoTopics(cleanedContent);
-
-    // A split reply becomes several sibling assistant Messages under one new MessageGroup —
-    // one bubble per topic. The structured extras still describe the whole turn, so they
-    // anchor to the LAST topic message (greatest createdAt — see ChatRepo.findLatestAssistantMessage).
-    let assistantMessage: Awaited<ReturnType<typeof ChatRepo.createMessage>>;
-    if (topics && topics.length > 1) {
-      const group = await ChatRepo.createMessageGroup(p.consultationId);
-      // Sequential (not Promise.all) so createdAt strictly increases in groupOrder order.
-      const topicMessages: Awaited<ReturnType<typeof ChatRepo.createMessage>>[] = [];
-      for (const [index, topic] of topics.entries()) {
-        topicMessages.push(
-          await ChatRepo.createMessage(
-            p.consultationId,
-            "assistant",
-            topic.content,
-            undefined,
-            p.parentMessageId,
-            group.id,
-            index,
-            topic.title,
-          ),
-        );
+    try {
+      const { lastAssistantMessageId: mid } = p;
+      if (p.timeline) await ChatRepo.saveTimeline(mid, p.timeline);
+      if (p.timeline && p.effectiveCaseId) {
+        await CaseTimelineSvc.promoteFromAi(p.effectiveCaseId, p.timeline, p.userId).catch(() => {});
       }
-      assistantMessage = topicMessages[topicMessages.length - 1];
-    } else {
-      assistantMessage = await ChatRepo.createMessage(
-        p.consultationId,
-        "assistant",
-        cleanedContent,
-        undefined,
-        p.parentMessageId,
-      );
-    }
+      if (p.mindMap) await ChatRepo.saveMindMap(mid, p.mindMap);
+      if (p.audioOverview) {
+        const { hostA, hostB } = voicePairForCase(p.effectiveCaseId ?? p.consultationId);
+        await ChatRepo.saveAudioOverview(mid, p.audioOverview, hostA, hostB);
+      }
+      if (p.reasoning) await ChatRepo.saveReasoning(mid, p.reasoning);
+      if (p.relatedCases.length) await ChatRepo.saveRelatedCases(mid, p.relatedCases);
 
-    if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
-    if (timeline && p.effectiveCaseId) {
-      await CaseTimelineSvc.promoteFromAi(p.effectiveCaseId, timeline, p.userId).catch(() => {});
-    }
-    if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
-    if (audioOverview) {
-      const { hostA, hostB } = voicePairForCase(p.effectiveCaseId ?? p.consultationId);
-      await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB).catch((err) => {
-        logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
+      await ChatRepo.setMessagesStatus(p.assistantMessageIds, "COMPLETE");
+    } catch (err) {
+      logger.error("Message persistence: failed to attach turn extras, marking FAILED", {
+        err,
+        messageId: p.lastAssistantMessageId,
       });
+      await ChatRepo.setMessagesStatus(p.assistantMessageIds, "FAILED").catch(() => {});
     }
-    if (reasoning) {
-      await ChatRepo.saveReasoning(assistantMessage.id, reasoning).catch((err) => {
-        logger.error("Failed to persist reasoning explanation", { err, messageId: assistantMessage.id });
-      });
-    }
-    if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
   }
 
   /** Chat Wonder keeps sessions in memory and drops them on restart; the frontend caches

@@ -1,30 +1,30 @@
 import ChatSvc from "../services/chat.service";
+import ChatRepo from "../repositories/chat.repository";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { MESSAGE_PERSISTENCE_QUEUE_URL } from "../config";
 import { RelatedCase } from "../utils/chatWonder";
 import { MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
 import logger from "../utils/logger";
 
-// A handful of Prisma writes per job (create the assistant Message(s), save the structured
-// extras) — light, so several turns' saves can run at once. Per-instance, same caveat as the
-// other queues.
+// A handful of Prisma upserts per job (the turn's structured extras) plus a status flip on
+// the already-created Message row(s) — light, so several turns can run at once. Per-instance,
+// same caveat as the other queues.
 const CONCURRENCY = 5;
 // The real job settles well under a second; this is only a safety margin, renewed well
 // before expiry (see withVisibilityHeartbeat).
 const VISIBILITY_TIMEOUT_SECONDS = 60;
 
-/** Everything ChatSvc.persistAssistantTurn needs — captured in memory the moment the stream
- * finishes, since there's no assistant Message row to reload it from yet. Serialized straight
- * into the SQS message body. */
+/** What ChatSvc.persistAssistantTurn needs to finish a turn whose assistant Message row(s)
+ * sendMessage already created (PENDING). Serialized straight into the SQS message body. */
 export interface AssistantTurnPayload {
   consultationId: string;
-  /** The user Message this reply answers — assistant rows hang off it as parentMessageId. */
-  parentMessageId: string;
+  /** The turn's assistant row(s) — one, or several sibling topic rows. All flip together to
+   * COMPLETE / FAILED. */
+  assistantMessageIds: string[];
+  /** The row the structured extras attach to (the last topic — greatest createdAt). */
+  lastAssistantMessageId: string;
   effectiveCaseId: string | null;
   userId: string;
-  /** Raw accumulated reply text — persistAssistantTurn still needs the un-stripped form for
-   * stripStructuredBlocks / splitIntoTopics / the extractTimeline+extractMindMap fallback. */
-  fullResponse: string;
   relatedCases: RelatedCase[];
   mindMap?: MindMapItem;
   timeline?: TimelineItem[];
@@ -43,13 +43,13 @@ function sleep(ms: number) {
 }
 
 /**
- * SQS queue for persisting a chat turn's assistant reply after it has already streamed to the
- * client. ChatSvc.sendMessage streams the response as today, then enqueues this — the request
- * ends the instant the last token is sent instead of waiting on the topic-split, MessageGroup,
- * timeline/mind-map/audio-overview/reasoning/related-cases writes. Mirrors the other queues'
- * shape (see citation-extraction.queue.ts); durability is SQS's own redelivery — a message
- * received but never deleted (worker crashed mid-save) reappears after its visibility timeout,
- * so ChatSvc.persistAssistantTurn is written to be idempotent.
+ * SQS queue that finishes a chat turn after its reply has streamed to the client and its
+ * assistant Message row(s) were created PENDING by ChatSvc.sendMessage. The job attaches the
+ * slower / failure-prone structured extras (case-timeline promote, mind map, audio overview,
+ * reasoning, related cases) and flips the row(s) to COMPLETE — or FAILED. Mirrors the other
+ * queues' shape (see citation-extraction.queue.ts); durability is SQS's own redelivery — a
+ * message received but never deleted (worker crashed mid-save) reappears after its visibility
+ * timeout, so ChatSvc.persistAssistantTurn is written to be idempotent.
  */
 export default class MessagePersistenceQueue {
   private static running = false;
@@ -57,16 +57,16 @@ export default class MessagePersistenceQueue {
   private static memoryWait: WaitItem[] = [];
 
   static enqueue(payload: AssistantTurnPayload): void {
-    if (!payload?.parentMessageId) return;
+    if (!payload?.lastAssistantMessageId) return;
 
     sendMessage(MESSAGE_PERSISTENCE_QUEUE_URL, JSON.stringify(payload)).catch(async (err) => {
       logger.error("Failed to enqueue assistant turn persistence job", {
         err,
-        parentMessageId: payload.parentMessageId,
+        messageId: payload.lastAssistantMessageId,
       });
-      // Never drop the turn. If the worker loop is running, hand it to memoryWait so the
-      // CONCURRENCY cap still applies; if the queue never started (no URL configured),
-      // persist inline right here.
+      // Never leave the turn stuck PENDING. If the worker loop is running, hand it to
+      // memoryWait so the CONCURRENCY cap still applies; if the queue never started (no URL
+      // configured), attach the extras inline right here.
       if (this.running) {
         this.memoryWait.push({ payload, receiptHandle: null });
         this.pump();
@@ -74,7 +74,7 @@ export default class MessagePersistenceQueue {
         await ChatSvc.persistAssistantTurn(payload).catch((e) => {
           logger.error("Message persistence: inline fallback failed", {
             err: e,
-            parentMessageId: payload.parentMessageId,
+            messageId: payload.lastAssistantMessageId,
           });
         });
       }
@@ -95,6 +95,16 @@ export default class MessagePersistenceQueue {
   }
 
   private static async run(): Promise<void> {
+    // Any assistant row still PENDING from before this process started was orphaned by a
+    // crash/redeploy — its content is saved, only the extras were lost. Flip it to COMPLETE
+    // so the frontend's status poll terminates. Age-gated inside the repo so a sibling
+    // instance's genuinely in-flight turn is left alone.
+    ChatRepo.completeStalePendingMessages()
+      .then((r) => {
+        if (r && r.count > 0) logger.info("Message persistence queue: completed stale PENDING turns", { count: r.count });
+      })
+      .catch((err) => logger.error("Message persistence queue: stale-PENDING sweep failed", { err }));
+
     logger.info("Message persistence queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
@@ -130,9 +140,9 @@ export default class MessagePersistenceQueue {
       if (
         parsed &&
         typeof parsed.consultationId === "string" &&
-        typeof parsed.parentMessageId === "string" &&
+        typeof parsed.lastAssistantMessageId === "string" &&
+        Array.isArray(parsed.assistantMessageIds) &&
         typeof parsed.userId === "string" &&
-        typeof parsed.fullResponse === "string" &&
         Array.isArray(parsed.relatedCases)
       ) {
         return parsed as AssistantTurnPayload;
@@ -162,7 +172,7 @@ export default class MessagePersistenceQueue {
       .catch((err) => {
         logger.error("Message persistence queue: job failed", {
           err,
-          parentMessageId: item.payload.parentMessageId,
+          messageId: item.payload.lastAssistantMessageId,
         });
       })
       .finally(async () => {
@@ -170,7 +180,7 @@ export default class MessagePersistenceQueue {
           await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle).catch((err) => {
             logger.error("Message persistence queue: failed to delete message", {
               err,
-              parentMessageId: item.payload.parentMessageId,
+              messageId: item.payload.lastAssistantMessageId,
             });
           });
         }
