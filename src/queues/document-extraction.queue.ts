@@ -19,6 +19,19 @@ const VISIBILITY_TIMEOUT_SECONDS = 600;
 // MAX_POLL_ATTEMPTS * TEXTRACT_ASYNC_POLL_INTERVAL_MS) so a legitimately slow scanned PDF is
 // never mistaken for a hang.
 const JOB_HARD_TIMEOUT_MS = 15 * 60_000;
+// How often to re-scan the DB for PENDING/FAILED documents nobody's actively working on.
+// Without this, the only time a stuck document (enqueue silently lost, process restarted
+// mid-batch, etc. — see JOB_HARD_TIMEOUT_MS's own note on this queue's single points of
+// failure) ever gets picked back up is the *next* server boot's one-time reload below —
+// observed in practice: a batch upload where all but one document sat PENDING for hours with
+// zero retry, discovered only when a lawyer asked why their documents were still "indexing."
+const PENDING_SWEEP_INTERVAL_MS = 5 * 60_000;
+// Only sweep documents older than this — createdAt is upload time, not "extraction attempt
+// started" time (the model has no separate timestamp for that), so a document uploaded
+// moments ago that's still legitimately waiting its turn in a large batch must not be mistaken
+// for stuck. Comfortably above JOB_HARD_TIMEOUT_MS so a single slow-but-healthy job in front of
+// it in the queue can't cause a false re-enqueue either.
+const PENDING_SWEEP_MIN_AGE_MS = 20 * 60_000;
 
 interface WaitItem {
   documentId: string;
@@ -41,6 +54,11 @@ export default class DocumentExtractionQueue {
   private static running = false;
   private static active = 0;
   private static memoryWait: WaitItem[] = [];
+  // Document ids this process currently has a job running for (CONCURRENCY is 1, so at most
+  // one entry today, but tracked as a set for when that changes) — the periodic sweep excludes
+  // these plus whatever's already sitting in memoryWait, so it never re-queues a document that
+  // isn't actually stuck, just because it hasn't reached READY/FAILED yet.
+  private static activeDocumentIds = new Set<string>();
 
   static enqueue(documentId: string): void {
     this.enqueueMany([documentId]);
@@ -64,19 +82,41 @@ export default class DocumentExtractionQueue {
   }
 
   private static async run(): Promise<void> {
-    const pending = await DocumentRepo.listPendingForExtraction().catch((err) => {
-      logger.error("Document extraction queue: failed to load PENDING documents", { err });
-      return [] as { id: string }[];
-    });
-    if (pending.length > 0) {
-      logger.info("Document extraction queue: re-queuing documents for extraction", { count: pending.length });
-      this.memoryWait.push(...pending.map((doc) => ({ documentId: doc.id, receiptHandle: null })));
-      this.pump();
-    }
+    // Nothing can legitimately be in flight yet at boot, so no age filter here — every
+    // PENDING/FAILED document found is unambiguously stuck from a prior process's lifetime.
+    await this.reloadStuckDocuments();
 
     logger.info("Document extraction queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
+    void this.sweepLoop();
     this.pump();
+  }
+
+  /** Shared by the boot-time reload (no age filter — see run()) and the periodic sweep (age-
+   * filtered — see PENDING_SWEEP_MIN_AGE_MS) so both push into the same memoryWait/pump path
+   * rather than duplicating it. */
+  private static async reloadStuckDocuments(olderThanMs?: number): Promise<void> {
+    const pending = await DocumentRepo.listPendingForExtraction(olderThanMs).catch((err) => {
+      logger.error("Document extraction queue: failed to load PENDING documents", { err });
+      return [] as { id: string }[];
+    });
+    if (pending.length === 0) return;
+
+    const alreadyQueued = new Set(this.memoryWait.map((item) => item.documentId));
+    const toQueue = pending.filter((doc) => !this.activeDocumentIds.has(doc.id) && !alreadyQueued.has(doc.id));
+    if (toQueue.length === 0) return;
+
+    logger.info("Document extraction queue: re-queuing documents for extraction", { count: toQueue.length });
+    this.memoryWait.push(...toQueue.map((doc) => ({ documentId: doc.id, receiptHandle: null })));
+    this.pump();
+  }
+
+  private static async sweepLoop(): Promise<void> {
+    while (this.running) {
+      await sleep(PENDING_SWEEP_INTERVAL_MS);
+      if (!this.running) return;
+      await this.reloadStuckDocuments(PENDING_SWEEP_MIN_AGE_MS);
+    }
   }
 
   private static async fetchLoop(): Promise<void> {
@@ -107,6 +147,7 @@ export default class DocumentExtractionQueue {
 
   private static runOne(item: WaitItem): void {
     this.active += 1;
+    this.activeDocumentIds.add(item.documentId);
     // Guards against releasing the slot twice — once from the hard-timeout race below, and
     // again later if the real job eventually settles on its own after all.
     let released = false;
@@ -114,6 +155,7 @@ export default class DocumentExtractionQueue {
       if (released) return;
       released = true;
       this.active -= 1;
+      this.activeDocumentIds.delete(item.documentId);
       this.pump();
     };
 

@@ -81,11 +81,18 @@ export default class DocumentRepo {
 
   /** PENDING/FAILED docs that should be extracted — re-queue after restart. FAILED is included
    * so a 429/OOM does not permanently skip embedding. */
-  static async listPendingForExtraction() {
+  /** `olderThanMs`, when given, only returns documents whose `createdAt` is that old —
+   * used by the periodic sweep (see DocumentExtractionQueue) so it doesn't re-queue a document
+   * that's still within a normal first-attempt window (createdAt is upload time, not
+   * extraction-attempt time — the model has no separate "attempt started" timestamp). The
+   * boot-time reload omits this: at boot nothing could possibly still be legitimately in
+   * flight, so every PENDING/FAILED document found there is unambiguously stuck. */
+  static async listPendingForExtraction(olderThanMs?: number) {
     return prisma.document.findMany({
       where: {
         ragStatus: { in: ["PENDING", "FAILED"] },
         OR: [{ caseId: { not: null } }, { consultationId: { not: null } }],
+        ...(olderThanMs ? { createdAt: { lt: new Date(Date.now() - olderThanMs) } } : {}),
       },
       select: { id: true },
     });
