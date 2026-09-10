@@ -137,6 +137,8 @@ export default class DocumentChunkSvc {
           : await DocumentChunkRepo.findRelevantByConsultation(scope.consultationId, queryEmbedding, perDocumentFloor);
       return {
         caseDocumentIds: readyDocIds,
+        // Already similarity-desc (and globally capped) from findRelevantByCase/Consultation —
+        // formatGroundingContext relies on this order when filling the char budget.
         caseDocumentChunkIds: rows.map((r) => r.id),
       };
     } catch {
@@ -204,19 +206,16 @@ export default class DocumentChunkSvc {
     const nameById = new Map(docs.map((d) => [d.id, d.name]));
     const scopedDocIds = new Set(docs.map((d) => d.id));
 
-    const byDoc = new Map<string, string[]>();
-    for (const row of rows) {
-      if (!scopedDocIds.has(row.caseDocumentId) || !allowedDocIds.has(row.caseDocumentId)) continue;
-      const list = byDoc.get(row.caseDocumentId) ?? [];
-      list.push(row.chunkText);
-      byDoc.set(row.caseDocumentId, list);
-    }
-
+    // `rows` is already in caseDocumentChunkIds order, which relevantChunksForScope fills
+    // similarity-desc. Walk that order so the 12k cap is spent on the closest pages, not
+    // whichever document happened to land first in a Map.
     const blocks: string[] = [];
     let used = 0;
-    for (const [docId, texts] of byDoc) {
-      const header = `Document "${nameById.get(docId) ?? docId}" (id: ${docId}):`;
-      let body = texts.join("\n\n");
+    for (const row of rows) {
+      if (!scopedDocIds.has(row.caseDocumentId) || !allowedDocIds.has(row.caseDocumentId)) continue;
+      const name = nameById.get(row.caseDocumentId) ?? row.caseDocumentId;
+      const header = `Document "${name}" (id: ${row.caseDocumentId}, page ${row.pageNumber ?? "?"}):`;
+      let body = row.chunkText;
       const room = charCap - used - header.length - 2;
       if (room <= 0) break;
       if (body.length > room) body = `${body.slice(0, room).trimEnd()}\n\n[...truncated...]`;

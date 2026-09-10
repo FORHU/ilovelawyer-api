@@ -148,18 +148,22 @@ export default class ChatSvc {
       consultationId,
       effectiveCaseId,
     );
+    // Rank against the same text the model sees — a file-only send stores "" on the
+    // message but substitutes ATTACHMENT_ONLY_PROMPT for the prompt. Embedding that empty
+    // string produced junk neighbors; this keeps retrieval aligned with the turn.
+    const rankingQuery = effectiveUserInput;
     if (scopedDocumentId) {
-      grounding = await DocumentChunkSvc.relevantChunksForDocument(scopedDocumentId, userInput);
+      grounding = await DocumentChunkSvc.relevantChunksForDocument(scopedDocumentId, rankingQuery);
       if (!grounding.caseDocumentIds.length) grounding = undefined;
     } else {
       const consultationDocs = await DocumentChunkSvc.relevantChunksForConsultation(
         consultationId,
-        userInput,
+        rankingQuery,
       );
       if (consultationDocs.caseDocumentIds.length) {
         grounding = consultationDocs;
       } else if (effectiveCaseId) {
-        grounding = await DocumentChunkSvc.relevantChunksForCase(effectiveCaseId, userInput);
+        grounding = await DocumentChunkSvc.relevantChunksForCase(effectiveCaseId, rankingQuery);
         if (!grounding.caseDocumentIds.length) grounding = undefined;
       }
     }
@@ -181,12 +185,12 @@ export default class ChatSvc {
     // about Documents, so transcript content is inlined into resolvedContext text only.
     const consultationTranscripts = await TranscriptionChunkSvc.relevantChunksForConsultation(
       consultationId,
-      userInput,
+      rankingQuery,
     );
     let transcriptGrounding = consultationTranscripts.transcriptionIds.length
       ? consultationTranscripts
       : effectiveCaseId
-        ? await TranscriptionChunkSvc.relevantChunksForCase(effectiveCaseId, userInput)
+        ? await TranscriptionChunkSvc.relevantChunksForCase(effectiveCaseId, rankingQuery)
         : undefined;
     if (transcriptGrounding && !transcriptGrounding.transcriptionIds.length) transcriptGrounding = undefined;
     const transcriptContext = transcriptGrounding
@@ -245,7 +249,7 @@ export default class ChatSvc {
         ChatSvc.streamWithSessionRetry(
           consultationId,
           sessionId,
-          userInput,
+          effectiveUserInput,
           onChunk,
           resolvedContext,
           onSessionRotated,
