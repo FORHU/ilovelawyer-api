@@ -36,33 +36,35 @@ export function parseLawCategory(raw: string): LawCategory {
 
 // One notice for every search, regardless of how the result was sourced — the response
 // must not hint at where a given hit came from.
-const SEARCH_NOTICE =
+export const SEARCH_NOTICE =
   "Summaries, tags, and relevance scores are research aids and may contain errors. " +
   "Always verify against the official text of each result.";
 
-interface SearchResultItem extends JurisPhItem {
+export interface SearchResultItem extends JurisPhItem {
   /** Our Law.id for this juris.ph document. */
   stored_id: string;
   /** true when this search inserted the row; false when it was already stored. */
   stored: boolean;
 }
 
-interface SearchResult {
+export interface SearchResult {
   items: SearchResultItem[];
   meta: {
-    dataset: JurisPhDataset;
+    /** juris.ph dataset name for PH; the UK wire category for UK (see LawSourceProvider). */
+    dataset: string;
     query: string;
     limit: number;
     count: number;
-    source: "juris.ph" | "cache";
+    /** "juris.ph" | "cache" for PH; "uk-legal-mcp" | "cache" for UK. */
+    source: string;
   };
   notice: string;
 }
 
-interface BrowseResult {
+export interface BrowseResult {
   items: SearchResultItem[];
   meta: {
-    dataset: JurisPhDataset;
+    dataset: string;
     limit: number;
     count: number;
     hasMore: boolean;
@@ -87,6 +89,9 @@ function browseFilterKey(p: {
   limit: number;
 }): string {
   return [
+    // t= prefix namespaces the LawBrowsePage unique index by tenant so a PH and a UK browse
+    // with the same year/limit can't collide (see UkLawSourceProvider.browse).
+    "t=PH",
     `d=${p.dataset}`,
     `ct=${p.caseType ?? ""}`,
     `tp=${(p.topics ?? []).slice().sort().join("+")}`,
@@ -169,11 +174,11 @@ function toDetailInput(detail: JurisPhDetail): Prisma.LawUpdateInput {
   };
 }
 
-interface DocumentResult {
+export interface DocumentResult {
   item: {
     id: string;
     stored_id: string;
-    dataset: JurisPhDataset;
+    dataset: string;
     title: string;
     reference: string | null;
     year: number | null;
@@ -210,7 +215,7 @@ interface DocumentResult {
     cited_gr_numbers: string[];
     cited_ra_numbers: string[];
   };
-  source: "juris.ph" | "cache";
+  source: string;
   notice: string;
 }
 

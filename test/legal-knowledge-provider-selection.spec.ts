@@ -15,13 +15,13 @@ async function expectComingSoon(promise: Promise<unknown>): Promise<void> {
 describe("Legal knowledge provider jurisdiction selection", () => {
   it("selects the PH provider with an available corpus", () => {
     const provider = getLegalKnowledgeProvider("PH");
-    expect(provider.jurisdiction).to.equal("PH");
+    expect(provider.tenantCode).to.equal("PH");
     expect(provider.corpusAvailable).to.equal(true);
   });
 
   it("selects the UK provider with an unavailable corpus", () => {
     const provider = getLegalKnowledgeProvider("UK");
-    expect(provider.jurisdiction).to.equal("UK");
+    expect(provider.tenantCode).to.equal("UK");
     expect(provider.corpusAvailable).to.equal(false);
   });
 

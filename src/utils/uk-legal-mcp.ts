@@ -121,3 +121,139 @@ export interface UkJudgmentGrepResult {
 export async function grepJudgment(slug: string, pattern: string, maxHits = 3): Promise<UkJudgmentGrepResult> {
   return callTool<UkJudgmentGrepResult>("case_law_grep_judgment", { slug, pattern, max_hits: maxHits });
 }
+
+// ── Library: search + detail tools (see legal/law-source/uk) ─────────────────
+
+export interface UkCaseLawSearchHit {
+  /** TNA judgment slug, e.g. "uksc/2024/12" — the id for judgment_get_* and citations_network. */
+  uri: string;
+  title: string;
+  /** Full court name, e.g. "United Kingdom Supreme Court" (not the slug). */
+  court: string | null;
+  published: string | null;
+  updated: string | null;
+  identifiers: { type: string; value: string; slug?: string }[];
+  xml_url: string | null;
+  pdf_url: string | null;
+}
+
+export interface UkCaseLawSearchResult {
+  results: UkCaseLawSearchHit[];
+  page: number;
+  has_more: boolean;
+}
+
+/** Full-text UK case-law search via TNA Find Case Law. `query: "*"` acts as match-all (used for
+ * court-filtered browse). `court` is a slug like "uksc" / "ewca/civ"; `page` is 1-indexed. */
+export async function caseLawSearch(args: {
+  query: string;
+  court?: string;
+  page?: number;
+  limit?: number;
+}): Promise<UkCaseLawSearchResult> {
+  return callTool<UkCaseLawSearchResult>("case_law_search", {
+    query: args.query,
+    ...(args.court ? { court: args.court } : {}),
+    ...(args.page ? { page: args.page } : {}),
+    ...(args.limit ? { limit: args.limit } : {}),
+  });
+}
+
+export interface UkLegislationSearchHit {
+  title: string;
+  /** legislation.gov.uk type code, e.g. "ukpga", "uksi". */
+  type: string;
+  year: number | null;
+  number: number | null;
+  score: number | null;
+  /** Canonical legislation.gov.uk URL. */
+  url: string;
+}
+
+export interface UkLegislationSearchResult {
+  results: UkLegislationSearchHit[];
+  total: number;
+}
+
+/** Title search over UK Acts & SIs (legislation.gov.uk). No pagination upstream — `limit` caps
+ * at 50. `type`/`year` are exact-match filters. */
+export async function legislationSearch(args: {
+  query: string;
+  type?: string;
+  year?: number;
+  limit?: number;
+}): Promise<UkLegislationSearchResult> {
+  return callTool<UkLegislationSearchResult>("legislation_search", {
+    query: args.query,
+    ...(args.type ? { type: args.type } : {}),
+    ...(typeof args.year === "number" ? { year: args.year } : {}),
+    ...(args.limit ? { limit: args.limit } : {}),
+  });
+}
+
+export interface UkJudgmentIndexResult {
+  paragraphs: { eId: string; preview: string }[];
+}
+
+/** Paragraph navigation index for one judgment — `{ eId, preview }` per paragraph. */
+export async function judgmentGetIndex(slug: string): Promise<UkJudgmentIndexResult> {
+  return callTool<UkJudgmentIndexResult>("judgment_get_index", { slug });
+}
+
+export interface UkLegislationTocResult {
+  type: string;
+  year: number;
+  number: number;
+  offset: number;
+  limit: number;
+  returned: number;
+  total_items: number;
+  has_more: boolean;
+  /** Flat "id: title" strings, e.g. "part-1: Preliminary". */
+  items: string[];
+}
+
+/** Structural table of contents for a UK Act or SI. Paginated via `offset`/`limit`. */
+export async function legislationGetToc(args: {
+  type: string;
+  year: number;
+  number: number;
+  offset?: number;
+  limit?: number;
+}): Promise<UkLegislationTocResult> {
+  return callTool<UkLegislationTocResult>("legislation_get_toc", {
+    type: args.type,
+    year: args.year,
+    number: args.number,
+    ...(typeof args.offset === "number" ? { offset: args.offset } : {}),
+    ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+  });
+}
+
+export interface UkLegislationSectionResult {
+  title: string | null;
+  section_number: string | null;
+  content: string;
+  content_truncated: boolean;
+  in_force: boolean | null;
+  extent: string[];
+  version_date: string | null;
+}
+
+/** Parsed text of one section of a UK Act or SI, with territorial extent + in-force status.
+ * `section` is a bare id ("1", "part-1", "part-2-chapter-1"), not "section-1". */
+export async function legislationGetSection(args: {
+  type: string;
+  year: number;
+  number: number;
+  section: string;
+  maxChars?: number;
+}): Promise<UkLegislationSectionResult> {
+  return callTool<UkLegislationSectionResult>("legislation_get_section", {
+    type: args.type,
+    year: args.year,
+    number: args.number,
+    section: args.section,
+    ...(typeof args.maxChars === "number" ? { max_chars: args.maxChars } : {}),
+  });
+}
