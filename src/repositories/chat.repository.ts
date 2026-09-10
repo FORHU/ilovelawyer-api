@@ -123,6 +123,14 @@ export default class ChatRepo {
     });
   }
 
+  /** Whether this user turn already has its assistant reply persisted — the idempotency
+   * check for MessagePersistenceQueue, whose SQS message can redeliver if a prior worker
+   * crashed after saving but before acking. A split reply persists several sibling rows all
+   * sharing this parentMessageId; finding any one of them means the turn is done. */
+  static async findAssistantReplyByParent(parentMessageId: string) {
+    return prisma.message.findFirst({ where: { parentMessageId, role: "assistant" }, select: { id: true } });
+  }
+
   static async findLatestAssistantMessage(consultationId: string) {
     return prisma.message.findFirst({
       where: { consultationId, role: "assistant" },
