@@ -62,6 +62,9 @@ export const CASE_RECONSTRUCTION_AUDIO_QUEUE_URL = process.env.CASE_RECONSTRUCTI
 /** Shared by every lawyer-triggered Legal Terminal Generate/Refresh action (Refresh Analysis,
  * Red Team, Case Reconstruction) — see queues/ai-generation.queue.ts. */
 export const AI_GENERATION_QUEUE_URL = process.env.AI_GENERATION_QUEUE_URL as string;
+/** Persists a chat turn's assistant reply after it has already streamed to the client — see
+ * queues/message-persistence.queue.ts. */
+export const MESSAGE_PERSISTENCE_QUEUE_URL = process.env.MESSAGE_PERSISTENCE_QUEUE_URL as string;
 export const CLOUDFRONT_URL = process.env.CLOUDFRONT_URL as string;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY as string;
 export const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL as string;

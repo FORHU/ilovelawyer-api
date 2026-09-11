@@ -15,6 +15,7 @@ import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
+import MessagePersistenceQueue, { AssistantTurnPayload } from "../queues/message-persistence.queue";
 import { getPresignedGetUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT } from "../constants";
@@ -147,18 +148,22 @@ export default class ChatSvc {
       consultationId,
       effectiveCaseId,
     );
+    // Rank against the same text the model sees — a file-only send stores "" on the
+    // message but substitutes ATTACHMENT_ONLY_PROMPT for the prompt. Embedding that empty
+    // string produced junk neighbors; this keeps retrieval aligned with the turn.
+    const rankingQuery = effectiveUserInput;
     if (scopedDocumentId) {
-      grounding = await DocumentChunkSvc.relevantChunksForDocument(scopedDocumentId, userInput);
+      grounding = await DocumentChunkSvc.relevantChunksForDocument(scopedDocumentId, rankingQuery);
       if (!grounding.caseDocumentIds.length) grounding = undefined;
     } else {
       const consultationDocs = await DocumentChunkSvc.relevantChunksForConsultation(
         consultationId,
-        userInput,
+        rankingQuery,
       );
       if (consultationDocs.caseDocumentIds.length) {
         grounding = consultationDocs;
       } else if (effectiveCaseId) {
-        grounding = await DocumentChunkSvc.relevantChunksForCase(effectiveCaseId, userInput);
+        grounding = await DocumentChunkSvc.relevantChunksForCase(effectiveCaseId, rankingQuery);
         if (!grounding.caseDocumentIds.length) grounding = undefined;
       }
     }
@@ -180,12 +185,12 @@ export default class ChatSvc {
     // about Documents, so transcript content is inlined into resolvedContext text only.
     const consultationTranscripts = await TranscriptionChunkSvc.relevantChunksForConsultation(
       consultationId,
-      userInput,
+      rankingQuery,
     );
     let transcriptGrounding = consultationTranscripts.transcriptionIds.length
       ? consultationTranscripts
       : effectiveCaseId
-        ? await TranscriptionChunkSvc.relevantChunksForCase(effectiveCaseId, userInput)
+        ? await TranscriptionChunkSvc.relevantChunksForCase(effectiveCaseId, rankingQuery)
         : undefined;
     if (transcriptGrounding && !transcriptGrounding.transcriptionIds.length) transcriptGrounding = undefined;
     const transcriptContext = transcriptGrounding
@@ -244,7 +249,7 @@ export default class ChatSvc {
         ChatSvc.streamWithSessionRetry(
           consultationId,
           sessionId,
-          userInput,
+          effectiveUserInput,
           onChunk,
           resolvedContext,
           onSessionRotated,
@@ -276,41 +281,68 @@ export default class ChatSvc {
       );
     }
 
-    const timeline = streamedTimeline ?? extractTimeline(fullResponse);
-    const mindMap = streamedMindMap ?? extractMindMap(fullResponse);
-    // No text-fallback re-parse here, unlike timeline/mindMap above — audioOverview only ever
-    // arrives as Chat Wonder's dedicated [AUDIO_OVERVIEW_DATA] frame (see chatWonder.ts),
-    // never inline in fullResponse, so there's nothing to re-extract from it.
-    const audioOverview = streamedAudioOverview;
-    // No text-fallback re-parse for reasoning either — same as audioOverview above, it only
-    // ever arrives as chat-wonder's dedicated typed WebSocket message, never inline in text.
-    const reasoning = streamedReasoning;
-    const cleanedContent = stripStructuredBlocks(fullResponse);
-    // Purely local text parsing (the reply's own markdown headings) — no chat-wonder
-    // involvement, no second AI call. See response-parser.ts's splitIntoTopics for why.
+    // The reply has fully streamed to the client by this point. Persisting it (topic split,
+    // MessageGroup, timeline/mind-map/audio-overview/reasoning/related-cases) is handed to
+    // MessagePersistenceQueue so ChatCtrl's res.end() fires on the last token instead of
+    // after every write. An enqueue-send failure falls back to persisting in-process (see the
+    // queue's memoryWait path), so a turn is never dropped.
+    MessagePersistenceQueue.enqueue({
+      consultationId,
+      parentMessageId: userMessage.id,
+      effectiveCaseId: effectiveCaseId ?? null,
+      userId,
+      fullResponse,
+      relatedCases,
+      mindMap: streamedMindMap,
+      timeline: streamedTimeline,
+      audioOverview: streamedAudioOverview,
+      reasoning: streamedReasoning,
+    });
+  }
+
+  /**
+   * Persists a chat turn's assistant reply after it has already streamed to the client —
+   * lifted out of sendMessage and run from MessagePersistenceQueue. A failure in any single
+   * write here can no longer take an already-delivered response down with it (it's off the
+   * request entirely now), but the same per-write .catch guards are kept so one bad write
+   * doesn't abort the rest.
+   *
+   * Idempotent: the queue's SQS message redelivers if a worker crashed after saving but
+   * before acking, and a split reply (several sibling rows) must not be persisted twice.
+   */
+  static async persistAssistantTurn(p: AssistantTurnPayload): Promise<void> {
+    if (await ChatRepo.findAssistantReplyByParent(p.parentMessageId)) {
+      logger.info("Message persistence: assistant turn already persisted, skipping", {
+        parentMessageId: p.parentMessageId,
+      });
+      return;
+    }
+
+    // audioOverview/reasoning have no text-fallback re-parse (unlike timeline/mindMap) — they
+    // only ever arrive as Chat Wonder's own dedicated frames, never inline in fullResponse.
+    const timeline = p.timeline ?? extractTimeline(p.fullResponse);
+    const mindMap = p.mindMap ?? extractMindMap(p.fullResponse);
+    const audioOverview = p.audioOverview;
+    const reasoning = p.reasoning;
+    const cleanedContent = stripStructuredBlocks(p.fullResponse);
     const topics = splitIntoTopics(cleanedContent);
 
-    // A split reply becomes several sibling assistant Messages under one new
-    // MessageGroup — one bubble per topic — instead of the usual single row. The
-    // structured extras below (timeline/mindMap/audioOverview/reasoning/relatedCases)
-    // still describe the whole turn, so they anchor to the LAST topic message, not the
-    // first: ChatRepo.findLatestAssistantMessage (CaseHubWidget's related-cases lookup)
-    // picks the assistant message with the greatest createdAt in the whole consultation,
-    // and only the last-created topic message satisfies that once a turn is split.
+    // A split reply becomes several sibling assistant Messages under one new MessageGroup —
+    // one bubble per topic. The structured extras still describe the whole turn, so they
+    // anchor to the LAST topic message (greatest createdAt — see ChatRepo.findLatestAssistantMessage).
     let assistantMessage: Awaited<ReturnType<typeof ChatRepo.createMessage>>;
     if (topics && topics.length > 1) {
-      const group = await ChatRepo.createMessageGroup(consultationId);
-      // Created sequentially (not Promise.all) so createdAt strictly increases in
-      // groupOrder order — the frontend transcript sorts by createdAt, not groupOrder.
+      const group = await ChatRepo.createMessageGroup(p.consultationId);
+      // Sequential (not Promise.all) so createdAt strictly increases in groupOrder order.
       const topicMessages: Awaited<ReturnType<typeof ChatRepo.createMessage>>[] = [];
       for (const [index, topic] of topics.entries()) {
         topicMessages.push(
           await ChatRepo.createMessage(
-            consultationId,
+            p.consultationId,
             "assistant",
             topic.content,
             undefined,
-            userMessage.id,
+            p.parentMessageId,
             group.id,
             index,
             topic.title,
@@ -320,37 +352,31 @@ export default class ChatSvc {
       assistantMessage = topicMessages[topicMessages.length - 1];
     } else {
       assistantMessage = await ChatRepo.createMessage(
-        consultationId,
+        p.consultationId,
         "assistant",
         cleanedContent,
         undefined,
-        userMessage.id,
+        p.parentMessageId,
       );
     }
 
     if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
-    if (timeline && effectiveCaseId) {
-      await CaseTimelineSvc.promoteFromAi(effectiveCaseId, timeline, userId).catch(() => {});
+    if (timeline && p.effectiveCaseId) {
+      await CaseTimelineSvc.promoteFromAi(p.effectiveCaseId, timeline, p.userId).catch(() => {});
     }
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
     if (audioOverview) {
-      const { hostA, hostB } = voicePairForCase(effectiveCaseId ?? consultationId);
-      // By this point the assistant's text has already streamed to the client — a failure
-      // here (e.g. the MessageAudioOverview migration not applied yet) must never take the
-      // already-delivered response down with it, same reasoning as promoteFromAi's .catch above.
+      const { hostA, hostB } = voicePairForCase(p.effectiveCaseId ?? p.consultationId);
       await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB).catch((err) => {
         logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
       });
     }
     if (reasoning) {
-      // Same reasoning as audioOverview's .catch above: the assistant's text has already
-      // streamed to the client, so a failure here (e.g. this migration not yet applied)
-      // must never take the already-delivered response down with it.
       await ChatRepo.saveReasoning(assistantMessage.id, reasoning).catch((err) => {
         logger.error("Failed to persist reasoning explanation", { err, messageId: assistantMessage.id });
       });
     }
-    if (relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, relatedCases);
+    if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
   }
 
   /** Chat Wonder keeps sessions in memory and drops them on restart; the frontend caches

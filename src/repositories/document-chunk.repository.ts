@@ -44,6 +44,12 @@ const COLUMNS_PER_ROW = 7;
 // findByDocument for why this needs to be paged rather than a single query.
 const SELECT_BATCH_SIZE = 200;
 
+/** Cosine similarity floor (`1 - <=>`). Matches ADR 0010's minSimilarity 0.3 so weak
+ * neighbors do not consume the 12k inlined-context budget. */
+const MIN_CHUNK_SIMILARITY = 0.3;
+/** After the per-document floor, keep only the strongest hits for chat-wonder inlining. */
+const GLOBAL_RELEVANT_CHUNK_LIMIT = 24;
+
 export default class DocumentChunkRepo {
   static async deleteByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<void> {
     await client.$executeRaw`DELETE FROM "CaseDocumentChunk" WHERE "caseDocumentId" = ${caseDocumentId}`;
@@ -130,19 +136,21 @@ export default class DocumentChunkRepo {
   }
 
   /** Same ranking + per-document floor as `findRelevantByCase`, but scoped to READY documents
-   * attached to a consultation. */
+   * attached to a consultation. Results are similarity-desc, weak hits dropped, then globally
+   * capped — see `findRelevantByCase`. */
   static async findRelevantByConsultation(
     consultationId: string,
     queryEmbedding: number[],
     perDocumentFloor = 3,
     client: DbClient = prisma,
     startRank = 1,
-  ): Promise<{ id: string; caseDocumentId: string }[]> {
+  ): Promise<{ id: string; caseDocumentId: string; similarity: number }[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
     const endRank = startRank + perDocumentFloor - 1;
-    return client.$queryRaw<{ id: string; caseDocumentId: string }[]>`
+    return client.$queryRaw<{ id: string; caseDocumentId: string; similarity: number }[]>`
       WITH ranked AS (
         SELECT c.id, c."caseDocumentId",
+               1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity,
                ROW_NUMBER() OVER (
                  PARTITION BY c."caseDocumentId"
                  ORDER BY c.embedding <=> ${vectorLiteral}::vector
@@ -153,7 +161,12 @@ export default class DocumentChunkRepo {
           AND d."ragStatus" = 'READY'
           AND c.embedding IS NOT NULL
       )
-      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank BETWEEN ${startRank} AND ${endRank}
+      SELECT id, "caseDocumentId", similarity
+      FROM ranked
+      WHERE doc_rank BETWEEN ${startRank} AND ${endRank}
+        AND similarity >= ${MIN_CHUNK_SIMILARITY}
+      ORDER BY similarity DESC
+      LIMIT ${GLOBAL_RELEVANT_CHUNK_LIMIT}
     `;
   }
 
@@ -161,10 +174,10 @@ export default class DocumentChunkRepo {
    * with a per-document floor so a case with many documents doesn't let a few large/textually-
    * similar documents crowd out every chunk slot from smaller or less-similar-worded ones. Each
    * READY document contributes up to `perDocumentFloor` of its own best-ranked chunks (or all of
-   * them, if it has fewer); there is no further global top-K cut on top of that, so overall size
-   * is bounded by `formatGroundingContext`'s char cap downstream, not by a chunk count here.
-   * Returns chunk id + owning document id so callers can build chat-wonder's
-   * `case_document_ids` + `case_document_chunk_ids` payload.
+   * them, if it has fewer); that set is then filtered to cosine similarity >= 0.3 and globally
+   * capped so `formatGroundingContext`'s 12k char budget is spent on the strongest hits first.
+   * Returns chunk id + owning document id (plus similarity) so callers can build chat-wonder's
+   * `case_document_ids` + `case_document_chunk_ids` payload in rank order.
    *
    * `startRank` pages further down each document's own ranking (1-based, inclusive) — the
    * initial call uses the default (rank 1..perDocumentFloor); a follow-up "load more relevant
@@ -176,12 +189,13 @@ export default class DocumentChunkRepo {
     perDocumentFloor = 3,
     client: DbClient = prisma,
     startRank = 1,
-  ): Promise<{ id: string; caseDocumentId: string }[]> {
+  ): Promise<{ id: string; caseDocumentId: string; similarity: number }[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
     const endRank = startRank + perDocumentFloor - 1;
-    return client.$queryRaw<{ id: string; caseDocumentId: string }[]>`
+    return client.$queryRaw<{ id: string; caseDocumentId: string; similarity: number }[]>`
       WITH ranked AS (
         SELECT c.id, c."caseDocumentId",
+               1 - (c.embedding <=> ${vectorLiteral}::vector) AS similarity,
                ROW_NUMBER() OVER (
                  PARTITION BY c."caseDocumentId"
                  ORDER BY c.embedding <=> ${vectorLiteral}::vector
@@ -192,7 +206,12 @@ export default class DocumentChunkRepo {
           AND d."ragStatus" = 'READY'
           AND c.embedding IS NOT NULL
       )
-      SELECT id, "caseDocumentId" FROM ranked WHERE doc_rank BETWEEN ${startRank} AND ${endRank}
+      SELECT id, "caseDocumentId", similarity
+      FROM ranked
+      WHERE doc_rank BETWEEN ${startRank} AND ${endRank}
+        AND similarity >= ${MIN_CHUNK_SIMILARITY}
+      ORDER BY similarity DESC
+      LIMIT ${GLOBAL_RELEVANT_CHUNK_LIMIT}
     `;
   }
 
