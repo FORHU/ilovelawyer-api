@@ -77,6 +77,7 @@ model User {
   transcriptions          Transcription[]
   calendarWatchChannels   CalendarWatchChannel[]
   events                  Event[]
+  notes                   Note[]
   terminalWorkspaces      TerminalWorkspace[]
   organizationMemberships OrganizationMember[]
   createdOrganizations    Organization[]                   @relation("OrgCreator")
@@ -666,6 +667,26 @@ model Event {
   @@index([organizationId])
   @@index([caseId])
   @@map("events")
+}
+
+// A free-form note anchored to one calendar day — distinct from Event/Appointment
+// in that it has no start/end time (see CONTEXT.md's "Note" glossary entry).
+model Note {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String   @map("organization_id")
+  date           DateTime @map("date")
+  body           String   @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([date])
+  @@map("notes")
 }
 
 // ── Transcription ─────────────────────────────────────────────────────────────
@@ -1310,6 +1331,7 @@ model Organization {
   consultations  Consultation[]
   bookmarks      Bookmark[]
   events         Event[]
+  notes          Note[]
   transcriptions Transcription[]
   connectors     IntegrationConnector[]
 
