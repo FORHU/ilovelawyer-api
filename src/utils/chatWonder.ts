@@ -422,8 +422,26 @@ export function streamChatWonderMessage(
       // user as if the AI had said "[Error] Unknown session." Must reject, not resolve,
       // so callers can detect this and retry with a fresh session_id instead of
       // displaying it as a real response.
+      //
+      // But only while nothing has arrived. the_server.py's chat_stream wraps the whole
+      // turn — including the post-__END__ timeline/mind-map/reasoning generation — in one
+      // try, and sends "[Error] ..." for any exception in it. Rejecting at that point threw
+      // away a reply the user had already watched stream in: ChatSvc.sendMessage never
+      // reached MessagePersistenceQueue.enqueue, so the turn vanished from history on the
+      // next page load. Once there is content, treat the frame as a warning and resolve with
+      // what we have — the answer is real even if the extras behind it failed.
       if (message.startsWith("[Error]")) {
-        fail(new Error(message.replace(/^\[Error\]\s*/, "")));
+        const detail = message.replace(/^\[Error\]\s*/, "");
+        if (accumulated.trim().length === 0) {
+          fail(new Error(detail));
+        } else {
+          logger.warn("Chat Wonder sent [Error] after reply content; keeping the reply", {
+            sessionId,
+            detail,
+            contentLength: accumulated.length,
+          });
+          finish();
+        }
         return;
       }
 

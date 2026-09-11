@@ -12,6 +12,13 @@ const CONCURRENCY = 5;
 // The real job settles well under a second; this is only a safety margin, renewed well
 // before expiry (see withVisibilityHeartbeat).
 const VISIBILITY_TIMEOUT_SECONDS = 60;
+// In-process retries for jobs that have no SQS receipt to fall back on (the enqueue-failed
+// memoryWait items and the no-queue inline path). SQS-delivered jobs don't need this: a failed
+// job is simply not acked and SQS redelivers it after the visibility timeout. Backoff is
+// 2s, 4s, 8s — long enough to ride out the transient RDS "can't reach database server" blips
+// seen on staging, short enough that the reply appears on the next page load.
+const IN_PROCESS_RETRIES = 3;
+const IN_PROCESS_RETRY_BASE_MS = 2_000;
 
 /** Everything ChatSvc.persistAssistantTurn needs — captured in memory the moment the stream
  * finishes, since there's no assistant Message row to reload it from yet. Serialized straight
@@ -71,10 +78,11 @@ export default class MessagePersistenceQueue {
         this.memoryWait.push({ payload, receiptHandle: null });
         this.pump();
       } else {
-        await ChatSvc.persistAssistantTurn(payload).catch((e) => {
-          logger.error("Message persistence: inline fallback failed", {
+        await persistWithRetry(payload).catch((e) => {
+          logger.error("Message persistence: inline fallback failed after retries — reply lost", {
             err: e,
             parentMessageId: payload.parentMessageId,
+            consultationId: payload.consultationId,
           });
         });
       }
@@ -156,26 +164,71 @@ export default class MessagePersistenceQueue {
 
   private static runOne(item: WaitItem): void {
     this.active += 1;
-    void withVisibilityHeartbeat(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
-      ChatSvc.persistAssistantTurn(item.payload),
-    )
-      .catch((err) => {
-        logger.error("Message persistence queue: job failed", {
-          err,
-          parentMessageId: item.payload.parentMessageId,
-        });
-      })
-      .finally(async () => {
+    // SQS-delivered jobs get one attempt here and rely on redelivery: the message is acked
+    // only after persistAssistantTurn resolves. A failed job is left un-acked so it reappears
+    // after VISIBILITY_TIMEOUT_SECONDS and is retried by whichever instance receives it (the
+    // queue's own redrive policy bounds the retries). Acking in a `finally` regardless of
+    // outcome — the previous behaviour — turned one transient DB error into a reply that
+    // had streamed to the user but never existed in their history.
+    // Jobs without a receipt (enqueue-failed fallback) have nothing to redeliver them, so
+    // they retry in-process instead.
+    const job = item.receiptHandle
+      ? () => ChatSvc.persistAssistantTurn(item.payload)
+      : () => persistWithRetry(item.payload);
+    void withVisibilityHeartbeat(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, job)
+      .then(async () => {
         if (item.receiptHandle) {
           await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle).catch((err) => {
+            // Persisted but not acked: SQS will redeliver, and persistAssistantTurn's
+            // already-persisted check makes that a no-op — safe, just noisy.
             logger.error("Message persistence queue: failed to delete message", {
               err,
               parentMessageId: item.payload.parentMessageId,
             });
           });
         }
+      })
+      .catch((err) => {
+        logger.error(
+          item.receiptHandle
+            ? "Message persistence queue: job failed — left for SQS redelivery"
+            : "Message persistence queue: in-process job failed after retries — reply lost",
+          {
+            err,
+            parentMessageId: item.payload.parentMessageId,
+            consultationId: item.payload.consultationId,
+          },
+        );
+      })
+      .finally(() => {
         this.active -= 1;
         this.pump();
       });
   }
+}
+
+/** persistAssistantTurn with bounded exponential backoff — for the paths that have no SQS
+ * receipt behind them. persistAssistantTurn is idempotent (already-persisted check), so a
+ * retry after a partial failure cannot double-write. */
+async function persistWithRetry(payload: AssistantTurnPayload): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= IN_PROCESS_RETRIES; attempt++) {
+    try {
+      await ChatSvc.persistAssistantTurn(payload);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < IN_PROCESS_RETRIES) {
+        const delay = IN_PROCESS_RETRY_BASE_MS * 2 ** attempt;
+        logger.warn("Message persistence: attempt failed, retrying", {
+          err,
+          attempt: attempt + 1,
+          retryInMs: delay,
+          parentMessageId: payload.parentMessageId,
+        });
+        await sleep(delay);
+      }
+    }
+  }
+  throw lastErr;
 }
