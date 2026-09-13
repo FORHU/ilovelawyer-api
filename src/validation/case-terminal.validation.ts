@@ -16,6 +16,10 @@ const HEARSAY_CATEGORIES = [
 ];
 const CASE_EDGE_RELATION_TYPES = ["SUPPORTS", "CONTRADICTS", "CITES", "PROVES", "REFUTES", "SPONSORS"];
 const GRAPH_VIEW_TYPES = ["timeline", "witnesses", "contradictions", "issues"];
+const DECISION_STATUSES = ["ACTIVE", "DISPUTED", "SUPERSEDED"];
+const THEORY_STANCES = ["ASSERTS", "DENIES"];
+const ANNOTATION_TARGET_TYPES = ["NODE", "EDGE", "DECISION", "CHUNK"];
+const ANNOTATION_KINDS = ["NOTE", "DISPUTE", "ALTERNATIVE_READING"];
 
 export const createTimelineSchema = Joi.object({
   title: Joi.string().required(),
@@ -210,4 +214,68 @@ export const graphViewSchema = Joi.object({
   view_type: Joi.string()
     .valid(...GRAPH_VIEW_TYPES)
     .required(),
+});
+
+export const listDecisionsSchema = Joi.object({
+  status: Joi.string()
+    .valid(...DECISION_STATUSES)
+    .optional(),
+});
+
+export const disputeDecisionSchema = Joi.object({
+  note: Joi.string().allow("").optional(),
+});
+
+export const createTheorySchema = Joi.object({
+  title: Joi.string().required(),
+  thesis: Joi.string().required(),
+});
+
+export const updateTheorySchema = Joi.object({
+  title: Joi.string().optional(),
+  thesis: Joi.string().optional(),
+});
+
+export const addTheoryClaimSchema = Joi.object({
+  statement: Joi.string().required(),
+  stance: Joi.string()
+    .valid(...THEORY_STANCES)
+    .required(),
+  graphNodeId: Joi.string().optional(),
+});
+
+export const addTheoryAssumptionSchema = Joi.object({
+  statement: Joi.string().required(),
+});
+
+export const addTheoryOpenQuestionSchema = Joi.object({
+  question: Joi.string().required(),
+});
+
+export const diffTheoriesSchema = Joi.object({
+  theoryAId: Joi.string().required(),
+  theoryBId: Joi.string().required(),
+});
+
+export const getTheoryDiffSchema = Joi.object({
+  theoryAId: Joi.string().required(),
+  theoryBId: Joi.string().required(),
+});
+
+export const listAnnotationsSchema = Joi.object({
+  targetType: Joi.string()
+    .valid(...ANNOTATION_TARGET_TYPES)
+    .optional(),
+  targetId: Joi.string().optional(),
+});
+
+export const createAnnotationSchema = Joi.object({
+  targetType: Joi.string()
+    .valid(...ANNOTATION_TARGET_TYPES)
+    .required(),
+  targetId: Joi.string().required(),
+  kind: Joi.string()
+    .valid(...ANNOTATION_KINDS)
+    .optional(),
+  body: Joi.string().required(),
 });

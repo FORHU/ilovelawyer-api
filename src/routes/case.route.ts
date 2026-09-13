@@ -93,10 +93,34 @@ router.delete("/:caseId/claims/:id", asyncHandler(CaseTerminalCtrl.deleteClaim))
 router.get("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.getReconstruction));
 router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.generateReconstruction));
 router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));
+router.post("/:caseId/reconstruction/scenes", asyncHandler(CaseTerminalCtrl.generateReconstructionScenes));
+router.post("/:caseId/reconstruction/table-read", asyncHandler(CaseTerminalCtrl.generateTableRead));
 router.post("/:caseId/reconstruction/audio", asyncHandler(CaseTerminalCtrl.generateReconstructionAudio));
 router.get("/:caseId/reconstruction/audio/poll", asyncHandler(CaseTerminalCtrl.pollReconstructionAudio));
 
 router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
 router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));
+
+router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
+router.post("/:caseId/decisions/:id/dispute", asyncHandler(CaseTerminalCtrl.disputeDecision));
+router.post("/:caseId/decisions/:id/reactivate", asyncHandler(CaseTerminalCtrl.reactivateDecision));
+
+router.get("/:caseId/theories", asyncHandler(CaseTerminalCtrl.listTheories));
+router.post("/:caseId/theories", asyncHandler(CaseTerminalCtrl.createTheory));
+router.post("/:caseId/theories/propose", asyncHandler(CaseTerminalCtrl.proposeTheory));
+router.get("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.getTheoryDiff));
+router.post("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.generateTheoryDiff));
+router.patch("/:caseId/theories/:id", asyncHandler(CaseTerminalCtrl.updateTheory));
+router.post("/:caseId/theories/:id/publish", asyncHandler(CaseTerminalCtrl.publishTheory));
+router.post("/:caseId/theories/:id/retire", asyncHandler(CaseTerminalCtrl.retireTheory));
+router.post("/:caseId/theories/:id/fork", asyncHandler(CaseTerminalCtrl.forkTheory));
+router.post("/:caseId/theories/:id/claims", asyncHandler(CaseTerminalCtrl.addTheoryClaim));
+router.post("/:caseId/theories/:id/assumptions", asyncHandler(CaseTerminalCtrl.addTheoryAssumption));
+router.post("/:caseId/theories/:id/open-questions", asyncHandler(CaseTerminalCtrl.addTheoryOpenQuestion));
+
+router.get("/:caseId/annotations", asyncHandler(CaseTerminalCtrl.listAnnotations));
+router.post("/:caseId/annotations", asyncHandler(CaseTerminalCtrl.createAnnotation));
+router.post("/:caseId/annotations/:id/resolve", asyncHandler(CaseTerminalCtrl.resolveAnnotation));
+router.post("/:caseId/annotations/:id/reopen", asyncHandler(CaseTerminalCtrl.reopenAnnotation));
 
 export default router;

@@ -2,7 +2,7 @@ import ChatSvc from "../services/chat.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { MESSAGE_PERSISTENCE_QUEUE_URL } from "../config";
 import { RelatedCase } from "../utils/chatWonder";
-import { MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
+import { MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
 import logger from "../utils/logger";
 
 // A handful of Prisma writes per job (create the assistant Message(s), save the structured
@@ -37,6 +37,7 @@ export interface AssistantTurnPayload {
   timeline?: TimelineItem[];
   audioOverview?: AudioOverviewTurn[];
   reasoning?: ReasoningExplanation;
+  decisions?: DecisionRecordsPayload;
 }
 
 interface WaitItem {

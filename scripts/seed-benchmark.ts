@@ -1,20 +1,22 @@
 /**
- * Seed the Brackenmoor Wharf benchmark case (fictional test material) into a UK organization.
+ * Seed a benchmark case (fictional test material) into an organization of the benchmark's tenant.
  *
- * Creates one Case, uploads benchmarks/brackenmoor/docs/D01–D20 to S3 through the same
+ * A benchmark lives at benchmarks/<slug>/ with docs/*.pdf and questions.json (see
+ * benchmarks/brackenmoor for the layout). Creates one Case, uploads the docs to S3 through the same
  * CaseSvc.handleCreateCaseWithDocument path the UI's presign flow ends in (so extraction,
  * chunking and embeddings run through DocumentExtractionQueue exactly as for a user upload),
  * and opens one Consultation bound to the case so the D21 questions can be asked against it
- * from the app or from scripts/run-brackenmoor-benchmark.ts.
+ * from the app or from scripts/run-benchmark.ts.
  *
  * Idempotent: re-running reuses the existing case (matched by caseName within the org) and
  * only uploads documents whose filename is not already attached. `--reset` deletes the
  * existing case first.
  *
  * Run (against whatever DATABASE_URL / AWS_* / SQS the .env points at):
- *   npx ts-node scripts/seed-brackenmoor-benchmark.ts --org my-practice
- *   npx ts-node scripts/seed-brackenmoor-benchmark.ts --org my-practice --user someone@example.com
- *   npx ts-node scripts/seed-brackenmoor-benchmark.ts --org my-practice --reset
+ *   npx ts-node scripts/seed-benchmark.ts --bench brackenmoor --org my-practice
+ *   npx ts-node scripts/seed-benchmark.ts --bench brackenmoor --org my-practice --user someone@example.com
+ *   npx ts-node scripts/seed-benchmark.ts --bench brackenmoor --org my-practice --reset
+ *   npx ts-node scripts/seed-benchmark.ts --bench brackenmoor --org my-practice --status
  *
  * Extraction is asynchronous: an API process (local `npm run dev` or the deployed one sharing
  * the queue) must be running to drain DocumentExtractionQueue. The script prints the case id,
@@ -32,16 +34,6 @@ import CaseSvc from "../src/services/case.service";
 import ChatRepo from "../src/repositories/chat.repository";
 import { uploadToS3 } from "../src/utils/s3";
 
-const BENCH_DIR = path.resolve(__dirname, "..", "benchmarks", "brackenmoor");
-const DOCS_DIR = path.join(BENCH_DIR, "docs");
-const QUESTIONS_PATH = path.join(BENCH_DIR, "questions.json");
-
-type Questions = {
-  caseName: string;
-  preamble: string;
-  questions: { id: string; title: string; prompt: string }[];
-};
-
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? process.argv[i + 1] : undefined;
@@ -49,6 +41,22 @@ function arg(name: string): string | undefined {
 function flag(name: string): boolean {
   return process.argv.includes(`--${name}`);
 }
+
+const BENCH_SLUG = arg("bench") || "brackenmoor";
+const BENCH_DIR = path.resolve(__dirname, "..", "benchmarks", BENCH_SLUG);
+const DOCS_DIR = path.join(BENCH_DIR, "docs");
+const QUESTIONS_PATH = path.join(BENCH_DIR, "questions.json");
+
+type Questions = {
+  caseName: string;
+  tenant?: "PH" | "UK";
+  preamble: string;
+  /** Case fields written on create; free-form so each benchmark can describe its own matter. */
+  actionType?: string;
+  jurisdiction?: string;
+  parties?: { name: string; designation: string }[];
+  questions: { id: string; title: string; prompt: string }[];
+};
 
 /** Bundle doc label ("D07") and a category from the filename, e.g.
  *  D07_Interview_Under_Caution_Aldwyn_Ferris.pdf → { label: "D07", category: "Interview Under Caution Aldwyn Ferris" }. */
@@ -60,10 +68,10 @@ function describe(filename: string) {
   };
 }
 
-async function resolveOrgAndUser(orgArg: string | undefined, userEmail: string | undefined) {
+async function resolveOrgAndUser(orgArg: string | undefined, userEmail: string | undefined, tenantCode: "PH" | "UK") {
   const org = await prisma.organization.findFirst({
     where: {
-      tenant: { code: "UK" },
+      tenant: { code: tenantCode },
       ...(orgArg ? { OR: [{ slug: orgArg }, { id: orgArg }] } : {}),
     },
     include: {
@@ -72,7 +80,7 @@ async function resolveOrgAndUser(orgArg: string | undefined, userEmail: string |
     },
     orderBy: { createdAt: "asc" },
   });
-  if (!org) throw new Error(`No UK organization found${orgArg ? ` for --org ${orgArg}` : ""}`);
+  if (!org) throw new Error(`No ${tenantCode} organization found${orgArg ? ` for --org ${orgArg}` : ""}`);
 
   let member = org.members.find((m) => m.status === "ACCEPTED");
   if (userEmail) {
@@ -99,8 +107,10 @@ async function printStatus(caseId: string) {
 }
 
 async function main() {
+  if (!fs.existsSync(QUESTIONS_PATH)) throw new Error(`No benchmark at ${BENCH_DIR} (expected questions.json and docs/)`);
   const questions: Questions = JSON.parse(fs.readFileSync(QUESTIONS_PATH, "utf-8"));
-  const { org, user } = await resolveOrgAndUser(arg("org"), arg("user"));
+  const { org, user } = await resolveOrgAndUser(arg("org"), arg("user"), questions.tenant ?? "UK");
+  console.log(`Benchmark:    ${BENCH_SLUG}`);
   console.log(`Organization: ${org.name} (${org.slug}, tenant ${org.tenant.code})`);
   console.log(`User:         ${user.email}`);
 
@@ -128,22 +138,15 @@ async function main() {
   } else {
     const created = await CaseSvc.create(org.id, user.id, {
       caseName: questions.caseName,
-      actionType: "Corporate manslaughter / HSWA prosecution; TCC payment & termination dispute; insurance coverage; ET protected disclosure; inquest",
-      jurisdiction: "England & Wales — Crown Court (Leeds), TCC Leeds, Employment Tribunal Leeds, West Yorkshire (Eastern) Coroner",
-      notes:
-        "FICTIONAL TEST MATERIAL — NOT A REAL CASE. Brackenmoor Wharf benchmark bundle D01–D20.\n\n" +
-        `Assessment (D21): ${questions.preamble}\n\n` +
-        questions.questions.map((q) => `${q.id} — ${q.title}`).join("\n") +
-        "\n\nFull question text: benchmarks/brackenmoor/questions.json",
-      parties: [
-        { name: "Meridian Structures Limited", designation: "Defendant (Crown Court) / Contractor (TCC)" },
-        { name: "Aldwyn Sinclair Ferris", designation: "Defendant (Crown Court)" },
-        { name: "Coldbrook Capital LLP", designation: "Employer / Claimant (TCC)" },
-        { name: "Priya Raghunathan", designation: "Claimant (Employment Tribunal)" },
-        { name: "Deniz Aksoy", designation: "Injured person / civil claimant" },
-        { name: "Tomasz Wieczorek (deceased)", designation: "Deceased" },
-        { name: "Caldera Specialty Insurance (UK) Limited", designation: "Insurer" },
-      ],
+      actionType: questions.actionType,
+      jurisdiction: questions.jurisdiction,
+      notes: [
+        `FICTIONAL TEST MATERIAL — NOT A REAL CASE. Benchmark bundle "${BENCH_SLUG}".`,
+        `Assessment: ${questions.preamble}`,
+        questions.questions.map((q) => `${q.id} — ${q.title}`).join("\n"),
+        `Full question text: benchmarks/${BENCH_SLUG}/questions.json`,
+      ].join("\n\n"),
+      parties: questions.parties,
     });
     caseId = created.id;
     console.log(`Created case ${caseId}`);
@@ -186,12 +189,13 @@ async function main() {
     console.log(`Attached ${created.length} documents; extraction enqueued`);
   }
 
+  const consultationTitle = `Benchmark: ${BENCH_SLUG}`;
   let consultation = await prisma.consultation.findFirst({
-    where: { caseId, organizationId: org.id, title: "Brackenmoor Wharf Benchmark (D21)" },
+    where: { caseId, organizationId: org.id, title: { in: [consultationTitle, "Brackenmoor Wharf Benchmark (D21)"] } },
     select: { id: true },
   });
   if (!consultation) {
-    consultation = await ChatRepo.createConsultation(org.id, user.id, "Brackenmoor Wharf Benchmark (D21)", caseId);
+    consultation = await ChatRepo.createConsultation(org.id, user.id, consultationTitle, caseId);
     console.log(`Created consultation ${consultation.id}`);
   } else {
     console.log(`Reusing consultation ${consultation.id}`);
@@ -201,7 +205,7 @@ async function main() {
   console.log(`\nCase id:         ${caseId}`);
   console.log(`Consultation id: ${consultation.id}`);
   console.log(`Questions:       ${QUESTIONS_PATH}`);
-  console.log("Poll extraction: npx ts-node scripts/seed-brackenmoor-benchmark.ts --org " + org.slug + " --status");
+  console.log(`Poll extraction: npx ts-node scripts/seed-benchmark.ts --bench ${BENCH_SLUG} --org ${org.slug} --status`);
 }
 
 main()

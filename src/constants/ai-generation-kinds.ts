@@ -10,6 +10,10 @@ export const AI_GENERATION_KINDS = [
   "mindMap",
   "audioOverviewScript",
   "citationExpand",
+  "caseTheoryPropose",
+  "theoryDiff",
+  "caseReconstructionScenes",
+  "caseReconstructionTableRead",
 ] as const;
 
 export type AiGenerationKind = (typeof AI_GENERATION_KINDS)[number];

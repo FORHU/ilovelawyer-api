@@ -11,6 +11,9 @@ import WitnessRepo from "../repositories/witness.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import RedTeamRepo from "../repositories/red-team.repository";
+import DecisionRecordRepo from "../repositories/decision-record.repository";
+import CaseTheoryRepo from "../repositories/case-theory.repository";
+import AnnotationRepo from "../repositories/annotation.repository";
 import CaseGraphRepo from "../repositories/case-graph.repository";
 import ChatRepo from "../repositories/chat.repository";
 import LawRepo from "../repositories/law.repository";
@@ -39,6 +42,9 @@ export default class CaseSnapshotSvc {
       damages,
       reconstruction,
       redTeamAssessment,
+      decisions,
+      theories,
+      annotations,
       staleness,
       requiredConfirmations,
       latestMindMap,
@@ -59,6 +65,9 @@ export default class CaseSnapshotSvc {
       DamageClaimRepo.list(caseId),
       CaseReconstructionRepo.get(caseId),
       RedTeamRepo.get(caseId),
+      DecisionRecordRepo.list(caseId),
+      CaseTheoryRepo.list(caseId),
+      AnnotationRepo.list(caseId),
       CaseGraphRepo.listStaleForCase(caseId),
       CaseAccess.requiredConfirmations(caseId),
       ChatRepo.findLatestMindMapCreatedAtForCase(caseId),
@@ -120,6 +129,9 @@ export default class CaseSnapshotSvc {
       damages,
       reconstruction,
       redTeamAssessment,
+      decisions,
+      theories,
+      annotations,
       staleness,
       mindMap: {
         lastGeneratedAt: latestMindMap?.createdAt ?? null,

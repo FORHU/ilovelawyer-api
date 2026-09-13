@@ -19,6 +19,8 @@ export const PANEL_IDS = [
   "damages",
   "caseReconstruction",
   "audioOverview",
+  "decisions",
+  "theories",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -212,6 +214,22 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: true,
     minSku: "SOLO",
     description: "Two-host podcast-style discussion of the case, generated on demand and rendered to speech",
+  },
+  {
+    id: "decisions",
+    label: "Decisions",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "The 'Why?' behind a legal answer's conclusions — rule, evidence for and against, the alternative considered and rejected, and what fact would change it. Populated automatically from legal chat turns, not generated on demand.",
+  },
+  {
+    id: "theories",
+    label: "Theories",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "Several lawyers' theories of the case, side by side — never merged. Diff any two to see what they share, what they disagree on, and the evidence that would decide it.",
   },
 ];
 

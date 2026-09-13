@@ -1,0 +1,79 @@
+{
+  "benchmark": "brackenmoor",
+  "ranAt": "2026-09-13T10:44:44.360Z",
+  "caseId": "8aedbceb-aa41-467f-88f1-9b4601db644b",
+  "consultationId": "b77b8ea6-eb09-4326-b718-d85ea887519e",
+  "chatWonder": {
+    "ws": "ws://127.0.0.1:8000/chat-stream",
+    "api": "http://127.0.0.1:8000"
+  },
+  "questions": [
+    {
+      "id": "Q1",
+      "title": "Criminal liability and the resolution of conflicting evidence",
+      "seconds": 256.6,
+      "chars": 50725,
+      "words": 7682,
+      "profile": {
+        "tools": {
+          "legislation_search": 5,
+          "legislation_get_section": 10,
+          "case_law_search": 4,
+          "judgment_get_header": 3,
+          "case_law_grep_judgment": 3,
+          "judgment_get_paragraph": 4,
+          "citations_resolve": 4,
+          "citations_format_oscola": 4
+        },
+        "verify": [],
+        "gates": [],
+        "forced": 0
+      }
+    },
+    {
+      "id": "Q2",
+      "title": "The commercial and insurance consequences",
+      "seconds": 388.7,
+      "chars": 69790,
+      "words": 10375,
+      "profile": {
+        "tools": {
+          "legislation_search": 8,
+          "legislation_get_section": 28,
+          "legislation_get_toc": 1,
+          "case_law_search": 8,
+          "judgment_get_header": 6,
+          "case_law_grep_judgment": 9,
+          "judgment_get_paragraph": 7,
+          "citations_resolve": 6,
+          "citations_format_oscola": 5
+        },
+        "verify": [],
+        "gates": [],
+        "forced": 0
+      }
+    },
+    {
+      "id": "Q3",
+      "title": "Admissibility, privilege, disclosure and professional conduct",
+      "seconds": 486.8,
+      "chars": 79855,
+      "words": 11924,
+      "profile": {
+        "tools": {
+          "case_law_search": 6,
+          "legislation_search": 6,
+          "legislation_get_section": 15,
+          "judgment_get_header": 2,
+          "case_law_grep_judgment": 2,
+          "judgment_get_paragraph": 4,
+          "citations_resolve": 3,
+          "citations_format_oscola": 3
+        },
+        "verify": [],
+        "gates": [],
+        "forced": 0
+      }
+    }
+  ]
+}

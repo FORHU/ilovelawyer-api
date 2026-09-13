@@ -1,25 +1,41 @@
 import CaseRefreshSvc from "../services/case-refresh.service";
 import RedTeamSvc from "../services/red-team.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
+import CaseTheorySvc from "../services/case-theory.service";
+import TheoryDiffSvc from "../services/theory-diff.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
 
-export type QueuedAiGenerationKind = "caseRefresh" | "redTeam" | "caseReconstruction";
+export type QueuedAiGenerationKind =
+  | "caseRefresh"
+  | "redTeam"
+  | "caseReconstruction"
+  | "caseTheoryPropose"
+  | "theoryDiff"
+  | "caseReconstructionScenes"
+  | "caseReconstructionTableRead";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
   caseId: string;
   userId: string;
+  // theoryDiff only — which pair to diff. Every other kind ignores these.
+  theoryAId?: string;
+  theoryBId?: string;
 }
 
 // Each kind's controller endpoint already ran CaseAccess.assertCanEdit + AiGenerationLockSvc.begin
 // synchronously (see each service's beginQueued) before enqueueing here — runQueued just does the
 // actual work and closes out the lock via AiGenerationLockSvc.finishWith.
-const RUNNERS: Record<QueuedAiGenerationKind, (caseId: string, userId: string) => Promise<unknown>> = {
-  caseRefresh: (caseId, userId) => CaseRefreshSvc.runQueued(caseId, userId),
-  redTeam: (caseId, userId) => RedTeamSvc.runQueued(caseId, userId),
-  caseReconstruction: (caseId, userId) => CaseReconstructionSvc.runQueued(caseId, userId),
+const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Promise<unknown>> = {
+  caseRefresh: (job) => CaseRefreshSvc.runQueued(job.caseId, job.userId),
+  redTeam: (job) => RedTeamSvc.runQueued(job.caseId, job.userId),
+  caseReconstruction: (job) => CaseReconstructionSvc.runQueued(job.caseId, job.userId),
+  caseTheoryPropose: (job) => CaseTheorySvc.runQueuedPropose(job.caseId, job.userId),
+  theoryDiff: (job) => TheoryDiffSvc.runQueuedDiff(job.caseId, job.userId, job.theoryAId!, job.theoryBId!),
+  caseReconstructionScenes: (job) => CaseReconstructionSvc.runQueuedScenes(job.caseId, job.userId),
+  caseReconstructionTableRead: (job) => CaseReconstructionSvc.runQueuedTableRead(job.caseId, job.userId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,
@@ -147,7 +163,7 @@ export default class AiGenerationQueue {
   private static runOne(item: WaitItem): void {
     this.active += 1;
     void withVisibilityHeartbeat(AI_GENERATION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
-      RUNNERS[item.job.kind](item.job.caseId, item.job.userId),
+      RUNNERS[item.job.kind](item.job),
     )
       // The runner already records FAILED on the AiGenerationJob row (AiGenerationLockSvc
       // .finishWith) — this catch only stops the rejection from going unhandled.

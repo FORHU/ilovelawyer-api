@@ -17,6 +17,10 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import DecisionRecordSvc from "../services/decision-record.service";
+import CaseTheorySvc from "../services/case-theory.service";
+import TheoryDiffSvc from "../services/theory-diff.service";
+import AnnotationSvc from "../services/annotation.service";
 import CaseGraphViewSvc, { GraphViewType } from "../services/case-graph-view.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import AiGenerationQueue from "../queues/ai-generation.queue";
@@ -48,7 +52,19 @@ import {
   updateClaimSchema,
   updateReconstructionSchema,
   graphViewSchema,
+  listDecisionsSchema,
+  disputeDecisionSchema,
+  createTheorySchema,
+  updateTheorySchema,
+  addTheoryClaimSchema,
+  addTheoryAssumptionSchema,
+  addTheoryOpenQuestionSchema,
+  diffTheoriesSchema,
+  getTheoryDiffSchema,
+  listAnnotationsSchema,
+  createAnnotationSchema,
 } from "../validation/case-terminal.validation";
+import { AnnotationKind, AnnotationTargetType, DecisionStatus } from "@prisma/client";
 
 export default class CaseTerminalCtrl {
   static async snapshot(req: Request, res: Response) {
@@ -390,6 +406,28 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  /** Grounded Reconstruction Rung 1 (differentiation program, Phase 3). Queued via
+   * AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async generateReconstructionScenes(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseReconstructionSvc.beginQueuedScenes(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseReconstructionScenes", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionScenes");
+    return res.status(202).json(status);
+  }
+
+  /** Grounded Reconstruction Rung 2 (differentiation program, Phase 3). Queued via
+   * AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async generateTableRead(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseReconstructionSvc.beginQueuedTableRead(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseReconstructionTableRead", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionTableRead");
+    return res.status(202).json(status);
+  }
+
   static async generateReconstructionAudio(req: Request, res: Response) {
     const result = await CaseReconstructionAudioSvc.startAudioJob(req.params.caseId, req.user.userId);
     // Poll to completion server-side too — same queue case-post-extraction.ts's auto-generation
@@ -426,5 +464,150 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "redTeam", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "redTeam");
     return res.status(202).json(status);
+  }
+
+  /** Decision Records (differentiation program, Phase 1) — see
+   * docs/plans/differentiation-program.md Workstream A. Unlike every other panel above,
+   * there is no generate/refresh action here: rows are promoted automatically by
+   * ChatSvc.persistAssistantTurn whenever a legal turn on this case produces one. */
+  static async listDecisions(req: Request, res: Response) {
+    const { error, value } = listDecisionsSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await DecisionRecordSvc.list(req.params.caseId, req.user.userId, value.status as DecisionStatus | undefined);
+    return res.status(200).json(result);
+  }
+
+  static async disputeDecision(req: Request, res: Response) {
+    const { error, value } = disputeDecisionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await DecisionRecordSvc.dispute(req.params.caseId, req.params.id, req.user.userId, value.note);
+    return res.status(200).json(result);
+  }
+
+  static async reactivateDecision(req: Request, res: Response) {
+    const result = await DecisionRecordSvc.reactivate(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  // ── Case Theories (differentiation program, Phase 2 — Workstream B) ──────────────────────
+
+  static async listTheories(req: Request, res: Response) {
+    const result = await CaseTheorySvc.list(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async createTheory(req: Request, res: Response) {
+    const { error, value } = createTheorySchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseTheorySvc.create(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async updateTheory(req: Request, res: Response) {
+    const { error, value } = updateTheorySchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseTheorySvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async publishTheory(req: Request, res: Response) {
+    const result = await CaseTheorySvc.publish(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async retireTheory(req: Request, res: Response) {
+    const result = await CaseTheorySvc.retire(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async forkTheory(req: Request, res: Response) {
+    const result = await CaseTheorySvc.fork(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(201).json(result);
+  }
+
+  static async addTheoryClaim(req: Request, res: Response) {
+    const { error, value } = addTheoryClaimSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseTheorySvc.addClaim(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async addTheoryAssumption(req: Request, res: Response) {
+    const { error, value } = addTheoryAssumptionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseTheorySvc.addAssumption(req.params.caseId, req.params.id, req.user.userId, value.statement);
+    return res.status(201).json(result);
+  }
+
+  static async addTheoryOpenQuestion(req: Request, res: Response) {
+    const { error, value } = addTheoryOpenQuestionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseTheorySvc.addOpenQuestion(req.params.caseId, req.params.id, req.user.userId, value.question);
+    return res.status(201).json(result);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async proposeTheory(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseTheorySvc.beginQueuedPropose(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseTheoryPropose", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseTheoryPropose");
+    return res.status(202).json(status);
+  }
+
+  static async getTheoryDiff(req: Request, res: Response) {
+    const { error, value } = getTheoryDiffSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await TheoryDiffSvc.get(req.params.caseId, req.user.userId, value.theoryAId, value.theoryBId);
+    return res.status(200).json(result);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async generateTheoryDiff(req: Request, res: Response) {
+    const { error, value } = diffTheoriesSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await TheoryDiffSvc.beginQueuedDiff(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "theoryDiff", caseId, userId, theoryAId: value.theoryAId, theoryBId: value.theoryBId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "theoryDiff");
+    return res.status(202).json(status);
+  }
+
+  // ── Annotations (differentiation program, Phase 2 — Workstream B) ────────────────────────
+
+  static async listAnnotations(req: Request, res: Response) {
+    const { error, value } = listAnnotationsSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await AnnotationSvc.list(
+      req.params.caseId,
+      req.user.userId,
+      value.targetType as AnnotationTargetType | undefined,
+      value.targetId as string | undefined,
+    );
+    return res.status(200).json(result);
+  }
+
+  static async createAnnotation(req: Request, res: Response) {
+    const { error, value } = createAnnotationSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await AnnotationSvc.create(req.params.caseId, req.user.userId, {
+      targetType: value.targetType as AnnotationTargetType,
+      targetId: value.targetId,
+      kind: (value.kind ?? "NOTE") as AnnotationKind,
+      body: value.body,
+    });
+    return res.status(201).json(result);
+  }
+
+  static async resolveAnnotation(req: Request, res: Response) {
+    const result = await AnnotationSvc.resolve(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async reopenAnnotation(req: Request, res: Response) {
+    const result = await AnnotationSvc.reopen(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
   }
 }

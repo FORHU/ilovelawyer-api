@@ -102,19 +102,20 @@ model Session {
 }
 
 model File {
-  id                  String                 @id @default(uuid())
-  filename            String?
-  fileUrl             String?
-  s3Key               String?
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
-  deletedAt           DateTime?
-  metaData            Json?
-  users               User[]
-  transcriptions      Transcription[]
-  caseDocuments       Document[]
-  caseReconstructions CaseReconstruction[]
-  audioOverviews      MessageAudioOverview[]
+  id                          String                 @id @default(uuid())
+  filename                    String?
+  fileUrl                     String?
+  s3Key                       String?
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
+  deletedAt                   DateTime?
+  metaData                    Json?
+  users                       User[]
+  transcriptions              Transcription[]
+  caseDocuments               Document[]
+  caseReconstructionAudio     CaseReconstruction[]   @relation("CaseReconstructionAudio")
+  caseReconstructionTableRead CaseReconstruction[]   @relation("CaseReconstructionTableRead")
+  audioOverviews              MessageAudioOverview[]
 }
 
 enum Role {
@@ -169,17 +170,18 @@ model Message {
   groupOrder      Int?
   groupTitle      String?
 
-  consultation  Consultation          @relation(fields: [consultationId], references: [id], onDelete: Cascade)
-  user          User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
-  parent        Message?              @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
-  replies       Message[]             @relation("MessageThread")
-  group         MessageGroup?         @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  timeline      MessageTimeline?
-  mindMap       MessageMindMap?
-  relatedCases  MessageRelatedCases?
-  audioOverview MessageAudioOverview?
-  reasoning     MessageReasoning?
-  documents     Document[]
+  consultation    Consultation           @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parent          Message?               @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  replies         Message[]              @relation("MessageThread")
+  group           MessageGroup?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  timeline        MessageTimeline?
+  mindMap         MessageMindMap?
+  relatedCases    MessageRelatedCases?
+  audioOverview   MessageAudioOverview?
+  reasoning       MessageReasoning?
+  decisionRecords MessageDecisionRecord?
+  documents       Document[]
 
   @@index([consultationId])
   @@index([userId])
@@ -258,6 +260,188 @@ model MessageReasoning {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }
 
+// Raw decision-record output for one assistant turn, exactly as chat-wonder returned it after
+// its own verification pass (anchors matched, citation links checked, evidence resolved) —
+// see legal_decisions.py. Kept per-message (unlike DecisionRecord below) so the turn that
+// produced a given record is always recoverable even after DecisionRecordSvc promotes/updates
+// the case-level rows.
+model MessageDecisionRecord {
+  id           String   @id @default(uuid())
+  messageId    String   @unique
+  records      Json
+  verification Json
+  createdAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+enum DecisionStatus {
+  ACTIVE
+  DISPUTED
+  SUPERSEDED
+}
+
+// Case-level Decision Record (differentiation program, Phase 1) — the "Why?" behind one
+// conclusion in a legal answer: the rule applied, the evidence for and against, the
+// alternative reading considered and rejected, how it was weighted, and what fact would
+// change it (payload shape: legal_decisions.py's audited record). Promoted from
+// MessageDecisionRecord by DecisionRecordSvc.promote whenever a legal turn on a case-linked
+// consultation produces one, and registered as a DECISION CaseGraphNode with SUPPORTS/
+// CONTRADICTS CaseEdges to the DOCUMENT nodes its evidence references — see
+// docs/plans/differentiation-program.md Workstream A. `authorUserId` is null for every
+// AI-generated row (mirrors CaseFinding's AI-authored convention); a lawyer disputing a
+// record flips `status` to DISPUTED rather than editing or deleting it, so the original
+// AI reasoning stays visible alongside the disagreement.
+model DecisionRecord {
+  id              String         @id @default(uuid())
+  caseId          String
+  sourceMessageId String?
+  anchor          String         @db.Text
+  payload         Json
+  status          DecisionStatus @default(ACTIVE)
+  authorUserId    String?
+  disputeNote     String?        @db.Text
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([caseId, status])
+}
+
+// ── Case Theories & Annotations (differentiation program, Phase 2 — Workstream B) ──────────
+// See docs/plans/differentiation-program.md. A theory of the case is a first-class, attributed
+// object: several lawyers can hold different theories of the same case side by side (never
+// merged — TheoryDiffSvc reconciles by naming the deciding evidence, not by picking a winner).
+// `authorUserId: null` marks an AI-proposed starting point (CaseTheorySvc.propose), same
+// AI-authored convention as DecisionRecord/CaseFinding — a lawyer adopts one by forking it
+// (forkedFromId) into their own authored copy, never by editing the AI's draft in place.
+enum TheoryStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+model CaseTheory {
+  id           String       @id @default(uuid())
+  caseId       String
+  authorUserId String?
+  title        String
+  thesis       String       @db.Text
+  status       TheoryStatus @default(DRAFT)
+  forkedFromId String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  case          Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  claims        TheoryClaim[]
+  assumptions   TheoryAssumption[]
+  openQuestions TheoryOpenQuestion[]
+
+  @@index([caseId])
+  @@index([caseId, authorUserId])
+}
+
+enum TheoryStance {
+  ASSERTS
+  DENIES
+}
+
+// `graphNodeId` optionally links this claim to an existing CaseGraphNode (typically a CLAIM,
+// FINDING or DOCUMENT) — when set, CaseTheorySvc.addClaim mirrors it into a CaseEdge from the
+// theory's own THEORY node (SUPPORTS for ASSERTS, CONTRADICTS for DENIES) so the claim shows up
+// in the Mind Map/citation-map with no dedicated UI of its own, the same trick DecisionRecord
+// uses for its evidence links.
+model TheoryClaim {
+  id          String       @id @default(uuid())
+  theoryId    String
+  statement   String       @db.Text
+  stance      TheoryStance
+  graphNodeId String?
+  createdAt   DateTime     @default(now())
+
+  theory CaseTheory @relation(fields: [theoryId], references: [id], onDelete: Cascade)
+
+  @@index([theoryId])
+}
+
+model TheoryAssumption {
+  id        String   @id @default(uuid())
+  theoryId  String
+  statement String   @db.Text
+  createdAt DateTime @default(now())
+
+  theory CaseTheory @relation(fields: [theoryId], references: [id], onDelete: Cascade)
+
+  @@index([theoryId])
+}
+
+model TheoryOpenQuestion {
+  id        String   @id @default(uuid())
+  theoryId  String
+  question  String   @db.Text
+  createdAt DateTime @default(now())
+
+  theory CaseTheory @relation(fields: [theoryId], references: [id], onDelete: Cascade)
+
+  @@index([theoryId])
+}
+
+// Cached result of TheoryDiffSvc.diff for one unordered pair of theories — regenerated on
+// demand (never silently merged into either theory). theoryAId/theoryBId are always stored with
+// the lexicographically smaller id first so a lookup works regardless of argument order.
+model TheoryDiff {
+  id        String   @id @default(uuid())
+  caseId    String
+  theoryAId String
+  theoryBId String
+  result    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([theoryAId, theoryBId])
+  @@index([caseId])
+}
+
+enum AnnotationTargetType {
+  NODE
+  EDGE
+  DECISION
+  CHUNK
+}
+
+enum AnnotationKind {
+  NOTE
+  DISPUTE
+  ALTERNATIVE_READING
+}
+
+// A comment/dispute/alternative-reading attached to any case element — a CaseGraphNode, a
+// CaseEdge, a DecisionRecord, or a document chunk. `authorUserId: null` marks one written by the
+// system itself (e.g. DecisionRecordSvc.dispute writes a DISPUTE annotation automatically
+// alongside flipping the record's status, so the note always has a durable, commentable home
+// even for a lawyer who never opens a general annotation UI).
+model Annotation {
+  id           String               @id @default(uuid())
+  caseId       String
+  authorUserId String?
+  targetType   AnnotationTargetType
+  targetId     String
+  kind         AnnotationKind       @default(NOTE)
+  body         String               @db.Text
+  resolvedAt   DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([caseId, targetType, targetId])
+}
+
 enum AudioOverviewStatus {
   IN_PROGRESS
   COMPLETED
@@ -334,6 +518,10 @@ model Case {
   graphNodes        CaseGraphNode[]
   graphEdges        CaseGraphEdge[]
   edges             CaseEdge[]
+  decisionRecords   DecisionRecord[]
+  theories          CaseTheory[]
+  theoryDiffs       TheoryDiff[]
+  annotations       Annotation[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1146,11 +1334,29 @@ model CaseReconstruction {
   audioJobName      String?
   audioStatus       String?
   audioStaleAt      DateTime?
+  // Rung 1 (differentiation program, Phase 3 — Workstream C): the timeline reconstructed as an
+  // ordered scene script — see Scene in case-reconstruction-scenes-parse.ts for the JSON shape.
+  // Generated by a dedicated action (CaseReconstructionSvc.generateScenes), not bundled into
+  // the main narrative generate — a lawyer may want the narrative without paying for scenes.
+  // Every sourceRef is verified (docId resolves to a real case document; quote, if given,
+  // appears in that document's sampled text) before being kept; an unverifiable ref is dropped
+  // from the scene, and if a scene ends up with none, that's itself recorded in `unresolved`
+  // rather than silently shipping an ungrounded scene.
+  scenes            Json?
+  // Rung 2 — multi-voice "table read" audio rendered from `scenes` (one Polly voice per actor,
+  // a narrator voice for action lines), reusing Audio Overview's synthesize-many-short-turns +
+  // ffmpeg-concat pipeline (mergeCastTurnsToMp3) rather than case reconstruction narration's
+  // single-voice async Polly task — same reasoning Audio Overview used: many short clips beat
+  // one call's length limits. Stale (not regenerated) whenever `scenes` changes underneath it.
+  tableReadFileId   String?
+  tableReadStatus   String?
+  tableReadStaleAt  DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  case      Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  audioFile File? @relation(fields: [audioFileId], references: [id])
+  case          Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  audioFile     File? @relation("CaseReconstructionAudio", fields: [audioFileId], references: [id])
+  tableReadFile File? @relation("CaseReconstructionTableRead", fields: [tableReadFileId], references: [id])
 }
 
 // The "Red Team" panel — an adversarial threat assessment generated from the case's own
@@ -1198,6 +1404,8 @@ enum CaseGraphNodeType {
   DAMAGE_CLAIM
   FINDING
   CLAIM
+  DECISION
+  THEORY
 }
 
 model CaseGraphNode {

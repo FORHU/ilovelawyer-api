@@ -122,3 +122,40 @@ export async function mergeTurnsToMp3(turns: AudioOverviewTurn[], voiceHostA: st
     });
   }
 }
+
+export interface CastTurn {
+  text: string;
+  voiceId: string;
+}
+
+/** Case Reconstruction's "table read" (differentiation program, Phase 3 — Rung 2): the same
+ * synthesize-many-short-turns-then-ffmpeg-concat pipeline as mergeTurnsToMp3 above, generalized
+ * from a fixed HOST_A/HOST_B pair to an arbitrary per-turn voice — one Polly voice per scene
+ * actor plus a narrator (see table-read-voices.ts), rather than two fixed hosts. Kept as a
+ * separate export rather than rewriting mergeTurnsToMp3 in terms of it, so Audio Overview's
+ * already-shipped, already-tested call site is untouched. */
+export async function mergeCastTurnsToMp3(turns: CastTurn[]): Promise<Buffer> {
+  const workDir = await mkdtemp(path.join(tmpdir(), "table-read-"));
+  try {
+    const turnPaths = await Promise.all(
+      turns.map(async (turn, index) => {
+        const buffer = await pool.run(() => synthesizeTurn(turn.text, turn.voiceId));
+        const turnPath = path.join(workDir, `turn-${String(index).padStart(3, "0")}.mp3`);
+        await writeFile(turnPath, buffer);
+        return turnPath;
+      }),
+    );
+
+    const listPath = path.join(workDir, "list.txt");
+    const listContent = turnPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
+    await writeFile(listPath, listContent, "utf8");
+
+    const outputPath = path.join(workDir, "merged.mp3");
+    await runFfmpegConcat(listPath, outputPath);
+    return await readFile(outputPath);
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch((err) => {
+      logger.warn("Table read: failed to clean up temp dir", { err, workDir });
+    });
+  }
+}

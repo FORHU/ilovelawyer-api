@@ -3,6 +3,38 @@
   "source": "D21_Assessment_Questions.pdf (fictional test material — not a real case)",
   "tenant": "UK",
   "caseName": "Brackenmoor Wharf Benchmark — R v Meridian Structures Ltd & Ferris (T2025/0417)",
+  "actionType": "Corporate manslaughter / HSWA prosecution; TCC payment & termination dispute; insurance coverage; ET protected disclosure; inquest",
+  "jurisdiction": "England & Wales — Crown Court (Leeds), TCC Leeds, Employment Tribunal Leeds, West Yorkshire (Eastern) Coroner",
+  "parties": [
+    {
+      "name": "Meridian Structures Limited",
+      "designation": "Defendant (Crown Court) / Contractor (TCC)"
+    },
+    {
+      "name": "Aldwyn Sinclair Ferris",
+      "designation": "Defendant (Crown Court)"
+    },
+    {
+      "name": "Coldbrook Capital LLP",
+      "designation": "Employer / Claimant (TCC)"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "designation": "Claimant (Employment Tribunal)"
+    },
+    {
+      "name": "Deniz Aksoy",
+      "designation": "Injured person / civil claimant"
+    },
+    {
+      "name": "Tomasz Wieczorek (deceased)",
+      "designation": "Deceased"
+    },
+    {
+      "name": "Caldera Specialty Insurance (UK) Limited",
+      "designation": "Insurer"
+    }
+  ],
   "preamble": "Answers must be grounded in the bundle (D01–D20) and in the law of England and Wales. Cite the specific document and paragraph for every factual assertion. Where the bundle is internally inconsistent, say so, identify the inconsistency precisely, and reason in the alternative rather than choosing silently.",
   "markingGuidance": [
     "identify at least fifteen distinct factual contradictions in the bundle and state which document is more probative on each and why",

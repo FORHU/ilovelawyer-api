@@ -13,11 +13,22 @@ import {
   STRUCTURED_DATA_WAIT_MS,
   CHAT_WONDER_SESSION_TIMEOUT_MS,
   CHAT_WONDER_REST_TIMEOUT_MS,
+  CASE_FULL_TEXT_INLINE_CHARS,
 } from "../constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import DocumentRepo from "../repositories/document.repository";
 import { embedText } from "./embedding";
-import { parseStructuredDataPayload, parseAudioOverviewPayload, parseReasoningPayload, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "./response-parser";
+import {
+  parseStructuredDataPayload,
+  parseAudioOverviewPayload,
+  parseReasoningPayload,
+  parseDecisionsPayload,
+  MindMapItem,
+  TimelineItem,
+  AudioOverviewTurn,
+  ReasoningExplanation,
+  DecisionRecordsPayload,
+} from "./response-parser";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,6 +64,32 @@ async function manifestFor(caseDocumentIds: string[]): Promise<{ id: string; nam
     return docs.map((d) => ({ id: d.id, name: d.name, category: d.category ?? null }));
   } catch (err) {
     logger.warn("Chat Wonder case document manifest lookup failed", { err });
+    return [];
+  }
+}
+
+/** Every attached document's full text when the whole case fits CASE_FULL_TEXT_INLINE_CHARS,
+ * else [] (chat-wonder then relies on the manifest + on-demand get_case_document as before).
+ * Best-effort like manifestFor: a lookup failure returns []. */
+export async function fullTextsFor(
+  caseDocumentIds: string[],
+  manifest: { id: string; name: string; category: string | null }[],
+): Promise<{ id: string; name: string; text: string }[]> {
+  if (!caseDocumentIds.length) return [];
+  try {
+    const texts = await DocumentChunkRepo.findFullTextsByDocuments(caseDocumentIds);
+    let total = 0;
+    for (const t of texts.values()) total += t.length;
+    if (total === 0 || total > CASE_FULL_TEXT_INLINE_CHARS) {
+      logger.info("Chat Wonder case documents not inlined whole", { documents: texts.size, chars: total, limit: CASE_FULL_TEXT_INLINE_CHARS });
+      return [];
+    }
+    const names = new Map(manifest.map((m) => [m.id, m.name]));
+    return caseDocumentIds
+      .filter((id) => texts.has(id))
+      .map((id) => ({ id, name: names.get(id) ?? "", text: texts.get(id) as string }));
+  } catch (err) {
+    logger.warn("Chat Wonder case document full-text lookup failed", { err });
     return [];
   }
 }
@@ -240,6 +277,11 @@ export interface ChatWonderStreamResult {
    * only) — absent whenever that turn made no tool calls, or generation failed silently on
    * chat-wonder's side. Absence is the normal case for many turns, not an error. */
   reasoning?: ReasoningExplanation;
+  /** From Chat Wonder's post-`__END__` `{"type":"decisions",...}` typed message (legal/legal_uk
+   * only) — Decision Records (differentiation program, Phase 1), already verified server-side.
+   * Absent whenever the turn produced no legal-analysis conclusions worth recording, or
+   * generation failed silently. Absence is the normal case for many turns, not an error. */
+  decisions?: DecisionRecordsPayload;
 }
 
 export function streamChatWonderMessage(
@@ -266,6 +308,7 @@ export function streamChatWonderMessage(
     let structuredTimeline: TimelineItem[] | undefined;
     let audioOverviewTurns: AudioOverviewTurn[] | undefined;
     let reasoningExplanation: ReasoningExplanation | undefined;
+    let decisionRecords: DecisionRecordsPayload | undefined;
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
     const resolved = normalizeGrounding(grounding);
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
@@ -297,6 +340,7 @@ export function streamChatWonderMessage(
         timeline: structuredTimeline,
         audioOverview: audioOverviewTurns,
         reasoning: reasoningExplanation,
+        decisions: decisionRecords,
       });
     };
 
@@ -319,7 +363,8 @@ export function streamChatWonderMessage(
 
     ws.onopen = () => {
       Promise.all([chunkIdsPromise, manifestPromise])
-        .then(([chunkIds, manifest]) => {
+        .then(async ([chunkIds, manifest]) => {
+          const fullTexts = resolved ? await fullTextsFor(resolved.caseDocumentIds, manifest) : [];
           const payload: {
             type: string;
             user_input: string;
@@ -329,6 +374,7 @@ export function streamChatWonderMessage(
             case_document_ids?: string[];
             case_document_chunk_ids?: string[];
             case_document_manifest?: { id: string; name: string; category: string | null }[];
+            case_document_texts?: { id: string; name: string; text: string }[];
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -345,13 +391,17 @@ export function streamChatWonderMessage(
           if (resolved) {
             payload.case_document_chunk_ids = chunkIds;
             payload.case_document_manifest = manifest;
+            if (fullTexts.length) payload.case_document_texts = fullTexts;
           }
-          // document_context can be the full text of one or more case documents — logged as a
-          // length, not inline, so one chatty turn doesn't blow up combined.log.
+          // document_context / case_document_texts can be the full text of the whole case —
+          // logged as lengths, not inline, so one chatty turn doesn't blow up combined.log.
           logger.info("Chat Wonder WS payload", {
             url: CHAT_WONDER_WS_URL,
             ...payload,
             document_context: payload.document_context ? `[${payload.document_context.length} chars]` : undefined,
+            case_document_texts: payload.case_document_texts
+              ? `[${payload.case_document_texts.length} docs, ${payload.case_document_texts.reduce((n, d) => n + d.text.length, 0)} chars]`
+              : undefined,
           });
           ws.send(JSON.stringify(payload));
         })
@@ -363,20 +413,25 @@ export function streamChatWonderMessage(
 
       let message = typeof event.data === "string" ? event.data : String(event.data);
 
-      // The one typed-envelope frame on this socket — the whole message is valid JSON on
-      // its own (see chat-wonder-v2-api's the_server.py, the "reasoning" send_text call),
-      // unlike every other frame here which is a `[TAG]`-prefixed string. Must be checked
-      // before any of the string-based branches below, since JSON.parse would throw (and
-      // is caught) for all of those.
-      let reasoningEnvelope: any = null;
+      // The typed-envelope frames on this socket — the whole message is valid JSON on its
+      // own (see chat-wonder-v2-api's the_server.py, the "reasoning"/"decisions" send_text
+      // calls), unlike every other frame here which is a `[TAG]`-prefixed string. Must be
+      // checked before any of the string-based branches below, since JSON.parse would throw
+      // (and is caught) for all of those.
+      let typedEnvelope: any = null;
       try {
-        reasoningEnvelope = JSON.parse(message);
+        typedEnvelope = JSON.parse(message);
       } catch {
-        reasoningEnvelope = null;
+        typedEnvelope = null;
       }
-      if (reasoningEnvelope && reasoningEnvelope.type === "reasoning") {
-        const parsed = parseReasoningPayload(reasoningEnvelope.data);
+      if (typedEnvelope && typedEnvelope.type === "reasoning") {
+        const parsed = parseReasoningPayload(typedEnvelope.data);
         if (parsed) reasoningExplanation = parsed;
+        return;
+      }
+      if (typedEnvelope && typedEnvelope.type === "decisions") {
+        const parsed = parseDecisionsPayload(typedEnvelope.data);
+        if (parsed) decisionRecords = parsed;
         return;
       }
 

@@ -226,6 +226,34 @@ export default class DocumentChunkRepo {
    * rust `String` into napi `string`", prisma/prisma#13864). Paging keeps each call's payload
    * bounded; the final in-memory array is still the full chunk set.
    */
+  /**
+   * Full text of several documents at once, joined from their chunks in chunkIndex order —
+   * no embeddings pulled (unlike findByDocument), so it stays cheap for a whole case. Used to
+   * inline a small bundle into a chat turn whole (see chatWonder.ts fullTextsFor): the
+   * Brackenmoor benchmark showed the model treating a relevance-filtered fetch as the entire
+   * exhibit, so for bundles that fit the budget we hand it every document in full up front.
+   */
+  static async findFullTextsByDocuments(
+    caseDocumentIds: string[],
+    client: DbClient = prisma,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!caseDocumentIds.length) return out;
+    const rows = await client.caseDocumentChunk.findMany({
+      where: { caseDocumentId: { in: caseDocumentIds } },
+      select: { caseDocumentId: true, chunkIndex: true, chunkText: true },
+      orderBy: [{ caseDocumentId: "asc" }, { chunkIndex: "asc" }],
+    });
+    const parts = new Map<string, string[]>();
+    for (const r of rows) {
+      const list = parts.get(r.caseDocumentId) ?? [];
+      list.push(r.chunkText);
+      parts.set(r.caseDocumentId, list);
+    }
+    for (const [id, list] of parts) out.set(id, list.join("\n"));
+    return out;
+  }
+
   static async findByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<DocumentChunkRow[]> {
     const rows: RawChunkRow[] = [];
     let offset = 0;
