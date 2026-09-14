@@ -17,6 +17,7 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import CaseGraphViewSvc, { GraphViewType } from "../services/case-graph-view.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import AiGenerationQueue from "../queues/ai-generation.queue";
@@ -48,6 +49,7 @@ import {
   updateClaimSchema,
   updateReconstructionSchema,
   graphViewSchema,
+  exportBriefSchema,
 } from "../validation/case-terminal.validation";
 
 export default class CaseTerminalCtrl {
@@ -426,5 +428,12 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "redTeam", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "redTeam");
     return res.status(202).json(status);
+  }
+
+  static async exportBrief(req: Request, res: Response) {
+    const { error, value } = exportBriefSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseBriefExportSvc.export(req.params.caseId, req.user.userId, value.format as CaseBriefFormat);
+    return res.status(200).json(result);
   }
 }

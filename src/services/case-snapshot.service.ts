@@ -98,6 +98,7 @@ export default class CaseSnapshotSvc {
         extractionMethod: doc.extractionMethod,
         language: doc.language,
         createdAt: doc.createdAt,
+        isExhibit: doc.isExhibit,
       })),
       timeline,
       risks,
@@ -137,3 +138,5 @@ export default class CaseSnapshotSvc {
     };
   }
 }
+
+export type CaseSnapshotResult = Awaited<ReturnType<typeof CaseSnapshotSvc.get>>;

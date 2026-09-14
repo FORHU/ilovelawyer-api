@@ -99,4 +99,6 @@ router.get("/:caseId/reconstruction/audio/poll", asyncHandler(CaseTerminalCtrl.p
 router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
 router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));
 
+router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
+
 export default router;

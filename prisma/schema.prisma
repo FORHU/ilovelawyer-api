@@ -370,6 +370,9 @@ model Document {
   pageCount        Int?
   extractionMethod String?
   ocrAttempted     Boolean   @default(false)
+  // Lawyer-curated subset of a case's Documents shown in the Case Brief export's Exhibit list —
+  // not every uploaded document is an Exhibit just by being uploaded. See CONTEXT.md's Exhibit entry.
+  isExhibit        Boolean   @default(false)
   createdAt        DateTime  @default(now())
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)

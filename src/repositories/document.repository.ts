@@ -133,7 +133,7 @@ export default class DocumentRepo {
     return prisma.document.findFirst({ where: { consultationId }, orderBy: { createdAt: "desc" } });
   }
 
-  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
+  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean }) {
     const result = await prisma.document.updateMany({ where: { id, organizationId }, data });
     return result.count > 0;
   }

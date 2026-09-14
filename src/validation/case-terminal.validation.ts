@@ -211,3 +211,7 @@ export const graphViewSchema = Joi.object({
     .valid(...GRAPH_VIEW_TYPES)
     .required(),
 });
+
+export const exportBriefSchema = Joi.object({
+  format: Joi.string().valid("docx", "pdf").required(),
+});
