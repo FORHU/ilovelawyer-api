@@ -1,4 +1,6 @@
 import {
+  ARRANGEMENT_VALUES,
+  ArrangementValue,
   defaultPanelIdsForPreset,
   PANEL_CATALOG,
   PANEL_IDS,
@@ -11,6 +13,10 @@ import {
 
 function isPanelId(value: unknown): value is PanelId {
   return typeof value === "string" && (PANEL_IDS as readonly string[]).includes(value);
+}
+
+function isArrangementValue(value: unknown): value is ArrangementValue {
+  return typeof value === "string" && (ARRANGEMENT_VALUES as readonly string[]).includes(value);
 }
 
 export function buildDefaultLayout(preset: PresetValue, sku = "SOLO"): WorkspaceLayout {
@@ -36,7 +42,7 @@ export function buildDefaultLayout(preset: PresetValue, sku = "SOLO"): Workspace
     },
   );
 
-  return { preset, panels };
+  return { preset, arrangement: "columns", panels };
 }
 
 export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
@@ -45,9 +51,10 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     raw.preset === "PANE_1" || raw.preset === "PANE_2" || raw.preset === "PANE_4" || raw.preset === "PANE_6"
       ? raw.preset
       : "PANE_2";
+  const arrangement: ArrangementValue = isArrangementValue(raw.arrangement) ? raw.arrangement : "columns";
 
   const fallback = buildDefaultLayout(preset, sku);
-  if (!Array.isArray(raw.panels) || raw.panels.length === 0) return fallback;
+  if (!Array.isArray(raw.panels) || raw.panels.length === 0) return { ...fallback, arrangement };
 
   const seen = new Set<PanelId>();
   const panels: PanelLayout[] = [];
@@ -93,7 +100,7 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     }
   }
 
-  return { preset, panels };
+  return { preset, arrangement, panels };
 }
 
 function clampRatio(value: unknown): number {
