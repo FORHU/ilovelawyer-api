@@ -30,6 +30,13 @@ A blocking gate on password-based Signup: a User's `isEmailVerified` flag starts
 _Avoid_: "OTP" alone as the name of the gate (OTP is the mechanism — the one-time code — not the gate itself; the gate is Email Verification)
 _Status: designed, not yet implemented — see Pending._
 
+**Case Claim**:
+A legal cause of action a lawyer is pursuing or defending against in a Case (e.g. "Breach of Contract") — `title` / `causeOfAction` / `description` on the `CaseClaim` model.
+_Avoid_: "Claim" for the unrelated per-sentence attribution tags the AI attaches to generated prose (`ReconstructionClaim`, `RedTeamClaim`: `text` / `category: GROUNDED|INFERENCE|UNSUPPORTED` / `sourceLabel`) — those are called **Attribution** everywhere user-facing (e.g. the Case Brief export's Attribution tables), specifically to avoid a lawyer reading "Claims" in a document and thinking of pleaded causes of action instead of AI provenance. The underlying `ReconstructionClaim`/`RedTeamClaim` type names are legacy and unchanged by this distinction — only rendered/document-facing text and new writing should say "Attribution."
+
+**Exhibit**:
+A `Document` a lawyer has explicitly marked for inclusion in the Case Brief export, via a new `isExhibit` boolean on the `Document` model (default `false` — a document is not an Exhibit just by being uploaded to the case). Marked/unmarked through the existing `PATCH /api/documents/:id` endpoint.
+_Avoid_: confusing with `ilovelawyer-app`'s unrelated, non-persisted "No verified exhibits for this scene" UI label (a reconstruction scene's source-document references) — that's a different, read-only concept with no `isExhibit`-style field behind it. Also avoid assuming every uploaded case `Document` is an Exhibit — the app's own glossary describes uploaded documents generically as "evidentiary," but that's broader than this flag; only explicitly-marked ones appear in the Case Brief's Exhibit list.
 **Benchmark**:
 A fictional litigation bundle plus an assessment paper, under `benchmarks/<slug>/` (`docs/*.pdf`, `questions.json` incl. tenant/case fields, `rubric.json`, `answers/<date>/`). Seeded into a real org's case with `scripts/seed-benchmark.ts`, asked through the production chat path with `scripts/run-benchmark.ts`, scored by `scripts/grade-benchmark.ts` (AI grader over the full bundle text + a solicitor moderation sheet), history in `benchmarks/scores.md`. First one: `brackenmoor` (UK). Every architecture change to the legal pipeline is expected to be measured against it.
 _Avoid_: "eval" for this (that word is used for the PH prompt eval set in chat-wonder); grading from the answer alone without the bundle text

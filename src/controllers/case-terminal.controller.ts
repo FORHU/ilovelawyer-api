@@ -17,6 +17,7 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
 import TheoryDiffSvc from "../services/theory-diff.service";
@@ -52,6 +53,7 @@ import {
   updateClaimSchema,
   updateReconstructionSchema,
   graphViewSchema,
+exportBriefSchema,
   listDecisionsSchema,
   disputeDecisionSchema,
   createTheorySchema,
@@ -466,6 +468,10 @@ export default class CaseTerminalCtrl {
     return res.status(202).json(status);
   }
 
+static async exportBrief(req: Request, res: Response) {
+    const { error, value } = exportBriefSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseBriefExportSvc.export(req.params.caseId, req.user.userId, value.format as CaseBriefFormat);
   /** Decision Records (differentiation program, Phase 1) — see
    * docs/plans/differentiation-program.md Workstream A. Unlike every other panel above,
    * there is no generate/refresh action here: rows are promoted automatically by

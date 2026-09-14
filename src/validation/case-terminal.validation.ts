@@ -216,6 +216,8 @@ export const graphViewSchema = Joi.object({
     .required(),
 });
 
+export const exportBriefSchema = Joi.object({
+  format: Joi.string().valid("docx", "pdf").required(),
 export const listDecisionsSchema = Joi.object({
   status: Joi.string()
     .valid(...DECISION_STATUSES)
