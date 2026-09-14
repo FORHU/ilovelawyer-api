@@ -1,5 +1,4 @@
 import { Request, Response } from "express";
-import LawSvc, { parseLawCategory } from "../services/law.service";
 import LawRepo from "../repositories/law.repository";
 import CitationEdgeRepo from "../repositories/citation-edge.repository";
 import CitationExtractionQueue from "../queues/citation-extraction.queue";
@@ -8,30 +7,26 @@ import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
 import { assertCitationsAvailable } from "../utils/law.utils";
+import { getLawSourceProvider } from "../legal/law-source/law-source.registry";
+import { legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
+import { UK_LEGISLATION_BASE_URL } from "../config";
 import { lawSearchSchema, lawDocumentSchema, lawBrowseSchema } from "../validation/law.validation";
 
 export default class LawCtrl {
   /**
-   * GET /api/law/search — the app-facing entry point to the same local-first search the
-   * admin panel uses (LawSvc.search: stored rows first, juris.ph on a miss, write-through).
-   * The admin route is ADMIN-only; this one is any authenticated org member.
-   *
-   * juris.ph only covers Philippine law, so this is PH-tenant only: every other tenantCode
-   * (UK today, anything unmapped) gets a 501 "coming soon" rather than PH data. The frontend
-   * gates the UI the same way (config/tenant-codes) and normally never calls this for a
-   * non-PH org — the check here is defense-in-depth, matching legal-knowledge.registry.ts.
+   * GET /api/law/search — local-first search for the Library tab. The `LawSourceProvider` for
+   * the caller's tenantCode (PH → juris.ph, UK → UK Legal MCP) checks stored `Law` rows first,
+   * calls upstream on a miss, and writes results through. An unmapped tenantCode gets a 501
+   * "coming soon" from the registry rather than another jurisdiction's data.
    */
   static async search(req: Request, res: Response) {
-    const { tenantCode } = getTenantContext(req);
-    if (tenantCode !== "PH") {
-      throw new HttpError("Philippine law search is not available for this jurisdiction — coming soon", 501);
-    }
+    const provider = getLawSourceProvider(getTenantContext(req).tenantCode);
 
-    const { error, value } = lawSearchSchema.validate(req.query, { convert: true });
+    const { error, value } = lawSearchSchema(provider).validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await LawSvc.search({
-      category: parseLawCategory(value.category),
+    const result = await provider.search({
+      category: provider.parseCategory(value.category),
       q: value.q,
       limit: value.limit,
     });
@@ -39,24 +34,25 @@ export default class LawCtrl {
   }
 
   /**
-   * GET /api/law/browse — facet browse (no free-text query) over juris.ph, 20 per page with an
-   * opaque `cursor` for "load more". Same PH-tenant-only rule as search. `caseType` applies to
-   * jurisprudence only; `topics` is a csv of the juris.ph topic vocabulary.
+   * GET /api/law/browse — faceted browse (no free-text query), 20 per page with an opaque
+   * `cursor` for "load more". Facets are tenant-specific: PH → `caseType` (jurisprudence only)
+   * + `topics` csv; UK → `court` (case law only). Facets that don't apply to the resolved
+   * provider/category are ignored by the provider.
    */
   static async browse(req: Request, res: Response) {
-    const { tenantCode } = getTenantContext(req);
-    if (tenantCode !== "PH") {
-      throw new HttpError("Philippine law browse is not available for this jurisdiction — coming soon", 501);
-    }
+    const provider = getLawSourceProvider(getTenantContext(req).tenantCode);
 
-    const { error, value } = lawBrowseSchema.validate(req.query, { convert: true });
+    const { error, value } = lawBrowseSchema(provider).validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await LawSvc.browse({
-      category: parseLawCategory(value.category),
-      caseType: value.category === "jurisprudence" ? value.caseType : undefined,
-      topics: value.topics,
-      year: value.year,
+    const result = await provider.browse({
+      category: provider.parseCategory(value.category),
+      facets: {
+        caseType: value.caseType,
+        topics: value.topics,
+        court: value.court,
+        year: value.year,
+      },
       cursor: value.cursor,
       limit: value.limit,
     });
@@ -64,24 +60,76 @@ export default class LawCtrl {
   }
 
   /**
-   * GET /api/law/document — one document by its juris id, for the detail page. Local-first
-   * with detail (LawSvc.getDocument): a stored row that already has its full detail is served
-   * from the DB; otherwise juris.ph's retrieve API fills it in and stores it. PH-tenant only.
+   * GET /api/law/document — one document by id, for the detail page. Local-first with detail:
+   * a stored row that already has its full detail is served from the DB; otherwise the
+   * provider's upstream fills it in and stores it. `id` is the juris source id for PH and our
+   * `Law.id` uuid for UK.
    */
   static async getDocument(req: Request, res: Response) {
-    const { tenantCode } = getTenantContext(req);
-    if (tenantCode !== "PH") {
-      throw new HttpError("Philippine law documents are not available for this jurisdiction — coming soon", 501);
-    }
+    const provider = getLawSourceProvider(getTenantContext(req).tenantCode);
 
-    const { error, value } = lawDocumentSchema.validate(req.query, { convert: true });
+    const { error, value } = lawDocumentSchema(provider).validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await LawSvc.getDocument({
-      category: parseLawCategory(value.category),
+    const result = await provider.getDocument({
+      category: provider.parseCategory(value.category),
       id: value.id,
     });
     return res.status(200).json(result);
+  }
+
+  /**
+   * GET /api/law/:lawId/pdf — same-origin proxy for a stored law's official PDF (see law.route.ts).
+   * legislation.gov.uk and the TNA judgment site both refuse framing (X-Frame-Options: DENY), so
+   * the browser can't embed those URLs directly; this streams the bytes back from our origin.
+   * Returns 502 when the upstream is unreachable or answers with anything other than a PDF (e.g.
+   * legislation.gov.uk's AWS-WAF challenge page) — the client falls back to a "View source" link.
+   */
+  static async pdf(req: Request, res: Response) {
+    const law = await LawRepo.findById(req.params.lawId);
+    if (!law) throw new HttpError("Law not found", 404);
+
+    let upstream: string | null;
+    if (law.category === "REPUBLIC_ACT") {
+      const parts = legislationUrlParts(law.jurisUrl);
+      upstream = parts
+        ? `${UK_LEGISLATION_BASE_URL}/${parts.type}/${parts.year}/${parts.number}/data.pdf`
+        : null;
+    } else {
+      upstream = law.pdfUrl ?? `${law.jurisUrl.replace(/\/+$/, "")}/data.pdf`;
+    }
+    if (!upstream) throw new HttpError("No PDF available for this document", 404);
+
+    let upstreamRes: globalThis.Response;
+    try {
+      upstreamRes = await fetch(upstream, {
+        signal: AbortSignal.timeout(20_000),
+        headers: {
+          "user-agent": "Mozilla/5.0 (compatible; ilovelawyer/1.0; +https://ilovelawyer.com)",
+          accept: "application/pdf,*/*",
+        },
+      });
+    } catch {
+      throw new HttpError("The official document source is unavailable right now", 502);
+    }
+
+    const contentType = (upstreamRes.headers.get("content-type") ?? "").toLowerCase();
+    if (!upstreamRes.ok || !contentType.includes("pdf")) {
+      throw new HttpError("The official document source is unavailable right now", 502);
+    }
+
+    const body = Buffer.from(await upstreamRes.arrayBuffer());
+    // helmet() set these on the way in — drop them so the frontend (a different origin) can
+    // embed this PDF in an <iframe>. Safe here: the body is a public primary-law PDF, nothing
+    // an attacker gains by framing.
+    res.removeHeader("X-Frame-Options");
+    res.removeHeader("Content-Security-Policy");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    return res.send(body);
   }
 
   /**

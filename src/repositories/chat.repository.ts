@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import { MessageRole, Prisma, AudioOverviewStatus } from "@prisma/client";
-import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
+import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
@@ -52,6 +52,7 @@ export default class ChatRepo {
         relatedCases: true,
         audioOverview: true,
         reasoning: true,
+        decisionRecords: true,
         documents: { include: { file: true } },
       },
     });
@@ -119,6 +120,21 @@ export default class ChatRepo {
         messageId,
         reasoning: data.reasoning,
         citationReasons: data.citation_reasons as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  /** `verification` is empty for now — chat-wonder-v2-api's legal_decisions.py already audits
+   * each record before it ever reaches this app (per-record `rule[].verified` /
+   * `evidence*[].verified` flags), so there is nothing further to re-derive here. The column
+   * exists for a future app-side re-check (e.g. re-verifying a quote against a document that
+   * was re-extracted after the turn) without a schema change. */
+  static async saveDecisionRecords(messageId: string, data: DecisionRecordsPayload) {
+    return prisma.messageDecisionRecord.create({
+      data: {
+        messageId,
+        records: data.records as unknown as Prisma.InputJsonValue,
+        verification: {} as Prisma.InputJsonValue,
       },
     });
   }

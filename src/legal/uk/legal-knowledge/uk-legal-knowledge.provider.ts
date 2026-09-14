@@ -8,6 +8,11 @@ import { LegalKnowledgeProvider } from "../../legal-knowledge-provider";
  * coming-soon error rather than reading the PH-only `documents` table — this is the enforcement
  * point that keeps UK from ever silently falling back to PH legal knowledge.
  *
+ * NOTE: this is a separate surface from the Library tab's live search/browse (`/api/law/*` ->
+ * `LawSourceProvider`), which DOES support UK via the UK Legal MCP — see
+ * docs/adr/0005-uk-library-source.md. This provider backs only the pre-ingested `documents`
+ * corpus behind `/api/legal-rag/*` and `/api/legal/*`.
+ *
  * analyzeKeyword is the one exception: LegalSourceCacheSvc already generates a UK answer via the
  * UK prompt template (legal/uk/prompts/legal-source-cache.prompt.ts, LEGAL_REVIEW_REQUIRED) and
  * never touches the PH corpus for a UK query, so it's real, tenantCode-safe functionality —

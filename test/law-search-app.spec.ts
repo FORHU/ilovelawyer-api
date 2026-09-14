@@ -127,7 +127,7 @@ describe("GET /api/law/search (app-facing, tenant-gated)", () => {
     expect(res.body.items.map((i: { id: string }) => i.id)).to.include(JURIS_ID);
   });
 
-  it("returns 501 (coming soon) for a UK org and never calls juris.ph", async () => {
+  it("rejects a PH category for a UK org with 400 and never calls juris.ph", async () => {
     stubFetch(() => {
       throw new Error("juris.ph must not be reached for a non-PH tenant");
     });
@@ -137,7 +137,7 @@ describe("GET /api/law/search (app-facing, tenant-gated)", () => {
       .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
       .set("X-Organization-Id", ukOrgId);
 
-    expect(res.status).to.equal(501);
+    expect(res.status).to.equal(400);
     expect(res.body).to.not.have.property("items");
   });
 });
@@ -275,7 +275,7 @@ describe("GET /api/law/browse (facet browse, tenant-gated)", () => {
     expect(res.status).to.equal(400);
   });
 
-  it("returns 501 for a UK org and never calls juris.ph", async () => {
+  it("rejects a PH category for a UK org with 400 and never calls juris.ph", async () => {
     stubFetch(() => {
       throw new Error("juris.ph must not be reached for a non-PH tenant");
     });
@@ -285,7 +285,7 @@ describe("GET /api/law/browse (facet browse, tenant-gated)", () => {
       .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
       .set("X-Organization-Id", ukOrgId);
 
-    expect(res.status).to.equal(501);
+    expect(res.status).to.equal(400);
   });
 });
 
@@ -392,11 +392,11 @@ describe("GET /api/law/document (detail, local-first with detail)", () => {
     expect(res.status).to.equal(404);
   });
 
-  it("returns 501 for a UK org", async () => {
+  it("rejects a PH category for a UK org with 400", async () => {
     const res = await request(app)
       .get(`/api/law/document?category=republic-acts&id=${raId}`)
       .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
       .set("X-Organization-Id", ukOrgId);
-    expect(res.status).to.equal(501);
+    expect(res.status).to.equal(400);
   });
 });

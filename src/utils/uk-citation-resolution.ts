@@ -1,4 +1,5 @@
 import LawRepo from "../repositories/law.repository";
+import { UK_CASELAW_BASE_URL } from "../config";
 import { resolveUkCitation, UkResolvedCitation } from "./uk-legal-mcp";
 
 export interface UkCitationResolutionResult {
@@ -6,14 +7,13 @@ export interface UkCitationResolutionResult {
   confidence: number;
 }
 
-const TNA_CASE_BASE = "https://caselaw.nationalarchives.gov.uk/";
-
 /** The TNA judgment slug a resolved case citation's URL implies (e.g. "uksc/2022/34"), or null
  * for anything not on TNA (legislation.gov.uk, or no URL at all) — this is what decides whether
- * a resolved Law row can later be expanded via citations_network (UkCitationNetworkSvc.expand). */
+ * a resolved Law row can later be expanded via citations_network (UkCitationNetworkSvc.expand).
+ * Must strip the same base that uk-law-mappers.ts builds `Law.jurisUrl` with (UK_CASELAW_BASE_URL). */
 export function extractCaseUri(jurisUrl: string | null | undefined): string | null {
-  if (!jurisUrl || !jurisUrl.startsWith(TNA_CASE_BASE)) return null;
-  const slug = jurisUrl.slice(TNA_CASE_BASE.length).replace(/^\/+|\/+$/g, "");
+  if (!jurisUrl || !jurisUrl.startsWith(UK_CASELAW_BASE_URL)) return null;
+  const slug = jurisUrl.slice(UK_CASELAW_BASE_URL.length).replace(/^\/+|\/+$/g, "");
   return slug || null;
 }
 

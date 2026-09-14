@@ -81,6 +81,12 @@ export default class LawRepo {
     });
   }
 
+  /** Merge lazily-fetched detail columns into an existing row (UK: the row is always created
+   * first by search/browse write-through, so this never needs the create half of upsert). */
+  static async updateDetail(id: string, detail: Prisma.LawUpdateInput) {
+    return prisma.law.update({ where: { id }, data: detail });
+  }
+
   // ── browse-page cache (LawBrowsePage) ──────────────────────────────────────
   static async findBrowsePage(pageKey: string) {
     return prisma.lawBrowsePage.findUnique({ where: { pageKey } });
@@ -130,6 +136,27 @@ export default class LawRepo {
           { caseNumber: { contains: params.q, mode: "insensitive" } },
           { raNumber: { contains: params.q, mode: "insensitive" } },
           { facts: { contains: params.q, mode: "insensitive" } },
+          { summary: { contains: params.q, mode: "insensitive" } },
+        ],
+      },
+      orderBy: [{ year: { sort: "desc", nulls: "last" } }, { score: { sort: "desc", nulls: "last" } }],
+      take: params.limit,
+    });
+  }
+
+  /** UK equivalent of `localSearch` — plain ILIKE over stored UK-tenant rows for the given
+   * category. The UK Legal MCP is only consulted when this returns nothing. No `facts` column
+   * for UK rows (left null in v1), so it isn't searched. */
+  static async localSearchUk(params: { category: LawCategory; q: string; limit: number }) {
+    const tenantId = await LawRepo.resolveUkTenantId();
+    return prisma.law.findMany({
+      where: {
+        tenantId,
+        category: params.category,
+        OR: [
+          { title: { contains: params.q, mode: "insensitive" } },
+          { caseNumber: { contains: params.q, mode: "insensitive" } },
+          { raNumber: { contains: params.q, mode: "insensitive" } },
           { summary: { contains: params.q, mode: "insensitive" } },
         ],
       },

@@ -1,0 +1,310 @@
+{
+  "benchmark": "brackenmoor",
+  "answers": "2026-09-13-after-fix",
+  "gradedAt": "2026-09-13T11:04:32.188Z",
+  "grader": "gpt-5.6-terra",
+  "rubricVersion": 1,
+  "moderated": false,
+  "questions": [
+    {
+      "id": "Q1",
+      "title": "Criminal liability and the resolution of conflicting evidence",
+      "total": 66,
+      "max": 100,
+      "scores": [
+        {
+          "id": "A",
+          "name": "Grounding & citation discipline",
+          "max": 25,
+          "score": 15,
+          "justification": "The advice generally cites the relevant bundle documents closely and is careful in several places to identify limitations, notably the access-card limitation and the forensic examiner's inability to attribute message composition. However, it sometimes upgrades contested material into fact: for example, it states that the LB-7 certificate \"was created on 13 November\", although D09 establishes only that the file object was generated then and expressly cannot exclude re-typing of a genuine earlier certificate. It also repeats D13's internally inconsistent assertion that covert monitoring was installed \"eleven days\" after Ms Raghunathan's disclosure rather than identifying the date conflict, and it treats the preliminary HSE report more readily as proof than D01.33 permits.",
+          "evidence": [
+            "D09 Part 2: examiner \"cannot exclude\" re-typing of a genuine earlier certificate",
+            "D13 Part 4: installation 1 December 2023 described as \"eleven days after\" disclosure; D10.7 is dated 16 November and D18.1 records HSE call on 17 November",
+            "D01.33: report \"should not be treated as evidence of the truth\" of matters recorded"
+          ]
+        },
+        {
+          "id": "B",
+          "name": "Contradiction identification",
+          "max": 20,
+          "score": 7,
+          "justification": "The answer identifies important conflicts, including D04/D05, manual wind readings against regional evidence, the 11:05 struck-through log entry against the crane logger, Ferris's denial of presence against access/image material, and the Vantrease/Danecourt causation disagreement. It provides a genuine probative hierarchy principally for the suspension/resumption issue, correctly preferring the independently downloaded machine logger for timing. It nevertheless falls well short of fifteen distinct contradictions each resolved by a stated probative assessment, and misses express planted conflicts, particularly D10's return demand for item 10.6 versus D20.3's assertion that return was not sought, and the D13/D18 chronology contradiction; it also does not confront D08 Part 3's stated possibility of later remedial work when repeatedly characterising the two inspection versions as irreconcilable.",
+          "evidence": [
+            "D14 Part 2: automatic logger is machine-generated and records L-12 at 11:13:26",
+            "D10 disclosure note: solicitors asserted privilege and demanded return of item 10.6 on 11 April 2024",
+            "D20.3: \"Meridian has not sought the return of item 10.6\"",
+            "D08 Part 3: versions are not necessarily logically inconsistent if remediation and later paper handover occurred"
+          ]
+        },
+        {
+          "id": "C",
+          "name": "Legal accuracy & authority",
+          "max": 20,
+          "score": 14,
+          "justification": "The statutory accounts of corporate manslaughter, gross-negligence manslaughter, HSWA s.37, CJA 2003 ss.119-120, CPA 1865 s.3 and CJPOA s.34 are substantially accurate, and the advice sensibly distinguishes substantive use of prior inconsistent statements from mere credit. It accurately cites Misra and addresses Bilta and Singularis as attribution authorities which do not displace the express statutory corporate-manslaughter test. But it does not cite or distinguish Argent and Howell, expressly named in the solicitor's note which Q1.5 required it to address, and its citation for the underlying HSWA ss.2-3 duties is incorrectly linked to s.37 rather than s.2.",
+          "evidence": [
+            "D07 solicitor's note expressly invites regard to \"R v Argent and R v Howell\"",
+            "Answer's HSWA ss.2-3 citation uses legislation.gov.uk/ukpga/1974/37/section/37",
+            "D16.3 names Bilta and Singularis; the answer identifies and distinguishes both"
+          ]
+        },
+        {
+          "id": "D",
+          "name": "Reasoning in the alternative",
+          "max": 15,
+          "score": 12,
+          "justification": "This is a substantial strength. The advice reasons conditionally on Ferris's presence, Pyle's trial position, the source of the radio instruction, the controlled drawing available at site, privilege, and the competing structural models; it also identifies what further material could resolve those issues. Its weakness is that it labels resumption \"in breach\" as proved despite the unresolved authority and record issues, and it does not fully preserve D08 Part 3's alternative that a defect record could have preceded subsequent remediation and a later handover.",
+          "evidence": [
+            "D14 Part 2: crane driver could not identify radio speaker and only assumed it was the AP",
+            "D01.34: it has not been established whether Rev. B or Rev. C was on site",
+            "D08 Part 3: no record of remedial work, but later remediation remains an arguable explanation"
+          ]
+        },
+        {
+          "id": "E",
+          "name": "Asserted vs said vs shown vs established",
+          "max": 10,
+          "score": 8,
+          "justification": "The answer usually distinguishes carefully between a witness saying something, a party asserting it, a record showing it, and an inference that may be drawn. Examples include its treatment of Ferris's account of the visitor badge, the restriction on device attribution, and its refusal to call D05 corroborated merely because a card was presented. The qualification is not fully sustained when it refers to physical proof of absent ties and an apparently created certificate without always preserving D01's preliminary, non-evidential status and D09's authorship caveat.",
+          "evidence": [
+            "D11.4.1: examiner does not opine who physically composed messages",
+            "D13 Part 1: card presentation does not identify cardholder",
+            "D01.1 and D01.33: conclusions are provisional and report is not proof of recorded matters"
+          ]
+        },
+        {
+          "id": "F",
+          "name": "Determinative silences",
+          "max": 5,
+          "score": 5,
+          "justification": "The answer identifies more than three potentially determinative lacunae and specifies productive enquiries. These include the identity of the person who ordered recommencement, the actual controlled drawing on site, primary CCTV/NVR evidence, the identity and evidence of the two agency workers, and device/location evidence relevant to Ferris's presence. Those enquiries are linked to chargeability rather than presented as generic investigative wishes.",
+          "evidence": [
+            "D14 Part 2: no identified radio speaker",
+            "D01.9 and D02.5.6: NSS-4402 and NSS-4419 remain unidentified",
+            "D01.34: revision on site not established",
+            "D13.3.3-3.5: east-elevation footage absent and NVR explanation unresolved"
+          ]
+        },
+        {
+          "id": "G",
+          "name": "Completeness",
+          "max": 5,
+          "score": 5,
+          "justification": "All five numbered parts of Q1 are addressed. The advice covers the Full Code Test, corporate and personal routes, Pyle's admissibility and credibility position, suspension and resumption, causation, adverse inferences, digital evidence, privilege and further enquiries. The answer is overlong, but it is not incomplete or left as a review list.",
+          "evidence": [
+            "Answer sections 1.1 to 1.5 each correspond to a numbered Q1 requirement",
+            "D01.30 DPP consent is identified in the charging recommendation context"
+          ]
+        }
+      ],
+      "overallComment": "This is a sophisticated and generally well-structured prosecution advice, especially on alternative reasoning, the distinction between corporate and individual liability, and the evidential limits of digital records. Its central assessment failure is not doing the required contradiction exercise: it neither identifies fifteen discrete conflicts nor supplies a document-by-document probative resolution for each. Worse, it repeats rather than diagnoses the bundle's conspicuous D13 \"eleven days\" chronology error, and it misses the D10/D20.3 privilege-return conflict. The legal framework is mostly sound, but the omission of Argent and Howell is material where the solicitor-advice basis for silence is expressly in issue.",
+      "gradingSeconds": 75
+    },
+    {
+      "id": "Q2",
+      "title": "The commercial and insurance consequences",
+      "total": 57,
+      "max": 100,
+      "scores": [
+        {
+          "id": "A",
+          "name": "Grounding & citation discipline",
+          "max": 25,
+          "score": 16,
+          "justification": "The answer is generally well anchored to D15-D17 and frequently distinguishes a document's contents from a proposition to be proved; it correctly flags that cl. 4.7.4 and the full IA/18 are not reproduced. However, it invents an assessment date of 13 September 2026, notwithstanding that neither the question nor bundle supplies today's date, and uses that invention to say limitation is close and protective proceedings are required within 24 hours. Some conclusions also overstate what is established, notably that Mr Aksoy \"plainly\" had statutory date-of-knowledge of the legally material cause on the accident date.",
+          "evidence": [
+            "No bundle document states that today's date is 13 September 2026.",
+            "Answer, section 2.4F: \"Limitation as at 13 September 2026\" and \"Within the next 24 hours\".",
+            "D03 paras 2 and 10-13: Mr Aksoy expressly qualifies his memory and says parts were reconstructed afterwards.",
+            "D15 Part 1 and Parts 2-4 are accurately used for the contractual timetable and certification."
+          ]
+        },
+        {
+          "id": "B",
+          "name": "Contradiction identification",
+          "max": 20,
+          "score": 3,
+          "justification": "The answer notices several conflicts, including the two Pyle accounts, the two inspection records, the certificate metadata, the wind evidence, and the competing structural experts. It does not, however, identify at least fifteen distinct contradictions and, critically, almost never states which item is more probative and why. It misses major planted contradictions, including the D10 disclosure/return account against D20.3, the D14 11:05 struck-through resumption against the 11:13:26 crane record, the D17 reservation-letter year discrepancy, and the impossible chronology in D18's board minute.",
+          "evidence": [
+            "D08 Parts 1-3: Version A records satisfactory ties and handover; hashed tablet Version B records defects and no handover.",
+            "D10 disclosure note says item 10.6 was disclosed in error and its return demanded; D20.3 says Meridian has not sought its return and HSE sequestered it.",
+            "D14 Parts 1-2: struck-through log says lifting resumed at 11:05; machine log records no hook load until 11:13:26.",
+            "D17 heading identifies INS/4 as 2.02.2024, whereas D17 Parts 4-5 date the reservation 2 February 2025.",
+            "D18 Part 18.2: a minute dated 2 November refers to an incident occurring on 14 November."
+          ]
+        },
+        {
+          "id": "C",
+          "name": "Legal accuracy & authority",
+          "max": 20,
+          "score": 12,
+          "justification": "The core named authorities are accurately identified and sensibly applied: Grove, Bexheat, SG South, Gosvenor and Versloot are all addressed, and the discussion of Insurance Act ss. 3, 7, 8, 10, 11, 12 and 17 is mostly sound. The Court of Appeal decision in Grove is mentioned without a neutral citation or resolved link, and Schedule 1 is only cursorily addressed rather than applying its different remedies. More seriously, the advice describes a civil claim as \"statutory-duty-based\" on CDM 2015 breaches without addressing the removal of civil liability for breach of health-and-safety regulations by s.69 Enterprise and Regulatory Reform Act 2013; CDM standards may inform negligence but do not themselves supply that cause of action. It also incorrectly says CDM 2015 applies in Northern Ireland.",
+          "evidence": [
+            "Answer, section 2.1C: Grove, Bexheat, SG South, Gosvenor and Versloot are cited with links.",
+            "D17 Part 6 expressly identifies Insurance Act 2015, Sch.1 paras 5-6; the answer does not separately analyse the Schedule's remedies.",
+            "Answer, section 2.4A/D: proposes a \"negligence and statutory-duty-based claim\" supported by CDM 2015.",
+            "Answer, section 2.4C: \"The Construction (Design and Management) Regulations 2015 apply throughout England, Wales, Scotland and Northern Ireland.\""
+          ]
+        },
+        {
+          "id": "D",
+          "name": "Reasoning in the alternative",
+          "max": 15,
+          "score": 11,
+          "justification": "The answer reasons usefully in the alternative on the validity of IA/18, the scope of any fraud defence, the two contractual termination routes, common-law repudiation, Caldera's knowledge, and oral hold-cover authority. It properly recognises that post-May 2024 metadata cannot itself establish Coldbrook's state of belief on 19 December 2023. But it does not reason in the alternative on the unsupplied current date or adequately distinguish possible dates of knowledge for Mr Aksoy, each dependant, and any estate claim.",
+          "evidence": [
+            "Answer, section 2.1E: distinguishes an overstated application from a document incapable of being a valid application.",
+            "Answer, section 2.2D: identifies the need for evidence of what Coldbrook actually knew by 19 December 2023.",
+            "D17 Part 3: the broker email is dated 4 September, but the actual contract-formation date is not supplied.",
+            "D01 paras 6-8 and D03: establish injury and accident, but not conclusively every legally material date-of-knowledge issue."
+          ]
+        },
+        {
+          "id": "E",
+          "name": "Asserted vs said vs shown vs established",
+          "max": 10,
+          "score": 8,
+          "justification": "The answer usually uses appropriate evidential language such as \"asserts\", \"if proved\", \"states\", \"facially\", and \"cannot conclusively establish\", particularly in relation to forgery, fraud and the reasonableness of Coldbrook's belief. It nevertheless occasionally compresses contested evidence into fact, for example by treating Meridian as having controlled the operational system and treating knowledge or causation as plain where the bundle preserves substantial disputes. The qualifications concerning the certificate, Pyle's evidence and the expert disagreement are otherwise a strength.",
+          "evidence": [
+            "D09 Part 2: the examiner cannot exclude retyping of a genuine earlier certificate and cannot conclusively establish authorship.",
+            "D01 para 33: HSE says its report should not be treated as evidence of the truth of matters recorded in referred documents.",
+            "D19 section 1 and D20 item 20.1: the experts materially disagree over the causal role of wind and relative ranking of causes."
+          ]
+        },
+        {
+          "id": "F",
+          "name": "Determinative silences",
+          "max": 5,
+          "score": 5,
+          "justification": "The answer identifies well over three potentially determinative silences and says what evidence would resolve them. These include the missing cl. 4.7.4/full IA/18 material, Caldera's contract-formation date and underwriting evidence, the broker's authority for TowerLine hold-cover, and the dependants' financial circumstances. Those are genuinely material to the specified payment, insurance and recovery issues.",
+          "evidence": [
+            "Answer, section 2.1E: missing cl. 4.7.4, full IA/18 and substantiation.",
+            "Answer, section 2.3A: missing formation date, Mr Pilbeam's role, underwriting guidelines and full file.",
+            "Answer, section 2.4B: missing broker appointment, binding authority, underwriting records and call notes.",
+            "Answer, section 2.4E: income, other dependants, children and agency/tax records are not identified in the bundle."
+          ]
+        },
+        {
+          "id": "G",
+          "name": "Completeness",
+          "max": 5,
+          "score": 2,
+          "justification": "Most of 2.1-2.3 is covered, and the answer does address the statutory insurer route, oral cover, CDM, Fatal Accidents Act and a forum distinction. It does not properly address limitation for every potential claim: it omits a distinct estate claim and assumes a date for today's assessment. It also expressly ends with a \"Not Yet Reviewed\" list, which the marking instructions identify as a completeness defect, and its discussion of the duty to the agency worker is much less developed than that concerning Mr Aksoy.",
+          "evidence": [
+            "Answer, \"Not Yet Reviewed\": expressly states that authorities on principal-contractor duties and broker authority have not been reviewed.",
+            "D01 para 7 identifies the deceased; answer discusses FAA dependant claims but not a separate estate cause of action and its limitation.",
+            "D17 Part 7 expressly distinguishes Mr Aksoy's TowerLine route from his direct Meridian route.",
+            "D01 paras 7-9 distinguish Mr Wieczorek's agency engagement from Mr Aksoy's TowerLine employment."
+          ]
+        }
+      ],
+      "overallComment": "This is a detailed and often legally literate answer, with particularly effective alternative analysis of the payment, termination and Caldera issues. Its principal assessment failure is not length but method: it does not perform the required systematic contradiction-and-probativeness exercise, despite the bundle being constructed around it. The unsupported selection of 13 September 2026 materially infects the limitation advice and urgent procedural recommendations. The personal-injury analysis also needs a more accurate account of CDM's role after the abolition of civil liability for breach of statutory duty, and separate treatment of every potential claimant and claim.",
+      "gradingSeconds": 91
+    },
+    {
+      "id": "Q3",
+      "title": "Admissibility, privilege, disclosure and professional conduct",
+      "total": 44,
+      "max": 100,
+      "scores": [
+        {
+          "id": "A",
+          "name": "Grounding & citation discipline",
+          "max": 25,
+          "score": 11,
+          "justification": "The memorandum usually gives useful document and paragraph references, and is generally careful to identify material as a party's position or a witness account. However, it adopts rather than identifies the D13 timing inconsistency: it repeatedly states that installation was eleven days after the 16 November disclosure, although the established installation date is 1 December, fifteen days later. It also treats D20.3's assertion that no return of D10.6 was sought as a fact, without confronting D10's express disclosure note that return was demanded on 11 April, and incorrectly says the crane log corroborates resumption at 11:05 when its raw data records resumption at 11:13:26.",
+          "evidence": [
+            "D13 Part 4: equipment installed 1 December 2023; final bullet says installation was 'eleven days after' the 16 November disclosure",
+            "D10 disclosure note: solicitors asserted privilege and demanded return of item 10.6 on 11 April 2024",
+            "D20.3 positions: 'Meridian has not sought the return of item 10.6'",
+            "D14 Part 1: struck-through entry says lifting resumed at 11:05; Part 2 machine log records L-12 began at 11:13:26"
+          ]
+        },
+        {
+          "id": "B",
+          "name": "Contradiction identification",
+          "max": 20,
+          "score": 3,
+          "justification": "The answer discusses a number of evidential tensions, particularly the board minute, competing inspection records, certificate provenance and the disputed audio. It does not identify at least fifteen distinct contradictions, does not provide a contradiction-by-contradiction probative comparison, and misses the assessment's expressly signposted inconsistencies. In particular, it neither resolves D13's arithmetic contradiction by preferring the dated installation record nor recognises that the machine crane record conflicts with, rather than corroborates, the struck-through 11:05 daily-log entry.",
+          "evidence": [
+            "D08 Parts 1-3: competing inspection versions and qualified forensic provenance",
+            "D06 para.13: Kettleborough accepts her 11:19 wording is inconsistent with her asserted 10:40 suspension",
+            "D13 Part 4 / D18 Part 18.1: stated 'eleven days' conflicts with 16 November disclosure and 1 December installation",
+            "D14 Parts 1-2: 11:05 struck-through resumption versus 11:13:26 automatic crane record",
+            "D10 disclosure note versus D20.3 positions on return of item 10.6"
+          ]
+        },
+        {
+          "id": "C",
+          "name": "Legal accuracy & authority",
+          "max": 20,
+          "score": 8,
+          "justification": "There is sound high-level treatment of legal advice privilege, the iniquity exception, the distinction between admissibility and weight, the CJA hearsay structure, and the no-service requirement for a section 103A claim. But the answer does not accurately complete the requested authority exercise: Cox and Railton and Eustice are not cited with resolved links or substantively distinguished, Vaughan is not analysed, and the final paragraph leaves the crucial no-qualifying-service burden point to be verified rather than advising on it. It also states that PACE section 78 applies throughout the United Kingdom, and gives an incomplete DPA 2018 analysis by saying the retrieved section is inapplicable instead of addressing the pleaded domestic provisions and any relevant exemption.",
+          "evidence": [
+            "Answer, 3.1: 'older authorities ... were not directly retrievable' for Cox and Railton and Eustice",
+            "D13 Part 4 identifies Meridian's reliance on Vaughan v London Borough of Lewisham and ss.35-40 DPA 2018",
+            "Answer, final 'Do not overlook': burden said to require verification against Smith/Kuzel before reliance",
+            "D18 pp.1-3: section 103A and the reason/principal-reason issue are central"
+          ]
+        },
+        {
+          "id": "D",
+          "name": "Reasoning in the alternative",
+          "max": 15,
+          "score": 9,
+          "justification": "The answer reasons effectively in the alternative on iniquity, waiver, the three possible readings of the recording, the board minute's provenance, and the expert's use of disputed material. It frequently specifies what further evidence or a preliminary ruling would decide the point. Its alternative reasoning is nevertheless undermined where it silently accepts the D13 timing assertion and where it frames the dismissal issue as Meridian having to prove genuine redundancy, without resolving the applicable burden analysis for a short-service claimant.",
+          "evidence": [
+            "Answer, 3.1D: separate alternatives for iniquity and inadvertent disclosure/waiver",
+            "Answer, 3.5E: proposed conditional expert opinions for each transcript reading",
+            "D18 Part 18.6: reason or principal reason is expressly disputed",
+            "D13 Part 4: dates permit the installation-timing contradiction to be identified rather than assumed away"
+          ]
+        },
+        {
+          "id": "E",
+          "name": "Asserted vs said vs shown vs established",
+          "max": 10,
+          "score": 7,
+          "justification": "The memorandum is often disciplined in saying that Meridian contends, an expert assumes, a witness says, or a document is capable of showing a matter. That is a real strength, especially in the privilege and hearsay sections. It lapses into treating disputed propositions as established, including the erroneous eleven-day surveillance chronology and the supposed failure to seek return of D10.6, despite contrary bundle text.",
+          "evidence": [
+            "D01 para.33: HSE report must not be treated as evidence of the truth of matters recorded in referred documents",
+            "D20.3: privilege-holder and CPS/Coldbrook positions are expressly competing",
+            "D10 disclosure note and D20.3: contradictory accounts of the return demand",
+            "D13 Part 4: installation date is stated as an established fact"
+          ]
+        },
+        {
+          "id": "F",
+          "name": "Determinative silences",
+          "max": 5,
+          "score": 3,
+          "justification": "The answer identifies several useful missing matters and proposes sensible enquiries, including the board-minute original and provenance material, disclosure-review records, surveillance access records, and evidence about the January recruitment. It does not clearly organise these as determinative bundle silences, and some requests concern evidence known to exist but not yet produced rather than a genuine silence. It also fails to identify the absence of the contents of Ferris's deleted messages, the identity of the person who actually used the Ferris visitor badge, and whether Meridian knew of the HSE call as separately determinative unresolved matters.",
+          "evidence": [
+            "D11 paras.2.1-2.5: five deleted Ferris messages cannot be recovered",
+            "D13 Part 1: visitor badge could have been Ferris, his driver, or neither; no gatehouse footage",
+            "D18 Part 18.6: Meridian's knowledge of the HSE call is expressly disputed",
+            "D18 Part 18.2: manuscript minute has not been produced"
+          ]
+        },
+        {
+          "id": "G",
+          "name": "Completeness",
+          "max": 5,
+          "score": 3,
+          "justification": "The answer is well structured and addresses all six numbered headings, includes a forum map for each main area, and gives substantial proposed directions. Completeness is reduced because the DPA 2018 issue is expressly left without substantive resolution, the statutory burden in the short-service section 103A claim is left as a 'verify' point, and the answer does not meet the question's requirement to identify and resolve every evidential contradiction. The final 'Do not overlook' qualification is particularly unsuitable in place of a concluded answer on a named issue.",
+          "evidence": [
+            "Answer, 3.3: says detailed DPA analysis must remain anchored to material not retrieved",
+            "Answer, final paragraph: 'verify against current authority before relying on it'",
+            "Question requirement: burden where there is no qualifying service; every evidential, privilege and disclosure problem",
+            "D18 Part 18.6: central issue is the reason or principal reason for dismissal"
+          ]
+        }
+      ],
+      "overallComment": "This is a polished and often analytically sophisticated answer, particularly on privilege, expert evidence, hearsay and procedural directions. Its central weakness is insufficiently forensic bundle control: it repeats planted inconsistencies instead of exposing them and does not supply the required fifteen contradiction/probativeness analyses. Authority discipline and the short-service whistleblowing burden are also materially incomplete. The answer should be shorter, more categorical on settled law, and more exact about what the raw document proves as distinct from what a party, expert or investigator asserts.",
+      "gradingSeconds": 64
+    }
+  ],
+  "overall": 55.7,
+  "passMark": 85
+}

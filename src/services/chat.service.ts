@@ -8,7 +8,8 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Re
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation } from "../utils/response-parser";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
+import DecisionRecordSvc from "./decision-record.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
@@ -214,6 +215,7 @@ export default class ChatSvc {
       timeline?: TimelineItem[];
       audioOverview?: AudioOverviewTurn[];
       reasoning?: ReasoningExplanation;
+      decisions?: DecisionRecordsPayload;
     }>(cacheKey);
     // Map-generation turns used to cache text-only replies (the mind map arrives on a
     // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
@@ -232,6 +234,7 @@ export default class ChatSvc {
     let streamedTimeline: TimelineItem[] | undefined;
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
+    let streamedDecisions: DecisionRecordsPayload | undefined;
     if (useCache && cached) {
       onChunk(cached.content);
       fullResponse = cached.content;
@@ -240,6 +243,7 @@ export default class ChatSvc {
       streamedTimeline = cached.timeline;
       streamedAudioOverview = cached.audioOverview;
       streamedReasoning = cached.reasoning;
+      streamedDecisions = cached.decisions;
     } else {
       // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
       // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
@@ -267,6 +271,7 @@ export default class ChatSvc {
       streamedTimeline = result.timeline;
       streamedAudioOverview = result.audioOverview;
       streamedReasoning = result.reasoning;
+      streamedDecisions = result.decisions;
       redis.set(
         cacheKey,
         {
@@ -276,6 +281,7 @@ export default class ChatSvc {
           timeline: streamedTimeline,
           audioOverview: streamedAudioOverview,
           reasoning: streamedReasoning,
+          decisions: streamedDecisions,
         },
         RESPONSE_CACHE_TTL,
       );
@@ -297,6 +303,7 @@ export default class ChatSvc {
       timeline: streamedTimeline,
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
+      decisions: streamedDecisions,
     });
   }
 
@@ -324,6 +331,7 @@ export default class ChatSvc {
     const mindMap = p.mindMap ?? extractMindMap(p.fullResponse);
     const audioOverview = p.audioOverview;
     const reasoning = p.reasoning;
+    const decisions = p.decisions;
     const cleanedContent = stripStructuredBlocks(p.fullResponse);
     const topics = splitIntoTopics(cleanedContent);
 
@@ -375,6 +383,23 @@ export default class ChatSvc {
       await ChatRepo.saveReasoning(assistantMessage.id, reasoning).catch((err) => {
         logger.error("Failed to persist reasoning explanation", { err, messageId: assistantMessage.id });
       });
+    }
+    if (decisions?.records.length) {
+      await ChatRepo.saveDecisionRecords(assistantMessage.id, decisions).catch((err) => {
+        logger.error("Failed to persist decision records", { err, messageId: assistantMessage.id });
+      });
+      // Only case-linked consultations have a case graph to promote into — a general
+      // consultation's decision records still get the raw MessageDecisionRecord row above
+      // (visible via that message), just no case-level DecisionRecord/graph promotion.
+      if (p.effectiveCaseId) {
+        await DecisionRecordSvc.promote(p.effectiveCaseId, assistantMessage.id, decisions.records).catch((err) => {
+          logger.error("Failed to promote decision records into the case graph", {
+            err,
+            caseId: p.effectiveCaseId,
+            messageId: assistantMessage.id,
+          });
+        });
+      }
     }
     if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
   }

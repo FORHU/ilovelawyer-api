@@ -200,6 +200,100 @@ export function parseReasoningPayload(data: unknown): ReasoningExplanation | und
   return { reasoning: anyV.reasoning, citation_reasons };
 }
 
+// Decision Records (differentiation program, Phase 1) — the "Why?" behind one conclusion in a
+// legal answer, already verified by chat-wonder-v2-api's legal_decisions.py before it ever
+// reaches here (every rule link checked against the retrieved pool, every evidence reference
+// checked against the attached exhibits) — see docs/plans/differentiation-program.md
+// Workstream A. This app only re-validates shape, not content: it never re-derives `verified`.
+export interface DecisionRule {
+  title: string;
+  url: string | null;
+  verified: boolean;
+}
+
+export interface DecisionEvidence {
+  doc: string;
+  docId: string | null;
+  pinpoint: string;
+  quote: string | null;
+  verified: boolean;
+}
+
+export interface DecisionAlternative {
+  position: string;
+  whyRejected: string;
+  evidenceRef: string | null;
+}
+
+export interface DecisionRecordItem {
+  anchor: string;
+  conclusion: string;
+  rule: DecisionRule[];
+  evidenceFor: DecisionEvidence[];
+  evidenceAgainst: DecisionEvidence[];
+  alternatives: DecisionAlternative[];
+  weighting: string;
+  confidence: "high" | "medium" | "low";
+  wouldChangeIf: string[];
+}
+
+export interface DecisionRecordsPayload {
+  records: DecisionRecordItem[];
+}
+
+function asStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+function asDecisionEvidence(v: unknown): DecisionEvidence[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+    .map((e) => ({
+      doc: typeof e.doc === "string" ? e.doc : "",
+      docId: typeof e.docId === "string" ? e.docId : null,
+      pinpoint: typeof e.pinpoint === "string" ? e.pinpoint : "",
+      quote: typeof e.quote === "string" ? e.quote : null,
+      verified: e.verified === true,
+    }));
+}
+
+/** Same calling convention as parseReasoningPayload: the whole `{"type":"decisions",...}`
+ * WebSocket message is valid JSON on its own, so the caller passes the parsed `.data` field. */
+export function parseDecisionsPayload(data: unknown): DecisionRecordsPayload | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const anyV = data as any;
+  if (!Array.isArray(anyV.records)) return undefined;
+  const records: DecisionRecordItem[] = anyV.records
+    .filter((r: unknown): r is Record<string, unknown> => !!r && typeof r === "object")
+    .filter((r: Record<string, unknown>) => typeof r.anchor === "string" && r.anchor.trim() && typeof r.conclusion === "string")
+    .map((r: Record<string, unknown>) => ({
+      anchor: r.anchor as string,
+      conclusion: r.conclusion as string,
+      rule: Array.isArray(r.rule)
+        ? (r.rule as any[])
+            .filter((x) => !!x && typeof x === "object" && typeof x.title === "string")
+            .map((x) => ({ title: x.title as string, url: typeof x.url === "string" ? x.url : null, verified: x.verified === true }))
+        : [],
+      evidenceFor: asDecisionEvidence(r.evidenceFor),
+      evidenceAgainst: asDecisionEvidence(r.evidenceAgainst),
+      alternatives: Array.isArray(r.alternatives)
+        ? (r.alternatives as unknown[])
+            .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+            .map((x) => ({
+              position: typeof x.position === "string" ? x.position : "",
+              whyRejected: typeof x.whyRejected === "string" ? x.whyRejected : "",
+              evidenceRef: typeof x.evidenceRef === "string" ? x.evidenceRef : null,
+            }))
+        : [],
+      weighting: typeof r.weighting === "string" ? r.weighting : "",
+      confidence: r.confidence === "high" || r.confidence === "low" ? r.confidence : "medium",
+      wouldChangeIf: asStringArray(r.wouldChangeIf),
+    }));
+  if (!records.length) return undefined;
+  return { records };
+}
+
 /**
  * Extracts a mind map structure from AI responses.
  * Supports [MINDMAP]...[/MINDMAP] wrapper, an unclosed tag (streaming cutoff),

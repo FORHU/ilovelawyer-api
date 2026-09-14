@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 import { getPresignedGetUrl } from "../utils/s3";
 import type { ReconstructionClaim } from "../utils/case-reconstruction-claims-parse";
+import type { Scene } from "../utils/case-reconstruction-scenes-parse";
 import { Prisma } from "@prisma/client";
 
 export interface ReconstructionUpsertData {
@@ -24,11 +25,23 @@ export interface ReconstructionAudioUpdate {
   audioStaleAt?: Date | null;
 }
 
+export interface ReconstructionTableReadUpdate {
+  tableReadFileId?: string | null;
+  tableReadStatus?: string | null;
+  tableReadStaleAt?: Date | null;
+}
+
 export default class CaseReconstructionRepo {
   static async get(caseId: string) {
-    const row = await prisma.caseReconstruction.findUnique({ where: { caseId }, include: { audioFile: true } });
+    const row = await prisma.caseReconstruction.findUnique({
+      where: { caseId },
+      include: { audioFile: true, tableReadFile: true },
+    });
     if (row?.audioFile?.s3Key) {
       row.audioFile.fileUrl = await getPresignedGetUrl(row.audioFile.s3Key);
+    }
+    if (row?.tableReadFile?.s3Key) {
+      row.tableReadFile.fileUrl = await getPresignedGetUrl(row.tableReadFile.s3Key);
     }
     return row;
   }
@@ -57,6 +70,19 @@ export default class CaseReconstructionRepo {
   }
 
   static async updateAudio(caseId: string, data: ReconstructionAudioUpdate) {
+    return prisma.caseReconstruction.update({ where: { caseId }, data });
+  }
+
+  /** `scenes: null` clears the script (not currently exposed as a lawyer action, but keeps the
+   * type honest — a reconstruction can predate Rung 1 or have generation fail outright). */
+  static async updateScenes(caseId: string, scenes: Scene[] | null) {
+    return prisma.caseReconstruction.update({
+      where: { caseId },
+      data: { scenes: scenes ? (scenes as unknown as Prisma.InputJsonValue) : Prisma.JsonNull },
+    });
+  }
+
+  static async updateTableRead(caseId: string, data: ReconstructionTableReadUpdate) {
     return prisma.caseReconstruction.update({ where: { caseId }, data });
   }
 

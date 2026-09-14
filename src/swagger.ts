@@ -267,6 +267,15 @@ const swaggerSpec: OAS3Definition = {
           updatedAt: { type: "string", format: "date-time" },
         },
       },
+      Note: {
+        type: "object",
+        description: "A free-form note anchored to one calendar day — distinct from an Event/Appointment in that it has no start/end time.",
+        properties: {
+          id: { type: "string" },
+          date: { type: "string", format: "date", description: "yyyy-MM-dd" },
+          body: { type: "string" },
+        },
+      },
       Error: {
         type: "object",
         properties: {
@@ -1960,6 +1969,53 @@ const swaggerSpec: OAS3Definition = {
           204: { description: "Event deleted" },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
+    // ── Notes (Calendar) ─────────────────────────────────────────────────────
+    "/notes": {
+      get: {
+        tags: ["Notes"],
+        summary: "List calendar notes for the current user within a date range",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "from", in: "query", schema: { type: "string", format: "date" }, description: "yyyy-MM-dd, inclusive" },
+          { name: "to", in: "query", schema: { type: "string", format: "date" }, description: "yyyy-MM-dd, inclusive" },
+        ],
+        responses: {
+          200: {
+            description: "Notes",
+            content: {
+              "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/Note" } } },
+            },
+          },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      post: {
+        tags: ["Notes"],
+        summary: "Create a calendar note",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["date", "body"],
+                properties: {
+                  date: { type: "string", format: "date", description: "yyyy-MM-dd" },
+                  body: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: "Note created", content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } },
+          400: { description: "Missing date or body", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },

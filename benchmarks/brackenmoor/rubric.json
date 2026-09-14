@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "derivedFrom": "D21 marking guidance",
+  "passMark": 85,
+  "criteria": [
+    {
+      "id": "A",
+      "name": "Grounding & citation discipline",
+      "weight": 25,
+      "guidance": "Every factual assertion is pinned to a bundle document and paragraph/part/item. No fact is asserted that the bundle does not support; a fact the answer could not see is flagged, not invented. Deduct heavily for any assertion contradicted by the bundle, and for characterising a document the answer has not actually read."
+    },
+    {
+      "id": "B",
+      "name": "Contradiction identification",
+      "weight": 20,
+      "guidance": "Distinct factual contradictions within the bundle are identified precisely (which document says what), and for each the answer says which document is more probative and why. Full marks needs the contradictions the question points at plus others the bundle plants (e.g. D13 'eleven days' vs D18 dates; D10 disclosure note vs D20.3 on return of item 10.6; D06 §13 wording; D14 struck-through entry vs crane log)."
+    },
+    {
+      "id": "C",
+      "name": "Legal accuracy & authority",
+      "weight": 20,
+      "guidance": "Statutes and cases are correctly stated and applied for England & Wales. Every authority the question names is cited (with a resolved link) or expressly distinguished. No authority is invented; no holding is stated from memory as if fetched. Deduct for hedging on a doctrinal point a competent practitioner would state outright."
+    },
+    {
+      "id": "D",
+      "name": "Reasoning in the alternative",
+      "weight": 15,
+      "guidance": "Where the bundle does not permit a single answer, the answer reasons through each tenable reading and states what would decide between them. Genuine ambiguity is flagged, never resolved by silent assumption."
+    },
+    {
+      "id": "E",
+      "name": "Asserted vs said vs shown vs established",
+      "weight": 10,
+      "guidance": "The answer consistently distinguishes what a party asserts, what a witness says, what a document shows, and what has been established."
+    },
+    {
+      "id": "F",
+      "name": "Determinative silences",
+      "weight": 5,
+      "guidance": "Matters on which the bundle is silent and which would be determinative are identified (at least three across the paper), with what enquiry would resolve them."
+    },
+    {
+      "id": "G",
+      "name": "Completeness",
+      "weight": 5,
+      "guidance": "Every numbered sub-question and every named issue within it is addressed; forum distinctions are stated where the question asks for them. Deduct for a 'Not Yet Reviewed' or similar list."
+    }
+  ]
+}

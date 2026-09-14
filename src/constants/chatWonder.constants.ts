@@ -10,6 +10,13 @@ export const CHAT_WONDER_SESSION_TIMEOUT_MS = 10_000;
  * comment on the 524 this same blocking-REST pattern produces for longer generations) so a
  * dead connection fails on our side with a clear error instead of a raw proxy timeout. */
 export const CHAT_WONDER_REST_TIMEOUT_MS = 90_000;
+
+/** A case whose READY documents total at most this many characters of extracted text is sent to
+ * chat-wonder whole (`case_document_texts`) alongside the ranked chunks, so the model has every
+ * exhibit in full from the first turn and never mistakes a relevance-filtered fetch for the
+ * complete document (Brackenmoor benchmark, D01 §25 / D20.3). 200k chars ≈ 50k tokens, under
+ * chat-wonder's CASE_DOCUMENT_TOKEN_BUDGET. Larger bundles fall back to on-demand fetches. */
+export const CASE_FULL_TEXT_INLINE_CHARS = Number(process.env.CASE_FULL_TEXT_INLINE_CHARS || 200_000);
 export const LEGAL_TAG = "[legal ai]";
 /** the_server.py::process_persona checks this exact tag before falling back to the
  * `jurisdiction` request field — sending it directly picks the `legal_uk` persona (its own

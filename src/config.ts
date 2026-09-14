@@ -47,6 +47,20 @@ export const JURIS_PH_API_URL = (process.env.JURIS_PH_API_URL || "https://juris.
  * chat-wonder-v2-api, which already calls this same server from the AI chat's tool loop).
  * uk-legal-mcp.ts posts `tools/call` requests directly at this one endpoint. */
 export const UK_LEGAL_MCP_URL = process.env.UK_LEGAL_MCP_URL || "https://uk-legal-mcp.fly.dev/mcp";
+/** The National Archives Find Case Law base — a UK judgment's canonical URL is
+ * `${UK_CASELAW_BASE_URL}/<slug>` (slug e.g. "uksc/2024/12"). Used to build `Law.jurisUrl` for
+ * UK case-law rows (uk-law-mappers.ts) and to strip it back to a slug (uk-citation-resolution.ts);
+ * both MUST agree, so it lives here. Trailing slash trimmed. */
+export const UK_CASELAW_BASE_URL = (
+  process.env.UK_CASELAW_BASE_URL || "https://caselaw.nationalarchives.gov.uk"
+).replace(/\/+$/, "");
+/** legislation.gov.uk base — a UK Act/SI's canonical URL is
+ * `${UK_LEGISLATION_BASE_URL}/<type>/<year>/<number>`. Used to parse a stored legislation URL
+ * back into `{ type, year, number }` for the UK Legal MCP's legislation tools. Trailing slash
+ * trimmed. */
+export const UK_LEGISLATION_BASE_URL = (
+  process.env.UK_LEGISLATION_BASE_URL || "https://www.legislation.gov.uk"
+).replace(/\/+$/, "");
 /** Shared secret Chat Wonder sends back to us via `x-api-key` when it calls our API (e.g. to fetch case document chunks). */
 export const CHAT_WONDER_API_KEY = process.env.CHAT_WONDER_API_KEY as string;
 export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;
