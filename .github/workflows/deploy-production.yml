@@ -104,6 +104,8 @@ jobs:
           CLOUDFRONT_URL: ${{ vars.CLOUDFRONT_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
+          UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
+          UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
         run: |
           cat > ${{ github.workspace }}/ilovelawyer-api.env << EOF
           DATABASE_URL=${DATABASE_URL}
@@ -141,6 +143,8 @@ jobs:
           CLOUDFRONT_URL=${CLOUDFRONT_URL}
           OPENAI_API_KEY=${OPENAI_API_KEY}
           JURIS_PH_API_URL=${JURIS_PH_API_URL}
+          UK_CASELAW_BASE_URL=${UK_CASELAW_BASE_URL}
+          UK_LEGISLATION_BASE_URL=${UK_LEGISLATION_BASE_URL}
           NODE_ENV=${{ env.NODE_ENV }}
           PORT=3001
           EOF
