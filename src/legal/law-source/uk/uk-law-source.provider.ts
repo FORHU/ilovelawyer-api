@@ -226,7 +226,7 @@ export class UkLawSourceProvider implements LawSourceProvider {
       judgmentGetIndex(slug).catch(() => null),
       getCitationsNetwork(slug).catch(() => null),
     ]);
-    return LawRepo.updateDetail(row.id, caseLawDetailInput(index, network));
+    return LawRepo.updateDetail(row.id, caseLawDetailInput(index, network, row.caseNumber));
   }
 
   private async fillLegislationDetail(row: Law): Promise<Law> {

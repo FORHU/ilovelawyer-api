@@ -48,17 +48,56 @@ async function callTool<T>(name: string, args: Record<string, unknown>): Promise
   if (payload == null) throw new UkLegalMcpUnavailableError(`UK Legal MCP returned an unreadable ${name} payload`);
   if (payload.error) throw new UkLegalMcpUnavailableError(`UK Legal MCP ${name} error: ${payload.error.message ?? "unknown"}`);
 
-  const structured = payload.result?.structuredContent;
+  const result = payload.result ?? {};
+  const text: unknown = result.content?.[0]?.text;
+
+  // A tool-level failure — the MCP returns HTTP 200 with `result.isError: true` and a
+  // human-readable `content[0].text` like `Internal error: {"error_category": "...", ...}`
+  // (NOT JSON), so this must be checked before the text-JSON fallback below or JSON.parse
+  // throws a bare SyntaxError that escapes as a 500.
+  if (result.isError) {
+    throw mcpToolError(name, typeof text === "string" ? text : "");
+  }
+
+  const structured = result.structuredContent;
   if (structured !== undefined) return structured as T;
 
   // Fallback for a server that only returns the text-content form — content[0].text is itself
   // a JSON string (mirrors the Python client's unwrap_tool_result).
-  const text = payload.result?.content?.[0]?.text;
   if (typeof text === "string") {
-    const parsed = JSON.parse(text) as T;
-    return parsed;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new UkLegalMcpUnavailableError(`UK Legal MCP ${name} returned an unparseable payload`);
+    }
   }
   throw new UkLegalMcpUnavailableError(`UK Legal MCP ${name} returned no usable content`);
+}
+
+/** Turns the MCP's `Internal error: {json}` tool-failure text into a typed error. A `validation`
+ * category (e.g. a court slug TNA's atom feed doesn't accept) is the caller's bad input -> 400;
+ * `not_found` -> 404; anything else is treated as a transient upstream problem so callers fall
+ * back to stored rows the same way they do for a network failure. */
+function mcpToolError(name: string, rawText: string): Error {
+  const jsonStart = rawText.indexOf("{");
+  let category: string | undefined;
+  let description: string | undefined;
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(rawText.slice(jsonStart)) as {
+        error_category?: string;
+        description?: string;
+      };
+      category = parsed.error_category;
+      description = parsed.description;
+    } catch {
+      /* fall through to the generic message */
+    }
+  }
+  const message = description || rawText || `UK Legal MCP ${name} failed`;
+  if (category === "validation") return new HttpError(`UK Legal MCP ${name}: ${message}`, 400);
+  if (category === "not_found") return new HttpError(`UK Legal MCP ${name}: ${message}`, 404);
+  return new UkLegalMcpUnavailableError(`UK Legal MCP ${name} error: ${message}`);
 }
 
 export interface UkCitationsNetworkResult {

@@ -18,8 +18,12 @@ export const UK_WIRE_BY_CATEGORY: Record<LawCategory, UkCategoryWire> = {
 };
 
 /**
- * Court slugs accepted on `/api/law/browse?court=` for UK case law — the subset of the UK Legal
- * MCP's `case_law_search` court vocab that Find Case Law's Atom feed also filters on. Extensible.
+ * Court slugs accepted on `/api/law/browse?court=` for UK case law. Each is verified to be a
+ * valid `court=` filter on TNA's Find Case Law atom feed (`atom.xml?court=<slug>` -> 200).
+ * NOTE: Northern Ireland courts (`nica`, `niqb`, `nifc`, `nist`) are deliberately absent — TNA's
+ * atom feed rejects them with HTTP 400 "not one of the available choices", even though the UK
+ * Legal MCP's own inputSchema lists them. NI judgments are still reachable by free-text search,
+ * just not by this court facet. See docs/adr/0005-uk-library-source.md.
  */
 export const UK_COURTS = [
   "uksc",
@@ -34,6 +38,8 @@ export const UK_COURTS = [
   "ewhc/tcc",
   "ewhc/ipec",
   "ewhc/pat",
+  "ewhc/scco",
+  "ewhc/admlty",
   "ewcop",
   "ewfc",
   "eat",
@@ -43,8 +49,7 @@ export const UK_COURTS = [
   "ukut/lc",
   "ukftt/tc",
   "ukftt/grc",
-  "nica",
-  "niqb",
+  "ukist",
 ] as const;
 export type UkCourt = (typeof UK_COURTS)[number];
 

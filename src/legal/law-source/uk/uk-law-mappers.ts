@@ -104,20 +104,47 @@ export function legislationHitToCreateInput(
 
 // ── lazy detail write-through ───────────────────────────────────────────────
 
+/** Lower-cases, collapses whitespace, strips leading zeros in number tokens — so
+ * "[2026] UKFTT 01281 (GRC)" and "[2026] UKFTT 1281 (GRC)" (a citations_network quirk) match. */
+const normalizeCitation = (c: string): string =>
+  c.toLowerCase().replace(/\s+/g, " ").replace(/\b0+(\d)/g, "$1").trim();
+
+/** Dedupe near-identical citations and drop the judgment's own citation (which
+ * citations_network echoes back, often in more than one form). */
+function cleanCitations(raw: string[], selfCitation: string | null): string[] {
+  const self = selfCitation ? normalizeCitation(selfCitation) : null;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of raw) {
+    const key = normalizeCitation(c);
+    if (!key || key === self || seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
+}
+
 export function caseLawDetailInput(
   index: UkJudgmentIndexResult | null,
   network: UkCitationsNetworkResult | null,
+  selfCitation: string | null,
 ): Prisma.LawUpdateInput {
   const sections = (index?.paragraphs ?? []).map((p) => ({ title: p.eId, summary: p.preview }));
-  const legislation = [...(network?.legislation_refs ?? []), ...(network?.si_refs ?? [])];
-  const cases = [...(network?.neutral_citations ?? []), ...(network?.law_report_refs ?? [])];
+  const legislation = cleanCitations(
+    [...(network?.legislation_refs ?? []), ...(network?.si_refs ?? [])],
+    null,
+  );
+  const cases = cleanCitations(
+    [...(network?.neutral_citations ?? []), ...(network?.law_report_refs ?? [])],
+    selfCitation,
+  );
   return {
     detailFetchedAt: new Date(),
     keywords: [],
     sections: asJson(sections),
     legalRulesCited: legislation,
     relatedCasesCited: cases,
-    citedGrNumbers: network?.neutral_citations ?? [],
+    citedGrNumbers: cleanCitations(network?.neutral_citations ?? [], selfCitation),
     citedRaNumbers: legislation,
   };
 }

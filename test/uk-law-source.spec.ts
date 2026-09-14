@@ -275,4 +275,48 @@ describe("UK Library source (LawSourceProvider)", () => {
     const page = await prisma.lawBrowsePage.findFirst({ where: { filterKey: { contains: "t=UK" } } });
     expect(page).to.not.be.null;
   });
+
+  it("browse: an unknown court is rejected by validation with 400 (never reaches the MCP)", async () => {
+    stubFetch(() => {
+      throw new Error("MCP must not be called for an invalid court");
+    });
+    const res = await request(app)
+      .get("/api/law/browse?category=uk-case-law&court=nica")
+      .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+      .set("X-Organization-Id", ukOrgId);
+    expect(res.status).to.equal(400);
+  });
+
+  it("browse: an MCP tool error (isError + non-JSON text) surfaces cleanly, not as a 500", async () => {
+    // Mirrors the real payload for a court TNA's atom feed rejects — `result.isError: true` and
+    // `content[0].text` = "Internal error: {json}" (NOT parseable JSON).
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: 'Internal error: {"error_category": "validation", "description": "Upstream rejected the request (400)"}',
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const res = await request(app)
+      // a court not touched by the other browse tests, so this misses the LawBrowsePage cache
+      .get("/api/law/browse?category=uk-case-law&court=ewhc%2Fch")
+      .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+      .set("X-Organization-Id", ukOrgId);
+
+    expect(res.status).to.be.oneOf([400, 502]);
+    expect(res.status).to.not.equal(500);
+  });
 });
