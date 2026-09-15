@@ -7,7 +7,9 @@ const transports: winston.transport[] = [
 ];
 
 const logger = winston.createLogger({
-  level: "info",
+  // LOG_LEVEL=debug surfaces the per-call hybrid-retrieval attribution (which chunks the lexical
+  // channel appended) that benchmark runs need; anything else keeps production at info.
+  level: process.env.LOG_LEVEL || "info",
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),

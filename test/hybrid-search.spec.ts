@@ -1,34 +1,6 @@
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { buildLexicalQuery, extractAnchors, reciprocalRankFusion, topNByScore } from "../src/utils/hybridSearch";
-
-describe("reciprocalRankFusion", () => {
-  it("ranks an id present in both lists above one present in only one", () => {
-    const fused = topNByScore(reciprocalRankFusion([["a", "b"], ["b", "c"]]), 3);
-    expect(fused[0]).to.equal("b");
-  });
-
-  it("with one empty list, reproduces the other list's order", () => {
-    const fused = topNByScore(reciprocalRankFusion([["x", "y", "z"], []]), 3);
-    expect(fused).to.deep.equal(["x", "y", "z"]);
-  });
-
-  it("lets a top lexical hit outrank a mid-table vector hit", () => {
-    // "cite" is rank 1 lexically and absent from vector; "v3" is rank 3 in vector only.
-    const fused = topNByScore(reciprocalRankFusion([["v1", "v2", "v3"], ["cite"]]), 4);
-    expect(fused.indexOf("cite")).to.be.lessThan(fused.indexOf("v3"));
-  });
-
-  it("scores by 1/(k + rank)", () => {
-    const scores = reciprocalRankFusion([["a"]], 60);
-    expect(scores.get("a")).to.be.closeTo(1 / 61, 1e-12);
-  });
-
-  it("topNByScore caps the result and keeps first-seen order on ties", () => {
-    const fused = topNByScore(reciprocalRankFusion([["a", "b"], ["c", "d"]]), 2);
-    expect(fused).to.deep.equal(["a", "c"]);
-  });
-});
+import { buildLexicalQuery, extractAnchors } from "../src/utils/hybridSearch";
 
 describe("buildLexicalQuery", () => {
   it("ORs the exact references a legal question cites, not its prose", () => {
@@ -55,10 +27,14 @@ describe("buildLexicalQuery", () => {
     expect(anchors.some((a) => a.includes("s alternative"))).to.equal(false);
   });
 
-  it("falls back to OR-ed content words when a question has no references", () => {
-    expect(buildLexicalQuery("did the site manager know the scaffold was unsafe")).to.equal(
-      "site OR manager OR know OR scaffold OR unsafe",
-    );
+  it("stands down to vector-only when a question cites no exact references", () => {
+    // An OR of content words matches nearly every chunk of a bundle and ts_rank_cd then ranks
+    // by verbosity — worse than not running the lexical channel at all.
+    expect(buildLexicalQuery("did the site manager know the scaffold was unsafe")).to.equal("");
+  });
+
+  it("stands down when a question cites only one reference", () => {
+    expect(buildLexicalQuery("what does D05 say about the handover?")).to.equal("");
   });
 
   it("returns an empty string for blank input", () => {

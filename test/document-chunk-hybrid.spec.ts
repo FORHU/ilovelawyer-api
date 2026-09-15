@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import crypto from "crypto";
-import { describe, it, before, after, afterEach } from "mocha";
+import { describe, it, before, after, beforeEach } from "mocha";
 import prisma from "../src/lib/prisma";
 import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
 
@@ -91,21 +91,32 @@ describe("DocumentChunkRepo hybrid retrieval", () => {
     await prisma.user.delete({ where: { id: userId } });
   });
 
-  afterEach(() => {
+  // Guard *before* each test, not after: dotenv loads a real .env at import time, so without
+  // this the first test inherits whatever HYBRID_RETRIEVAL_ENABLED the developer's .env sets.
+  // Every test below opts in explicitly.
+  beforeEach(() => {
     delete process.env.HYBRID_RETRIEVAL_ENABLED;
   });
 
   describe("findRelevantByDocument (single document)", () => {
-    it("flag off: returns vector-only order, citation chunk last", async () => {
-      const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, CITATION_QUERY, 3);
+    // limit 2 so the main doc's third chunk (the lexical-only citation) sits outside the vector
+    // selection — that is the chunk the lexical channel is supposed to add.
+    it("flag off: returns the vector top-2, citation chunk absent", async () => {
+      const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, CITATION_QUERY, 2);
+      expect(ids).to.deep.equal([nearId, midId]);
+    });
+
+    it("flag on: appends the lexical-only chunk without displacing any vector hit", async () => {
+      process.env.HYBRID_RETRIEVAL_ENABLED = "true";
+      const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, CITATION_QUERY, 2);
+      // The vector selection is intact and still first; the citation chunk is strictly additional.
       expect(ids).to.deep.equal([nearId, midId, citationId]);
     });
 
-    it("flag on: lexical match lifts the citation chunk to the top despite a poor vector rank", async () => {
+    it("flag on: a chunk both channels found is not duplicated", async () => {
       process.env.HYBRID_RETRIEVAL_ENABLED = "true";
       const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, CITATION_QUERY, 3);
-      expect(ids[0]).to.equal(citationId);
-      expect(ids).to.have.members([nearId, midId, citationId]);
+      expect(ids).to.deep.equal([nearId, midId, citationId]);
     });
 
     it("flag on with a blank query: falls back to vector-only order", async () => {
@@ -114,10 +125,16 @@ describe("DocumentChunkRepo hybrid retrieval", () => {
       expect(ids).to.deep.equal([nearId, midId, citationId]);
     });
 
-    it("flag on with no lexical matches: vector order is unchanged", async () => {
+    it("flag on with a question citing no references: vector-only, lexical stands down", async () => {
       process.env.HYBRID_RETRIEVAL_ENABLED = "true";
-      const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, "zzqx nonexistent", 3);
-      expect(ids).to.deep.equal([nearId, midId, citationId]);
+      const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, "was the floor wet", 2);
+      expect(ids).to.deep.equal([nearId, midId]);
+    });
+
+    it("flag on with references that match nothing: vector order is unchanged", async () => {
+      process.env.HYBRID_RETRIEVAL_ENABLED = "true";
+      const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, "Does D99 para. 77 bind Zzqx Holdings?", 2);
+      expect(ids).to.deep.equal([nearId, midId]);
     });
 
     it("flag on but lexical search throws: degrades to vector-only instead of failing", async () => {
@@ -127,8 +144,8 @@ describe("DocumentChunkRepo hybrid retrieval", () => {
         throw new Error("simulated: column missing");
       };
       try {
-        const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, CITATION_QUERY, 3);
-        expect(ids).to.deep.equal([nearId, midId, citationId]);
+        const ids = await DocumentChunkRepo.findRelevantByDocument(mainDocId, queryEmbedding, CITATION_QUERY, 2);
+        expect(ids).to.deep.equal([nearId, midId]);
       } finally {
         DocumentChunkRepo.lexicalIdsByDocument = original;
       }
@@ -141,13 +158,12 @@ describe("DocumentChunkRepo hybrid retrieval", () => {
       expect(rows.map((r) => r.id)).to.deep.equal([nearId, midId]);
     });
 
-    it("flag on: a lexical match takes a floor slot in its document and a lexical-only document now surfaces", async () => {
+    it("flag on: lexical hits are appended and the vector selection survives intact", async () => {
       process.env.HYBRID_RETRIEVAL_ENABLED = "true";
       const rows = await DocumentChunkRepo.findRelevantByCase(caseId, queryEmbedding, CITATION_QUERY, 2);
-      const ids = rows.map((r) => r.id);
-      expect(ids).to.include(citationId);
-      expect(ids).to.include(reportChunkId);
-      expect(ids).to.not.include(midId);
+      // The regression guard: under the old RRF fusion midId was evicted from its floor slot by
+      // the citation chunk. Hybrid must now be a superset of the flag-off result.
+      expect(rows.map((r) => r.id)).to.deep.equal([nearId, midId, citationId, reportChunkId]);
       expect(rows.find((r) => r.id === reportChunkId)?.caseDocumentId).to.equal(reportDocId);
     });
 
@@ -157,11 +173,25 @@ describe("DocumentChunkRepo hybrid retrieval", () => {
       expect(rows.map((r) => r.id)).to.deep.equal([nearId, midId]);
     });
 
-    it("flag on, startRank pages past each document's fused top slice", async () => {
+    it("flag on: at most one lexical chunk per document", async () => {
+      process.env.HYBRID_RETRIEVAL_ENABLED = "true";
+      const rows = await DocumentChunkRepo.findRelevantByCase(caseId, queryEmbedding, CITATION_QUERY, 2);
+      const appendedPerDoc = new Map<string, number>();
+      for (const row of rows.filter((r) => r.id === citationId || r.id === reportChunkId)) {
+        appendedPerDoc.set(row.caseDocumentId, (appendedPerDoc.get(row.caseDocumentId) ?? 0) + 1);
+      }
+      for (const count of appendedPerDoc.values()) expect(count).to.equal(1);
+    });
+
+    it("flag on, startRank pages past each document's slice and matches vector-only paging", async () => {
+      const vectorOnlyPage2 = await DocumentChunkRepo.findRelevantByCase(caseId, queryEmbedding, CITATION_QUERY, 2, prisma, 3);
       process.env.HYBRID_RETRIEVAL_ENABLED = "true";
       const page2 = await DocumentChunkRepo.findRelevantByCase(caseId, queryEmbedding, CITATION_QUERY, 2, prisma, 3);
-      // Main doc's fused order is near, citation, mid — rank 3 is mid. Report doc has one chunk.
-      expect(page2.map((r) => r.id)).to.deep.equal([midId]);
+      // Each document's lexical slice advances with the vector window, so page 2 does not
+      // re-append the chunks page 1 already returned. Neither document has a second lexical hit
+      // and the remaining vector hits sit below the 0.3 floor, so both pages are empty.
+      expect(page2.map((r) => r.id)).to.deep.equal(vectorOnlyPage2.map((r) => r.id));
+      expect(page2.map((r) => r.id)).to.not.include(citationId);
     });
   });
 });

@@ -1,24 +1,3 @@
-/** Reciprocal Rank Fusion: merges independently-ranked id lists (vector, lexical, ...) into one
- * fused ranking. k=60 is the standard damping constant — large enough that rank 1 vs rank 2 in
- * one list can't swamp the other list's contribution. */
-export function reciprocalRankFusion(rankedLists: string[][], k = 60): Map<string, number> {
-  const scores = new Map<string, number>();
-  for (const ids of rankedLists) {
-    ids.forEach((id, index) => {
-      scores.set(id, (scores.get(id) ?? 0) + 1 / (k + index + 1));
-    });
-  }
-  return scores;
-}
-
-/** Ids sorted by fused score, highest first. Ties keep insertion order (first list wins). */
-export function topNByScore(scores: Map<string, number>, n: number): string[] {
-  return [...scores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, n)
-    .map(([id]) => id);
-}
-
 const MONTH = "(?:January|February|March|April|May|June|July|August|September|October|November|December)";
 
 /** Exact-reference patterns a lawyer's question tends to hinge on. Each match becomes one
@@ -58,14 +37,17 @@ export function extractAnchors(text: string): string[] {
 }
 
 /** Build the string handed to `websearch_to_tsquery`. Its default is AND-every-word, which a
- * multi-sentence question never satisfies against a single chunk; instead we OR the exact
- * references the question cites (the lexical channel's job — embeddings cover semantics), or,
- * for a question with no references, OR its content words. Returns "" when nothing usable. */
+ * multi-sentence question never satisfies against a single chunk, so we OR the exact references
+ * the question cites — the lexical channel's job, since embeddings already cover semantics.
+ *
+ * A question citing fewer than MIN_ANCHORS references gets "" (vector-only) rather than an OR of
+ * its content words. That fallback was actively harmful: "did the site manager know the scaffold
+ * was unsafe" became `site OR manager OR know OR scaffold OR unsafe`, which matches nearly every
+ * chunk of a construction bundle, and `ts_rank_cd` then ranks those by term density — i.e. by how
+ * verbose a chunk is, not how relevant. When a question names no exact reference the lexical
+ * channel has nothing to contribute and should stand down. */
 export function buildLexicalQuery(text: string): string {
   const anchors = extractAnchors(text);
-  const terms =
-    anchors.length >= MIN_ANCHORS
-      ? anchors
-      : [...new Set((text.match(/[A-Za-z][A-Za-z'-]{3,}/g) ?? []).map((w) => w.toLowerCase()))].slice(0, MAX_TERMS);
-  return terms.map((t) => (/[\s.()£:%-]/.test(t) ? `"${t.replace(/"/g, "")}"` : t)).join(" OR ");
+  if (anchors.length < MIN_ANCHORS) return "";
+  return anchors.map((t) => (/[\s.()£:%-]/.test(t) ? `"${t.replace(/"/g, "")}"` : t)).join(" OR ");
 }

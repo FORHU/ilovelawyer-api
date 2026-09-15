@@ -2,7 +2,7 @@ import crypto from "crypto";
 import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
 import { isHybridRetrievalEnabled } from "../config";
-import { buildLexicalQuery, reciprocalRankFusion, topNByScore } from "../utils/hybridSearch";
+import { buildLexicalQuery } from "../utils/hybridSearch";
 import logger from "../utils/logger";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
@@ -59,14 +59,19 @@ const SELECT_BATCH_SIZE = 200;
 const MIN_CHUNK_SIMILARITY = 0.3;
 /** After the per-document floor, keep only the strongest hits for chat-wonder inlining. */
 const GLOBAL_RELEVANT_CHUNK_LIMIT = 24;
-/** Over-fetch factor per ranked list before RRF fusion — a chunk ranked #2 lexically but
- * outside the vector top-N still needs to be present in its list to surface after fusion. */
-const HYBRID_CANDIDATE_MULTIPLIER = 3;
+/** Lexical hits are *appended* to the vector selection, never fused into it — see
+ * `findRelevantInScope`. These bound how much they can add: at most one extra chunk per
+ * document, and at most this many extra chunks overall. Deliberately small; the lexical
+ * channel's job is to catch the one exhibit/section reference cosine missed, not to
+ * re-rank the pool. */
+const LEXICAL_PER_DOC_CAP = 1;
+const LEXICAL_EXTRA_SLOTS = 4;
 /** A chunk whose digit-stripped text recurs this many times across the scope is a running page
  * header/footer ("… D07 / p.2" — identical on every page of every bundle document once digits
- * are removed), not content. The paragraph chunker emits each such line as its own chunk, and
- * they embed close to any question that names the case — so in hybrid mode they're kept out of
- * the candidate pool rather than allowed to consume floor slots. */
+ * are removed), not content. Applied to the lexical channel only: a header line carrying the
+ * document code matches an OR of exhibit references almost by construction, so without this it
+ * would win the lexical ranking outright. The vector half is left exactly as the flag-off path
+ * computes it. */
 const BOILERPLATE_REPEAT_THRESHOLD = 3;
 
 export default class DocumentChunkRepo {
@@ -180,10 +185,12 @@ export default class DocumentChunkRepo {
   /** Most relevant chunk ids for one document. Callers embed the user's question (see
    * `embedding.ts::embedText`) and pass both the vector and the original text.
    *
-   * With HYBRID_RETRIEVAL_ENABLED off (or a blank query) this is the vector-only ranking.
-   * With it on, vector and lexical rankings are fused with reciprocal rank fusion. A lexical
-   * failure (column missing, DB hiccup) degrades to vector-only for that call rather than
-   * failing the chat turn. */
+   * With HYBRID_RETRIEVAL_ENABLED off (or a query with no exact references) this is the
+   * vector-only ranking. With it on, the vector top-N is returned *unchanged* and up to
+   * `LEXICAL_EXTRA_SLOTS` lexical-only chunks are appended after it — hybrid can only add
+   * to what vector-only would have returned, never reorder or displace it (see
+   * `findRelevantInScope` for why). A lexical failure (column missing, DB hiccup) degrades
+   * to vector-only for that call rather than failing the chat turn. */
   static async findRelevantByDocument(
     caseDocumentId: string,
     queryEmbedding: number[],
@@ -191,28 +198,34 @@ export default class DocumentChunkRepo {
     limit = 10,
     client: DbClient = prisma,
   ): Promise<string[]> {
-    if (!isHybridRetrievalEnabled() || !queryText.trim()) {
+    if (!isHybridRetrievalEnabled() || !buildLexicalQuery(queryText)) {
       return DocumentChunkRepo.vectorIdsByDocument(caseDocumentId, queryEmbedding, limit, client);
     }
 
-    const candidateLimit = limit * HYBRID_CANDIDATE_MULTIPLIER;
     let degraded = false;
     const [vectorIds, lexicalIds] = await Promise.all([
-      DocumentChunkRepo.vectorIdsByDocument(caseDocumentId, queryEmbedding, candidateLimit, client),
-      DocumentChunkRepo.lexicalIdsByDocument(caseDocumentId, queryText, candidateLimit, client).catch((err) => {
+      DocumentChunkRepo.vectorIdsByDocument(caseDocumentId, queryEmbedding, limit, client),
+      // Over-fetch by `limit`: a lexical hit already in the vector selection adds nothing, so
+      // fetch enough that overlap can't starve the append.
+      DocumentChunkRepo.lexicalIdsByDocument(caseDocumentId, queryText, limit + LEXICAL_EXTRA_SLOTS, client).catch((err) => {
         degraded = true;
         logger.warn("hybrid retrieval: lexical search failed, using vector-only", { caseDocumentId, err });
         return [] as string[];
       }),
     ]);
 
+    const selected = new Set(vectorIds);
+    const appended = lexicalIds.filter((id) => !selected.has(id)).slice(0, LEXICAL_EXTRA_SLOTS);
+
     logger.debug("hybrid retrieval", {
       caseDocumentId,
       path: degraded ? "hybrid-degraded" : "hybrid",
-      vectorCandidates: vectorIds.length,
+      vectorSelected: vectorIds.length,
       lexicalCandidates: lexicalIds.length,
+      lexicalAppended: appended.length,
+      lexicalAppendedIds: appended,
     });
-    return topNByScore(reciprocalRankFusion([vectorIds, lexicalIds]), limit);
+    return [...vectorIds, ...appended];
   }
 
   /** Same ranking + per-document floor as `findRelevantByCase`, but scoped to READY documents
@@ -246,10 +259,10 @@ export default class DocumentChunkRepo {
    * `case_document_chunk_ids` payload in rank order.
    *
    * Vector-only (flag off): a document's ranking is cosine similarity, hits below 0.3 are
-   * dropped, and the global order is similarity-desc. Hybrid (flag on): the scope-wide vector
-   * ranking and scope-wide full-text ranking are RRF-fused first, then the per-document floor
-   * is taken from that fused order — so a chunk that only matches lexically can take a floor
-   * slot, and with no lexical hits the result is identical to vector-only.
+   * dropped, and the global order is similarity-desc. Hybrid (flag on): that exact vector
+   * selection is returned first, then up to `LEXICAL_EXTRA_SLOTS` chunks that matched only
+   * lexically are appended after it — so hybrid is a superset of vector-only and a lexical
+   * hit can never take a floor slot away from a vector hit.
    *
    * `startRank` pages further down each document's own ranking (1-based, inclusive) — the
    * initial call uses the default (rank 1..perDocumentFloor); a follow-up "load more relevant
@@ -274,6 +287,19 @@ export default class DocumentChunkRepo {
     );
   }
 
+  /** Vector selection first, lexical appended second — never fused.
+   *
+   * The earlier implementation RRF-fused the two rankings and then sliced each document's
+   * `startRank..endRank` window out of the *fused* order. With a per-document floor of 3 that
+   * window is three slots wide, so every lexical hit that landed in it evicted a vector hit —
+   * hybrid was substitutive, and the 2026-09-15 brackenmoor run scored 57.7 against
+   * vector-only's 64 (see benchmarks/scores.md). RRF assumes a wide top-k to fuse into; over a
+   * 3-slot window it is a coin flip on whether you traded down.
+   *
+   * So the vector half here is the untouched `vectorOnlyInScope` query — byte-identical to
+   * what the flag-off path returns — and lexical-only chunks are appended after it, bounded by
+   * `LEXICAL_PER_DOC_CAP` and `LEXICAL_EXTRA_SLOTS`. Any benchmark delta is therefore fully
+   * attributable to the appended chunks, which is what makes the next A/B debuggable. */
   private static async findRelevantInScope(
     scope: Prisma.Sql,
     scopeLog: Record<string, string>,
@@ -285,32 +311,39 @@ export default class DocumentChunkRepo {
   ): Promise<ScopedChunkHit[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
     const endRank = startRank + perDocumentFloor - 1;
+    const tsQuery = isHybridRetrievalEnabled() ? buildLexicalQuery(queryText) : "";
 
-    if (!isHybridRetrievalEnabled() || !queryText.trim()) {
+    if (!tsQuery) {
       return DocumentChunkRepo.vectorOnlyInScope(scope, vectorLiteral, startRank, endRank, client);
     }
 
-    const maxDocRank = endRank * HYBRID_CANDIDATE_MULTIPLIER;
-    const tsQuery = buildLexicalQuery(queryText);
+    // `startRank` pages the vector window down each document; page the lexical window in step so
+    // a "load more" call appends the *next* lexical hits rather than the ones page 1 already had.
+    const page = Math.floor((startRank - 1) / perDocumentFloor);
+    const lexicalStart = page * LEXICAL_PER_DOC_CAP + 1;
+    const lexicalEnd = lexicalStart + LEXICAL_PER_DOC_CAP - 1;
+
     let degraded = false;
     const [vectorHits, lexicalHits] = await Promise.all([
-      DocumentChunkRepo.vectorCandidatesInScope(scope, vectorLiteral, maxDocRank, client),
-      tsQuery
-        ? DocumentChunkRepo.lexicalCandidatesInScope(scope, vectorLiteral, tsQuery, maxDocRank, client).catch((err) => {
-            degraded = true;
-            logger.warn("hybrid retrieval: lexical search failed, using vector-only", { ...scopeLog, err });
-            return [] as ScopedChunkHit[];
-          })
-        : Promise.resolve([] as ScopedChunkHit[]),
+      DocumentChunkRepo.vectorOnlyInScope(scope, vectorLiteral, startRank, endRank, client),
+      DocumentChunkRepo.lexicalCandidatesInScope(scope, vectorLiteral, tsQuery, lexicalEnd, client).catch((err) => {
+        degraded = true;
+        logger.warn("hybrid retrieval: lexical search failed, using vector-only", { ...scopeLog, err });
+        return [] as ScopedChunkHit[];
+      }),
     ]);
 
+    const appended = DocumentChunkRepo.appendableLexicalHits(vectorHits, lexicalHits, lexicalStart, lexicalEnd);
     logger.debug("hybrid retrieval", {
       ...scopeLog,
       path: degraded ? "hybrid-degraded" : "hybrid",
-      vectorCandidates: vectorHits.length,
+      vectorSelected: vectorHits.length,
       lexicalCandidates: lexicalHits.length,
+      lexicalAppended: appended.length,
+      lexicalAppendedIds: appended.map((h) => h.id),
+      selectedIds: [...vectorHits, ...appended].map((h) => h.id),
     });
-    return DocumentChunkRepo.fuseScopedHits(vectorHits, lexicalHits, startRank, endRank);
+    return [...vectorHits, ...appended];
   }
 
   /** The pre-hybrid query, unchanged: per-document vector rank window, similarity floor, global
@@ -346,7 +379,7 @@ export default class DocumentChunkRepo {
   }
 
   /** READY chunks in scope, annotated with how often their digit-stripped text recurs across the
-   * scope — see BOILERPLATE_REPEAT_THRESHOLD. Shared by both hybrid candidate queries. */
+   * scope — see BOILERPLATE_REPEAT_THRESHOLD. Backs the lexical candidate query. */
   private static scopedChunksSql(scope: Prisma.Sql): Prisma.Sql {
     return Prisma.sql`
       SELECT c.id, c."caseDocumentId", c.embedding, c."chunkTsv",
@@ -360,38 +393,11 @@ export default class DocumentChunkRepo {
     `;
   }
 
-  /** Up to `maxDocRank` vector hits per document (same similarity floor as vector-only, minus
-   * boilerplate), returned in scope-wide similarity order — the vector ranking that gets fused. */
-  private static vectorCandidatesInScope(
-    scope: Prisma.Sql,
-    vectorLiteral: string,
-    maxDocRank: number,
-    client: DbClient,
-  ): Promise<ScopedChunkHit[]> {
-    return client.$queryRaw<ScopedChunkHit[]>`
-      WITH scoped AS (${DocumentChunkRepo.scopedChunksSql(scope)}),
-      ranked AS (
-        SELECT id, "caseDocumentId",
-               1 - (embedding <=> ${vectorLiteral}::vector) AS similarity,
-               ROW_NUMBER() OVER (
-                 PARTITION BY "caseDocumentId"
-                 ORDER BY embedding <=> ${vectorLiteral}::vector
-               ) AS doc_rank
-        FROM scoped
-        WHERE embedding IS NOT NULL
-          AND repeats < ${BOILERPLATE_REPEAT_THRESHOLD}
-      )
-      SELECT id, "caseDocumentId", similarity
-      FROM ranked
-      WHERE doc_rank <= ${maxDocRank}
-        AND similarity >= ${MIN_CHUNK_SIMILARITY}
-      ORDER BY similarity DESC
-    `;
-  }
-
   /** Up to `maxDocRank` full-text hits per document, returned in scope-wide `ts_rank_cd` order —
-   * the lexical ranking that gets fused. Similarity is carried along (0 when the chunk has no
-   * embedding) so a lexical-only hit still has a value for the global tie-break. */
+   * the pool `appendableLexicalHits` draws from. Similarity is carried along (0 when the chunk
+   * has no embedding) so an appended hit still carries a value for callers that read it.
+   * Deliberately has no similarity floor: these chunks are extra, not competing for a floor
+   * slot, so a lexically exact hit with weak cosine is exactly what we want here. */
   private static lexicalCandidatesInScope(
     scope: Prisma.Sql,
     vectorLiteral: string,
@@ -420,34 +426,32 @@ export default class DocumentChunkRepo {
     `;
   }
 
-  /** RRF-fuse the two scope-wide rankings, take each document's `startRank..endRank` slice of
-   * the fused order, then apply the global cap in fused order (similarity breaks ties). With no
-   * lexical hits this reproduces vector-only exactly: fused order == similarity order. */
-  private static fuseScopedHits(
+  /** The lexical-only chunks that may be appended to `vectorHits`.
+   *
+   * Takes each document's `lexicalStart..lexicalEnd` slice of the lexical ranking, drops
+   * anything the vector half already selected, and caps the result at `LEXICAL_EXTRA_SLOTS`
+   * scope-wide in lexical-rank order. Ranking happens before the overlap filter so a chunk
+   * both channels found consumes its document's slot rather than silently promoting the next
+   * lexical hit — the per-document cap stays honest across pages. */
+  private static appendableLexicalHits(
     vectorHits: ScopedChunkHit[],
     lexicalHits: ScopedChunkHit[],
-    startRank: number,
-    endRank: number,
+    lexicalStart: number,
+    lexicalEnd: number,
   ): ScopedChunkHit[] {
-    const hitById = new Map<string, ScopedChunkHit>();
-    for (const hit of vectorHits) hitById.set(hit.id, hit);
-    for (const hit of lexicalHits) if (!hitById.has(hit.id)) hitById.set(hit.id, hit);
+    const alreadySelected = new Set(vectorHits.map((h) => h.id));
+    const rankPerDoc = new Map<string, number>();
+    const appended: ScopedChunkHit[] = [];
 
-    const scores = reciprocalRankFusion([vectorHits.map((h) => h.id), lexicalHits.map((h) => h.id)]);
-    const fused = [...scores.entries()]
-      .map(([id, score]) => ({ hit: hitById.get(id)!, score }))
-      .sort((a, b) => b.score - a.score || b.hit.similarity - a.hit.similarity);
-
-    const takenPerDoc = new Map<string, number>();
-    const selected: ScopedChunkHit[] = [];
-    for (const { hit } of fused) {
-      const rank = (takenPerDoc.get(hit.caseDocumentId) ?? 0) + 1;
-      takenPerDoc.set(hit.caseDocumentId, rank);
-      if (rank < startRank || rank > endRank) continue;
-      selected.push(hit);
-      if (selected.length >= GLOBAL_RELEVANT_CHUNK_LIMIT) break;
+    for (const hit of lexicalHits) {
+      const rank = (rankPerDoc.get(hit.caseDocumentId) ?? 0) + 1;
+      rankPerDoc.set(hit.caseDocumentId, rank);
+      if (rank < lexicalStart || rank > lexicalEnd) continue;
+      if (alreadySelected.has(hit.id)) continue;
+      appended.push(hit);
+      if (appended.length >= LEXICAL_EXTRA_SLOTS) break;
     }
-    return selected;
+    return appended;
   }
 
   /**
