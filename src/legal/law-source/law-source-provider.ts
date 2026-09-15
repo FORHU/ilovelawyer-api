@@ -18,8 +18,9 @@ export interface LawFacets {
   caseType?: string;
   /** PH only (csv on the wire). */
   topics?: string[];
-  /** UK case law only — court slug, e.g. "uksc", "ewca/civ". */
-  court?: string;
+  /** UK case law only — court slugs, e.g. ["uksc", "ewca/civ"] (csv on the wire). Empty/absent
+   * means "all courts", same as PH's empty `topics`. */
+  courts?: string[];
   /** Both PH (juris.ph) and UK case-law browse. */
   year?: number;
 }

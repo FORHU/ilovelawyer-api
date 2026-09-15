@@ -49,10 +49,27 @@ export const lawBrowseSchema = (p: LawSourceProvider) => {
             })
             .optional()
         : Joi.forbidden(),
-    // UK case law only — court slug.
-    court: courts.length ? Joi.string().valid(...courts).optional() : Joi.forbidden(),
+    // UK case law only — csv, e.g. "ewca/civ,ewhc/admin". Multiple courts are fanned out to
+    // parallel upstream requests and merged (see UkLawSourceProvider.browse).
+    court:
+      courts.length > 0
+        ? Joi.string()
+            .custom((raw: string, helpers) => {
+              const list = raw
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
+              const bad = list.find((c) => !(courts as readonly string[]).includes(c));
+              if (bad) return helpers.error("any.invalid", { bad });
+              return list;
+            })
+            .optional()
+        : Joi.forbidden(),
     year: Joi.number().integer().min(1200).max(2100).optional(),
-    cursor: Joi.string().max(20000).optional(),
+    // Bumped from 20000: a multi-court browse cursor carries a small per-source leftover buffer
+    // for every selected court (see UkLawSourceProvider's cursor shape), which can exceed the
+    // old single-court cursor's size when several courts are selected at once.
+    cursor: Joi.string().max(100000).optional(),
     limit: Joi.number().integer().min(1).max(20).default(20),
   });
 };
