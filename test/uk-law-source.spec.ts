@@ -20,8 +20,9 @@ function mcpResponse(structuredContent: unknown): Response {
   });
 }
 
+const UK_CASELAW_BASE = "https://caselaw.nationalarchives.gov.uk";
 const SLUG = "uksc/2099/1";
-const CASE_URL = `https://caselaw.nationalarchives.gov.uk/${SLUG}`;
+const CASE_URL = `${UK_CASELAW_BASE}/${SLUG}`;
 
 const caseLawSearchResult = {
   results: [
@@ -45,8 +46,31 @@ describe("UK Library source (LawSourceProvider)", () => {
   const ukOrgId = crypto.randomUUID();
   const realFetch = globalThis.fetch;
 
-  function stubFetch(handler: () => Promise<Response> | Response) {
-    globalThis.fetch = (async () => handler()) as typeof fetch;
+  function stubFetch(handler: (init?: RequestInit) => Promise<Response> | Response) {
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => handler(init)) as typeof fetch;
+  }
+
+  /** Reads the `court` MCP tool argument off a stubbed fetch call's JSON-RPC body — lets a
+   * multi-court test respond differently per court, the same way the real upstream would. */
+  function courtArgFrom(init?: RequestInit): string | undefined {
+    const body = JSON.parse(String(init?.body)) as { params?: { arguments?: { court?: string } } };
+    return body.params?.arguments?.court;
+  }
+
+  /** Builds one `case_law_search` hit for the merge/pagination tests below — distinct from the
+   * shared `caseLawSearchResult` fixture used by the single-court tests. */
+  function caseHit(opts: { slug: string; ncn: string; published: string }) {
+    const url = `https://caselaw.nationalarchives.gov.uk/${opts.slug}`;
+    return {
+      uri: opts.slug,
+      title: `Merge Test ${opts.ncn}`,
+      court: "Test Court",
+      published: opts.published,
+      updated: opts.published,
+      identifiers: [{ type: "ukncn", value: opts.ncn, slug: opts.slug }],
+      xml_url: `${url}/data.xml`,
+      pdf_url: `${url}/data.pdf`,
+    };
   }
 
   before(async () => {
@@ -318,5 +342,89 @@ describe("UK Library source (LawSourceProvider)", () => {
 
     expect(res.status).to.be.oneOf([400, 502]);
     expect(res.status).to.not.equal(500);
+  });
+
+  it("browse: multiple selected courts merge into one newest-first list", async () => {
+    const older = caseHit({ slug: "uksc/2099/20", ncn: "[2099] UKSC 20", published: "2099-01-01T00:00:00Z" });
+    const newer = caseHit({ slug: "ukpc/2099/21", ncn: "[2099] UKPC 21", published: "2099-06-01T00:00:00Z" });
+
+    stubFetch((init) => {
+      const court = courtArgFrom(init);
+      const item = court === "uksc" ? older : newer;
+      return mcpResponse({ results: [item], page: 1, has_more: false });
+    });
+
+    const res = await request(app)
+      .get("/api/law/browse?category=uk-case-law&court=uksc,ukpc")
+      .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+      .set("X-Organization-Id", ukOrgId);
+
+    expect(res.status).to.equal(200);
+    expect(res.body.items).to.have.length(2);
+    // Both sources returned has_more:false, so nothing left to merge next time.
+    expect(res.body.cursor).to.be.null;
+    // "newer" (2099-06) sorts ahead of "older" (2099-01) regardless of which court it came from.
+    expect(res.body.items[0].case_number).to.equal("[2099] UKPC 21");
+    expect(res.body.items[1].case_number).to.equal("[2099] UKSC 20");
+
+    await prisma.law.deleteMany({
+      where: { jurisSourceId: { in: [`${UK_CASELAW_BASE}/uksc/2099/20`, `${UK_CASELAW_BASE}/ukpc/2099/21`] } },
+    });
+  });
+
+  it("browse: multi-court pagination carries leftover buffer forward with no duplicates or gaps", async () => {
+    // Court A has 3 items (all newer than court B's), so page 1 (limit 2) should be all-A,
+    // leaving one A item buffered; page 2 should be that leftover A item followed by B's item.
+    const a1 = caseHit({ slug: "uksc/2099/30", ncn: "[2099] UKSC 30", published: "2099-09-03T00:00:00Z" });
+    const a2 = caseHit({ slug: "uksc/2099/31", ncn: "[2099] UKSC 31", published: "2099-09-02T00:00:00Z" });
+    const a3 = caseHit({ slug: "uksc/2099/32", ncn: "[2099] UKSC 32", published: "2099-09-01T00:00:00Z" });
+    const b1 = caseHit({ slug: "ukpc/2099/33", ncn: "[2099] UKPC 33", published: "2099-01-01T00:00:00Z" });
+
+    stubFetch((init) => {
+      const court = courtArgFrom(init);
+      if (court === "uksc") return mcpResponse({ results: [a1, a2, a3], page: 1, has_more: false });
+      return mcpResponse({ results: [b1], page: 1, has_more: false });
+    });
+
+    const page1 = await request(app)
+      .get("/api/law/browse?category=uk-case-law&court=uksc,ukpc&limit=2")
+      .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+      .set("X-Organization-Id", ukOrgId);
+
+    expect(page1.status).to.equal(200);
+    expect(page1.body.items.map((i: { case_number: string }) => i.case_number)).to.deep.equal([
+      "[2099] UKSC 30",
+      "[2099] UKSC 31",
+    ]);
+    expect(page1.body.cursor).to.be.a("string");
+
+    stubFetch(() => {
+      throw new Error("page 2 must be served from the leftover buffer, not a fresh MCP call");
+    });
+
+    const page2 = await request(app)
+      .get(`/api/law/browse?category=uk-case-law&court=uksc,ukpc&limit=2&cursor=${encodeURIComponent(page1.body.cursor)}`)
+      .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+      .set("X-Organization-Id", ukOrgId);
+
+    expect(page2.status).to.equal(200);
+    expect(page2.body.items.map((i: { case_number: string }) => i.case_number)).to.deep.equal([
+      "[2099] UKSC 32",
+      "[2099] UKPC 33",
+    ]);
+    expect(page2.body.cursor).to.be.null;
+
+    await prisma.law.deleteMany({
+      where: {
+        jurisSourceId: {
+          in: [
+            `${UK_CASELAW_BASE}/uksc/2099/30`,
+            `${UK_CASELAW_BASE}/uksc/2099/31`,
+            `${UK_CASELAW_BASE}/uksc/2099/32`,
+            `${UK_CASELAW_BASE}/ukpc/2099/33`,
+          ],
+        },
+      },
+    });
   });
 });

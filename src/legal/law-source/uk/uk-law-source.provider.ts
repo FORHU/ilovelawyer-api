@@ -114,6 +114,15 @@ export class UkLawSourceProvider implements LawSourceProvider {
   }
 
   // ── browse (case law only) ────────────────────────────────────────────────
+  //
+  // TNA's Find Case Law feed (behind caseLawSearch) only accepts one `court=` value per
+  // request, so a multi-court selection fans out to one parallel request per selected court
+  // ("source" below) and merges the pages by decisionDate descending. A single source — either
+  // one court, or no court filter at all (source key "*") — degenerates to exactly one fetch
+  // per page with nothing to merge, i.e. today's original single-court behavior, unchanged.
+  // Each source's own page fetch/cache is unaffected (still keyed per court, see
+  // fetchCourtPage); only the outer cursor format is new, to carry each source's current page
+  // number plus any not-yet-served leftover items ("buffer") between browse() calls.
 
   async browse(params: {
     category: LawCategory;
@@ -129,18 +138,75 @@ export class UkLawSourceProvider implements LawSourceProvider {
     }
 
     const limit = params.limit || BROWSE_PAGE_SIZE;
-    const court = params.facets.court;
-    const page = decodePage(params.cursor);
-    const isFirstPage = page === 1;
+    const sources: (string | undefined)[] = params.facets.courts?.length ? params.facets.courts : [undefined];
+    const state = decodeBrowseCursor(params.cursor, sources);
 
+    const toFetch = sources.filter((s) => {
+      const src = state.sources[s ?? "*"];
+      return src.buffer.length === 0 && !src.exhausted;
+    });
+
+    if (toFetch.length > 0) {
+      const plans = toFetch.map((court) => ({ court, page: state.sources[court ?? "*"].page }));
+      const fetched = await Promise.all(plans.map((plan) => this.fetchCourtPage(plan.court, plan.page, limit)));
+      plans.forEach((plan, i) => {
+        const result = fetched[i];
+        state.sources[plan.court ?? "*"] = {
+          page: plan.page + 1,
+          exhausted: !result.hasMore,
+          buffer: result.items,
+        };
+      });
+    }
+
+    // k-way merge: repeatedly take the newest decisionDate across all non-empty buffers.
+    const merged: BufferItem[] = [];
+    while (merged.length < limit) {
+      let bestKey: string | null = null;
+      let best: BufferItem | null = null;
+      for (const key of Object.keys(state.sources)) {
+        const candidate = state.sources[key].buffer[0];
+        if (candidate && (!best || compareDecisionDateDesc(candidate.decisionDate, best.decisionDate) < 0)) {
+          bestKey = key;
+          best = candidate;
+        }
+      }
+      if (!bestKey || !best) break;
+      merged.push(best);
+      state.sources[bestKey].buffer.shift();
+    }
+
+    const hasMore = Object.values(state.sources).some((s) => s.buffer.length > 0 || !s.exhausted);
+
+    const rows = await LawRepo.findByJurisSourceIds(merged.map((m) => m.jurisSourceId));
+    const byId = new Map(rows.map((r) => [r.jurisSourceId, r]));
+    const ordered = merged.map((m) => byId.get(m.jurisSourceId)).filter((r): r is Law => !!r);
+
+    return {
+      items: ordered.map((r) => this.rowToItem("uk-case-law", r)),
+      meta: { dataset: "uk-case-law", limit, count: ordered.length, hasMore },
+      cursor: hasMore ? encodeBrowseCursor(state) : null,
+      notice: SEARCH_NOTICE,
+    };
+  }
+
+  /** One page from one court (or the unfiltered "*" source), cache-aware exactly as the
+   * pre-multi-court browse() used to be — this is that same logic, just parameterized so
+   * browse() above can call it once per selected court and merge the results. */
+  private async fetchCourtPage(
+    court: string | undefined,
+    page: number,
+    limit: number,
+  ): Promise<{ items: BufferItem[]; hasMore: boolean }> {
     const filterKey = `t=UK|d=uk-case-law|court=${court ?? ""}|l=${limit}`;
     const pageKey = browsePageKey(filterKey, String(page));
+    const isFirstPage = page === 1;
 
     const cached = await LawRepo.findBrowsePage(pageKey);
     const cachedFresh =
       !!cached && (!cached.isFirstPage || Date.now() - cached.fetchedAt.getTime() < BROWSE_CACHE_TTL_MS);
     if (cached && cachedFresh) {
-      return this.browseFromCache(limit, cached);
+      return { items: await this.bufferItemsFor(cached.jurisIds), hasMore: cached.hasMore };
     }
 
     const tenantId = await LawRepo.resolveUkTenantId();
@@ -149,7 +215,7 @@ export class UkLawSourceProvider implements LawSourceProvider {
       hits = await caseLawSearch({ query: BROWSE_WILDCARD, court, page, limit });
     } catch (err) {
       if (err instanceof UkLegalMcpUnavailableError) {
-        if (cached) return this.browseFromCache(limit, cached);
+        if (cached) return { items: await this.bufferItemsFor(cached.jurisIds), hasMore: cached.hasMore };
         throw new HttpError("The UK legal source is unavailable — browse can't be served offline", 502);
       }
       throw err;
@@ -169,28 +235,18 @@ export class UkLawSourceProvider implements LawSourceProvider {
     });
 
     return {
-      items: rows.map((r) => this.rowToItem("uk-case-law", r)),
-      meta: { dataset: "uk-case-law", limit, count: rows.length, hasMore: hits.has_more },
-      cursor: hits.has_more ? encodePage(page + 1) : null,
-      notice: SEARCH_NOTICE,
+      items: rows.map((r) => ({ jurisSourceId: r.jurisSourceId, decisionDate: r.decisionDate ? r.decisionDate.toISOString() : null })),
+      hasMore: hits.has_more,
     };
   }
 
-  private async browseFromCache(
-    limit: number,
-    cached: { jurisIds: string[]; hasMore: boolean; nextCursor: string | null },
-  ): Promise<BrowseResult> {
-    const rows = await LawRepo.findByJurisSourceIds(cached.jurisIds);
+  private async bufferItemsFor(jurisIds: string[]): Promise<BufferItem[]> {
+    const rows = await LawRepo.findByJurisSourceIds(jurisIds);
     const byId = new Map(rows.map((r) => [r.jurisSourceId, r]));
-    const ordered = cached.jurisIds
+    return jurisIds
       .map((id) => byId.get(id))
-      .filter((r): r is Law => !!r);
-    return {
-      items: ordered.map((r) => this.rowToItem("uk-case-law", r)),
-      meta: { dataset: "uk-case-law", limit, count: ordered.length, hasMore: cached.hasMore },
-      cursor: cached.nextCursor,
-      notice: SEARCH_NOTICE,
-    };
+      .filter((r): r is Law => !!r)
+      .map((r) => ({ jurisSourceId: r.jurisSourceId, decisionDate: r.decisionDate ? r.decisionDate.toISOString() : null }));
   }
 
   // ── document (lazy detail) ────────────────────────────────────────────────
@@ -349,21 +405,84 @@ export class UkLawSourceProvider implements LawSourceProvider {
 
 // ── cursor / page-key helpers ───────────────────────────────────────────────
 
-function encodePage(page: number): string {
-  return Buffer.from(JSON.stringify({ page })).toString("base64url");
+/** One not-yet-served result carried in a source's buffer — just enough to sort (decisionDate)
+ * and re-look-up the full row (jurisSourceId) once it's actually returned to the caller. */
+interface BufferItem {
+  jurisSourceId: string;
+  decisionDate: string | null;
 }
 
-function decodePage(raw: string | undefined): number {
-  if (!raw) return 1;
-  try {
-    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as { page?: unknown };
-    if (typeof parsed.page === "number" && Number.isInteger(parsed.page) && parsed.page >= 1) {
-      return parsed.page;
-    }
-  } catch {
-    /* fall through */
+interface SourceCursorState {
+  /** Next page to fetch from this source, once its buffer runs dry. */
+  page: number;
+  exhausted: boolean;
+  buffer: BufferItem[];
+}
+
+/** The outer, multi-court-aware cursor: one entry per selected court (keyed by the court slug,
+ * or "*" for "no court filter"). A single-source browse still uses this shape — it just never
+ * has more than one key, so the merge loop below has nothing to actually merge. */
+interface BrowseCursorState {
+  sources: Record<string, SourceCursorState>;
+}
+
+function decodeBrowseCursor(raw: string | undefined, sources: (string | undefined)[]): BrowseCursorState {
+  const state: BrowseCursorState = { sources: {} };
+  for (const s of sources) {
+    state.sources[s ?? "*"] = { page: 1, exhausted: false, buffer: [] };
   }
-  throw new HttpError("Invalid cursor", 400);
+  if (!raw) return state;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    throw new HttpError("Invalid cursor", 400);
+  }
+  const parsedSources = (parsed as Partial<BrowseCursorState> | null)?.sources;
+  if (!parsedSources || typeof parsedSources !== "object") throw new HttpError("Invalid cursor", 400);
+
+  // Only restore state for sources still selected on this request — if the user deselected a
+  // court since the last page, that key is simply dropped rather than kept around unused.
+  for (const key of Object.keys(state.sources)) {
+    const src = parsedSources[key] as Partial<SourceCursorState> | undefined;
+    if (
+      src &&
+      typeof src.page === "number" && Number.isInteger(src.page) && src.page >= 1 &&
+      typeof src.exhausted === "boolean" &&
+      Array.isArray(src.buffer)
+    ) {
+      state.sources[key] = {
+        page: src.page,
+        exhausted: src.exhausted,
+        buffer: src.buffer.filter(
+          (b): b is BufferItem =>
+            !!b && typeof b.jurisSourceId === "string" && (b.decisionDate === null || typeof b.decisionDate === "string"),
+        ),
+      };
+    }
+  }
+  return state;
+}
+
+function encodeBrowseCursor(state: BrowseCursorState): string {
+  return Buffer.from(JSON.stringify(state)).toString("base64url");
+}
+
+/** Sort key for the merge: newest decisionDate first, nulls (no known date) last. ISO date
+ * strings compare correctly as plain strings. */
+function compareDecisionDateDesc(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a < b ? 1 : -1;
+}
+
+// Per-source page cursor, unchanged from before multi-court support — still what gets saved
+// onto each cached LawBrowsePage row's `nextCursor` column (informational only; browse() above
+// no longer reads it back, it tracks per-source progress itself via BrowseCursorState).
+function encodePage(page: number): string {
+  return Buffer.from(JSON.stringify({ page })).toString("base64url");
 }
 
 function browsePageKey(filterKey: string, cursorRaw: string): string {

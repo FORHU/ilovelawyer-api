@@ -50,7 +50,7 @@ export default class LawCtrl {
       facets: {
         caseType: value.caseType,
         topics: value.topics,
-        court: value.court,
+        courts: value.court,
         year: value.year,
       },
       cursor: value.cursor,
