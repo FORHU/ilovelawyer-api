@@ -7,6 +7,7 @@ import {
   ChangeMessageVisibilityCommand,
 } from "@aws-sdk/client-sqs";
 import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION } from "../config";
+import logger from "../utils/logger";
 
 const client = new SQSClient({
   region: AWS_REGION,
@@ -24,20 +25,37 @@ export interface ReceivedMessage {
   receiptHandle: string;
 }
 
-export async function sendMessage(queueUrl: string, body: string): Promise<void> {
-  await client.send(new SendMessageCommand({ QueueUrl: queueUrl, MessageBody: body }));
+/** `delaySeconds`, when given, makes the message invisible to receivers until it elapses (SQS
+ * caps this at 900 — 15 minutes). Used by AiGenerationQueue's "casePostExtraction" kind to
+ * durably schedule the auto-refresh quiet window on SQS itself rather than an in-process timer
+ * (see queues/case-post-extraction.ts) — the delay then survives a restart or a multi-instance
+ * deploy instead of living in one process's memory. */
+export async function sendMessage(queueUrl: string, body: string, delaySeconds?: number): Promise<void> {
+  const result = await client.send(
+    new SendMessageCommand({
+      QueueUrl: queueUrl,
+      MessageBody: body,
+      ...(delaySeconds ? { DelaySeconds: delaySeconds } : {}),
+    }),
+  );
+  logger.info("SQS: message sent", { queueUrl, bytes: body.length, messageId: result.MessageId, delaySeconds });
 }
 
 /** SQS batches cap at 10 entries per call — chunks larger payloads transparently. */
 export async function sendMessageBatch(queueUrl: string, bodies: string[]): Promise<void> {
   for (let i = 0; i < bodies.length; i += MAX_BATCH_SIZE) {
     const chunk = bodies.slice(i, i + MAX_BATCH_SIZE);
-    await client.send(
+    const result = await client.send(
       new SendMessageBatchCommand({
         QueueUrl: queueUrl,
         Entries: chunk.map((body, idx) => ({ Id: String(i + idx), MessageBody: body })),
       }),
     );
+    logger.info("SQS: batch sent", {
+      queueUrl,
+      count: chunk.length,
+      messageIds: (result.Successful ?? []).map((e) => e.MessageId),
+    });
   }
 }
 
@@ -65,10 +83,21 @@ export async function receiveMessages(
         ...(visibilityTimeoutSeconds ? { VisibilityTimeout: visibilityTimeoutSeconds } : {}),
       }),
     );
-    return (result.Messages ?? [])
+    const messages = (result.Messages ?? [])
       .filter((m): m is typeof m & { Body: string; ReceiptHandle: string } => !!m.Body && !!m.ReceiptHandle)
       .map((m) => ({ body: m.Body, receiptHandle: m.ReceiptHandle }));
-  } catch {
+    // Only logged when something actually arrived — every queue's fetchLoop long-polls this in
+    // a tight while(running) loop, so logging every empty 20s poll would flood the logs with
+    // nothing but noise across every queue, all the time.
+    if (messages.length) {
+      logger.info("SQS: messages received", { queueUrl, count: messages.length });
+    }
+    return messages;
+  } catch (err) {
+    // Previously silent (bare `return []`, same as the normal "nothing to receive" case) — a
+    // real ReceiveMessage failure (bad queue URL, network blip, throttling) was indistinguishable
+    // from an empty poll. Still never throws (callers' loop-and-retry behavior doesn't change).
+    logger.warn("SQS: receive failed", { queueUrl, err });
     return [];
   }
 }

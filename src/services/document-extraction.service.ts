@@ -195,7 +195,7 @@ export default class DocumentExtractionSvc {
         });
 
         const { scheduleCasePostExtraction } = await import("../queues/case-post-extraction");
-        scheduleCasePostExtraction(doc.caseId);
+        scheduleCasePostExtraction(doc.caseId, doc.userId);
       }
     } catch (err) {
       logger.error("Document extraction failed", { err, documentId });

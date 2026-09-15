@@ -147,8 +147,21 @@ export default class DocumentSvc {
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
   }
 
-  static async delete(id: string, organizationId: string) {
+  /** userId is the authenticated deleter — needed only to attribute an auto-triggered
+   * post-extraction refresh (case-post-extraction.ts) to a real actor when a READY, case-scoped
+   * document is removed, same as the uploader is used when extraction finishes. */
+  static async delete(id: string, organizationId: string, userId: string) {
+    const doc = await DocumentRepo.findById(id, organizationId);
+    if (!doc) throw new HttpError("Document not found", 404);
+
     const deleted = await DocumentRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Document not found", 404);
+
+    // Only a READY document actually changes the case's READY corpus — deleting a
+    // PENDING/FAILED one has nothing for the fingerprint check to see change.
+    if (doc.caseId && doc.ragStatus === "READY") {
+      const { scheduleCasePostExtraction } = await import("../queues/case-post-extraction");
+      scheduleCasePostExtraction(doc.caseId, userId);
+    }
   }
 }
