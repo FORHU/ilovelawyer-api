@@ -845,9 +845,8 @@ model Event {
   status                  String    @default("pending")
   googleLink              String?   @map("google_link")
   googleEventId           String?   @map("google_event_id")
+  reminderLeadMinutes     Int?      @map("reminder_lead_minutes")
   lastReminderSentAt      DateTime? @map("last_reminder_sent_at")
-  reminderDayBeforeSentAt DateTime? @map("reminder_day_before_sent_at")
-  reminderDayOfSentAt     DateTime? @map("reminder_day_of_sent_at")
   lawyerAcknowledgedAt    DateTime? @map("lawyer_acknowledged_at")
   clientFeedback          String?   @map("client_feedback") @db.Text
   caseId                  String?   @map("case_id")

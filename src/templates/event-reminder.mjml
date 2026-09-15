@@ -1,0 +1,24 @@
+<mjml>
+  <mj-body background-color="#f4f4f5">
+    <mj-section background-color="#0b0b0f" padding="24px">
+      <mj-column>
+        <mj-image src="{{logoSrc}}" alt="ilovelawyer" width="170px" align="left" />
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff">
+      <mj-column>
+        <mj-text>Hello,</mj-text>
+        <mj-text>This is a reminder for your upcoming {{eventType}}:</mj-text>
+        <mj-text font-size="18px" font-weight="bold">{{title}}</mj-text>
+        <mj-text>{{dateTime}}</mj-text>
+        {{#if caseName}}
+        <mj-text>Case: {{caseName}}</mj-text>
+        {{/if}}
+        {{#if notes}}
+        <mj-text>Notes: {{notes}}</mj-text>
+        {{/if}}
+        <mj-button href="{{calendarLink}}">View in Calendar</mj-button>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
