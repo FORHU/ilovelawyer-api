@@ -101,6 +101,7 @@ router.get("/:caseId/reconstruction/audio/poll", asyncHandler(CaseTerminalCtrl.p
 router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
 router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));
 
+router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
 router.post("/:caseId/decisions/:id/dispute", asyncHandler(CaseTerminalCtrl.disputeDecision));
 router.post("/:caseId/decisions/:id/reactivate", asyncHandler(CaseTerminalCtrl.reactivateDecision));

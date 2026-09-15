@@ -4,9 +4,13 @@ import { Prisma } from "@prisma/client";
 
 export default class TerminalWorkspaceRepo {
   static async list(userId: string) {
+    // Stable creation order, not isLastUsed/updatedAt — those change on every select/apply,
+    // which was reshuffling the tab strip out from under whatever the user just clicked.
+    // isLastUsed still exists for "which tab to restore on page load" (read elsewhere), it just
+    // no longer drives display order.
     return prisma.terminalWorkspace.findMany({
       where: { userId },
-      orderBy: [{ isLastUsed: "desc" }, { updatedAt: "desc" }],
+      orderBy: { createdAt: "asc" },
     });
   }
 

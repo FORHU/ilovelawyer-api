@@ -53,4 +53,5 @@ export const updateDocumentSchema = Joi.object({
   name: Joi.string().optional(),
   caseId: Joi.string().allow(null).optional(),
   consultationId: Joi.string().allow(null).optional(),
+  isExhibit: Joi.boolean().optional(),
 });

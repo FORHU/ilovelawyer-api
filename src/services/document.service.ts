@@ -141,7 +141,7 @@ export default class DocumentSvc {
     return mapDocumentToDto(doc);
   }
 
-  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null }) {
+  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean }) {
     const updated = await DocumentRepo.update(id, organizationId, data);
     if (!updated) throw new HttpError("Document not found", 404);
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
