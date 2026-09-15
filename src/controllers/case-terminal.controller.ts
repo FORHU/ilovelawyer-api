@@ -468,10 +468,13 @@ export default class CaseTerminalCtrl {
     return res.status(202).json(status);
   }
 
-static async exportBrief(req: Request, res: Response) {
+  static async exportBrief(req: Request, res: Response) {
     const { error, value } = exportBriefSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseBriefExportSvc.export(req.params.caseId, req.user.userId, value.format as CaseBriefFormat);
+    return res.status(200).json(result);
+  }
+
   /** Decision Records (differentiation program, Phase 1) — see
    * docs/plans/differentiation-program.md Workstream A. Unlike every other panel above,
    * there is no generate/refresh action here: rows are promoted automatically by
