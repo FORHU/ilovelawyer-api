@@ -58,6 +58,8 @@ export default class EventSvc {
     case_id?: string;
     dateSource?: string;
     date_source?: string;
+    reminderLeadMinutes?: number;
+    reminder_lead_minutes?: number;
   }) {
     return EventRepo.create(organizationId, userId, {
       title: body.title || "Consultation",
@@ -70,6 +72,7 @@ export default class EventSvc {
       googleEventId: body.google_event_id || undefined,
       caseId: body.caseId || body.case_id || undefined,
       dateSource: body.dateSource || body.date_source || "calendar",
+      reminderLeadMinutes: body.reminderLeadMinutes ?? body.reminder_lead_minutes ?? undefined,
     });
   }
 
@@ -84,8 +87,11 @@ export default class EventSvc {
     if (body.client_email !== undefined) data.clientEmail = body.client_email;
     if (body.notes !== undefined) data.notes = body.notes;
     if (body.last_reminder_sent_at !== undefined) data.lastReminderSentAt = new Date(body.last_reminder_sent_at);
-    if (body.reminder_day_before_sent_at !== undefined) data.reminderDayBeforeSentAt = new Date(body.reminder_day_before_sent_at);
-    if (body.reminder_day_of_sent_at !== undefined) data.reminderDayOfSentAt = new Date(body.reminder_day_of_sent_at);
+    if (body.reminder_lead_minutes !== undefined || body.reminderLeadMinutes !== undefined) {
+      data.reminderLeadMinutes = body.reminderLeadMinutes ?? body.reminder_lead_minutes ?? null;
+      // Lead time changed: the previous send (if any) was timed for the old offset.
+      data.lastReminderSentAt = null;
+    }
     if (body.lawyer_acknowledged_at !== undefined) data.lawyerAcknowledgedAt = new Date(body.lawyer_acknowledged_at);
     if (body.caseId !== undefined || body.case_id !== undefined) data.caseId = body.caseId || body.case_id || null;
     if (body.dateSource !== undefined || body.date_source !== undefined) data.dateSource = body.dateSource || body.date_source;

@@ -80,6 +80,7 @@ export default class EventRepo {
     googleEventId?: string;
     caseId?: string;
     dateSource?: string;
+    reminderLeadMinutes?: number;
   }) {
     return prisma.event.create({ data: { organizationId, userId, ...data } });
   }
@@ -138,5 +139,29 @@ export default class EventRepo {
     return prisma.event.findFirst({
       where: { organizationId, userId, googleEventId: null, title, dateTime },
     });
+  }
+
+  /**
+   * Candidates for EventReminderQueue: not yet reminded, not cancelled, and due within
+   * (now, windowEnd] — the exact `dateTime - reminderLeadMinutes` cutoff is checked by the
+   * caller since Prisma can't compare two columns arithmetically in a `where`.
+   */
+  static async findDueForReminder(now: Date, windowEnd: Date) {
+    return prisma.event.findMany({
+      where: {
+        reminderLeadMinutes: { not: null },
+        lastReminderSentAt: null,
+        status: { notIn: ["cancelled", "denied"] },
+        dateTime: { gt: now, lte: windowEnd },
+      },
+      include: {
+        user: { select: { email: true } },
+        case: { select: { caseName: true } },
+      },
+    });
+  }
+
+  static async markReminderSent(id: string, sentAt: Date) {
+    return prisma.event.update({ where: { id }, data: { lastReminderSentAt: sentAt } });
   }
 }

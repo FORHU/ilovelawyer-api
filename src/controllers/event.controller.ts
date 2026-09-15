@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import EventSvc from "../services/event.service";
 import HttpError from "../utils/http-error";
 import prisma from "../lib/prisma";
+import { createEventSchema, updateEventSchema, updateEventByGoogleIdSchema } from "../validation/event.validation";
 
 async function getUserEmail(userId: string): Promise<string> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
@@ -30,19 +31,28 @@ export default class EventCtrl {
   }
 
   static async create(req: Request, res: Response) {
-    const event = await EventSvc.create(req.organization!.id, req.user.userId, req.body);
+    const { error, value } = createEventSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const event = await EventSvc.create(req.organization!.id, req.user.userId, value);
     return res.status(201).json({ event });
   }
 
   static async updateById(req: Request, res: Response) {
+    const { error, value } = updateEventSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
     const email = await getUserEmail(req.user.userId);
-    const result = await EventSvc.updateById(req.params.id, req.organization!.id, req.user.userId, email, req.body);
+    const result = await EventSvc.updateById(req.params.id, req.organization!.id, req.user.userId, email, value);
     return res.status(200).json(result);
   }
 
   static async updateByGoogleEventId(req: Request, res: Response) {
+    const { error, value } = updateEventByGoogleIdSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
     const email = await getUserEmail(req.user.userId);
-    const result = await EventSvc.updateByGoogleEventId(req.params.googleEventId, req.organization!.id, req.user.userId, email, req.body);
+    const result = await EventSvc.updateByGoogleEventId(req.params.googleEventId, req.organization!.id, req.user.userId, email, value);
     return res.status(200).json(result);
   }
 
