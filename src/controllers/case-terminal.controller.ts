@@ -468,7 +468,7 @@ export default class CaseTerminalCtrl {
     return res.status(202).json(status);
   }
 
-static async exportBrief(req: Request, res: Response) {
+  static async exportBrief(req: Request, res: Response) {
     const { error, value } = exportBriefSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseBriefExportSvc.export(req.params.caseId, req.user.userId, value.format as CaseBriefFormat);
