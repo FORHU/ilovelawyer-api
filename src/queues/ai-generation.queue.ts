@@ -14,7 +14,8 @@ export type QueuedAiGenerationKind =
   | "caseTheoryPropose"
   | "theoryDiff"
   | "caseReconstructionScenes"
-  | "caseReconstructionTableRead";
+  | "caseReconstructionTableRead"
+  | "casePostExtraction";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -25,9 +26,22 @@ export interface QueuedAiGenerationJob {
   theoryBId?: string;
 }
 
-// Each kind's controller endpoint already ran CaseAccess.assertCanEdit + AiGenerationLockSvc.begin
-// synchronously (see each service's beginQueued) before enqueueing here — runQueued just does the
-// actual work and closes out the lock via AiGenerationLockSvc.finishWith.
+// Each of caseRefresh/redTeam/caseReconstruction/caseTheoryPropose/theoryDiff/
+// caseReconstructionScenes/caseReconstructionTableRead's controller endpoint already ran
+// CaseAccess.assertCanEdit + AiGenerationLockSvc.begin synchronously (see each service's
+// beginQueued) before enqueueing here — runQueued just does the actual work and closes out the
+// lock via AiGenerationLockSvc.finishWith.
+//
+// casePostExtraction is different: it's the auto-refresh trigger itself
+// (queues/case-post-extraction.ts), not a job whose lock was already claimed by a controller —
+// its own runner decides whether a refresh is actually warranted (pending docs / unchanged READY
+// set / already in progress) and claims AiGenerationLockSvc.begin("caseRefresh") itself once it
+// is. Routed through a dynamic import rather than a top-level one: case-post-extraction.ts needs
+// to call AiGenerationQueue.enqueue (to durably schedule/reschedule itself via SQS — see
+// scheduleCasePostExtraction), which would make this a circular top-level import if this file
+// also statically imported case-post-extraction.ts. The dynamic import only resolves once a
+// message is actually being processed, well after both modules have finished loading, so the
+// cycle never matters at module-init time.
 const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Promise<unknown>> = {
   caseRefresh: (job) => CaseRefreshSvc.runQueued(job.caseId, job.userId),
   redTeam: (job) => RedTeamSvc.runQueued(job.caseId, job.userId),
@@ -36,11 +50,19 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   theoryDiff: (job) => TheoryDiffSvc.runQueuedDiff(job.caseId, job.userId, job.theoryAId!, job.theoryBId!),
   caseReconstructionScenes: (job) => CaseReconstructionSvc.runQueuedScenes(job.caseId, job.userId),
   caseReconstructionTableRead: (job) => CaseReconstructionSvc.runQueuedTableRead(job.caseId, job.userId),
+  casePostExtraction: async (job) => {
+    const { runCasePostExtraction } = await import("./case-post-extraction");
+    return runCasePostExtraction(job.caseId, job.userId);
+  },
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,
 // case finding) — generous enough to cover that plus a retry-once on either of the other two
-// kinds' single call. Renewed well before expiry (see withVisibilityHeartbeat).
+// kinds' single call. casePostExtraction can chain that same caseRefresh work plus a fourth,
+// heavier first-ingest reconstruction + Polly call (see case-post-extraction.ts) — a slower
+// worst case than any other kind here, but not a hard ceiling risk: withVisibilityHeartbeat
+// keeps renewing on an interval for as long as the job is still running, regardless of total
+// elapsed time, so this constant only has to outlast the gap before the first renewal.
 const VISIBILITY_TIMEOUT_SECONDS = 900;
 // Each job is one (or a few sequential) Chat Wonder call — I/O-bound, not CPU/memory heavy like
 // DocumentExtractionQueue's PDF parsing, so a few can run concurrently without real resource
@@ -77,9 +99,15 @@ export default class AiGenerationQueue {
   private static active = 0;
   private static memoryWait: WaitItem[] = [];
 
-  static enqueue(job: QueuedAiGenerationJob): void {
+  /** `delaySeconds` is only meaningful on the real SQS path — the in-memory fallback below (used
+   * when sendMessage itself fails, e.g. the queue is misconfigured/unreachable) runs the job
+   * immediately regardless, same as it always has for the other kinds. That's an accepted
+   * degraded-mode trade-off: an infra outage turns a delayed/debounced trigger into an immediate
+   * one rather than dropping it, and casePostExtraction's own pending/fingerprint checks
+   * (case-post-extraction.ts) still guard against that being wasteful. */
+  static enqueue(job: QueuedAiGenerationJob, delaySeconds?: number): void {
     const body = JSON.stringify(job);
-    sendMessage(AI_GENERATION_QUEUE_URL, body).catch((err) => {
+    sendMessage(AI_GENERATION_QUEUE_URL, body, delaySeconds).catch((err) => {
       logger.error("Failed to enqueue AI generation job", { err, job });
       this.memoryWait.push({ job, receiptHandle: null });
       this.pump();
@@ -162,13 +190,22 @@ export default class AiGenerationQueue {
 
   private static runOne(item: WaitItem): void {
     this.active += 1;
+    const startedAt = Date.now();
+    logger.info("AI generation queue: job started", { kind: item.job.kind, caseId: item.job.caseId });
     void withVisibilityHeartbeat(AI_GENERATION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
       RUNNERS[item.job.kind](item.job),
     )
+      .then(() => {
+        logger.info("AI generation queue: job finished", {
+          kind: item.job.kind,
+          caseId: item.job.caseId,
+          durationMs: Date.now() - startedAt,
+        });
+      })
       // The runner already records FAILED on the AiGenerationJob row (AiGenerationLockSvc
       // .finishWith) — this catch only stops the rejection from going unhandled.
       .catch((err) => {
-        logger.error("AI generation queue: job failed", { err, job: item.job });
+        logger.error("AI generation queue: job failed", { err, job: item.job, durationMs: Date.now() - startedAt });
       })
       .finally(async () => {
         if (item.receiptHandle) {

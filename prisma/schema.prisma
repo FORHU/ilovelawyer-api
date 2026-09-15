@@ -481,6 +481,11 @@ model ConsultationParticipant {
 
 // ── Case Management ────────────────────────────────────────────────────────────
 
+enum CaseStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 model Case {
   id              String    @id @default(uuid())
   userId          String
@@ -491,6 +496,17 @@ model Case {
   language        String    @default("en")
   notes           String?   @db.Text
   lastRefreshedAt DateTime?
+  // Archiving is a pure visibility flag — an ARCHIVED case behaves identically to an ACTIVE one
+  // everywhere else (documents, chat, auto-refresh, CaseAccess); it only changes which of the
+  // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
+  // param and CaseRepo.setStatus.
+  status          CaseStatus @default(ACTIVE)
+  // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
+  // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
+  // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
+  // a delete immediately followed by a re-add that nets out to the same set). Null until the
+  // first refresh runs.
+  readySetFingerprint String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -526,6 +542,7 @@ model Case {
 
   @@index([userId])
   @@index([organizationId])
+  @@index([organizationId, status])
 }
 
 model Party {
@@ -842,9 +859,8 @@ model Event {
   status                  String    @default("pending")
   googleLink              String?   @map("google_link")
   googleEventId           String?   @map("google_event_id")
+  reminderLeadMinutes     Int?      @map("reminder_lead_minutes")
   lastReminderSentAt      DateTime? @map("last_reminder_sent_at")
-  reminderDayBeforeSentAt DateTime? @map("reminder_day_before_sent_at")
-  reminderDayOfSentAt     DateTime? @map("reminder_day_of_sent_at")
   lawyerAcknowledgedAt    DateTime? @map("lawyer_acknowledged_at")
   clientFeedback          String?   @map("client_feedback") @db.Text
   caseId                  String?   @map("case_id")
