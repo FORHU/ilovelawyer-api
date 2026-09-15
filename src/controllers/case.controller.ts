@@ -32,7 +32,7 @@ export default class CaseCtrl {
     const { error, value } = listCasesSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.list(req.organization!.id, value.page, value.limit, value.search);
+    const result = await CaseSvc.list(req.organization!.id, value.page, value.limit, value.search, value.status);
     return res.status(200).json(result);
   }
 
@@ -52,6 +52,16 @@ export default class CaseCtrl {
   static async delete(req: Request, res: Response) {
     await CaseSvc.delete(req.params.id, req.organization!.id);
     return res.status(204).send();
+  }
+
+  static async archive(req: Request, res: Response) {
+    const result = await CaseSvc.archive(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async unarchive(req: Request, res: Response) {
+    const result = await CaseSvc.unarchive(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
   }
 
   static async handleCreateCaseWithDocument(req: Request, res: Response) {
