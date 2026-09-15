@@ -598,6 +598,9 @@ model CaseDocumentChunk {
   charCount      Int
   pageNumber     Int?
   embedding      Unsupported("vector(1536)")?
+  // Generated column (see 20260916000000_add_case_document_chunk_fts) — Postgres derives it
+  // from chunkText; read via raw SQL only, same Unsupported escape hatch as `embedding`.
+  chunkTsv       Unsupported("tsvector")?
   createdAt      DateTime                     @default(now())
 
   caseDocument Document @relation(fields: [caseDocumentId], references: [id], onDelete: Cascade)

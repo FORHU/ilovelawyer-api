@@ -21,11 +21,16 @@ describe("Case document embedding isolation", () => {
   const chunkBId = crypto.randomUUID();
 
   before(async () => {
+    const tenant = await prisma.tenant.upsert({
+      where: { code: "UK" },
+      update: {},
+      create: { code: "UK", name: "United Kingdom" },
+    });
     await prisma.user.create({
       data: { id: userId, email: `iso-${userId}@example.com`, username: `iso-${userId}` },
     });
     await prisma.organization.create({
-      data: { id: orgId, name: "Isolation Org", slug: `iso-org-${orgId}`, createdById: userId },
+      data: { id: orgId, name: "Isolation Org", slug: `iso-org-${orgId}`, tenantId: tenant.id, createdById: userId },
     });
     await prisma.case.createMany({
       data: [
@@ -74,7 +79,7 @@ describe("Case document embedding isolation", () => {
     const queryEmbedding = new Array(1536).fill(0);
     queryEmbedding[0] = 1;
 
-    const rows = await DocumentChunkRepo.findRelevantByCase(caseAId, queryEmbedding, 20);
+    const rows = await DocumentChunkRepo.findRelevantByCase(caseAId, queryEmbedding, "", 20);
     expect(rows.map((r) => r.id)).to.deep.equal([chunkAId]);
     expect(rows.map((r) => r.caseDocumentId)).to.deep.equal([docAId]);
   });
@@ -83,7 +88,7 @@ describe("Case document embedding isolation", () => {
     const queryEmbedding = new Array(1536).fill(0);
     queryEmbedding[0] = 1;
 
-    const rows = await DocumentChunkRepo.findRelevantByCase(caseBId, queryEmbedding, 20);
+    const rows = await DocumentChunkRepo.findRelevantByCase(caseBId, queryEmbedding, "", 20);
     expect(rows.map((r) => r.id)).to.deep.equal([chunkBId]);
   });
 });

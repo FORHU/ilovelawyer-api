@@ -11,3 +11,5 @@ dist/
 .DS_Store
 Thumbs.db
 /docs
+benchmarks/brackenmoor/answers/2026-09-14-hybrid-off/moderation.md
+/benchmarks

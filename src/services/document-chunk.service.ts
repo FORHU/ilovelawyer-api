@@ -133,8 +133,8 @@ export default class DocumentChunkSvc {
       const queryEmbedding = await embedText(query);
       const rows =
         "caseId" in scope
-          ? await DocumentChunkRepo.findRelevantByCase(scope.caseId, queryEmbedding, perDocumentFloor)
-          : await DocumentChunkRepo.findRelevantByConsultation(scope.consultationId, queryEmbedding, perDocumentFloor);
+          ? await DocumentChunkRepo.findRelevantByCase(scope.caseId, queryEmbedding, query, perDocumentFloor)
+          : await DocumentChunkRepo.findRelevantByConsultation(scope.consultationId, queryEmbedding, query, perDocumentFloor);
       return {
         caseDocumentIds: readyDocIds,
         // Already similarity-desc (and globally capped) from findRelevantByCase/Consultation —
@@ -157,7 +157,7 @@ export default class DocumentChunkSvc {
   ): Promise<RelevantCaseChunks> {
     try {
       const queryEmbedding = await embedText(query);
-      const chunkIds = await DocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding, limit);
+      const chunkIds = await DocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding, query, limit);
       return { caseDocumentIds: chunkIds.length ? [caseDocumentId] : [], caseDocumentChunkIds: chunkIds };
     } catch {
       const chunkIds = await DocumentChunkRepo.findIdsByDocument(caseDocumentId);
