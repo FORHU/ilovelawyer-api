@@ -63,8 +63,6 @@ export const UK_LEGISLATION_BASE_URL = (
 ).replace(/\/+$/, "");
 /** Shared secret Chat Wonder sends back to us via `x-api-key` when it calls our API (e.g. to fetch case document chunks). */
 export const CHAT_WONDER_API_KEY = process.env.CHAT_WONDER_API_KEY as string;
-// Read at call time (not module load) so the flag can be toggled per test without re-importing.
-export const isHybridRetrievalEnabled = () => process.env.HYBRID_RETRIEVAL_ENABLED === "true";
 export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;
 export const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY as string;
 export const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET as string;

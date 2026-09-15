@@ -40,9 +40,8 @@ export interface CaseDocumentGrounding {
 }
 
 /** Chunk ids to send Chat Wonder for a given (document, question) pair. Embeds the
- * user's question and ranks this document's chunks by cosine similarity (fused with a
- * full-text rank when HYBRID_RETRIEVAL_ENABLED) — this is what actually uses the
- * `embedding` column each chunk was stored with. Falls back to every
+ * user's question and ranks this document's chunks by cosine similarity — this is what
+ * actually uses the `embedding` column each chunk was stored with. Falls back to every
  * chunk (unfiltered, chunkIndex order) if embedding/similarity search fails for any
  * reason — a degraded but still-correct result, never a broken chat turn. */
 async function relevantChunkIdsFor(caseDocumentId: string, query: string): Promise<string[]> {
