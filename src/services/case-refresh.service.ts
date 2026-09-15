@@ -26,15 +26,18 @@ export default class CaseRefreshSvc {
         await AiGenerationLockSvc.begin(caseId, "caseRefresh");
     }
 
-    /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
-    static async runQueued(caseId: string, userId: string): Promise<void> {
+    /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row.
+     * `reason` is audit-trail only — it never changes what runs, just distinguishes a lawyer's
+     * "Refresh analysis" click from the automatic post-extraction trigger in the case.refresh
+     * audit row (case-post-extraction.ts passes "post-extraction" explicitly). */
+    static async runQueued(caseId: string, userId: string, reason: "manual" | "post-extraction" = "manual"): Promise<void> {
         await AiGenerationLockSvc.finishWith(caseId, "caseRefresh", () =>
-            CaseRefreshSvc.refreshInner(caseId, userId),
+            CaseRefreshSvc.refreshInner(caseId, userId, reason),
         );
     }
 
-    private static async refreshInner(caseId: string, userId: string) {
-        logger.info("Refresh analysis: started", { caseId, userId });
+    private static async refreshInner(caseId: string, userId: string, reason: "manual" | "post-extraction") {
+        logger.info("Refresh analysis: started", { caseId, userId, reason });
 
         // The automatic post-extraction trigger schedules this up to 45s (plus queue wait) after
         // the corpus change that caused it — long enough for the case to have been deleted in
@@ -120,9 +123,9 @@ export default class CaseRefreshSvc {
             caseId,
             actorId: userId,
             action: "case.refresh",
-            payload: { pendingDocs: pending.length },
+            payload: { pendingDocs: pending.length, reason },
         });
-        logger.info("Refresh analysis: completed", { caseId, userId });
+        logger.info("Refresh analysis: completed", { caseId, userId, reason });
         return CaseSnapshotSvc.get(caseId, userId);
     }
 }

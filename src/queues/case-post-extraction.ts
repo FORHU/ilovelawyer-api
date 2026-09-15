@@ -111,7 +111,7 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       const CaseRefreshSvc = (await import("../services/case-refresh.service")).default;
       // runQueued closes out the lock (DONE/FAILED) itself via AiGenerationLockSvc.finishWith —
       // same as the controller's queued HTTP path (CaseTerminalCtrl.refresh).
-      await CaseRefreshSvc.runQueued(caseId, userId);
+      await CaseRefreshSvc.runQueued(caseId, userId, "post-extraction");
       await CaseRepo.setReadySetFingerprint(caseId, fingerprint);
       logger.info("Case refresh completed", { caseId, userId, source: "auto" });
     }
