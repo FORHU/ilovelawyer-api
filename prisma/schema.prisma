@@ -481,6 +481,11 @@ model ConsultationParticipant {
 
 // ── Case Management ────────────────────────────────────────────────────────────
 
+enum CaseStatus {
+  ACTIVE
+  ARCHIVED
+}
+
 model Case {
   id              String    @id @default(uuid())
   userId          String
@@ -491,6 +496,11 @@ model Case {
   language        String    @default("en")
   notes           String?   @db.Text
   lastRefreshedAt DateTime?
+  // Archiving is a pure visibility flag — an ARCHIVED case behaves identically to an ACTIVE one
+  // everywhere else (documents, chat, auto-refresh, CaseAccess); it only changes which of the
+  // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
+  // param and CaseRepo.setStatus.
+  status          CaseStatus @default(ACTIVE)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
@@ -532,6 +542,7 @@ model Case {
 
   @@index([userId])
   @@index([organizationId])
+  @@index([organizationId, status])
 }
 
 model Party {

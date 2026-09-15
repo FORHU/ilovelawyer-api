@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma";
+import { CaseStatus } from "@prisma/client";
 
 export interface PartyInput {
   name: string;
@@ -32,11 +33,12 @@ export default class CaseRepo {
     });
   }
 
-  static async list(organizationId: string, page: number, limit: number, search?: string) {
+  static async list(organizationId: string, page: number, limit: number, search?: string, status: CaseStatus = "ACTIVE") {
     const skip = (page - 1) * limit;
 
     const where = {
       organizationId,
+      status,
       ...(search
         ? {
             OR: [
@@ -88,6 +90,16 @@ export default class CaseRepo {
   static async delete(id: string, organizationId: string) {
     const result = await prisma.case.deleteMany({ where: { id, organizationId } });
     return result.count > 0;
+  }
+
+  /** Archiving is a pure visibility flag (see CaseStatus on the schema) — this is the one place
+   * that flips it. Find-then-update (not updateMany) since this is a genuine user-initiated
+   * action with a real 404 to report, not a best-effort background write like markRefreshed
+   * below, which deliberately tolerates a case having vanished mid-flight. */
+  static async setStatus(id: string, organizationId: string, status: CaseStatus) {
+    const existing = await prisma.case.findFirst({ where: { id, organizationId }, select: { id: true } });
+    if (!existing) return null;
+    return prisma.case.update({ where: { id }, data: { status }, include: { parties: true } });
   }
 
   /** Stamped at the end of a full CaseRefreshSvc.refresh run — not scoped by organizationId

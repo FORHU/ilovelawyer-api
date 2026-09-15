@@ -1,4 +1,5 @@
 import CaseRepo, { CaseData } from "../repositories/case.repository";
+import OrganizationRepo from "../repositories/organization.repository";
 import HttpError from "../utils/http-error";
 import FileSvc from "./files.service";
 import DocumentRepo from "../repositories/document.repository";
@@ -7,14 +8,15 @@ import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
+import { CaseStatus } from "@prisma/client";
 
 export default class CaseSvc {
   static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {
     return CaseRepo.create(organizationId, userId, data);
   }
 
-  static async list(organizationId: string, page: number, limit: number, search?: string) {
-    return CaseRepo.list(organizationId, page, limit, search);
+  static async list(organizationId: string, page: number, limit: number, search?: string, status?: CaseStatus) {
+    return CaseRepo.list(organizationId, page, limit, search, status);
   }
 
   static async getById(id: string, organizationId: string) {
@@ -32,6 +34,24 @@ export default class CaseSvc {
   static async delete(id: string, organizationId: string) {
     const deleted = await CaseRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Case not found", 404);
+  }
+
+  /** Archiving/unarchiving are independent of delete — an archived case can still be deleted,
+   * and archiving never blocks anything else on the case (documents, chat, auto-refresh all
+   * keep working identically). No CaseAccess check here, matching update/delete above — this
+   * service scopes purely by organizationId, unlike the CaseAccess-gated case sub-resources. */
+  static async archive(id: string, organizationId: string, actorId: string) {
+    const updated = await CaseRepo.setStatus(id, organizationId, "ARCHIVED");
+    if (!updated) throw new HttpError("Case not found", 404);
+    await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.archive" });
+    return updated;
+  }
+
+  static async unarchive(id: string, organizationId: string, actorId: string) {
+    const updated = await CaseRepo.setStatus(id, organizationId, "ACTIVE");
+    if (!updated) throw new HttpError("Case not found", 404);
+    await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.unarchive" });
+    return updated;
   }
 
   /**
