@@ -78,7 +78,7 @@ export default class DocumentCtrl {
   }
 
   static async delete(req: Request, res: Response) {
-    await DocumentSvc.delete(req.params.id, req.organization!.id);
+    await DocumentSvc.delete(req.params.id, req.organization!.id, req.user.userId);
     return res.status(204).send();
   }
 }

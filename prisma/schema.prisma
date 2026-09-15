@@ -491,6 +491,12 @@ model Case {
   language        String    @default("en")
   notes           String?   @db.Text
   lastRefreshedAt DateTime?
+  // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
+  // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
+  // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
+  // a delete immediately followed by a re-add that nets out to the same set). Null until the
+  // first refresh runs.
+  readySetFingerprint String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

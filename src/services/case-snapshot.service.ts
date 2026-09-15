@@ -102,6 +102,11 @@ export default class CaseSnapshotSvc {
         name: doc.name,
         ragStatus: doc.ragStatus,
         documentType: doc.documentType,
+        // The Workspace document browser's "folders" are purely this field (see
+        // DocumentFolderBrowser on the frontend) — exposing it here is what lets the Legal
+        // Terminal's Evidence & Timeline panel group the same document list into the same
+        // folders instead of one flat list, without inventing a second folder concept.
+        category: doc.category,
         mimeType: doc.mimeType,
         pageCount: doc.pageCount,
         extractionMethod: doc.extractionMethod,

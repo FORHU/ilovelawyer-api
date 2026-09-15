@@ -26,40 +26,76 @@ export default class CaseRefreshSvc {
         await AiGenerationLockSvc.begin(caseId, "caseRefresh");
     }
 
-    /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
-    static async runQueued(caseId: string, userId: string): Promise<void> {
+    /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row.
+     * `reason` is audit-trail only — it never changes what runs, just distinguishes a lawyer's
+     * "Refresh analysis" click from the automatic post-extraction trigger in the case.refresh
+     * audit row (case-post-extraction.ts passes "post-extraction" explicitly). */
+    static async runQueued(caseId: string, userId: string, reason: "manual" | "post-extraction" = "manual"): Promise<void> {
         await AiGenerationLockSvc.finishWith(caseId, "caseRefresh", () =>
-            CaseRefreshSvc.refreshInner(caseId, userId),
+            CaseRefreshSvc.refreshInner(caseId, userId, reason),
         );
     }
 
-    private static async refreshInner(caseId: string, userId: string) {
+    private static async refreshInner(caseId: string, userId: string, reason: "manual" | "post-extraction") {
+        logger.info("Refresh analysis: started", { caseId, userId, reason });
+
+        // The automatic post-extraction trigger schedules this up to 45s (plus queue wait) after
+        // the corpus change that caused it — long enough for the case to have been deleted in
+        // the meantime. Manual "Refresh analysis" clicks can't hit this (beginQueued's
+        // CaseAccess.assertCanEdit already confirmed the case exists just before enqueueing).
+        if (!(await CaseRepo.exists(caseId))) {
+            logger.info("Refresh analysis: case no longer exists, skipping", { caseId });
+            return;
+        }
+
         const docs = await DocumentRepo.listAllByCase(caseId);
         const pending = docs.filter(
             (d) => d.ragStatus === "PENDING" || d.ragStatus === "FAILED",
         );
-        if (pending.length)
+        if (pending.length) {
+            logger.info("Refresh analysis: re-queuing pending documents", { caseId, count: pending.length });
             DocumentExtractionQueue.enqueueMany(pending.map((d) => d.id));
+        }
 
-        await EvidenceIntelligenceSvc.scanContradictions(caseId, userId).catch(
-            () => [],
-        );
-        await CaseStrategySvc.generateFromDocuments(caseId, userId).catch(
-            (err) => {
+        let stepStartedAt = Date.now();
+        await EvidenceIntelligenceSvc.scanContradictions(caseId, userId)
+            .then(() => {
+                logger.info("Refresh analysis: contradictions scan done", { caseId, durationMs: Date.now() - stepStartedAt });
+            })
+            .catch((err) => {
+                logger.warn("Chat Wonder contradictions scan failed", {
+                    err,
+                    caseId,
+                    durationMs: Date.now() - stepStartedAt,
+                });
+                return [];
+            });
+
+        stepStartedAt = Date.now();
+        await CaseStrategySvc.generateFromDocuments(caseId, userId)
+            .then(() => {
+                logger.info("Refresh analysis: case strategy done", { caseId, durationMs: Date.now() - stepStartedAt });
+            })
+            .catch((err) => {
                 logger.warn("Chat Wonder case strategy failed", {
                     err,
                     caseId,
+                    durationMs: Date.now() - stepStartedAt,
                 });
-            },
-        );
-        await CaseFindingAiSvc.generateFromDocuments(caseId, userId).catch(
-            (err) => {
+            });
+
+        stepStartedAt = Date.now();
+        await CaseFindingAiSvc.generateFromDocuments(caseId, userId)
+            .then(() => {
+                logger.info("Refresh analysis: case finding done", { caseId, durationMs: Date.now() - stepStartedAt });
+            })
+            .catch((err) => {
                 logger.warn("Chat Wonder case finding generation failed", {
                     err,
                     caseId,
+                    durationMs: Date.now() - stepStartedAt,
                 });
-            },
-        );
+            });
 
         const consultations = await ChatRepo.listConsultationIdsByCase(caseId);
         for (const consultation of consultations) {
@@ -78,6 +114,7 @@ export default class CaseRefreshSvc {
                     items as unknown as TimelineItem[],
                     userId,
                 );
+                logger.info("Refresh analysis: promoted AI timeline", { caseId, consultationId: consultation.id });
             }
         }
 
@@ -86,8 +123,9 @@ export default class CaseRefreshSvc {
             caseId,
             actorId: userId,
             action: "case.refresh",
-            payload: { pendingDocs: pending.length },
+            payload: { pendingDocs: pending.length, reason },
         });
+        logger.info("Refresh analysis: completed", { caseId, userId, reason });
         return CaseSnapshotSvc.get(caseId, userId);
     }
 }
