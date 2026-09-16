@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.post("/signup", asyncHandler(AuthCtrl.signup));
 router.post("/send-otp", asyncHandler(AuthCtrl.sendOtp));
+router.post("/cancel-signup", asyncHandler(AuthCtrl.cancelSignup));
 router.post("/verify-otp", asyncHandler(AuthCtrl.verifyOtp));
 router.post("/login", asyncHandler(AuthCtrl.login));
 router.post("/refresh", asyncHandler(AuthCtrl.refresh));

@@ -44,6 +44,10 @@ interface WaitItem {
   payload: AssistantTurnPayload;
   /** null for the enqueue-failed in-memory fallback — nothing to delete/ack for those. */
   receiptHandle: string | null;
+  /** The SQS-assigned id this job was delivered under — undefined for the same in-memory
+   * fallback cases as receiptHandle. Logged alongside payload.parentMessageId throughout so a
+   * turn's whole lifecycle (enqueued -> received -> persisted -> acked) can be traced by either id. */
+  sqsMessageId?: string;
 }
 
 function sleep(ms: number) {
@@ -67,27 +71,40 @@ export default class MessagePersistenceQueue {
   static enqueue(payload: AssistantTurnPayload): void {
     if (!payload?.parentMessageId) return;
 
-    sendMessage(MESSAGE_PERSISTENCE_QUEUE_URL, JSON.stringify(payload)).catch(async (err) => {
-      logger.error("Failed to enqueue assistant turn persistence job", {
-        err,
-        parentMessageId: payload.parentMessageId,
-      });
-      // Never drop the turn. If the worker loop is running, hand it to memoryWait so the
-      // CONCURRENCY cap still applies; if the queue never started (no URL configured),
-      // persist inline right here.
-      if (this.running) {
-        this.memoryWait.push({ payload, receiptHandle: null });
-        this.pump();
-      } else {
-        await persistWithRetry(payload).catch((e) => {
-          logger.error("Message persistence: inline fallback failed after retries — reply lost", {
-            err: e,
-            parentMessageId: payload.parentMessageId,
-            consultationId: payload.consultationId,
-          });
-        });
-      }
+    logger.info("Message persistence: enqueueing assistant turn", {
+      parentMessageId: payload.parentMessageId,
+      consultationId: payload.consultationId,
     });
+
+    sendMessage(MESSAGE_PERSISTENCE_QUEUE_URL, JSON.stringify(payload))
+      .then((sqsMessageId) => {
+        logger.info("Message persistence: enqueued to SQS", {
+          parentMessageId: payload.parentMessageId,
+          consultationId: payload.consultationId,
+          sqsMessageId,
+        });
+      })
+      .catch(async (err) => {
+        logger.error("Failed to enqueue assistant turn persistence job", {
+          err,
+          parentMessageId: payload.parentMessageId,
+        });
+        // Never drop the turn. If the worker loop is running, hand it to memoryWait so the
+        // CONCURRENCY cap still applies; if the queue never started (no URL configured),
+        // persist inline right here.
+        if (this.running) {
+          this.memoryWait.push({ payload, receiptHandle: null });
+          this.pump();
+        } else {
+          await persistWithRetry(payload).catch((e) => {
+            logger.error("Message persistence: inline fallback failed after retries — reply lost", {
+              err: e,
+              parentMessageId: payload.parentMessageId,
+              consultationId: payload.consultationId,
+            });
+          });
+        }
+      });
   }
 
   static start(): void {
@@ -124,10 +141,16 @@ export default class MessagePersistenceQueue {
         const payload = this.parse(message.body);
         if (!payload) {
           // Malformed message — drop it rather than let it loop forever.
+          logger.error("Message persistence: dropping malformed SQS message", { sqsMessageId: message.messageId });
           void deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, message.receiptHandle).catch(() => {});
           continue;
         }
-        this.memoryWait.push({ payload, receiptHandle: message.receiptHandle });
+        logger.info("Message persistence: received job from SQS", {
+          parentMessageId: payload.parentMessageId,
+          consultationId: payload.consultationId,
+          sqsMessageId: message.messageId,
+        });
+        this.memoryWait.push({ payload, receiptHandle: message.receiptHandle, sqsMessageId: message.messageId });
       }
       this.pump();
     }
@@ -165,6 +188,11 @@ export default class MessagePersistenceQueue {
 
   private static runOne(item: WaitItem): void {
     this.active += 1;
+    logger.info("Message persistence: starting persist", {
+      parentMessageId: item.payload.parentMessageId,
+      consultationId: item.payload.consultationId,
+      sqsMessageId: item.sqsMessageId,
+    });
     // SQS-delivered jobs get one attempt here and rely on redelivery: the message is acked
     // only after persistAssistantTurn resolves. A failed job is left un-acked so it reappears
     // after VISIBILITY_TIMEOUT_SECONDS and is retried by whichever instance receives it (the
@@ -178,15 +206,28 @@ export default class MessagePersistenceQueue {
       : () => persistWithRetry(item.payload);
     void withVisibilityHeartbeat(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, job)
       .then(async () => {
+        logger.info("Message persistence: persist succeeded", {
+          parentMessageId: item.payload.parentMessageId,
+          consultationId: item.payload.consultationId,
+          sqsMessageId: item.sqsMessageId,
+        });
         if (item.receiptHandle) {
-          await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle).catch((err) => {
-            // Persisted but not acked: SQS will redeliver, and persistAssistantTurn's
-            // already-persisted check makes that a no-op — safe, just noisy.
-            logger.error("Message persistence queue: failed to delete message", {
-              err,
-              parentMessageId: item.payload.parentMessageId,
+          await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle)
+            .then(() => {
+              logger.info("Message persistence: acked SQS message", {
+                parentMessageId: item.payload.parentMessageId,
+                sqsMessageId: item.sqsMessageId,
+              });
+            })
+            .catch((err) => {
+              // Persisted but not acked: SQS will redeliver, and persistAssistantTurn's
+              // already-persisted check makes that a no-op — safe, just noisy.
+              logger.error("Message persistence queue: failed to delete message", {
+                err,
+                parentMessageId: item.payload.parentMessageId,
+                sqsMessageId: item.sqsMessageId,
+              });
             });
-          });
         }
       })
       .catch((err) => {
@@ -198,6 +239,7 @@ export default class MessagePersistenceQueue {
             err,
             parentMessageId: item.payload.parentMessageId,
             consultationId: item.payload.consultationId,
+            sqsMessageId: item.sqsMessageId,
           },
         );
       })

@@ -35,6 +35,10 @@ export const sendOtpSchema = Joi.object({
   email: Joi.string().email().required(),
 });
 
+export const cancelSignupSchema = Joi.object({
+  email: Joi.string().email().required(),
+});
+
 export const verifyOtpSchema = Joi.object({
   email: Joi.string().email().required(),
   code: Joi.string().length(6).required(),
