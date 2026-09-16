@@ -32,6 +32,13 @@ const PENDING_SWEEP_INTERVAL_MS = 5 * 60_000;
 // for stuck. Comfortably above JOB_HARD_TIMEOUT_MS so a single slow-but-healthy job in front of
 // it in the queue can't cause a false re-enqueue either.
 const PENDING_SWEEP_MIN_AGE_MS = 20 * 60_000;
+// An empty (0-byte) upload can never successfully extract — DocumentExtractionSvc.process always
+// resolves it straight to FAILED (trimmedPages.length === 0) — so it has no terminal state the
+// sweep above will ever stop re-queuing on its own; left alone it would bounce PENDING -> FAILED
+// forever, once per PENDING_SWEEP_INTERVAL_MS, indefinitely. Evicted outright after a full day
+// (chosen so it can't ever race a legitimate one still finishing its first attempt) rather than
+// just left FAILED, so the doc doesn't sit in "pending limbo" in the DB/UI.
+const EMPTY_DOCUMENT_EVICTION_MS = 24 * 60 * 60_000;
 
 interface WaitItem {
   documentId: string;
@@ -82,6 +89,9 @@ export default class DocumentExtractionQueue {
   }
 
   private static async run(): Promise<void> {
+    // Runs before the reload below so a doc that's already past the eviction age at boot gets
+    // deleted instead of re-queued for yet another doomed attempt.
+    await this.evictStaleEmptyDocuments();
     // Nothing can legitimately be in flight yet at boot, so no age filter here — every
     // PENDING/FAILED document found is unambiguously stuck from a prior process's lifetime.
     await this.reloadStuckDocuments();
@@ -115,7 +125,18 @@ export default class DocumentExtractionQueue {
     while (this.running) {
       await sleep(PENDING_SWEEP_INTERVAL_MS);
       if (!this.running) return;
+      await this.evictStaleEmptyDocuments();
       await this.reloadStuckDocuments(PENDING_SWEEP_MIN_AGE_MS);
+    }
+  }
+
+  private static async evictStaleEmptyDocuments(): Promise<void> {
+    const { count } = await DocumentRepo.deleteStaleEmpty(EMPTY_DOCUMENT_EVICTION_MS).catch((err) => {
+      logger.error("Document extraction queue: failed to evict stale empty documents", { err });
+      return { count: 0 };
+    });
+    if (count > 0) {
+      logger.info("Document extraction queue: evicted stale empty documents", { count });
     }
   }
 
