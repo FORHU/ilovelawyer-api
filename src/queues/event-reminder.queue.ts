@@ -1,4 +1,5 @@
 import EventRepo from "../repositories/event.repository";
+import NotificationSvc from "../services/notification.service";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import { CLIENT_URL } from "../config";
@@ -22,6 +23,8 @@ function formatEventDateTimeShort(dateTime: Date): string {
 
 interface ReminderCandidate {
   id: string;
+  userId: string;
+  organizationId: string;
   title: string;
   type: string;
   dateTime: Date;
@@ -113,5 +116,16 @@ export default class EventReminderQueue {
     }
 
     await EventRepo.markReminderSent(event.id, new Date());
+
+    // In-app bell notification for the lawyer only — the client recipient (if any) isn't
+    // necessarily an app user and has no notification inbox to receive it in.
+    await NotificationSvc.create({
+      userId: event.userId,
+      organizationId: event.organizationId,
+      type: "EVENT_REMINDER",
+      title: `Upcoming ${eventType}`,
+      message: `${event.title} — ${when}`,
+      link: "/homepage/calendar",
+    }).catch((err) => logger.error("Event reminder queue: failed to create notification", { err, eventId: event.id }));
   }
 }
