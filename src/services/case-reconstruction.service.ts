@@ -58,13 +58,14 @@ export default class CaseReconstructionSvc {
 
   private static async generateInner(caseId: string, userId?: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    const ukJurisdiction = tenantCode === "UK" ? await CaseAccess.resolveUkJurisdiction(caseId) : null;
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
     if (ready.length < 1) throw new HttpError("No indexed documents to reconstruct from yet", 422);
 
     const buildCaseReconstructionPrompt = getCaseReconstructionPromptBuilder(tenantCode);
     const pack = await buildFactExcerptPack(ready);
-    const prompt = `${buildCaseReconstructionPrompt(ready)}
+    const prompt = `${buildCaseReconstructionPrompt(ready, ukJurisdiction)}
 
 ## EXTRACTED TEXT
 Use only these excerpts and the attached case documents.

@@ -74,6 +74,9 @@ export default class RedTeamSvc {
       // Case.jurisdiction is the case's own free-text court/venue field — unrelated to the
       // tenantCode above (which only selects which PH/UK prompt template to render).
       jurisdiction: snapshot.case.jurisdiction,
+      // UK tenant only — read by buildUKRedTeamPrompt to pick England & Wales / Scotland /
+      // Northern Ireland framing; ignored by the PH builder.
+      ukJurisdiction: snapshot.case.ukJurisdiction,
       parties: snapshot.case.parties,
       legalIssues: snapshot.findings.filter((f) => f.category === "LEGAL_ISSUE").map((f) => f.label),
       weaknesses: snapshot.findings.filter((f) => f.category === "WEAKNESS").map((f) => f.label),

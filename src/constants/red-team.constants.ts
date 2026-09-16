@@ -2,6 +2,10 @@ export interface RedTeamPromptData {
   caseName: string;
   actionType?: string | null;
   jurisdiction?: string | null;
+  /** UK tenant only — England and Wales / Scotland / Northern Ireland (Case.ukJurisdiction).
+   * Ignored by the PH prompt builder; read by the UK one (see uk/prompts/red-team.prompt.ts)
+   * to select the right courts/procedure/terminology instead of assuming England & Wales. */
+  ukJurisdiction?: string | null;
   parties: { name: string; designation: string }[];
   legalIssues: string[];
   weaknesses: string[];

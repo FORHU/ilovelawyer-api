@@ -17,13 +17,14 @@ export default class CaseStrategySvc {
 
   private static async generateFromDocumentsInner(caseId: string, userId?: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    const ukJurisdiction = tenantCode === "UK" ? await CaseAccess.resolveUkJurisdiction(caseId) : null;
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
     if (ready.length < 1) return ProceduralDeadlineRepo.listProcedureItems(caseId);
 
     const buildCaseStrategyPrompt = getCaseStrategyPromptBuilder(tenantCode);
     const pack = await buildFactExcerptPack(ready);
-    const prompt = `${buildCaseStrategyPrompt(ready)}
+    const prompt = `${buildCaseStrategyPrompt(ready, ukJurisdiction)}
 
 ## EXTRACTED TEXT
 Use only these excerpts and the attached case documents.

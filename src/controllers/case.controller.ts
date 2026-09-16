@@ -22,6 +22,7 @@ export default class CaseCtrl {
       caseName: string;
       actionType?: string;
       jurisdiction?: string;
+      ukJurisdiction?: string;
       notes?: string;
       parties?: PartyInput[];
     });
