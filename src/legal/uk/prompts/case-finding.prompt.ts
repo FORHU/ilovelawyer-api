@@ -2,14 +2,15 @@
 // output block structure must stay identical, only the legal framing differs.
 // AI_FINDING_NOTE lives in ../../../constants/case-finding.constants — this file used to
 // redeclare its own (unused) copy; use the shared one instead.
+import { ukJurisdictionRoleLabel } from "./uk-jurisdiction-role-label";
 
-export function buildUKCaseFindingPrompt(docs: { id: string; name: string }[]): string {
+export function buildUKCaseFindingPrompt(docs: { id: string; name: string }[], ukJurisdiction?: string | null): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
 
   return `[legal ai]
 
 ## ROLE
-LEGAL_REVIEW_REQUIRED: You are assessing an England & Wales case's litigation posture from the attached documents only. You are not writing a memo or citing authority.
+LEGAL_REVIEW_REQUIRED: You are assessing ${ukJurisdictionRoleLabel(ukJurisdiction)} case's litigation posture from the attached documents only. You are not writing a memo or citing authority.
 
 ## TASK
 From the documents only, identify:

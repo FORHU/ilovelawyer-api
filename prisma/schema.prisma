@@ -494,6 +494,11 @@ model Case {
   caseName        String
   actionType      String?
   jurisdiction    String?
+  // Constrained (England and Wales / Scotland / Northern Ireland) selector for which UK legal
+  // system applies to this case — distinct from `jurisdiction` above (a free-text court/venue
+  // field) and from Tenant.code (the PH/UK deployment-region boundary, see CONTEXT.md). Only
+  // meaningful for UK-tenant organizations; left null for PH.
+  ukJurisdiction  String?
   language        String    @default("en")
   notes           String?   @db.Text
   lastRefreshedAt DateTime?

@@ -2,14 +2,15 @@
 // output block structure must stay identical, only the legal framing differs.
 // AI_PROCEDURE_NOTE/AI_KEY_DATE_STATUS live in ../../../constants/case-strategy.constants — this
 // file used to redeclare its own (unused) copies; use the shared ones instead.
+import { ukJurisdictionRoleLabel } from "./uk-jurisdiction-role-label";
 
-export function buildUKCaseStrategyPrompt(docs: { id: string; name: string }[]): string {
+export function buildUKCaseStrategyPrompt(docs: { id: string; name: string }[], ukJurisdiction?: string | null): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
 
   return `[legal ai]
 
 ## ROLE
-LEGAL_REVIEW_REQUIRED: You propose a short case plan and extract key dates from the attached England & Wales case documents. You are not writing a memo or citing authority.
+LEGAL_REVIEW_REQUIRED: You propose a short case plan and extract key dates from the attached ${ukJurisdictionRoleLabel(ukJurisdiction)} case documents. You are not writing a memo or citing authority.
 
 ## TASK
 From the documents only:
