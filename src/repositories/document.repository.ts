@@ -159,4 +159,18 @@ export default class DocumentRepo {
     const result = await prisma.document.deleteMany({ where: { id, organizationId } });
     return result.count > 0;
   }
+
+  /** Deletes empty (0-byte) documents that have sat unresolved (PENDING/FAILED) for at least
+   * `olderThanMs` — see DocumentExtractionQueue's eviction sweep for why an empty file has no
+   * terminal state to reach on its own and would otherwise loop in `listPendingForExtraction`
+   * forever. */
+  static async deleteStaleEmpty(olderThanMs: number) {
+    return prisma.document.deleteMany({
+      where: {
+        fileSize: 0,
+        ragStatus: { in: ["PENDING", "FAILED"] },
+        createdAt: { lt: new Date(Date.now() - olderThanMs) },
+      },
+    });
+  }
 }
