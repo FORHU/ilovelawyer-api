@@ -12,6 +12,7 @@ import {
   resetPasswordSchema,
   sendOtpSchema,
   verifyOtpSchema,
+  cancelSignupSchema,
 } from "../validation/auth.validation";
 
 export default class AuthCtrl {
@@ -144,6 +145,19 @@ export default class AuthCtrl {
     }
 
     const result = await AuthSvc.sendOtp(email);
+
+    return res.status(200).json(result);
+  }
+
+  static async cancelSignup(req: Request, res: Response) {
+    const { email } = req.body;
+
+    const { error } = cancelSignupSchema.validate({ email });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const result = await AuthSvc.cancelSignup(email);
 
     return res.status(200).json(result);
   }

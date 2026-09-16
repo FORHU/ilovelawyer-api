@@ -534,6 +534,29 @@ const swaggerSpec: OAS3Definition = {
         },
       },
     },
+    "/auth/cancel-signup": {
+      post: {
+        tags: ["Auth"],
+        summary: "Cancel a pending, unverified signup so the email can be reused",
+        description: "Called by the frontend's \"Use a different email\" action on the sign-up OTP screen. Scoped so it only ever deletes a row that is still isEmailVerified:false and approvalStatus:PENDING — a verified or admin-approved/denied account is left untouched. Same anti-enumeration response shape regardless of whether anything matched.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email"],
+                properties: { email: { type: "string", format: "email" } },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Pending signup cancelled if one existed", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" } } } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
     "/auth/verify-otp": {
       post: {
         tags: ["Auth"],

@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
+import { Prisma } from "@prisma/client";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import TenantRepo from "../repositories/tenant.repository";
@@ -39,7 +40,21 @@ export default class AuthSvc {
     // login/refresh's existing "let it through" handling of an unresolved Tenant code.
     const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
 
-    const user = await AuthRepo.createUser({ username, email, password: hashedPassword, name, tenantId });
+    let user;
+    try {
+      user = await AuthRepo.createUser({ username, email, password: hashedPassword, name, tenantId });
+    } catch (err) {
+      // The findByEmail/findByUsername checks above aren't atomic with this insert — a
+      // concurrent signup for the same email (a double-submit, or a retry racing the request
+      // that created the row in the first place) can slip past both and hit the unique
+      // constraint here instead. Without this, that's an uncaught PrismaClientKnownRequestError,
+      // which error-handler.middleware.ts has no special case for and turns into a bare 500 —
+      // this makes it the same clean 409 the pre-check above already gives a non-racing caller.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        throw new HttpError("Email already in use", 409);
+      }
+      throw err;
+    }
 
     // Sent immediately, before email verification — the user should know to expect the
     // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
@@ -47,6 +62,18 @@ export default class AuthSvc {
     await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
 
     return user;
+  }
+
+  /** "Use a different email" on the sign-up OTP screen — lets an abandoned signup attempt be
+   * cleaned up so the same email can be reused immediately, instead of permanently colliding
+   * with (and, before this endpoint existed, occasionally 500ing) a later signup attempt. Same
+   * anti-enumeration shape as sendOtp/forgotPassword below: always the same response regardless
+   * of whether anything was actually deleted, so this can't be used to probe registered emails.
+   * AuthRepo.deleteUnverifiedPendingUser is scoped so a verified or admin-approved/denied
+   * account is never touched, no matter what email is passed in. */
+  static async cancelSignup(email: string): Promise<{ message: string }> {
+    await AuthRepo.deleteUnverifiedPendingUser(email);
+    return { message: "If a pending signup exists for this email, it has been cancelled" };
   }
 
   /** A user's account is exclusive to whichever Tenant their organization was created

@@ -72,6 +72,15 @@ export default class AuthRepo {
     return prisma.user.delete({ where: { id: userId } });
   }
 
+  /** Self-service "use a different email" cleanup (AuthSvc.cancelSignup) — scoped narrowly so
+   * it can only ever remove a signup that's still genuinely in limbo, never a real account: an
+   * email that's been verified, or a row an admin has since approved/denied, doesn't match and
+   * is left untouched. `deleteMany` (not `delete`) so a no-match is a silent no-op rather than
+   * a thrown "record not found". */
+  static async deleteUnverifiedPendingUser(email: string) {
+    return prisma.user.deleteMany({ where: { email, isEmailVerified: false, approvalStatus: "PENDING" } });
+  }
+
   static async findByRefreshToken(refreshToken: string) {
     return prisma.session.findUnique({ where: { refreshToken } });
   }

@@ -1,11 +1,15 @@
 /** A reply that streamed to the user must never be lost at persistence time.
  *
- * Two regressions, both observed on staging as "the AI answered, but the message is gone
- * after a page reload":
+ * Three regressions, all observed (or reproduced) as "the AI answered, but the message is
+ * gone after a page reload":
  *  1. MessagePersistenceQueue acked (deleted) the SQS message even when
  *     persistAssistantTurn threw, so one transient DB error discarded the turn forever.
  *  2. streamChatWonderMessage rejected on any "[Error]" frame, even one arriving after the
  *     whole answer had been accumulated, so ChatSvc.sendMessage threw before enqueueing.
+ *  3. streamChatWonderMessage's ws.onerror unconditionally rejected on any raw socket-level
+ *     error (e.g. the connection dropping during the post-__END__ structured-data wait),
+ *     even with the full answer already accumulated — same failure mode as #2, just via a
+ *     different trigger, and missing the same guard.
  *
  * No AWS/DB/Redis: sqs helpers and ChatSvc.persistAssistantTurn are monkeypatched on the
  * CommonJS module objects, and the stream client talks to a local `ws` server.
@@ -103,12 +107,20 @@ describe("MessagePersistenceQueue durability", () => {
 describe("streamChatWonderMessage and [Error] frames", () => {
   let server: WebSocketServer;
   let script: string[] = [];
+  // Set only by the ws.onerror test below, to swap in raw-socket behavior a scripted list of
+  // text frames can't express (an abrupt connection failure, not a frame). Reset in that
+  // test's own `finally` so every other test keeps using the plain `script` replay above.
+  let onConnectionOverride: ((socket: WebSocket) => void) | null = null;
   let streamChatWonderMessage: typeof import("../src/utils/chatWonder").streamChatWonderMessage;
   let originalWsUrl: string;
 
   before(async () => {
     server = new WebSocketServer({ port: 0 });
     server.on("connection", (socket: WebSocket) => {
+      if (onConnectionOverride) {
+        onConnectionOverride(socket);
+        return;
+      }
       socket.on("message", () => {
         for (const frame of script) socket.send(frame);
       });
@@ -144,5 +156,45 @@ describe("streamChatWonderMessage and [Error] frames", () => {
     const result = await streamChatWonderMessage("s2", "hello", (c) => chunks.push(c));
     expect(result.content).to.equal("First part of the answer. Second part.");
     expect(chunks.join("")).to.equal("First part of the answer. Second part.");
+  });
+
+  it("keeps the reply when the raw socket errors after content has arrived", async () => {
+    onConnectionOverride = (socket: WebSocket) => {
+      socket.on("message", () => {
+        socket.send("First part of the answer. ");
+        socket.send("Second part.__END__");
+        // A raw TCP-level failure, not a clean close — fires the client's `ws.onerror`
+        // (ECONNRESET), not `onclose`. Simulates a dropped connection during the
+        // post-__END__ structured-data wait, the real-world trigger for this bug.
+        (socket as unknown as { _socket: { destroy: () => void } })._socket.destroy();
+      });
+    };
+    try {
+      const chunks: string[] = [];
+      const result = await streamChatWonderMessage("s3", "hello", (c) => chunks.push(c));
+      expect(result.content).to.equal("First part of the answer. Second part.");
+      expect(chunks.join("")).to.equal("First part of the answer. Second part.");
+    } finally {
+      onConnectionOverride = null;
+    }
+  });
+
+  it("still rejects when the raw socket errors before any content arrives", async () => {
+    onConnectionOverride = (socket: WebSocket) => {
+      socket.on("message", () => {
+        (socket as unknown as { _socket: { destroy: () => void } })._socket.destroy();
+      });
+    };
+    try {
+      let err: Error | undefined;
+      try {
+        await streamChatWonderMessage("s4", "hello", () => {});
+      } catch (e) {
+        err = e as Error;
+      }
+      expect(err?.message).to.equal("Chat Wonder connection error");
+    } finally {
+      onConnectionOverride = null;
+    }
   });
 });
