@@ -552,9 +552,21 @@ export function streamChatWonderMessage(
 
     ws.onerror = () => {
       if (settled) return;
-      settled = true;
-      if (postEndTimer) clearTimeout(postEndTimer);
-      reject(new HttpError("Chat Wonder connection error", 503));
+      // Same reasoning as the [Error]-frame handler above: a socket-level error after the
+      // reply has already streamed to and rendered in the client must not throw that reply
+      // away — the user watched it arrive, and rejecting here means ChatSvc.sendMessage never
+      // reaches MessagePersistenceQueue.enqueue, so the turn vanishes from history for good.
+      if (accumulated.trim().length === 0) {
+        settled = true;
+        if (postEndTimer) clearTimeout(postEndTimer);
+        reject(new HttpError("Chat Wonder connection error", 503));
+      } else {
+        logger.warn("Chat Wonder socket error after reply content; keeping the reply", {
+          sessionId,
+          contentLength: accumulated.length,
+        });
+        finish();
+      }
     };
 
     ws.onclose = () => {

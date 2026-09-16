@@ -23,6 +23,9 @@ const MAX_BATCH_SIZE = 10;
 export interface ReceivedMessage {
   body: string;
   receiptHandle: string;
+  /** The SQS-assigned id for this delivery — same id logged by sendMessage's "SQS: message
+   * sent", so a job's whole SQS lifecycle (sent -> received -> acked) can be traced by it. */
+  messageId: string;
 }
 
 /** `delaySeconds`, when given, makes the message invisible to receivers until it elapses (SQS
@@ -30,7 +33,7 @@ export interface ReceivedMessage {
  * durably schedule the auto-refresh quiet window on SQS itself rather than an in-process timer
  * (see queues/case-post-extraction.ts) — the delay then survives a restart or a multi-instance
  * deploy instead of living in one process's memory. */
-export async function sendMessage(queueUrl: string, body: string, delaySeconds?: number): Promise<void> {
+export async function sendMessage(queueUrl: string, body: string, delaySeconds?: number): Promise<string | undefined> {
   const result = await client.send(
     new SendMessageCommand({
       QueueUrl: queueUrl,
@@ -39,6 +42,10 @@ export async function sendMessage(queueUrl: string, body: string, delaySeconds?:
     }),
   );
   logger.info("SQS: message sent", { queueUrl, bytes: body.length, messageId: result.MessageId, delaySeconds });
+  // The queue's own SQS-assigned id — callers that want to correlate it with their own domain
+  // id (e.g. MessagePersistenceQueue's parentMessageId) log that pairing themselves; this
+  // generic wrapper has no idea what's inside `body`.
+  return result.MessageId;
 }
 
 /** SQS batches cap at 10 entries per call — chunks larger payloads transparently. */
@@ -85,12 +92,12 @@ export async function receiveMessages(
     );
     const messages = (result.Messages ?? [])
       .filter((m): m is typeof m & { Body: string; ReceiptHandle: string } => !!m.Body && !!m.ReceiptHandle)
-      .map((m) => ({ body: m.Body, receiptHandle: m.ReceiptHandle }));
+      .map((m) => ({ body: m.Body, receiptHandle: m.ReceiptHandle, messageId: m.MessageId ?? "" }));
     // Only logged when something actually arrived — every queue's fetchLoop long-polls this in
     // a tight while(running) loop, so logging every empty 20s poll would flood the logs with
     // nothing but noise across every queue, all the time.
     if (messages.length) {
-      logger.info("SQS: messages received", { queueUrl, count: messages.length });
+      logger.info("SQS: messages received", { queueUrl, count: messages.length, messageIds: messages.map((m) => m.messageId) });
     }
     return messages;
   } catch (err) {

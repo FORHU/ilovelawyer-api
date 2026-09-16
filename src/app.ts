@@ -11,7 +11,7 @@ import swaggerSpec from "./swagger";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { createServer } from "http";
-import { Server } from "socket.io";
+import { initSocket } from "./lib/socket";
 
 const app = express();
 
@@ -54,17 +54,7 @@ app.use(errorHandler);
 
 const server = createServer(app);
 
-export const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
-
-import events from "./events";
-
-events(io);
+initSocket(server);
 
 setup().catch((err) => {
   console.log(err);

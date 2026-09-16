@@ -51,7 +51,7 @@ export const createCaseWithDocumentSchema = Joi.object({
         s3Key: Joi.string().required(),
         metaData: Joi.object({
           documentType: Joi.string().optional(),
-          fileSize: Joi.number().integer().positive().required(),
+          fileSize: Joi.number().integer().min(0).required(),
           mimeType: Joi.string().required(),
           category: Joi.string().trim().max(200).optional(),
         }).required(),

@@ -325,6 +325,21 @@ export default class ChatSvc {
       return;
     }
 
+    // The consultation can be deleted by the user between the reply streaming to their
+    // browser and this async job running (there's no way to cancel an already-enqueued SQS
+    // message on delete) — every write below has a consultationId FK, so that's not a
+    // transient error worth retrying, it's permanent: the row is never coming back. Without
+    // this check it surfaces as a P2003 foreign key violation that MessagePersistenceQueue
+    // treats as retryable, so it fails and redelivers forever instead of just... nothing left
+    // to do.
+    if (!(await ChatRepo.findConsultationById(p.consultationId))) {
+      logger.warn("Message persistence: consultation no longer exists, dropping turn", {
+        consultationId: p.consultationId,
+        parentMessageId: p.parentMessageId,
+      });
+      return;
+    }
+
     // audioOverview/reasoning have no text-fallback re-parse (unlike timeline/mindMap) — they
     // only ever arrive as Chat Wonder's own dedicated frames, never inline in fullResponse.
     const timeline = p.timeline ?? extractTimeline(p.fullResponse);
@@ -402,6 +417,13 @@ export default class ChatSvc {
       }
     }
     if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
+
+    logger.info("Message persistence: assistant turn persisted", {
+      parentMessageId: p.parentMessageId,
+      consultationId: p.consultationId,
+      assistantMessageId: assistantMessage.id,
+      topicCount: topics && topics.length > 1 ? topics.length : 1,
+    });
   }
 
   /** Chat Wonder keeps sessions in memory and drops them on restart; the frontend caches

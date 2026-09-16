@@ -1,5 +1,11 @@
 import EventRepo from "../repositories/event.repository";
+import NotificationSvc from "./notification.service";
 import HttpError from "../utils/http-error";
+import logger from "../utils/logger";
+
+function formatEventDateTime(dateTime: Date): string {
+  return dateTime.toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
+}
 
 function inferEventType(title?: string, description?: string): string {
   const typeMatch = description?.match(/\[type:(meeting|appointment|hearing|deposition)\]/);
@@ -61,7 +67,7 @@ export default class EventSvc {
     reminderLeadMinutes?: number;
     reminder_lead_minutes?: number;
   }) {
-    return EventRepo.create(organizationId, userId, {
+    const event = await EventRepo.create(organizationId, userId, {
       title: body.title || "Consultation",
       type: body.type || "Meeting",
       dateTime: new Date(body.date_time || body.dateTime || ""),
@@ -74,6 +80,20 @@ export default class EventSvc {
       dateSource: body.dateSource || body.date_source || "calendar",
       reminderLeadMinutes: body.reminderLeadMinutes ?? body.reminder_lead_minutes ?? undefined,
     });
+
+    // Only the direct create-appointment flow reaches here — Google webhook sync
+    // (syncFromGoogleWebhook below) writes through EventRepo directly, so this never fires
+    // for the dozens of events a calendar sync can import at once.
+    NotificationSvc.create({
+      userId,
+      organizationId,
+      type: "EVENT_REMINDER",
+      title: "Appointment scheduled",
+      message: `${event.title} — ${formatEventDateTime(event.dateTime)}`,
+      link: "/homepage/calendar",
+    }).catch((err) => logger.error("EventSvc.create: failed to create notification", { err, eventId: event.id }));
+
+    return event;
   }
 
   static async updateById(id: string, organizationId: string, userId: string, userEmail: string, body: any) {

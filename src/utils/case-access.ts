@@ -32,7 +32,7 @@ export default class CaseAccess {
           { organization: { members: { some: { userId, status: "ACCEPTED", role: { in: ["OWNER", "ADMIN"] } } } } },
         ],
       },
-      select: { id: true, userId: true },
+      select: { id: true, userId: true, caseName: true, organizationId: true },
     });
     if (!record) throw new HttpError("Case not found or not editable", 404);
     return record;

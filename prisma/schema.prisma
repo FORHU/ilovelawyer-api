@@ -78,6 +78,7 @@ model User {
   calendarWatchChannels   CalendarWatchChannel[]
   events                  Event[]
   notes                   Note[]
+  notifications           Notification[]
   terminalWorkspaces      TerminalWorkspace[]
   organizationMemberships OrganizationMember[]
   createdOrganizations    Organization[]                   @relation("OrgCreator")
@@ -919,6 +920,33 @@ model Note {
   @@map("notes")
 }
 
+// Centralized in-app notification hub (bell icon). `organizationId` is nullable so a
+// notification can outlive the user leaving an org, or be sent outside any org context
+// (e.g. a system-wide alert) — always scope reads/writes by userId, treat organizationId
+// as informational only. `type` mirrors Event.type: a free-form string, not a Prisma enum,
+// validated at the Joi layer (see notification.validation.ts) so new categories don't need
+// a migration.
+model Notification {
+  id             String    @id @default(uuid())
+  userId         String
+  organizationId String?   @map("organization_id")
+  type           String
+  title          String
+  message        String    @db.Text
+  link           String?
+  isRead         Boolean   @default(false) @map("is_read")
+  readAt         DateTime? @map("read_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([organizationId])
+  @@map("notifications")
+}
+
 // ── Transcription ─────────────────────────────────────────────────────────────
 
 model Transcription {
@@ -1582,6 +1610,7 @@ model Organization {
   bookmarks      Bookmark[]
   events         Event[]
   notes          Note[]
+  notifications  Notification[]
   transcriptions Transcription[]
   connectors     IntegrationConnector[]
 
