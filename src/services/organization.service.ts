@@ -11,6 +11,8 @@ import { renderTemplate } from "../utils/template";
 import { slugify } from "../utils/slug";
 import { CLIENT_URL } from "../config";
 import { TenantCode } from "../types/tenant-code";
+import NotificationSvc from "./notification.service";
+import logger from "../utils/logger";
 
 export default class OrganizationSvc {
   static async create(userId: string, name: string, packageSku: PackageSku | undefined, tenantCode: TenantCode) {
@@ -219,9 +221,21 @@ export default class OrganizationSvc {
   }
 
   static async grantAccess(caseId: string, actorId: string, userId: string, permission: CasePermission) {
-    await CaseAccess.assertCanEdit(caseId, actorId);
+    const caseRecord = await CaseAccess.assertCanEdit(caseId, actorId);
     const access = await OrganizationRepo.grantCaseAccess(caseId, userId, permission);
     await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.grant_access", payload: { userId, permission } });
+
+    if (userId !== actorId) {
+      await NotificationSvc.create({
+        userId,
+        organizationId: caseRecord.organizationId ?? undefined,
+        type: "CASE_UPDATE",
+        title: "You were given access to a case",
+        message: `You now have ${permission.toLowerCase()} access to "${caseRecord.caseName}"`,
+        link: `/homepage/terminal/${caseId}`,
+      }).catch((err) => logger.error("grantAccess: failed to create notification", { err, caseId, userId }));
+    }
+
     return access;
   }
 
