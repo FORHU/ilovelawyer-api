@@ -1,12 +1,14 @@
 // LEGAL_REVIEW_REQUIRED: see ../../ph/prompts/case-reconstruction.prompt.ts for the PH
 // counterpart — output block structure must stay identical, only the legal framing differs.
-export function buildUKCaseReconstructionPrompt(docs: { id: string; name: string }[]): string {
+import { ukJurisdictionRoleLabel } from "./uk-jurisdiction-role-label";
+
+export function buildUKCaseReconstructionPrompt(docs: { id: string; name: string }[], ukJurisdiction?: string | null): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
 
   return `[legal ai]
 
 ## ROLE
-LEGAL_REVIEW_REQUIRED: You reconstruct the factual narrative of an England & Wales case from the attached documents only. You are not writing a memo or citing authority.
+LEGAL_REVIEW_REQUIRED: You reconstruct the factual narrative of ${ukJurisdictionRoleLabel(ukJurisdiction)} case from the attached documents only. You are not writing a memo or citing authority.
 
 ## TASK
 Write a chronological, plain-language narrative of what happened in this case, as supported by the documents: who did what, when, and what followed. Note where the record is silent or unclear rather than filling gaps with assumption.

@@ -7,9 +7,27 @@ import OrganizationRepo from "../repositories/organization.repository";
 import { TenantCode } from "../types/tenant-code";
 import CaseGraphSvc from "./case-graph.service";
 
+// The UK deadline engine only implements England & Wales CPR rules and bank-holiday calendar
+// today — applying them to a Scotland or Northern Ireland case would silently compute the wrong
+// due date (different court rules, different holiday sets), so those two are blocked here
+// rather than producing a confidently-wrong answer. England and Wales and an unset Jurisdiction
+// (historical default, pre-dating Case.ukJurisdiction) both pass through unchanged.
+const UK_JURISDICTIONS_WITHOUT_DEADLINE_RULES = new Set(["Scotland", "Northern Ireland"]);
+
 export default class ProceduralDeadlineSvc {
   static rules(tenantCode: TenantCode) {
     return getDeadlineEngine(tenantCode).listRules();
+  }
+
+  private static async assertDeadlineEngineSupportsCase(caseId: string, tenantCode: TenantCode): Promise<void> {
+    if (tenantCode !== "UK") return;
+    const ukJurisdiction = await CaseAccess.resolveUkJurisdiction(caseId);
+    if (ukJurisdiction && UK_JURISDICTIONS_WITHOUT_DEADLINE_RULES.has(ukJurisdiction)) {
+      throw new HttpError(
+        `Procedural deadline calculation isn't available for ${ukJurisdiction} yet — today it only implements England & Wales court rules and bank holidays. LEGAL_REVIEW_REQUIRED: track this deadline manually until ${ukJurisdiction} rules are added.`,
+        501,
+      );
+    }
   }
 
   static async list(caseId: string, userId: string) {
@@ -31,6 +49,7 @@ export default class ProceduralDeadlineSvc {
     if (Number.isNaN(triggerDate.getTime())) throw new HttpError("Invalid triggerDate", 400);
 
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    await ProceduralDeadlineSvc.assertDeadlineEngineSupportsCase(caseId, tenantCode);
     const computation = getDeadlineEngine(tenantCode).calculate(body.ruleCode, triggerDate);
 
     const row = await ProceduralDeadlineRepo.create(caseId, {
@@ -84,6 +103,7 @@ export default class ProceduralDeadlineSvc {
     }
 
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    await ProceduralDeadlineSvc.assertDeadlineEngineSupportsCase(caseId, tenantCode);
     const computation = getDeadlineEngine(tenantCode).calculate(deadline.ruleCode, triggerDate);
 
     const row = await ProceduralDeadlineRepo.updateComputed(deadlineId, {

@@ -64,6 +64,7 @@ export default class CaseSvc {
 
     if (caseRecord.actionType) lines.push(`Type of Action: ${caseRecord.actionType}`);
     if (caseRecord.jurisdiction) lines.push(`Jurisdiction: ${caseRecord.jurisdiction}`);
+    if (caseRecord.ukJurisdiction) lines.push(`UK Jurisdiction: ${caseRecord.ukJurisdiction}`);
 
     if (caseRecord.parties && caseRecord.parties.length > 0) {
       lines.push("Parties:");

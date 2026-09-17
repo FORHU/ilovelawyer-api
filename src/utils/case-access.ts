@@ -59,6 +59,17 @@ export default class CaseAccess {
   }
 
   /**
+   * The case's selected UK legal system (England and Wales / Scotland / Northern Ireland —
+   * see Case.ukJurisdiction), null if unset. Distinct from resolveTenantCode above — this is
+   * the sub-national split within the UK tenant, used to steer prompt framing and to gate
+   * deadline calculation, which today only implements England & Wales rules.
+   */
+  static async resolveUkJurisdiction(caseId: string): Promise<string | null> {
+    const record = await prisma.case.findUnique({ where: { id: caseId }, select: { ukJurisdiction: true } });
+    return record?.ukJurisdiction ?? null;
+  }
+
+  /**
    * Deadlines default to requiring two independent confirmations (a second-pair-of-eyes
    * safety check). A SOLO-package organization has exactly one seat, so that bar can never be
    * met by design — solo cases require only one confirmation instead of two. Call only after
