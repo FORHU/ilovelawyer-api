@@ -162,7 +162,7 @@ export default class TranscriptionSvc {
   }
 }
 
-async function fetchTranscriptText(url: string): Promise<string> {
+export async function fetchTranscriptText(url: string): Promise<string> {
   try {
     const { data } = await axios.get(url);
     if (!data?.results) return "";
@@ -192,6 +192,16 @@ async function fetchTranscriptText(url: string): Promise<string> {
       }
       return "spk_0";
     };
+
+    // AWS Transcribe's diarization always returns a speaker_labels.segments array once
+    // ShowSpeakerLabels is on — even a solo recording gets every segment tagged "spk_0". Without
+    // this check, a single-speaker transcript still got a "[Speaker 0]:" turn label on every
+    // pause/paragraph split below, reading as a multi-person conversation transcript for a
+    // recording that was never a dialogue. Only genuinely multi-speaker audio gets the tagged
+    // conversational format; one detected speaker gets plain paragraph text instead.
+    const speakerCount = new Set(
+      data.results.speaker_labels.segments.map((seg: any) => seg.speaker_label),
+    ).size;
 
     const items = data.results.items;
     let fullTranscript = "";
@@ -225,7 +235,8 @@ async function fetchTranscriptText(url: string): Promise<string> {
         let text = currentBuffer.join(" ").replace(/ ([,.!?;:])/g, "$1");
         text = text.charAt(0).toUpperCase() + text.slice(1);
         if (!/[.!?]$/.test(text)) text += ".";
-        fullTranscript += `[TS:${currentStartTime.toFixed(2)}] [${currentSpeaker}]: ${text}\n\n`;
+        fullTranscript +=
+          speakerCount > 1 ? `[TS:${currentStartTime.toFixed(2)}] [${currentSpeaker}]: ${text}\n\n` : `${text}\n\n`;
         currentSpeaker = speaker;
         currentStartTime = itemStart;
         currentBuffer = [content];
@@ -240,7 +251,8 @@ async function fetchTranscriptText(url: string): Promise<string> {
       let text = currentBuffer.join(" ").replace(/ ([,.!?;:])/g, "$1");
       text = text.charAt(0).toUpperCase() + text.slice(1);
       if (!/[.!?]$/.test(text)) text += ".";
-      fullTranscript += `[TS:${currentStartTime.toFixed(2)}] [${currentSpeaker}]: ${text}\n\n`;
+      fullTranscript +=
+        speakerCount > 1 ? `[TS:${currentStartTime.toFixed(2)}] [${currentSpeaker}]: ${text}\n\n` : `${text}\n\n`;
     }
 
     return fullTranscript.trim() || (data.results.transcripts?.[0]?.transcript ?? "");

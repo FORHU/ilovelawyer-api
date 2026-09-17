@@ -19,7 +19,7 @@ import AudioOverviewQueue from "../queues/audio-overview.queue";
 import MessagePersistenceQueue, { AssistantTurnPayload } from "../queues/message-persistence.queue";
 import { getPresignedGetUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
-import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT } from "../constants";
+import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 
 export default class ChatSvc {
@@ -551,6 +551,13 @@ export default class ChatSvc {
       .slice(0, TITLE_MAX_CHARS);
   }
 
+  /** True when a parsed title is the title prompts' explicit "couldn't confidently categorize
+   * this" escape hatch (see UNCLEAR_TITLE_SENTINEL's doc comment) rather than a real title —
+   * callers should treat this the same as no title at all, never save it verbatim. */
+  static isUnclearTitle(title: string): boolean {
+    return title.trim().toUpperCase() === UNCLEAR_TITLE_SENTINEL;
+  }
+
   private static async generateAndSaveTitle(
     consultationId: string,
     userMessage: string,
@@ -564,7 +571,11 @@ export default class ChatSvc {
       const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode));
       if (!raw) return;
       title = ChatSvc.parseTitle(raw);
-      if (!title) return;
+      // Left untitled rather than saved — gibberish/unclear input stays untitled (frontend
+      // falls back to "Untitled consultation") instead of a fabricated legal category, and
+      // since consultation.title stays null, the next message's send retries generation with
+      // whatever the user says next.
+      if (!title || ChatSvc.isUnclearTitle(title)) return;
       redis.set(cacheKey, title, TITLE_CACHE_TTL);
     }
 
