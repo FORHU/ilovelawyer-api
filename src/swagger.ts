@@ -55,6 +55,7 @@ const swaggerSpec: OAS3Definition = {
           lastLoginAt: { type: "string", format: "date-time", nullable: true },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
+          hasPassword: { type: "boolean", description: "False for Google-only accounts, which have no password to change" },
         },
       },
       File: {
@@ -626,6 +627,39 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         responses: {
           204: { description: "Account deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/change-password": {
+      post: {
+        tags: ["Users"],
+        summary: "Change the current authenticated user's password",
+        description: "Requires the current password. Not available for Google-only accounts (hasPassword: false on UserProfile).",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["currentPassword", "newPassword"],
+                properties: {
+                  currentPassword: { type: "string" },
+                  newPassword: { type: "string", minLength: 8 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "Password updated",
+            content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" } } } } },
+          },
+          400: {
+            description: "Validation error, incorrect current password, or account has no password to change",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },

@@ -9,6 +9,7 @@ router.use(validSession);
 
 router.get("/me", asyncHandler(UsersCtrl.me));
 router.patch("/me", asyncHandler(UsersCtrl.updateMe));
+router.post("/me/change-password", asyncHandler(UsersCtrl.changePassword));
 router.delete("/me", asyncHandler(UsersCtrl.deleteMe));
 router.post("/me/cancel-deletion", asyncHandler(UsersCtrl.cancelDeletion));
 
