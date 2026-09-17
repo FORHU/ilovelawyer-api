@@ -62,6 +62,13 @@ model User {
   emailVerificationAttempts   Int       @default(0)
   emailVerificationLastSentAt DateTime?
 
+  // One-time "Login" link sent in the admin-approval email (AdminSvc.transition, approve
+  // action only) — its own dedicated pair, separate from both otpCode/otpExpiry
+  // (password reset) and emailVerificationCode (signup OTP), so none of the three
+  // one-time-token flows can clobber each other.
+  loginLinkToken       String?
+  loginLinkTokenExpiry DateTime?
+
   sessions                 Session[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
   consultations            Consultation[]

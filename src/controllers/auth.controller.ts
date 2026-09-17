@@ -13,6 +13,7 @@ import {
   sendOtpSchema,
   verifyOtpSchema,
   cancelSignupSchema,
+  consumeLoginLinkSchema,
 } from "../validation/auth.validation";
 
 export default class AuthCtrl {
@@ -171,6 +172,20 @@ export default class AuthCtrl {
     }
 
     const { user, accessToken, refreshToken } = await AuthSvc.verifyOtp(email, code);
+    setRefreshTokenCookie(res, refreshToken, true);
+
+    return res.status(200).json({ user, accessToken });
+  }
+
+  static async consumeLoginLink(req: Request, res: Response) {
+    const { token } = req.body;
+
+    const { error } = consumeLoginLinkSchema.validate({ token });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const { user, accessToken, refreshToken } = await AuthSvc.consumeLoginLink(token);
     setRefreshTokenCookie(res, refreshToken, true);
 
     return res.status(200).json({ user, accessToken });
