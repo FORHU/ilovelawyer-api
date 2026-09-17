@@ -24,6 +24,15 @@ export default class DecisionRecordRepo {
     return prisma.decisionRecord.findFirst({ where: { id, caseId } });
   }
 
+  /** Idempotency guard for CaseGraphPromotionQueue: DecisionRecordSvc.promote() has no
+   * dedup of its own (each call is meant to add new records for a turn), so a retried/
+   * redelivered promotion job for the same assistant message must check this first rather
+   * than call promote() again and double the case's decision records. */
+  static async existsForSourceMessage(sourceMessageId: string): Promise<boolean> {
+    const row = await prisma.decisionRecord.findFirst({ where: { sourceMessageId }, select: { id: true } });
+    return row !== null;
+  }
+
   static async updateStatus(id: string, caseId: string, status: DecisionStatus, disputeNote?: string | null) {
     const existing = await prisma.decisionRecord.findFirst({ where: { id, caseId } });
     if (!existing) return null;

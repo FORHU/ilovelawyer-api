@@ -303,6 +303,8 @@ export function streamChatWonderMessage(
   tenantCode?: TenantCode,
 ): Promise<ChatWonderStreamResult> {
   return new Promise((resolve, reject) => {
+    const streamStartedAt = Date.now();
+    logger.info("Chat Wonder: WS connecting", { sessionId, url: CHAT_WONDER_WS_URL });
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
     let accumulated = "";
     let sourcesDropped = false;
@@ -314,6 +316,9 @@ export function streamChatWonderMessage(
     let reasoningExplanation: ReasoningExplanation | undefined;
     let decisionRecords: DecisionRecordsPayload | undefined;
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
+    let payloadSentAt: number | undefined;
+    let firstChunkAt: number | undefined;
+    let endFrameAt: number | undefined;
     const resolved = normalizeGrounding(grounding);
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
     // the time onopen fires, instead of waiting on this serially after the socket is up.
@@ -338,6 +343,15 @@ export function streamChatWonderMessage(
       } catch {
         // already closing
       }
+      logger.info("Chat Wonder: stream finished", {
+        sessionId,
+        totalMs: Date.now() - streamStartedAt,
+        connectToSendMs: payloadSentAt ? payloadSentAt - streamStartedAt : undefined,
+        timeToFirstChunkMs: firstChunkAt ? firstChunkAt - streamStartedAt : undefined,
+        timeToEndFrameMs: endFrameAt ? endFrameAt - streamStartedAt : undefined,
+        structuredDataWaitMs: endFrameAt ? Date.now() - endFrameAt : undefined,
+        contentChars: accumulated.length,
+      });
       resolve({
         content: accumulated,
         relatedCases,
@@ -358,11 +372,24 @@ export function streamChatWonderMessage(
       } catch {
         // already closing
       }
+      logger.error("Chat Wonder: stream failed", {
+        sessionId,
+        totalMs: Date.now() - streamStartedAt,
+        connectToSendMs: payloadSentAt ? payloadSentAt - streamStartedAt : undefined,
+        timeToFirstChunkMs: firstChunkAt ? firstChunkAt - streamStartedAt : undefined,
+        err,
+      });
       reject(err);
     };
 
     const armPostEndWait = () => {
       if (postEndTimer) return;
+      endFrameAt = Date.now();
+      logger.info("Chat Wonder: __END__ frame received, waiting for structured data", {
+        sessionId,
+        timeToEndFrameMs: endFrameAt - streamStartedAt,
+        structuredDataWaitBudgetMs: STRUCTURED_DATA_WAIT_MS,
+      });
       postEndTimer = setTimeout(() => finish(), STRUCTURED_DATA_WAIT_MS);
     };
 
@@ -400,6 +427,7 @@ export function streamChatWonderMessage(
           }
           // document_context / case_document_texts can be the full text of the whole case —
           // logged as lengths, not inline, so one chatty turn doesn't blow up combined.log.
+          payloadSentAt = Date.now();
           logger.info("Chat Wonder WS payload", {
             url: CHAT_WONDER_WS_URL,
             ...payload,
@@ -407,6 +435,7 @@ export function streamChatWonderMessage(
             case_document_texts: payload.case_document_texts
               ? `[${payload.case_document_texts.length} docs, ${payload.case_document_texts.reduce((n, d) => n + d.text.length, 0)} chars]`
               : undefined,
+            connectToSendMs: payloadSentAt - streamStartedAt,
           });
           ws.send(JSON.stringify(payload));
         })
@@ -490,8 +519,8 @@ export function streamChatWonderMessage(
       // But only while nothing has arrived. the_server.py's chat_stream wraps the whole
       // turn — including the post-__END__ timeline/mind-map/reasoning generation — in one
       // try, and sends "[Error] ..." for any exception in it. Rejecting at that point threw
-      // away a reply the user had already watched stream in: ChatSvc.sendMessage never
-      // reached MessagePersistenceQueue.enqueue, so the turn vanished from history on the
+      // away a reply the user had already watched stream in: ChatSvc.processChatGenerationJob
+      // never reached ChatSvc.persistAssistantTurn, so the turn vanished from history on the
       // next page load. Once there is content, treat the frame as a warning and resolve with
       // what we have — the answer is real even if the extras behind it failed.
       if (message.startsWith("[Error]")) {
@@ -552,6 +581,13 @@ export function streamChatWonderMessage(
       }
 
       if (message) {
+        if (!firstChunkAt) {
+          firstChunkAt = Date.now();
+          logger.info("Chat Wonder: first content chunk received", {
+            sessionId,
+            timeToFirstChunkMs: firstChunkAt - streamStartedAt,
+          });
+        }
         accumulated += message;
         onChunk(message);
       }
@@ -563,8 +599,9 @@ export function streamChatWonderMessage(
       if (settled) return;
       // Same reasoning as the [Error]-frame handler above: a socket-level error after the
       // reply has already streamed to and rendered in the client must not throw that reply
-      // away — the user watched it arrive, and rejecting here means ChatSvc.sendMessage never
-      // reaches MessagePersistenceQueue.enqueue, so the turn vanishes from history for good.
+      // away — the user watched it arrive, and rejecting here means
+      // ChatSvc.processChatGenerationJob never reaches ChatSvc.persistAssistantTurn, so the
+      // turn vanishes from history for good.
       if (accumulated.trim().length === 0) {
         settled = true;
         if (postEndTimer) clearTimeout(postEndTimer);

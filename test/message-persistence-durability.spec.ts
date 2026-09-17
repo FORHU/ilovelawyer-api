@@ -1,18 +1,24 @@
-/** A reply that streamed to the user must never be lost at persistence time.
+/** A reply that streamed to the user must never be lost, and must be DURABLE (visible via
+ * GET /messages) as soon as the AI job completes — not sometime later.
  *
- * Three regressions, all observed (or reproduced) as "the AI answered, but the message is
- * gone after a page reload":
- *  1. MessagePersistenceQueue acked (deleted) the SQS message even when
- *     persistAssistantTurn threw, so one transient DB error discarded the turn forever.
- *  2. streamChatWonderMessage rejected on any "[Error]" frame, even one arriving after the
- *     whole answer had been accumulated, so ChatSvc.sendMessage threw before enqueueing.
- *  3. streamChatWonderMessage's ws.onerror unconditionally rejected on any raw socket-level
- *     error (e.g. the connection dropping during the post-__END__ structured-data wait),
- *     even with the full answer already accumulated — same failure mode as #2, just via a
- *     different trigger, and missing the same guard.
+ * This file covers the persistence layer that both ChatSvc.persistAssistantTurn (the canonical
+ * write) and CaseGraphPromotionQueue (secondary case-graph enrichment) are built on — see
+ * test/chat-generation-queue.spec.ts for the queue-driven job architecture these run inside
+ * (ChatSvc.enqueueChatGeneration / ChatSvc.processChatGenerationJob), including the browser-
+ * refresh scenarios end to end. What's covered here:
  *
- * No AWS/DB/Redis: sqs helpers and ChatSvc.persistAssistantTurn are monkeypatched on the
- * CommonJS module objects, and the stream client talks to a local `ws` server.
+ *  - ChatSvc.persistAssistantTurn's idempotency (duplicate completion never creates a second
+ *    assistant message) and its "consultation deleted concurrently" no-op path.
+ *  - ChatSvc.promoteAssistantTurnToCaseGraph's own idempotency guard for case-graph enrichment.
+ *  - CaseGraphPromotionQueue's ack/redelivery behavior — acks only on success, leaves a failed
+ *    job un-acked for SQS to redeliver, and retries its own enqueue-failed in-process fallback.
+ *  - streamChatWonderMessage's [Error]-frame and raw-socket-error handling: both must keep an
+ *    already-accumulated reply instead of throwing it away (two related regressions, both
+ *    observed/reproduced as "the AI answered, but the message is gone after a page reload").
+ *
+ * No AWS/DB/Redis: repository/service static methods are monkeypatched on the CommonJS module
+ * objects, and the stream client talks to a local `ws` server — this codebase's established
+ * pattern for testing around a live network/DB call without a real backing service.
  */
 import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
@@ -23,8 +29,11 @@ import WebSocket, { WebSocketServer } from "ws";
 
 import * as sqs from "../src/lib/sqs";
 import * as config from "../src/config";
-import ChatSvc from "../src/services/chat.service";
-import MessagePersistenceQueue, { AssistantTurnPayload } from "../src/queues/message-persistence.queue";
+import ChatSvc, { AssistantTurnPayload } from "../src/services/chat.service";
+import ChatRepo from "../src/repositories/chat.repository";
+import DecisionRecordRepo from "../src/repositories/decision-record.repository";
+import DecisionRecordSvc from "../src/services/decision-record.service";
+import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../src/queues/case-graph-promotion.queue";
 
 const payload: AssistantTurnPayload = {
   consultationId: "c1",
@@ -39,8 +48,16 @@ function flush(ms = 20) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-describe("MessagePersistenceQueue durability", () => {
-  const originalPersist = ChatSvc.persistAssistantTurn;
+describe("CaseGraphPromotionQueue durability", () => {
+  const promotionPayload: CaseGraphPromotionPayload = {
+    consultationId: "c1",
+    parentMessageId: "m1",
+    assistantMessageId: "a1",
+    effectiveCaseId: "case1",
+    userId: "u1",
+    decisions: { records: [{ anchor: "x" } as any] },
+  };
+  const originalPromote = ChatSvc.promoteAssistantTurnToCaseGraph;
   const originalDelete = (sqs as any).deleteMessage;
   const originalHeartbeat = (sqs as any).withVisibilityHeartbeat;
   let deleted: string[];
@@ -54,51 +71,178 @@ describe("MessagePersistenceQueue durability", () => {
     };
     // Real helper renews visibility on a timer via the AWS client; here just run the job.
     (sqs as any).withVisibilityHeartbeat = async (_u: string, _h: string | null, _t: number, job: () => Promise<unknown>) => job();
-    (MessagePersistenceQueue as any).running = true;
-    (MessagePersistenceQueue as any).active = 0;
-    (MessagePersistenceQueue as any).memoryWait = [];
+    (CaseGraphPromotionQueue as any).running = true;
+    (CaseGraphPromotionQueue as any).active = 0;
+    (CaseGraphPromotionQueue as any).memoryWait = [];
   });
 
   afterEach(() => {
-    ChatSvc.persistAssistantTurn = originalPersist;
+    ChatSvc.promoteAssistantTurnToCaseGraph = originalPromote;
     (sqs as any).deleteMessage = originalDelete;
     (sqs as any).withVisibilityHeartbeat = originalHeartbeat;
-    (MessagePersistenceQueue as any).running = false;
+    (CaseGraphPromotionQueue as any).running = false;
   });
 
-  it("acks the SQS message after a successful persist", async () => {
-    ChatSvc.persistAssistantTurn = async () => {
+  it("acks the SQS message after a successful promotion", async () => {
+    ChatSvc.promoteAssistantTurnToCaseGraph = async () => {
       attempts++;
     };
-    (MessagePersistenceQueue as any).runOne({ payload, receiptHandle: "r-ok" });
+    (CaseGraphPromotionQueue as any).runOne({ payload: promotionPayload, receiptHandle: "r-ok" });
     await flush();
     expect(attempts).to.equal(1);
     expect(deleted).to.deep.equal(["r-ok"]);
-    expect((MessagePersistenceQueue as any).active).to.equal(0);
+    expect((CaseGraphPromotionQueue as any).active).to.equal(0);
   });
 
   it("leaves a failed SQS job un-acked so SQS redelivers it", async () => {
-    ChatSvc.persistAssistantTurn = async () => {
+    ChatSvc.promoteAssistantTurnToCaseGraph = async () => {
       attempts++;
       throw new Error("Can't reach database server");
     };
-    (MessagePersistenceQueue as any).runOne({ payload, receiptHandle: "r-fail" });
+    (CaseGraphPromotionQueue as any).runOne({ payload: promotionPayload, receiptHandle: "r-fail" });
     await flush();
     expect(attempts).to.equal(1);
     expect(deleted).to.deep.equal([]);
-    expect((MessagePersistenceQueue as any).active).to.equal(0);
+    expect((CaseGraphPromotionQueue as any).active).to.equal(0);
   });
 
   it("retries an in-process (no receipt) job until it succeeds", async function () {
     this.timeout(10_000);
-    ChatSvc.persistAssistantTurn = async () => {
+    ChatSvc.promoteAssistantTurnToCaseGraph = async () => {
       attempts++;
       if (attempts < 2) throw new Error("transient");
     };
-    (MessagePersistenceQueue as any).runOne({ payload, receiptHandle: null });
+    (CaseGraphPromotionQueue as any).runOne({ payload: promotionPayload, receiptHandle: null });
     await flush(2_500); // first retry lands after the 2s base backoff
     expect(attempts).to.equal(2);
     expect(deleted).to.deep.equal([]);
+  });
+});
+
+describe("ChatSvc.promoteAssistantTurnToCaseGraph idempotency", () => {
+  const promotionPayload: CaseGraphPromotionPayload = {
+    consultationId: "c1",
+    parentMessageId: "m1",
+    assistantMessageId: "a1",
+    effectiveCaseId: "case1",
+    userId: "u1",
+    decisions: { records: [{ anchor: "x" } as any] },
+  };
+  const originalExists = DecisionRecordRepo.existsForSourceMessage;
+  const originalPromote = DecisionRecordSvc.promote;
+
+  afterEach(() => {
+    DecisionRecordRepo.existsForSourceMessage = originalExists;
+    DecisionRecordSvc.promote = originalPromote;
+  });
+
+  it("promotes decisions when this turn hasn't been promoted yet", async () => {
+    let promoteCalls = 0;
+    DecisionRecordRepo.existsForSourceMessage = async () => false;
+    DecisionRecordSvc.promote = async () => {
+      promoteCalls++;
+      return { count: 1 };
+    };
+    await ChatSvc.promoteAssistantTurnToCaseGraph(promotionPayload);
+    expect(promoteCalls).to.equal(1);
+  });
+
+  it("skips promotion when this turn's decisions were already promoted — the guard against SQS redelivery double-promoting", async () => {
+    let promoteCalls = 0;
+    DecisionRecordRepo.existsForSourceMessage = async () => true;
+    DecisionRecordSvc.promote = async () => {
+      promoteCalls++;
+      return { count: 1 };
+    };
+    await ChatSvc.promoteAssistantTurnToCaseGraph(promotionPayload);
+    expect(promoteCalls).to.equal(0);
+  });
+
+  it("does nothing for a general (non-case) consultation", async () => {
+    let existsCalls = 0;
+    DecisionRecordRepo.existsForSourceMessage = async () => {
+      existsCalls++;
+      return false;
+    };
+    await ChatSvc.promoteAssistantTurnToCaseGraph({ ...promotionPayload, effectiveCaseId: null });
+    expect(existsCalls).to.equal(0);
+  });
+});
+
+describe("ChatSvc.persistAssistantTurn (canonical, synchronous persistence)", () => {
+  const original = {
+    findAssistantReplyByParent: ChatRepo.findAssistantReplyByParent,
+    findConsultationById: ChatRepo.findConsultationById,
+    createMessage: ChatRepo.createMessage,
+    setReplyStatus: ChatRepo.setReplyStatus,
+    saveTimeline: ChatRepo.saveTimeline,
+    saveMindMap: ChatRepo.saveMindMap,
+    saveRelatedCases: ChatRepo.saveRelatedCases,
+  };
+
+  afterEach(() => {
+    Object.assign(ChatRepo, original);
+  });
+
+  it("creates exactly one assistant message and reports it DONE", async () => {
+    let createCalls = 0;
+    ChatRepo.findAssistantReplyByParent = async () => null;
+    ChatRepo.findConsultationById = async () => ({ id: "c1" }) as any;
+    ChatRepo.createMessage = async () => {
+      createCalls++;
+      return { id: "a1" } as any;
+    };
+    const statuses: { status: string; opts?: unknown }[] = [];
+    ChatRepo.setReplyStatus = async (_id, status, opts) => {
+      statuses.push({ status, opts });
+      return {} as any;
+    };
+
+    const result = await ChatSvc.persistAssistantTurn(payload);
+
+    expect(result?.id).to.equal("a1");
+    expect(createCalls).to.equal(1);
+    expect(statuses).to.deep.equal([{ status: "DONE", opts: { clearPendingContent: true } }]);
+  });
+
+  it("is idempotent — a duplicate completion for the same parentMessageId never creates a second assistant message (Test: duplicate completion)", async () => {
+    let createCalls = 0;
+    let existing: { id: string } | null = null;
+    ChatRepo.findAssistantReplyByParent = async () => existing;
+    ChatRepo.findConsultationById = async () => ({ id: "c1" }) as any;
+    ChatRepo.createMessage = async () => {
+      createCalls++;
+      existing = { id: "a1" };
+      return { id: "a1" } as any;
+    };
+    const doneCount = { n: 0 };
+    ChatRepo.setReplyStatus = async (_id, status) => {
+      if (status === "DONE") doneCount.n++;
+      return {} as any;
+    };
+
+    const first = await ChatSvc.persistAssistantTurn(payload);
+    const second = await ChatSvc.persistAssistantTurn(payload); // simulates a retry/redelivery of the same completion
+
+    expect(createCalls).to.equal(1); // only ONE canonical assistant message ever created
+    expect(first?.id).to.equal("a1");
+    expect(second?.id).to.equal("a1");
+    expect(doneCount.n).to.equal(2); // both calls still confirm the parent as DONE
+  });
+
+  it("returns null (not an error) without creating a message when the consultation was deleted concurrently", async () => {
+    let createCalls = 0;
+    ChatRepo.findAssistantReplyByParent = async () => null;
+    ChatRepo.findConsultationById = async () => null; // deleted mid-generation
+    ChatRepo.createMessage = async () => {
+      createCalls++;
+      return { id: "a1" } as any;
+    };
+
+    const result = await ChatSvc.persistAssistantTurn(payload);
+
+    expect(result).to.equal(null);
+    expect(createCalls).to.equal(0);
   });
 });
 

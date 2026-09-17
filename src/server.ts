@@ -5,7 +5,8 @@ import AudioOverviewQueue from "./queues/audio-overview.queue";
 import CaseReconstructionAudioQueue from "./queues/case-reconstruction-audio.queue";
 import CitationExtractionQueue from "./queues/citation-extraction.queue";
 import AiGenerationQueue from "./queues/ai-generation.queue";
-import MessagePersistenceQueue from "./queues/message-persistence.queue";
+import CaseGraphPromotionQueue from "./queues/case-graph-promotion.queue";
+import ChatGenerationQueue from "./queues/chat-generation.queue";
 import EventReminderQueue from "./queues/event-reminder.queue";
 import AccountDeletionQueue from "./queues/account-deletion.queue";
 
@@ -16,7 +17,8 @@ AudioOverviewQueue.start();
 CaseReconstructionAudioQueue.start();
 CitationExtractionQueue.start();
 AiGenerationQueue.start();
-MessagePersistenceQueue.start();
+CaseGraphPromotionQueue.start();
+ChatGenerationQueue.start();
 EventReminderQueue.start();
 AccountDeletionQueue.start();
 

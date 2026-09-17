@@ -76,9 +76,18 @@ export const CASE_RECONSTRUCTION_AUDIO_QUEUE_URL = process.env.CASE_RECONSTRUCTI
 /** Shared by every lawyer-triggered Legal Terminal Generate/Refresh action (Refresh Analysis,
  * Red Team, Case Reconstruction) — see queues/ai-generation.queue.ts. */
 export const AI_GENERATION_QUEUE_URL = process.env.AI_GENERATION_QUEUE_URL as string;
-/** Persists a chat turn's assistant reply after it has already streamed to the client — see
- * queues/message-persistence.queue.ts. */
+/** A chat turn's full AI-generation lifecycle (RAG, cache check, AI streaming, canonical
+ * persistence) — owned by the worker, not the original HTTP request. See
+ * queues/chat-generation.queue.ts. Reuses the queue that predates chat generation being
+ * queue-driven at all (it used to be where the chat message itself got persisted, back when
+ * everything else ran synchronously in the request) — one queue, one consumer. */
 export const MESSAGE_PERSISTENCE_QUEUE_URL = process.env.MESSAGE_PERSISTENCE_QUEUE_URL as string;
+/** Case-graph enrichment for an already-persisted chat turn (timeline/decision-record
+ * promotion) — see queues/case-graph-promotion.queue.ts. Its own dedicated queue: it must
+ * NOT share a physical SQS queue with MESSAGE_PERSISTENCE_QUEUE_URL (or any other queue) —
+ * two independent consumers polling the same queue will randomly steal each other's messages,
+ * since SQS has no concept of message "type" routing between consumers. */
+export const CASE_GRAPH_PROMOTION_QUEUE_URL = process.env.CASE_GRAPH_PROMOTION_QUEUE_URL as string;
 export const CLOUDFRONT_URL = process.env.CLOUDFRONT_URL as string;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY as string;
 export const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL as string;

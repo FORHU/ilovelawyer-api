@@ -186,6 +186,17 @@ model Message {
   groupId         String?
   groupOrder      Int?
   groupTitle      String?
+  // Tracks a user turn's assistant reply through generation — set to PENDING when this
+  // (user-role) message is created, before streaming starts, so a page load can tell
+  // "still generating" from "reply never came" from durable state instead of any
+  // in-memory client flag. Flipped to DONE once persistAssistantTurn runs, or FAILED if
+  // generation throws before ever enqueueing. Always null on assistant/system messages.
+  replyStatus     MessageReplyStatus?
+  // Raw accumulated reply text, checkpointed periodically while still streaming (see
+  // ChatSvc.sendMessage) — lets a mid-generation page refresh show the partial answer
+  // instead of a bare "thinking" indicator until the real persisted reply lands. Cleared
+  // once replyStatus flips to DONE.
+  pendingReplyContent String? @db.Text
 
   consultation    Consultation           @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -469,6 +480,12 @@ enum MessageRole {
   user
   assistant
   system
+}
+
+enum MessageReplyStatus {
+  PENDING
+  DONE
+  FAILED
 }
 
 model ConsultationInvite {

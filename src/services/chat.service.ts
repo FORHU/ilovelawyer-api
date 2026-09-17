@@ -16,11 +16,46 @@ import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
-import MessagePersistenceQueue, { AssistantTurnPayload } from "../queues/message-persistence.queue";
+import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
+import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getPresignedGetUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import DecisionRecordRepo from "../repositories/decision-record.repository";
+import { emitToUser } from "../lib/socket";
 import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Bounded exponential backoff for the request-path canonical-persistence retry — 2s, 4s, 8s.
+// Long enough to ride out a transient RDS blip, bounded enough not to hang the HTTP request
+// indefinitely if the DB is genuinely down (worst case adds ~14s before the request fails).
+const PERSIST_RETRIES = 3;
+const PERSIST_RETRY_BASE_MS = 2_000;
+
+/** Everything ChatSvc.persistAssistantTurn needs to write the canonical, durable record of a
+ * completed AI turn — captured in memory the instant the stream (or cache replay) finishes.
+ * Unlike the old queue-carried payload of the same shape, this one is only ever passed
+ * in-process (see sendMessage), never serialized over SQS — persistAssistantTurn now runs
+ * synchronously in the request path, before the HTTP response ends. */
+export interface AssistantTurnPayload {
+  consultationId: string;
+  /** The user Message this reply answers — assistant rows hang off it as parentMessageId. */
+  parentMessageId: string;
+  effectiveCaseId: string | null;
+  userId: string;
+  /** Raw accumulated reply text — persistAssistantTurn still needs the un-stripped form for
+   * stripStructuredBlocks / splitIntoTopics / the extractTimeline+extractMindMap fallback. */
+  fullResponse: string;
+  relatedCases: RelatedCase[];
+  mindMap?: MindMapItem;
+  timeline?: TimelineItem[];
+  audioOverview?: AudioOverviewTurn[];
+  reasoning?: ReasoningExplanation;
+  decisions?: DecisionRecordsPayload;
+}
 
 export default class ChatSvc {
   static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
@@ -80,20 +115,36 @@ export default class ChatSvc {
     return ChatRepo.deleteMessage(messageId);
   }
 
-  static async sendMessage(
+  /**
+   * The ONLY thing the HTTP request now does for a chat turn: validate/authorize, create the
+   * user Message row (PENDING — this row's id doubles as the job's id, see
+   * ChatGenerationJob.jobId's doc comment for why there's no separate job table), and hand the
+   * rest off to ChatGenerationQueue. Returns immediately — the browser is never made to wait
+   * for RAG/cache/AI generation/persistence, and the AI job's fate no longer depends on this
+   * HTTP connection staying open (see ChatSvc.processChatGenerationJob, which is what a worker
+   * actually runs, decoupled from this request entirely).
+   *
+   * effectiveCaseId and the Chat Wonder session are resolved HERE, not in the worker: both are
+   * cheap (an ownership check / a redis-cached lookup, not a Chat Wonder network call in the
+   * common case) and both matter for the response — a bad/foreign caseId 404s immediately
+   * instead of only surfacing after a round trip through SQS, and the effective session id is
+   * returned to the client right away instead of arriving later over the socket.
+   */
+  static async enqueueChatGeneration(
     organizationId: string,
     tenantCode: TenantCode,
     userId: string,
     consultationId: string,
     requestedSessionId: string,
     userInput: string,
-    onChunk: (text: string) => void,
     documentContext?: string,
-    onSessionRotated?: (newSessionId: string) => void,
     caseDocumentId?: string,
     caseId?: string,
     documentIds?: string[],
-  ) {
+  ): Promise<{ messageId: string; sessionId: string; replyStatus: "PENDING" }> {
+    const t0 = Date.now();
+    logger.info("Chat: enqueueChatGeneration started", { consultationId });
+
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
     if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
@@ -110,16 +161,105 @@ export default class ChatSvc {
     // One Chat Wonder session per consultation. The client caches a single session_id for
     // the whole app; reusing it across cases leaks prior-case document text via session history.
     const sessionId = await ChatSvc.resolveChatWonderSession(consultationId);
-    if (sessionId !== requestedSessionId) {
-      onSessionRotated?.(sessionId);
-    }
+    logger.info("Chat: session resolved", {
+      consultationId,
+      sessionId,
+      rotated: sessionId !== requestedSessionId,
+      elapsedMs: Date.now() - t0,
+    });
 
-    const needsTitle = consultation.title === null;
-    const userMessage = await ChatRepo.createMessage(consultationId, "user", userInput, userId);
+    const userMessage = await ChatRepo.createMessage(
+      consultationId,
+      "user",
+      userInput,
+      userId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "PENDING",
+    );
+    logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
 
     if (documentIds?.length) {
       await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
     }
+
+    ChatGenerationQueue.enqueue({
+      jobId: userMessage.id,
+      organizationId,
+      tenantCode,
+      userId,
+      consultationId,
+      sessionId,
+      userInput,
+      documentContext,
+      caseDocumentId,
+      effectiveCaseId: effectiveCaseId ?? null,
+      enqueuedAt: Date.now(),
+    });
+
+    logger.info("Chat: enqueueChatGeneration completed — job handed to worker", {
+      consultationId,
+      messageId: userMessage.id,
+      elapsedMs: Date.now() - t0,
+    });
+
+    return { messageId: userMessage.id, sessionId, replyStatus: "PENDING" };
+  }
+
+  /**
+   * Runs a chat turn's ENTIRE AI generation lifecycle — RAG, cache check, AI streaming,
+   * checkpointing, canonical persistence, background work enqueue — OWNED BY THE WORKER
+   * (ChatGenerationQueue), not by whatever HTTP request originally created the job. This is
+   * the queue-driven replacement for the old synchronous-in-request ChatSvc.sendMessage: the
+   * request that created `job` may have long since returned (or the browser that sent it may
+   * have refreshed or closed entirely) by the time this runs, and that must not matter — the
+   * job runs to completion regardless, live chunks go out over the socket on a best-effort
+   * basis (emitToUser is a no-op if nobody's connected), and the canonical assistant message
+   * still gets durably persisted either way (see persistAssistantTurnWithRetry below).
+   */
+  static async processChatGenerationJob(job: ChatGenerationJob): Promise<void> {
+    const t0 = Date.now();
+    logger.info("Chat generation: processing started", { jobId: job.jobId, consultationId: job.consultationId });
+
+    const { jobId: parentMessageId, organizationId, tenantCode, userId, consultationId, sessionId, caseDocumentId, documentContext } = job;
+    const effectiveCaseId = job.effectiveCaseId ?? undefined;
+
+    const consultation = await ChatRepo.findConsultationWithCase(consultationId);
+    if (!consultation || consultation.organizationId !== organizationId) {
+      // The consultation was deleted between enqueue and this job running — nothing left to
+      // reply into. Not retryable (see ChatGenerationQueue's doc comment on why it always
+      // acks): re-running the same job against a gone consultation would never succeed.
+      logger.warn("Chat generation: consultation no longer exists, dropping job", {
+        jobId: parentMessageId,
+        consultationId,
+      });
+      return;
+    }
+    const userInput = job.userInput;
+
+    // emitToUser is documented as never throwing (lib/socket.ts), but this is called
+    // synchronously from inside streamChatWonderMessage's ws.onmessage handler on every
+    // chunk — an uncaught throw there would propagate out of that handler and could abort
+    // generation (or worse) over a live-push failure that has nothing to do with whether the
+    // turn itself is succeeding. A disconnected/broken socket layer must never take an AI job
+    // down with it (see the class-level "browser failure" invariant this queue is built on).
+    const emitEvent = (event: string, payload: Record<string, unknown>) => {
+      try {
+        emitToUser(userId, event, { consultationId, messageId: parentMessageId, ...payload });
+      } catch (err) {
+        logger.warn("Chat generation: emitToUser failed, continuing without it", { err, event, jobId: parentMessageId });
+      }
+    };
+
+    // Fired once the job is confirmed real (consultation still exists) and about to start
+    // actual work — lets a connected client flip straight to "generating" instead of waiting
+    // for the first token. Purely a live-UX signal: nothing downstream depends on it arriving.
+    emitEvent("chat:started", {});
+    logger.info("Chat generation: chat:started emitted", { jobId: parentMessageId, consultationId });
+
+    const needsTitle = consultation.title === null;
 
     // content stays a stored empty string for a file-only send (see ADR) — everything the AI
     // and title generation actually see substitutes in a fixed stand-in instead.
@@ -131,6 +271,10 @@ export default class ChatSvc {
 
     // Re-derived from the live Case row on every message (not cached on the consultation),
     // so edits to the Case's fields are picked up immediately rather than going stale.
+    // consultation.case covers the overwhelmingly common path (the consultation itself is
+    // case-linked); the explicit lookup only runs for a case-portfolio chat whose per-message
+    // caseId points at a case the consultation itself isn't linked to (see
+    // enqueueChatGeneration's effectiveCaseId resolution, which already ownership-checked it).
     let caseRecord = consultation.case;
     if (!caseRecord && effectiveCaseId) {
       caseRecord = await CaseSvc.getById(effectiveCaseId, organizationId);
@@ -208,6 +352,14 @@ export default class ChatSvc {
     const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext]
       .filter(Boolean)
       .join("\n\n");
+    logger.info("Chat: grounding/RAG context resolved", {
+      consultationId,
+      messageId: parentMessageId,
+      caseDocumentChunks: grounding?.caseDocumentIds.length ?? 0,
+      transcriptChunks: transcriptGrounding?.transcriptionIds.length ?? 0,
+      contextChars: resolvedContext.length,
+      elapsedMs: Date.now() - t0,
+    });
 
     const cacheKey = responseCacheKey(
       consultationId,
@@ -234,6 +386,46 @@ export default class ChatSvc {
     const wantsAudioOverview = /audio overview/i.test(userInput);
     const useCache =
       Boolean(cached) && !wantsAudioOverview && (!wantsMindMap || cached?.mindMap);
+    logger.info("Chat: response cache checked", {
+      consultationId,
+      messageId: parentMessageId,
+      cacheHit: Boolean(cached),
+      useCache,
+      elapsedMs: Date.now() - t0,
+    });
+
+    // Checkpoints the raw accumulated reply into the user message's pendingReplyContent every
+    // CHECKPOINT_INTERVAL_MS, so a mid-generation browser refresh can show the partial answer
+    // instead of a bare "thinking" indicator until the real reply is persisted (see
+    // Message.replyStatus's doc comment). This is the refresh-safe, durable progress record —
+    // it exists independently of whether anyone is connected to the socket below. Throttled
+    // and chained (not fired per-chunk) since Chat Wonder can emit many chunks a second.
+    const CHECKPOINT_INTERVAL_MS = 1_000;
+    let lastCheckpointAt = 0;
+    let checkpointChain: Promise<unknown> = Promise.resolve();
+    let accumulatedForCheckpoint = "";
+    let chunkCount = 0;
+    const checkpointedOnChunk = (text: string) => {
+      // Best-effort live push for a browser actively connected right now — emitToUser is a
+      // no-op if nobody's listening (tab refreshed/closed, or never had a socket). This is
+      // purely a UX nicety on top of the durable checkpoint above, never load-bearing for
+      // correctness: a disconnected/refreshed client falls back to the messages API and
+      // reading pendingReplyContent, same as it always could.
+      emitEvent("chat:chunk", { chunk: text });
+      chunkCount++;
+      if (chunkCount === 1) {
+        logger.info("Chat generation: first chunk emitted", { jobId: parentMessageId, consultationId, elapsedMs: Date.now() - t0 });
+      }
+      accumulatedForCheckpoint += text;
+      const now = Date.now();
+      if (now - lastCheckpointAt >= CHECKPOINT_INTERVAL_MS) {
+        lastCheckpointAt = now;
+        const snapshot = accumulatedForCheckpoint;
+        checkpointChain = checkpointChain
+          .then(() => ChatRepo.checkpointPendingReply(parentMessageId, snapshot))
+          .catch((err) => logger.warn("Chat: pending-reply checkpoint failed", { err, messageId: parentMessageId }));
+      }
+    };
 
     let fullResponse: string;
     let relatedCases: RelatedCase[];
@@ -242,66 +434,118 @@ export default class ChatSvc {
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
-    if (useCache && cached) {
-      onChunk(cached.content);
-      fullResponse = cached.content;
-      relatedCases = cached.relatedCases;
-      streamedMindMap = cached.mindMap;
-      streamedTimeline = cached.timeline;
-      streamedAudioOverview = cached.audioOverview;
-      streamedReasoning = cached.reasoning;
-      streamedDecisions = cached.decisions;
-    } else {
-      // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
-      // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
-      // untouched, since there's no "duplicate generate" concern for two different questions.
-      const generationKind = wantsMindMap ? "mindMap" : wantsAudioOverview ? "audioOverviewScript" : null;
-      const runStream = () =>
-        ChatSvc.streamWithSessionRetry(
+    try {
+      if (useCache && cached) {
+        checkpointedOnChunk(cached.content);
+        fullResponse = cached.content;
+        relatedCases = cached.relatedCases;
+        streamedMindMap = cached.mindMap;
+        streamedTimeline = cached.timeline;
+        streamedAudioOverview = cached.audioOverview;
+        streamedReasoning = cached.reasoning;
+        streamedDecisions = cached.decisions;
+      } else {
+        // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
+        // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
+        // untouched, since there's no "duplicate generate" concern for two different questions.
+        const generationKind = wantsMindMap ? "mindMap" : wantsAudioOverview ? "audioOverviewScript" : null;
+        const aiCallStartedAt = Date.now();
+        logger.info("Chat: AI call starting", {
           consultationId,
+          messageId: parentMessageId,
           sessionId,
-          effectiveUserInput,
-          onChunk,
-          resolvedContext,
-          onSessionRotated,
-          grounding,
-          undefined,
-          tenantCode,
+          generationKind,
+          elapsedMs: aiCallStartedAt - t0,
+        });
+        // Chat Wonder session ids are cached client-side indefinitely; the old synchronous-
+        // in-request flow told the caller about a rotation via an X-Chat-Session-Id response
+        // header. There's no HTTP response left to attach that to now, so a connected client
+        // instead learns about it over the socket — chat:session-rotated — and picks it up on
+        // its next send regardless via the same resolveChatWonderSession redis lookup this job
+        // itself resolved sessionId from at enqueue time.
+        const onSessionRotated = (newSessionId: string) => {
+          emitEvent("chat:session-rotated", { sessionId: newSessionId });
+        };
+        const runStream = () =>
+          ChatSvc.streamWithSessionRetry(
+            consultationId,
+            sessionId,
+            effectiveUserInput,
+            checkpointedOnChunk,
+            resolvedContext,
+            onSessionRotated,
+            grounding,
+            undefined,
+            tenantCode,
+          );
+        const result =
+          generationKind && effectiveCaseId
+            ? await AiGenerationLockSvc.run(effectiveCaseId, generationKind, runStream)
+            : await runStream();
+        logger.info("Chat: AI call finished", {
+          consultationId,
+          messageId: parentMessageId,
+          aiCallMs: Date.now() - aiCallStartedAt,
+          elapsedMs: Date.now() - t0,
+          responseChars: result.content.length,
+          chunksStreamed: chunkCount,
+        });
+        fullResponse = result.content;
+        relatedCases = result.relatedCases;
+        streamedMindMap = result.mindMap;
+        streamedTimeline = result.timeline;
+        streamedAudioOverview = result.audioOverview;
+        streamedReasoning = result.reasoning;
+        streamedDecisions = result.decisions;
+        redis.set(
+          cacheKey,
+          {
+            content: fullResponse,
+            relatedCases,
+            mindMap: streamedMindMap,
+            timeline: streamedTimeline,
+            audioOverview: streamedAudioOverview,
+            reasoning: streamedReasoning,
+            decisions: streamedDecisions,
+          },
+          RESPONSE_CACHE_TTL,
         );
-      const result =
-        generationKind && effectiveCaseId
-          ? await AiGenerationLockSvc.run(effectiveCaseId, generationKind, runStream)
-          : await runStream();
-      fullResponse = result.content;
-      relatedCases = result.relatedCases;
-      streamedMindMap = result.mindMap;
-      streamedTimeline = result.timeline;
-      streamedAudioOverview = result.audioOverview;
-      streamedReasoning = result.reasoning;
-      streamedDecisions = result.decisions;
-      redis.set(
-        cacheKey,
-        {
-          content: fullResponse,
-          relatedCases,
-          mindMap: streamedMindMap,
-          timeline: streamedTimeline,
-          audioOverview: streamedAudioOverview,
-          reasoning: streamedReasoning,
-          decisions: streamedDecisions,
-        },
-        RESPONSE_CACHE_TTL,
-      );
+      }
+    } catch (err) {
+      logger.error("Chat generation: AI call failed", {
+        consultationId,
+        messageId: parentMessageId,
+        elapsedMs: Date.now() - t0,
+        err,
+      });
+      // Lets a freshly-loaded page tell "generation failed" from "still generating" (see
+      // Message.replyStatus) instead of polling forever for a reply that's never coming — the
+      // durable, refresh-safe signal. chat:error is the best-effort live counterpart for a
+      // client connected right now.
+      await ChatRepo.setReplyStatus(parentMessageId, "FAILED").catch(() => {});
+      emitEvent("chat:error", { message: err instanceof Error ? err.message : "Generation failed" });
+      logger.info("Chat generation: chat:error emitted", { jobId: parentMessageId, consultationId, reason: "ai-call-failed" });
+      // Rethrown so ChatGenerationQueue's runOne logs the failure — it does NOT trigger SQS
+      // redelivery (this queue always acks, see its class doc comment): replyStatus is already
+      // the durable FAILED record, so a blind retry of the same prompt against Chat Wonder
+      // would be wasted work, not a meaningful recovery attempt.
+      throw err;
     }
 
-    // The reply has fully streamed to the client by this point. Persisting it (topic split,
-    // MessageGroup, timeline/mind-map/audio-overview/reasoning/related-cases) is handed to
-    // MessagePersistenceQueue so ChatCtrl's res.end() fires on the last token instead of
-    // after every write. An enqueue-send failure falls back to persisting in-process (see the
-    // queue's memoryWait path), so a turn is never dropped.
-    MessagePersistenceQueue.enqueue({
+    // The reply has fully streamed to any connected client by this point, but that live push
+    // is a temporary, best-effort experience — it is NOT what makes the reply durable. The
+    // canonical record (the assistant Message row(s): topic split, MessageGroup,
+    // timeline/mind-map/audio-overview/reasoning/related-cases, replyStatus DONE) is written
+    // HERE, before this job is considered complete — regardless of whether the original
+    // request or any connected browser is still around to see it.
+    //
+    // persistAssistantTurnWithRetry retries transient DB failures with bounded backoff
+    // (2s/4s/8s) before giving up — a blip delays completion instead of silently losing the
+    // reply. If it still fails after retries, the job must NOT be treated as successful:
+    // replyStatus is flipped to FAILED and chat:error is emitted, same as an AI failure above.
+    const assistantTurnPayload: AssistantTurnPayload = {
       consultationId,
-      parentMessageId: userMessage.id,
+      parentMessageId,
       effectiveCaseId: effectiveCaseId ?? null,
       userId,
       fullResponse,
@@ -311,40 +555,158 @@ export default class ChatSvc {
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
       decisions: streamedDecisions,
+    };
+
+    let assistantMessage: { id: string } | null;
+    try {
+      assistantMessage = await ChatSvc.persistAssistantTurnWithRetry(assistantTurnPayload);
+    } catch (err) {
+      logger.error("Chat generation: canonical persistence failed after retries — response was NOT saved", {
+        consultationId,
+        messageId: parentMessageId,
+        elapsedMs: Date.now() - t0,
+        err,
+      });
+      await ChatRepo.setReplyStatus(parentMessageId, "FAILED").catch(() => {});
+      emitEvent("chat:error", { message: "Failed to save the assistant response" });
+      logger.info("Chat generation: chat:error emitted", { jobId: parentMessageId, consultationId, reason: "persistence-failed" });
+      throw err;
+    }
+
+    logger.info("Chat generation: assistant message persisted", {
+      consultationId,
+      messageId: parentMessageId,
+      assistantMessageId: assistantMessage?.id,
+      elapsedMs: Date.now() - t0,
+    });
+
+    // chat:done fires ONLY after canonical persistence has already succeeded above — a
+    // connected client can trust it to mean "GET /messages will include this now," never a
+    // "trust me, it's coming" signal. Never load-bearing either way: a disconnected/refreshed
+    // client reaches the same conclusion by re-fetching messages and seeing replyStatus DONE.
+    if (assistantMessage) {
+      emitEvent("chat:done", { assistantMessageId: assistantMessage.id });
+      logger.info("Chat generation: chat:done emitted", {
+        jobId: parentMessageId,
+        consultationId,
+        assistantMessageId: assistantMessage.id,
+      });
+    }
+
+    // Only now enqueue the secondary/background work — case-graph enrichment (promoting the
+    // AI's timeline/decisions into the case's own Timeline/DecisionRecord tables). This runs
+    // AFTER canonical persistence, not before it: its own failure (SQS down, worker crash) must
+    // never affect whether the chat message exists — it already does, durably, in the DB.
+    // Gated on effectiveCaseId here (not just left to CaseGraphPromotionQueue's own timeline/
+    // decisions-presence guard): a general, non-case consultation has no case graph to promote
+    // into, so it must not enqueue at all — not "enqueue a job that then no-ops," an entirely
+    // skipped round trip through SQS.
+    // enqueue() is designed to never throw (its own SQS-send failure is caught internally and
+    // falls back to an in-process retry — see CaseGraphPromotionQueue), but it's wrapped here
+    // too: even a bug in that path must not turn an already-persisted, already-durable reply
+    // into a failed job.
+    if (assistantMessage && effectiveCaseId) {
+      try {
+        CaseGraphPromotionQueue.enqueue({
+          consultationId,
+          parentMessageId,
+          assistantMessageId: assistantMessage.id,
+          effectiveCaseId,
+          userId,
+          timeline: streamedTimeline,
+          decisions: streamedDecisions,
+          enqueuedAt: Date.now(),
+        });
+      } catch (err) {
+        logger.error("Chat generation: failed to enqueue case graph promotion — message is still durable", {
+          consultationId,
+          messageId: parentMessageId,
+          assistantMessageId: assistantMessage.id,
+          err,
+        });
+      }
+    }
+
+    logger.info("Chat generation: job completed (persisted, background work queued)", {
+      consultationId,
+      messageId: parentMessageId,
+      chunksStreamed: chunkCount,
+      totalMs: Date.now() - t0,
     });
   }
 
+  /** persistAssistantTurn with bounded exponential backoff — the worker-path retry for
+   * canonical persistence (see processChatGenerationJob). A `null` return (not a thrown error)
+   * means the consultation was deleted concurrently — an expected, non-retryable no-op, not a
+   * failure. */
+  private static async persistAssistantTurnWithRetry(
+    payload: AssistantTurnPayload,
+  ): Promise<{ id: string } | null> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= PERSIST_RETRIES; attempt++) {
+      try {
+        return await this.persistAssistantTurn(payload);
+      } catch (err) {
+        lastErr = err;
+        if (attempt < PERSIST_RETRIES) {
+          const delay = PERSIST_RETRY_BASE_MS * 2 ** attempt;
+          logger.warn("Chat: canonical persistence attempt failed, retrying", {
+            err,
+            attempt: attempt + 1,
+            retryInMs: delay,
+            parentMessageId: payload.parentMessageId,
+          });
+          await sleep(delay);
+        }
+      }
+    }
+    throw lastErr;
+  }
+
   /**
-   * Persists a chat turn's assistant reply after it has already streamed to the client —
-   * lifted out of sendMessage and run from MessagePersistenceQueue. A failure in any single
-   * write here can no longer take an already-delivered response down with it (it's off the
-   * request entirely now), but the same per-write .catch guards are kept so one bad write
-   * doesn't abort the rest.
+   * Persists a chat turn's assistant reply — the CANONICAL, durable record of a completed AI
+   * response (topic-split Message row(s), timeline/mind-map/audio-overview/reasoning/related-
+   * cases, replyStatus DONE). Called synchronously from sendMessage, in the request path, right
+   * after AI generation (or a cache replay) finishes and BEFORE the HTTP response ends — the
+   * request is only considered successfully completed once this write lands, so a browser
+   * refresh immediately afterward always finds the reply via GET /messages.
    *
-   * Idempotent: the queue's SQS message redelivers if a worker crashed after saving but
-   * before acking, and a split reply (several sibling rows) must not be persisted twice.
+   * This intentionally does NOT promote the timeline/decisions into the case graph
+   * (CaseTimelineSvc/DecisionRecordSvc) — that's secondary/background enrichment, done by
+   * promoteAssistantTurnToCaseGraph via CaseGraphPromotionQueue, enqueued only after this
+   * function returns successfully. A failure in that later, async step can never make the
+   * message created here disappear.
+   *
+   * Idempotent by parentMessageId — a retry from persistAssistantTurnWithRetry after a partial
+   * failure (e.g. the message row was created but a structured-extra write then threw) finds
+   * the already-created row here and returns it rather than splitting the reply into duplicate
+   * sibling rows. Returns null (not an error) if the consultation was deleted concurrently —
+   * an expected, non-retryable no-op.
    */
-  static async persistAssistantTurn(p: AssistantTurnPayload): Promise<void> {
-    if (await ChatRepo.findAssistantReplyByParent(p.parentMessageId)) {
+  static async persistAssistantTurn(p: AssistantTurnPayload): Promise<{ id: string } | null> {
+    const t0 = Date.now();
+    const alreadyPersisted = await ChatRepo.findAssistantReplyByParent(p.parentMessageId);
+    if (alreadyPersisted) {
       logger.info("Message persistence: assistant turn already persisted, skipping", {
         parentMessageId: p.parentMessageId,
       });
-      return;
+      // A retried/redelivered call after a crash between saving and acking — the earlier run
+      // may not have reached the DONE mark below, so this idempotent path still applies it.
+      await ChatRepo.setReplyStatus(p.parentMessageId, "DONE", { clearPendingContent: true }).catch(() => {});
+      return alreadyPersisted;
     }
 
-    // The consultation can be deleted by the user between the reply streaming to their
-    // browser and this async job running (there's no way to cancel an already-enqueued SQS
-    // message on delete) — every write below has a consultationId FK, so that's not a
-    // transient error worth retrying, it's permanent: the row is never coming back. Without
-    // this check it surfaces as a P2003 foreign key violation that MessagePersistenceQueue
-    // treats as retryable, so it fails and redelivers forever instead of just... nothing left
-    // to do.
+    // The consultation can be deleted by the user in a separate concurrent request while this
+    // one is still generating — every write below has a consultationId FK, so that's not a
+    // transient error worth retrying (persistAssistantTurnWithRetry would otherwise burn all
+    // its backoff attempts on a P2003 foreign key violation that's never going away), it's
+    // permanent: the row is never coming back.
     if (!(await ChatRepo.findConsultationById(p.consultationId))) {
       logger.warn("Message persistence: consultation no longer exists, dropping turn", {
         consultationId: p.consultationId,
         parentMessageId: p.parentMessageId,
       });
-      return;
+      return null;
     }
 
     // audioOverview/reasoning have no text-fallback re-parse (unlike timeline/mindMap) — they
@@ -390,10 +752,13 @@ export default class ChatSvc {
       );
     }
 
+    logger.info("Message persistence: assistant message row(s) created", {
+      parentMessageId: p.parentMessageId,
+      assistantMessageId: assistantMessage.id,
+      elapsedMs: Date.now() - t0,
+    });
+
     if (timeline) await ChatRepo.saveTimeline(assistantMessage.id, timeline);
-    if (timeline && p.effectiveCaseId) {
-      await CaseTimelineSvc.promoteFromAi(p.effectiveCaseId, timeline, p.userId).catch(() => {});
-    }
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
     if (audioOverview) {
       const { hostA, hostB } = voicePairForCase(p.effectiveCaseId ?? p.consultationId);
@@ -407,30 +772,77 @@ export default class ChatSvc {
       });
     }
     if (decisions?.records.length) {
+      // Case-graph promotion (CaseTimelineSvc/DecisionRecordSvc) happens later, off-request,
+      // via promoteAssistantTurnToCaseGraph — see that method's doc comment. This row (the
+      // turn's own record of its decisions) is part of the canonical message, though, so it's
+      // still saved here, synchronously.
       await ChatRepo.saveDecisionRecords(assistantMessage.id, decisions).catch((err) => {
         logger.error("Failed to persist decision records", { err, messageId: assistantMessage.id });
       });
-      // Only case-linked consultations have a case graph to promote into — a general
-      // consultation's decision records still get the raw MessageDecisionRecord row above
-      // (visible via that message), just no case-level DecisionRecord/graph promotion.
-      if (p.effectiveCaseId) {
-        await DecisionRecordSvc.promote(p.effectiveCaseId, assistantMessage.id, decisions.records).catch((err) => {
-          logger.error("Failed to promote decision records into the case graph", {
-            err,
-            caseId: p.effectiveCaseId,
-            messageId: assistantMessage.id,
-          });
-        });
-      }
     }
     if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
+
+    await ChatRepo.setReplyStatus(p.parentMessageId, "DONE", { clearPendingContent: true }).catch((err) => {
+      logger.error("Message persistence: failed to mark parent message DONE", {
+        err,
+        parentMessageId: p.parentMessageId,
+      });
+    });
 
     logger.info("Message persistence: assistant turn persisted", {
       parentMessageId: p.parentMessageId,
       consultationId: p.consultationId,
       assistantMessageId: assistantMessage.id,
       topicCount: topics && topics.length > 1 ? topics.length : 1,
+      durationMs: Date.now() - t0,
     });
+
+    return { id: assistantMessage.id };
+  }
+
+  /**
+   * Case-graph enrichment for an already-persisted chat turn: promotes the AI's timeline into
+   * the case's own Timeline table (CaseTimelineSvc.promoteFromAi) and its decision records into
+   * the case's DecisionRecord table + CaseGraph nodes/edges (DecisionRecordSvc.promote). Called
+   * from CaseGraphPromotionQueue, after ChatSvc.persistAssistantTurn has already durably created
+   * the assistant Message this enriches — this step is a nice-to-have on top of an already-
+   * complete, already-visible reply, never a prerequisite for it.
+   *
+   * Idempotent: CaseTimelineSvc.promoteFromAi already dedupes by title+date against existing
+   * rows. DecisionRecordSvc.promote does not dedupe on its own (each call is meant to add new
+   * records), so a guard here checks for records already promoted from this assistantMessageId
+   * before calling it — needed now that SQS redelivery of this job is the only thing that would
+   * otherwise call promote() twice for the same turn.
+   */
+  static async promoteAssistantTurnToCaseGraph(p: CaseGraphPromotionPayload): Promise<void> {
+    if (!p.effectiveCaseId) return;
+
+    if (p.timeline?.length) {
+      await CaseTimelineSvc.promoteFromAi(p.effectiveCaseId, p.timeline, p.userId).catch((err) => {
+        logger.error("Case graph promotion: failed to promote timeline", {
+          err,
+          caseId: p.effectiveCaseId,
+          assistantMessageId: p.assistantMessageId,
+        });
+      });
+    }
+
+    if (p.decisions?.records.length) {
+      const alreadyPromoted = await DecisionRecordRepo.existsForSourceMessage(p.assistantMessageId);
+      if (alreadyPromoted) {
+        logger.info("Case graph promotion: decisions already promoted for this turn, skipping", {
+          assistantMessageId: p.assistantMessageId,
+        });
+      } else {
+        await DecisionRecordSvc.promote(p.effectiveCaseId, p.assistantMessageId, p.decisions.records).catch((err) => {
+          logger.error("Failed to promote decision records into the case graph", {
+            err,
+            caseId: p.effectiveCaseId,
+            messageId: p.assistantMessageId,
+          });
+        });
+      }
+    }
   }
 
   /** Chat Wonder keeps sessions in memory and drops them on restart; the frontend caches
