@@ -172,12 +172,19 @@ export default class ChatSvc {
     // Inline ranked chunk text into document_context. Chat-wonder also receives case_document_ids
     // for its callback fetch, but that often fails in local/staging (ILOVELAWYER_API_BASE points
     // at production with a mismatched API key) — inlining keeps analysis working either way.
-    const groundingContext = grounding
-      ? await DocumentChunkSvc.formatGroundingContext(grounding, 12_000, {
-          caseId: effectiveCaseId,
-          consultationId,
-        })
-      : "";
+    const omitEmbeddingRanking = process.env.OMIT_EMBEDDING_RANKING === "true";
+    if (omitEmbeddingRanking) {
+      logger.info("OMIT_EMBEDDING_RANKING: sending document ids only, no ranked chunk ids");
+    }
+    const groundingContext =
+      omitEmbeddingRanking
+        ? ""
+        : grounding
+          ? await DocumentChunkSvc.formatGroundingContext(grounding, 12_000, {
+              caseId: effectiveCaseId,
+              consultationId,
+            })
+          : "";
 
     // Transcript grounding (ADR 0013): a parallel, independent lookup — never merged/ranked
     // together with Case Document grounding above. Same consultation → case priority shape, but

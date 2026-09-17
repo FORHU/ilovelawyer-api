@@ -14,6 +14,7 @@ import {
   CHAT_WONDER_SESSION_TIMEOUT_MS,
   CHAT_WONDER_REST_TIMEOUT_MS,
   CASE_FULL_TEXT_INLINE_CHARS,
+  OMIT_EMBEDDING_RANKING,
 } from "../constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -135,11 +136,13 @@ export async function callChatWonderRest(
   // active_case_documents instead of keeping docs from a previous case/consultation.
   payload.case_document_ids = resolved?.caseDocumentIds ?? [];
   if (resolved) {
-    payload.case_document_chunk_ids =
-      resolved.caseDocumentChunkIds ??
-      (resolved.caseDocumentIds.length === 1
-        ? await relevantChunkIdsFor(resolved.caseDocumentIds[0], prompt)
-        : []);
+    const chunkIds = OMIT_EMBEDDING_RANKING
+      ? []
+      : resolved.caseDocumentChunkIds ??
+        (resolved.caseDocumentIds.length === 1
+          ? await relevantChunkIdsFor(resolved.caseDocumentIds[0], prompt)
+          : []);
+    if (chunkIds.length) payload.case_document_chunk_ids = chunkIds;
     payload.case_document_manifest = await manifestFor(resolved.caseDocumentIds);
   }
 
@@ -147,6 +150,7 @@ export async function callChatWonderRest(
   const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload, {
     timeout: CHAT_WONDER_REST_TIMEOUT_MS,
   });
+  if (data?.usage) logger.info("Chat Wonder usage", data.usage);
   return data;
 }
 
@@ -315,13 +319,14 @@ export function streamChatWonderMessage(
     // the time onopen fires, instead of waiting on this serially after the socket is up.
     // When chunk ids are already supplied (case-scoped ranking), reuse them; otherwise
     // rank a single document's chunks against userInput — see relevantChunkIdsFor.
-    const chunkIdsPromise = resolved
-      ? resolved.caseDocumentChunkIds !== undefined
-        ? Promise.resolve(resolved.caseDocumentChunkIds)
-        : resolved.caseDocumentIds.length === 1
-          ? relevantChunkIdsFor(resolved.caseDocumentIds[0], userInput)
-          : Promise.resolve<string[]>([])
-      : Promise.resolve<string[]>([]);
+    const chunkIdsPromise =
+      OMIT_EMBEDDING_RANKING || !resolved
+        ? Promise.resolve<string[]>([])
+        : resolved.caseDocumentChunkIds !== undefined
+          ? Promise.resolve(resolved.caseDocumentChunkIds)
+          : resolved.caseDocumentIds.length === 1
+            ? relevantChunkIdsFor(resolved.caseDocumentIds[0], userInput)
+            : Promise.resolve<string[]>([]);
     const manifestPromise = manifestFor(resolved?.caseDocumentIds ?? []);
 
     const finish = () => {
@@ -389,7 +394,7 @@ export function streamChatWonderMessage(
           // chat-wonder ChatRequest only reads the plural field — singular is ignored.
           payload.case_document_ids = resolved?.caseDocumentIds ?? [];
           if (resolved) {
-            payload.case_document_chunk_ids = chunkIds;
+            if (chunkIds.length) payload.case_document_chunk_ids = chunkIds;
             payload.case_document_manifest = manifest;
             if (fullTexts.length) payload.case_document_texts = fullTexts;
           }
@@ -432,6 +437,10 @@ export function streamChatWonderMessage(
       if (typedEnvelope && typedEnvelope.type === "decisions") {
         const parsed = parseDecisionsPayload(typedEnvelope.data);
         if (parsed) decisionRecords = parsed;
+        return;
+      }
+      if (typedEnvelope && typedEnvelope.type === "usage") {
+        logger.info("Chat Wonder usage", typedEnvelope.data);
         return;
       }
 

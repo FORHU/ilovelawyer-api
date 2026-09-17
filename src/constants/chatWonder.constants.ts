@@ -17,6 +17,9 @@ export const CHAT_WONDER_REST_TIMEOUT_MS = 90_000;
  * complete document (Brackenmoor benchmark, D01 §25 / D20.3). 200k chars ≈ 50k tokens, under
  * chat-wonder's CASE_DOCUMENT_TOKEN_BUDGET. Larger bundles fall back to on-demand fetches. */
 export const CASE_FULL_TEXT_INLINE_CHARS = Number(process.env.CASE_FULL_TEXT_INLINE_CHARS || 200_000);
+/** Benchmark-only: skip pgvector ranking and do not send case_document_chunk_ids, so
+ * chat-wonder's get_case_document BM25 truncation path can run. Default off. */
+export const OMIT_EMBEDDING_RANKING = process.env.OMIT_EMBEDDING_RANKING === "true";
 export const LEGAL_TAG = "[legal ai]";
 /** the_server.py::process_persona checks this exact tag before falling back to the
  * `jurisdiction` request field — sending it directly picks the `legal_uk` persona (its own
