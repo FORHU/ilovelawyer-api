@@ -21,4 +21,7 @@ export interface TransitionSpec {
   to: ApprovalStatus;
   template: string;
   subject: string;
+  // When true, transition() mints a one-time login-link token and passes it to the
+  // template as {{loginLink}} — only "approve" sets this today.
+  includeLoginLink?: boolean;
 }

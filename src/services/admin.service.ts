@@ -1,10 +1,13 @@
+import crypto from "crypto";
 import AuthRepo from "../repositories/auth.repository";
+import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import { originForTenantCode } from "../utils/tenant-host";
 import { redis } from "../lib/redis";
 import { ListUsersParams } from "../types/admin.types";
-import { USERS_LIST_CACHE_TTL_S, USERS_LIST_VERSION_KEY, TRANSITIONS } from "../constants";
+import { USERS_LIST_CACHE_TTL_S, USERS_LIST_VERSION_KEY, TRANSITIONS, LOGIN_LINK_EXPIRY_MS } from "../constants";
 
 export default class AdminSvc {
   static async listUsers(params: ListUsersParams) {
@@ -37,9 +40,29 @@ export default class AdminSvc {
     }
 
     const updated = await AuthRepo.setApprovalStatus(userId, spec.to, spec.to === "DENIED" ? (reason ?? null) : null);
+
+    // Any approvalStatus change invalidates whatever session the user is currently holding —
+    // otherwise a stale refresh-token cookie from before this transition keeps silently
+    // re-authenticating them (e.g. an approved-but-not-yet-refreshed PENDING session slipping
+    // straight into the app once approvalStatus flips to ACTIVE). Applies uniformly to every
+    // transition, not just approve.
+    await AuthRepo.deleteSessionsByUserId(userId);
     await AdminSvc.bustUsersListCache();
 
-    const html = await renderTemplate(spec.template, { name: user.name || "there", reason: reason ?? "" });
+    let loginLink = "";
+    if (spec.includeLoginLink) {
+      const token = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + LOGIN_LINK_EXPIRY_MS);
+      await AuthRepo.setLoginLinkToken(userId, token, expiresAt);
+      // A tenant-scoped account's login link should land on its own subdomain (uk./ph.), not
+      // the bare CLIENT_URL[0] — see originForTenantCode. Unresolved (no org yet) falls back
+      // to CLIENT_URL[0] there.
+      const membership = await OrganizationMemberRepo.findAnyForUser(userId);
+      const origin = originForTenantCode(membership?.organization.tenant.code);
+      loginLink = `${origin}/login-link?token=${token}`;
+    }
+
+    const html = await renderTemplate(spec.template, { name: user.name || "there", reason: reason ?? "", loginLink });
     await sendEmail({ to: user.email, subject: spec.subject, html });
 
     return updated;
