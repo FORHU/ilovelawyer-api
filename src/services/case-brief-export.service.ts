@@ -42,11 +42,14 @@ export default class CaseBriefExportSvc {
 
   /** History listing needs its own access check — unlike export(), it never calls
    * CaseSnapshotSvc.get(), so nothing else here does that check implicitly. Read-level access,
-   * matching the snapshot/export endpoints it sits alongside. */
-  static async listHistory(caseId: string, userId: string) {
+   * matching the snapshot/export endpoints it sits alongside.
+   * Cursor-paginated for infinite scroll (not numbered pages) — same nextCursor convention as
+   * NotificationSvc.list: present only when a full page came back, since that's the only case
+   * where there might be more. */
+  static async listHistory(caseId: string, userId: string, filters: { limit?: number; cursor?: string } = {}) {
     await CaseAccess.loadAccessibleCase(caseId, userId);
-    const rows = await CaseBriefExportRepo.listByCase(caseId);
-    return Promise.all(
+    const rows = await CaseBriefExportRepo.listByCase(caseId, filters);
+    const items = await Promise.all(
       rows.map(async (row) => ({
         id: row.id,
         format: row.format as CaseBriefFormat,
@@ -54,5 +57,7 @@ export default class CaseBriefExportSvc {
         file: { id: row.file.id, fileUrl: row.file.s3Key ? await getPresignedGetUrl(row.file.s3Key) : row.file.fileUrl },
       })),
     );
+    const nextCursor = filters.limit && items.length === filters.limit ? items[items.length - 1]!.id : null;
+    return { items, nextCursor };
   }
 }
