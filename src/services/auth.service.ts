@@ -356,4 +356,29 @@ export default class AuthSvc {
 
     return { accessToken, refreshToken };
   }
+
+  /** Consumes the one-time "Login" link sent in the approval email (AdminSvc.transition) and
+   * mints a brand-new session — the counterpart to resetPassword above, which does the same
+   * consume-token-then-login shape for the password-reset flow. */
+  static async consumeLoginLink(token: string, remember = true) {
+    const userId = await AuthRepo.consumeLoginLinkToken(token);
+    if (!userId) {
+      throw new HttpError("Invalid or expired login link", 400);
+    }
+
+    // Defense in depth: transition() already revoked sessions at approval time, but this
+    // clears anything created since (e.g. a normal login the user did in the meantime).
+    await AuthRepo.deleteSessionsByUserId(userId);
+
+    const { accessToken, refreshToken } = loginToken(userId, remember);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    await AuthRepo.createSession(userId, refreshToken, expiresAt);
+    await AuthRepo.updateLastLogin(userId);
+
+    return {
+      user: await AuthRepo.findById(userId),
+      accessToken,
+      refreshToken,
+    };
+  }
 }

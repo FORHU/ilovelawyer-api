@@ -227,6 +227,30 @@ export default class AuthRepo {
     return result.count > 0 ? user.id : null;
   }
 
+  static async setLoginLinkToken(userId: string, token: string, expiresAt: Date) {
+    return prisma.user.update({ where: { id: userId }, data: { loginLinkToken: token, loginLinkTokenExpiry: expiresAt } });
+  }
+
+  /** Race-safe single-use consumption, same pattern as consumeResetToken: the WHERE clause on
+   * the updateMany is re-evaluated atomically by Postgres at update time, so two concurrent
+   * requests racing the same link only ever let one through. Also requires approvalStatus
+   * still ACTIVE — a link emailed at approval time must not still work if the account was
+   * blocked/denied again before it was clicked. */
+  static async consumeLoginLinkToken(token: string): Promise<string | null> {
+    const user = await prisma.user.findFirst({
+      where: { loginLinkToken: token, loginLinkTokenExpiry: { gt: new Date() }, approvalStatus: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!user) return null;
+
+    const result = await prisma.user.updateMany({
+      where: { id: user.id, loginLinkToken: token, loginLinkTokenExpiry: { gt: new Date() }, approvalStatus: "ACTIVE" },
+      data: { loginLinkToken: null, loginLinkTokenExpiry: null },
+    });
+
+    return result.count > 0 ? user.id : null;
+  }
+
   static async setEmailVerificationCode(userId: string, code: string, expiresAt: Date) {
     return prisma.user.update({
       where: { id: userId },

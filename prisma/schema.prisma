@@ -68,6 +68,13 @@ model User {
   emailVerificationAttempts   Int       @default(0)
   emailVerificationLastSentAt DateTime?
 
+  // One-time "Login" link sent in the admin-approval email (AdminSvc.transition, approve
+  // action only) — its own dedicated pair, separate from both otpCode/otpExpiry
+  // (password reset) and emailVerificationCode (signup OTP), so none of the three
+  // one-time-token flows can clobber each other.
+  loginLinkToken       String?
+  loginLinkTokenExpiry DateTime?
+
   sessions                 Session[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
   consultations            Consultation[]
@@ -93,6 +100,7 @@ model User {
   caseAccesses            CaseAccess[]
   integrationConnectors   IntegrationConnector[]
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
+  caseBriefExports        CaseBriefExport[]
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -124,6 +132,7 @@ model File {
   caseReconstructionAudio     CaseReconstruction[]   @relation("CaseReconstructionAudio")
   caseReconstructionTableRead CaseReconstruction[]   @relation("CaseReconstructionTableRead")
   audioOverviews              MessageAudioOverview[]
+  caseBriefExports            CaseBriefExport[]
 }
 
 enum Role {
@@ -550,6 +559,7 @@ model Case {
   decisionRecords   DecisionRecord[]
   theories          CaseTheory[]
   theoryDiffs       TheoryDiff[]
+  briefExports      CaseBriefExport[]
   annotations       Annotation[]
 
   @@index([userId])
@@ -612,6 +622,26 @@ enum RagStatus {
   PENDING
   READY
   FAILED
+}
+
+// One row per Case Brief render — every call to CaseBriefExportSvc.export(), preview or
+// download alike (no distinction between the two; a lawyer opening the preview modal is still
+// "generating a brief" as far as this history is concerned). `file` is the actual rendered
+// artifact in S3; this row is what makes it findable/listable per case, since File itself has no
+// caseId and is shared across many unrelated purposes (avatars, transcriptions, audio, ...).
+model CaseBriefExport {
+  id        String   @id @default(uuid())
+  caseId    String
+  format    String
+  fileId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  file File @relation(fields: [fileId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([caseId])
 }
 
 // Case Document chunk + embedding store (ADR 0008/0010) — distinct from legal-rag's externally-

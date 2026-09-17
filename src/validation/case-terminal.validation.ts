@@ -220,6 +220,11 @@ export const exportBriefSchema = Joi.object({
   format: Joi.string().valid("docx", "pdf").required(),
 });
 
+export const exportBriefHistorySchema = Joi.object({
+  limit: Joi.number().integer().min(1).max(100).optional(),
+  cursor: Joi.string().optional(),
+});
+
 export const listDecisionsSchema = Joi.object({
   status: Joi.string()
     .valid(...DECISION_STATUSES)

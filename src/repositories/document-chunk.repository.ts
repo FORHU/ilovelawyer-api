@@ -20,18 +20,6 @@ export interface DocumentChunkRow {
   chunkText: string;
   charCount: number;
   createdAt: Date;
-  embedding: number[] | null;
-}
-
-interface RawChunkRow extends Omit<DocumentChunkRow, "embedding"> {
-  embedding: string | null;
-}
-
-// pgvector's text form is "[0.012,-0.034,...]" — strip the brackets and split, since Prisma has
-// no native vector type to parse this into an array for us.
-function parseVector(text: string | null): number[] | null {
-  if (!text) return null;
-  return text.slice(1, -1).split(",").map(Number);
 }
 
 // Rows per INSERT statement. A document can produce tens of thousands of chunks (e.g. a 50MB
@@ -40,8 +28,8 @@ function parseVector(text: string | null): number[] | null {
 const INSERT_BATCH_SIZE = 500;
 const COLUMNS_PER_ROW = 7;
 
-// Rows per SELECT page when reading chunks back out with embeddings included — see
-// findByDocument for why this needs to be paged rather than a single query.
+// Rows per SELECT page when reading chunks back out — see findByDocument for why this needs to
+// be paged rather than a single query.
 const SELECT_BATCH_SIZE = 200;
 
 /** Cosine similarity floor (`1 - <=>`). Matches ADR 0010's minSimilarity 0.3 so weak
@@ -216,15 +204,14 @@ export default class DocumentChunkRepo {
   }
 
   /**
-   * Ordered chunk listing for a document, including each chunk's embedding vector. `embedding`
-   * is an `Unsupported` Prisma type, so it's cast to text in SQL and parsed back into a number
-   * array here rather than selected via the query builder.
-   *
-   * Fetched in pages of SELECT_BATCH_SIZE rather than one `$queryRaw` call: each embedding
-   * serializes to ~15-20KB of text, and a large document's full chunk set can push a single
-   * call's total result size past Prisma's napi string-conversion limit ("Failed to convert
-   * rust `String` into napi `string`", prisma/prisma#13864). Paging keeps each call's payload
-   * bounded; the final in-memory array is still the full chunk set.
+   * Ordered chunk listing for a document (text only, no embedding — the only consumer of this,
+   * chat-wonder-v2-api's get_case_document, reads just `id`/`chunkText`; ranking against a query
+   * is done server-side in Postgres via findRelevantBy*, which never materializes embeddings
+   * into JS). Fetched in pages of SELECT_BATCH_SIZE rather than one `$queryRaw` call: a large
+   * document's full chunk set (tens of thousands of rows, up to EMBEDDING_CHAR_CAP chars each)
+   * can still push a single call's total result size past Prisma's napi string-conversion limit
+   * ("Failed to convert rust `String` into napi `string`", prisma/prisma#13864). Paging keeps
+   * each call's payload bounded; the final in-memory array is still the full chunk set.
    */
   /**
    * Full text of several documents at once, joined from their chunks in chunkIndex order —
@@ -255,12 +242,12 @@ export default class DocumentChunkRepo {
   }
 
   static async findByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<DocumentChunkRow[]> {
-    const rows: RawChunkRow[] = [];
+    const rows: DocumentChunkRow[] = [];
     let offset = 0;
 
     for (;;) {
-      const batch = await client.$queryRaw<RawChunkRow[]>`
-        SELECT id, "caseDocumentId", "chunkIndex", "chunkText", "charCount", "createdAt", embedding::text AS embedding
+      const batch = await client.$queryRaw<DocumentChunkRow[]>`
+        SELECT id, "caseDocumentId", "chunkIndex", "chunkText", "charCount", "createdAt"
         FROM "CaseDocumentChunk"
         WHERE "caseDocumentId" = ${caseDocumentId}
         ORDER BY "chunkIndex" ASC
@@ -271,7 +258,7 @@ export default class DocumentChunkRepo {
       offset += SELECT_BATCH_SIZE;
     }
 
-    return rows.map((row) => ({ ...row, embedding: parseVector(row.embedding) }));
+    return rows;
   }
 
   /**

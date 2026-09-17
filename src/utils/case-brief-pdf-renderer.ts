@@ -78,13 +78,33 @@ export function renderBriefToPdf(document: BriefDocument): Promise<Buffer> {
 
     const footerText = `${document.cover.caseName} — ${formatDate(document.cover.generatedAt)} — ${DISCLAIMER}`;
     const drawFooter = () => {
+      // Reproduced locally as a RangeError: Maximum call stack size exceeded before this fix.
+      // pdfkit's .text() always runs through LineWrapper, which decides whether to paginate by
+      // checking `y + lineHeight > page.height - page.margins.bottom` — regardless of whether the
+      // call was given an explicit x/y. The footer sits at/past that bottom-margin line by
+      // design, so LineWrapper called continueOnNewPage() itself, which fires `pageAdded` again,
+      // which calls drawFooter() again, which fails the same check again — infinite recursion
+      // until the stack blows. (lineBreak: false does NOT prevent this — it only skips wrapping a
+      // single line's *width*, not this vertical fit check.)
+      // Fix: zero out the bottom margin only for the duration of this draw, so pdfkit's own fit
+      // check sees the full page height as available and never decides to paginate for a footer
+      // that's deliberately drawn past the normal content margin.
+      const { x: cursorX, y: cursorY } = doc;
+      const bottomMargin = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
       const bottom = doc.page.height - PAGE_MARGIN + 15;
       doc
         .font("Helvetica")
         .fontSize(8)
         .fillColor("#666666")
-        .text(footerText, PAGE_MARGIN, bottom, { width: doc.page.width - PAGE_MARGIN * 2, align: "center" });
+        .text(footerText, PAGE_MARGIN, bottom, {
+          width: doc.page.width - PAGE_MARGIN * 2,
+          align: "center",
+        });
       doc.fillColor("#000000");
+      doc.page.margins.bottom = bottomMargin;
+      doc.x = cursorX;
+      doc.y = cursorY;
     };
     doc.on("pageAdded", drawFooter);
     drawFooter(); // pageAdded doesn't fire for the first page created by the constructor
