@@ -66,6 +66,11 @@ async function main() {
         skipped++;
         continue;
       }
+      if (ChatSvc.isUnclearTitle(title)) {
+        console.log(`  [skip] ${id} — model couldn't confidently categorize the first message`);
+        skipped++;
+        continue;
+      }
 
       await prisma.consultation.update({ where: { id }, data: { title } });
       console.log(`  [ok]   ${id} — "${title}"`);
