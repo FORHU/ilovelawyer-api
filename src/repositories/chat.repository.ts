@@ -89,7 +89,7 @@ export default class ChatRepo {
   }
 
   /** Checkpoints the raw accumulated reply text while a turn is still streaming — throttled by
-   * the caller (ChatSvc.sendMessage), not on every chunk. */
+   * the caller (ChatSvc.processChatGenerationJob), not on every chunk. */
   static async checkpointPendingReply(messageId: string, pendingReplyContent: string) {
     return prisma.message.update({ where: { id: messageId }, data: { pendingReplyContent } });
   }

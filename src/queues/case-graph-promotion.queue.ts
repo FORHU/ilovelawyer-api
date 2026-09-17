@@ -22,11 +22,11 @@ const IN_PROCESS_RETRY_BASE_MS = 2_000;
 /**
  * Everything ChatSvc.promoteAssistantTurnToCaseGraph needs. The canonical assistant Message row
  * (content, timeline/mindMap/audioOverview/reasoning/decisions rows) is already durably
- * persisted by the time this is enqueued — see ChatSvc.sendMessage, which awaits
- * ChatSvc.persistAssistantTurn synchronously in the request path before enqueueing this. This
- * queue only carries the case-graph *enrichment* derived from that turn (promoting the AI's
- * timeline/decisions into the case's own Timeline/DecisionRecord tables and CaseGraph nodes/edges)
- * — background work whose failure must never affect whether the chat message itself exists.
+ * persisted by the time this is enqueued — see ChatSvc.processChatGenerationJob, which awaits
+ * ChatSvc.persistAssistantTurn before ever enqueueing this. This queue only carries the
+ * case-graph *enrichment* derived from that turn (promoting the AI's timeline/decisions into
+ * the case's own Timeline/DecisionRecord tables and CaseGraph nodes/edges) — background work
+ * whose failure must never affect whether the chat message itself exists.
  */
 export interface CaseGraphPromotionPayload {
   consultationId: string;
@@ -39,8 +39,8 @@ export interface CaseGraphPromotionPayload {
   userId: string;
   timeline?: TimelineItem[];
   decisions?: DecisionRecordsPayload;
-  /** Date.now() at the moment ChatSvc.sendMessage called enqueue() — lets the queue log how
-   * long a job actually waited in SQS before a worker picked it up. */
+  /** Date.now() at the moment ChatSvc.processChatGenerationJob called enqueue() — lets the
+   * queue log how long a job actually waited in SQS before a worker picked it up. */
   enqueuedAt?: number;
 }
 
@@ -62,11 +62,11 @@ function sleep(ms: number) {
  * SQS queue for the case-graph enrichment that follows an already-persisted chat turn — promoting
  * the AI's timeline/decision-record extras into the case's own graph (CaseTimelineSvc.promoteFromAi,
  * DecisionRecordSvc.promote). This is deliberately NOT where the chat message itself gets created:
- * ChatSvc.sendMessage persists the canonical assistant Message synchronously, in the request path,
- * before this is ever enqueued — see ChatSvc.persistAssistantTurn. A failure here can never make an
- * already-delivered, already-persisted reply disappear; it only delays case-graph enrichment, which
- * is retried the same way the other queues are (SQS redelivery, or in-process backoff for the
- * enqueue-failed fallback).
+ * ChatSvc.processChatGenerationJob (run by ChatGenerationQueue's worker) persists the canonical
+ * assistant Message via ChatSvc.persistAssistantTurn before this is ever enqueued. A failure here
+ * can never make an already-delivered, already-persisted reply disappear; it only delays
+ * case-graph enrichment, which is retried the same way the other queues are (SQS redelivery, or
+ * in-process backoff for the enqueue-failed fallback).
  */
 export default class CaseGraphPromotionQueue {
   private static running = false;

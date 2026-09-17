@@ -3,7 +3,6 @@ import ChatSvc from "../services/chat.service";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import { getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
-import logger from "../utils/logger";
 import {
   listConsultationsSchema,
   createConsultationSchema,
@@ -98,8 +97,19 @@ export default class ChatCtrl {
     return res.status(200).json(result);
   }
 
+  /**
+   * Creates the AI generation job and returns immediately — it does NOT run RAG/AI generation
+   * itself. ChatSvc.enqueueChatGeneration does only the fast, synchronous part (validate,
+   * create the user Message row, hand off to ChatGenerationQueue); a worker owns everything
+   * else (see ChatSvc.processChatGenerationJob), decoupled from this request/response entirely.
+   *
+   * The client gets `messageId` back to correlate live chat:chunk/chat:done/chat:error socket
+   * events (see lib/socket.ts's emitToUser, already connected for push notifications — this
+   * reuses that same connection/room rather than opening a second one) and to match against
+   * GET /messages' replyStatus if it isn't watching the socket (a fresh page load, or the
+   * socket never connected) — durable, refresh-safe status either way.
+   */
   static async sendMessage(req: Request, res: Response) {
-    const requestStartedAt = Date.now();
     const { consultationId } = req.params;
     const { message, sessionId, documentContext, caseDocumentId, caseId, documentIds } = req.body;
 
@@ -108,65 +118,19 @@ export default class ChatCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    let effectiveSessionId = sessionId;
-    let headersSent = false;
-    // The browser can disconnect (refresh, navigate away, close the tab) mid-stream while AI
-    // generation keeps running server-side to completion — ChatSvc.sendMessage doesn't (and
-    // shouldn't) know or care that nobody is listening anymore; it still accumulates the full
-    // reply and persists it. This guard only protects the client-facing side of that: writing
-    // to a closed/destroyed response must never throw and take the whole request handler down
-    // with it (which would abort ChatSvc.sendMessage before it reaches canonical persistence).
-    const writeChunk = (chunk: string) => {
-      if (res.destroyed || res.writableEnded) return;
-      try {
-        if (!headersSent) {
-          headersSent = true;
-          const headers: Record<string, string> = {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-cache, no-transform",
-            Connection: "keep-alive",
-            "Transfer-Encoding": "chunked",
-            // Tells an nginx reverse proxy (if one sits in front of this API) not to
-            // buffer the response before forwarding it — otherwise chunked streaming
-            // arrives at the client all at once instead of incrementally.
-            "X-Accel-Buffering": "no",
-          };
-          // Chat Wonder's session_id is cached client-side indefinitely; if this request
-          // had to rotate to a fresh one (see ChatSvc.streamWithSessionRetry), tell the
-          // client so it can update its cache instead of repeating the same failed-then-
-          // retried round trip on every future message.
-          if (effectiveSessionId !== sessionId) {
-            headers["X-Chat-Session-Id"] = effectiveSessionId;
-          }
-          res.writeHead(200, headers);
-        }
-        res.write(chunk);
-      } catch (err) {
-        logger.warn("Chat: failed to write stream chunk (client likely disconnected)", { consultationId, err });
-      }
-    };
-
-    await ChatSvc.sendMessage(
+    const result = await ChatSvc.enqueueChatGeneration(
       req.organization!.id,
       req.organization!.tenantCode,
       req.user.userId,
       consultationId,
       sessionId,
       message,
-      writeChunk,
       documentContext,
-      (newSessionId) => {
-        effectiveSessionId = newSessionId;
-      },
       caseDocumentId,
       caseId,
       documentIds,
     );
 
-    logger.info("Chat: HTTP response ended", {
-      consultationId,
-      totalRequestMs: Date.now() - requestStartedAt,
-    });
-    res.end();
+    return res.status(202).json(result);
   }
 }

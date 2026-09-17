@@ -519,10 +519,10 @@ export function streamChatWonderMessage(
       // But only while nothing has arrived. the_server.py's chat_stream wraps the whole
       // turn — including the post-__END__ timeline/mind-map/reasoning generation — in one
       // try, and sends "[Error] ..." for any exception in it. Rejecting at that point threw
-      // away a reply the user had already watched stream in: ChatSvc.sendMessage never
-      // reached ChatSvc.persistAssistantTurn, so the turn vanished from history on the next
-      // page load. Once there is content, treat the frame as a warning and resolve with what
-      // we have — the answer is real even if the extras behind it failed.
+      // away a reply the user had already watched stream in: ChatSvc.processChatGenerationJob
+      // never reached ChatSvc.persistAssistantTurn, so the turn vanished from history on the
+      // next page load. Once there is content, treat the frame as a warning and resolve with
+      // what we have — the answer is real even if the extras behind it failed.
       if (message.startsWith("[Error]")) {
         const detail = message.replace(/^\[Error\]\s*/, "");
         if (accumulated.trim().length === 0) {
@@ -599,8 +599,9 @@ export function streamChatWonderMessage(
       if (settled) return;
       // Same reasoning as the [Error]-frame handler above: a socket-level error after the
       // reply has already streamed to and rendered in the client must not throw that reply
-      // away — the user watched it arrive, and rejecting here means ChatSvc.sendMessage never
-      // reaches ChatSvc.persistAssistantTurn, so the turn vanishes from history for good.
+      // away — the user watched it arrive, and rejecting here means
+      // ChatSvc.processChatGenerationJob never reaches ChatSvc.persistAssistantTurn, so the
+      // turn vanishes from history for good.
       if (accumulated.trim().length === 0) {
         settled = true;
         if (postEndTimer) clearTimeout(postEndTimer);
