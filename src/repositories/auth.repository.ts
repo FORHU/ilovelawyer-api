@@ -1,6 +1,34 @@
 import prisma from "../lib/prisma";
 import { ApprovalStatus, Prisma } from "@prisma/client";
 
+// Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
+// entire cached /me response with whatever any of these return, so all three must expose the
+// same shape (see setDeletionRequested's note). `password` is selected only to derive
+// `hasPassword` in toPublicUser and is never included in what's returned.
+const PUBLIC_USER_SELECT = {
+  id: true,
+  username: true,
+  email: true,
+  name: true,
+  role: true,
+  isEmailVerified: true,
+  approvalStatus: true,
+  denialReason: true,
+  onboardingCompleted: true,
+  provider: true,
+  avatarId: true,
+  lastLoginAt: true,
+  createdAt: true,
+  updatedAt: true,
+  deletionRequestedAt: true,
+  password: true,
+} as const;
+
+function toPublicUser<T extends { password: string | null }>(user: T): Omit<T, "password"> & { hasPassword: boolean } {
+  const { password, ...rest } = user;
+  return { ...rest, hasPassword: password !== null };
+}
+
 export default class AuthRepo {
   static async createUser(data: { username: string; email: string; password: string; name: string; tenantId?: string | null }) {
     return prisma.user.create({
@@ -16,25 +44,18 @@ export default class AuthRepo {
   }
 
   static async findById(id: string) {
-    return prisma.user.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        name: true,
-        role: true,
-        isEmailVerified: true,
-        approvalStatus: true,
-        denialReason: true,
-        onboardingCompleted: true,
-        provider: true,
-        avatarId: true,
-        lastLoginAt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    const user = await prisma.user.findUnique({ where: { id }, select: PUBLIC_USER_SELECT });
+    return user ? toPublicUser(user) : null;
+  }
+
+  /** Unlike findById, includes the actual password hash — used only for verifying the current
+   * password in UsersSvc.changePassword. Never expose this result directly to a client. */
+  static async findByIdWithPasswordHash(id: string) {
+    return prisma.user.findUnique({ where: { id }, select: { id: true, password: true } });
+  }
+
+  static async updatePassword(userId: string, hashedPassword: string) {
+    return prisma.user.update({ where: { id: userId }, data: { password: hashedPassword } });
   }
 
   static async updateLastLogin(userId: string) {
@@ -46,30 +67,35 @@ export default class AuthRepo {
   }
 
   static async updateProfile(userId: string, data: { name?: string; username?: string }) {
-    return prisma.user.update({
-      where: { id: userId },
-      data,
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        name: true,
-        role: true,
-        isEmailVerified: true,
-        approvalStatus: true,
-        denialReason: true,
-        onboardingCompleted: true,
-        provider: true,
-        avatarId: true,
-        lastLoginAt: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    const user = await prisma.user.update({ where: { id: userId }, data, select: PUBLIC_USER_SELECT });
+    return toPublicUser(user);
   }
 
   static async deleteUser(userId: string) {
     return prisma.user.delete({ where: { id: userId } });
+  }
+
+  /** Marks (or, given `null`, unmarks) a user for self-service deletion — see
+   * ACCOUNT_DELETION_GRACE_PERIOD_DAYS and AccountDeletionQueue. Selects the same full shape as
+   * findById/updateProfile (not just the touched field) since the frontend replaces its cached
+   * /me response with whatever this returns — a partial object here would blank out fields like
+   * approvalStatus and incorrectly bounce an ACTIVE user to the pending-approval screen. */
+  static async setDeletionRequested(userId: string, requestedAt: Date | null) {
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { deletionRequestedAt: requestedAt },
+      select: PUBLIC_USER_SELECT,
+    });
+    return toPublicUser(user);
+  }
+
+  /** Users whose grace period has fully elapsed as of `cutoff` (i.e. `now - gracePeriod`) —
+   * candidates for AccountDeletionQueue to hard-delete. */
+  static async findDueForHardDeletion(cutoff: Date) {
+    return prisma.user.findMany({
+      where: { deletionRequestedAt: { lte: cutoff } },
+      select: { id: true, email: true, name: true },
+    });
   }
 
   /** Self-service "use a different email" cleanup (AuthSvc.cancelSignup) — scoped narrowly so

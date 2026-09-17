@@ -10,5 +10,7 @@ router.use(validSession, asyncHandler(resolveOrganization));
 
 router.get("/", asyncHandler(NoteCtrl.list));
 router.post("/", asyncHandler(NoteCtrl.create));
+router.put("/:id", asyncHandler(NoteCtrl.updateById));
+router.delete("/:id", asyncHandler(NoteCtrl.deleteById));
 
 export default router;

@@ -53,7 +53,8 @@ import {
   updateClaimSchema,
   updateReconstructionSchema,
   graphViewSchema,
-exportBriefSchema,
+  exportBriefSchema,
+  exportBriefHistorySchema,
   listDecisionsSchema,
   disputeDecisionSchema,
   createTheorySchema,
@@ -472,6 +473,16 @@ export default class CaseTerminalCtrl {
     const { error, value } = exportBriefSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseBriefExportSvc.export(req.params.caseId, req.user.userId, value.format as CaseBriefFormat);
+    return res.status(200).json(result);
+  }
+
+  static async exportBriefHistory(req: Request, res: Response) {
+    const { error, value } = exportBriefHistorySchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseBriefExportSvc.listHistory(req.params.caseId, req.user.userId, {
+      limit: value.limit,
+      cursor: value.cursor,
+    });
     return res.status(200).json(result);
   }
 

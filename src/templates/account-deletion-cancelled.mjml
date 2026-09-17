@@ -1,0 +1,11 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Your request to delete your ilovelawyer account has been cancelled. Your account is safe and nothing has been deleted.</mj-text>
+        <mj-text>If you didn't cancel this, please contact support.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

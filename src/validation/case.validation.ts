@@ -1,5 +1,7 @@
 import Joi from "joi";
-import { DOCUMENT_UPLOAD_BATCH_MAX } from "../constants";
+import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX } from "../constants";
+
+const UNSUPPORTED_FILE_TYPE_MESSAGE = `Unsupported file type. Supported formats: ${ALLOWED_DOCUMENT_EXTENSIONS.join(", ").toUpperCase()}.`;
 
 const ACTION_TYPES = ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"];
 const PARTY_DESIGNATIONS = ["Petitioner / Plaintiff", "Respondent / Defendant", "Intervenor / Third-Party"];
@@ -54,7 +56,10 @@ export const createCaseWithDocumentSchema = Joi.object({
     .max(DOCUMENT_UPLOAD_BATCH_MAX)
     .items(
       Joi.object({
-        filename: Joi.string().required(),
+        filename: Joi.string()
+          .required()
+          .pattern(ALLOWED_DOCUMENT_FILENAME_PATTERN)
+          .messages({ "string.pattern.base": UNSUPPORTED_FILE_TYPE_MESSAGE }),
         s3Key: Joi.string().required(),
         metaData: Joi.object({
           documentType: Joi.string().optional(),

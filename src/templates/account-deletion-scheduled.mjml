@@ -1,0 +1,12 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>We've received your request to delete your ilovelawyer account. Your account and all associated data will be permanently deleted on {{scheduledFor}}, {{gracePeriodDays}} days from now.</mj-text>
+        <mj-text>Changed your mind? Sign in and cancel the request from your profile's Danger Zone at any time before then.</mj-text>
+        <mj-text>If you didn't request this, please sign in and cancel it, or contact support.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

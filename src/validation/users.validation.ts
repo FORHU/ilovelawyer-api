@@ -9,3 +9,8 @@ export const updateMeSchema = Joi.object({
     .pattern(/^[a-zA-Z0-9._]+$/)
     .optional(),
 }).min(1);
+
+export const changePasswordSchema = Joi.object({
+  currentPassword: Joi.string().required(),
+  newPassword: Joi.string().min(8).required(),
+});
