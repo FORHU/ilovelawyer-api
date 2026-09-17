@@ -1,11 +1,12 @@
 import crypto from "crypto";
 import AuthRepo from "../repositories/auth.repository";
+import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import { originForTenantCode } from "../utils/tenant-host";
 import { redis } from "../lib/redis";
 import { ListUsersParams } from "../types/admin.types";
-import { CLIENT_URL } from "../config";
 import { USERS_LIST_CACHE_TTL_S, USERS_LIST_VERSION_KEY, TRANSITIONS, LOGIN_LINK_EXPIRY_MS } from "../constants";
 
 export default class AdminSvc {
@@ -53,7 +54,12 @@ export default class AdminSvc {
       const token = crypto.randomUUID();
       const expiresAt = new Date(Date.now() + LOGIN_LINK_EXPIRY_MS);
       await AuthRepo.setLoginLinkToken(userId, token, expiresAt);
-      loginLink = `${CLIENT_URL[0]}/login-link?token=${token}`;
+      // A tenant-scoped account's login link should land on its own subdomain (uk./ph.), not
+      // the bare CLIENT_URL[0] — see originForTenantCode. Unresolved (no org yet) falls back
+      // to CLIENT_URL[0] there.
+      const membership = await OrganizationMemberRepo.findAnyForUser(userId);
+      const origin = originForTenantCode(membership?.organization.tenant.code);
+      loginLink = `${origin}/login-link?token=${token}`;
     }
 
     const html = await renderTemplate(spec.template, { name: user.name || "there", reason: reason ?? "", loginLink });
