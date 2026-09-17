@@ -1,6 +1,6 @@
 import ChatSvc from "../services/chat.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
-import { MESSAGE_PERSISTENCE_QUEUE_URL } from "../config";
+import { CASE_GRAPH_PROMOTION_QUEUE_URL } from "../config";
 import { TimelineItem, DecisionRecordsPayload } from "../utils/response-parser";
 import logger from "../utils/logger";
 
@@ -86,7 +86,7 @@ export default class CaseGraphPromotionQueue {
       consultationId: payload.consultationId,
     });
 
-    sendMessage(MESSAGE_PERSISTENCE_QUEUE_URL, JSON.stringify(payload))
+    sendMessage(CASE_GRAPH_PROMOTION_QUEUE_URL, JSON.stringify(payload))
       .then((sqsMessageId) => {
         logger.info("Case graph promotion: enqueued to SQS", {
           parentMessageId: payload.parentMessageId,
@@ -128,8 +128,8 @@ export default class CaseGraphPromotionQueue {
     // receiveMessages() swallows its own errors (see lib/sqs.ts) and returns [], so an
     // empty/missing queue URL would make fetchLoop spin on ReceiveMessageCommand with no
     // backoff. Refuse to start instead — matches AiGenerationQueue.
-    if (!MESSAGE_PERSISTENCE_QUEUE_URL) {
-      logger.error("Case graph promotion queue: MESSAGE_PERSISTENCE_QUEUE_URL is not set, refusing to start");
+    if (!CASE_GRAPH_PROMOTION_QUEUE_URL) {
+      logger.error("Case graph promotion queue: CASE_GRAPH_PROMOTION_QUEUE_URL is not set, refusing to start");
       return;
     }
     this.running = true;
@@ -150,7 +150,7 @@ export default class CaseGraphPromotionQueue {
         continue;
       }
 
-      const messages = await receiveMessages(MESSAGE_PERSISTENCE_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
+      const messages = await receiveMessages(CASE_GRAPH_PROMOTION_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
       if (messages.length === 0) continue;
 
       for (const message of messages) {
@@ -158,7 +158,7 @@ export default class CaseGraphPromotionQueue {
         if (!payload) {
           // Malformed message — drop it rather than let it loop forever.
           logger.error("Case graph promotion: dropping malformed SQS message", { sqsMessageId: message.messageId });
-          void deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, message.receiptHandle).catch(() => {});
+          void deleteMessage(CASE_GRAPH_PROMOTION_QUEUE_URL, message.receiptHandle).catch(() => {});
           continue;
         }
         logger.info("Case graph promotion: received job from SQS", {
@@ -224,7 +224,7 @@ export default class CaseGraphPromotionQueue {
     const job = item.receiptHandle
       ? () => ChatSvc.promoteAssistantTurnToCaseGraph(item.payload)
       : () => promoteWithRetry(item.payload);
-    void withVisibilityHeartbeat(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, job)
+    void withVisibilityHeartbeat(CASE_GRAPH_PROMOTION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, job)
       .then(async () => {
         logger.info("Case graph promotion: succeeded", {
           parentMessageId: item.payload.parentMessageId,
@@ -234,7 +234,7 @@ export default class CaseGraphPromotionQueue {
           processingMs: Date.now() - startedAt,
         });
         if (item.receiptHandle) {
-          await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle)
+          await deleteMessage(CASE_GRAPH_PROMOTION_QUEUE_URL, item.receiptHandle)
             .then(() => {
               logger.info("Case graph promotion: acked SQS message", {
                 parentMessageId: item.payload.parentMessageId,

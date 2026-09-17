@@ -1,6 +1,6 @@
 import ChatSvc from "../services/chat.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
-import { CHAT_GENERATION_QUEUE_URL } from "../config";
+import { MESSAGE_PERSISTENCE_QUEUE_URL } from "../config";
 import { TenantCode } from "../types/tenant-code";
 import logger from "../utils/logger";
 
@@ -73,6 +73,13 @@ function sleep(ms: number) {
  * synchronously in the request, then enqueue only the DB write" design with (see
  * ChatSvc.enqueueChatGeneration / ChatSvc.processChatGenerationJob).
  *
+ * Queue URL: reuses MESSAGE_PERSISTENCE_QUEUE_URL — the one that used to be where the chat
+ * message itself got persisted, before this turn was queue-driven (see that config constant's
+ * doc comment). This is the ONLY consumer of that queue; CaseGraphPromotionQueue has its own,
+ * separate CASE_GRAPH_PROMOTION_QUEUE_URL. Never point two queue classes' consumers at the
+ * same physical SQS queue — each poller has no way to tell "not my message type" from
+ * "malformed," so they'll randomly steal and drop each other's jobs.
+ *
  * Acking: unlike CaseGraphPromotionQueue (which leaves a failed job un-acked so SQS blindly
  * redelivers it), this queue ALWAYS acks in `runOne`'s `finally`, mirroring AiGenerationQueue's
  * established pattern for the same reason — Message.replyStatus is this job's own durable
@@ -98,7 +105,7 @@ export default class ChatGenerationQueue {
       consultationId: job.consultationId,
     });
 
-    sendMessage(CHAT_GENERATION_QUEUE_URL, JSON.stringify(job))
+    sendMessage(MESSAGE_PERSISTENCE_QUEUE_URL, JSON.stringify(job))
       .then((sqsMessageId) => {
         logger.info("Chat generation: enqueued to SQS", {
           jobId: job.jobId,
@@ -134,20 +141,20 @@ export default class ChatGenerationQueue {
 
   static start(): void {
     if (this.running) return;
-    if (!CHAT_GENERATION_QUEUE_URL) {
-      logger.error("Chat generation queue: CHAT_GENERATION_QUEUE_URL is not set, refusing to start");
+    if (!MESSAGE_PERSISTENCE_QUEUE_URL) {
+      logger.error("Chat generation queue: MESSAGE_PERSISTENCE_QUEUE_URL is not set, refusing to start");
       return;
     }
     // Logs the actual URL being polled — handy while testing, especially if this is
     // temporarily pointed at a queue shared with another consumer: confirms at a glance which
     // physical SQS queue this worker is actually attached to.
-    logger.info("Chat generation queue: starting", { queueUrl: CHAT_GENERATION_QUEUE_URL, concurrency: CONCURRENCY });
+    logger.info("Chat generation queue: starting", { queueUrl: MESSAGE_PERSISTENCE_QUEUE_URL, concurrency: CONCURRENCY });
     this.running = true;
     void this.run();
   }
 
   private static async run(): Promise<void> {
-    logger.info("Chat generation queue started", { queueUrl: CHAT_GENERATION_QUEUE_URL, concurrency: CONCURRENCY });
+    logger.info("Chat generation queue started", { queueUrl: MESSAGE_PERSISTENCE_QUEUE_URL, concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
   }
@@ -160,14 +167,14 @@ export default class ChatGenerationQueue {
         continue;
       }
 
-      const messages = await receiveMessages(CHAT_GENERATION_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
+      const messages = await receiveMessages(MESSAGE_PERSISTENCE_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
       if (messages.length === 0) continue;
 
       for (const message of messages) {
         const job = this.parse(message.body);
         if (!job) {
           logger.error("Chat generation: dropping malformed SQS message", { sqsMessageId: message.messageId });
-          void deleteMessage(CHAT_GENERATION_QUEUE_URL, message.receiptHandle).catch(() => {});
+          void deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, message.receiptHandle).catch(() => {});
           continue;
         }
         logger.info("Chat generation: received job from SQS", {
@@ -201,10 +208,10 @@ export default class ChatGenerationQueue {
     ) {
       return parsed as ChatGenerationJob;
     }
-    // Valid JSON but the wrong shape — e.g. this queue is (temporarily) sharing a physical SQS
-    // queue with another job type (CaseGraphPromotionPayload doesn't have userInput/sessionId).
+    // Valid JSON but the wrong shape — most likely MESSAGE_PERSISTENCE_QUEUE_URL got pointed at
+    // a queue another consumer is also polling (see the class doc comment on why that's unsafe).
     // Logging the keys actually present, not the full body, makes that misconfiguration obvious
-    // during testing without dumping potentially large chat payloads into the log.
+    // without dumping potentially large chat payloads into the log.
     logger.error("Chat generation queue: message JSON doesn't match ChatGenerationJob's shape", {
       keysPresent: parsed ? Object.keys(parsed) : [],
     });
@@ -238,7 +245,7 @@ export default class ChatGenerationQueue {
       activeJobs: this.active,
       waitingJobs: this.memoryWait.length,
     });
-    void withVisibilityHeartbeat(CHAT_GENERATION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
+    void withVisibilityHeartbeat(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
       ChatSvc.processChatGenerationJob(item.job),
     )
       .then(() => {
@@ -263,7 +270,7 @@ export default class ChatGenerationQueue {
       })
       .finally(async () => {
         if (item.receiptHandle) {
-          await deleteMessage(CHAT_GENERATION_QUEUE_URL, item.receiptHandle)
+          await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle)
             .then(() => {
               logger.info("Chat generation: acked SQS message", {
                 jobId: item.job.jobId,
