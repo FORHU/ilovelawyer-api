@@ -195,6 +195,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
     redisSet: redis.set,
     emitToUser: socketLib.emitToUser,
     caseGraphEnqueue: CaseGraphPromotionQueue.enqueue,
+    caseSvcGetById: CaseSvc.getById,
   };
 
   before(async () => {
@@ -261,6 +262,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
     redis.set = originals.redisSet;
     (socketLib as any).emitToUser = originals.emitToUser;
     CaseGraphPromotionQueue.enqueue = originals.caseGraphEnqueue;
+    CaseSvc.getById = originals.caseSvcGetById;
   });
 
   it("Test 1 — normal completion: RAG -> AI -> DB, final response exists (persisted), and the chat:started -> chat:chunk -> chat:done lifecycle fires in order", async () => {
@@ -436,6 +438,11 @@ describe("ChatSvc.processChatGenerationJob", () => {
       "The full answer.__END__",
       '[STRUCTURED_DATA]{"timeline":[{"title":"Filed complaint","occurredOn":"2024-01-01"}]}[DONE]',
     ];
+    // consultation.case is null in the shared beforeEach mock (a general, not-case-linked
+    // consultation record), so a job with an explicit effectiveCaseId falls through to a real
+    // CaseSvc.getById lookup for the case-context text — same as a case-portfolio chat whose
+    // consultation itself has no case link (see processChatGenerationJob's caseRecord logic).
+    CaseSvc.getById = async () => ({ id: "case-1", caseName: "Test Case" }) as any;
     let enqueuedPayload: any = null;
     CaseGraphPromotionQueue.enqueue = (payload: any) => {
       enqueuedPayload = payload;
