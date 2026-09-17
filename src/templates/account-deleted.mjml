@@ -1,0 +1,11 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Your ilovelawyer account and all associated data have been permanently deleted, as requested {{gracePeriodDays}} days ago.</mj-text>
+        <mj-text>If you didn't request this, please contact support immediately.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
