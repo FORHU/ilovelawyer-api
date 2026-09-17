@@ -1,9 +1,11 @@
+import bcrypt from "bcrypt";
 import AuthRepo from "../repositories/auth.repository";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
 import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS } from "../constants/account-deletion.constants";
+import { BCRYPT_SALT_ROUNDS } from "../constants";
 
 function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
@@ -29,6 +31,21 @@ export default class UsersSvc {
     }
 
     return AuthRepo.updateProfile(userId, data);
+  }
+
+  /** Requires the current password (unlike the emailed forgot-password/reset-password flow)
+   * since the user is already authenticated here — this is a self-service change, not a
+   * recovery from being locked out. Google-only accounts have no password to change. */
+  static async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await AuthRepo.findByIdWithPasswordHash(userId);
+    if (!user) throw new HttpError("User not found", 404);
+    if (!user.password) throw new HttpError("This account signed in with Google and has no password to change", 400);
+
+    const isValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isValid) throw new HttpError("Current password is incorrect", 400);
+
+    const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+    await AuthRepo.updatePassword(userId, hashedPassword);
   }
 
   /** Starts the grace period rather than deleting immediately — see
