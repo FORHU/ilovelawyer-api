@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { MessageRole, Prisma, AudioOverviewStatus } from "@prisma/client";
+import { MessageRole, Prisma, AudioOverviewStatus, MessageReplyStatus } from "@prisma/client";
 import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
@@ -67,10 +67,31 @@ export default class ChatRepo {
     groupId?: string,
     groupOrder?: number,
     groupTitle?: string,
+    replyStatus?: MessageReplyStatus,
   ) {
     return prisma.message.create({
-      data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle },
+      data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle, replyStatus },
     });
+  }
+
+  /** Flips a user turn's replyStatus once its reply is known to be done or has failed — see
+   * Message.replyStatus's doc comment. `clearPendingContent` wipes the checkpointed partial
+   * text once it's superseded by the real persisted reply. */
+  static async setReplyStatus(
+    messageId: string,
+    replyStatus: MessageReplyStatus,
+    opts?: { clearPendingContent?: boolean },
+  ) {
+    return prisma.message.update({
+      where: { id: messageId },
+      data: { replyStatus, ...(opts?.clearPendingContent ? { pendingReplyContent: null } : {}) },
+    });
+  }
+
+  /** Checkpoints the raw accumulated reply text while a turn is still streaming — throttled by
+   * the caller (ChatSvc.sendMessage), not on every chunk. */
+  static async checkpointPendingReply(messageId: string, pendingReplyContent: string) {
+    return prisma.message.update({ where: { id: messageId }, data: { pendingReplyContent } });
   }
 
   /** One row per split, multi-topic AI reply — see MessageGroup. Created before the topic
@@ -139,10 +160,11 @@ export default class ChatRepo {
     });
   }
 
-  /** Whether this user turn already has its assistant reply persisted — the idempotency
-   * check for MessagePersistenceQueue, whose SQS message can redeliver if a prior worker
-   * crashed after saving but before acking. A split reply persists several sibling rows all
-   * sharing this parentMessageId; finding any one of them means the turn is done. */
+  /** Whether this user turn already has its assistant reply persisted — the idempotency check
+   * for ChatSvc.persistAssistantTurn, guarding against a retried call (persistAssistantTurnWithRetry's
+   * own backoff) re-splitting an already-created reply into duplicate sibling rows. A split
+   * reply persists several sibling rows all sharing this parentMessageId; finding any one of
+   * them means the turn is done. */
   static async findAssistantReplyByParent(parentMessageId: string) {
     return prisma.message.findFirst({ where: { parentMessageId, role: "assistant" }, select: { id: true } });
   }

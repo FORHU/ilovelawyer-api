@@ -76,8 +76,10 @@ export const CASE_RECONSTRUCTION_AUDIO_QUEUE_URL = process.env.CASE_RECONSTRUCTI
 /** Shared by every lawyer-triggered Legal Terminal Generate/Refresh action (Refresh Analysis,
  * Red Team, Case Reconstruction) — see queues/ai-generation.queue.ts. */
 export const AI_GENERATION_QUEUE_URL = process.env.AI_GENERATION_QUEUE_URL as string;
-/** Persists a chat turn's assistant reply after it has already streamed to the client — see
- * queues/message-persistence.queue.ts. */
+/** Case-graph enrichment for an already-persisted chat turn (timeline/decision-record
+ * promotion) — see queues/case-graph-promotion.queue.ts. The env var name predates that
+ * queue's rename (it used to be where the chat message itself got persisted); left as-is to
+ * avoid an infra change, since it's just the identifier for the same underlying SQS queue. */
 export const MESSAGE_PERSISTENCE_QUEUE_URL = process.env.MESSAGE_PERSISTENCE_QUEUE_URL as string;
 export const CLOUDFRONT_URL = process.env.CLOUDFRONT_URL as string;
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY as string;

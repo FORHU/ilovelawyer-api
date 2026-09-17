@@ -43,7 +43,7 @@ export async function sendMessage(queueUrl: string, body: string, delaySeconds?:
   );
   logger.info("SQS: message sent", { queueUrl, bytes: body.length, messageId: result.MessageId, delaySeconds });
   // The queue's own SQS-assigned id — callers that want to correlate it with their own domain
-  // id (e.g. MessagePersistenceQueue's parentMessageId) log that pairing themselves; this
+  // id (e.g. CaseGraphPromotionQueue's assistantMessageId) log that pairing themselves; this
   // generic wrapper has no idea what's inside `body`.
   return result.MessageId;
 }

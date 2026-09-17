@@ -5,7 +5,7 @@ import AudioOverviewQueue from "./queues/audio-overview.queue";
 import CaseReconstructionAudioQueue from "./queues/case-reconstruction-audio.queue";
 import CitationExtractionQueue from "./queues/citation-extraction.queue";
 import AiGenerationQueue from "./queues/ai-generation.queue";
-import MessagePersistenceQueue from "./queues/message-persistence.queue";
+import CaseGraphPromotionQueue from "./queues/case-graph-promotion.queue";
 import EventReminderQueue from "./queues/event-reminder.queue";
 
 import { PORT } from "./config";
@@ -15,7 +15,7 @@ AudioOverviewQueue.start();
 CaseReconstructionAudioQueue.start();
 CitationExtractionQueue.start();
 AiGenerationQueue.start();
-MessagePersistenceQueue.start();
+CaseGraphPromotionQueue.start();
 EventReminderQueue.start();
 
 app.listen(PORT, "0.0.0.0", () => {

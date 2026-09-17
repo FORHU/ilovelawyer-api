@@ -3,6 +3,7 @@ import ChatSvc from "../services/chat.service";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import { getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
+import logger from "../utils/logger";
 import {
   listConsultationsSchema,
   createConsultationSchema,
@@ -98,6 +99,7 @@ export default class ChatCtrl {
   }
 
   static async sendMessage(req: Request, res: Response) {
+    const requestStartedAt = Date.now();
     const { consultationId } = req.params;
     const { message, sessionId, documentContext, caseDocumentId, caseId, documentIds } = req.body;
 
@@ -108,29 +110,40 @@ export default class ChatCtrl {
 
     let effectiveSessionId = sessionId;
     let headersSent = false;
+    // The browser can disconnect (refresh, navigate away, close the tab) mid-stream while AI
+    // generation keeps running server-side to completion — ChatSvc.sendMessage doesn't (and
+    // shouldn't) know or care that nobody is listening anymore; it still accumulates the full
+    // reply and persists it. This guard only protects the client-facing side of that: writing
+    // to a closed/destroyed response must never throw and take the whole request handler down
+    // with it (which would abort ChatSvc.sendMessage before it reaches canonical persistence).
     const writeChunk = (chunk: string) => {
-      if (!headersSent) {
-        headersSent = true;
-        const headers: Record<string, string> = {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          "Transfer-Encoding": "chunked",
-          // Tells an nginx reverse proxy (if one sits in front of this API) not to
-          // buffer the response before forwarding it — otherwise chunked streaming
-          // arrives at the client all at once instead of incrementally.
-          "X-Accel-Buffering": "no",
-        };
-        // Chat Wonder's session_id is cached client-side indefinitely; if this request
-        // had to rotate to a fresh one (see ChatSvc.streamWithSessionRetry), tell the
-        // client so it can update its cache instead of repeating the same failed-then-
-        // retried round trip on every future message.
-        if (effectiveSessionId !== sessionId) {
-          headers["X-Chat-Session-Id"] = effectiveSessionId;
+      if (res.destroyed || res.writableEnded) return;
+      try {
+        if (!headersSent) {
+          headersSent = true;
+          const headers: Record<string, string> = {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            "Transfer-Encoding": "chunked",
+            // Tells an nginx reverse proxy (if one sits in front of this API) not to
+            // buffer the response before forwarding it — otherwise chunked streaming
+            // arrives at the client all at once instead of incrementally.
+            "X-Accel-Buffering": "no",
+          };
+          // Chat Wonder's session_id is cached client-side indefinitely; if this request
+          // had to rotate to a fresh one (see ChatSvc.streamWithSessionRetry), tell the
+          // client so it can update its cache instead of repeating the same failed-then-
+          // retried round trip on every future message.
+          if (effectiveSessionId !== sessionId) {
+            headers["X-Chat-Session-Id"] = effectiveSessionId;
+          }
+          res.writeHead(200, headers);
         }
-        res.writeHead(200, headers);
+        res.write(chunk);
+      } catch (err) {
+        logger.warn("Chat: failed to write stream chunk (client likely disconnected)", { consultationId, err });
       }
-      res.write(chunk);
     };
 
     await ChatSvc.sendMessage(
@@ -150,6 +163,10 @@ export default class ChatCtrl {
       documentIds,
     );
 
+    logger.info("Chat: HTTP response ended", {
+      consultationId,
+      totalRequestMs: Date.now() - requestStartedAt,
+    });
     res.end();
   }
 }
