@@ -15,4 +15,14 @@ export default class NoteCtrl {
     const note = await NoteSvc.create(req.organization!.id, req.user.userId, req.body);
     return res.status(201).json(note);
   }
+
+  static async updateById(req: Request, res: Response) {
+    const result = await NoteSvc.updateById(req.params.id, req.organization!.id, req.user.userId, req.body);
+    return res.status(200).json(result);
+  }
+
+  static async deleteById(req: Request, res: Response) {
+    await NoteSvc.deleteById(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(204).send();
+  }
 }

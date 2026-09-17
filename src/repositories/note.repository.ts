@@ -16,4 +16,12 @@ export default class NoteRepo {
   static async create(organizationId: string, userId: string, data: { date: Date; body: string }) {
     return prisma.note.create({ data: { organizationId, userId, ...data } });
   }
+
+  static async updateById(id: string, organizationId: string, userId: string, data: { date?: Date; body?: string }) {
+    return prisma.note.updateMany({ where: { id, organizationId, userId }, data });
+  }
+
+  static async deleteById(id: string, organizationId: string, userId: string) {
+    return prisma.note.deleteMany({ where: { id, organizationId, userId } });
+  }
 }

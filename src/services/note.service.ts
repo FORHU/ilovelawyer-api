@@ -32,4 +32,21 @@ export default class NoteSvc {
     });
     return toNoteDto(note);
   }
+
+  static async updateById(id: string, organizationId: string, userId: string, body: { date?: string; body?: string }) {
+    if (body.body !== undefined && !body.body.trim()) throw new HttpError("body is required", 400);
+
+    const data: { date?: Date; body?: string } = {};
+    if (body.date !== undefined) data.date = new Date(`${body.date}T00:00:00.000Z`);
+    if (body.body !== undefined) data.body = body.body.trim();
+
+    const result = await NoteRepo.updateById(id, organizationId, userId, data);
+    if (result.count === 0) throw new HttpError("Note not found", 404);
+    return { success: true };
+  }
+
+  static async deleteById(id: string, organizationId: string, userId: string) {
+    const result = await NoteRepo.deleteById(id, organizationId, userId);
+    if (result.count === 0) throw new HttpError("Note not found", 404);
+  }
 }
