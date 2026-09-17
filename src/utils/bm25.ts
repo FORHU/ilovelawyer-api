@@ -9,6 +9,8 @@
  * isolation — construct once per corpus, call `.scores()`/`.scoresNormalised()` per query.
  */
 
+import logger from "./logger";
+
 const DEFAULT_K1 = 1.5;
 const DEFAULT_B = 0.75;
 
@@ -104,8 +106,15 @@ export class BM25 {
  * BM25 index each call — fine for a one-off ranking, wasteful if scoring many queries against
  * the same corpus (construct `new BM25(corpus)` once and reuse it for that case instead). */
 export function rank(corpus: readonly string[], query: string, topN?: number): number[] {
+  const start = Date.now();
   const scores = new BM25(corpus).scores(query);
   const order = corpus.map((_, i) => i).sort((a, b) => scores[b] - scores[a]);
+  logger.info("BM25: rank", {
+    corpusSize: corpus.length,
+    topN,
+    topScore: scores.length ? Math.max(...scores) : 0,
+    elapsedMs: Date.now() - start,
+  });
   return topN !== undefined ? order.slice(0, topN) : order;
 }
 
@@ -144,7 +153,10 @@ export function rrfRankScores(
   k = 60,
 ): number[] {
   const size = Math.max(embeddingScores.length, bm25Scores.length);
-  if (size <= 0) return [];
+  if (size <= 0) {
+    logger.info("BM25: rrfRankScores", { size: 0 });
+    return [];
+  }
 
   const embeddingRanks = positiveRankMap(embeddingScores);
   const bm25Ranks = positiveRankMap(bm25Scores);
@@ -160,6 +172,12 @@ export function rrfRankScores(
   }
 
   const peak = raw.length ? Math.max(...raw) : 0;
-  if (peak <= 0) return raw.map(() => 0);
-  return raw.map((score) => Math.round((score / peak) * 1e6) / 1e6);
+  const fused = peak <= 0 ? raw.map(() => 0) : raw.map((score) => Math.round((score / peak) * 1e6) / 1e6);
+  logger.info("BM25: rrfRankScores", {
+    size,
+    k,
+    embeddingRanked: embeddingRanks.size,
+    bm25Ranked: bm25Ranks.size,
+  });
+  return fused;
 }

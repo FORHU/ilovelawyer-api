@@ -6,6 +6,7 @@ import { embedText } from "../utils/embedding";
 import { rank as bm25Rank } from "../utils/bm25";
 import { RagStatus } from "@prisma/client";
 import { OMIT_EMBEDDING_RANKING } from "../constants";
+import logger from "../utils/logger";
 
 const CACHE_TTL_S = 300; // 5 minutes
 // Per-document chunk floor, not a case-wide chunk count — see findRelevantByCase's docstring.
@@ -52,12 +53,18 @@ export default class DocumentChunkSvc {
     const key = cacheKey(caseDocumentId);
 
     let result = await redis.get<DocumentWithChunks>(key);
-    if (!result) {
+    if (result) {
+      logger.info("Case document: cache hit", { caseDocumentId, chunks: result.chunks.length });
+    } else {
+      logger.info("Case document: cache miss, fetching from DB", { caseDocumentId });
       const doc = await prisma.document.findUnique({
         where: { id: caseDocumentId },
         select: { id: true, name: true, caseId: true, ragStatus: true },
       });
-      if (!doc) throw new HttpError("Case document not found", 404);
+      if (!doc) {
+        logger.warn("Case document: not found", { caseDocumentId });
+        throw new HttpError("Case document not found", 404);
+      }
 
       const chunks = await DocumentChunkRepo.findByDocument(caseDocumentId);
       result = {
@@ -67,6 +74,7 @@ export default class DocumentChunkSvc {
         ragStatus: doc.ragStatus,
         chunks,
       };
+      logger.info("Case document: fetched from DB", { caseDocumentId, chunks: chunks.length, ragStatus: doc.ragStatus });
       await redis.set(key, result, CACHE_TTL_S);
     }
 
@@ -77,6 +85,11 @@ export default class DocumentChunkSvc {
       chunks.map((c) => c.chunkText),
       query,
     );
+    logger.info("Case document: BM25 rerank", {
+      caseDocumentId,
+      chunks: chunks.length,
+      topChunkId: chunks[order[0]]?.id,
+    });
     return { ...result, chunks: order.map((i) => chunks[i]) };
   }
 
