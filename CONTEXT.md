@@ -42,8 +42,8 @@ A fictional litigation bundle plus an assessment paper, under `benchmarks/<slug>
 _Avoid_: "eval" for this (that word is used for the PH prompt eval set in chat-wonder); grading from the answer alone without the bundle text
 
 **Whole-Case Inline**:
-When a case's READY documents total at most `CASE_FULL_TEXT_INLINE_CHARS` (200k chars), `streamChatWonderMessage` sends every document's full text as `case_document_texts` alongside the ranked chunks and manifest; chat-wonder holds them in full for the turn. Larger cases keep the ranked-chunks + on-demand fetch behaviour.
-_Avoid_: raising the threshold without raising chat-wonder's `CASE_DOCUMENT_TOKEN_BUDGET` to match
+When a case's READY documents total at most `CASE_FULL_TEXT_INLINE_CHARS` (200k chars in prod / official scorecards; local cheap profile uses 40k), `streamChatWonderMessage` sends every document's full text as `case_document_texts` alongside the ranked chunks and manifest; chat-wonder holds them in full for the turn. Larger cases keep the ranked-chunks + on-demand fetch behaviour. `OMIT_EMBEDDING_RANKING` is benchmark-only and must stay unset for everyday chat.
+_Avoid_: raising the threshold without raising chat-wonder's `CASE_DOCUMENT_TOKEN_BUDGET` to match; enabling `OMIT_EMBEDDING_RANKING` outside a BM25 A/B run
 
 **Decision Record**:
 The "Why?" behind one conclusion in a legal chat answer — rule applied, evidence for/against, the alternative considered and rejected, weighting, confidence, and what fact would change it. Generated and self-audited by chat-wonder-v2-api per turn (every `rule[].url` checked against that turn's retrieved pool, every `evidence*[].docId`/quote against the case's attached exhibits — this app never re-derives `verified`), persisted on `MessageDecisionRecord`, and promoted into a standalone `DecisionRecord` row per record (`DecisionRecordSvc.promote`, always `authorUserId: null`, mirroring `CaseTimelineSvc.promoteFromAi`) plus DECISION/DOCUMENT nodes and SUPPORTS/CONTRADICTS edges in the Case Graph. Surfaced as the "Decisions" Terminal panel, populated automatically — never generated on demand.

@@ -3,7 +3,9 @@ import { redis } from "../lib/redis";
 import DocumentChunkRepo, { DocumentChunkRow } from "../repositories/document-chunk.repository";
 import HttpError from "../utils/http-error";
 import { embedText } from "../utils/embedding";
+import { rank as bm25Rank } from "../utils/bm25";
 import { RagStatus } from "@prisma/client";
+import { OMIT_EMBEDDING_RANKING } from "../constants";
 
 const CACHE_TTL_S = 300; // 5 minutes
 // Per-document chunk floor, not a case-wide chunk count — see findRelevantByCase's docstring.
@@ -33,28 +35,49 @@ export interface RelevantCaseChunks {
 }
 
 export default class DocumentChunkSvc {
-  static async listByDocument(caseDocumentId: string): Promise<DocumentWithChunks> {
+  /**
+   * query, when given, BM25-ranks the document's chunks by relevance to it — reordering only,
+   * nothing is dropped. The cached/fetched result is always built and stored in natural
+   * chunkIndex order regardless of query, so a ranked request and an unranked request for the
+   * same document still share one cache entry and one DB read; ranking only reorders the copy
+   * handed back to this particular caller.
+   *
+   * This is what chat-wonder-v2-api's get_case_document now calls (passing the current
+   * question as query) instead of running its own BM25 pass locally after fetching the whole
+   * document — see that function's docstring for how it decides whether to keep this order
+   * (about to truncate) or fall back to chunkIndex order (nothing will be cut, so there's
+   * nothing to gain by disturbing reading order).
+   */
+  static async listByDocument(caseDocumentId: string, query?: string): Promise<DocumentWithChunks> {
     const key = cacheKey(caseDocumentId);
 
-    const cached = await redis.get<DocumentWithChunks>(key);
-    if (cached) return cached;
+    let result = await redis.get<DocumentWithChunks>(key);
+    if (!result) {
+      const doc = await prisma.document.findUnique({
+        where: { id: caseDocumentId },
+        select: { id: true, name: true, caseId: true, ragStatus: true },
+      });
+      if (!doc) throw new HttpError("Case document not found", 404);
 
-    const doc = await prisma.document.findUnique({
-      where: { id: caseDocumentId },
-      select: { id: true, name: true, caseId: true, ragStatus: true },
-    });
-    if (!doc) throw new HttpError("Case document not found", 404);
+      const chunks = await DocumentChunkRepo.findByDocument(caseDocumentId);
+      result = {
+        caseDocumentId: doc.id,
+        name: doc.name,
+        caseId: doc.caseId,
+        ragStatus: doc.ragStatus,
+        chunks,
+      };
+      await redis.set(key, result, CACHE_TTL_S);
+    }
 
-    const chunks = await DocumentChunkRepo.findByDocument(caseDocumentId);
-    const result: DocumentWithChunks = {
-      caseDocumentId: doc.id,
-      name: doc.name,
-      caseId: doc.caseId,
-      ragStatus: doc.ragStatus,
-      chunks,
-    };
-    await redis.set(key, result, CACHE_TTL_S);
-    return result;
+    const { chunks } = result;
+    if (!query || !chunks.length) return result;
+
+    const order = bm25Rank(
+      chunks.map((c) => c.chunkText),
+      query,
+    );
+    return { ...result, chunks: order.map((i) => chunks[i]) };
   }
 
   /** Same shape as `listByDocument`, but scoped to every document under a case or a consultation
@@ -128,6 +151,7 @@ export default class DocumentChunkSvc {
     });
     const readyDocIds = readyDocs.map((d) => d.id);
     if (!readyDocIds.length) return { caseDocumentIds: [], caseDocumentChunkIds: [] };
+    if (OMIT_EMBEDDING_RANKING) return { caseDocumentIds: readyDocIds, caseDocumentChunkIds: [] };
 
     try {
       const queryEmbedding = await embedText(query);
@@ -155,6 +179,9 @@ export default class DocumentChunkSvc {
     query: string,
     limit = DEFAULT_SINGLE_DOCUMENT_CHUNK_LIMIT,
   ): Promise<RelevantCaseChunks> {
+    if (OMIT_EMBEDDING_RANKING) {
+      return { caseDocumentIds: [caseDocumentId], caseDocumentChunkIds: [] };
+    }
     try {
       const queryEmbedding = await embedText(query);
       const chunkIds = await DocumentChunkRepo.findRelevantByDocument(caseDocumentId, queryEmbedding, limit);

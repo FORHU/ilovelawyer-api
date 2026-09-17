@@ -1,5 +1,6 @@
 import { Request } from "express";
 import { TenantCode } from "../types/tenant-code";
+import { CLIENT_URL } from "../config";
 
 /**
  * Explicit hostname → Tenant code map. No substring/`.includes()` matching — an unrecognized
@@ -47,4 +48,31 @@ export function resolveTenantCodeFromRequest(req: Request): TenantCode | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The absolute frontend origin to use for a given Tenant code's emailed links (approval
+ * login-link, password reset, org invites, ...). CLIENT_URL already lists every allowed
+ * origin — including each tenant's own subdomain (`ph.ilovelawyer.{local:3002,com}`,
+ * `uk.ilovelawyer.{local:3002,com}`) — so this just picks the one whose host actually
+ * belongs to that tenant, instead of always defaulting to CLIENT_URL[0] (the bare
+ * localhost/apex origin). A link built from the wrong origin still resolves once the
+ * frontend's own domain-mismatch redirect kicks in (see app/(protected)/layout.tsx), but
+ * it should never be the first hop for a tenant-scoped account. Falls back to CLIENT_URL[0]
+ * when the tenant is unresolved (e.g. no organization yet) or no matching origin is
+ * configured for it.
+ */
+export function originForTenantCode(tenantCode: string | null | undefined): string {
+  if (tenantCode) {
+    const prefix = `${tenantCode.toLowerCase()}.`;
+    const match = CLIENT_URL.find((origin) => {
+      try {
+        return new URL(origin).hostname.toLowerCase().startsWith(prefix);
+      } catch {
+        return false;
+      }
+    });
+    if (match) return match;
+  }
+  return CLIENT_URL[0];
 }

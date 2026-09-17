@@ -19,7 +19,7 @@ import AudioOverviewQueue from "../queues/audio-overview.queue";
 import MessagePersistenceQueue, { AssistantTurnPayload } from "../queues/message-persistence.queue";
 import { getPresignedGetUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
-import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT } from "../constants";
+import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 
 export default class ChatSvc {
@@ -172,12 +172,19 @@ export default class ChatSvc {
     // Inline ranked chunk text into document_context. Chat-wonder also receives case_document_ids
     // for its callback fetch, but that often fails in local/staging (ILOVELAWYER_API_BASE points
     // at production with a mismatched API key) — inlining keeps analysis working either way.
-    const groundingContext = grounding
-      ? await DocumentChunkSvc.formatGroundingContext(grounding, 12_000, {
-          caseId: effectiveCaseId,
-          consultationId,
-        })
-      : "";
+    const omitEmbeddingRanking = process.env.OMIT_EMBEDDING_RANKING === "true";
+    if (omitEmbeddingRanking) {
+      logger.info("OMIT_EMBEDDING_RANKING: sending document ids only, no ranked chunk ids");
+    }
+    const groundingContext =
+      omitEmbeddingRanking
+        ? ""
+        : grounding
+          ? await DocumentChunkSvc.formatGroundingContext(grounding, 12_000, {
+              caseId: effectiveCaseId,
+              consultationId,
+            })
+          : "";
 
     // Transcript grounding (ADR 0013): a parallel, independent lookup — never merged/ranked
     // together with Case Document grounding above. Same consultation → case priority shape, but
@@ -544,6 +551,13 @@ export default class ChatSvc {
       .slice(0, TITLE_MAX_CHARS);
   }
 
+  /** True when a parsed title is the title prompts' explicit "couldn't confidently categorize
+   * this" escape hatch (see UNCLEAR_TITLE_SENTINEL's doc comment) rather than a real title —
+   * callers should treat this the same as no title at all, never save it verbatim. */
+  static isUnclearTitle(title: string): boolean {
+    return title.trim().toUpperCase() === UNCLEAR_TITLE_SENTINEL;
+  }
+
   private static async generateAndSaveTitle(
     consultationId: string,
     userMessage: string,
@@ -557,7 +571,11 @@ export default class ChatSvc {
       const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode));
       if (!raw) return;
       title = ChatSvc.parseTitle(raw);
-      if (!title) return;
+      // Left untitled rather than saved — gibberish/unclear input stays untitled (frontend
+      // falls back to "Untitled consultation") instead of a fabricated legal category, and
+      // since consultation.title stays null, the next message's send retries generation with
+      // whatever the user says next.
+      if (!title || ChatSvc.isUnclearTitle(title)) return;
       redis.set(cacheKey, title, TITLE_CACHE_TTL);
     }
 

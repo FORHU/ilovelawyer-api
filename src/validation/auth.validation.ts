@@ -43,3 +43,7 @@ export const verifyOtpSchema = Joi.object({
   email: Joi.string().email().required(),
   code: Joi.string().length(6).required(),
 });
+
+export const consumeLoginLinkSchema = Joi.object({
+  token: Joi.string().required(),
+});

@@ -9,7 +9,8 @@
  * The score is AI-moderated: moderation.md is a sheet for a solicitor to confirm or adjust each
  * criterion; the scorecard records `moderated: false` until someone fills it in. Grader model:
  * BENCHMARK_GRADER_MODEL (default gpt-5.6-terra, reasoning high) via the OpenAI Responses API,
- * using OPENAI_API_KEY from .env.
+ * using OPENAI_API_KEY from .env. For local smoke grading set BENCHMARK_GRADER_MODEL=gpt-5.6-luna;
+ * keep terra only when writing a line to benchmarks/scores.md.
  */
 import * as dotenv from "dotenv";
 dotenv.config();

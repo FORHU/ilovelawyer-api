@@ -3,7 +3,9 @@
     <mj-section>
       <mj-column>
         <mj-text>Hello {{name}},</mj-text>
-        <mj-text>Your ilovelawyer account has been approved. You can now sign in and start using the app.</mj-text>
+        <mj-text>Your ilovelawyer account has been approved. Click below to sign in and start using the app.</mj-text>
+        <mj-button href="{{loginLink}}">Login</mj-button>
+        <mj-text>This link will expire in 7 days.</mj-text>
       </mj-column>
     </mj-section>
   </mj-body>

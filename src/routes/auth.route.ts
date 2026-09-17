@@ -17,5 +17,6 @@ router.post("/google/refresh", validSession, asyncHandler(AuthCtrl.refreshGoogle
 router.post("/forgot-password", asyncHandler(AuthCtrl.forgotPassword));
 router.get("/reset-password/validate", asyncHandler(AuthCtrl.validateResetToken));
 router.post("/reset-password", asyncHandler(AuthCtrl.resetPassword));
+router.post("/login-link/consume", asyncHandler(AuthCtrl.consumeLoginLink));
 
 export default router;
