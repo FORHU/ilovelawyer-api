@@ -20,7 +20,12 @@ export default class UsersCtrl {
   }
 
   static async deleteMe(req: Request, res: Response) {
-    await UsersSvc.deleteMe(req.user.userId);
-    return res.status(204).send();
+    const user = await UsersSvc.requestDeletion(req.user.userId);
+    return res.status(200).json(user);
+  }
+
+  static async cancelDeletion(req: Request, res: Response) {
+    const user = await UsersSvc.cancelDeletion(req.user.userId);
+    return res.status(200).json(user);
   }
 }

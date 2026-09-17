@@ -49,6 +49,12 @@ model User {
   approvalStatus             ApprovalStatus @default(PENDING)
   denialReason               String?
   onboardingCompleted        Boolean        @default(false)
+
+  // Self-service deletion request. Set when the user requests deletion from their profile;
+  // the account (and all its data) is hard-deleted by AccountDeletionQueue once
+  // ACCOUNT_DELETION_GRACE_PERIOD_DAYS has elapsed since this timestamp, unless the user
+  // cancels first by clearing it back to null. Null means no deletion is scheduled.
+  deletionRequestedAt DateTime?
   otpCode                    String?
   otpExpiry                  DateTime?
   emailVerificationOtp       String?

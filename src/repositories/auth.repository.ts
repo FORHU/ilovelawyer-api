@@ -33,6 +33,7 @@ export default class AuthRepo {
         lastLoginAt: true,
         createdAt: true,
         updatedAt: true,
+        deletionRequestedAt: true,
       },
     });
   }
@@ -64,12 +65,51 @@ export default class AuthRepo {
         lastLoginAt: true,
         createdAt: true,
         updatedAt: true,
+        deletionRequestedAt: true,
       },
     });
   }
 
   static async deleteUser(userId: string) {
     return prisma.user.delete({ where: { id: userId } });
+  }
+
+  /** Marks (or, given `null`, unmarks) a user for self-service deletion — see
+   * ACCOUNT_DELETION_GRACE_PERIOD_DAYS and AccountDeletionQueue. Selects the same full shape as
+   * findById/updateProfile (not just the touched field) since the frontend replaces its cached
+   * /me response with whatever this returns — a partial object here would blank out fields like
+   * approvalStatus and incorrectly bounce an ACTIVE user to the pending-approval screen. */
+  static async setDeletionRequested(userId: string, requestedAt: Date | null) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { deletionRequestedAt: requestedAt },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        role: true,
+        isEmailVerified: true,
+        approvalStatus: true,
+        denialReason: true,
+        onboardingCompleted: true,
+        provider: true,
+        avatarId: true,
+        lastLoginAt: true,
+        createdAt: true,
+        updatedAt: true,
+        deletionRequestedAt: true,
+      },
+    });
+  }
+
+  /** Users whose grace period has fully elapsed as of `cutoff` (i.e. `now - gracePeriod`) —
+   * candidates for AccountDeletionQueue to hard-delete. */
+  static async findDueForHardDeletion(cutoff: Date) {
+    return prisma.user.findMany({
+      where: { deletionRequestedAt: { lte: cutoff } },
+      select: { id: true, email: true, name: true },
+    });
   }
 
   /** Self-service "use a different email" cleanup (AuthSvc.cancelSignup) — scoped narrowly so
