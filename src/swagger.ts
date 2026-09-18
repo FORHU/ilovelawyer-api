@@ -1761,6 +1761,24 @@ const swaggerSpec: OAS3Definition = {
       },
     },
 
+    "/documents/{id}/text-preview": {
+      get: {
+        tags: ["Documents"],
+        summary: "Extract a document's plain text for in-app preview of formats with no rich viewer (e.g. legacy .doc)",
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          200: {
+            description: "Extracted text",
+            content: { "application/json": { schema: { type: "object", properties: { text: { type: "string" } } } } },
+          },
+          400: { description: "Text preview not available for this file type", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+
     // ── Transcriptions ────────────────────────────────────────────────────
     "/transcriptions": {
       get: {

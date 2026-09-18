@@ -5,7 +5,7 @@ export const DOCUMENT_UPLOAD_BATCH_MAX = 50;
  * filters to these before ever calling presign/create, but that's advisory only — anyone can
  * call the API directly, so this is the authoritative check (enforced via filename extension in
  * document.validation.ts / case.validation.ts). */
-export const ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "docx", "xlsx", "jpg", "jpeg", "png"];
+export const ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "xlsx", "xlsm", "xlam", "jpg", "jpeg", "png"];
 
 export const ALLOWED_DOCUMENT_FILENAME_PATTERN = new RegExp(
   `\\.(${ALLOWED_DOCUMENT_EXTENSIONS.join("|")})$`,

@@ -69,6 +69,11 @@ export default class DocumentCtrl {
     return res.status(200).json(doc);
   }
 
+  static async getTextPreview(req: Request, res: Response) {
+    const result = await DocumentSvc.getTextPreview(req.params.id, req.organization!.id);
+    return res.status(200).json(result);
+  }
+
   static async update(req: Request, res: Response) {
     const { error, value } = updateDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
