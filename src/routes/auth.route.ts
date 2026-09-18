@@ -10,6 +10,7 @@ router.post("/send-otp", asyncHandler(AuthCtrl.sendOtp));
 router.post("/cancel-signup", asyncHandler(AuthCtrl.cancelSignup));
 router.post("/verify-otp", asyncHandler(AuthCtrl.verifyOtp));
 router.post("/login", asyncHandler(AuthCtrl.login));
+router.post("/update-required-password", asyncHandler(AuthCtrl.updateRequiredPassword));
 router.post("/refresh", asyncHandler(AuthCtrl.refresh));
 router.post("/logout", asyncHandler(AuthCtrl.logout));
 router.post("/google", asyncHandler(AuthCtrl.google));

@@ -45,7 +45,11 @@ export default class UsersSvc {
     if (!isValid) throw new HttpError("Current password is incorrect", 400);
 
     const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
-    await AuthRepo.updatePassword(userId, hashedPassword);
+    // changePasswordSchema enforces the current strong-password policy, so this also
+    // satisfies mustChangePassword — a legacy user who reaches this endpoint with an
+    // active session (e.g. one already open before the flag was ever checked) shouldn't
+    // still be walled off by it on their next login.
+    await AuthRepo.updatePasswordAndClearMustChange(userId, hashedPassword);
   }
 
   /** Starts the grace period rather than deleting immediately — see
