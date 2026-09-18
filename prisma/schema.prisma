@@ -222,6 +222,7 @@ model Message {
   audioOverview   MessageAudioOverview?
   reasoning       MessageReasoning?
   decisionRecords MessageDecisionRecord?
+  researchSteps   MessageResearchSteps?
   documents       Document[]
 
   @@index([consultationId])
@@ -312,6 +313,20 @@ model MessageDecisionRecord {
   records      Json
   verification Json
   createdAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+// Persisted counterpart of the live-only "[TRACE]" research/verification steps shown while a
+// reply is generating (ResearchTraceList on the frontend; streamChatWonderMessage's [TRACE]
+// handling here) — kept per-message, same pattern as MessageReasoning/MessageDecisionRecord, so
+// refreshing a case still shows how a turn's answer was checked, not only its final text.
+// Absent for turns that made no tool calls — that's the normal case, not an error.
+model MessageResearchSteps {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  steps     Json
+  createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }

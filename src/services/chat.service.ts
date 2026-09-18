@@ -8,7 +8,7 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Re
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import DecisionRecordSvc from "./decision-record.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
@@ -55,6 +55,7 @@ export interface AssistantTurnPayload {
   audioOverview?: AudioOverviewTurn[];
   reasoning?: ReasoningExplanation;
   decisions?: DecisionRecordsPayload;
+  researchSteps?: TraceStep[];
 }
 
 export default class ChatSvc {
@@ -375,6 +376,7 @@ export default class ChatSvc {
       audioOverview?: AudioOverviewTurn[];
       reasoning?: ReasoningExplanation;
       decisions?: DecisionRecordsPayload;
+      researchSteps?: TraceStep[];
     }>(cacheKey);
     // Map-generation turns used to cache text-only replies (the mind map arrives on a
     // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
@@ -434,6 +436,7 @@ export default class ChatSvc {
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
+    let streamedResearchSteps: TraceStep[] | undefined;
     try {
       if (useCache && cached) {
         checkpointedOnChunk(cached.content);
@@ -444,6 +447,7 @@ export default class ChatSvc {
         streamedAudioOverview = cached.audioOverview;
         streamedReasoning = cached.reasoning;
         streamedDecisions = cached.decisions;
+        streamedResearchSteps = cached.researchSteps;
       } else {
         // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
         // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
@@ -497,6 +501,7 @@ export default class ChatSvc {
         streamedAudioOverview = result.audioOverview;
         streamedReasoning = result.reasoning;
         streamedDecisions = result.decisions;
+        streamedResearchSteps = result.researchSteps;
         redis.set(
           cacheKey,
           {
@@ -507,6 +512,7 @@ export default class ChatSvc {
             audioOverview: streamedAudioOverview,
             reasoning: streamedReasoning,
             decisions: streamedDecisions,
+            researchSteps: streamedResearchSteps,
           },
           RESPONSE_CACHE_TTL,
         );
@@ -555,6 +561,7 @@ export default class ChatSvc {
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
       decisions: streamedDecisions,
+      researchSteps: streamedResearchSteps,
     };
 
     let assistantMessage: { id: string } | null;
@@ -778,6 +785,11 @@ export default class ChatSvc {
       // still saved here, synchronously.
       await ChatRepo.saveDecisionRecords(assistantMessage.id, decisions).catch((err) => {
         logger.error("Failed to persist decision records", { err, messageId: assistantMessage.id });
+      });
+    }
+    if (p.researchSteps?.length) {
+      await ChatRepo.saveResearchSteps(assistantMessage.id, p.researchSteps).catch((err) => {
+        logger.error("Failed to persist research steps", { err, messageId: assistantMessage.id });
       });
     }
     if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
