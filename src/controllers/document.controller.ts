@@ -1,7 +1,12 @@
 import { Request, Response } from "express";
 import DocumentSvc from "../services/document.service";
 import HttpError from "../utils/http-error";
-import { presignDocumentSchema, createDocumentSchema, updateDocumentSchema } from "../validation/document.validation";
+import {
+  presignDocumentSchema,
+  createDocumentSchema,
+  updateDocumentSchema,
+  listDocumentsSchema,
+} from "../validation/document.validation";
 
 export default class DocumentCtrl {
   static async presign(req: Request, res: Response) {
@@ -48,19 +53,22 @@ export default class DocumentCtrl {
   }
 
   static async list(req: Request, res: Response) {
-    const { caseId, consultationId } = req.query;
+    const { error, value } = listDocumentsSchema.validate(req.query, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
 
-    if (caseId && typeof caseId === "string") {
-      const docs = await DocumentSvc.listByCase(req.organization!.id, caseId);
+    const { caseId, consultationId, status } = value;
+
+    if (caseId) {
+      const docs = await DocumentSvc.listByCase(req.organization!.id, caseId, status);
       return res.status(200).json(docs);
     }
 
-    if (consultationId && typeof consultationId === "string") {
-      const docs = await DocumentSvc.listByConsultation(req.organization!.id, consultationId);
+    if (consultationId) {
+      const docs = await DocumentSvc.listByConsultation(req.organization!.id, consultationId, status);
       return res.status(200).json(docs);
     }
 
-    const docs = await DocumentSvc.list(req.organization!.id);
+    const docs = await DocumentSvc.list(req.organization!.id, status);
     return res.status(200).json(docs);
   }
 
@@ -85,5 +93,15 @@ export default class DocumentCtrl {
   static async delete(req: Request, res: Response) {
     await DocumentSvc.delete(req.params.id, req.organization!.id, req.user.userId);
     return res.status(204).send();
+  }
+
+  static async archive(req: Request, res: Response) {
+    const result = await DocumentSvc.archive(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async unarchive(req: Request, res: Response) {
+    const result = await DocumentSvc.unarchive(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
   }
 }

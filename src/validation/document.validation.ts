@@ -62,3 +62,9 @@ export const updateDocumentSchema = Joi.object({
   consultationId: Joi.string().allow(null).optional(),
   isExhibit: Joi.boolean().optional(),
 });
+
+export const listDocumentsSchema = Joi.object({
+  caseId: Joi.string().optional(),
+  consultationId: Joi.string().optional(),
+  status: Joi.string().valid("ACTIVE", "ARCHIVED").default("ACTIVE"),
+});

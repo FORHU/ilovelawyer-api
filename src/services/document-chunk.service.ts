@@ -59,10 +59,19 @@ export default class DocumentChunkSvc {
       logger.info("Case document: cache miss, fetching from DB", { caseDocumentId });
       const doc = await prisma.document.findUnique({
         where: { id: caseDocumentId },
-        select: { id: true, name: true, caseId: true, ragStatus: true },
+        select: { id: true, name: true, caseId: true, ragStatus: true, status: true },
       });
       if (!doc) {
         logger.warn("Case document: not found", { caseDocumentId });
+        throw new HttpError("Case document not found", 404);
+      }
+      // Option A of the "Archived Documents in Chat" plan — an archived document is unreachable
+      // here too, not just excluded from auto-selection (relevantChunksForScope) and explicit
+      // attachment (ChatSvc.scopedCaseDocumentId). Treated as 404 rather than a silent empty
+      // result: this is chat-wonder's own get_case_document callback, requesting a document id it
+      // was already told about — a 404 here is a real, actionable signal, not a degraded fallback.
+      if (doc.status === "ARCHIVED") {
+        logger.warn("Case document: archived, refusing", { caseDocumentId });
         throw new HttpError("Case document not found", 404);
       }
 
@@ -102,8 +111,12 @@ export default class DocumentChunkSvc {
     const cached = await redis.get<DocumentWithChunks[]>(key);
     if (cached) return cached;
 
+    // status: "ACTIVE" — same Option A exclusion as listByDocument/relevantChunksForScope, kept
+    // consistent across every document-selection entry point chat-wonder can reach.
     const docs = await prisma.document.findMany({
-      where: filter.caseId ? { caseId: filter.caseId } : { consultationId: filter.consultationId },
+      where: filter.caseId
+        ? { caseId: filter.caseId, status: "ACTIVE" }
+        : { consultationId: filter.consultationId, status: "ACTIVE" },
       select: { id: true, name: true, caseId: true, ragStatus: true },
       orderBy: { createdAt: "desc" },
     });
@@ -149,10 +162,15 @@ export default class DocumentChunkSvc {
     query: string,
     perDocumentFloor: number,
   ): Promise<RelevantCaseChunks> {
+    // status: "ACTIVE" keeps an archived document out of auto-selection — archiving elsewhere in
+    // the app is a pure visibility flag with no effect on RAG, but grounding is the one place we
+    // deliberately opt out of that rule (see the "Archived Documents in Chat" plan, Option A: full
+    // exclusion). This only closes the auto-selection door — an explicit reference is blocked
+    // separately in ChatSvc.scopedCaseDocumentId.
     const where =
       "caseId" in scope
-        ? { caseId: scope.caseId, ragStatus: "READY" as const }
-        : { consultationId: scope.consultationId, ragStatus: "READY" as const };
+        ? { caseId: scope.caseId, ragStatus: "READY" as const, status: "ACTIVE" as const }
+        : { consultationId: scope.consultationId, ragStatus: "READY" as const, status: "ACTIVE" as const };
 
     // Every READY document in scope must end up in caseDocumentIds regardless of whether the
     // relevance ranking below picked any of its chunks — the ranking governs what's pre-filled
@@ -269,5 +287,17 @@ export default class DocumentChunkSvc {
       "do NOT treat them as public legal precedent. Do not ask the user to re-upload these files.]\n\n" +
       blocks.join("\n\n")
     );
+  }
+
+  /** Busts listByDocument's per-document cache entry and listByCaseOrConsultation's per-scope
+   * one for a document that just changed status — without this, archiving/unarchiving wouldn't
+   * take effect for chat-wonder's callback endpoints until the existing 5-minute TTL expired on
+   * its own (see CACHE_TTL_S). Best-effort: redis.del already swallows a down/unready client. */
+  static async invalidateCacheForDocument(doc: { id: string; caseId: string | null; consultationId: string | null }): Promise<void> {
+    await Promise.all([
+      redis.del(cacheKey(doc.id)),
+      doc.caseId ? redis.del(filterCacheKey({ caseId: doc.caseId })) : Promise.resolve(),
+      doc.consultationId ? redis.del(filterCacheKey({ consultationId: doc.consultationId })) : Promise.resolve(),
+    ]);
   }
 }
