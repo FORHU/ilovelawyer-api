@@ -890,7 +890,12 @@ export default class ChatSvc {
     return sessionId;
   }
 
-  /** Ignore a client-supplied document id unless it belongs to this consultation or case. */
+  /** Ignore a client-supplied document id unless it belongs to this consultation or case, and
+   * unless it's still ACTIVE — an archived document is excluded from chat entirely (Option A of
+   * the "Archived Documents in Chat" plan), not just from auto-selection. Falling through to
+   * `undefined` here degrades to sendMessage's next grounding path (consultation/case auto-search,
+   * which itself excludes archived documents via relevantChunksForScope) rather than erroring —
+   * same best-effort shape as every other grounding fallback in this file. */
   private static async scopedCaseDocumentId(
     caseDocumentId: string | undefined,
     userId: string,
@@ -900,6 +905,7 @@ export default class ChatSvc {
     if (!caseDocumentId) return undefined;
     const doc = await DocumentRepo.findById(caseDocumentId, userId);
     if (!doc) return undefined;
+    if (doc.status === "ARCHIVED") return undefined;
     if (!documentBelongsToScope(doc, { userId, consultationId, caseId })) return undefined;
     return doc.id;
   }

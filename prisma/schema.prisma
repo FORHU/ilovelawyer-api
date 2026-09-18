@@ -46,15 +46,15 @@ model User {
   // need a session to finish solo/org setup and to see /account-pending); the frontend's
   // protected-route guard is what keeps them out of the real app. denialReason is
   // admin-authored, optional, shown to the user in the denial email/page.
-  approvalStatus             ApprovalStatus @default(PENDING)
-  denialReason               String?
-  onboardingCompleted        Boolean        @default(false)
+  approvalStatus      ApprovalStatus @default(PENDING)
+  denialReason        String?
+  onboardingCompleted Boolean        @default(false)
 
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
   // ACCOUNT_DELETION_GRACE_PERIOD_DAYS has elapsed since this timestamp, unless the user
   // cancels first by clearing it back to null. Null means no deletion is scheduled.
-  deletionRequestedAt DateTime?
+  deletionRequestedAt        DateTime?
   otpCode                    String?
   otpExpiry                  DateTime?
   emailVerificationOtp       String?
@@ -133,6 +133,12 @@ model File {
   caseReconstructionTableRead CaseReconstruction[]   @relation("CaseReconstructionTableRead")
   audioOverviews              MessageAudioOverview[]
   caseBriefExports            CaseBriefExport[]
+  fileStatus                  FileStatus?            @default(ACTIVE)
+}
+
+enum FileStatus {
+  FOR_DELETION
+  ACTIVE
 }
 
 enum Role {
@@ -172,31 +178,31 @@ model Consultation {
 }
 
 model Message {
-  id              String      @id @default(uuid())
-  consultationId  String
-  role            MessageRole
-  content         String      @db.Text
-  imagePreview    String?
-  timestamp       DateTime?
-  createdAt       DateTime    @default(now())
-  userId          String?
-  parentMessageId String?
+  id                  String              @id @default(uuid())
+  consultationId      String
+  role                MessageRole
+  content             String              @db.Text
+  imagePreview        String?
+  timestamp           DateTime?
+  createdAt           DateTime            @default(now())
+  userId              String?
+  parentMessageId     String?
   // Set only when this reply is one topic of a split, multi-topic answer (see
   // MessageGroup) — null for every ordinary, unsplit message.
-  groupId         String?
-  groupOrder      Int?
-  groupTitle      String?
+  groupId             String?
+  groupOrder          Int?
+  groupTitle          String?
   // Tracks a user turn's assistant reply through generation — set to PENDING when this
   // (user-role) message is created, before streaming starts, so a page load can tell
   // "still generating" from "reply never came" from durable state instead of any
   // in-memory client flag. Flipped to DONE once persistAssistantTurn runs, or FAILED if
   // generation throws before ever enqueueing. Always null on assistant/system messages.
-  replyStatus     MessageReplyStatus?
+  replyStatus         MessageReplyStatus?
   // Raw accumulated reply text, checkpointed periodically while still streaming (see
   // ChatSvc.sendMessage) — lets a mid-generation page refresh show the partial answer
   // instead of a bare "thinking" indicator until the real persisted reply lands. Cleared
   // once replyStatus flips to DONE.
-  pendingReplyContent String? @db.Text
+  pendingReplyContent String?             @db.Text
 
   consultation    Consultation           @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -520,33 +526,33 @@ enum CaseStatus {
 }
 
 model Case {
-  id              String    @id @default(uuid())
-  userId          String
-  organizationId  String?
-  caseName        String
-  actionType      String?
-  jurisdiction    String?
+  id                  String     @id @default(uuid())
+  userId              String
+  organizationId      String?
+  caseName            String
+  actionType          String?
+  jurisdiction        String?
   // Constrained (England and Wales / Scotland / Northern Ireland) selector for which UK legal
   // system applies to this case — distinct from `jurisdiction` above (a free-text court/venue
   // field) and from Tenant.code (the PH/UK deployment-region boundary, see CONTEXT.md). Only
   // meaningful for UK-tenant organizations; left null for PH.
-  ukJurisdiction  String?
-  language        String    @default("en")
-  notes           String?   @db.Text
-  lastRefreshedAt DateTime?
+  ukJurisdiction      String?
+  language            String     @default("en")
+  notes               String?    @db.Text
+  lastRefreshedAt     DateTime?
   // Archiving is a pure visibility flag — an ARCHIVED case behaves identically to an ACTIVE one
   // everywhere else (documents, chat, auto-refresh, CaseAccess); it only changes which of the
   // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
   // param and CaseRepo.setStatus.
-  status          CaseStatus @default(ACTIVE)
+  status              CaseStatus @default(ACTIVE)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
   // a delete immediately followed by a re-add that nets out to the same set). Null until the
   // first refresh runs.
   readySetFingerprint String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
 
   user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization      Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
@@ -615,10 +621,16 @@ model Document {
   pageCount        Int?
   extractionMethod String?
   ocrAttempted     Boolean   @default(false)
+
   // Lawyer-curated subset of a case's Documents shown in the Case Brief export's Exhibit list —
   // not every uploaded document is an Exhibit just by being uploaded. See CONTEXT.md's Exhibit entry.
-  isExhibit        Boolean   @default(false)
-  createdAt        DateTime  @default(now())
+  isExhibit Boolean @default(false)
+  // Archiving is a pure visibility flag, same as Case.status — an ARCHIVED document stays fully
+  // intact (chunks, RAG grounding, metadata, relationships) and is only hidden from the active
+  // document view by default. See DocumentRepo.list's status param and DocumentRepo.setStatus.
+
+  status    DocumentStatus @default(ACTIVE)
+  createdAt DateTime       @default(now())
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -630,7 +642,9 @@ model Document {
 
   @@index([userId])
   @@index([organizationId])
+  @@index([organizationId, status])
   @@index([caseId])
+  @@index([caseId, status])
   @@index([consultationId])
   @@index([messageId])
 }
@@ -639,6 +653,11 @@ enum RagStatus {
   PENDING
   READY
   FAILED
+}
+
+enum DocumentStatus {
+  ACTIVE
+  ARCHIVED
 }
 
 // One row per Case Brief render — every call to CaseBriefExportSvc.export(), preview or
@@ -904,25 +923,25 @@ model CalendarWatchChannel {
 }
 
 model Event {
-  id                      String    @id @default(uuid())
-  userId                  String
-  organizationId          String    @map("organization_id")
-  title                   String
-  type                    String    @default("Meeting")
-  dateTime                DateTime  @map("date_time")
-  clientEmail             String?   @map("client_email")
-  notes                   String?   @db.Text
-  status                  String    @default("pending")
-  googleLink              String?   @map("google_link")
-  googleEventId           String?   @map("google_event_id")
-  reminderLeadMinutes     Int?      @map("reminder_lead_minutes")
-  lastReminderSentAt      DateTime? @map("last_reminder_sent_at")
-  lawyerAcknowledgedAt    DateTime? @map("lawyer_acknowledged_at")
-  clientFeedback          String?   @map("client_feedback") @db.Text
-  caseId                  String?   @map("case_id")
-  dateSource              String?   @map("date_source")
-  createdAt               DateTime  @default(now()) @map("created_at")
-  updatedAt               DateTime  @updatedAt @map("updated_at")
+  id                   String    @id @default(uuid())
+  userId               String
+  organizationId       String    @map("organization_id")
+  title                String
+  type                 String    @default("Meeting")
+  dateTime             DateTime  @map("date_time")
+  clientEmail          String?   @map("client_email")
+  notes                String?   @db.Text
+  status               String    @default("pending")
+  googleLink           String?   @map("google_link")
+  googleEventId        String?   @map("google_event_id")
+  reminderLeadMinutes  Int?      @map("reminder_lead_minutes")
+  lastReminderSentAt   DateTime? @map("last_reminder_sent_at")
+  lawyerAcknowledgedAt DateTime? @map("lawyer_acknowledged_at")
+  clientFeedback       String?   @map("client_feedback") @db.Text
+  caseId               String?   @map("case_id")
+  dateSource           String?   @map("date_source")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { Prisma, RagStatus } from "@prisma/client";
+import { Prisma, RagStatus, DocumentStatus } from "@prisma/client";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -45,25 +45,25 @@ export default class DocumentRepo {
     });
   }
 
-  static async list(organizationId: string) {
+  static async list(organizationId: string, status: DocumentStatus = "ACTIVE") {
     return prisma.document.findMany({
-      where: { organizationId },
+      where: { organizationId, status },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
   }
 
-  static async listByCase(organizationId: string, caseId: string) {
+  static async listByCase(organizationId: string, caseId: string, status: DocumentStatus = "ACTIVE") {
     return prisma.document.findMany({
-      where: { organizationId, caseId },
+      where: { organizationId, caseId, status },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
   }
 
-  static async listByConsultation(organizationId: string, consultationId: string) {
+  static async listByConsultation(organizationId: string, consultationId: string, status: DocumentStatus = "ACTIVE") {
     return prisma.document.findMany({
-      where: { organizationId, consultationId },
+      where: { organizationId, consultationId, status },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
@@ -158,6 +158,15 @@ export default class DocumentRepo {
   static async delete(id: string, organizationId: string) {
     const result = await prisma.document.deleteMany({ where: { id, organizationId } });
     return result.count > 0;
+  }
+
+  /** Archiving is a pure visibility flag (see DocumentStatus on the schema) — this is the one
+   * place that flips it. Find-then-update (not updateMany) since this is a genuine
+   * user-initiated action with a real 404 to report. */
+  static async setStatus(id: string, organizationId: string, status: DocumentStatus) {
+    const existing = await prisma.document.findFirst({ where: { id, organizationId }, select: { id: true } });
+    if (!existing) return null;
+    return prisma.document.update({ where: { id }, data: { status }, include: { file: true } });
   }
 
   /** Deletes empty (0-byte) documents that have sat unresolved (PENDING/FAILED) for at least

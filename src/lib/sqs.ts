@@ -22,6 +22,9 @@ const client = new SQSClient({
 const WAIT_TIME_SECONDS = 20;
 // Hard ceiling from the SQS API itself, independent of any queue's own CONCURRENCY.
 const MAX_BATCH_SIZE = 10;
+// How long to pause a queue's fetch loop after a failed receive, since a fast-failing request
+// (e.g. NonExistentQueue) skips the WAIT_TIME_SECONDS long-poll that would otherwise throttle it.
+const RECEIVE_ERROR_BACKOFF_MS = 5000;
 
 export interface ReceivedMessage {
   body: string;
@@ -108,6 +111,12 @@ export async function receiveMessages(
     // real ReceiveMessage failure (bad queue URL, network blip, throttling) was indistinguishable
     // from an empty poll. Still never throws (callers' loop-and-retry behavior doesn't change).
     logger.warn("SQS: receive failed", { queueUrl, err });
+    // A failed request returns instantly instead of long-polling for WAIT_TIME_SECONDS, which is
+    // normally what throttles each queue's `while (running)` fetch loop. Without this delay, a
+    // persistently broken endpoint (e.g. LocalStack down or a queue never created in dev) makes
+    // every queue spin as fast as the event loop allows, flooding stdout with this same stack
+    // trace thousands of times a second.
+    await new Promise((resolve) => setTimeout(resolve, RECEIVE_ERROR_BACKOFF_MS));
     return [];
   }
 }
