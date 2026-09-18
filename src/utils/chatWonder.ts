@@ -221,10 +221,20 @@ function withLegalTag(input: string, tenantCode?: TenantCode): string {
   return `${tag} ${stripLegalTag(input)}`;
 }
 
+/** Thrown by generateTitleViaWs for a genuine transport failure (timeout or socket error),
+ * as opposed to resolving "" when Chat Wonder legitimately produced no content — lets the
+ * caller log/handle the two cases differently instead of conflating them. */
+export class TitleGenerationError extends Error {
+  constructor(public readonly reason: "timeout" | "socket_error", message: string) {
+    super(message);
+    this.name = "TitleGenerationError";
+  }
+}
+
 export async function generateTitleViaWs(prompt: string): Promise<string> {
   const sessionId = await getChatWonderSessionId();
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
     let accumulated = "";
     let settled = false;
@@ -236,7 +246,14 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
       resolve(value);
     };
 
-    const timeout = setTimeout(() => finish(""), 30_000);
+    const fail = (reason: "timeout" | "socket_error", message: string) => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch { /* ignore */ }
+      reject(new TitleGenerationError(reason, message));
+    };
+
+    const timeout = setTimeout(() => fail("timeout", "Chat Wonder title generation timed out after 30s"), 30_000);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
@@ -260,7 +277,7 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
       accumulated += msg;
     };
 
-    ws.onerror = () => { clearTimeout(timeout); finish(""); };
+    ws.onerror = () => { clearTimeout(timeout); fail("socket_error", "Chat Wonder title WS errored"); };
     ws.onclose  = () => { clearTimeout(timeout); finish(accumulated.trim()); };
   });
 }
