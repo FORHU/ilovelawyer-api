@@ -10,6 +10,7 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
 import DecisionRecordSvc from "./decision-record.service";
+import GeneratedDocumentExportSvc from "./generated-document-export.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
@@ -55,6 +56,7 @@ export interface AssistantTurnPayload {
   audioOverview?: AudioOverviewTurn[];
   reasoning?: ReasoningExplanation;
   decisions?: DecisionRecordsPayload;
+  draftedDocument?: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string };
 }
 
 export default class ChatSvc {
@@ -99,7 +101,20 @@ export default class ChatSvc {
 
     const messages = await ChatRepo.listMessagesByConsultation(consultationId);
     return Promise.all(
-      messages.map(async (m) => ({ ...m, documents: await Promise.all(m.documents.map(mapDocumentToDto)) })),
+      messages.map(async (m) => ({
+        ...m,
+        documents: await Promise.all(m.documents.map(mapDocumentToDto)),
+        generatedDocument:
+          m.generatedDocument?.file?.s3Key
+            ? {
+                id: m.generatedDocument.file.id,
+                fileUrl: await getPresignedGetUrl(m.generatedDocument.file.s3Key),
+                filename: m.generatedDocument.file.filename,
+                documentType: m.generatedDocument.documentType,
+                documentName: m.generatedDocument.documentName,
+              }
+            : undefined,
+      })),
     );
   }
 
@@ -375,6 +390,7 @@ export default class ChatSvc {
       audioOverview?: AudioOverviewTurn[];
       reasoning?: ReasoningExplanation;
       decisions?: DecisionRecordsPayload;
+      draftedDocument?: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string };
     }>(cacheKey);
     // Map-generation turns used to cache text-only replies (the mind map arrives on a
     // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
@@ -434,6 +450,7 @@ export default class ChatSvc {
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
+    let streamedDraftedDocument: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string } | undefined;
     try {
       if (useCache && cached) {
         checkpointedOnChunk(cached.content);
@@ -444,6 +461,7 @@ export default class ChatSvc {
         streamedAudioOverview = cached.audioOverview;
         streamedReasoning = cached.reasoning;
         streamedDecisions = cached.decisions;
+        streamedDraftedDocument = cached.draftedDocument;
       } else {
         // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
         // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
@@ -497,6 +515,7 @@ export default class ChatSvc {
         streamedAudioOverview = result.audioOverview;
         streamedReasoning = result.reasoning;
         streamedDecisions = result.decisions;
+        streamedDraftedDocument = result.draftedDocument;
         redis.set(
           cacheKey,
           {
@@ -507,6 +526,7 @@ export default class ChatSvc {
             audioOverview: streamedAudioOverview,
             reasoning: streamedReasoning,
             decisions: streamedDecisions,
+            draftedDocument: streamedDraftedDocument,
           },
           RESPONSE_CACHE_TTL,
         );
@@ -555,6 +575,7 @@ export default class ChatSvc {
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
       decisions: streamedDecisions,
+      draftedDocument: streamedDraftedDocument,
     };
 
     let assistantMessage: { id: string } | null;
@@ -779,6 +800,23 @@ export default class ChatSvc {
       await ChatRepo.saveDecisionRecords(assistantMessage.id, decisions).catch((err) => {
         logger.error("Failed to persist decision records", { err, messageId: assistantMessage.id });
       });
+    }
+    if (p.draftedDocument) {
+      // Rendered here, synchronously, in-process — no HTTP hop to ourselves. See #71.
+      try {
+        const { file } = await GeneratedDocumentExportSvc.export(
+          p.draftedDocument.content,
+          p.draftedDocument.documentName || p.draftedDocument.documentType || "Document",
+          p.draftedDocument.format,
+        );
+        await ChatRepo.saveGeneratedDocument(assistantMessage.id, {
+          fileId: file.id,
+          documentType: p.draftedDocument.documentType,
+          documentName: p.draftedDocument.documentName,
+        });
+      } catch (err) {
+        logger.error("Failed to render/persist generated document", { err, messageId: assistantMessage.id });
+      }
     }
     if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
 

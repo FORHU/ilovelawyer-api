@@ -54,6 +54,7 @@ export default class ChatRepo {
         reasoning: true,
         decisionRecords: true,
         documents: { include: { file: true } },
+        generatedDocument: { include: { file: true } },
       },
     });
   }
@@ -158,6 +159,13 @@ export default class ChatRepo {
         verification: {} as Prisma.InputJsonValue,
       },
     });
+  }
+
+  static async saveGeneratedDocument(
+    messageId: string,
+    data: { fileId: string; documentType?: string; documentName?: string },
+  ) {
+    return prisma.messageGeneratedDocument.create({ data: { messageId, ...data } });
   }
 
   /** Whether this user turn already has its assistant reply persisted — the idempotency check
