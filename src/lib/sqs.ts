@@ -6,12 +6,15 @@ import {
   DeleteMessageCommand,
   ChangeMessageVisibilityCommand,
 } from "@aws-sdk/client-sqs";
-import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION } from "../config";
+import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_SQS_ENDPOINT } from "../config";
 import logger from "../utils/logger";
 
 const client = new SQSClient({
   region: AWS_REGION,
   credentials: { accessKeyId: AWS_ACCESS_KEY, secretAccessKey: AWS_SECRET_ACCESS_KEY },
+  // Only SQS is redirected to LocalStack in dev — S3/Polly/Textract (src/utils/s3.ts,
+  // src/utils/polly.ts, src/utils/ocr.ts) keep talking to real AWS with the same credentials.
+  ...(AWS_SQS_ENDPOINT ? { endpoint: AWS_SQS_ENDPOINT } : {}),
 });
 
 // Long-poll the whole 20s window — this is what makes SQS receive behave like Redis's BRPOP
