@@ -6,6 +6,7 @@ import { resolveTenantCodeFromRequest } from "../utils/tenant-host";
 import {
   signupSchema,
   loginSchema,
+  updateRequiredPasswordSchema,
   googleLoginSchema,
   forgotPasswordSchema,
   validateResetTokenSchema,
@@ -44,6 +45,27 @@ export default class AuthCtrl {
     }
 
     const { user, accessToken, refreshToken } = await AuthSvc.login(email, password, !!remember, resolveTenantCodeFromRequest(req));
+    setRefreshTokenCookie(res, refreshToken, !!remember);
+
+    return res.status(200).json({ user, accessToken });
+  }
+
+  /** Completes the one-time forced password update a 428 from login() sends the client to. */
+  static async updateRequiredPassword(req: Request, res: Response) {
+    const { email, currentPassword, newPassword, remember } = req.body;
+
+    const { error } = updateRequiredPasswordSchema.validate({ email, currentPassword, newPassword, remember });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const { user, accessToken, refreshToken } = await AuthSvc.updateRequiredPassword(
+      email,
+      currentPassword,
+      newPassword,
+      !!remember,
+      resolveTenantCodeFromRequest(req),
+    );
     setRefreshTokenCookie(res, refreshToken, !!remember);
 
     return res.status(200).json({ user, accessToken });

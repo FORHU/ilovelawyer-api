@@ -22,9 +22,16 @@ const client = new SQSClient({
 const WAIT_TIME_SECONDS = 20;
 // Hard ceiling from the SQS API itself, independent of any queue's own CONCURRENCY.
 const MAX_BATCH_SIZE = 10;
-// How long to pause a queue's fetch loop after a failed receive, since a fast-failing request
-// (e.g. NonExistentQueue) skips the WAIT_TIME_SECONDS long-poll that would otherwise throttle it.
+// A failed ReceiveMessageCommand (e.g. LocalStack not running in dev, a network blip) returns
+// near-instantly instead of honoring WAIT_TIME_SECONDS — without this, every queue's fetchLoop
+// `while (this.running)` spins as fast as the event loop allows, flooding the logs with
+// thousands of "SQS: receive failed" lines/sec. This is the throttle for that path specifically;
+// the normal empty-poll case still relies on WAIT_TIME_SECONDS itself.
 const RECEIVE_ERROR_BACKOFF_MS = 5000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export interface ReceivedMessage {
   body: string;
@@ -81,6 +88,11 @@ export async function sendMessageBatch(queueUrl: string, bodies: string[]): Prom
  * regardless of what default a queue happens to be provisioned with (often a bare 30s): the
  * message's real timeout is the caller's app-level value from the very first moment, not
  * whatever the queue's static AWS-side setting is, so there's no gap before the first renewal. */
+// Tracks which queue URLs are currently in a failing streak, so a sustained outage (LocalStack
+// down for the whole dev session) logs once at the start instead of once per retry. Cleared the
+// moment a queue receives successfully again, so a *new* incident later still gets its own log.
+const failingQueues = new Set<string>();
+
 export async function receiveMessages(
   queueUrl: string,
   maxMessages: number,
@@ -96,6 +108,7 @@ export async function receiveMessages(
         ...(visibilityTimeoutSeconds ? { VisibilityTimeout: visibilityTimeoutSeconds } : {}),
       }),
     );
+    failingQueues.delete(queueUrl);
     const messages = (result.Messages ?? [])
       .filter((m): m is typeof m & { Body: string; ReceiptHandle: string } => !!m.Body && !!m.ReceiptHandle)
       .map((m) => ({ body: m.Body, receiptHandle: m.ReceiptHandle, messageId: m.MessageId ?? "" }));
@@ -110,13 +123,15 @@ export async function receiveMessages(
     // Previously silent (bare `return []`, same as the normal "nothing to receive" case) — a
     // real ReceiveMessage failure (bad queue URL, network blip, throttling) was indistinguishable
     // from an empty poll. Still never throws (callers' loop-and-retry behavior doesn't change).
-    logger.warn("SQS: receive failed", { queueUrl, err });
-    // A failed request returns instantly instead of long-polling for WAIT_TIME_SECONDS, which is
-    // normally what throttles each queue's `while (running)` fetch loop. Without this delay, a
-    // persistently broken endpoint (e.g. LocalStack down or a queue never created in dev) makes
-    // every queue spin as fast as the event loop allows, flooding stdout with this same stack
-    // trace thousands of times a second.
-    await new Promise((resolve) => setTimeout(resolve, RECEIVE_ERROR_BACKOFF_MS));
+    // Logged once per failing streak (see failingQueues above), not once per retry — a
+    // ReceiveMessageCommand failure returns near-instantly rather than honoring
+    // WAIT_TIME_SECONDS, so without RECEIVE_ERROR_BACKOFF_MS below every queue's fetchLoop would
+    // otherwise spin at full CPU/socket speed for as long as the outage lasts.
+    if (!failingQueues.has(queueUrl)) {
+      logger.warn("SQS: receive failed", { queueUrl, err });
+      failingQueues.add(queueUrl);
+    }
+    await sleep(RECEIVE_ERROR_BACKOFF_MS);
     return [];
   }
 }

@@ -41,6 +41,13 @@ model User {
   tenantId           String?
   isEmailVerified    Boolean   @default(false)
 
+  // Set true for every account that existed before the strong-password policy shipped
+  // (see the add_must_change_password migration's backfill) and for any account whose
+  // password otherwise falls outside the current policy. Checked by AuthSvc.login, which
+  // blocks the session and routes the client to AuthSvc.updateRequiredPassword instead.
+  // Cleared the moment that succeeds — a one-time gate, never re-asked after that.
+  mustChangePassword Boolean   @default(false)
+
   // Independent of Email Verification and of login itself — a new User starts PENDING
   // regardless of signup method. Login still succeeds for a PENDING/DENIED user (they
   // need a session to finish solo/org setup and to see /account-pending); the frontend's

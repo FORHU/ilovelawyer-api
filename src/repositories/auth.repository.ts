@@ -54,8 +54,11 @@ export default class AuthRepo {
     return prisma.user.findUnique({ where: { id }, select: { id: true, password: true } });
   }
 
-  static async updatePassword(userId: string, hashedPassword: string) {
-    return prisma.user.update({ where: { id: userId }, data: { password: hashedPassword } });
+  /** Clears mustChangePassword in the same write — every password update goes through
+   * strongPassword validation now, so every caller of this satisfies the forced-update
+   * gate as a side effect, whether or not that's what motivated the call. */
+  static async updatePasswordAndClearMustChange(userId: string, hashedPassword: string) {
+    return prisma.user.update({ where: { id: userId }, data: { password: hashedPassword, mustChangePassword: false } });
   }
 
   static async updateLastLogin(userId: string) {
@@ -206,8 +209,11 @@ export default class AuthRepo {
       // Completing a reset via the emailed link is proof of ownership of that inbox,
       // so it also satisfies email verification — otherwise an unverified account that
       // resets its password would still be locked out of login by the isEmailVerified
-      // check right after successfully resetting.
-      data: { password: hashedPassword, otpCode: null, otpExpiry: null, isEmailVerified: true },
+      // check right after successfully resetting. resetPasswordSchema already enforces
+      // the current strong-password policy, so this also satisfies mustChangePassword —
+      // without clearing it here, a legacy user who resets via email would still hit the
+      // forced-update wall on their next login despite already having a compliant password.
+      data: { password: hashedPassword, otpCode: null, otpExpiry: null, isEmailVerified: true, mustChangePassword: false },
     });
 
     return result.count > 0 ? user.id : null;
@@ -310,6 +316,7 @@ export default class AuthRepo {
       provider: true,
       isEmailVerified: true,
       approvalStatus: true,
+      mustChangePassword: true,
       createdAt: true,
       lastLoginAt: true,
     } as const;
