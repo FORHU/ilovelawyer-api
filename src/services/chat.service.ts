@@ -267,7 +267,15 @@ export default class ChatSvc {
     const effectiveUserInput = userInput.trim() ? userInput : ATTACHMENT_ONLY_PROMPT;
 
     if (needsTitle) {
-      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode).catch(() => {});
+      const titleStartedAt = Date.now();
+      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode, userId).catch((err) => {
+        logger.error("Chat title: generation failed (non-fatal — reply unaffected, retries next message)", {
+          consultationId,
+          tenantCode,
+          err,
+          elapsedMs: Date.now() - titleStartedAt,
+        });
+      });
     }
 
     // Re-derived from the live Case row on every message (not cached on the consultation),
@@ -992,23 +1000,48 @@ export default class ChatSvc {
     consultationId: string,
     userMessage: string,
     tenantCode: TenantCode,
+    userId: string,
   ): Promise<void> {
     const cacheKey = titleCacheKey(userMessage, tenantCode);
+    const startedAt = Date.now();
 
     let title = await redis.get<string>(cacheKey);
 
-    if (!title) {
+    if (title) {
+      logger.info("Chat title: cache hit", { consultationId, tenantCode });
+    } else {
       const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode));
-      if (!raw) return;
+      if (!raw) {
+        logger.info("Chat title: model returned no content, leaving untitled (retries next message)", {
+          consultationId,
+          tenantCode,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
       title = ChatSvc.parseTitle(raw);
       // Left untitled rather than saved — gibberish/unclear input stays untitled (frontend
       // falls back to "Untitled consultation") instead of a fabricated legal category, and
       // since consultation.title stays null, the next message's send retries generation with
       // whatever the user says next.
-      if (!title || ChatSvc.isUnclearTitle(title)) return;
+      if (!title || ChatSvc.isUnclearTitle(title)) {
+        logger.info(
+          !title
+            ? "Chat title: parsed title was empty, leaving untitled"
+            : "Chat title: model returned UNCLEAR_INPUT sentinel (working as intended), leaving untitled",
+          { consultationId, tenantCode, raw: raw.slice(0, 120) },
+        );
+        return;
+      }
       redis.set(cacheKey, title, TITLE_CACHE_TTL);
     }
 
     await ChatRepo.updateConsultation(consultationId, title);
+    logger.info("Chat title: saved", { consultationId, tenantCode, title, elapsedMs: Date.now() - startedAt });
+    // Pushed the moment it's saved (title generation usually finishes in 1-2s, well before the
+    // reply itself) rather than waiting for the frontend's end-of-turn refetch, so the sidebar/
+    // header title updates immediately instead of trailing behind the topic breakdown, which
+    // only becomes available once the full reply is persisted.
+    emitToUser(userId, "chat:title-updated", { consultationId, title });
   }
 }

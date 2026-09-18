@@ -97,6 +97,20 @@ export default class EventSvc {
   }
 
   static async updateById(id: string, organizationId: string, userId: string, userEmail: string, body: any) {
+    // A cancelled appointment is only allowed to change its own `status` field (e.g. restoring
+    // it back to "pending") — every other field (time, title, notes, etc.) is frozen once
+    // cancelled. The frontend already hides the Edit button for cancelled rows, but that's
+    // UI-only; without this check a stale open edit form (or a direct API call) could still
+    // silently rewrite a cancelled appointment's details.
+    const nonStatusFieldsPresent = Object.keys(body).some((key) => key !== "status");
+    if (nonStatusFieldsPresent) {
+      const existing = await EventRepo.findById(id, organizationId, userId, userEmail);
+      if (!existing) throw new HttpError("Event not found", 404);
+      if (existing.status === "cancelled") {
+        throw new HttpError("Cannot edit a cancelled appointment. Restore it first.", 400);
+      }
+    }
+
     const data: any = {};
     if (body.status !== undefined) data.status = body.status;
     if (body.google_link !== undefined) data.googleLink = body.google_link;
