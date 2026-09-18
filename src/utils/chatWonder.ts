@@ -286,6 +286,16 @@ export interface ChatWonderStreamResult {
    * Absent whenever the turn produced no legal-analysis conclusions worth recording, or
    * generation failed silently. Absence is the normal case for many turns, not an error. */
   decisions?: DecisionRecordsPayload;
+  /** From Chat Wonder's pre-`__END__` `[GENERATED_FILE_DATA]` frame (legal persona only) — the
+   * raw drafted text from a successful generate_legal_document/draft_pleading tool call, not yet
+   * rendered to a file. Rendering happens here, in-process, via GeneratedDocumentExportSvc — see
+   * #71. Absent on every turn that didn't draft a document. */
+  draftedDocument?: {
+    content: string;
+    format: "docx" | "pdf";
+    documentType?: string;
+    documentName?: string;
+  };
 }
 
 export function streamChatWonderMessage(
@@ -315,6 +325,7 @@ export function streamChatWonderMessage(
     let audioOverviewTurns: AudioOverviewTurn[] | undefined;
     let reasoningExplanation: ReasoningExplanation | undefined;
     let decisionRecords: DecisionRecordsPayload | undefined;
+    let draftedDocument: ChatWonderStreamResult["draftedDocument"];
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
     let payloadSentAt: number | undefined;
     let firstChunkAt: number | undefined;
@@ -360,6 +371,7 @@ export function streamChatWonderMessage(
         audioOverview: audioOverviewTurns,
         reasoning: reasoningExplanation,
         decisions: decisionRecords,
+        draftedDocument,
       });
     };
 
@@ -502,6 +514,28 @@ export function streamChatWonderMessage(
         if (doneIdx !== -1) payload = payload.slice(0, doneIdx);
         audioOverviewTurns = parseAudioOverviewPayload(payload);
         if (doneIdx !== -1) finish();
+        return;
+      }
+
+      // Legal persona only, sent as its own frame before __END__ (see the_server.py's
+      // /chat-stream handler, alongside [TAILOR_DATA]/[MAPS_DATA] for other personas) —
+      // never mixed into the answer text, so no [DONE]-stripping needed here.
+      const generatedFileIdx = message.indexOf("[GENERATED_FILE_DATA]");
+      if (generatedFileIdx !== -1) {
+        const payload = message.slice(generatedFileIdx + "[GENERATED_FILE_DATA]".length);
+        try {
+          const parsed = JSON.parse(payload);
+          if (parsed && typeof parsed.content === "string") {
+            draftedDocument = {
+              content: parsed.content,
+              format: parsed.format === "pdf" ? "pdf" : "docx",
+              documentType: parsed.document_type,
+              documentName: parsed.document_name,
+            };
+          }
+        } catch {
+          // malformed frame — leave draftedDocument unset
+        }
         return;
       }
 
