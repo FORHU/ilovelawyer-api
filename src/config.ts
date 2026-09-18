@@ -67,6 +67,11 @@ export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;
 export const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY as string;
 export const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET as string;
 export const AWS_REGION = process.env.AWS_REGION as string;
+/** Redirects the SQS client (only) at a local emulator (LocalStack) instead of real AWS — see
+ * src/lib/sqs.ts. Left unset in production, which keeps talking to real AWS unchanged. Local
+ * dev sets this to http://localhost:4566 (see .env.example) so each developer's own LocalStack
+ * instance is the only thing their SQS traffic can ever reach — no shared AWS queue in dev. */
+export const AWS_SQS_ENDPOINT = process.env.AWS_SQS_ENDPOINT || undefined;
 // SQS queue URLs — one per background job type, provisioned externally (same convention as
 // AWS_S3_BUCKET above: this app never creates its own AWS infra, only references it).
 export const DOCUMENT_EXTRACTION_QUEUE_URL = process.env.DOCUMENT_EXTRACTION_QUEUE_URL as string;

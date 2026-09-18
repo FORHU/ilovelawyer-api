@@ -31,5 +31,41 @@ services:
       - redis
     restart: always
 
+  # Per-developer SQS emulator — each developer runs their own instance of this, so there is no
+  # shared AWS resource in dev at all: a message sent by this machine's API can only ever be
+  # received by this same machine's workers (see src/lib/sqs.ts's AWS_SQS_ENDPOINT override).
+  localstack:
+    image: localstack/localstack:3
+    container_name: ilovelawyer-localstack
+    environment:
+      - SERVICES=sqs
+      - DEFAULT_REGION=ap-southeast-1
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: always
+
+  # One-shot: creates the 7 app queues in LocalStack once it's healthy. create-queue is
+  # idempotent (returns the existing queue if one already exists by that name), so re-running
+  # this on every `docker compose up` is safe — it's not a long-running service.
+  sqs-init:
+    image: amazon/aws-cli:2.15.30
+    container_name: ilovelawyer-sqs-init
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ap-southeast-1
+    entrypoint: ["/bin/sh", "/init/create-queues.sh"]
+    volumes:
+      - ./docker/localstack-init:/init:ro
+    restart: "no"
+
 volumes:
   postgres_data:
