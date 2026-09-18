@@ -4,7 +4,8 @@ import prisma from "../lib/prisma";
 import DocumentRepo from "../repositories/document.repository";
 import FilesRepo from "../repositories/files.repository";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
-import { s3UrlForKey, getPresignedUploadUrl, getPresignedGetUrl } from "../utils/s3";
+import { s3UrlForKey, getPresignedUploadUrl, getPresignedGetUrl, getObjectBuffer } from "../utils/s3";
+import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 
@@ -139,6 +140,25 @@ export default class DocumentSvc {
     const doc = await DocumentRepo.findById(id, organizationId);
     if (!doc) throw new HttpError("Document not found", 404);
     return mapDocumentToDto(doc);
+  }
+
+  /** Plain-text fallback preview for formats the browser has no rich in-app viewer for (legacy
+   * .doc, chiefly — see AttachmentPreview on the frontend). Re-runs the same extraction the
+   * indexing pipeline uses (document-text-extraction.ts) directly against the S3 bytes rather
+   * than reading persisted CaseDocumentChunk rows, so it works immediately after upload without
+   * waiting on (or depending on the success of) RAG extraction/chunking. */
+  static async getTextPreview(id: string, organizationId: string) {
+    const doc = await DocumentRepo.findById(id, organizationId);
+    if (!doc) throw new HttpError("Document not found", 404);
+    if (!doc.file?.s3Key) throw new HttpError("Document has no file", 404);
+
+    const buffer = await getObjectBuffer(doc.file.s3Key);
+    try {
+      const text = await extractText(buffer, doc.mimeType, doc.name);
+      return { text };
+    } catch {
+      throw new HttpError("Text preview not available for this file type", 400);
+    }
   }
 
   static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean }) {
