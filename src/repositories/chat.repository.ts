@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import { MessageRole, Prisma, AudioOverviewStatus, MessageReplyStatus } from "@prisma/client";
-import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
+import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 
 export default class ChatRepo {
@@ -53,6 +53,7 @@ export default class ChatRepo {
         audioOverview: true,
         reasoning: true,
         decisionRecords: true,
+        researchSteps: true,
         documents: { include: { file: true } },
       },
     });
@@ -157,6 +158,12 @@ export default class ChatRepo {
         records: data.records as unknown as Prisma.InputJsonValue,
         verification: {} as Prisma.InputJsonValue,
       },
+    });
+  }
+
+  static async saveResearchSteps(messageId: string, steps: TraceStep[]) {
+    return prisma.messageResearchSteps.create({
+      data: { messageId, steps: steps as unknown as Prisma.InputJsonValue },
     });
   }
 
