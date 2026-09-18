@@ -3,13 +3,13 @@ import { WorkspacePreset } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 
 export default class TerminalWorkspaceRepo {
-  static async list(userId: string) {
+  static async list(userId: string, caseId: string) {
     // Stable creation order, not isLastUsed/updatedAt — those change on every select/apply,
     // which was reshuffling the tab strip out from under whatever the user just clicked.
     // isLastUsed still exists for "which tab to restore on page load" (read elsewhere), it just
     // no longer drives display order.
     return prisma.terminalWorkspace.findMany({
-      where: { userId },
+      where: { userId, caseId },
       orderBy: { createdAt: "asc" },
     });
   }
@@ -18,9 +18,9 @@ export default class TerminalWorkspaceRepo {
     return prisma.terminalWorkspace.findFirst({ where: { id, userId } });
   }
 
-  static async create(userId: string, data: { name: string; preset: WorkspacePreset; layoutJson: Prisma.InputJsonValue }) {
+  static async create(userId: string, data: { caseId: string; name: string; preset: WorkspacePreset; layoutJson: Prisma.InputJsonValue }) {
     return prisma.$transaction(async (tx) => {
-      await tx.terminalWorkspace.updateMany({ where: { userId, isLastUsed: true }, data: { isLastUsed: false } });
+      await tx.terminalWorkspace.updateMany({ where: { userId, caseId: data.caseId, isLastUsed: true }, data: { isLastUsed: false } });
       return tx.terminalWorkspace.create({
         data: { userId, ...data, isLastUsed: true },
       });
@@ -32,12 +32,14 @@ export default class TerminalWorkspaceRepo {
     userId: string,
     data: { name?: string; preset?: WorkspacePreset; layoutJson?: Prisma.InputJsonValue; isLastUsed?: boolean },
   ) {
-    const existing = await prisma.terminalWorkspace.findFirst({ where: { id, userId }, select: { id: true } });
+    const existing = await prisma.terminalWorkspace.findFirst({ where: { id, userId }, select: { id: true, caseId: true } });
     if (!existing) return null;
 
     return prisma.$transaction(async (tx) => {
       if (data.isLastUsed) {
-        await tx.terminalWorkspace.updateMany({ where: { userId, isLastUsed: true }, data: { isLastUsed: false } });
+        // Scoped to this workspace's own case — "last used" tracks per-case, so applying a
+        // layout in one case must not clear which layout was last used in a different case.
+        await tx.terminalWorkspace.updateMany({ where: { userId, caseId: existing.caseId, isLastUsed: true }, data: { isLastUsed: false } });
       }
       return tx.terminalWorkspace.update({ where: { id }, data });
     });

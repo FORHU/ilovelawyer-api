@@ -15,7 +15,9 @@ export default class TerminalWorkspaceCtrl {
   }
 
   static async list(req: Request, res: Response) {
-    const result = await TerminalWorkspaceSvc.list(req.user.userId);
+    const caseId = req.query.caseId;
+    if (typeof caseId !== "string" || !caseId) throw new HttpError("caseId query param is required", 400);
+    const result = await TerminalWorkspaceSvc.list(req.user.userId, caseId);
     return res.status(200).json(result);
   }
 
@@ -49,7 +51,7 @@ export default class TerminalWorkspaceCtrl {
     const { error, value } = resetWorkspaceSchema.validate(req.body ?? {});
     if (error) throw new HttpError(error.message, 400);
     const sku = await TerminalWorkspaceSvc.skuForUser(req.user.userId);
-    const result = await TerminalWorkspaceSvc.resetToPreset(req.user.userId, sku, value.preset);
+    const result = await TerminalWorkspaceSvc.resetToPreset(req.user.userId, sku, value.caseId, value.preset);
     return res.status(201).json(result);
   }
 

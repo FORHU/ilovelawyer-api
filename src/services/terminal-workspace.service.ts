@@ -19,8 +19,8 @@ export default class TerminalWorkspaceSvc {
     };
   }
 
-  static async list(userId: string) {
-    return TerminalWorkspaceRepo.list(userId);
+  static async list(userId: string, caseId: string) {
+    return TerminalWorkspaceRepo.list(userId, caseId);
   }
 
   static async getById(id: string, userId: string) {
@@ -29,10 +29,11 @@ export default class TerminalWorkspaceSvc {
     return row;
   }
 
-  static async create(userId: string, sku: string, body: { name: string; preset?: WorkspacePreset; layoutJson?: unknown }) {
+  static async create(userId: string, sku: string, body: { caseId: string; name: string; preset?: WorkspacePreset; layoutJson?: unknown }) {
     const preset = body.preset ?? defaultPresetForSku(sku);
     const layoutJson = normalizeLayout(body.layoutJson ?? buildDefaultLayout(preset, sku), sku) as unknown as Prisma.InputJsonValue;
     return TerminalWorkspaceRepo.create(userId, {
+      caseId: body.caseId,
       name: body.name,
       preset,
       layoutJson,
@@ -61,9 +62,10 @@ export default class TerminalWorkspaceSvc {
     return updated;
   }
 
-  static async resetToPreset(userId: string, sku: string, preset?: WorkspacePreset) {
+  static async resetToPreset(userId: string, sku: string, caseId: string, preset?: WorkspacePreset) {
     const resolved = preset ?? defaultPresetForSku(sku);
     return TerminalWorkspaceRepo.create(userId, {
+      caseId,
       name: `Default ${resolved.replace("_", " ")}`,
       preset: resolved,
       layoutJson: buildDefaultLayout(resolved, sku) as unknown as Prisma.InputJsonValue,
