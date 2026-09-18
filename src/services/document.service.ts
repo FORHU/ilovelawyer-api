@@ -193,6 +193,17 @@ export default class DocumentSvc {
     return mapDocumentToDto(updated);
   }
 
+  /** Cascades a Case's own archive into its documents (see CaseSvc.archive) — loops this same
+   * archive() over every document under the case, same shape as CaseSvc.delete looping delete()
+   * below. Skips documents already ARCHIVED so archiving a case (or one with documents a user
+   * already archived by hand) doesn't write redundant audit rows. */
+  static async archiveByCase(caseId: string, organizationId: string, actorId: string) {
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    for (const doc of docs) {
+      if (doc.status === "ACTIVE") await this.archive(doc.id, organizationId, actorId);
+    }
+  }
+
   /** userId is the authenticated deleter — needed only to attribute an auto-triggered
    * post-extraction refresh (case-post-extraction.ts) to a real actor when a READY, case-scoped
    * document is removed, same as the uploader is used when extraction finishes. */

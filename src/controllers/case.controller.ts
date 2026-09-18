@@ -51,7 +51,7 @@ export default class CaseCtrl {
   }
 
   static async delete(req: Request, res: Response) {
-    await CaseSvc.delete(req.params.id, req.organization!.id);
+    await CaseSvc.delete(req.params.id, req.organization!.id, req.user.userId);
     return res.status(204).send();
   }
 
