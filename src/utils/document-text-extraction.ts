@@ -1,16 +1,26 @@
 import { PDFParse } from "pdf-parse";
 import mammoth from "mammoth";
 import ExcelJS from "exceljs";
+import WordExtractor from "word-extractor";
 import { ocrDocument, ocrPdfFromS3 } from "./ocr";
 import logger from "./logger";
 
-type DocType = "pdf" | "docx" | "image" | "xlsx";
+type DocType = "pdf" | "doc" | "docx" | "image" | "xlsx";
 
 // Textract's synchronous DetectDocumentText only accepts these two raster formats (plus
 // single-page PDF, handled separately above) — anything else (WEBP, GIF, HEIC, ...) still
 // falls through to the "unsupported" error below rather than failing inside Textract itself.
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png"]);
+
+// .xlsm/.xlam are macro-enabled/add-in variants of the same OOXML zip container as .xlsx, so
+// exceljs reads them with the same workbook.xlsx.load path used for "xlsx" below.
+const XLSX_MIME_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroEnabled.12",
+  "application/vnd.ms-excel.addin.macroEnabled.12",
+]);
+const XLSX_EXTENSIONS = new Set(["xlsx", "xlsm", "xlam"]);
 
 // Legacy .xls (binary BIFF8) is deliberately not included — exceljs only reads the modern
 // OOXML .xlsx format, and loading a .xls through its xlsx parser just throws.
@@ -22,14 +32,16 @@ export interface ExtractedPage {
 
 function resolveType(mimeType?: string | null, filename?: string): DocType | null {
   if (mimeType === "application/pdf") return "pdf";
+  if (mimeType === "application/msword") return "doc";
   if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
-  if (mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") return "xlsx";
+  if (mimeType && XLSX_MIME_TYPES.has(mimeType)) return "xlsx";
   if (mimeType && IMAGE_MIME_TYPES.has(mimeType)) return "image";
 
   const ext = filename?.split(".").pop()?.toLowerCase();
   if (ext === "pdf") return "pdf";
+  if (ext === "doc") return "doc";
   if (ext === "docx") return "docx";
-  if (ext === "xlsx") return "xlsx";
+  if (ext && XLSX_EXTENSIONS.has(ext)) return "xlsx";
   if (ext && IMAGE_EXTENSIONS.has(ext)) return "image";
   return null;
 }
@@ -62,6 +74,13 @@ async function extractPdfPages(buffer: Buffer): Promise<ExtractedPage[]> {
 async function extractDocxPages(buffer: Buffer): Promise<ExtractedPage[]> {
   const result = await mammoth.extractRawText({ buffer });
   return pagesFromText(result.value);
+}
+
+// word-extractor reads the legacy OLE compound-file .doc format that mammoth can't parse.
+async function extractDocPages(buffer: Buffer): Promise<ExtractedPage[]> {
+  const extractor = new WordExtractor();
+  const document = await extractor.extract(buffer);
+  return pagesFromText(document.getBody());
 }
 
 // exceljs represents a cell's parsed value as string | number | boolean | Date | null/undefined
@@ -106,6 +125,10 @@ export async function extractPages(
   const type = resolveType(mimeType, filename);
   if (type === "docx") {
     return { pages: await extractDocxPages(buffer), method: "text", ocrAttempted: false };
+  }
+
+  if (type === "doc") {
+    return { pages: await extractDocPages(buffer), method: "text", ocrAttempted: false };
   }
 
   if (type === "xlsx") {
