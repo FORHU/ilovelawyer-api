@@ -10,6 +10,7 @@ router.use(validSession, asyncHandler(resolveOrganization));
 
 router.get("/", asyncHandler(DocumentCtrl.list));
 router.get("/:id", asyncHandler(DocumentCtrl.getById));
+router.get("/:id/text-preview", asyncHandler(DocumentCtrl.getTextPreview));
 router.post("/presign", asyncHandler(DocumentCtrl.presign));
 router.post("/", asyncHandler(DocumentCtrl.create));
 router.patch("/:id", asyncHandler(DocumentCtrl.update));
