@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import FilesRepo from "../repositories/files.repository";
 import { renderGeneratedDocx, renderGeneratedPdf } from "../utils/generated-document-renderer";
-import { uploadToS3 } from "../utils/s3";
+import { uploadToS3, getPresignedGetUrl } from "../utils/s3";
 
 export type GeneratedDocumentFormat = "docx" | "pdf";
 
@@ -30,6 +30,6 @@ export default class GeneratedDocumentExportSvc {
     const filename = `${sanitizeFilename(documentName)}.${format}`;
     const file = await FilesRepo.create(filename, outputUri, key, { source: "chat-wonder", documentName });
 
-    return { file: { id: file.id, filename } };
+    return { file: { id: file.id, fileUrl: await getPresignedGetUrl(key), filename } };
   }
 }

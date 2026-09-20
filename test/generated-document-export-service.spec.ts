@@ -14,6 +14,7 @@ describe("GeneratedDocumentExportSvc.export", () => {
   const originals = {
     filesCreate: FilesRepo.create,
     uploadToS3: s3.uploadToS3,
+    getPresignedGetUrl: s3.getPresignedGetUrl,
     renderDocx: renderer.renderGeneratedDocx,
     renderPdf: renderer.renderGeneratedPdf,
   };
@@ -32,6 +33,7 @@ describe("GeneratedDocumentExportSvc.export", () => {
       filesCreateCalls.push(row);
       return row;
     };
+    (s3 as any).getPresignedGetUrl = async (key: string) => `https://s3.example/presigned/${key}`;
     (s3 as any).uploadToS3 = async (key: string, body: Buffer, contentType: string) => {
       uploadCalls.push({ key, body, contentType });
       return `https://s3.example/${key}`;
@@ -49,6 +51,7 @@ describe("GeneratedDocumentExportSvc.export", () => {
   afterEach(() => {
     (FilesRepo as any).create = originals.filesCreate;
     (s3 as any).uploadToS3 = originals.uploadToS3;
+    (s3 as any).getPresignedGetUrl = originals.getPresignedGetUrl;
     (renderer as any).renderGeneratedDocx = originals.renderDocx;
     (renderer as any).renderGeneratedPdf = originals.renderPdf;
   });
@@ -76,7 +79,11 @@ describe("GeneratedDocumentExportSvc.export", () => {
     });
 
     expect(result).to.deep.equal({
-      file: { id: "file-1", filename: "Opposition-to-Motion-for-Reconsideration.docx" },
+      file: {
+        id: "file-1",
+        fileUrl: `https://s3.example/presigned/${uploadCalls[0]!.key}`,
+        filename: "Opposition-to-Motion-for-Reconsideration.docx",
+      },
     });
   });
 
