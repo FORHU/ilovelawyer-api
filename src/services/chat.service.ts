@@ -8,7 +8,7 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Re
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload } from "../utils/response-parser";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import DecisionRecordSvc from "./decision-record.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
@@ -55,6 +55,7 @@ export interface AssistantTurnPayload {
   audioOverview?: AudioOverviewTurn[];
   reasoning?: ReasoningExplanation;
   decisions?: DecisionRecordsPayload;
+  researchSteps?: TraceStep[];
 }
 
 export default class ChatSvc {
@@ -266,7 +267,15 @@ export default class ChatSvc {
     const effectiveUserInput = userInput.trim() ? userInput : ATTACHMENT_ONLY_PROMPT;
 
     if (needsTitle) {
-      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode).catch(() => {});
+      const titleStartedAt = Date.now();
+      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode, userId).catch((err) => {
+        logger.error("Chat title: generation failed (non-fatal — reply unaffected, retries next message)", {
+          consultationId,
+          tenantCode,
+          err,
+          elapsedMs: Date.now() - titleStartedAt,
+        });
+      });
     }
 
     // Re-derived from the live Case row on every message (not cached on the consultation),
@@ -375,6 +384,7 @@ export default class ChatSvc {
       audioOverview?: AudioOverviewTurn[];
       reasoning?: ReasoningExplanation;
       decisions?: DecisionRecordsPayload;
+      researchSteps?: TraceStep[];
     }>(cacheKey);
     // Map-generation turns used to cache text-only replies (the mind map arrives on a
     // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
@@ -434,6 +444,7 @@ export default class ChatSvc {
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
+    let streamedResearchSteps: TraceStep[] | undefined;
     try {
       if (useCache && cached) {
         checkpointedOnChunk(cached.content);
@@ -444,6 +455,7 @@ export default class ChatSvc {
         streamedAudioOverview = cached.audioOverview;
         streamedReasoning = cached.reasoning;
         streamedDecisions = cached.decisions;
+        streamedResearchSteps = cached.researchSteps;
       } else {
         // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
         // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
@@ -497,6 +509,7 @@ export default class ChatSvc {
         streamedAudioOverview = result.audioOverview;
         streamedReasoning = result.reasoning;
         streamedDecisions = result.decisions;
+        streamedResearchSteps = result.researchSteps;
         redis.set(
           cacheKey,
           {
@@ -507,6 +520,7 @@ export default class ChatSvc {
             audioOverview: streamedAudioOverview,
             reasoning: streamedReasoning,
             decisions: streamedDecisions,
+            researchSteps: streamedResearchSteps,
           },
           RESPONSE_CACHE_TTL,
         );
@@ -555,6 +569,7 @@ export default class ChatSvc {
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
       decisions: streamedDecisions,
+      researchSteps: streamedResearchSteps,
     };
 
     let assistantMessage: { id: string } | null;
@@ -780,6 +795,11 @@ export default class ChatSvc {
         logger.error("Failed to persist decision records", { err, messageId: assistantMessage.id });
       });
     }
+    if (p.researchSteps?.length) {
+      await ChatRepo.saveResearchSteps(assistantMessage.id, p.researchSteps).catch((err) => {
+        logger.error("Failed to persist research steps", { err, messageId: assistantMessage.id });
+      });
+    }
     if (p.relatedCases.length) await ChatRepo.saveRelatedCases(assistantMessage.id, p.relatedCases);
 
     await ChatRepo.setReplyStatus(p.parentMessageId, "DONE", { clearPendingContent: true }).catch((err) => {
@@ -890,7 +910,12 @@ export default class ChatSvc {
     return sessionId;
   }
 
-  /** Ignore a client-supplied document id unless it belongs to this consultation or case. */
+  /** Ignore a client-supplied document id unless it belongs to this consultation or case, and
+   * unless it's still ACTIVE — an archived document is excluded from chat entirely (Option A of
+   * the "Archived Documents in Chat" plan), not just from auto-selection. Falling through to
+   * `undefined` here degrades to sendMessage's next grounding path (consultation/case auto-search,
+   * which itself excludes archived documents via relevantChunksForScope) rather than erroring —
+   * same best-effort shape as every other grounding fallback in this file. */
   private static async scopedCaseDocumentId(
     caseDocumentId: string | undefined,
     userId: string,
@@ -900,6 +925,7 @@ export default class ChatSvc {
     if (!caseDocumentId) return undefined;
     const doc = await DocumentRepo.findById(caseDocumentId, userId);
     if (!doc) return undefined;
+    if (doc.status === "ARCHIVED") return undefined;
     if (!documentBelongsToScope(doc, { userId, consultationId, caseId })) return undefined;
     return doc.id;
   }
@@ -974,23 +1000,48 @@ export default class ChatSvc {
     consultationId: string,
     userMessage: string,
     tenantCode: TenantCode,
+    userId: string,
   ): Promise<void> {
     const cacheKey = titleCacheKey(userMessage, tenantCode);
+    const startedAt = Date.now();
 
     let title = await redis.get<string>(cacheKey);
 
-    if (!title) {
+    if (title) {
+      logger.info("Chat title: cache hit", { consultationId, tenantCode });
+    } else {
       const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode));
-      if (!raw) return;
+      if (!raw) {
+        logger.info("Chat title: model returned no content, leaving untitled (retries next message)", {
+          consultationId,
+          tenantCode,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
       title = ChatSvc.parseTitle(raw);
       // Left untitled rather than saved — gibberish/unclear input stays untitled (frontend
       // falls back to "Untitled consultation") instead of a fabricated legal category, and
       // since consultation.title stays null, the next message's send retries generation with
       // whatever the user says next.
-      if (!title || ChatSvc.isUnclearTitle(title)) return;
+      if (!title || ChatSvc.isUnclearTitle(title)) {
+        logger.info(
+          !title
+            ? "Chat title: parsed title was empty, leaving untitled"
+            : "Chat title: model returned UNCLEAR_INPUT sentinel (working as intended), leaving untitled",
+          { consultationId, tenantCode, raw: raw.slice(0, 120) },
+        );
+        return;
+      }
       redis.set(cacheKey, title, TITLE_CACHE_TTL);
     }
 
     await ChatRepo.updateConsultation(consultationId, title);
+    logger.info("Chat title: saved", { consultationId, tenantCode, title, elapsedMs: Date.now() - startedAt });
+    // Pushed the moment it's saved (title generation usually finishes in 1-2s, well before the
+    // reply itself) rather than waiting for the frontend's end-of-turn refetch, so the sidebar/
+    // header title updates immediately instead of trailing behind the topic breakdown, which
+    // only becomes available once the full reply is persisted.
+    emitToUser(userId, "chat:title-updated", { consultationId, title });
   }
 }

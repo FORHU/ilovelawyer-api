@@ -2,6 +2,7 @@ import Joi from "joi";
 import { PRESET_VALUES } from "../constants";
 
 export const createWorkspaceSchema = Joi.object({
+  caseId: Joi.string().uuid().required(),
   name: Joi.string().trim().min(1).max(120).required(),
   preset: Joi.string()
     .valid(...PRESET_VALUES)
@@ -19,6 +20,7 @@ export const updateWorkspaceSchema = Joi.object({
 }).min(1);
 
 export const resetWorkspaceSchema = Joi.object({
+  caseId: Joi.string().uuid().required(),
   preset: Joi.string()
     .valid(...PRESET_VALUES)
     .optional(),

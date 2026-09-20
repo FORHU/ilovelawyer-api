@@ -127,7 +127,7 @@ async function main() {
 
   if (existing && flag("reset")) {
     console.log(`Deleting existing case ${existing.id} (--reset)`);
-    await CaseSvc.delete(existing.id, org.id);
+    await CaseSvc.delete(existing.id, org.id, user.id);
     existing = null;
   }
 

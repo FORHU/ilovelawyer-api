@@ -24,11 +24,13 @@ import {
   parseAudioOverviewPayload,
   parseReasoningPayload,
   parseDecisionsPayload,
+  parseTraceFrame,
   MindMapItem,
   TimelineItem,
   AudioOverviewTurn,
   ReasoningExplanation,
   DecisionRecordsPayload,
+  TraceStep,
 } from "./response-parser";
 
 function sleep(ms: number) {
@@ -219,10 +221,20 @@ function withLegalTag(input: string, tenantCode?: TenantCode): string {
   return `${tag} ${stripLegalTag(input)}`;
 }
 
+/** Thrown by generateTitleViaWs for a genuine transport failure (timeout or socket error),
+ * as opposed to resolving "" when Chat Wonder legitimately produced no content — lets the
+ * caller log/handle the two cases differently instead of conflating them. */
+export class TitleGenerationError extends Error {
+  constructor(public readonly reason: "timeout" | "socket_error", message: string) {
+    super(message);
+    this.name = "TitleGenerationError";
+  }
+}
+
 export async function generateTitleViaWs(prompt: string): Promise<string> {
   const sessionId = await getChatWonderSessionId();
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
     let accumulated = "";
     let settled = false;
@@ -234,7 +246,14 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
       resolve(value);
     };
 
-    const timeout = setTimeout(() => finish(""), 30_000);
+    const fail = (reason: "timeout" | "socket_error", message: string) => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch { /* ignore */ }
+      reject(new TitleGenerationError(reason, message));
+    };
+
+    const timeout = setTimeout(() => fail("timeout", "Chat Wonder title generation timed out after 30s"), 30_000);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
@@ -258,7 +277,7 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
       accumulated += msg;
     };
 
-    ws.onerror = () => { clearTimeout(timeout); finish(""); };
+    ws.onerror = () => { clearTimeout(timeout); fail("socket_error", "Chat Wonder title WS errored"); };
     ws.onclose  = () => { clearTimeout(timeout); finish(accumulated.trim()); };
   });
 }
@@ -286,6 +305,11 @@ export interface ChatWonderStreamResult {
    * Absent whenever the turn produced no legal-analysis conclusions worth recording, or
    * generation failed silently. Absence is the normal case for many turns, not an error. */
   decisions?: DecisionRecordsPayload;
+  /** Persisted counterpart of the live-only `[TRACE]` research/verification steps (see the
+   * onmessage handling below) — merged from start/result frame pairs the same way the
+   * frontend's extractTraceSteps merges them live, so a later replay matches what was shown
+   * while streaming. Empty (not absent) for a turn that made no tool calls. */
+  researchSteps: TraceStep[];
 }
 
 export function streamChatWonderMessage(
@@ -315,6 +339,7 @@ export function streamChatWonderMessage(
     let audioOverviewTurns: AudioOverviewTurn[] | undefined;
     let reasoningExplanation: ReasoningExplanation | undefined;
     let decisionRecords: DecisionRecordsPayload | undefined;
+    const researchSteps = new Map<string, TraceStep>();
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
     let payloadSentAt: number | undefined;
     let firstChunkAt: number | undefined;
@@ -360,6 +385,7 @@ export function streamChatWonderMessage(
         audioOverview: audioOverviewTurns,
         reasoning: reasoningExplanation,
         decisions: decisionRecords,
+        researchSteps: Array.from(researchSteps.values()),
       });
     };
 
@@ -538,15 +564,33 @@ export function streamChatWonderMessage(
         return;
       }
 
-      // Live-only glass-box research-trace frames (see the_server.py's/legal_responses_chain.py's
+      // Glass-box research-trace frames (see the_server.py's/legal_responses_chain.py's
       // '[TRACE]' yields, sent as their own standalone WS message each, never mixed with prose).
-      // Forwarded via onChunk so the app's live trace UI can render them as they arrive, but
-      // deliberately excluded from `accumulated` — they aren't part of the AI's answer and must
-      // never survive into the persisted transcript (unlike [MINDMAP]/[TIMELINE], which the
+      // Forwarded via onChunk so the app's live trace UI can render them as they arrive, and
+      // still deliberately excluded from `accumulated` — they aren't part of the AI's answer and
+      // must never survive into the persisted transcript (unlike [MINDMAP]/[TIMELINE], which the
       // frontend strips only for the *live* bubble because the backend's own response-parser
       // still needs to see them once to extract structured data before persisting the rest).
+      // They ARE captured separately below into `researchSteps`, merging each tool call's
+      // 'start'/'result' frame pair by id — this is the persisted counterpart of the live-only
+      // trace UI (see ChatWonderStreamResult.researchSteps).
       if (message.startsWith("[TRACE]")) {
         onChunk(message);
+        const frame = parseTraceFrame(message);
+        if (frame) {
+          const existing = researchSteps.get(frame.id);
+          if (frame.phase === "start") {
+            researchSteps.set(frame.id, {
+              id: frame.id,
+              tool: frame.tool ?? existing?.tool ?? "",
+              label: frame.label ?? existing?.label ?? "",
+              count: existing?.count,
+              status: "active",
+            });
+          } else if (frame.phase === "result" && existing) {
+            researchSteps.set(frame.id, { ...existing, count: frame.count, status: "done" });
+          }
+        }
         return;
       }
 

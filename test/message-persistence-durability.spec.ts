@@ -178,6 +178,7 @@ describe("ChatSvc.persistAssistantTurn (canonical, synchronous persistence)", ()
     saveTimeline: ChatRepo.saveTimeline,
     saveMindMap: ChatRepo.saveMindMap,
     saveRelatedCases: ChatRepo.saveRelatedCases,
+    saveResearchSteps: ChatRepo.saveResearchSteps,
   };
 
   afterEach(() => {
@@ -243,6 +244,42 @@ describe("ChatSvc.persistAssistantTurn (canonical, synchronous persistence)", ()
 
     expect(result).to.equal(null);
     expect(createCalls).to.equal(0);
+  });
+
+  it("persists research steps alongside the reply when the turn made tool calls", async () => {
+    ChatRepo.findAssistantReplyByParent = async () => null;
+    ChatRepo.findConsultationById = async () => ({ id: "c1" }) as any;
+    ChatRepo.createMessage = async () => ({ id: "a1" }) as any;
+    ChatRepo.setReplyStatus = async () => ({}) as any;
+    let savedMessageId: string | undefined;
+    let savedSteps: unknown;
+    ChatRepo.saveResearchSteps = async (messageId, steps) => {
+      savedMessageId = messageId;
+      savedSteps = steps;
+      return {} as any;
+    };
+
+    const steps = [{ id: "t1", tool: "search_jurisprudence", label: "Searching case law", count: 3, status: "done" as const }];
+    await ChatSvc.persistAssistantTurn({ ...payload, researchSteps: steps });
+
+    expect(savedMessageId).to.equal("a1");
+    expect(savedSteps).to.deep.equal(steps);
+  });
+
+  it("does not call saveResearchSteps when the turn made no tool calls", async () => {
+    ChatRepo.findAssistantReplyByParent = async () => null;
+    ChatRepo.findConsultationById = async () => ({ id: "c1" }) as any;
+    ChatRepo.createMessage = async () => ({ id: "a1" }) as any;
+    ChatRepo.setReplyStatus = async () => ({}) as any;
+    let saveCalls = 0;
+    ChatRepo.saveResearchSteps = async () => {
+      saveCalls++;
+      return {} as any;
+    };
+
+    await ChatSvc.persistAssistantTurn(payload); // no researchSteps field
+
+    expect(saveCalls).to.equal(0);
   });
 });
 
@@ -340,5 +377,23 @@ describe("streamChatWonderMessage and [Error] frames", () => {
     } finally {
       onConnectionOverride = null;
     }
+  });
+
+  it("merges [TRACE] start/result frames into researchSteps and keeps them out of content (ilovelawyer-api#119)", async () => {
+    script = [
+      '[TRACE]{"id":"t1","phase":"start","tool":"search_jurisprudence","label":"Searching case law"}[/TRACE]',
+      "The answer. ",
+      '[TRACE]{"id":"t1","phase":"result","count":5}[/TRACE]',
+      "Second part.__END__",
+    ];
+    const chunks: string[] = [];
+    const result = await streamChatWonderMessage("s5", "hello", (c) => chunks.push(c));
+
+    expect(result.content).to.equal("The answer. Second part.");
+    expect(result.researchSteps).to.deep.equal([
+      { id: "t1", tool: "search_jurisprudence", label: "Searching case law", count: 5, status: "done" },
+    ]);
+    // Live forwarding is unchanged — the raw frame still reaches onChunk for the streaming UI.
+    expect(chunks.some((c) => c.startsWith("[TRACE]"))).to.equal(true);
   });
 });

@@ -2,6 +2,7 @@ import CaseRepo, { CaseData } from "../repositories/case.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import HttpError from "../utils/http-error";
 import FileSvc from "./files.service";
+import DocumentSvc from "./document.service";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import prisma from "../lib/prisma";
@@ -31,9 +32,22 @@ export default class CaseSvc {
     return CaseRepo.findById(id, organizationId);
   }
 
-  static async delete(id: string, organizationId: string) {
-    const deleted = await CaseRepo.delete(id, organizationId);
-    if (!deleted) throw new HttpError("Case not found", 404);
+  /** Document.caseId's FK is ON DELETE SET NULL, not CASCADE (see schema) — nothing removes a
+   * case's documents automatically when the Case row goes, so each is deleted explicitly first,
+   * through the same path DocumentSvc.delete's single-document endpoint uses (drops its RAG
+   * chunks via cascade, marks its File FOR_DELETION for the cleanup sweep). Existence/ownership
+   * is checked up front so a caseId from another organization can't reach DocumentRepo's
+   * unscoped listAllByCase. */
+  static async delete(id: string, organizationId: string, actorId: string) {
+    const caseRecord = await CaseRepo.findById(id, organizationId);
+    if (!caseRecord) throw new HttpError("Case not found", 404);
+
+    const docs = await DocumentRepo.listAllByCase(id);
+    for (const doc of docs) {
+      await DocumentSvc.delete(doc.id, organizationId, actorId);
+    }
+
+    await CaseRepo.delete(id, organizationId);
   }
 
   /** Archiving/unarchiving are independent of delete — an archived case can still be deleted,
@@ -44,6 +58,8 @@ export default class CaseSvc {
     const updated = await CaseRepo.setStatus(id, organizationId, "ARCHIVED");
     if (!updated) throw new HttpError("Case not found", 404);
     await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.archive" });
+    // Cascades into the case's own documents — see DocumentSvc.archiveByCase.
+    await DocumentSvc.archiveByCase(id, organizationId, actorId);
     return updated;
   }
 

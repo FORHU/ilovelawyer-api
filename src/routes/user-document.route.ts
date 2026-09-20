@@ -15,5 +15,7 @@ router.post("/presign", asyncHandler(DocumentCtrl.presign));
 router.post("/", asyncHandler(DocumentCtrl.create));
 router.patch("/:id", asyncHandler(DocumentCtrl.update));
 router.delete("/:id", asyncHandler(DocumentCtrl.delete));
+router.post("/:id/archive", asyncHandler(DocumentCtrl.archive));
+router.post("/:id/unarchive", asyncHandler(DocumentCtrl.unarchive));
 
 export default router;

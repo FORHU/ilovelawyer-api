@@ -32,6 +32,18 @@ export interface ReasoningExplanation {
   citation_reasons: CitationReason[];
 }
 
+// One row of the live "glass-box" research trace (ResearchTraceList on the frontend) — a tool
+// call's 'start' frame (id/tool/label) and its 'result' frame (id/count) share one id and are
+// merged into a single step, the same way the frontend's own extractTraceSteps does
+// (ilovelawyer-app/lib/chat/mind-map-parser.ts), so a persisted step matches what was shown live.
+export interface TraceStep {
+  id: string;
+  tool: string;
+  label: string;
+  count?: number;
+  status: "active" | "done";
+}
+
 export interface TopicSection {
   title: string;
   content: string;
@@ -177,6 +189,29 @@ export function splitIntoTopics(content: string): TopicSection[] | undefined {
     const title = headingMatch?.[1]?.replace(/\*\*/g, "").trim() || `Topic ${index + 1}`;
     return { title, content: section };
   });
+}
+
+/**
+ * Parses one `[TRACE]{...}[/TRACE]` frame body (see chatWonder.ts's streamChatWonderMessage —
+ * each frame arrives as its own standalone WS message, unlike the tagged blocks above that get
+ * embedded inline in streamed prose). Returns the raw `{id, phase, tool?, label?, count?}` fields;
+ * callers merge start/result pairs sharing an id into a single TraceStep themselves (see
+ * chatWonder.ts), matching how the frontend's extractTraceSteps merges the live version.
+ */
+export function parseTraceFrame(
+  message: string,
+): { id: string; phase: string; tool?: string; label?: string; count?: number } | undefined {
+  const body = message.replace(/^\[TRACE\]/, "").replace(/\[\/TRACE\]\s*$/, "");
+  const parsed = safeJsonParse(body.trim());
+  if (!parsed || typeof parsed !== "object" || typeof (parsed as any).id !== "string") return undefined;
+  const anyV = parsed as any;
+  return {
+    id: anyV.id,
+    phase: typeof anyV.phase === "string" ? anyV.phase : "",
+    tool: typeof anyV.tool === "string" ? anyV.tool : undefined,
+    label: typeof anyV.label === "string" ? anyV.label : undefined,
+    count: typeof anyV.count === "number" ? anyV.count : undefined,
+  };
 }
 
 /**

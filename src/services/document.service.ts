@@ -3,11 +3,14 @@ import path from "path";
 import prisma from "../lib/prisma";
 import DocumentRepo from "../repositories/document.repository";
 import FilesRepo from "../repositories/files.repository";
+import OrganizationRepo from "../repositories/organization.repository";
+import DocumentChunkSvc from "./document-chunk.service";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { s3UrlForKey, getPresignedUploadUrl, getPresignedGetUrl, getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
+import { DocumentStatus } from "@prisma/client";
 
 /** Flattens the related File row's fileUrl onto the Document, matching the Swagger `UserDocument`
  * contract (a top-level `fileUrl`, not a nested `file` object) — see docs/adr for the fileUrl gap
@@ -121,18 +124,18 @@ export default class DocumentSvc {
     );
   }
 
-  static async list(organizationId: string) {
-    const docs = await DocumentRepo.list(organizationId);
+  static async list(organizationId: string, status?: DocumentStatus) {
+    const docs = await DocumentRepo.list(organizationId, status);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async listByCase(organizationId: string, caseId: string) {
-    const docs = await DocumentRepo.listByCase(organizationId, caseId);
+  static async listByCase(organizationId: string, caseId: string, status?: DocumentStatus) {
+    const docs = await DocumentRepo.listByCase(organizationId, caseId, status);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async listByConsultation(organizationId: string, consultationId: string) {
-    const docs = await DocumentRepo.listByConsultation(organizationId, consultationId);
+  static async listByConsultation(organizationId: string, consultationId: string, status?: DocumentStatus) {
+    const docs = await DocumentRepo.listByConsultation(organizationId, consultationId, status);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
@@ -167,6 +170,40 @@ export default class DocumentSvc {
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
   }
 
+  /** Archiving/unarchiving is independent of delete and never affects RAG grounding, chat, or
+   * case refresh — same reasoning as Case.archive/unarchive, this only changes which of the
+   * Document view's Active/Archived tabs the document shows up in. */
+  static async archive(id: string, organizationId: string, actorId: string) {
+    const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED");
+    if (!updated) throw new HttpError("Document not found", 404);
+    await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.archive", payload: { documentId: id } });
+    // Without this, chat-wonder's listByDocument/listByCaseOrConsultation callbacks would keep
+    // serving this document out of Redis for up to CACHE_TTL_S after it's archived.
+    await DocumentChunkSvc.invalidateCacheForDocument(updated);
+    return mapDocumentToDto(updated);
+  }
+
+  static async unarchive(id: string, organizationId: string, actorId: string) {
+    const updated = await DocumentRepo.setStatus(id, organizationId, "ACTIVE");
+    if (!updated) throw new HttpError("Document not found", 404);
+    await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.unarchive", payload: { documentId: id } });
+    // Same reasoning as archive() above, in reverse — listByCaseOrConsultation's cached array
+    // from while this document was excluded shouldn't linger past the moment it's restored.
+    await DocumentChunkSvc.invalidateCacheForDocument(updated);
+    return mapDocumentToDto(updated);
+  }
+
+  /** Cascades a Case's own archive into its documents (see CaseSvc.archive) — loops this same
+   * archive() over every document under the case, same shape as CaseSvc.delete looping delete()
+   * below. Skips documents already ARCHIVED so archiving a case (or one with documents a user
+   * already archived by hand) doesn't write redundant audit rows. */
+  static async archiveByCase(caseId: string, organizationId: string, actorId: string) {
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    for (const doc of docs) {
+      if (doc.status === "ACTIVE") await this.archive(doc.id, organizationId, actorId);
+    }
+  }
+
   /** userId is the authenticated deleter — needed only to attribute an auto-triggered
    * post-extraction refresh (case-post-extraction.ts) to a real actor when a READY, case-scoped
    * document is removed, same as the uploader is used when extraction finishes. */
@@ -176,6 +213,11 @@ export default class DocumentSvc {
 
     const deleted = await DocumentRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Document not found", 404);
+
+    // The Document row (and its RAG chunks, via cascade) are gone now, but its File row and the
+    // S3 object it points at are not touched by DocumentRepo.delete — mark the File FOR_DELETION
+    // so a cleanup sweep can find and remove it later instead of it staying orphaned forever.
+    if (doc.fileId) await FilesRepo.markForDeletionIfOrphaned(doc.fileId);
 
     // Only a READY document actually changes the case's READY corpus — deleting a
     // PENDING/FAILED one has nothing for the fingerprint check to see change.
