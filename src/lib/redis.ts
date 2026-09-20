@@ -47,4 +47,13 @@ export const redis = {
       return 0;
     }
   },
+
+  /** Best-effort single-key invalidation — a miss just means the next read falls through to the
+   * DB, same as any other cache miss, so a failed/unready client is safe to swallow. */
+  async del(key: string): Promise<void> {
+    if (!client.isReady) return;
+    try {
+      await client.del(key);
+    } catch {}
+  },
 };

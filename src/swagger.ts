@@ -343,7 +343,7 @@ const swaggerSpec: OAS3Definition = {
                 properties: {
                   username: { type: "string", example: "juandelacruz" },
                   email: { type: "string", format: "email", example: "juan@example.com" },
-                  password: { type: "string", minLength: 8, example: "password123" },
+                  password: { type: "string", minLength: 10, example: "P@ssword123" },
                 },
               },
             },
@@ -381,6 +381,42 @@ const swaggerSpec: OAS3Definition = {
           200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Invalid credentials", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Email not verified", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          428: {
+            description: "Credentials are correct, but this account predates the current password policy — call /auth/update-required-password instead of retrying login",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+        },
+      },
+    },
+    "/auth/update-required-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Complete the one-time forced password update for a legacy (pre-policy) account",
+        description:
+          "Called after login() responds 428. Re-verifies currentPassword (no session exists yet), sets newPassword, clears the account's mustChangePassword flag for good, and logs the user in — same response shape and refreshToken cookie behavior as /auth/login.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email", "currentPassword", "newPassword"],
+                properties: {
+                  email: { type: "string", format: "email", example: "juan@example.com" },
+                  currentPassword: { type: "string" },
+                  newPassword: { type: "string", minLength: 10, example: "P@ssword123" },
+                  remember: { type: "boolean", default: false, description: "Persist the refreshToken cookie across browser restarts" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Password updated, login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Invalid email or current password", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: { description: "Account does not have a pending password update requirement", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
@@ -499,7 +535,7 @@ const swaggerSpec: OAS3Definition = {
                 required: ["token", "password"],
                 properties: {
                   token: { type: "string" },
-                  password: { type: "string", minLength: 8 },
+                  password: { type: "string", minLength: 10 },
                 },
               },
             },
@@ -645,7 +681,7 @@ const swaggerSpec: OAS3Definition = {
                 required: ["currentPassword", "newPassword"],
                 properties: {
                   currentPassword: { type: "string" },
-                  newPassword: { type: "string", minLength: 8 },
+                  newPassword: { type: "string", minLength: 10 },
                 },
               },
             },

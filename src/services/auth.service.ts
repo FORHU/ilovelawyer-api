@@ -110,7 +110,64 @@ export default class AuthSvc {
       throw new HttpError("Email not verified", 403);
     }
 
+    // Legacy accounts created under the old, weaker password policy — one-time gate, cleared
+    // by updateRequiredPassword below. 428 (Precondition Required), not 403, so it can't be
+    // confused with the email-not-verified case above; unified-auth.tsx's sign-in handler
+    // checks for this status specifically and routes to a "set a new password" step instead
+    // of issuing a session. Never applied to ADMIN — those are bootstrap/seeded operator
+    // accounts (see the migration's backfill), and ilovelawyer-admin has no self-service
+    // recovery UI for this gate the way ilovelawyer-app does, so flagging one would lock
+    // staff out with no way back in.
+    if (user.mustChangePassword && user.role !== "ADMIN") {
+      throw new HttpError("Password update required", 428);
+    }
+
     await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
+
+    const { accessToken, refreshToken } = loginToken(user.id, remember);
+
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    await AuthRepo.createSession(user.id, refreshToken, expiresAt);
+    await AuthRepo.updateLastLogin(user.id);
+
+    return {
+      user: await AuthRepo.findById(user.id),
+      accessToken,
+      refreshToken,
+    };
+  }
+
+  /** Completes the one-time forced password update for a legacy (mustChangePassword) account.
+   * Re-verifies currentPassword itself rather than trusting a session, since login() above
+   * blocks before a session is ever issued for this account — the same knowledge-of-current-
+   * password check login() already did is what authorizes this call. On success, behaves like
+   * a completed login: clears the gate, creates a session, and returns tokens the same shape
+   * as login()'s, so the frontend can proceed exactly as it would after a normal sign-in. */
+  static async updateRequiredPassword(
+    email: string,
+    currentPassword: string,
+    newPassword: string,
+    remember = false,
+    requestTenantCode: TenantCode | null = null,
+  ) {
+    const user = await AuthRepo.findByEmail(email);
+    if (!user || !user.password) {
+      throw new HttpError("Invalid email or password", 401);
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isValid) {
+      throw new HttpError("Invalid email or password", 401);
+    }
+
+    if (!user.mustChangePassword) {
+      throw new HttpError("Password update was not required for this account", 409);
+    }
+
+    await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
+
+    const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+    await AuthRepo.updatePasswordAndClearMustChange(user.id, hashedPassword);
 
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
