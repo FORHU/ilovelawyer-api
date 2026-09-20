@@ -33,6 +33,9 @@ function sleep(ms: number) {
 // Bounded exponential backoff for the request-path canonical-persistence retry — 2s, 4s, 8s.
 // Long enough to ride out a transient RDS blip, bounded enough not to hang the HTTP request
 // indefinitely if the DB is genuinely down (worst case adds ~14s before the request fails).
+/** Link target chat-wonder has the model write for a generated document's inline download link. */
+const DOWNLOAD_PLACEHOLDER = "(#download)";
+
 const PERSIST_RETRIES = 3;
 const PERSIST_RETRY_BASE_MS = 2_000;
 
@@ -101,20 +104,27 @@ export default class ChatSvc {
 
     const messages = await ChatRepo.listMessagesByConsultation(consultationId);
     return Promise.all(
-      messages.map(async (m) => ({
-        ...m,
-        documents: await Promise.all(m.documents.map(mapDocumentToDto)),
-        generatedDocument:
-          m.generatedDocument?.file?.s3Key
-            ? {
-                id: m.generatedDocument.file.id,
-                fileUrl: await getPresignedGetUrl(m.generatedDocument.file.s3Key),
-                filename: m.generatedDocument.file.filename,
-                documentType: m.generatedDocument.documentType,
-                documentName: m.generatedDocument.documentName,
-              }
-            : undefined,
-      })),
+      messages.map(async ({ generatedDocument, ...m }) => {
+        const file = generatedDocument?.file;
+        // The real URL is filled in here, at read time, rather than stored in the message: the
+        // presigned URL expires, and the stored content is also what gets replayed to chat-wonder
+        // as history — it shouldn't carry a dead URL. chat-wonder has the model write the link
+        // inline as `[affidavit of loss](#download)`; if it didn't, a "Download …" line is appended.
+        let content = m.content;
+        if (file?.s3Key) {
+          const url = await getPresignedGetUrl(file.s3Key, undefined, file.filename ?? undefined);
+          content = content.includes(DOWNLOAD_PLACEHOLDER)
+            ? content.split(DOWNLOAD_PLACEHOLDER).join(`(${url})`)
+            : `${content}
+
+[Download ${generatedDocument?.documentName || "document"} (${file.filename?.split(".").pop() ?? "file"})](${url})`;
+        }
+        return {
+          ...m,
+          content,
+          documents: await Promise.all(m.documents.map(mapDocumentToDto)),
+        };
+      }),
     );
   }
 
