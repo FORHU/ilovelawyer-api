@@ -9,9 +9,11 @@ export default class ChatRepo {
     return prisma.consultation.create({ data: { organizationId, userId, title, caseId } });
   }
 
+  /** With a caseId: that case's consultations. Without: only standalone (non-case) consultations,
+   * so case chats don't leak into the general Consultation page's Recent list. */
   static async listConsultations(organizationId: string, caseId?: string) {
     return prisma.consultation.findMany({
-      where: { organizationId, ...(caseId ? { caseId } : {}) },
+      where: { organizationId, caseId: caseId ?? null },
       orderBy: { createdAt: "desc" },
     });
   }

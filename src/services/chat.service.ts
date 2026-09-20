@@ -996,6 +996,18 @@ export default class ChatSvc {
     return title.trim().toUpperCase() === UNCLEAR_TITLE_SENTINEL;
   }
 
+  /** True only for a real "[Legal Area]: [Specific Issue]" title (the format both tenants' title
+   * prompts require). Chat Wonder returns upstream failures as ordinary content — e.g.
+   * "[Error] Error code: 429 - ..." when the model is rate-limited — which parseTitle would
+   * otherwise happily save (and redis-cache) as the consultation's title, and which the
+   * frontend then surfaces as a suggested prompt. A model reply that ignores the format
+   * (echoing the user's non-legal message, small talk) is rejected the same way. */
+  static isValidTitle(title: string): boolean {
+    const t = title.trim();
+    if (!t || /^\[?error\]?/i.test(t)) return false;
+    return /^[^:]{2,}:\s*\S/.test(t);
+  }
+
   private static async generateAndSaveTitle(
     consultationId: string,
     userMessage: string,
@@ -1006,6 +1018,8 @@ export default class ChatSvc {
     const startedAt = Date.now();
 
     let title = await redis.get<string>(cacheKey);
+    // Titles cached before isValidTitle existed may be error text — regenerate instead.
+    if (title && !ChatSvc.isValidTitle(title)) title = null;
 
     if (title) {
       logger.info("Chat title: cache hit", { consultationId, tenantCode });
@@ -1031,6 +1045,14 @@ export default class ChatSvc {
             : "Chat title: model returned UNCLEAR_INPUT sentinel (working as intended), leaving untitled",
           { consultationId, tenantCode, raw: raw.slice(0, 120) },
         );
+        return;
+      }
+      if (!ChatSvc.isValidTitle(title)) {
+        logger.warn("Chat title: model reply wasn't a valid title (error text or off-format), leaving untitled", {
+          consultationId,
+          tenantCode,
+          raw: raw.slice(0, 120),
+        });
         return;
       }
       redis.set(cacheKey, title, TITLE_CACHE_TTL);

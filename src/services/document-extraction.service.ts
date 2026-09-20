@@ -5,10 +5,19 @@ import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import { getObjectBuffer } from "../utils/s3";
 import { extractPages } from "../utils/document-text-extraction";
+import { transcribeS3Media } from "./transcription.service";
+import { MEDIA_DOCUMENT_EXTENSIONS, MEDIA_DOCUMENT_MIME_TYPES } from "../constants";
 import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
 import { embedTexts, isRateLimit } from "../utils/embedding";
 import { categorizeDocument } from "../utils/chatWonder";
 import logger from "../utils/logger";
+
+/** mp3/mp4 evidence — transcribed via AWS Transcribe rather than text-extracted. */
+function isMediaDocument(mimeType?: string | null, filename?: string): boolean {
+  if (mimeType && MEDIA_DOCUMENT_MIME_TYPES.includes(mimeType)) return true;
+  const ext = filename?.split(".").pop()?.toLowerCase();
+  return !!ext && MEDIA_DOCUMENT_EXTENSIONS.includes(ext);
+}
 
 export default class DocumentExtractionSvc {
   /**
@@ -35,9 +44,20 @@ export default class DocumentExtractionSvc {
       // limiting/queue backlog" apart from each other after the fact, since none of that
       // showed up as elapsed time anywhere before this.
       const tStart = Date.now();
-      const buffer = await getObjectBuffer(doc.file.s3Key);
+      // mp3/mp4 evidence has no text layer — transcribe it with AWS Transcribe (the same helpers
+      // the Transcription page uses, reading straight from S3 so the file is never buffered here)
+      // and index the transcript through the normal pipeline below. A failed/timed-out job throws,
+      // which the catch at the bottom resolves to ragStatus FAILED.
+      const isMedia = isMediaDocument(doc.mimeType, doc.name);
+      const buffer = isMedia ? null : await getObjectBuffer(doc.file.s3Key);
       const tDownloaded = Date.now();
-      const { pages, method, ocrAttempted } = await extractPages(buffer, doc.mimeType, doc.name, doc.file.s3Key);
+      const { pages, method, ocrAttempted } = buffer
+        ? await extractPages(buffer, doc.mimeType, doc.name, doc.file.s3Key)
+        : {
+            pages: [{ pageNumber: 1, text: await transcribeS3Media(doc.file.s3Key, `document-${documentId}`) }],
+            method: "text" as const,
+            ocrAttempted: false,
+          };
       const tExtracted = Date.now();
       logger.info("Document extraction: timing (download, extract)", {
         documentId,
