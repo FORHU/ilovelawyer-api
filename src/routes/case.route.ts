@@ -17,6 +17,8 @@ router.patch("/:id", asyncHandler(CaseCtrl.update));
 router.delete("/:id", asyncHandler(CaseCtrl.delete));
 router.post("/:id/archive", asyncHandler(CaseCtrl.archive));
 router.post("/:id/unarchive", asyncHandler(CaseCtrl.unarchive));
+router.post("/archive", asyncHandler(CaseCtrl.archiveMany));
+router.post("/unarchive", asyncHandler(CaseCtrl.unarchiveMany));
 
 /**
  *  UI routes for user document management.

@@ -63,11 +63,42 @@ export default class CaseSvc {
     return updated;
   }
 
+  /** Bulk "Select All" archive from the Active Cases tab — loops archive() (cascade included)
+   * over every selected id with allSettled so one missing/already-archived case doesn't fail the
+   * rest of the batch. Mirrors unarchiveMany below. */
+  static async archiveMany(ids: string[], organizationId: string, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.archive(id, organizationId, actorId)));
+    const succeeded: Awaited<ReturnType<typeof CaseRepo.setStatus>>[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(result.value);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to archive case" });
+    });
+    return { succeeded, failed };
+  }
+
   static async unarchive(id: string, organizationId: string, actorId: string) {
     const updated = await CaseRepo.setStatus(id, organizationId, "ACTIVE");
     if (!updated) throw new HttpError("Case not found", 404);
     await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.unarchive" });
+    // Cascades into the case's own documents, mirroring archive()'s cascade above — otherwise a
+    // restored case would show back up as Active while its documents stayed stuck in Archived.
+    await DocumentSvc.unarchiveByCase(id, organizationId, actorId);
     return updated;
+  }
+
+  /** Bulk "Select All" restore from the Archived Cases tab — loops unarchive() (cascade included)
+   * over every selected id with allSettled so one missing/already-active case doesn't fail the
+   * rest of the batch. */
+  static async unarchiveMany(ids: string[], organizationId: string, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.unarchive(id, organizationId, actorId)));
+    const succeeded: Awaited<ReturnType<typeof CaseRepo.setStatus>>[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(result.value);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to restore case" });
+    });
+    return { succeeded, failed };
   }
 
   /**
