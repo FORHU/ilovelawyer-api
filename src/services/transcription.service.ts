@@ -27,6 +27,63 @@ function getTranscribeClient() {
   });
 }
 
+/** Starts an AWS Transcribe batch job for audio/video already sitting in S3. Shared by
+ * TranscriptionSvc.startBatchJob (Transcription page) and the Case Document extraction pipeline
+ * (mp3/mp4 evidence uploads), so both use identical language/diarization settings. */
+export async function startTranscribeJob(s3Key: string, jobName: string): Promise<void> {
+  if (!AWS_S3_BUCKET) throw new HttpError("AWS_S3_BUCKET is not configured", 500);
+  const mediaFormat = getMediaFormat(s3Key);
+  const params: any = {
+    TranscriptionJobName: jobName,
+    IdentifyLanguage: true,
+    LanguageOptions: ["en-US", "tl-PH", "ko-KR"],
+    Media: { MediaFileUri: `s3://${AWS_S3_BUCKET}/${s3Key}` },
+    Settings: { ShowSpeakerLabels: true, MaxSpeakerLabels: 10 },
+  };
+  if (mediaFormat) params.MediaFormat = mediaFormat;
+  await getTranscribeClient().send(new StartTranscriptionJobCommand(params));
+}
+
+export interface TranscribeJobResult {
+  status: string;
+  transcript?: string;
+  failureReason?: string;
+}
+
+/** One-shot status check of a started job; on COMPLETED also fetches/formats the transcript. */
+export async function getTranscribeJobResult(jobName: string): Promise<TranscribeJobResult> {
+  const data = await getTranscribeClient().send(new GetTranscriptionJobCommand({ TranscriptionJobName: jobName }));
+  const job = data.TranscriptionJob;
+  if (!job) throw new HttpError("Job not found in AWS Transcribe", 404);
+
+  const status = job.TranscriptionJobStatus ?? "UNKNOWN";
+  if (status === "COMPLETED" && job.Transcript?.TranscriptFileUri) {
+    return { status, transcript: await fetchTranscriptText(job.Transcript.TranscriptFileUri) };
+  }
+  if (status === "FAILED") return { status, failureReason: job.FailureReason };
+  return { status };
+}
+
+const TRANSCRIBE_POLL_INTERVAL_MS = 5_000;
+// Kept under DocumentExtractionQueue's 15-minute JOB_HARD_TIMEOUT_MS, same as its Textract poll.
+const TRANSCRIBE_MAX_WAIT_MS = 12 * 60_000;
+
+/** Transcribes S3 media end-to-end (start job, poll to completion) and returns the formatted
+ * transcript text. Throws if the job fails or times out. */
+export async function transcribeS3Media(s3Key: string, jobLabel: string): Promise<string> {
+  const jobName = `${jobLabel}-${Date.now()}`;
+  await startTranscribeJob(s3Key, jobName);
+
+  const deadline = Date.now() + TRANSCRIBE_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, TRANSCRIBE_POLL_INTERVAL_MS));
+    const result = await getTranscribeJobResult(jobName);
+    if (result.status === "COMPLETED") return result.transcript ?? "";
+    if (result.status === "FAILED") throw new Error(`AWS Transcribe job failed: ${result.failureReason ?? "unknown reason"}`);
+  }
+  throw new Error("Timed out waiting for AWS Transcribe job");
+}
+
 export default class TranscriptionSvc {
   static async list(organizationId: string) {
     return TranscriptionRepo.findAllByUser(organizationId);
@@ -66,24 +123,11 @@ export default class TranscriptionSvc {
     if (!s3Key) throw new HttpError("No audio file or S3 key linked to this transcription", 400);
     if (!AWS_S3_BUCKET) throw new HttpError("AWS_S3_BUCKET is not configured", 500);
 
-    const s3Uri = `s3://${AWS_S3_BUCKET}/${s3Key}`;
     const jobName = `transcription-${id}-${Date.now()}`;
-    const mediaFormat = getMediaFormat(s3Key);
-
-    const client = getTranscribeClient();
-    const params: any = {
-      TranscriptionJobName: jobName,
-      IdentifyLanguage: true,
-      LanguageOptions: ["en-US", "tl-PH", "ko-KR"],
-      Media: { MediaFileUri: s3Uri },
-      Settings: { ShowSpeakerLabels: true, MaxSpeakerLabels: 10 },
-    };
-    if (mediaFormat) params.MediaFormat = mediaFormat;
-
     try {
-      await client.send(new StartTranscriptionJobCommand(params));
+      await startTranscribeJob(s3Key, jobName);
     } catch (err) {
-      logger.error("Failed to start AWS Transcribe job", { err, transcriptionId: id, jobName, s3Uri });
+      logger.error("Failed to start AWS Transcribe job", { err, transcriptionId: id, jobName, s3Key });
       throw new HttpError(
         `Failed to start transcription${err instanceof Error ? `: ${err.message}` : ""}`,
         502,
@@ -100,37 +144,25 @@ export default class TranscriptionSvc {
     if (!item) throw new HttpError("Transcription not found", 404);
     if (!item.jobName) throw new HttpError("No transcription job started for this record", 400);
 
-    const client = getTranscribeClient();
-
-    let data;
+    let result;
     try {
-      data = await client.send(new GetTranscriptionJobCommand({ TranscriptionJobName: item.jobName }));
+      result = await getTranscribeJobResult(item.jobName);
     } catch (err) {
       logger.error("Failed to poll AWS Transcribe job", { err, transcriptionId: id, jobName: item.jobName });
+      if (err instanceof HttpError) throw err;
       throw new HttpError(
         `Failed to check transcription status${err instanceof Error ? `: ${err.message}` : ""}`,
         502,
       );
     }
 
-    const job = data.TranscriptionJob;
-    if (!job) throw new HttpError("Job not found in AWS Transcribe", 404);
-
-    const status = job.TranscriptionJobStatus ?? "UNKNOWN";
-
-    if (status === "COMPLETED" && job.Transcript?.TranscriptFileUri) {
-      const transcriptText = await fetchTranscriptText(job.Transcript.TranscriptFileUri);
-      await TranscriptionRepo.update(id, organizationId, { status, transcript: transcriptText });
-      return { status, transcript: transcriptText };
+    if (result.status === "COMPLETED" && result.transcript !== undefined) {
+      await TranscriptionRepo.update(id, organizationId, { status: result.status, transcript: result.transcript });
+    } else if (result.status === "FAILED") {
+      logger.error("AWS Transcribe job failed", { transcriptionId: id, jobName: item.jobName, failureReason: result.failureReason });
+      await TranscriptionRepo.update(id, organizationId, { status: result.status });
     }
-
-    if (status === "FAILED") {
-      logger.error("AWS Transcribe job failed", { transcriptionId: id, jobName: item.jobName, failureReason: job.FailureReason });
-      await TranscriptionRepo.update(id, organizationId, { status });
-      return { status, failureReason: job.FailureReason };
-    }
-
-    return { status };
+    return result;
   }
 
   static async update(id: string, organizationId: string, data: {
