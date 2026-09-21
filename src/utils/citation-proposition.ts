@@ -13,6 +13,7 @@ const USE_JEV_PROPOSITION = process.env.USE_JEV_PROPOSITION === "true";
 
 export async function classifyPropositionWithJev(quote: string, official: string): Promise<ParsedProposition | null> {
   const client = getTypeSafeClient();
+  logger.info("Jev request", { feature: "citation-proposition", question: "propositionType", officialText: official, quotedText: quote });
   const response = await client.systemOne({
     state: { officialText: official, quotedText: quote },
     questions: {
@@ -23,7 +24,8 @@ export async function classifyPropositionWithJev(quote: string, official: string
     },
   });
   const answer = response.answers.propositionType;
-  logger.info("Jev citation proposition response", {
+  logger.info("Jev response", {
+    feature: "citation-proposition",
     choice: answer.choice,
     confidence: answer.confidence,
     probabilities: answer.probabilities,
@@ -67,7 +69,7 @@ export async function classifyProposition(
     try {
       return await classifyPropositionWithJev(quote, official);
     } catch (err) {
-      logger.warn("Jev citation proposition classification failed", { err });
+      logger.warn("Jev error", { feature: "citation-proposition", err });
       return null;
     }
   }

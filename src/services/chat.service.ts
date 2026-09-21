@@ -210,11 +210,6 @@ export default class ChatSvc {
     );
     logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
 
-    // Fire-and-forget — logged only (see message-triage.ts), no DB column exists yet to persist
-    // this against. Must never delay message send/generation, so it's not awaited here.
-    // flagMessageUrgency never rejects (catches internally), so no .catch needed.
-    void flagMessageUrgency(userInput);
-
     if (documentIds?.length) {
       await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
     }
@@ -391,7 +386,24 @@ export default class ChatSvc {
       ? await TranscriptionChunkSvc.formatGroundingContext(transcriptGrounding)
       : "";
 
-    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext]
+    // Awaited (unlike a purely observational log-only call) because its result feeds
+    // resolvedContext below — chat-wonder needs it before generation starts, not after.
+    // flagMessageUrgency never rejects and returns null when USE_JEV_MESSAGE_TRIAGE is unset,
+    // so this is a no-op (empty string, no added latency) whenever the flag is off.
+    const urgency = await flagMessageUrgency(userInput);
+    const urgencyContext = urgency?.urgent
+      ? `[Jev triage] This message was flagged as urgent (${Math.round(urgency.probability * 100)}% confidence) — it may involve a time-sensitive deadline, an imminent hearing, or an emergency. Prioritize directness and actionable next steps in your response.`
+      : "";
+    logger.info("Jev chat context injection", {
+      feature: "message-triage",
+      consultationId,
+      messageId: parentMessageId,
+      urgent: urgency?.urgent ?? false,
+      probability: urgency?.probability ?? null,
+      injected: Boolean(urgencyContext),
+    });
+
+    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext, urgencyContext]
       .filter(Boolean)
       .join("\n\n");
     logger.info("Chat: grounding/RAG context resolved", {
@@ -399,6 +411,7 @@ export default class ChatSvc {
       messageId: parentMessageId,
       caseDocumentChunks: grounding?.caseDocumentIds.length ?? 0,
       transcriptChunks: transcriptGrounding?.transcriptionIds.length ?? 0,
+      urgent: urgency?.urgent ?? false,
       contextChars: resolvedContext.length,
       elapsedMs: Date.now() - t0,
     });
