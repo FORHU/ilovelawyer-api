@@ -1,9 +1,13 @@
+import { LawCategory } from "@prisma/client";
 import LawSvc from "../services/law.service";
 
 export interface CitationResolutionInput {
   caseNumber?: string | null;
   title?: string | null;
   year?: number | null;
+  /** Defaults to JURISPRUDENCE — every existing caller (Citation Check/Map) resolves case-law
+   * citations only. Pass REPUBLIC_ACT explicitly to resolve a Republic Act citation instead. */
+  category?: LawCategory;
 }
 
 export interface CitationResolutionResult {
@@ -70,7 +74,7 @@ export async function resolveCitationToLaw(input: CitationResolutionInput): Prom
 
   let result: Awaited<ReturnType<typeof LawSvc.search>>;
   try {
-    result = await LawSvc.search({ category: "JURISPRUDENCE", q: query, limit: 3 });
+    result = await LawSvc.search({ category: input.category ?? "JURISPRUDENCE", q: query, limit: 3 });
   } catch {
     // juris.ph unreachable and nothing stored locally — unresolved, not fatal.
     return null;
