@@ -62,6 +62,106 @@ const HAND_WRITTEN: Case[] = [
     tenantCode: "UK",
     expected: "INFERRED",
   },
+  {
+    label: "paraphrase (PH contract breach)",
+    officialText:
+      "The Seller failed to deliver the goods within the fifteen (15)-day period stipulated in Clause 4.2, thereby constituting a material breach of contract.",
+    quotedText: "The Seller's failure to deliver within the fifteen-day window under Clause 4.2 was a material breach.",
+    tenantCode: "PH",
+    expected: "PARAPHRASED",
+  },
+  {
+    label: "inference (remedy not stated)",
+    officialText:
+      "The Seller failed to deliver the goods within the fifteen (15)-day period stipulated in Clause 4.2, thereby constituting a material breach of contract.",
+    quotedText: "The Buyer is entitled to rescind the contract.",
+    tenantCode: "PH",
+    expected: "INFERRED",
+  },
+  {
+    label: "paraphrase (PH bail standard)",
+    officialText:
+      "Bail shall not be a matter of right in offenses punishable by reclusion perpetua when the evidence of guilt is strong.",
+    quotedText:
+      "In offenses carrying a reclusion perpetua penalty, bail is discretionary rather than a matter of right if the evidence of guilt is strong.",
+    tenantCode: "PH",
+    expected: "PARAPHRASED",
+  },
+  {
+    label: "inference (custody outcome not stated)",
+    officialText: "The accused should remain in custody until trial.",
+    quotedText: "The accused is guilty of the offense charged.",
+    tenantCode: "PH",
+    expected: "INFERRED",
+  },
+  {
+    label: "paraphrase (UK unfair dismissal)",
+    officialText:
+      "An employee is regarded as unfairly dismissed if the employer fails to follow a fair procedure, even where a valid reason for dismissal exists.",
+    quotedText:
+      "Dismissal will be unfair where the employer does not follow fair procedure, regardless of whether there was a valid reason.",
+    tenantCode: "UK",
+    expected: "PARAPHRASED",
+  },
+  {
+    label: "inference (remedy not stated, UK dismissal)",
+    officialText:
+      "An employee is regarded as unfairly dismissed if the employer fails to follow a fair procedure, even where a valid reason for dismissal exists.",
+    quotedText: "The employee should be reinstated.",
+    tenantCode: "UK",
+    expected: "INFERRED",
+  },
+  {
+    label: "paraphrase (PH child custody)",
+    officialText:
+      "The custody of children below seven years of age shall be given to the mother, unless the court finds compelling reasons to order otherwise.",
+    quotedText:
+      "Mothers are generally awarded custody of children under seven, absent compelling reasons for the court to decide differently.",
+    tenantCode: "PH",
+    expected: "PARAPHRASED",
+  },
+  {
+    label: "inference (overstated absolute rule)",
+    officialText:
+      "The custody of children below seven years of age shall be given to the mother, unless the court finds compelling reasons to order otherwise.",
+    quotedText: "Fathers cannot obtain custody of young children under any circumstance.",
+    tenantCode: "PH",
+    expected: "INFERRED",
+  },
+  {
+    label: "paraphrase (PH land sale formalities)",
+    officialText:
+      "A contract of sale of a parcel of land, to be valid and enforceable, must be in a public instrument and registered with the Registry of Deeds.",
+    quotedText:
+      "For a land sale contract to be valid and enforceable, it must be executed as a public instrument and duly registered.",
+    tenantCode: "PH",
+    expected: "PARAPHRASED",
+  },
+  {
+    label: "inference (voidness not stated)",
+    officialText:
+      "A contract of sale of a parcel of land, to be valid and enforceable, must be in a public instrument and registered with the Registry of Deeds.",
+    quotedText: "Unregistered land sales are automatically void from the start.",
+    tenantCode: "PH",
+    expected: "INFERRED",
+  },
+  {
+    label: "paraphrase (UK res ipsa loquitur elements)",
+    officialText:
+      "Res ipsa loquitur applies where the injury would not ordinarily occur absent negligence, the instrumentality was under the defendant's exclusive control, and the plaintiff did not contribute to the injury.",
+    quotedText:
+      "The doctrine applies when three elements are met: the accident wouldn't normally happen without negligence, the defendant had sole control of the cause, and the plaintiff wasn't at fault.",
+    tenantCode: "UK",
+    expected: "PARAPHRASED",
+  },
+  {
+    label: "inference (automatic liability overstated)",
+    officialText:
+      "Res ipsa loquitur applies where the injury would not ordinarily occur absent negligence, the instrumentality was under the defendant's exclusive control, and the plaintiff did not contribute to the injury.",
+    quotedText: "The defendant is automatically liable whenever res ipsa loquitur applies.",
+    tenantCode: "UK",
+    expected: "INFERRED",
+  },
 ];
 
 async function realCases(): Promise<Case[]> {

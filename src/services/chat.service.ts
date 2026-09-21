@@ -18,6 +18,7 @@ import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
+import { flagMessageUrgency } from "../utils/message-triage";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getPresignedGetUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -208,6 +209,11 @@ export default class ChatSvc {
       "PENDING",
     );
     logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
+
+    // Fire-and-forget — logged only (see message-triage.ts), no DB column exists yet to persist
+    // this against. Must never delay message send/generation, so it's not awaited here.
+    // flagMessageUrgency never rejects (catches internally), so no .catch needed.
+    void flagMessageUrgency(userInput);
 
     if (documentIds?.length) {
       await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
