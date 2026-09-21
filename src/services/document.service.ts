@@ -193,6 +193,20 @@ export default class DocumentSvc {
     return mapDocumentToDto(updated);
   }
 
+  /** Bulk "Select All" restore from the Archived documents view — same per-document path as
+   * unarchive() (audit row + cache invalidation each), fanned out with allSettled so one missing/
+   * already-active id doesn't fail the whole batch the user selected. */
+  static async unarchiveMany(ids: string[], organizationId: string, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.unarchive(id, organizationId, actorId)));
+    const succeeded: Awaited<ReturnType<typeof mapDocumentToDto>>[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(result.value);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to restore document" });
+    });
+    return { succeeded, failed };
+  }
+
   /** Cascades a Case's own archive into its documents (see CaseSvc.archive) — loops this same
    * archive() over every document under the case, same shape as CaseSvc.delete looping delete()
    * below. Skips documents already ARCHIVED so archiving a case (or one with documents a user
@@ -201,6 +215,19 @@ export default class DocumentSvc {
     const docs = await DocumentRepo.listAllByCase(caseId);
     for (const doc of docs) {
       if (doc.status === "ACTIVE") await this.archive(doc.id, organizationId, actorId);
+    }
+  }
+
+  /** Cascades a Case's own restore into its documents (see CaseSvc.unarchive) — mirrors
+   * archiveByCase above, in reverse, so restoring a case doesn't leave it "active" with documents
+   * that are still hidden in the Archived view. Only restores documents this same case-archive
+   * cascade would have archived; one a user deliberately archived by hand while the case was
+   * already active would, in practice, already be ACTIVE by the time the case gets archived, so
+   * this can't distinguish the two today — same limitation archiveByCase already accepts. */
+  static async unarchiveByCase(caseId: string, organizationId: string, actorId: string) {
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    for (const doc of docs) {
+      if (doc.status === "ARCHIVED") await this.unarchive(doc.id, organizationId, actorId);
     }
   }
 

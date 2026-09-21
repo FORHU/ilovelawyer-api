@@ -1,5 +1,5 @@
 import Joi from "joi";
-import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX } from "../constants";
+import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX, BULK_ACTION_MAX } from "../constants";
 
 const UNSUPPORTED_FILE_TYPE_MESSAGE = `Unsupported file type. Supported formats: ${ALLOWED_DOCUMENT_EXTENSIONS.join(", ").toUpperCase()}.`;
 
@@ -67,4 +67,8 @@ export const listDocumentsSchema = Joi.object({
   caseId: Joi.string().optional(),
   consultationId: Joi.string().optional(),
   status: Joi.string().valid("ACTIVE", "ARCHIVED").default("ACTIVE"),
+});
+
+export const bulkUnarchiveDocumentsSchema = Joi.object({
+  ids: Joi.array().items(Joi.string()).min(1).max(BULK_ACTION_MAX).required(),
 });

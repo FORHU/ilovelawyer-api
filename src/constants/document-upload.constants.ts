@@ -1,6 +1,11 @@
 /** Max files per presign or confirm request. The client chunks larger sets into batches of this size. */
 export const DOCUMENT_UPLOAD_BATCH_MAX = 50;
 
+/** Max ids per bulk archive-state request (documents or cases) — mass "Select All" restore/archive
+ * from the UI is bounded by this, same as an upload batch, so one request can't ask for an
+ * unbounded Promise.allSettled fan-out. */
+export const BULK_ACTION_MAX = 50;
+
 /** Document Analysis / case evidence upload's declared supported formats. The client already
  * filters to these before ever calling presign/create, but that's advisory only — anyone can
  * call the API directly, so this is the authoritative check (enforced via filename extension in

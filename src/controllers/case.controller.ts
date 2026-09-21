@@ -11,6 +11,7 @@ import {
   updateCaseSchema,
   createCaseWithDocumentSchema,
   relevantChunksSchema,
+  bulkCaseIdsSchema,
 } from "../validation/case.validation";
 
 export default class CaseCtrl {
@@ -62,6 +63,26 @@ export default class CaseCtrl {
 
   static async unarchive(req: Request, res: Response) {
     const result = await CaseSvc.unarchive(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** Bulk "Select All" archive — POST /api/my-cases/archive, not /:id/archive, so it can't
+   * collide with the single-case route above (different segment count). */
+  static async archiveMany(req: Request, res: Response) {
+    const { error, value } = bulkCaseIdsSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await CaseSvc.archiveMany(value.ids, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** Bulk "Select All" restore — POST /api/my-cases/unarchive, not /:id/unarchive, so it can't
+   * collide with the single-case route above (different segment count). */
+  static async unarchiveMany(req: Request, res: Response) {
+    const { error, value } = bulkCaseIdsSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await CaseSvc.unarchiveMany(value.ids, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 

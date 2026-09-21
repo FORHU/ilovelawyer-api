@@ -6,6 +6,7 @@ import {
   createDocumentSchema,
   updateDocumentSchema,
   listDocumentsSchema,
+  bulkUnarchiveDocumentsSchema,
 } from "../validation/document.validation";
 
 export default class DocumentCtrl {
@@ -102,6 +103,16 @@ export default class DocumentCtrl {
 
   static async unarchive(req: Request, res: Response) {
     const result = await DocumentSvc.unarchive(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** Bulk "Select All" restore — POST /api/documents/unarchive, not /:id/unarchive, so it can't
+   * collide with the single-document route above (different segment count). */
+  static async unarchiveMany(req: Request, res: Response) {
+    const { error, value } = bulkUnarchiveDocumentsSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await DocumentSvc.unarchiveMany(value.ids, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 }

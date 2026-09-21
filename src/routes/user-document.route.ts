@@ -17,5 +17,6 @@ router.patch("/:id", asyncHandler(DocumentCtrl.update));
 router.delete("/:id", asyncHandler(DocumentCtrl.delete));
 router.post("/:id/archive", asyncHandler(DocumentCtrl.archive));
 router.post("/:id/unarchive", asyncHandler(DocumentCtrl.unarchive));
+router.post("/unarchive", asyncHandler(DocumentCtrl.unarchiveMany));
 
 export default router;
