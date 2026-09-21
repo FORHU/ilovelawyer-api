@@ -117,8 +117,8 @@ export default class EventSvc {
     if (body.google_event_id !== undefined) data.googleEventId = body.google_event_id;
     if (body.title !== undefined) data.title = body.title;
     if (body.type !== undefined) data.type = body.type;
-    if (body.date_time !== undefined || body.dateTime !== undefined) data.dateTime = new Date(body.date_time || body.dateTime);
-    if (body.client_email !== undefined || body.clientEmail !== undefined) data.clientEmail = body.client_email || body.clientEmail;
+    if (body.date_time !== undefined) data.dateTime = new Date(body.date_time);
+    if (body.client_email !== undefined) data.clientEmail = body.client_email;
     if (body.notes !== undefined) data.notes = body.notes;
     if (body.last_reminder_sent_at !== undefined) data.lastReminderSentAt = new Date(body.last_reminder_sent_at);
     if (body.reminder_lead_minutes !== undefined || body.reminderLeadMinutes !== undefined) {
@@ -141,8 +141,8 @@ export default class EventSvc {
     if (body.google_link !== undefined) data.googleLink = body.google_link;
     if (body.title !== undefined) data.title = body.title;
     if (body.type !== undefined) data.type = body.type;
-    if (body.date_time !== undefined || body.dateTime !== undefined) data.dateTime = new Date(body.date_time || body.dateTime);
-    if (body.client_email !== undefined || body.clientEmail !== undefined) data.clientEmail = body.client_email || body.clientEmail;
+    if (body.date_time !== undefined) data.dateTime = new Date(body.date_time);
+    if (body.client_email !== undefined) data.clientEmail = body.client_email;
     if (body.notes !== undefined) data.notes = body.notes;
 
     const result = await EventRepo.updateByGoogleEventId(googleEventId, organizationId, userId, userEmail, data);
