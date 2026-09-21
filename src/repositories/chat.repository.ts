@@ -164,6 +164,15 @@ export default class ChatRepo {
     });
   }
 
+  /** Rewrites a message's stored Decision Records - used to persist the cleaned-up form
+   * (file names instead of ids, re-verified quotes) once ChatSvc has produced it at read time. */
+  static async updateDecisionRecords(messageId: string, data: DecisionRecordsPayload) {
+    return prisma.messageDecisionRecord.update({
+      where: { messageId },
+      data: { records: data.records as unknown as Prisma.InputJsonValue },
+    });
+  }
+
   static async saveGeneratedDocument(
     messageId: string,
     data: { fileId: string; documentType?: string; documentName?: string },
