@@ -51,8 +51,20 @@ const GET_PRESIGN_EXPIRY_SECONDS = 3600;
 
 /** The bucket has no public-read policy, so File.fileUrl (a bare S3 URL) 403s in a browser —
  * this signs a short-lived GET on read instead. Local signature computation only, no AWS call. */
-export function getPresignedGetUrl(key: string, expiresIn: number = GET_PRESIGN_EXPIRY_SECONDS): Promise<string> {
-  const command = new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key });
+export function getPresignedGetUrl(
+  key: string,
+  expiresIn: number = GET_PRESIGN_EXPIRY_SECONDS,
+  downloadFilename?: string,
+): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: AWS_S3_BUCKET,
+    Key: key,
+    // The S3 key is a UUID, and browsers ignore <a download> on cross-origin URLs, so without
+    // this the saved file is named after the key. RFC 6266: ASCII fallback + UTF-8 filename*.
+    ...(downloadFilename && {
+      ResponseContentDisposition: `attachment; filename="${downloadFilename.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(downloadFilename)}`,
+    }),
+  });
   return getSignedUrl(client, command, { expiresIn });
 }
 

@@ -140,6 +140,7 @@ model File {
   caseReconstructionTableRead CaseReconstruction[]   @relation("CaseReconstructionTableRead")
   audioOverviews              MessageAudioOverview[]
   caseBriefExports            CaseBriefExport[]
+  generatedDocuments          MessageGeneratedDocument[]
   fileStatus                  FileStatus?            @default(ACTIVE)
 }
 
@@ -224,6 +225,7 @@ model Message {
   decisionRecords MessageDecisionRecord?
   researchSteps   MessageResearchSteps?
   documents       Document[]
+  generatedDocument MessageGeneratedDocument?
 
   @@index([consultationId])
   @@index([userId])
@@ -315,6 +317,22 @@ model MessageDecisionRecord {
   createdAt    DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+// A generate_legal_document/draft_pleading tool call's rendered output — see #71. Rendered
+// synchronously in persistAssistantTurn (unlike MessageAudioOverview's audio, this is fast
+// enough not to need a queue/poll flow), so `file` is already resolvable by the time this
+// row's message is first returned from listMessagesByConsultation.
+model MessageGeneratedDocument {
+  id           String   @id @default(uuid())
+  messageId    String   @unique
+  fileId       String
+  documentType String?
+  documentName String?
+  createdAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  file    File    @relation(fields: [fileId], references: [id])
 }
 
 // Persisted counterpart of the live-only "[TRACE]" research/verification steps shown while a
