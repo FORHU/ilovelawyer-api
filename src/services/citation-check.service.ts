@@ -46,17 +46,18 @@ export default class CitationCheckSvc {
       officialText = doc?.full_text ?? doc?.formatted_markdown ?? null;
     }
 
-    const result = evaluateCitation({
-      quotedText: body.quotedText,
-      officialText,
-      citedReference: body.citedReference,
-    });
-
-    // Separate from the quote-vs-source text match above: does the cited authority itself
+    // Separate from the quote-vs-source text match below: does the cited authority itself
     // actually exist? Reuses the same resolution engine Citation Map uses (LawSvc.search for
     // PH, the UK Legal MCP for UK) rather than a new verification path — resolving here means
     // Citation Map's own lazy resolution (CitationMapSvc.getSeed) finds it already done.
-    const resolved = await CitationCheckSvc.resolveAuthority(body.citedReference, tenantCode);
+    const [result, resolved] = await Promise.all([
+      evaluateCitation({
+        quotedText: body.quotedText,
+        officialText,
+        citedReference: body.citedReference,
+      }),
+      CitationCheckSvc.resolveAuthority(body.citedReference, tenantCode),
+    ]);
 
     // Both computed before the row is created so the check is persisted whole — a lawyer-typed
     // pinpoint always wins over the auto-detected one, which only fires for a resolved UK judgment.
