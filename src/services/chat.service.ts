@@ -4,7 +4,8 @@ import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
-import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
+import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
+import { generateTitleViaWs,streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -1028,7 +1029,7 @@ export default class ChatSvc {
     }
 
     const message = await ChatRepo.findLatestAssistantMessage(consultationId);
-    return message?.relatedCases?.items ?? [];
+    return enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
   }
 
   /** Starts rendering the audio for a message's already-generated Audio Overview script

@@ -19,6 +19,20 @@ function isMediaDocument(mimeType?: string | null, filename?: string): boolean {
   return !!ext && MEDIA_DOCUMENT_EXTENSIONS.includes(ext);
 }
 
+/**
+ * Transcribes mp3/mp4 evidence. Music, sound effects and silent screen recordings complete
+ * successfully in Transcribe but return zero words — an empty transcript would otherwise fall
+ * into the "no text extracted" branch, mark the document FAILED, and get re-swept (and
+ * re-transcribed, billably) forever. A short placeholder indexes it as a normal READY document
+ * so the file is still findable by name and the case's evidence list isn't stuck on an error.
+ */
+async function transcribeMedia(s3Key: string, documentId: string, filename: string): Promise<string> {
+  const transcript = (await transcribeS3Media(s3Key, `document-${documentId}`)).trim();
+  if (transcript) return transcript;
+  logger.info("Document extraction: media has no recognizable speech", { documentId, name: filename });
+  return `[Audio/video file "${filename}" — no speech was detected, so there is no transcript to index.]`;
+}
+
 export default class DocumentExtractionSvc {
   /**
    * Extraction → chunking → embedding → storage pipeline for a Case Document (ADR 0010).
@@ -54,7 +68,7 @@ export default class DocumentExtractionSvc {
       const { pages, method, ocrAttempted } = buffer
         ? await extractPages(buffer, doc.mimeType, doc.name, doc.file.s3Key)
         : {
-            pages: [{ pageNumber: 1, text: await transcribeS3Media(doc.file.s3Key, `document-${documentId}`) }],
+            pages: [{ pageNumber: 1, text: await transcribeMedia(doc.file.s3Key, documentId, doc.name) }],
             method: "text" as const,
             ocrAttempted: false,
           };
