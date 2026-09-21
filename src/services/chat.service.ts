@@ -10,6 +10,7 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import DecisionRecordSvc from "./decision-record.service";
+import GeneratedDocumentExportSvc from "./generated-document-export.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
@@ -32,6 +33,9 @@ function sleep(ms: number) {
 // Bounded exponential backoff for the request-path canonical-persistence retry — 2s, 4s, 8s.
 // Long enough to ride out a transient RDS blip, bounded enough not to hang the HTTP request
 // indefinitely if the DB is genuinely down (worst case adds ~14s before the request fails).
+/** Link target chat-wonder has the model write for a generated document's inline download link. */
+const DOWNLOAD_PLACEHOLDER = "(#download)";
+
 const PERSIST_RETRIES = 3;
 const PERSIST_RETRY_BASE_MS = 2_000;
 
@@ -55,6 +59,7 @@ export interface AssistantTurnPayload {
   audioOverview?: AudioOverviewTurn[];
   reasoning?: ReasoningExplanation;
   decisions?: DecisionRecordsPayload;
+  draftedDocument?: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string };
   researchSteps?: TraceStep[];
 }
 
@@ -100,7 +105,27 @@ export default class ChatSvc {
 
     const messages = await ChatRepo.listMessagesByConsultation(consultationId);
     return Promise.all(
-      messages.map(async (m) => ({ ...m, documents: await Promise.all(m.documents.map(mapDocumentToDto)) })),
+      messages.map(async ({ generatedDocument, ...m }) => {
+        const file = generatedDocument?.file;
+        // The real URL is filled in here, at read time, rather than stored in the message: the
+        // presigned URL expires, and the stored content is also what gets replayed to chat-wonder
+        // as history — it shouldn't carry a dead URL. chat-wonder has the model write the link
+        // inline as `[affidavit of loss](#download)`; if it didn't, a "Download …" line is appended.
+        let content = m.content;
+        if (file?.s3Key) {
+          const url = await getPresignedGetUrl(file.s3Key, undefined, file.filename ?? undefined);
+          content = content.includes(DOWNLOAD_PLACEHOLDER)
+            ? content.split(DOWNLOAD_PLACEHOLDER).join(`(${url})`)
+            : `${content}
+
+[Download ${generatedDocument?.documentName || "document"} (${file.filename?.split(".").pop() ?? "file"})](${url})`;
+        }
+        return {
+          ...m,
+          content,
+          documents: await Promise.all(m.documents.map(mapDocumentToDto)),
+        };
+      }),
     );
   }
 
@@ -384,6 +409,7 @@ export default class ChatSvc {
       audioOverview?: AudioOverviewTurn[];
       reasoning?: ReasoningExplanation;
       decisions?: DecisionRecordsPayload;
+      draftedDocument?: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string };
       researchSteps?: TraceStep[];
     }>(cacheKey);
     // Map-generation turns used to cache text-only replies (the mind map arrives on a
@@ -444,6 +470,7 @@ export default class ChatSvc {
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
+    let streamedDraftedDocument: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string } | undefined;
     let streamedResearchSteps: TraceStep[] | undefined;
     try {
       if (useCache && cached) {
@@ -455,6 +482,7 @@ export default class ChatSvc {
         streamedAudioOverview = cached.audioOverview;
         streamedReasoning = cached.reasoning;
         streamedDecisions = cached.decisions;
+        streamedDraftedDocument = cached.draftedDocument;
         streamedResearchSteps = cached.researchSteps;
       } else {
         // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
@@ -509,6 +537,7 @@ export default class ChatSvc {
         streamedAudioOverview = result.audioOverview;
         streamedReasoning = result.reasoning;
         streamedDecisions = result.decisions;
+        streamedDraftedDocument = result.draftedDocument;
         streamedResearchSteps = result.researchSteps;
         redis.set(
           cacheKey,
@@ -520,6 +549,7 @@ export default class ChatSvc {
             audioOverview: streamedAudioOverview,
             reasoning: streamedReasoning,
             decisions: streamedDecisions,
+            draftedDocument: streamedDraftedDocument,
             researchSteps: streamedResearchSteps,
           },
           RESPONSE_CACHE_TTL,
@@ -569,6 +599,7 @@ export default class ChatSvc {
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
       decisions: streamedDecisions,
+      draftedDocument: streamedDraftedDocument,
       researchSteps: streamedResearchSteps,
     };
 
@@ -794,6 +825,23 @@ export default class ChatSvc {
       await ChatRepo.saveDecisionRecords(assistantMessage.id, decisions).catch((err) => {
         logger.error("Failed to persist decision records", { err, messageId: assistantMessage.id });
       });
+    }
+    if (p.draftedDocument) {
+      // Rendered here, synchronously, in-process — no HTTP hop to ourselves. See #71.
+      try {
+        const { file } = await GeneratedDocumentExportSvc.export(
+          p.draftedDocument.content,
+          p.draftedDocument.documentName || p.draftedDocument.documentType || "Document",
+          p.draftedDocument.format,
+        );
+        await ChatRepo.saveGeneratedDocument(assistantMessage.id, {
+          fileId: file.id,
+          documentType: p.draftedDocument.documentType,
+          documentName: p.draftedDocument.documentName,
+        });
+      } catch (err) {
+        logger.error("Failed to render/persist generated document", { err, messageId: assistantMessage.id });
+      }
     }
     if (p.researchSteps?.length) {
       await ChatRepo.saveResearchSteps(assistantMessage.id, p.researchSteps).catch((err) => {

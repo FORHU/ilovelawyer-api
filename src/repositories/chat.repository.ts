@@ -57,6 +57,7 @@ export default class ChatRepo {
         decisionRecords: true,
         researchSteps: true,
         documents: { include: { file: true } },
+        generatedDocument: { include: { file: true } },
       },
     });
   }
@@ -161,6 +162,13 @@ export default class ChatRepo {
         verification: {} as Prisma.InputJsonValue,
       },
     });
+  }
+
+  static async saveGeneratedDocument(
+    messageId: string,
+    data: { fileId: string; documentType?: string; documentName?: string },
+  ) {
+    return prisma.messageGeneratedDocument.create({ data: { messageId, ...data } });
   }
 
   static async saveResearchSteps(messageId: string, steps: TraceStep[]) {
