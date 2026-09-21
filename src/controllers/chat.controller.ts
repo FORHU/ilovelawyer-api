@@ -133,4 +133,19 @@ export default class ChatCtrl {
 
     return res.status(202).json(result);
   }
+
+  /**
+   * Stops a turn that is still generating (the Stop button) — see ChatSvc.cancelChatGeneration.
+   * 200 with the turn's resulting replyStatus, including when it was already finished/cancelled.
+   */
+  static async cancelMessage(req: Request, res: Response) {
+    const { consultationId, messageId } = req.params;
+    const result = await ChatSvc.cancelChatGeneration(
+      req.organization!.id,
+      req.user.userId,
+      consultationId,
+      messageId,
+    );
+    return res.status(200).json(result);
+  }
 }
