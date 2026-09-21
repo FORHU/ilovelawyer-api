@@ -1,0 +1,228 @@
+import { LawCategory } from "@prisma/client";
+import LawRepo from "../repositories/law.repository";
+import LawSvc from "../services/law.service";
+import { UK_CASELAW_BASE_URL, UK_LEGISLATION_BASE_URL } from "../config";
+import { TenantCode } from "../types/tenant-code";
+import { normalizeUkLegislationUrl, resolveUkCitationToLaw, resolveUkLegislationTitleToLaw } from "./uk-citation-resolution";
+import logger from "./logger";
+
+export interface CitationRewriteResult {
+  content: string;
+  rewrittenCount: number;
+  attemptedCount: number;
+  /** Citations that could not be resolved to a Library item and were stripped down to plain,
+   * non-clickable text rather than left as an external link — see the "no fallback" policy on
+   * `rewriteLegalCitationLinks`. */
+  strippedCount: number;
+}
+
+// A surviving citation's URL is always an exact match from that turn's retrieved tool results
+// (legal_citations.py's gate_unverified_legal_urls), but the surrounding syntax differs: plain
+// markdown `[label](url)` is what survives when the reply isn't in "legal mode," but the normal
+// legal-mode path additionally runs the gated markdown through format_legal_citation_links,
+// which rewrites every `[<label> Law](url)` / `[<label> Jurisprudence](url)` into an HTML anchor
+// — `<a href="url" class="legal-ref law|jurisprudence" target="_blank"><label> Law</a>` — before
+// it ever reaches ilovelawyer-api. That HTML form is what a real citation (like the ones in the
+// user's own report) actually looks like in `Message.content`, so both must be matched or this
+// rewrite silently finds nothing to do. Mirrors assistant-message.tsx's own convertHtmlAnchors
+// regex for the HTML form, so both sides agree on what counts as a citation anchor.
+const MD_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+const HTML_LINK_RE = /<a\s+[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+// Caps how long a chat turn's persistence can be held up resolving citations against the UK
+// Legal MCP (a real network round trip, TIMEOUT_MS = 10s in uk-legal-mcp.ts). Whatever hasn't
+// resolved by then falls back to today's external-link behavior for that citation only.
+const REWRITE_TIMEOUT_MS = 4_500;
+
+const WIRE_CATEGORY: Record<TenantCode, Record<LawCategory, string>> = {
+  UK: { JURISPRUDENCE: "uk-case-law", REPUBLIC_ACT: "uk-legislation" },
+  PH: { JURISPRUDENCE: "jurisprudence", REPUBLIC_ACT: "republic-acts" },
+};
+
+interface Resolution {
+  lawId: string;
+  category: LawCategory;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function libraryHref(tenantCode: TenantCode, resolution: Resolution): string {
+  return `/homepage/library/laws/${resolution.lawId}?category=${WIRE_CATEGORY[tenantCode][resolution.category]}`;
+}
+
+// The model is instructed to suffix a citation label with a literal " Law"/" Jurisprudence"
+// (see legal_prompt*.txt), but the gate step only requires a matching URL, not the suffix — so
+// it's optional here too. Neither citations_resolve nor LawSvc.search expects the literal word.
+export function stripCitationSuffix(label: string): string {
+  return label.replace(/\s+(Law|Jurisprudence)$/i, "").trim();
+}
+
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+const UK_LEGISLATION_HOST = hostnameOf(UK_LEGISLATION_BASE_URL);
+const UK_CASELAW_HOST = hostnameOf(UK_CASELAW_BASE_URL);
+
+/** "legislation" | "caselaw" | null, matched by hostname rather than a raw string-prefix
+ * comparison against UK_LEGISLATION_BASE_URL/UK_CASELAW_BASE_URL. A prefix check silently
+ * rejects every citation whose URL differs from the configured base in scheme, "www.", or case
+ * (e.g. an MCP-returned "https://legislation.gov.uk/..." against a "https://www.legislation.gov.uk"
+ * base) — which looks identical to "not a Library-backed host" and falls through to the external
+ * fallback even for a document that's genuinely already in the Library. */
+function ukHostKind(href: string): "legislation" | "caselaw" | null {
+  const host = hostnameOf(href);
+  if (!host) return null;
+  if (host === UK_LEGISLATION_HOST) return "legislation";
+  if (host === UK_CASELAW_HOST) return "caselaw";
+  return null;
+}
+
+export function isKnownLawHost(href: string, tenantCode: TenantCode): boolean {
+  if (tenantCode === "UK") return ukHostKind(href) !== null;
+  return hostnameOf(href) === "juris.ph";
+}
+
+/** UK: fast path is an exact `Law.jurisSourceId` lookup (pinpoint-normalized for legislation);
+ * slow path re-verifies the citation's own label against the UK Legal MCP and materializes a
+ * new Law row on first sight (resolveUkCitationToLaw already does both, category bug fixed). */
+async function resolveUkHref(href: string, label: string): Promise<Resolution | null> {
+  const isLegislation = ukHostKind(href) === "legislation";
+  const category: LawCategory = isLegislation ? "REPUBLIC_ACT" : "JURISPRUDENCE";
+
+  const jurisSourceId = isLegislation ? normalizeUkLegislationUrl(href) : href;
+  const existing = await LawRepo.findByJurisSourceId(jurisSourceId);
+  if (existing) return { lawId: existing.id, category };
+
+  const strippedLabel = stripCitationSuffix(label);
+  if (isLegislation) {
+    // citations_resolve only understands "s.N Act YYYY" — the AI's actual citation order is
+    // the reverse ("Act YYYY, s N"), which it flatly rejects, and even the form it does accept
+    // can resolve to a generic search page instead of a document (see
+    // resolveUkLegislationTitleToLaw's doc comment). A plain title search handles the AI's
+    // real phrasing, so it's tried first; the OSCOLA resolver is only a fallback for the rare
+    // case the label already happens to be in strict citation form (e.g. a bare "SI YYYY/N").
+    const byTitle = await resolveUkLegislationTitleToLaw(strippedLabel);
+    if (byTitle) return { lawId: byTitle.lawId, category };
+  }
+
+  const resolved = await resolveUkCitationToLaw(strippedLabel);
+  if (!resolved) return null;
+  return { lawId: resolved.lawId, category };
+}
+
+const JURIS_PH_PATH_RE = /^\/(case|republic-act)\/([^/?#]+)/;
+
+/** PH citation URLs (juris-ph.ts) already embed the exact juris.ph item id that
+ * `Law.jurisSourceId` is keyed on (`https://juris.ph/case/{id}` / `.../republic-act/{id}`), so
+ * this is an exact-id lookup, not a fuzzy title match — reuses LawSvc.getDocument, the same
+ * write-through-on-miss path the Library detail page itself uses. */
+async function resolvePhHref(href: string): Promise<Resolution | null> {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+
+  const match = url.pathname.match(JURIS_PH_PATH_RE);
+  if (!match) return null;
+  const category: LawCategory = match[1] === "case" ? "JURISPRUDENCE" : "REPUBLIC_ACT";
+  const id = decodeURIComponent(match[2]);
+
+  try {
+    const doc = await LawSvc.getDocument({ category, id });
+    return { lawId: doc.item.stored_id, category };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Rewrites inline `[label](href)` legal citation links in an already-gated chat answer so a
+ * citation the app already stores (or can materialize) in the Library links in-app instead of
+ * out to legislation.gov.uk / caselaw.nationalarchives.gov.uk / juris.ph. Only the href changes
+ * on a resolved citation — the model's own label (often more precise than the Library's stored
+ * title, e.g. carrying a pinpoint section) is left untouched.
+ *
+ * No-external-navigation policy: a citation link must never leave the app, and the app has no
+ * Library page to send a user to for a document it can't identify — so a citation that isn't (or
+ * can't be) resolved to a Library item, for any reason (unrecognized host, resolution genuinely
+ * failed, or the time budget ran out), is stripped down to its plain label text rather than left
+ * as a clickable external link. This intentionally also strips any non-legal link that happens
+ * to match the citation syntax, since there's no way to tell "harmless external reference" apart
+ * from "unresolved citation" at this layer — see the doc comment on assistant-message.tsx's `a`
+ * renderer for the frontend half of this contract (only an internal Library href stays clickable).
+ * Never throws — a total failure degrades to "no citations rewritten this turn," original links
+ * intact (a rarer, coarser-grained fallback than the stripping done for a single unresolved
+ * citation, reserved for a bug in this function itself).
+ */
+export async function rewriteLegalCitationLinks(
+  content: string,
+  tenantCode: TenantCode,
+): Promise<CitationRewriteResult> {
+  try {
+    const mdMatches = [...content.matchAll(MD_LINK_RE)];
+    const htmlMatches = [...content.matchAll(HTML_LINK_RE)];
+    if (mdMatches.length === 0 && htmlMatches.length === 0) {
+      return { content, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 };
+    }
+
+    const labelByHref = new Map<string, string>();
+    for (const [, label, href] of mdMatches) {
+      if (!labelByHref.has(href)) labelByHref.set(href, label);
+    }
+    for (const [, href, label] of htmlMatches) {
+      if (!labelByHref.has(href)) labelByHref.set(href, label);
+    }
+
+    // Only a known law host is even worth attempting — a Hansard/Parliament/etc. URL has no
+    // chance of matching a Library item, so it skips straight to "will be stripped," no I/O.
+    const attempted = [...labelByHref.keys()].filter((href) => isKnownLawHost(href, tenantCode));
+
+    const resolutions = new Map<string, Resolution | null>();
+    if (attempted.length > 0) {
+      const resolveAll = Promise.all(
+        attempted.map(async (href) => {
+          try {
+            const resolution =
+              tenantCode === "UK" ? await resolveUkHref(href, labelByHref.get(href)!) : await resolvePhHref(href);
+            resolutions.set(href, resolution);
+          } catch (err) {
+            logger.warn("Legal citation link rewrite: resolution failed for one href, it will be stripped", {
+              err,
+              tenantCode,
+            });
+          }
+        }),
+      );
+      await Promise.race([resolveAll, sleep(REWRITE_TIMEOUT_MS)]);
+    }
+
+    let rewrittenCount = 0;
+    let strippedCount = 0;
+    const rewrite = (label: string, href: string): string => {
+      const resolution = resolutions.get(href);
+      if (resolution) {
+        rewrittenCount += 1;
+        return `[${label}](${libraryHref(tenantCode, resolution)})`;
+      }
+      strippedCount += 1;
+      return label;
+    };
+    const rewritten = content
+      .replace(MD_LINK_RE, (_full, label: string, href: string) => rewrite(label, href))
+      .replace(HTML_LINK_RE, (_full, href: string, label: string) => rewrite(label, href));
+
+    return { content: rewritten, rewrittenCount, attemptedCount: attempted.length, strippedCount };
+  } catch (err) {
+    logger.warn("Legal citation link rewrite: failed, keeping original links", { err, tenantCode });
+    return { content, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 };
+  }
+}

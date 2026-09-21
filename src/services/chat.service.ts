@@ -24,6 +24,7 @@ import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
 import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
+import { rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,6 +47,7 @@ export interface AssistantTurnPayload {
   parentMessageId: string;
   effectiveCaseId: string | null;
   userId: string;
+  tenantCode: TenantCode;
   /** Raw accumulated reply text — persistAssistantTurn still needs the un-stripped form for
    * stripStructuredBlocks / splitIntoTopics / the extractTimeline+extractMindMap fallback. */
   fullResponse: string;
@@ -562,6 +564,7 @@ export default class ChatSvc {
       parentMessageId,
       effectiveCaseId: effectiveCaseId ?? null,
       userId,
+      tenantCode,
       fullResponse,
       relatedCases,
       mindMap: streamedMindMap,
@@ -731,7 +734,28 @@ export default class ChatSvc {
     const audioOverview = p.audioOverview;
     const reasoning = p.reasoning;
     const decisions = p.decisions;
-    const cleanedContent = stripStructuredBlocks(p.fullResponse);
+    let cleanedContent = stripStructuredBlocks(p.fullResponse);
+    const {
+      content: rewrittenContent,
+      rewrittenCount,
+      attemptedCount,
+      strippedCount,
+    } = await rewriteLegalCitationLinks(cleanedContent, p.tenantCode).catch((err) => {
+      logger.warn("Message persistence: citation link rewrite failed, keeping original links", {
+        err,
+        parentMessageId: p.parentMessageId,
+      });
+      return { content: cleanedContent, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 };
+    });
+    cleanedContent = rewrittenContent;
+    if (attemptedCount > 0 || strippedCount > 0) {
+      logger.info("Message persistence: legal citation links rewritten", {
+        parentMessageId: p.parentMessageId,
+        rewrittenCount,
+        attemptedCount,
+        strippedCount,
+      });
+    }
     const topics = splitIntoTopics(cleanedContent);
 
     // A split reply becomes several sibling assistant Messages under one new MessageGroup —
