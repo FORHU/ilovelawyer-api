@@ -5,7 +5,7 @@ import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
-import { generateTitleViaWs,streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
+import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -28,6 +28,17 @@ import { emitToUser } from "../lib/socket";
 import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 import { rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
+
+/** How a running chat turn is stopped — see ChatSvc.processChatGenerationJob/cancelChatGeneration. */
+interface GenerationControl {
+  abort: AbortController;
+  /** Raw text streamed so far, live — read by a Stop on the same instance so the saved partial
+   * reply matches what the user saw (an other-instance Stop falls back to the 1s checkpoint). */
+  getPartial: () => string;
+}
+
+/** How often a running job checks whether a Stop landed on another instance. */
+const CANCEL_POLL_INTERVAL_MS = 1_000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -72,6 +83,9 @@ export interface AssistantTurnPayload {
 }
 
 export default class ChatSvc {
+  /** Jobs currently running on THIS instance, so a Stop that lands here can abort them at once. */
+  private static activeGenerations = new Map<string, GenerationControl>();
+
   static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
     if (caseId) {
       // Throws 404 if the case doesn't exist or isn't in this organization
@@ -254,7 +268,93 @@ export default class ChatSvc {
    * still gets durably persisted either way (see persistAssistantTurnWithRetry below).
    */
   static async processChatGenerationJob(job: ChatGenerationJob): Promise<void> {
+    // Stop support: ChatSvc.cancelChatGeneration flips replyStatus to CANCELLED (the durable,
+    // cross-instance signal — this job may run on a different instance than the one that got
+    // the cancel request) and, when it happens to be on this same instance, aborts `abort`
+    // directly via this registry. The poll below covers the cross-instance case; it is not
+    // needed for correctness of the DB state, only to stop generating (and billing) promptly.
+    const control: GenerationControl = { abort: new AbortController(), getPartial: () => "" };
+    ChatSvc.activeGenerations.set(job.jobId, control);
+    const cancelPoll = setInterval(() => {
+      ChatRepo.findReplyState(job.jobId)
+        .then((state) => {
+          if (state?.replyStatus === "CANCELLED") control.abort.abort();
+        })
+        .catch(() => {});
+    }, CANCEL_POLL_INTERVAL_MS);
+    try {
+      await ChatSvc.runChatGenerationJob(job, control);
+    } finally {
+      clearInterval(cancelPoll);
+      ChatSvc.activeGenerations.delete(job.jobId);
+    }
+  }
+
+  /**
+   * Stops an in-flight chat turn (the Stop button). Idempotent: cancelling a turn that already
+   * finished, failed or was cancelled just reports its current replyStatus.
+   *
+   * Owns everything the user-visible result of a stop needs, so the client gets a deterministic
+   * answer from this one call instead of waiting on the worker: it flips replyStatus PENDING ->
+   * CANCELLED (one conditional write — races the worker's own DONE/FAILED with a single winner),
+   * saves whatever reply text had streamed so far as an ordinary assistant message (no topic
+   * split, structured extras or related cases — those need a finished answer), aborts the
+   * worker's Chat Wonder socket if the job runs on this instance, and emits chat:cancelled. A job
+   * on another instance notices the CANCELLED status within CANCEL_POLL_INTERVAL_MS and stops;
+   * its partial text then comes from the ~1s-old checkpoint rather than the live buffer.
+   */
+  static async cancelChatGeneration(
+    organizationId: string,
+    requesterUserId: string,
+    consultationId: string,
+    messageId: string,
+  ): Promise<{ messageId: string; replyStatus: string | null; assistantMessageId?: string }> {
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    if (!consultation || consultation.organizationId !== organizationId) {
+      throw new HttpError("Consultation not found", 404);
+    }
+    const message = await ChatRepo.findReplyState(messageId);
+    if (!message || message.consultationId !== consultationId || message.role !== "user") {
+      throw new HttpError("Message not found", 404);
+    }
+
+    const cancelled = await ChatRepo.markReplyCancelled(messageId, consultationId);
+    if (!cancelled) {
+      const current = await ChatRepo.findReplyState(messageId);
+      return { messageId, replyStatus: current?.replyStatus ?? null };
+    }
+
+    const running = ChatSvc.activeGenerations.get(messageId);
+    const partialRaw = running ? running.getPartial() : (message.pendingReplyContent ?? "");
+    running?.abort.abort();
+
+    const partial = stripStructuredBlocks(partialRaw);
+    let assistantMessageId: string | undefined;
+    if (partial) {
+      const existing = await ChatRepo.findAssistantReplyByParent(messageId);
+      assistantMessageId =
+        existing?.id ?? (await ChatRepo.createMessage(consultationId, "assistant", partial, undefined, messageId)).id;
+    }
+
+    logger.info("Chat generation: cancelled by user", {
+      consultationId,
+      messageId,
+      ranOnThisInstance: Boolean(running),
+      partialChars: partial.length,
+    });
+    for (const userId of new Set([message.userId, requesterUserId].filter((id): id is string => Boolean(id)))) {
+      try {
+        emitToUser(userId, "chat:cancelled", { consultationId, messageId, assistantMessageId });
+      } catch (err) {
+        logger.warn("Chat generation: emitToUser(chat:cancelled) failed", { err, messageId });
+      }
+    }
+    return { messageId, replyStatus: "CANCELLED", assistantMessageId };
+  }
+
+  private static async runChatGenerationJob(job: ChatGenerationJob, control: GenerationControl): Promise<void> {
     const t0 = Date.now();
+    const { signal } = control.abort;
     logger.info("Chat generation: processing started", { jobId: job.jobId, consultationId: job.consultationId });
 
     const { jobId: parentMessageId, organizationId, tenantCode, userId, consultationId, sessionId, caseDocumentId, documentContext } = job;
@@ -272,6 +372,14 @@ export default class ChatSvc {
       return;
     }
     const userInput = job.userInput;
+
+    // Stopped while still queued (or waiting on SQS) — nothing to generate, and nothing to emit:
+    // ChatSvc.cancelChatGeneration already told the client.
+    const initialState = await ChatRepo.findReplyState(parentMessageId).catch(() => null);
+    if (initialState?.replyStatus === "CANCELLED") {
+      logger.info("Chat generation: cancelled before start, skipping", { jobId: parentMessageId, consultationId });
+      return;
+    }
 
     // emitToUser is documented as never throwing (lib/socket.ts), but this is called
     // synchronously from inside streamChatWonderMessage's ws.onmessage handler on every
@@ -443,6 +551,11 @@ export default class ChatSvc {
       elapsedMs: Date.now() - t0,
     });
 
+    if (signal.aborted) {
+      logger.info("Chat generation: cancelled during context resolution", { jobId: parentMessageId, consultationId });
+      return;
+    }
+
     const cacheKey = responseCacheKey(
       consultationId,
       userInput,
@@ -489,7 +602,11 @@ export default class ChatSvc {
     let checkpointChain: Promise<unknown> = Promise.resolve();
     let accumulatedForCheckpoint = "";
     let chunkCount = 0;
+    control.getPartial = () => accumulatedForCheckpoint;
     const checkpointedOnChunk = (text: string) => {
+      // A chunk already in flight when Stop landed: drop it — the saved partial reply and the
+      // client's frozen bubble must both end at the same point.
+      if (signal.aborted) return;
       // Best-effort live push for a browser actively connected right now — emitToUser is a
       // no-op if nobody's listening (tab refreshed/closed, or never had a socket). This is
       // purely a UX nicety on top of the durable checkpoint above, never load-bearing for
@@ -565,6 +682,14 @@ export default class ChatSvc {
             grounding,
             undefined,
             tenantCode,
+            signal,
+            // The answer text is fully streamed; the extras (timeline/mind map/reasoning/
+            // decisions) and persistence are still to come before chat:done. Lets a connected
+            // client stop showing "generating" (Stop) and show "finishing analysis" instead.
+            // Purely a live-UX signal, like every event here; skipped once the user has stopped.
+            () => {
+              if (!signal.aborted) emitEvent("chat:answer-complete", {});
+            },
           );
         const result =
           generationKind && effectiveCaseId
@@ -578,6 +703,9 @@ export default class ChatSvc {
           responseChars: result.content.length,
           chunksStreamed: chunkCount,
         });
+        // Stop landed just as the stream completed: the reply is already saved as a partial by
+        // ChatSvc.cancelChatGeneration — don't cache it or persist a second, full one.
+        if (signal.aborted) return;
         fullResponse = result.content;
         relatedCases = result.relatedCases;
         streamedMindMap = result.mindMap;
@@ -604,6 +732,17 @@ export default class ChatSvc {
         );
       }
     } catch (err) {
+      if (err instanceof GenerationCancelledError || signal.aborted) {
+        // Not a failure: the user pressed Stop. replyStatus is already CANCELLED and the partial
+        // reply already saved and announced (chat:cancelled) by ChatSvc.cancelChatGeneration.
+        logger.info("Chat generation: stopped by user", {
+          consultationId,
+          messageId: parentMessageId,
+          elapsedMs: Date.now() - t0,
+          chunksStreamed: chunkCount,
+        });
+        return;
+      }
       logger.error("Chat generation: AI call failed", {
         consultationId,
         messageId: parentMessageId,
@@ -651,6 +790,15 @@ export default class ChatSvc {
       draftedDocument: streamedDraftedDocument,
       researchSteps: streamedResearchSteps,
     };
+
+    // A Stop on another instance may not have reached this job's abort signal yet (the poll runs
+    // once a second) — the durable status is the tiebreaker, so a cancelled turn never also gets
+    // a full reply persisted next to its saved partial one.
+    const stateBeforePersist = await ChatRepo.findReplyState(parentMessageId).catch(() => null);
+    if (signal.aborted || stateBeforePersist?.replyStatus === "CANCELLED") {
+      logger.info("Chat generation: cancelled before persistence, dropping reply", { jobId: parentMessageId, consultationId });
+      return;
+    }
 
     let assistantMessage: { id: string } | null;
     try {
@@ -999,9 +1147,11 @@ export default class ChatSvc {
     grounding?: CaseDocumentGrounding,
     caseId?: string,
     tenantCode?: TenantCode,
+    signal?: AbortSignal,
+    onAnswerComplete?: () => void,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
@@ -1009,7 +1159,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete);
     }
   }
 

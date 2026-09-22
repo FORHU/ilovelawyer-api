@@ -186,6 +186,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
     findAssistantReplyByParent: ChatRepo.findAssistantReplyByParent,
     findConsultationById: ChatRepo.findConsultationById,
     setReplyStatus: ChatRepo.setReplyStatus,
+    findReplyState: ChatRepo.findReplyState,
     saveTimeline: ChatRepo.saveTimeline,
     saveMindMap: ChatRepo.saveMindMap,
     saveRelatedCases: ChatRepo.saveRelatedCases,
@@ -231,6 +232,8 @@ describe("ChatSvc.processChatGenerationJob", () => {
     ChatRepo.findAssistantReplyByParent = async () => null;
     ChatRepo.findConsultationById = async () => ({ id: "c1" }) as any;
     ChatRepo.setReplyStatus = async () => ({}) as any;
+    ChatRepo.findReplyState = async () =>
+      ({ id: "m-user-1", consultationId: "c1", role: "user", userId: "user1", replyStatus: "PENDING", pendingReplyContent: null }) as any;
     ChatRepo.saveTimeline = async () => ({}) as any;
     ChatRepo.saveMindMap = async () => ({}) as any;
     ChatRepo.saveRelatedCases = async () => ({}) as any;
@@ -252,6 +255,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
       findAssistantReplyByParent: originals.findAssistantReplyByParent,
       findConsultationById: originals.findConsultationById,
       setReplyStatus: originals.setReplyStatus,
+      findReplyState: originals.findReplyState,
       saveTimeline: originals.saveTimeline,
       saveMindMap: originals.saveMindMap,
       saveRelatedCases: originals.saveRelatedCases,
@@ -301,6 +305,20 @@ describe("ChatSvc.processChatGenerationJob", () => {
       expect(e.payload.messageId).to.equal(baseJob.jobId);
       expect(e.payload.consultationId).to.equal(baseJob.consultationId);
     }
+  });
+
+  it("emits chat:answer-complete once the answer text has streamed (at __END__) and BEFORE chat:done, so the UI can stop showing 'generating' while the extras finish", async () => {
+    script = ["Part one. ", "Part two.__END__", "[DONE]"];
+
+    await ChatSvc.processChatGenerationJob(baseJob);
+
+    const eventOrder = emitted.map((e) => e.event);
+    expect(eventOrder.filter((e) => e === "chat:answer-complete").length).to.equal(1);
+    expect(eventOrder.lastIndexOf("chat:chunk")).to.be.lessThan(eventOrder.indexOf("chat:answer-complete"));
+    expect(eventOrder.indexOf("chat:answer-complete")).to.be.lessThan(eventOrder.indexOf("chat:done"));
+    const evt = emitted.find((e) => e.event === "chat:answer-complete")!;
+    expect(evt.payload.messageId).to.equal(baseJob.jobId);
+    expect(evt.userId).to.equal("user1");
   });
 
   it("Test 3 — completes and persists the FULL response even when the live-push layer is completely broken (simulates a disconnected/refreshed browser mid-generation, or a socket.io bug): the worker doesn't know or care whether emitToUser reached anyone, and a throwing emitToUser can't block generation either (see emitEvent's try/catch)", async () => {
