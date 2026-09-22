@@ -14,6 +14,13 @@ export default class CaseGraphSvc {
     return CaseGraphRepo.upsertNode(caseId, nodeType, refId);
   }
 
+  /** Counterpart of ensureNode — call when the underlying record (a CaseTimelineEvent, etc.) is
+   * gone, so a graph view (CaseGraphViewSvc) never renders a ghost "Untitled event" node whose
+   * refId no longer resolves to anything. */
+  static async removeNode(nodeType: CaseGraphNodeType, refId: string) {
+    await CaseGraphRepo.deleteNode(nodeType, refId);
+  }
+
   static async linkNodes(
     caseId: string,
     sourceType: CaseGraphNodeType,
