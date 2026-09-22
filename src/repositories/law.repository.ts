@@ -124,23 +124,32 @@ export default class LawRepo {
   }
 
   /** Primary lookup for LawSvc.search — plain ILIKE over the stored rows, PH tenant,
-   * given category. juris.ph is only consulted when this returns nothing. */
-  static async localSearch(params: { category: LawCategory; q: string; limit: number }) {
+   * given category. juris.ph is only consulted when this returns nothing.
+   * `terms` are ILIKE'd against the text columns (any term may match). `number` instead looks a
+   * document up by its number: stored values aren't in one format ("9262", "RA 8796", "No. 8371"),
+   * so this matches on the digits and the caller keeps only the exact-number rows. */
+  static async localSearch(params: {
+    category: LawCategory;
+    terms: string[];
+    number?: { field: "raNumber" | "caseNumber"; digits: string };
+    limit: number;
+  }) {
     const tenantId = await LawRepo.resolvePhTenantId();
+    const OR: Prisma.LawWhereInput[] = params.number
+      ? [{ [params.number.field]: { contains: params.number.digits } }]
+      : params.terms.flatMap((term) => [
+          { title: { contains: term, mode: "insensitive" as const } },
+          { caseNumber: { contains: term, mode: "insensitive" as const } },
+          { raNumber: { contains: term, mode: "insensitive" as const } },
+          { facts: { contains: term, mode: "insensitive" as const } },
+          { summary: { contains: term, mode: "insensitive" as const } },
+        ]);
     return prisma.law.findMany({
-      where: {
-        tenantId,
-        category: params.category,
-        OR: [
-          { title: { contains: params.q, mode: "insensitive" } },
-          { caseNumber: { contains: params.q, mode: "insensitive" } },
-          { raNumber: { contains: params.q, mode: "insensitive" } },
-          { facts: { contains: params.q, mode: "insensitive" } },
-          { summary: { contains: params.q, mode: "insensitive" } },
-        ],
-      },
+      where: { tenantId, category: params.category, OR },
       orderBy: [{ year: { sort: "desc", nulls: "last" } }, { score: { sort: "desc", nulls: "last" } }],
-      take: params.limit,
+      // A digit match can also hit longer numbers ("9262" in "19262"), so over-fetch a little
+      // before the caller narrows to the exact number.
+      take: params.number ? params.limit * 5 : params.limit,
     });
   }
 
