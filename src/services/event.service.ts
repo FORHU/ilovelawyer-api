@@ -90,7 +90,7 @@ export default class EventSvc {
       type: "EVENT_REMINDER",
       title: "Appointment scheduled",
       message: `${event.title} — ${formatEventDateTime(event.dateTime)}`,
-      link: "/homepage/calendar",
+      link: `/homepage/calendar?date=${encodeURIComponent(event.dateTime.toISOString())}`,
     }).catch((err) => logger.error("EventSvc.create: failed to create notification", { err, eventId: event.id }));
 
     return event;
