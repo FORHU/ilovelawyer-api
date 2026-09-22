@@ -8,22 +8,45 @@ function formatDate(date: Date | null): string {
   return date ? date.toISOString().slice(0, 10) : "—";
 }
 
-/** pdfkit has no table primitive — this hand-rolls a simple fixed-column-width row renderer.
- * Deliberately simple: PDF is a second output format from the same BriefDocument model, not a
- * separately art-directed layout, so cell wrapping beyond pdfkit's own `text()` wrapping and
- * page-break-mid-table are both out of scope for v1. */
+const CELL_PADDING = 8;
+const ROW_GAP = 4;
+const MIN_ROW_HEIGHT = 14;
+
+/** Statement / Category / Source tables get a wider Statement column — equal thirds cramp the
+ * long text column while leaving Category (a single word) mostly empty. Any other table keeps
+ * equal widths. */
+export function columnWidths(headers: string[], usableWidth: number): number[] {
+  const isAttribution = headers.join("|") === "Statement|Category|Source";
+  const weights = isAttribution ? [0.5, 0.15, 0.35] : headers.map(() => 1 / headers.length);
+  return weights.map((w) => w * usableWidth);
+}
+
+/** A row is as tall as its tallest cell — measuring only the first cell let a wrapped Source
+ * filename spill into the next row. */
+export function measureRowHeight(doc: PDFKit.PDFDocument, cells: string[], widths: number[]): number {
+  const tallest = Math.max(
+    ...cells.map((cell, i) => doc.heightOfString(cell || "", { width: widths[i]! - CELL_PADDING })),
+  );
+  return Math.max(tallest, MIN_ROW_HEIGHT);
+}
+
+/** pdfkit has no table primitive — this hand-rolls a fixed-column-width row renderer. A row that
+ * would cross the bottom margin moves to a new page (pdfkit would otherwise split it mid-cell),
+ * and the header row repeats at the top of each continuation page. */
 function drawTable(doc: PDFKit.PDFDocument, headers: string[], rows: string[][]) {
   const usableWidth = doc.page.width - PAGE_MARGIN * 2;
-  const colWidth = usableWidth / headers.length;
+  const widths = columnWidths(headers, usableWidth);
+  const xs = widths.map((_, i) => PAGE_MARGIN + widths.slice(0, i).reduce((a, b) => a + b, 0));
+  const bottomLimit = () => doc.page.height - PAGE_MARGIN;
 
   const drawRow = (cells: string[], bold: boolean) => {
-    const startY = doc.y;
     doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(9);
+    const rowHeight = measureRowHeight(doc, cells, widths);
+    const startY = doc.y;
     cells.forEach((cell, i) => {
-      doc.text(cell, PAGE_MARGIN + i * colWidth, startY, { width: colWidth - 8 });
+      doc.text(cell, xs[i]!, startY, { width: widths[i]! - CELL_PADDING });
     });
-    const rowHeight = Math.max(doc.heightOfString(cells[0] || "", { width: colWidth - 8 }), 14);
-    doc.y = startY + rowHeight + 4;
+    doc.y = startY + rowHeight + ROW_GAP;
     doc
       .moveTo(PAGE_MARGIN, doc.y - 2)
       .lineTo(PAGE_MARGIN + usableWidth, doc.y - 2)
@@ -32,7 +55,17 @@ function drawTable(doc: PDFKit.PDFDocument, headers: string[], rows: string[][])
   };
 
   drawRow(headers, true);
-  for (const row of rows) drawRow(row, false);
+  for (const row of rows) {
+    doc.font("Helvetica").fontSize(9);
+    const needed = measureRowHeight(doc, row, widths) + ROW_GAP;
+    const fresh = doc.y <= doc.page.margins.top + 1;
+    // A row taller than a whole page can't fit anywhere — start it on a fresh page and let it run.
+    if (!fresh && doc.y + needed > bottomLimit()) {
+      doc.addPage();
+      drawRow(headers, true);
+    }
+    drawRow(row, false);
+  }
   doc.moveDown(0.5);
 }
 
