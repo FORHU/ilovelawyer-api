@@ -125,7 +125,7 @@ export default class EventReminderQueue {
       type: "EVENT_REMINDER",
       title: `Upcoming ${eventType}`,
       message: `${event.title} — ${when}`,
-      link: "/homepage/calendar",
+      link: `/homepage/calendar?date=${encodeURIComponent(event.dateTime.toISOString())}`,
     }).catch((err) => logger.error("Event reminder queue: failed to create notification", { err, eventId: event.id }));
   }
 }
