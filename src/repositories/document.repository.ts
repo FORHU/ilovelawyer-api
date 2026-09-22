@@ -121,6 +121,11 @@ export default class DocumentRepo {
     await prisma.document.updateMany({ where: { id: { in: ids }, organizationId, consultationId }, data: { messageId } });
   }
 
+  /** Count of a message's attachments still being extracted/indexed (see ChatSvc's attachment wait). */
+  static async countPendingByMessage(messageId: string): Promise<number> {
+    return prisma.document.count({ where: { messageId, ragStatus: "PENDING" } });
+  }
+
   /** Unscoped by organizationId — used internally by extraction dispatch, which only ever receives an id
    * of a document it just created/confirmed itself, not a user-supplied id. */
   static async findByIdWithFile(id: string) {

@@ -23,12 +23,15 @@ describe("Citation check — jurisdiction guard on legalRagId", () => {
     await prisma.user.create({ data: { id: userA, email: `cite-a-${userA}@example.com`, username: `cite-a-${userA}` } });
     await prisma.user.create({ data: { id: userB, email: `cite-b-${userB}@example.com`, username: `cite-b-${userB}` } });
 
+    const phTenant = await prisma.tenant.upsert({ where: { code: "PH" }, update: {}, create: { code: "PH", name: "Philippines" } });
+    const ukTenant = await prisma.tenant.upsert({ where: { code: "UK" }, update: {}, create: { code: "UK", name: "United Kingdom" } });
+
     await prisma.organization.create({
       data: {
         id: orgAId,
         name: "Citation Org PH",
         slug: `cite-org-ph-${orgAId}`,
-        jurisdiction: "PH",
+        tenantId: phTenant.id,
         createdById: userA,
         members: { create: { userId: userA, role: "OWNER" } },
       },
@@ -38,7 +41,7 @@ describe("Citation check — jurisdiction guard on legalRagId", () => {
         id: orgBId,
         name: "Citation Org UK",
         slug: `cite-org-uk-${orgBId}`,
-        jurisdiction: "UK",
+        tenantId: ukTenant.id,
         createdById: userB,
         members: { create: { userId: userB, role: "OWNER" } },
       },

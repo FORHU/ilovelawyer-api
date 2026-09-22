@@ -25,6 +25,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1103.0",
     "@prisma/client": "^5.20.0",
     "@types/winston": "^2.4.4",
+    "@typesafe-ai/sdk": "^0.6.0",
     "axios": "^1.6.1",
     "bcrypt": "^5.1.1",
     "cookie-parser": "^1.4.7",

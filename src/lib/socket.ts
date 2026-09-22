@@ -6,6 +6,21 @@ import logger from "../utils/logger";
 
 let io: IOServer | null = null;
 
+/** Live Case Document extraction events pushed by DocumentExtractionSvc. `Document.ragStatus` in
+ * the database stays the source of truth — these only let a connected client skip polling. */
+export type DocumentSocketEvent = "document:started" | "document:ready" | "document:failed" | "document:retrying";
+
+export interface DocumentSocketPayload {
+  documentId: string;
+  caseId: string | null;
+  consultationId: string | null;
+  ragStatus: "PENDING" | "READY" | "FAILED";
+  /** READY only. */
+  pageCount?: number | null;
+  /** READY only — the AI-assigned category, if categorization finished. */
+  category?: string | null;
+}
+
 function roomForUser(userId: string): string {
   return `user:${userId}`;
 }

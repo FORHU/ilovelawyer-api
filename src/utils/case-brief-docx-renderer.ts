@@ -20,12 +20,24 @@ function formatDate(date: Date | null): string {
   return date ? date.toISOString().slice(0, 10) : "—";
 }
 
+/** Statement / Category / Source tables get a wider Statement column — equal thirds cramp the
+ * long text column while leaving Category (a single word) mostly empty. Mirrors columnWidths()
+ * in case-brief-pdf-renderer.ts, same policy for both output formats. Any other table keeps
+ * equal widths. */
+function columnWidthPercentages(headers: string[]): number[] {
+  const isAttribution = headers.join("|") === "Statement|Category|Source";
+  const weights = isAttribution ? [0.5, 0.15, 0.35] : headers.map(() => 1 / headers.length);
+  return weights.map((w) => w * 100);
+}
+
 function tableFromBlock(block: Extract<BriefBlock, { type: "table" }>): Table {
+  const widths = columnWidthPercentages(block.headers);
+
   const headerRow = new TableRow({
     children: block.headers.map(
-      (h) =>
+      (h, i) =>
         new TableCell({
-          width: { size: 100 / block.headers.length, type: WidthType.PERCENTAGE },
+          width: { size: widths[i]!, type: WidthType.PERCENTAGE },
           children: [new Paragraph({ children: [new TextRun({ text: h, bold: true })] })],
         }),
     ),
@@ -35,9 +47,9 @@ function tableFromBlock(block: Extract<BriefBlock, { type: "table" }>): Table {
     (row) =>
       new TableRow({
         children: row.map(
-          (cell) =>
+          (cell, i) =>
             new TableCell({
-              width: { size: 100 / block.headers.length, type: WidthType.PERCENTAGE },
+              width: { size: widths[i]!, type: WidthType.PERCENTAGE },
               children: [new Paragraph({ text: cell })],
             }),
         ),

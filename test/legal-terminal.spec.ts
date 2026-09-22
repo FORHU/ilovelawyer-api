@@ -112,24 +112,25 @@ describe("Legal Terminal — PH deadline engine", () => {
 });
 
 describe("Legal Terminal — citation validity", () => {
-  it("marks a quotation valid when it appears in official text", () => {
-    const result = evaluateCitation({
+  it("marks a quotation valid when it appears in official text", async () => {
+    const result = await evaluateCitation({
       quotedText: "The accused is presumed innocent until the contrary is proved",
       officialText: "In all criminal prosecutions, the accused is presumed innocent until the contrary is proved.",
     });
     expect(result.status).to.equal("VALID");
   });
 
-  it("marks a quotation invalid when it is absent", () => {
-    const result = evaluateCitation({
+  it("marks a quotation invalid when it is absent", async () => {
+    // USE_JEV_VALIDITY is unset in the test env, so this stays on the heuristic path (no live call).
+    const result = await evaluateCitation({
       quotedText: "Every lawyer is entitled to a win probability of ninety percent",
       officialText: "No person shall be deprived of life, liberty, or property without due process of law.",
     });
     expect(result.status).to.equal("INVALID");
   });
 
-  it("stays unverified without official text", () => {
-    const result = evaluateCitation({ quotedText: "Due process of law" });
+  it("stays unverified without official text", async () => {
+    const result = await evaluateCitation({ quotedText: "Due process of law" });
     expect(result.status).to.equal("UNVERIFIED");
   });
 });
