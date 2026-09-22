@@ -1,3 +1,4 @@
-
-# Shell scripts run inside Linux containers — CRLF breaks them (e.g. `set -eu`).
+# Shell scripts run inside Linux containers (see docker-compose.yml's sqs-init) — CRLF from a
+# Windows checkout breaks their shebang/`set` line ("set: -: invalid option") since sh doesn't
+# strip \r. Force LF regardless of core.autocrlf.
 *.sh text eol=lf
