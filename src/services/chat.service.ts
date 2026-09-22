@@ -39,6 +39,10 @@ function sleep(ms: number) {
 /** Link target chat-wonder has the model write for a generated document's inline download link. */
 const DOWNLOAD_PLACEHOLDER = "(#download)";
 
+// Kept under AWS Transcribe's own 12-minute ceiling (transcription.service.ts) so a slow-but-healthy
+// video usually finishes first, while a hung one still lets the turn proceed eventually.
+const ATTACHMENT_READY_MAX_WAIT_MS = 10 * 60_000;
+const ATTACHMENT_READY_POLL_MS = 3_000;
 const PERSIST_RETRIES = 3;
 const PERSIST_RETRY_BASE_MS = 2_000;
 
@@ -288,6 +292,28 @@ export default class ChatSvc {
     // for the first token. Purely a live-UX signal: nothing downstream depends on it arriving.
     emitEvent("chat:started", {});
     logger.info("Chat generation: chat:started emitted", { jobId: parentMessageId, consultationId });
+
+    // Attachments sent with this message are still PENDING while they're extracted/transcribed
+    // (audio/video especially), and grounding below only sees READY documents — replying now would
+    // tell the user no files are attached. Hold the reply (the client already shows "generating")
+    // until they settle, capped so a stuck extraction can't hang the turn forever.
+    const attachmentWaitStartedAt = Date.now();
+    try {
+      while (
+        Date.now() - attachmentWaitStartedAt < ATTACHMENT_READY_MAX_WAIT_MS &&
+        (await DocumentRepo.countPendingByMessage(parentMessageId)) > 0
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, ATTACHMENT_READY_POLL_MS));
+      }
+    } catch (err) {
+      logger.warn("Chat generation: attachment wait failed, continuing", { err, jobId: parentMessageId });
+    }
+    if (Date.now() - attachmentWaitStartedAt > ATTACHMENT_READY_POLL_MS) {
+      logger.info("Chat generation: waited for attachments to finish indexing", {
+        jobId: parentMessageId,
+        waitedMs: Date.now() - attachmentWaitStartedAt,
+      });
+    }
 
     const needsTitle = consultation.title === null;
 
