@@ -5,7 +5,8 @@ import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
-import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
+import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
+import { generateTitleViaWs,streamChatWonderMessage, getChatWonderSessionId, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -40,6 +41,10 @@ function sleep(ms: number) {
 /** Link target chat-wonder has the model write for a generated document's inline download link. */
 const DOWNLOAD_PLACEHOLDER = "(#download)";
 
+// Kept under AWS Transcribe's own 12-minute ceiling (transcription.service.ts) so a slow-but-healthy
+// video usually finishes first, while a hung one still lets the turn proceed eventually.
+const ATTACHMENT_READY_MAX_WAIT_MS = 10 * 60_000;
+const ATTACHMENT_READY_POLL_MS = 3_000;
 const PERSIST_RETRIES = 3;
 const PERSIST_RETRY_BASE_MS = 2_000;
 
@@ -289,11 +294,6 @@ export default class ChatSvc {
     );
     logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
 
-    // Fire-and-forget — logged only (see message-triage.ts), no DB column exists yet to persist
-    // this against. Must never delay message send/generation, so it's not awaited here.
-    // flagMessageUrgency never rejects (catches internally), so no .catch needed.
-    void flagMessageUrgency(userInput);
-
     if (documentIds?.length) {
       await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
     }
@@ -375,6 +375,28 @@ export default class ChatSvc {
     // for the first token. Purely a live-UX signal: nothing downstream depends on it arriving.
     emitEvent("chat:started", {});
     logger.info("Chat generation: chat:started emitted", { jobId: parentMessageId, consultationId });
+
+    // Attachments sent with this message are still PENDING while they're extracted/transcribed
+    // (audio/video especially), and grounding below only sees READY documents — replying now would
+    // tell the user no files are attached. Hold the reply (the client already shows "generating")
+    // until they settle, capped so a stuck extraction can't hang the turn forever.
+    const attachmentWaitStartedAt = Date.now();
+    try {
+      while (
+        Date.now() - attachmentWaitStartedAt < ATTACHMENT_READY_MAX_WAIT_MS &&
+        (await DocumentRepo.countPendingByMessage(parentMessageId)) > 0
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, ATTACHMENT_READY_POLL_MS));
+      }
+    } catch (err) {
+      logger.warn("Chat generation: attachment wait failed, continuing", { err, jobId: parentMessageId });
+    }
+    if (Date.now() - attachmentWaitStartedAt > ATTACHMENT_READY_POLL_MS) {
+      logger.info("Chat generation: waited for attachments to finish indexing", {
+        jobId: parentMessageId,
+        waitedMs: Date.now() - attachmentWaitStartedAt,
+      });
+    }
 
     const needsTitle = consultation.title === null;
 
@@ -475,7 +497,24 @@ export default class ChatSvc {
       ? await TranscriptionChunkSvc.formatGroundingContext(transcriptGrounding)
       : "";
 
-    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext]
+    // Awaited (unlike a purely observational log-only call) because its result feeds
+    // resolvedContext below — chat-wonder needs it before generation starts, not after.
+    // flagMessageUrgency never rejects and returns null when USE_JEV_MESSAGE_TRIAGE is unset,
+    // so this is a no-op (empty string, no added latency) whenever the flag is off.
+    const urgency = await flagMessageUrgency(userInput);
+    const urgencyContext = urgency?.urgent
+      ? `[Jev triage] This message was flagged as urgent (${Math.round(urgency.probability * 100)}% confidence) — it may involve a time-sensitive deadline, an imminent hearing, or an emergency. Prioritize directness and actionable next steps in your response.`
+      : "";
+    logger.info("Jev chat context injection", {
+      feature: "message-triage",
+      consultationId,
+      messageId: parentMessageId,
+      urgent: urgency?.urgent ?? false,
+      probability: urgency?.probability ?? null,
+      injected: Boolean(urgencyContext),
+    });
+
+    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext, urgencyContext]
       .filter(Boolean)
       .join("\n\n");
     logger.info("Chat: grounding/RAG context resolved", {
@@ -483,6 +522,7 @@ export default class ChatSvc {
       messageId: parentMessageId,
       caseDocumentChunks: grounding?.caseDocumentIds.length ?? 0,
       transcriptChunks: transcriptGrounding?.transcriptionIds.length ?? 0,
+      urgent: urgency?.urgent ?? false,
       contextChars: resolvedContext.length,
       elapsedMs: Date.now() - t0,
     });
@@ -1114,7 +1154,7 @@ export default class ChatSvc {
     }
 
     const message = await ChatRepo.findLatestAssistantMessage(consultationId);
-    return message?.relatedCases?.items ?? [];
+    return enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
   }
 
   /** Starts rendering the audio for a message's already-generated Audio Overview script

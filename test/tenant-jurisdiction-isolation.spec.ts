@@ -24,12 +24,15 @@ describe("Tenant + jurisdiction isolation across a PH org and a UK org", () => {
     await prisma.user.create({ data: { id: userA, email: `iso-a-${userA}@example.com`, username: `iso-a-${userA}` } });
     await prisma.user.create({ data: { id: userB, email: `iso-b-${userB}@example.com`, username: `iso-b-${userB}` } });
 
+    const phTenant = await prisma.tenant.upsert({ where: { code: "PH" }, update: {}, create: { code: "PH", name: "Philippines" } });
+    const ukTenant = await prisma.tenant.upsert({ where: { code: "UK" }, update: {}, create: { code: "UK", name: "United Kingdom" } });
+
     await prisma.organization.create({
       data: {
         id: orgAId,
         name: "Isolation Org PH",
         slug: `iso-org-ph-${orgAId}`,
-        jurisdiction: "PH",
+        tenantId: phTenant.id,
         createdById: userA,
         members: { create: { userId: userA, role: "OWNER" } },
       },
@@ -39,7 +42,7 @@ describe("Tenant + jurisdiction isolation across a PH org and a UK org", () => {
         id: orgBId,
         name: "Isolation Org UK",
         slug: `iso-org-uk-${orgBId}`,
-        jurisdiction: "UK",
+        tenantId: ukTenant.id,
         createdById: userB,
         members: { create: { userId: userB, role: "OWNER" } },
       },
@@ -57,9 +60,9 @@ describe("Tenant + jurisdiction isolation across a PH org and a UK org", () => {
     await prisma.user.deleteMany({ where: { id: { in: [userA, userB] } } });
   });
 
-  it("resolves each case's jurisdiction from its own organization", async () => {
-    expect(await CaseAccess.resolveJurisdiction(caseAId)).to.equal("PH");
-    expect(await CaseAccess.resolveJurisdiction(caseBId)).to.equal("UK");
+  it("resolves each case's tenant code from its own organization", async () => {
+    expect(await CaseAccess.resolveTenantCode(caseAId)).to.equal("PH");
+    expect(await CaseAccess.resolveTenantCode(caseBId)).to.equal("UK");
   });
 
   it("lets a member read their own org's case", async () => {

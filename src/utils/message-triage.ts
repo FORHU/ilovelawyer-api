@@ -21,6 +21,7 @@ export async function flagMessageUrgency(userInput: string): Promise<UrgencyFlag
 
   try {
     const client = getTypeSafeClient();
+    logger.info("Jev request", { feature: "message-triage", question: "urgency", content: message });
     const response = await client.systemOne({
       state: { message },
       questions: {
@@ -29,10 +30,10 @@ export async function flagMessageUrgency(userInput: string): Promise<UrgencyFlag
     });
     const answer = response.answers.urgency;
     const urgent = answer.noul >= 0.5;
-    logger.info("Jev message urgency response", { urgent, probability: answer.noul });
+    logger.info("Jev response", { feature: "message-triage", urgent, probability: answer.noul });
     return { urgent, probability: answer.noul };
   } catch (err) {
-    logger.warn("Jev message urgency classification failed", { err });
+    logger.warn("Jev error", { feature: "message-triage", err });
     return null;
   }
 }

@@ -73,6 +73,7 @@ export function evaluateCitationHeuristic(input: CitationCheckInput): CitationCh
  * this only runs to double-check what the heuristic would otherwise call INVALID. */
 export async function evaluateCitationWithJev(quote: string, official: string): Promise<CitationCheckResult> {
   const client = getTypeSafeClient();
+  logger.info("Jev request", { feature: "citation-validity", question: "validity", officialText: official, quotedText: quote });
   const response = await client.systemOne({
     state: { officialText: official, quotedText: quote },
     questions: {
@@ -83,7 +84,8 @@ export async function evaluateCitationWithJev(quote: string, official: string): 
     },
   });
   const answer = response.answers.validity;
-  logger.info("Jev citation validity response", {
+  logger.info("Jev response", {
+    feature: "citation-validity",
     choice: answer.choice,
     confidence: answer.confidence,
     probabilities: answer.probabilities,
@@ -110,7 +112,7 @@ export async function evaluateCitation(input: CitationCheckInput): Promise<Citat
   try {
     return await evaluateCitationWithJev(input.quotedText.trim(), input.officialText!.trim());
   } catch (err) {
-    logger.warn("Jev citation validity classification failed", { err });
+    logger.warn("Jev error", { feature: "citation-validity", err });
     return heuristic;
   }
 }
