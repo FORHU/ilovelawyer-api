@@ -8,8 +8,10 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 
 const router = express.Router();
 
-router.use(validSession);
-
-router.post("/upload", upload.single("file"), asyncHandler(FilesCtrl.upload));
+router.post("/upload", validSession, upload.single("file"), asyncHandler(FilesCtrl.upload));
+// Public by omission (no validSession): the browser never sends a Bearer header for an <a>,
+// <audio> or <iframe> src, so ilovelawyer-app's Route Handler calls this server-to-server with
+// only the proxy token as auth — see FilesSvc.resolve.
+router.get("/resolve", asyncHandler(FilesCtrl.resolve));
 
 export default router;

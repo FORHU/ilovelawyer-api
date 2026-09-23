@@ -12,4 +12,16 @@ export default class FilesCtrl {
 
     return res.status(201).json(file);
   }
+
+  /** Called server-to-server by ilovelawyer-app's /files/[token] Route Handler — never by the
+   * browser directly, so there's no user session here; the token itself is the auth. */
+  static async resolve(req: Request, res: Response) {
+    const token = req.query.token;
+    if (typeof token !== "string" || !token) {
+      throw new HttpError("Not found", 404);
+    }
+
+    const url = await FilesSvc.resolve(token);
+    return res.status(200).json({ url });
+  }
 }
