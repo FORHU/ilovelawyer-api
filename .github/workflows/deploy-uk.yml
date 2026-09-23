@@ -1,0 +1,262 @@
+name: Deploy UK
+
+# FORHU/ilovelawyer-api → the London stack (eu-west-2).
+#
+# Same build as deploy-production.yml. Two differences:
+#   * the host has no SSH port and no key pair, so the deploy runs through SSM
+#     Run Command instead of scp + ssh-action;
+#   * the env file travels through Parameter Store (encrypted) rather than being
+#     copied to the box, and carries UK endpoints.
+#
+# Images are tagged uk-<sha> in the same ap-southeast-1 registry, so Singapore's
+# :latest and :<sha> tags are never touched.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to deploy"
+        required: true
+        default: main
+      image_tag:
+        description: "Existing image tag to deploy. Leave blank to build from ref."
+        required: false
+        default: ""
+      run_migrations:
+        description: "Run prisma migrate deploy before swapping the container"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ilovelawyer-uk-deploy        # shared with ilovelawyer-app: one deploy at a time
+  cancel-in-progress: false
+
+env:
+  ECR_REPOSITORY: ilovelawyer-api
+  ECR_REGION: ap-southeast-1          # where the images live
+  AWS_REGION: eu-west-2               # where the UK stack runs
+  ACCOUNT_ID: "617163942417"
+  INSTANCE_ID: i-0c21e7d8c1aae968c
+  APP_DIR: /opt/ilovelawyer
+  ENV_PARAM: /ilovelawyer-uk/api-env
+  NODE_ENV: production
+  PORT: "3001"
+
+jobs:
+  deploy:
+    name: Build, Push & Deploy (UK)
+    # Native arm64 — matches Graviton EC2. Do not build linux/arm64 via QEMU on
+    # ubuntu-latest; npm/prisma under emulation looks stuck and can take hours.
+    runs-on: ubuntu-24.04-arm
+    environment: uk
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_UK_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.image_tag }}"
+          [ -z "$TAG" ] && TAG="uk-${{ github.sha }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "registry=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.ECR_REGION }}.amazonaws.com" >> "$GITHUB_OUTPUT"
+          echo "Deploying ${{ env.ECR_REPOSITORY }}:$TAG"
+
+      # The registry is in ap-southeast-1, so log in against that region.
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "${{ env.ECR_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ steps.tag.outputs.registry }}"
+
+      - name: Set up Docker Buildx
+        if: ${{ github.event.inputs.image_tag == '' }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        if: ${{ github.event.inputs.image_tag == '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/arm64
+          provenance: false
+          tags: ${{ steps.tag.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+
+      # Written here, stored encrypted, read by the instance at deploy time.
+      # Nothing sensitive is ever copied onto the box over the network.
+      - name: Store env file in Parameter Store
+        env:
+          DATABASE_URL: ${{ secrets.UK_DATABASE_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          MAILER_TRANSPORT_HOST: ${{ secrets.MAILER_TRANSPORT_HOST }}
+          MAILER_TRANSPORT_PORT: ${{ vars.MAILER_TRANSPORT_PORT }}
+          MAILER_TRANSPORT_SECURE: ${{ vars.MAILER_TRANSPORT_SECURE }}
+          MAILER_EMAIL: ${{ secrets.MAILER_EMAIL }}
+          MAILER_PASSWORD: ${{ secrets.MAILER_PASSWORD }}
+          ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
+          REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
+          ACCESS_TOKEN_EXPIRY: ${{ vars.ACCESS_TOKEN_EXPIRY }}
+          REFRESH_TOKEN_EXPIRY_DAYS: ${{ vars.REFRESH_TOKEN_EXPIRY_DAYS }}
+          REDIS_URL: ${{ secrets.UK_REDIS_URL }}
+          REDIS_HOST: ${{ vars.UK_REDIS_HOST }}
+          REDIS_PORT: ${{ vars.UK_REDIS_PORT }}
+          REDIS_PASSWORD: ${{ secrets.UK_REDIS_PASSWORD }}
+          SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+          CLIENT_URL: ${{ vars.UK_CLIENT_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          CHAT_WONDER_API_URL: ${{ vars.UK_CHAT_WONDER_API_URL }}
+          CHAT_WONDER_WS_URL: ${{ vars.UK_CHAT_WONDER_WS_URL }}
+          CHAT_WONDER_API_KEY: ${{ secrets.CHAT_WONDER_API_KEY }}
+          CLOUDFRONT_URL: ${{ vars.UK_CLOUDFRONT_URL }}
+          FILE_TOKEN_SECRET: ${{ secrets.FILE_TOKEN_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          USE_JEV_PROPOSITION: ${{ vars.USE_JEV_PROPOSITION }}
+          USE_JEV_VALIDITY: ${{ vars.USE_JEV_VALIDITY }}
+          USE_JEV_MESSAGE_TRIAGE: ${{ vars.USE_JEV_MESSAGE_TRIAGE }}
+          JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
+          UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
+          UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
+        run: |
+          set -euo pipefail
+          umask 077
+          cat > env.tmp << EOF
+          DATABASE_URL=${DATABASE_URL}
+          SECRET_KEY=${SECRET_KEY}
+          MAILER_TRANSPORT_HOST=${MAILER_TRANSPORT_HOST}
+          MAILER_TRANSPORT_PORT=${MAILER_TRANSPORT_PORT}
+          MAILER_TRANSPORT_SECURE=${MAILER_TRANSPORT_SECURE}
+          MAILER_EMAIL=${MAILER_EMAIL}
+          MAILER_PASSWORD=${MAILER_PASSWORD}
+          ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
+          REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET}
+          ACCESS_TOKEN_EXPIRY=${ACCESS_TOKEN_EXPIRY}
+          REFRESH_TOKEN_EXPIRY_DAYS=${REFRESH_TOKEN_EXPIRY_DAYS}
+          REDIS_URL=${REDIS_URL}
+          REDIS_HOST=${REDIS_HOST}
+          REDIS_PORT=${REDIS_PORT}
+          REDIS_PASSWORD=${REDIS_PASSWORD}
+          SERVICE_ACCOUNT=${SERVICE_ACCOUNT}
+          CLIENT_URL=${CLIENT_URL}
+          GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+          GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+          CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
+          CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}
+          CHAT_WONDER_API_KEY=${CHAT_WONDER_API_KEY}
+          AWS_S3_BUCKET=ilovelawyer-uk
+          DOCUMENT_EXTRACTION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/document-extraction
+          CITATION_EXTRACTION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/citation-extraction
+          AUDIO_OVERVIEW_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/audio-overview
+          CASE_RECONSTRUCTION_AUDIO_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/case-reconstruction-audio
+          AI_GENERATION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/ai_generate
+          MESSAGE_PERSISTENCE_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/message-queue
+          CASE_GRAPH_PROMOTION_QUEUE_URL=
+          AWS_REGION=${{ env.AWS_REGION }}
+          CLOUDFRONT_URL=${CLOUDFRONT_URL}
+          FILE_TOKEN_SECRET=${FILE_TOKEN_SECRET}
+          OPENAI_API_KEY=${OPENAI_API_KEY}
+          TYPESAFE_API_KEY=${TYPESAFE_API_KEY}
+          USE_JEV_PROPOSITION=${USE_JEV_PROPOSITION}
+          USE_JEV_VALIDITY=${USE_JEV_VALIDITY}
+          USE_JEV_MESSAGE_TRIAGE=${USE_JEV_MESSAGE_TRIAGE}
+          JURIS_PH_API_URL=${JURIS_PH_API_URL}
+          UK_CASELAW_BASE_URL=${UK_CASELAW_BASE_URL}
+          UK_LEGISLATION_BASE_URL=${UK_LEGISLATION_BASE_URL}
+          NODE_ENV=${{ env.NODE_ENV }}
+          PORT=${{ env.PORT }}
+          EOF
+
+          # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the UK instance role grants
+          # S3, SQS, Polly, Textract and Transcribe. An empty value here would
+          # break the SDK's credential chain.
+
+          aws ssm put-parameter \
+            --name "${{ env.ENV_PARAM }}" \
+            --type SecureString --overwrite \
+            --value "file://env.tmp" \
+            --region "${{ env.AWS_REGION }}" > /dev/null
+
+          rm -f env.tmp
+
+      - name: Deploy via SSM
+        id: send
+        env:
+          REGISTRY: ${{ steps.tag.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          MIGRATE: ${{ github.event.inputs.run_migrations }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${{ env.ECR_REPOSITORY }}:${TAG}"
+          ENVFILE="${{ env.APP_DIR }}/ilovelawyer-api.env"
+
+          COMMANDS=(
+            "set -euo pipefail"
+            "mkdir -p ${{ env.APP_DIR }}"
+            "aws ssm get-parameter --name ${{ env.ENV_PARAM }} --with-decryption --region ${{ env.AWS_REGION }} --query Parameter.Value --output text > ${ENVFILE}"
+            "chmod 600 ${ENVFILE}"
+            "aws ecr get-login-password --region ${{ env.ECR_REGION }} | docker login --username AWS --password-stdin ${REGISTRY}"
+            "docker pull --platform linux/arm64 ${IMAGE}"
+          )
+
+          if [ "${MIGRATE}" = "true" ]; then
+            COMMANDS+=("docker run --rm --platform linux/arm64 --network host --entrypoint npx -v ${ENVFILE}:/app/.env:ro ${IMAGE} prisma migrate deploy")
+          fi
+
+          COMMANDS+=(
+            "docker rm -f ilovelawyer-api 2>/dev/null || true"
+            "docker run -d --name ilovelawyer-api --restart unless-stopped --platform linux/arm64 --env-file ${ENVFILE} -p 127.0.0.1:${{ env.PORT }}:${{ env.PORT }} ${IMAGE}"
+            "docker image prune -f"
+          )
+
+          # jq builds the JSON, so a quote inside any command cannot break it.
+          PARAMS=$(printf '%s\n' "${COMMANDS[@]}" | jq -R . | jq -sc '{commands: .}')
+
+          CMD_ID=$(aws ssm send-command \
+            --region "${{ env.AWS_REGION }}" \
+            --instance-ids "${{ env.INSTANCE_ID }}" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ilovelawyer-api ${TAG}" \
+            --timeout-seconds 900 \
+            --parameters "${PARAMS}" \
+            --query Command.CommandId --output text)
+
+          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
+          echo "SSM command: $CMD_ID"
+
+      - name: Wait for the deploy
+        run: |
+          set -uo pipefail
+          STATUS=Pending
+          for i in $(seq 1 90); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${{ env.AWS_REGION }}" \
+              --command-id "${{ steps.send.outputs.command_id }}" \
+              --instance-id "${{ env.INSTANCE_ID }}" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            echo "status: $STATUS"
+            case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 10
+          done
+
+          aws ssm get-command-invocation \
+            --region "${{ env.AWS_REGION }}" \
+            --command-id "${{ steps.send.outputs.command_id }}" \
+            --instance-id "${{ env.INSTANCE_ID }}" \
+            --query '[StandardOutputContent,StandardErrorContent]' --output text
+
+          [ "$STATUS" = "Success" ] || { echo "::error::deploy $STATUS"; exit 1; }
