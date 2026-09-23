@@ -979,6 +979,7 @@ model Event {
   title                String
   type                 String    @default("Meeting")
   dateTime             DateTime  @map("date_time")
+  endDateTime          DateTime? @map("end_date_time")
   clientEmail          String?   @map("client_email")
   notes                String?   @db.Text
   status               String    @default("pending")

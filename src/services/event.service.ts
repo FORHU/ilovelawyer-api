@@ -54,6 +54,8 @@ export default class EventSvc {
     type?: string;
     date_time?: string;
     dateTime?: string;
+    end_date_time?: string;
+    endDateTime?: string;
     client_email?: string;
     clientEmail?: string;
     notes?: string;
@@ -67,10 +69,12 @@ export default class EventSvc {
     reminderLeadMinutes?: number;
     reminder_lead_minutes?: number;
   }) {
+    const endDateTimeSource = body.end_date_time || body.endDateTime;
     const event = await EventRepo.create(organizationId, userId, {
       title: body.title || "Consultation",
       type: body.type || "Meeting",
       dateTime: new Date(body.date_time || body.dateTime || ""),
+      endDateTime: endDateTimeSource ? new Date(endDateTimeSource) : undefined,
       clientEmail: body.client_email || body.clientEmail || undefined,
       notes: body.notes || undefined,
       status: body.status || "pending",
@@ -118,6 +122,10 @@ export default class EventSvc {
     if (body.title !== undefined) data.title = body.title;
     if (body.type !== undefined) data.type = body.type;
     if (body.date_time !== undefined || body.dateTime !== undefined) data.dateTime = new Date(body.date_time || body.dateTime);
+    if (body.end_date_time !== undefined || body.endDateTime !== undefined) {
+      const endDateTimeValue = body.end_date_time ?? body.endDateTime;
+      data.endDateTime = endDateTimeValue ? new Date(endDateTimeValue) : null;
+    }
     if (body.client_email !== undefined || body.clientEmail !== undefined) data.clientEmail = body.client_email || body.clientEmail;
     if (body.notes !== undefined) data.notes = body.notes;
     if (body.last_reminder_sent_at !== undefined) data.lastReminderSentAt = new Date(body.last_reminder_sent_at);
