@@ -33,6 +33,30 @@ export const INTENT_HINT_THRESHOLD = 0.7;
 export const ATTACHMENT_THRESHOLD = 0.75;
 
 /**
+ * Locales the product answers in. chat-wonder turns whatever it is told into a hard instruction
+ * ("always respond in the `{x}`-locale language") backed by zero-tolerance language-mixing rules,
+ * so this list is deliberately the set we serve rather than every language Jev might name.
+ */
+export const REPLY_LANGUAGES = { ENGLISH: "en", TAGALOG: "tl", KOREAN: "ko" } as const;
+export type ReplyLanguageChoice = keyof typeof REPLY_LANGUAGES | "OTHER";
+
+/**
+ * Confidence at or above which Jev's language call is trusted. Below it we answer in the tenant's
+ * own language instead of acting on a coin flip — a wrong language is the most visible failure a
+ * legal answer can have, and "unsure" should mean "use the default", never "guess".
+ *
+ * Set from measurement, not taste: on a 19-prompt comparison Jev was right 18 times, and the two
+ * shakiest reads ("res ipsa loquitur" 44%, "estafa case" 76% → OTHER) were exactly the Latin/loan
+ * -word cases where no detector should be believed. The bar puts those on the default.
+ */
+export const REPLY_LANGUAGE_MIN_CONFIDENCE = 0.8;
+
+/** Locales we can actually answer in — the values User.preferredLanguage is expected to hold,
+ * and the app's own locale set (en/tl/ko). Anything outside it falls to English as a last resort
+ * because we have no prompt or UI for it. */
+const SUPPORTED_LOCALES = new Set<string>(Object.values(REPLY_LANGUAGES));
+
+/**
  * What the user is asking the assistant to DO — one label per message, aligned with the legal
  * persona's actual capabilities in chat-wonder (get_legal_recommendation, analyze_document,
  * generate_legal_document, draft_pleading, the research tools) plus the paralegal-style work the
@@ -92,6 +116,10 @@ export interface MessageTriage extends UrgencyFlag {
   /** Probability that the message refers to a document/file/email the assistant would need to
    * read — compared against what is actually attached or grounded, see missingAttachmentContextFor. */
   refersToAttachment: number;
+  /** The language the reply should be written in, as Jev read it, plus how sure it was. Resolved
+   * against the tenant default by resolveReplyLanguage — don't use this directly. */
+  replyLanguage: ReplyLanguageChoice;
+  replyLanguageConfidence: number;
 }
 
 export function isMessageIntent(value: unknown): value is MessageIntent {
@@ -114,6 +142,7 @@ export interface RawTriageAnswers {
   urgency: { noul: number };
   intent: { choice: string; confidence: number; probabilities: Record<string, number> };
   attachment: { noul: number };
+  replyLanguage: { choice: string; confidence: number };
 }
 
 /** Turns Jev's answers into a MessageTriage: applies URGENCY_THRESHOLD, maps an unknown or
@@ -132,7 +161,38 @@ export function parseTriage(answers: RawTriageAnswers): MessageTriage {
     intentConfidence: answers.intent.confidence,
     intentProbabilities,
     refersToAttachment: answers.attachment.noul,
+    replyLanguage: (answers.replyLanguage.choice in REPLY_LANGUAGES || answers.replyLanguage.choice === "OTHER"
+      ? answers.replyLanguage.choice
+      : "OTHER") as ReplyLanguageChoice,
+    replyLanguageConfidence: answers.replyLanguage.confidence,
   };
+}
+
+/**
+ * The locale to tell chat-wonder to answer in, or undefined to leave it to chat-wonder's own
+ * langid fallback (when triage did not run at all).
+ *
+ * Exists because langid — what chat-wonder uses unaided — is badly wrong on legal text: measured
+ * live, "uk law" classifies as Indonesian, "CPR 15.4 defence deadline" as French, "annulment PH"
+ * as Spanish and "reclusion perpetua bail" as Indonesian. Every one of those becomes a confident
+ * answer in the wrong language, because the detected locale is handed to the model as an order.
+ *
+ * The fallback is the USER'S OWN stated language (User.preferredLanguage), never a house default.
+ * An earlier version fell back to a per-tenant constant that was "en" for both tenants, which
+ * quietly forced English on every uncertain message — including a Tagalog one that happened to
+ * read at 79%. A detector that is unsure should defer to what the person already told us they
+ * speak, not to what we speak.
+ *
+ * A confident detection still wins over the preference: someone who writes in Tagalog gets a
+ * Tagalog answer whatever their profile says. The preference breaks ties; it does not override.
+ */
+export function resolveReplyLanguage(triage: MessageTriage | null, preferredLanguage?: string | null): string | undefined {
+  if (!triage) return undefined;
+  if (triage.replyLanguage !== "OTHER" && triage.replyLanguageConfidence >= REPLY_LANGUAGE_MIN_CONFIDENCE) {
+    return REPLY_LANGUAGES[triage.replyLanguage];
+  }
+  const preferred = (preferredLanguage ?? "").trim().toLowerCase();
+  return SUPPORTED_LOCALES.has(preferred) ? preferred : "en";
 }
 
 /**
@@ -150,7 +210,7 @@ export async function triageMessage(userInput: string): Promise<MessageTriage | 
 
   try {
     const client = getTypeSafeClient();
-    logger.info("Jev request", { feature: "message-triage", questions: ["urgency", "intent", "attachment"], content: message });
+    logger.info("Jev request", { feature: "message-triage", questions: ["urgency", "intent", "attachment", "replyLanguage"], content: message });
     const intentOptions = Object.fromEntries(MESSAGE_INTENTS.map((k) => [k, null])) as Record<MessageIntent, null>;
     const response = await client.systemOne({
       state: { message },
@@ -159,6 +219,10 @@ export async function triageMessage(userInput: string): Promise<MessageTriage | 
           "Does this message need prompt action from the lawyer receiving it? Yes if there is a deadline, limitation period, hearing, or emergency that binds the user or their client and is live and approaching — including one the reader must infer from a date plus a known rule. No if the only period mentioned is one the user is GIVING to someone else, if the event is routine and weeks or months away, if the matter is already concluded, if a date appears only inside a citation or reference, or if the message asks in general terms how a rule or period works.",
         ),
         intent: choice(intentQuestion(), intentOptions),
+        replyLanguage: choice(
+          "What language is this message WRITTEN in? Judge the language of the words the user typed, not the subject matter — legal terms of art in Latin (res ipsa loquitur, habeas corpus, reclusion perpetua), statute and rule references (s.43B ERA 1996, CPR 15.4), and abbreviations are used inside English legal writing and do not make the message another language. Answer OTHER only if the message is genuinely written in a language that is not English, Tagalog or Korean.",
+          { ENGLISH: null, TAGALOG: null, KOREAN: null, OTHER: null },
+        ),
         attachment: noul(
           "Does the message refer to a specific document, file, email, contract, decision, or other material that the user has attached or uploaded, or expects the assistant to already have on file — such that the assistant would need to read that material to answer? Material quoted or pasted inside the message itself does NOT count, and neither does the assistant's own previous answer or draft.",
         ),
@@ -173,6 +237,8 @@ export async function triageMessage(userInput: string): Promise<MessageTriage | 
       intentConfidence: result.intentConfidence,
       intentProbabilities: result.intentProbabilities,
       refersToAttachment: result.refersToAttachment,
+      replyLanguage: result.replyLanguage,
+      replyLanguageConfidence: result.replyLanguageConfidence,
     });
     return result;
   } catch (err) {

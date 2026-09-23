@@ -7,6 +7,7 @@ import {
   intentContextFor,
   missingAttachmentContextFor,
   notificationFor,
+  resolveReplyLanguage,
   triageContextFor,
   MESSAGE_INTENTS,
   MessageTriage,
@@ -14,6 +15,7 @@ import {
   ATTACHMENT_THRESHOLD,
   URGENCY_NOTIFY_THRESHOLD,
   URGENCY_THRESHOLD,
+  REPLY_LANGUAGE_MIN_CONFIDENCE,
 } from "../src/utils/message-triage";
 
 const routineConsultation: MessageTriage = {
@@ -23,6 +25,8 @@ const routineConsultation: MessageTriage = {
   intentConfidence: 0.9,
   intentProbabilities: { CONSULTATION: 0.9 },
   refersToAttachment: 0.05,
+  replyLanguage: "ENGLISH",
+  replyLanguageConfidence: 0.99,
 };
 
 describe("Jev message triage", () => {
@@ -121,6 +125,52 @@ describe("Jev message triage", () => {
       const guard = missingAttachmentContextFor(dependsOnDoc, false);
       expect(guard).to.include("Do not guess or reconstruct");
       expect(guard).to.include("ask the user to upload or paste it");
+    });
+  });
+
+  describe("resolveReplyLanguage", () => {
+    it("maps a confident detection to its locale", () => {
+      expect(resolveReplyLanguage(routineConsultation, "en")).to.equal("en");
+      expect(resolveReplyLanguage({ ...routineConsultation, replyLanguage: "TAGALOG" }, "en")).to.equal("tl");
+      expect(resolveReplyLanguage({ ...routineConsultation, replyLanguage: "KOREAN" }, "en")).to.equal("ko");
+    });
+
+    it("lets a confident detection override the stated preference — writing in Tagalog gets Tagalog", () => {
+      expect(resolveReplyLanguage({ ...routineConsultation, replyLanguage: "TAGALOG" }, "en")).to.equal("tl");
+    });
+
+    it("falls back to the USER'S OWN language below the bar, not to English", () => {
+      // The whole point of the correction: an uncertain read must not force English on someone
+      // who told us they speak Tagalog. "res ipsa loquitur" read at 44% in the live comparison.
+      const unsure = { ...routineConsultation, replyLanguage: "ENGLISH" as const, replyLanguageConfidence: REPLY_LANGUAGE_MIN_CONFIDENCE - 0.01 };
+      expect(resolveReplyLanguage(unsure, "tl")).to.equal("tl");
+      expect(resolveReplyLanguage(unsure, "ko")).to.equal("ko");
+      expect(resolveReplyLanguage(unsure, "en")).to.equal("en");
+    });
+
+    it("respects the bar itself", () => {
+      const atBar = { ...routineConsultation, replyLanguage: "TAGALOG" as const, replyLanguageConfidence: REPLY_LANGUAGE_MIN_CONFIDENCE };
+      expect(resolveReplyLanguage(atBar, "en")).to.equal("tl");
+    });
+
+    it("falls back on OTHER however confident it is — we only answer in languages we serve", () => {
+      expect(resolveReplyLanguage({ ...routineConsultation, replyLanguage: "OTHER", replyLanguageConfidence: 1 }, "tl")).to.equal("tl");
+    });
+
+    it("returns undefined when triage did not run, leaving chat-wonder on its own detector", () => {
+      expect(resolveReplyLanguage(null, "tl")).to.equal(undefined);
+    });
+
+    it("uses English as the last resort for a missing or unserved preference", () => {
+      const unsure = { ...routineConsultation, replyLanguage: "OTHER" as const };
+      for (const pref of [undefined, null, "", "  ", "fr", "zz"]) {
+        expect(resolveReplyLanguage(unsure, pref), String(pref)).to.equal("en");
+      }
+    });
+
+    it("is case- and whitespace-tolerant about the stored preference", () => {
+      const unsure = { ...routineConsultation, replyLanguage: "OTHER" as const };
+      expect(resolveReplyLanguage(unsure, " TL ")).to.equal("tl");
     });
   });
 

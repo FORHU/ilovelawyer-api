@@ -1,4 +1,5 @@
 import ChatRepo from "../repositories/chat.repository";
+import AuthRepo from "../repositories/auth.repository";
 import DocumentRepo from "../repositories/document.repository";
 import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
@@ -20,7 +21,7 @@ import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
 import GroundingVerifierSvc from "./grounding-verifier.service";
-import { triageMessage, triageContextFor, notificationFor, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
+import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
 import NotificationSvc from "./notification.service";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
@@ -592,6 +593,15 @@ export default class ChatSvc {
           Boolean(transcriptGrounding) ||
           (await DocumentRepo.countForMessage(parentMessageId).catch(() => 0)) > 0;
     const triageContext = triageContextFor(triage, { hasAttachedMaterial });
+    // The locale chat-wonder must answer in. Undefined when triage didn't run, which leaves
+    // chat-wonder on its own langid path — see resolveReplyLanguage for why that path is the
+    // problem this replaces. The sender's own preferredLanguage is the tie-breaker when Jev is
+    // unsure, so an uncertain read never silently forces English on a non-English speaker; it is
+    // only looked up on turns that were actually triaged.
+    const senderPreferredLanguage = triage
+      ? await AuthRepo.findPreferredLanguage(userId).catch(() => null)
+      : undefined;
+    const replyLanguage = resolveReplyLanguage(triage, senderPreferredLanguage);
     logger.info("Jev chat context injection", {
       feature: "message-triage",
       consultationId,
@@ -601,6 +611,9 @@ export default class ChatSvc {
       intent: triage?.intent ?? null,
       intentConfidence: triage?.intentConfidence ?? null,
       refersToAttachment: triage?.refersToAttachment ?? null,
+      replyLanguage: replyLanguage ?? null,
+      replyLanguageRaw: triage?.replyLanguage ?? null,
+      replyLanguageConfidence: triage?.replyLanguageConfidence ?? null,
       hasAttachedMaterial,
       missingAttachment: Boolean(triage) && !hasAttachedMaterial,
       injected: Boolean(triageContext),
@@ -797,6 +810,7 @@ export default class ChatSvc {
             () => {
               if (!signal.aborted) emitEvent("chat:answer-complete", {});
             },
+            replyLanguage,
           );
         const result =
           generationKind && effectiveCaseId
@@ -1278,9 +1292,10 @@ export default class ChatSvc {
     tenantCode?: TenantCode,
     signal?: AbortSignal,
     onAnswerComplete?: () => void,
+    replyLanguage?: string,
   ) {
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
@@ -1288,7 +1303,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage);
     }
   }
 

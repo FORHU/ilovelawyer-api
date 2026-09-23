@@ -43,6 +43,14 @@ export default class AuthRepo {
     return prisma.user.findUnique({ where: { email }, include: { tenant: { select: { code: true, name: true } } } });
   }
 
+  /** The locale this user asked to be addressed in (User.preferredLanguage). Read per chat turn
+   * by ChatSvc when Jev's language read is too uncertain to act on — see resolveReplyLanguage,
+   * which defers to the person's own stated language rather than to a house default. */
+  static async findPreferredLanguage(id: string): Promise<string | null> {
+    const user = await prisma.user.findUnique({ where: { id }, select: { preferredLanguage: true } });
+    return user?.preferredLanguage ?? null;
+  }
+
   static async findById(id: string) {
     const user = await prisma.user.findUnique({ where: { id }, select: PUBLIC_USER_SELECT });
     return user ? toPublicUser(user) : null;

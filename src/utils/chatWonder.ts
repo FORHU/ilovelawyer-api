@@ -359,6 +359,11 @@ export function streamChatWonderMessage(
    * seconds and that this promise still waits for. Lets the UI tell "text done, analysis still
    * finishing" apart from "still writing the answer". Never throws into the stream. */
   onAnswerComplete?: () => void,
+  /** Locale the reply must be written in ("en" / "tl" / "ko"), resolved by Jev triage upstream
+   * (see resolveReplyLanguage). Omitted, chat-wonder falls back to langid on the query — which
+   * reads "uk law" as Indonesian and "CPR 15.4 defence deadline" as French, and then instructs
+   * the model to answer in that language. */
+  replyLanguage?: string,
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -484,6 +489,7 @@ export function streamChatWonderMessage(
             case_document_chunk_ids?: string[];
             case_document_manifest?: { id: string; name: string; category: string | null }[];
             case_document_texts?: { id: string; name: string; text: string }[];
+            reply_language?: string;
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -492,6 +498,9 @@ export function streamChatWonderMessage(
           };
           if (documentContext) {
             payload.document_context = documentContext;
+          }
+          if (replyLanguage) {
+            payload.reply_language = replyLanguage;
           }
           // Always send case_document_ids (including []) so chat-wonder replaces
           // session-scoped active_case_documents instead of keeping prior-case docs.

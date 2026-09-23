@@ -15,7 +15,7 @@ import {
 } from "../src/utils/message-triage";
 
 /** A well-formed Jev reply for one intent, overridable per test. */
-function answers(overrides: Partial<{ choice: string; confidence: number; probabilities: Record<string, number>; urgency: number; attachment: number }> = {}): RawTriageAnswers {
+function answers(overrides: Partial<{ choice: string; confidence: number; probabilities: Record<string, number>; urgency: number; attachment: number; language: string; languageConfidence: number }> = {}): RawTriageAnswers {
   return {
     urgency: { noul: overrides.urgency ?? 0.05 },
     intent: {
@@ -24,6 +24,7 @@ function answers(overrides: Partial<{ choice: string; confidence: number; probab
       probabilities: overrides.probabilities ?? { CONSULTATION: 0.9, OTHER: 0.1 },
     },
     attachment: { noul: overrides.attachment ?? 0.05 },
+    replyLanguage: { choice: overrides.language ?? "ENGLISH", confidence: overrides.languageConfidence ?? 0.99 },
   };
 }
 
@@ -102,6 +103,19 @@ describe("MESSAGE_INTENTS", () => {
       expect(ctx.split("\n")[0]).to.equal("[REQUEST TYPE: DEADLINE_COMPUTATION (83% confidence).]");
     });
   });
+
+  describe("parseTriage — reply language", () => {
+    it("passes a known language through with its confidence", () => {
+      const t = parseTriage(answers({ language: "TAGALOG", languageConfidence: 0.93 }))
+      expect(t.replyLanguage).to.equal("TAGALOG")
+      expect(t.replyLanguageConfidence).to.equal(0.93)
+    })
+
+    it("maps an unrecognised language label to OTHER, so the tenant default takes over", () => {
+      expect(parseTriage(answers({ language: "SWAHILI" })).replyLanguage).to.equal("OTHER")
+      expect(parseTriage(answers({ language: "" })).replyLanguage).to.equal("OTHER")
+    })
+  })
 
   describe("isMessageIntent", () => {
     it("accepts every listed intent and rejects everything else", () => {
