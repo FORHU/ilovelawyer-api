@@ -12,6 +12,8 @@ name: Deploy UK
 # :latest and :<sha> tags are never touched.
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
