@@ -117,6 +117,12 @@ export default class DocumentRepo {
   /** Links documents already uploaded (via presign + confirm) to the message they were sent
    * alongside. Scoped to organizationId and consultationId so a caller can't link someone else's
    * document, or one from a different consultation, by guessing an id. */
+  /** How many documents were sent with this specific user message (linkToMessage above) — the
+   * worker's "is anything actually attached?" check for the missing-attachment guard. */
+  static async countForMessage(messageId: string) {
+    return prisma.document.count({ where: { messageId } });
+  }
+
   static async linkToMessage(ids: string[], messageId: string, organizationId: string, consultationId: string) {
     await prisma.document.updateMany({ where: { id: { in: ids }, organizationId, consultationId }, data: { messageId } });
   }

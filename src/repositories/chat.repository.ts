@@ -58,6 +58,13 @@ export default class ChatRepo {
         researchSteps: true,
         documents: { include: { file: true } },
         generatedDocument: { include: { file: true } },
+        // Verification rows for this reply (docs/plans/grounding-verifier.md). `passage` is
+        // deliberately excluded: it is the slab of bundle text the verdict was reached against,
+        // useful when auditing one row but far too heavy to ship on every message in a thread.
+        groundingChecks: {
+          select: { id: true, kind: true, assertion: true, citation: true, documentId: true, verdict: true, confidence: true, evidenceKind: true },
+          orderBy: { createdAt: "asc" },
+        },
       },
     });
   }
@@ -109,6 +116,30 @@ export default class ChatRepo {
       data: { replyStatus: "CANCELLED", pendingReplyContent: null },
     });
     return count === 1;
+  }
+
+  /** Records a Jev triage result (urgency + intent) on the user Message and mirrors urgency onto
+   * the consultation's urgentAt (set on an urgent turn, cleared on a routine one — the
+   * consultation list reads that column, not the messages). One transaction so they can't
+   * disagree. */
+  static async setMessageTriage(
+    messageId: string,
+    consultationId: string,
+    triage: { urgent: boolean; probability: number; intent: string; intentConfidence: number; refersToAttachment: number },
+  ) {
+    return prisma.$transaction([
+      prisma.message.update({
+        where: { id: messageId },
+        data: {
+          urgent: triage.urgent,
+          urgencyProbability: triage.probability,
+          intent: triage.intent,
+          intentConfidence: triage.intentConfidence,
+          refersToAttachment: triage.refersToAttachment,
+        },
+      }),
+      prisma.consultation.update({ where: { id: consultationId }, data: { urgentAt: triage.urgent ? new Date() : null } }),
+    ]);
   }
 
   /** Checkpoints the raw accumulated reply text while a turn is still streaming — throttled by

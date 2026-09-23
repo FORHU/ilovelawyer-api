@@ -6,6 +6,9 @@
  *
  *   npx ts-node scripts/grade-benchmark.ts --bench brackenmoor --org magni-beatae-tempora --answers 2026-09-13-after-fix [--only Q1]
  *
+ * --case <id> grades against that case's READY documents instead of the seeded benchmark case —
+ * use it with answers produced by run-benchmark.ts --consultation so the grader sees the same bundle.
+ *
  * The score is AI-moderated: moderation.md is a sheet for a solicitor to confirm or adjust each
  * criterion; the scorecard records `moderated: false` until someone fills it in. Grader model:
  * BENCHMARK_GRADER_MODEL (default gpt-5.6-terra, reasoning high) via the OpenAI Responses API,
@@ -75,8 +78,11 @@ async function main() {
   const orgArg = arg("org") || "";
   const org = await prisma.organization.findFirst({ where: { OR: [{ slug: orgArg }, { id: orgArg }] } });
   if (!org) throw new Error("--org <slug|id> is required");
-  const caseRow = await prisma.case.findFirst({ where: { organizationId: org.id, caseName: q.caseName } });
-  if (!caseRow) throw new Error("Benchmark case not seeded");
+  const caseArg = arg("case");
+  const caseRow = caseArg
+    ? await prisma.case.findFirst({ where: { id: caseArg, organizationId: org.id } })
+    : await prisma.case.findFirst({ where: { organizationId: org.id, caseName: q.caseName } });
+  if (!caseRow) throw new Error(caseArg ? `Case ${caseArg} not found in ${org.slug}` : "Benchmark case not seeded");
   const bundle = await bundleText(caseRow.id);
   console.log(`bundle text: ${bundle.length} chars; grader: ${MODEL}`);
 

@@ -19,7 +19,10 @@ import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
-import { flagMessageUrgency } from "../utils/message-triage";
+import GroundingVerifierSvc from "./grounding-verifier.service";
+import { triageMessage, triageContextFor, notificationFor, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
+import NotificationSvc from "./notification.service";
+import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getPresignedGetUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -96,6 +99,55 @@ export default class ChatSvc {
 
   static async listConsultations(organizationId: string, caseId?: string) {
     return ChatRepo.listConsultations(organizationId, caseId);
+  }
+
+  /**
+   * Delivers whatever notificationFor (message-triage.ts) decided a triage result warrants, as a
+   * CASE_UPDATE to everyone on the consultation EXCEPT the sender — they already know. Recipients:
+   * the consultation owner plus every accepted participant, deduped. This method owns delivery
+   * only; the policy (which triage results notify, and the wording) lives next to the labels so it
+   * can grow without touching this. Called fire-and-forget from processChatGenerationJob.
+   */
+  static async notifyTriagedMessage(
+    consultation: { id: string; userId: string; organizationId: string; title: string | null; caseId: string | null },
+    senderUserId: string,
+    userInput: string,
+    triage: MessageTriage,
+    effectiveCaseId?: string,
+  ): Promise<void> {
+    const decision = notificationFor(triage, consultation.title);
+    if (!decision) return;
+
+    const participants = await ParticipantRepo.list(consultation.id);
+    const recipients = new Set<string>([consultation.userId, ...participants.map((p) => p.userId)]);
+    recipients.delete(senderUserId);
+    if (recipients.size === 0) return;
+
+    const caseId = consultation.caseId ?? effectiveCaseId;
+    const link = caseId ? `/homepage/terminal/${caseId}?c=${consultation.id}` : `/homepage/terminal?c=${consultation.id}`;
+    const excerpt = userInput.trim().replace(/\s+/g, " ");
+    const message = excerpt.length > 140 ? `${excerpt.slice(0, 137)}…` : excerpt;
+
+    await Promise.all(
+      Array.from(recipients).map((recipientId) =>
+        NotificationSvc.create({
+          userId: recipientId,
+          organizationId: consultation.organizationId,
+          type: "CASE_UPDATE",
+          title: decision.title,
+          message,
+          link,
+        }),
+      ),
+    );
+    logger.info("Jev triage: notification sent", {
+      feature: "message-triage",
+      consultationId: consultation.id,
+      recipients: recipients.size,
+      reason: decision.reason,
+      intent: triage.intent,
+      probability: triage.probability,
+    });
   }
 
   static async renameConsultation(organizationId: string, consultationId: string, title: string) {
@@ -523,22 +575,65 @@ export default class ChatSvc {
 
     // Awaited (unlike a purely observational log-only call) because its result feeds
     // resolvedContext below — chat-wonder needs it before generation starts, not after.
-    // flagMessageUrgency never rejects and returns null when USE_JEV_MESSAGE_TRIAGE is unset,
-    // so this is a no-op (empty string, no added latency) whenever the flag is off.
-    const urgency = await flagMessageUrgency(userInput);
-    const urgencyContext = urgency?.urgent
-      ? `[Jev triage] This message was flagged as urgent (${Math.round(urgency.probability * 100)}% confidence) — it may involve a time-sensitive deadline, an imminent hearing, or an emergency. Prioritize directness and actionable next steps in your response.`
-      : "";
+    // triageMessage never rejects and returns null when USE_JEV_MESSAGE_TRIAGE is unset, so
+    // this is a no-op (empty string, no added latency) whenever the flag is off. One Jev call
+    // answers both questions — urgency and intent (what the user is asking for: advice, a
+    // document, a pleading, document analysis, research, paralegal work).
+    const triage = await triageMessage(userInput);
+    // "Is anything actually attached?" for the missing-attachment guard: documents sent with this
+    // message, ranked case/consultation chunks, pasted document_context, or transcript chunks all
+    // count. Only looked up when Jev says the message depends on a document, so the routine path
+    // pays nothing.
+    const hasAttachedMaterial =
+      !triage || triage.refersToAttachment < ATTACHMENT_THRESHOLD
+        ? true
+        : Boolean(grounding) ||
+          Boolean(documentContext) ||
+          Boolean(transcriptGrounding) ||
+          (await DocumentRepo.countForMessage(parentMessageId).catch(() => 0)) > 0;
+    const triageContext = triageContextFor(triage, { hasAttachedMaterial });
     logger.info("Jev chat context injection", {
       feature: "message-triage",
       consultationId,
       messageId: parentMessageId,
-      urgent: urgency?.urgent ?? false,
-      probability: urgency?.probability ?? null,
-      injected: Boolean(urgencyContext),
+      urgent: triage?.urgent ?? false,
+      probability: triage?.probability ?? null,
+      intent: triage?.intent ?? null,
+      intentConfidence: triage?.intentConfidence ?? null,
+      refersToAttachment: triage?.refersToAttachment ?? null,
+      hasAttachedMaterial,
+      missingAttachment: Boolean(triage) && !hasAttachedMaterial,
+      injected: Boolean(triageContext),
+      injectedChars: triageContext.length,
     });
+    if (triage) {
+      // Everything below is a side channel for the triage signal — none of it may affect
+      // whether this turn generates. Persistence is awaited (it's one small write and the
+      // socket/notification consumers read the row back), the rest is fire-and-forget.
+      await ChatRepo.setMessageTriage(parentMessageId, consultationId, triage).catch((err) =>
+        logger.warn("Jev triage: failed to persist triage on message", { err, consultationId, messageId: parentMessageId }),
+      );
+      emitEvent("chat:triage", {
+        urgent: triage.urgent,
+        probability: triage.probability,
+        intent: triage.intent,
+        intentConfidence: triage.intentConfidence,
+        refersToAttachment: triage.refersToAttachment,
+        missingAttachment: !hasAttachedMaterial,
+      });
+      // notificationFor decides whether anyone else should hear about this turn; this just
+      // hands it the result and never blocks generation on the outcome. Skipped on an
+      // already-aborted job: the user pressed Stop, so pinging the rest of the team about a
+      // turn that is being thrown away would be noise. The triage row above is still written —
+      // it records what was asked, which stays true whether or not the reply was produced.
+      if (!signal.aborted) {
+        void ChatSvc.notifyTriagedMessage(consultation, userId, userInput, triage, effectiveCaseId).catch((err) =>
+          logger.warn("Jev triage: failed to raise notification", { err, consultationId, messageId: parentMessageId }),
+        );
+      }
+    }
 
-    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext, urgencyContext]
+    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext, triageContext]
       .filter(Boolean)
       .join("\n\n");
     logger.info("Chat: grounding/RAG context resolved", {
@@ -546,7 +641,8 @@ export default class ChatSvc {
       messageId: parentMessageId,
       caseDocumentChunks: grounding?.caseDocumentIds.length ?? 0,
       transcriptChunks: transcriptGrounding?.transcriptionIds.length ?? 0,
-      urgent: urgency?.urgent ?? false,
+      urgent: triage?.urgent ?? false,
+      intent: triage?.intent ?? null,
       contextChars: resolvedContext.length,
       elapsedMs: Date.now() - t0,
     });
@@ -632,13 +728,24 @@ export default class ChatSvc {
     let relatedCases: RelatedCase[];
     let streamedMindMap: MindMapItem | undefined;
     let streamedTimeline: TimelineItem[] | undefined;
+    // Which case documents' full text actually went into this turn's payload. The grounding
+    // verifier needs the truth of what the model was given, not what the case holds (see
+    // GroundingVerifierSvc): a "not reproduced in the available extract" line is a defect only if
+    // the text was there. A cached reply leaves this empty, which is why the verifier is skipped
+    // on the cache path rather than told a comfortable lie.
+    let inlinedCaseDocumentIds: string[] = [];
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
     let streamedDraftedDocument: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string } | undefined;
     let streamedResearchSteps: TraceStep[] | undefined;
+    // A cache hit replays a reply generated against some earlier turn's grounding, so this turn
+    // has no record of what text the model saw. The grounding verifier is skipped rather than run
+    // on that unknown — see the call site below.
+    let usedCachedResponse = false;
     try {
       if (useCache && cached) {
+        usedCachedResponse = true;
         checkpointedOnChunk(cached.content);
         fullResponse = cached.content;
         relatedCases = cached.relatedCases;
@@ -715,6 +822,7 @@ export default class ChatSvc {
         streamedDecisions = result.decisions;
         streamedDraftedDocument = result.draftedDocument;
         streamedResearchSteps = result.researchSteps;
+        inlinedCaseDocumentIds = result.inlinedCaseDocumentIds;
         redis.set(
           cacheKey,
           {
@@ -834,6 +942,27 @@ export default class ChatSvc {
         consultationId,
         assistantMessageId: assistantMessage.id,
       });
+    }
+
+    // Grounding verification (docs/plans/grounding-verifier.md). Deliberately after chat:done:
+    // the lawyer already has the reply, and this only attaches what the bundle says about the
+    // claims in it. Fire-and-forget, never awaited — GroundingVerifierSvc.verifyAnswer swallows
+    // its own failures, and this `void` is the second guarantee that a verification problem can
+    // never become a chat problem. Skipped on the cache path, where inlinedCaseDocumentIds is
+    // empty and every disclaimer would be misread as NOT_SUPPLIED.
+    if (assistantMessage && effectiveCaseId && GroundingVerifierSvc.enabled && !usedCachedResponse) {
+      const verifiedMessageId = assistantMessage.id;
+      void GroundingVerifierSvc.verifyAnswer({
+        assistantMessageId: verifiedMessageId,
+        caseId: effectiveCaseId,
+        answer: fullResponse,
+        rankedDocumentIds: grounding?.caseDocumentIds ?? [],
+        inlinedDocumentIds: inlinedCaseDocumentIds,
+      })
+        .then((counts) => {
+          if (counts.checked) emitEvent("chat:grounding", { assistantMessageId: verifiedMessageId, ...counts });
+        })
+        .catch((err) => logger.warn("Grounding verifier: unexpected rejection", { err, consultationId, messageId: parentMessageId }));
     }
 
     // Only now enqueue the secondary/background work — case-graph enrichment (promoting the

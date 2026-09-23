@@ -320,6 +320,13 @@ export interface ChatWonderStreamResult {
    * frontend's extractTraceSteps merges them live, so a later replay matches what was shown
    * while streaming. Empty (not absent) for a turn that made no tool calls. */
   researchSteps: TraceStep[];
+  /** Case documents whose FULL text was inlined into this turn's payload (`case_document_texts`).
+   * The grounding verifier needs the ground truth of what the model was actually given, not what
+   * the case happens to hold: an answer that says a document "is not reproduced in the available
+   * extract" is a defect only if the text was there, and a pipeline gap if it wasn't. Empty
+   * whenever the whole-case inline was skipped — typically because the bundle exceeded
+   * CASE_FULL_TEXT_INLINE_CHARS, which is exactly the case that must not be blamed on the model. */
+  inlinedCaseDocumentIds: string[];
 }
 
 /** Thrown by streamChatWonderMessage when its AbortSignal fires — the user pressed Stop. Not a
@@ -368,6 +375,7 @@ export function streamChatWonderMessage(
     let reasoningExplanation: ReasoningExplanation | undefined;
     let decisionRecords: DecisionRecordsPayload | undefined;
     let draftedDocument: ChatWonderStreamResult["draftedDocument"];
+    let inlinedCaseDocumentIds: string[] = [];
     const researchSteps = new Map<string, TraceStep>();
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
     let payloadSentAt: number | undefined;
@@ -417,6 +425,7 @@ export function streamChatWonderMessage(
         decisions: decisionRecords,
         draftedDocument,
         researchSteps: Array.from(researchSteps.values()),
+        inlinedCaseDocumentIds,
       });
     };
 
@@ -464,6 +473,7 @@ export function streamChatWonderMessage(
       Promise.all([chunkIdsPromise, manifestPromise])
         .then(async ([chunkIds, manifest]) => {
           const fullTexts = resolved ? await fullTextsFor(resolved.caseDocumentIds, manifest) : [];
+          inlinedCaseDocumentIds = fullTexts.map((t) => t.id);
           const payload: {
             type: string;
             user_input: string;
@@ -723,7 +733,31 @@ export function streamChatWonderMessage(
     };
 
     ws.onclose = () => {
-      finish();
+      if (settled) return;
+      // A close AFTER __END__ is the normal end of a turn (or the structured-data wait being cut
+      // short) — finish with what we have. A close BEFORE __END__ with nothing streamed is chat-
+      // wonder dying mid-turn (container restart, keepalive ping timeout, proxy drop): it must
+      // surface as a failure so the worker records FAILED + chat:error instead of persisting an
+      // empty assistant message as DONE, which is what happened on every such close before this.
+      // A close before __END__ with content already streamed keeps the reply, same as onerror.
+      if (endFrameAt || accumulated.trim().length > 0) {
+        if (!endFrameAt) {
+          logger.warn("Chat Wonder closed before __END__ but after reply content; keeping the reply", {
+            sessionId,
+            contentLength: accumulated.length,
+          });
+        }
+        finish();
+        return;
+      }
+      settled = true;
+      if (postEndTimer) clearTimeout(postEndTimer);
+      logger.error("Chat Wonder closed the stream before __END__ with no content", {
+        sessionId,
+        totalMs: Date.now() - streamStartedAt,
+        payloadSent: Boolean(payloadSentAt),
+      });
+      reject(new HttpError("Chat Wonder closed the stream before completing the reply", 503));
     };
   });
 }

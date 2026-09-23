@@ -5,6 +5,7 @@ import CaseRiskSvc from "../services/case-risk.service";
 import CaseRefreshSvc from "../services/case-refresh.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CitationCheckSvc from "../services/citation-check.service";
+import GroundingVerifierSvc from "../services/grounding-verifier.service";
 import CitationMapSvc from "../services/citation-map.service";
 import UkCitationMapSvc from "../services/uk-citation-map.service";
 import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
@@ -124,6 +125,18 @@ export default class CaseTerminalCtrl {
   static async deleteTimeline(req: Request, res: Response) {
     await CaseTimelineSvc.delete(req.params.caseId, req.params.id, req.user.userId);
     return res.status(204).send();
+  }
+
+  /** Verification panel: what the grounding verifier found across this case's answers. */
+  static async listGroundingChecks(req: Request, res: Response) {
+    const result = await GroundingVerifierSvc.listForCase(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async getGroundingCheck(req: Request, res: Response) {
+    const result = await GroundingVerifierSvc.getCheck(req.params.caseId, req.params.id, req.user.userId);
+    if (!result) throw new HttpError("Grounding check not found", 404);
+    return res.status(200).json(result);
   }
 
   static async listRisks(req: Request, res: Response) {
