@@ -99,6 +99,33 @@ export default class ChatRepo {
     });
   }
 
+  /** True when this consultation's most recent message is a user turn still awaiting its reply.
+   * Every turn in a consultation shares one Chat Wonder session (see ChatSvc.resolveChatWonderSession)
+   * — two turns generating concurrently on it silently orphan one of them, so enqueueChatGeneration
+   * checks this before creating a second turn. A best-effort guard (read-then-create, not an
+   * atomic lock) layered under the client's own busy check, not a replacement for it. */
+  static async hasPendingTurn(consultationId: string): Promise<boolean> {
+    const last = await prisma.message.findFirst({
+      where: { consultationId },
+      orderBy: { createdAt: "desc" },
+      select: { role: true, replyStatus: true },
+    });
+    return last?.role === "user" && last.replyStatus === "PENDING";
+  }
+
+  /** Turns that have been PENDING longer than is ever legitimate (attachment wait +
+   * generation) — swept back to FAILED by ChatGenerationQueue's own sweep loop so a turn that
+   * got silently orphaned (two concurrent turns colliding on one Chat Wonder session, a worker
+   * that crashed before reaching its own catch block, a hung Chat Wonder connection that never
+   * sends a terminal frame) doesn't leave the client's "still generating" state waiting on an
+   * event that will never come. */
+  static async findStalePendingMessages(olderThan: Date) {
+    return prisma.message.findMany({
+      where: { role: "user", replyStatus: "PENDING", createdAt: { lt: olderThan } },
+      select: { id: true, consultationId: true, userId: true },
+    });
+  }
+
   /** A user turn's current replyStatus (and its checkpointed partial reply) — polled by the
    * generation worker to notice a Stop from another instance, and read by the cancel endpoint. */
   static async findReplyState(messageId: string) {
@@ -211,6 +238,15 @@ export default class ChatRepo {
         records: data.records as unknown as Prisma.InputJsonValue,
         verification: {} as Prisma.InputJsonValue,
       },
+    });
+  }
+
+  /** Rewrites a message's stored Decision Records - used to persist the cleaned-up form
+   * (file names instead of ids, re-verified quotes) once ChatSvc has produced it at read time. */
+  static async updateDecisionRecords(messageId: string, data: DecisionRecordsPayload) {
+    return prisma.messageDecisionRecord.update({
+      where: { messageId },
+      data: { records: data.records as unknown as Prisma.InputJsonValue },
     });
   }
 

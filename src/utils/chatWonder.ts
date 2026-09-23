@@ -18,6 +18,7 @@ import {
 } from "../constants";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import DocumentRepo from "../repositories/document.repository";
+import { registerTurnDocuments } from "../services/case-document-callback-scope.service";
 import { embedText } from "./embedding";
 import {
   parseStructuredDataPayload,
@@ -137,6 +138,9 @@ export async function callChatWonderRest(
   // Always send case_document_ids (including []) so chat-wonder replaces session-scoped
   // active_case_documents instead of keeping docs from a previous case/consultation.
   payload.case_document_ids = resolved?.caseDocumentIds ?? [];
+  // Chat Wonder reads these back through GET /api/v1/case-document/:id - remember exactly which
+  // ids we handed it, so that callback can refuse any other id (case-document-callback-scope).
+  await registerTurnDocuments(payload.case_document_ids);
   if (resolved) {
     const chunkIds = OMIT_EMBEDDING_RANKING
       ? []
@@ -477,6 +481,8 @@ export function streamChatWonderMessage(
     ws.onopen = () => {
       Promise.all([chunkIdsPromise, manifestPromise])
         .then(async ([chunkIds, manifest]) => {
+          // Before the payload goes out: Chat Wonder may call back for these ids at once.
+          await registerTurnDocuments(resolved?.caseDocumentIds ?? []);
           const fullTexts = resolved ? await fullTextsFor(resolved.caseDocumentIds, manifest) : [];
           inlinedCaseDocumentIds = fullTexts.map((t) => t.id);
           const payload: {

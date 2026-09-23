@@ -20,6 +20,8 @@ import * as socketLib from "../src/lib/socket";
 import * as config from "../src/config";
 import ChatSvc from "../src/services/chat.service";
 import ChatRepo from "../src/repositories/chat.repository";
+import DocumentRepo from "../src/repositories/document.repository";
+import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
 import DocumentChunkSvc from "../src/services/document-chunk.service";
 import TranscriptionChunkSvc from "../src/services/transcription-chunk.service";
 import CaseSvc from "../src/services/case.service";
@@ -186,6 +188,9 @@ describe("ChatSvc.processChatGenerationJob", () => {
     findAssistantReplyByParent: ChatRepo.findAssistantReplyByParent,
     findConsultationById: ChatRepo.findConsultationById,
     setReplyStatus: ChatRepo.setReplyStatus,
+    listRefsForScope: DocumentRepo.listRefsForScope,
+    findFullTextsByDocuments: DocumentChunkRepo.findFullTextsByDocuments,
+    saveDecisionRecords: ChatRepo.saveDecisionRecords,
     findReplyState: ChatRepo.findReplyState,
     saveTimeline: ChatRepo.saveTimeline,
     saveMindMap: ChatRepo.saveMindMap,
@@ -232,6 +237,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
     ChatRepo.findAssistantReplyByParent = async () => null;
     ChatRepo.findConsultationById = async () => ({ id: "c1" }) as any;
     ChatRepo.setReplyStatus = async () => ({}) as any;
+    DocumentRepo.listRefsForScope = async () => [];
     ChatRepo.findReplyState = async () =>
       ({ id: "m-user-1", consultationId: "c1", role: "user", userId: "user1", replyStatus: "PENDING", pendingReplyContent: null }) as any;
     ChatRepo.saveTimeline = async () => ({}) as any;
@@ -260,6 +266,9 @@ describe("ChatSvc.processChatGenerationJob", () => {
       saveMindMap: originals.saveMindMap,
       saveRelatedCases: originals.saveRelatedCases,
     });
+    DocumentRepo.listRefsForScope = originals.listRefsForScope;
+    (DocumentChunkRepo as any).findFullTextsByDocuments = originals.findFullTextsByDocuments;
+    (ChatRepo as any).saveDecisionRecords = originals.saveDecisionRecords;
     DocumentChunkSvc.relevantChunksForConsultation = originals.relevantChunksForConsultation;
     TranscriptionChunkSvc.relevantChunksForConsultation = originals.transcriptRelevantChunksForConsultation;
     redis.get = originals.redisGet;
@@ -495,6 +504,171 @@ describe("ChatSvc.processChatGenerationJob", () => {
 
     expect(created).to.equal("The full answer.");
     expect(enqueueCalled).to.equal(false);
+  });
+
+  // --- File ids must never reach a user (utils/document-references.ts) ---
+
+  const DOC_ID = "b56af9c1-1119-4ebe-bca2-330bbf6ea759";
+  const DOC_NAME = "Letter before claim.pdf";
+
+  it("no file id reaches the user: an id in the streamed answer becomes the file name, in the live chunk and in the saved reply", async () => {
+    DocumentRepo.listRefsForScope = async () => [{ id: DOC_ID, name: DOC_NAME }] as any;
+    script = [`The claim is set out in ${DOC_ID} at clause 5.__END__`, "[DONE]"];
+    let saved: string | undefined;
+    ChatRepo.createMessage = async (_c, _role, content) => {
+      saved = content;
+      return { id: "m-assistant-1", content } as any;
+    };
+
+    await ChatSvc.processChatGenerationJob(baseJob);
+
+    const live = emitted.filter((e) => e.event === "chat:chunk").map((e) => e.payload.chunk).join("");
+    expect(live).to.include(DOC_NAME);
+    expect(live).to.not.include(DOC_ID);
+    expect(saved).to.equal(`The claim is set out in ${DOC_NAME} at clause 5.`);
+  });
+
+  it("Decision Records are saved with the file name instead of the id, docId filled in, and a quote that really is in the document verified (the exact shape from the bug report)", async () => {
+    const quote = "Halcyon says clause 5 required Prestbury to achieve a 98% next-day dispatch service level";
+    DocumentRepo.listRefsForScope = async () => [{ id: DOC_ID, name: DOC_NAME }] as any;
+    (DocumentChunkRepo as any).findFullTextsByDocuments = async () => new Map([[DOC_ID, `Section 2. ${quote}. More text.`]]);
+    const decisions = {
+      type: "decisions",
+      data: {
+        records: [
+          {
+            anchor: "Prestbury denies liability.",
+            conclusion: "Prestbury contests its liability.",
+            rule: [],
+            evidenceFor: [{ doc: DOC_ID, docId: null, pinpoint: "Section 2", quote, verified: false }],
+            evidenceAgainst: [],
+            alternatives: [],
+            weighting: "Significant.",
+            confidence: "high",
+            wouldChangeIf: [],
+          },
+        ],
+      },
+    };
+    script = ["Prestbury denies liability.__END__", JSON.stringify(decisions), "[DONE]"];
+    let savedDecisions: any;
+    (ChatRepo as any).saveDecisionRecords = async (_id: string, data: any) => {
+      savedDecisions = data;
+      return {} as any;
+    };
+
+    await ChatSvc.processChatGenerationJob(baseJob);
+
+    expect(savedDecisions).to.not.equal(undefined);
+    const ev = savedDecisions.records[0].evidenceFor[0];
+    expect(ev.doc).to.equal(DOC_NAME);
+    expect(ev.docId).to.equal(DOC_ID);
+    expect(ev.verified).to.equal(true);
+    expect(JSON.stringify(savedDecisions)).to.not.include(`"doc":"${DOC_ID}"`);
+  });
+
+  it("scopedCaseDocumentId looks the document up by ORGANIZATION (it used to pass the user id, which never matched, so an explicitly attached file was silently never used)", async () => {
+    const seen: { id: string; org: string }[] = [];
+    const doc = { id: "doc-1", userId: "user1", consultationId: "c1", caseId: null, status: "ACTIVE" };
+    const originalFindById = DocumentRepo.findById;
+    DocumentRepo.findById = (async (id: string, org: string) => {
+      seen.push({ id, org });
+      return org === "org1" ? doc : null;
+    }) as any;
+    try {
+      const scoped = (ChatSvc as any).scopedCaseDocumentId.bind(ChatSvc);
+      expect(await scoped("doc-1", "org1", "user1", "c1")).to.equal("doc-1");
+      expect(seen[0]).to.deep.equal({ id: "doc-1", org: "org1" });
+      // Another organization, another user's file, and another consultation all fail closed.
+      expect(await scoped("doc-1", "other-org", "user1", "c1")).to.equal(undefined);
+      expect(await scoped("doc-1", "org1", "someone-else", "c1")).to.equal(undefined);
+      expect(await scoped("doc-1", "org1", "user1", "c2")).to.equal(undefined);
+    } finally {
+      DocumentRepo.findById = originalFindById;
+    }
+  });
+
+  it("messages already saved with an id in their Decision Records are cleaned when listed, and the clean form is saved back", async () => {
+    const original = {
+      findConsultationById: ChatRepo.findConsultationById,
+      listMessagesByConsultation: (ChatRepo as any).listMessagesByConsultation,
+      updateDecisionRecords: (ChatRepo as any).updateDecisionRecords,
+    };
+    let updated: any;
+    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", caseId: null }) as any;
+    DocumentRepo.listRefsForScope = async () => [{ id: DOC_ID, name: DOC_NAME }] as any;
+    (DocumentChunkRepo as any).findFullTextsByDocuments = async () => new Map();
+    (ChatRepo as any).updateDecisionRecords = async (_id: string, data: any) => {
+      updated = data;
+      return {} as any;
+    };
+    (ChatRepo as any).listMessagesByConsultation = async () => [
+      { id: "u1", role: "user", content: "analyze", documents: [], decisionRecords: null, generatedDocument: null },
+      {
+        id: "a1",
+        role: "assistant",
+        content: `See "Letter before claim.pdf" (id: ${DOC_ID}) for the claim.`,
+        documents: [],
+        generatedDocument: null,
+        decisionRecords: {
+          id: "dr1",
+          messageId: "a1",
+          verification: {},
+          records: [
+            {
+              anchor: "x",
+              conclusion: "y",
+              rule: [],
+              evidenceFor: [{ doc: DOC_ID, docId: null, pinpoint: "", quote: null, verified: false }],
+              evidenceAgainst: [],
+              alternatives: [],
+              weighting: "",
+              confidence: "high",
+              wouldChangeIf: [],
+            },
+          ],
+        },
+      },
+    ];
+    try {
+      const messages: any[] = await ChatSvc.listMessages("org1", "c1");
+      const assistant = messages.find((m) => m.id === "a1");
+      expect(assistant.content).to.equal('See "Letter before claim.pdf" for the claim.');
+      expect(assistant.decisionRecords.records[0].evidenceFor[0].doc).to.equal(DOC_NAME);
+      expect(assistant.decisionRecords.records[0].evidenceFor[0].docId).to.equal(DOC_ID);
+      expect(JSON.stringify(messages)).to.not.include(DOC_ID + '","docId":null');
+      await flush();
+      expect(updated.records[0].evidenceFor[0].doc).to.equal(DOC_NAME);
+    } finally {
+      ChatRepo.findConsultationById = original.findConsultationById;
+      (ChatRepo as any).listMessagesByConsultation = original.listMessagesByConsultation;
+      (ChatRepo as any).updateDecisionRecords = original.updateDecisionRecords;
+    }
+  });
+
+  it("listing clean messages does not touch the documents table at all", async () => {
+    const original = {
+      findConsultationById: ChatRepo.findConsultationById,
+      listMessagesByConsultation: (ChatRepo as any).listMessagesByConsultation,
+    };
+    let lookups = 0;
+    DocumentRepo.listRefsForScope = async () => {
+      lookups++;
+      return [];
+    };
+    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", caseId: null }) as any;
+    (ChatRepo as any).listMessagesByConsultation = async () => [
+      { id: "u1", role: "user", content: "hello", documents: [], decisionRecords: null, generatedDocument: null },
+      { id: "a1", role: "assistant", content: "A clean answer.", documents: [], decisionRecords: null, generatedDocument: null },
+    ];
+    try {
+      const messages: any[] = await ChatSvc.listMessages("org1", "c1");
+      expect(messages).to.have.length(2);
+      expect(lookups).to.equal(0);
+    } finally {
+      ChatRepo.findConsultationById = original.findConsultationById;
+      (ChatRepo as any).listMessagesByConsultation = original.listMessagesByConsultation;
+    }
   });
 
   it("consultation deleted before the job ran: drops the job without creating a message or throwing", async () => {

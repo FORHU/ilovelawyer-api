@@ -6,7 +6,7 @@ import FilesRepo from "../repositories/files.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentChunkSvc from "./document-chunk.service";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
-import { s3UrlForKey, getPresignedUploadUrl, getPresignedGetUrl, getObjectBuffer } from "../utils/s3";
+import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
@@ -16,12 +16,12 @@ import { DocumentStatus } from "@prisma/client";
  * contract (a top-level `fileUrl`, not a nested `file` object) — see docs/adr for the fileUrl gap
  * this closes: fileUrl was declared in the contract but no query ever included the File relation.
  * The bucket has no public-read policy (see utils/s3.ts), so a bare File.fileUrl 403s in a
- * browser — signed here into a short-lived GET the same way audio playback URLs already are
- * (chat.service.ts's pollAudioOverviewAudio). Falls back to the bare fileUrl when there's no
- * s3Key to sign (pre-migration rows, if any). */
+ * browser anyway — this hands back a same-origin proxy link instead (see getProxyFileUrl), never
+ * the stored fileUrl column, which may be a raw S3/CloudFront URL. Pre-migration rows with no
+ * s3Key get null rather than that stored URL. */
 export async function mapDocumentToDto<T extends { file?: { fileUrl: string | null; s3Key: string | null } | null }>(doc: T) {
   const { file, ...rest } = doc;
-  const fileUrl = file?.s3Key ? await getPresignedGetUrl(file.s3Key) : (file?.fileUrl ?? null);
+  const fileUrl = file?.s3Key ? getProxyFileUrl(file.s3Key) : null;
   return { ...rest, fileUrl };
 }
 
@@ -62,7 +62,7 @@ export default class DocumentSvc {
   static async create(
     organizationId: string,
     userId: string,
-    data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string },
+    data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string; fileSize?: number },
   ) {
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
@@ -72,6 +72,7 @@ export default class DocumentSvc {
       caseId: data.caseId,
       consultationId: data.consultationId,
       mimeType: data.contentType,
+      fileSize: data.fileSize,
     });
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(doc.id);
     return doc;
@@ -82,7 +83,7 @@ export default class DocumentSvc {
   static async createMany(
     organizationId: string,
     userId: string,
-    items: { key: string; name: string; contentType?: string }[],
+    items: { key: string; name: string; contentType?: string; fileSize?: number }[],
     caseId?: string,
     consultationId?: string,
   ) {
@@ -103,6 +104,7 @@ export default class DocumentSvc {
         name: items[i].name,
         fileId: file.id,
         mimeType: items[i].contentType,
+        fileSize: items[i].fileSize,
       }));
 
       const createdDocuments = await DocumentRepo.createManyAndReturn(userDocumentData, tx);
@@ -118,8 +120,8 @@ export default class DocumentSvc {
     // `createdDocuments` since both were built from the same ordered `items` input.
     return Promise.all(
       createdDocuments.map(async (doc, i) => {
-        const { s3Key, fileUrl } = files[i];
-        return { ...doc, fileUrl: s3Key ? await getPresignedGetUrl(s3Key) : (fileUrl ?? null) };
+        const { s3Key } = files[i];
+        return { ...doc, fileUrl: s3Key ? getProxyFileUrl(s3Key) : null };
       }),
     );
   }

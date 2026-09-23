@@ -30,6 +30,7 @@ import { AI_GENERATION_KINDS, AiGenerationKind } from "../constants";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
 import { getTenantContext } from "../utils/tenant-context";
+import logger from "../utils/logger";
 import {
   createTimelineSchema,
   updateTimelineSchema,
@@ -137,6 +138,22 @@ export default class CaseTerminalCtrl {
     const result = await GroundingVerifierSvc.getCheck(req.params.caseId, req.params.id, req.user.userId);
     if (!result) throw new HttpError("Grounding check not found", 404);
     return res.status(200).json(result);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. Manual escape hatch for
+   * the automatic post-upload timeline extraction (queues/case-post-extraction.ts) — runs the
+   * same case-strategy pass, just without also re-running contradictions/case-finding.
+   * Logs its own timestamp so a slow run can be diagnosed by diffing against the queue's own
+   * "AI generation queue: job started"/"job finished" logs (queue wait) and
+   * CaseStrategySvc's per-step timing logs (where inside the run the time actually went). */
+  static async generateTimeline(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    logger.info("Timeline generate: requested", { caseId, userId });
+    await CaseTimelineSvc.beginQueuedGenerate(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "timelineGenerate", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "timelineGenerate");
+    return res.status(202).json(status);
   }
 
   static async listRisks(req: Request, res: Response) {

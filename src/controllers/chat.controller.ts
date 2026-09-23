@@ -54,7 +54,7 @@ export default class ChatCtrl {
 
   static async getRelatedCases(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const relatedCases = await ChatSvc.getRelatedCases(req.organization!.id, consultationId);
+    const relatedCases = await ChatSvc.getRelatedCases(req.organization!.id, req.organization!.tenantCode, consultationId);
     return res.status(200).json({ relatedCases });
   }
 

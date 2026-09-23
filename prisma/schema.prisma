@@ -840,6 +840,13 @@ model Law {
   detailFetchedAt DateTime?
   keywords        String[]
 
+  // Verbatim document text, PDF-extracted from pdfUrl/sourceUrl (see law-fulltext.ts) — juris.ph
+  // itself exposes no full-text endpoint, only the summary fields above. fullTextFetchedAt is
+  // stamped on every attempt, success or failure, so a document with no recoverable text (no
+  // source url, unreachable PDF, scanned image) isn't re-fetched on every view.
+  fullText          String?   @db.Text
+  fullTextFetchedAt DateTime?
+
   // republic-acts detail
   sections                 Json?
   keyProvisions            String[]
@@ -991,6 +998,7 @@ model Event {
   title                String
   type                 String    @default("Meeting")
   dateTime             DateTime  @map("date_time")
+  endDateTime          DateTime? @map("end_date_time")
   clientEmail          String?   @map("client_email")
   notes                String?   @db.Text
   status               String    @default("pending")

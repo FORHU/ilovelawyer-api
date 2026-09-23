@@ -1,6 +1,7 @@
 import ChatRepo from "../repositories/chat.repository";
 import AuthRepo from "../repositories/auth.repository";
 import DocumentRepo from "../repositories/document.repository";
+import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import CaseSvc from "./case.service";
 import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
@@ -11,6 +12,7 @@ import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
+import { DocumentRef, redactDocumentIds, sanitizeDecisionRecords, decisionRecordsNeedSanitizing } from "../utils/document-references";
 import DecisionRecordSvc from "./decision-record.service";
 import GeneratedDocumentExportSvc from "./generated-document-export.service";
 import CaseTimelineSvc from "./case-timeline.service";
@@ -25,13 +27,13 @@ import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage,
 import NotificationSvc from "./notification.service";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
-import { getPresignedGetUrl } from "../utils/s3";
+import { getProxyFileUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
 import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
-import { rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
+import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 
 /** How a running chat turn is stopped — see ChatSvc.processChatGenerationJob/cancelChatGeneration. */
 interface GenerationControl {
@@ -179,8 +181,32 @@ export default class ChatSvc {
     }
 
     const messages = await ChatRepo.listMessagesByConsultation(consultationId);
+
+    // File ids must never reach a user (see utils/document-references.ts). New turns are cleaned
+    // before they are saved; this covers messages saved before that, and heals them once.
+    const looksLeaky = (m: (typeof messages)[number]) =>
+      Boolean(m.decisionRecords && decisionRecordsNeedSanitizing({ records: m.decisionRecords.records })) ||
+      (m.role === "assistant" && /\(\s*id:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i.test(m.content));
+    const scopeDocs = messages.some(looksLeaky)
+      ? await ChatSvc.scopeDocumentRefs(organizationId, consultationId, consultation.caseId)
+      : [];
+
     return Promise.all(
-      messages.map(async ({ generatedDocument, ...m }) => {
+      messages.map(async ({ generatedDocument, decisionRecords, ...m }) => {
+        let cleanedDecisionRecords = decisionRecords;
+        if (decisionRecords && decisionRecordsNeedSanitizing({ records: decisionRecords.records })) {
+          const cleaned = await ChatSvc.sanitizeDecisionPayload(
+            { records: decisionRecords.records as unknown as DecisionRecordsPayload["records"] },
+            { organizationId, consultationId, caseId: consultation.caseId },
+            scopeDocs,
+          );
+          cleanedDecisionRecords = { ...decisionRecords, records: cleaned.records as unknown as typeof decisionRecords.records };
+          // Best-effort: later reads (and anything else reading the row) get the clean form for free.
+          ChatRepo.updateDecisionRecords(m.id, cleaned).catch((err) =>
+            logger.warn("Chat: could not persist sanitized decision records", { err, messageId: m.id }),
+          );
+        }
+        if (m.role === "assistant" && scopeDocs.length) m.content = redactDocumentIds(m.content, scopeDocs);
         const file = generatedDocument?.file;
         // The real URL is filled in here, at read time, rather than stored in the message: the
         // presigned URL expires, and the stored content is also what gets replayed to chat-wonder
@@ -188,7 +214,7 @@ export default class ChatSvc {
         // inline as `[affidavit of loss](#download)`; if it didn't, a "Download …" line is appended.
         let content = m.content;
         if (file?.s3Key) {
-          const url = await getPresignedGetUrl(file.s3Key, undefined, file.filename ?? undefined);
+          const url = getProxyFileUrl(file.s3Key, { filename: file.filename ?? undefined });
           content = content.includes(DOWNLOAD_PLACEHOLDER)
             ? content.split(DOWNLOAD_PLACEHOLDER).join(`(${url})`)
             : `${content}
@@ -198,10 +224,63 @@ export default class ChatSvc {
         return {
           ...m,
           content,
+          decisionRecords: cleanedDecisionRecords,
           documents: await Promise.all(m.documents.map(mapDocumentToDto)),
         };
       }),
     );
+  }
+
+  /** (id, name) of the documents in scope for a consultation/case, for turning file ids into
+   * names. Never throws: with no list, ids are still replaced by a generic label, never shown. */
+  static async scopeDocumentRefs(
+    organizationId: string | null | undefined,
+    consultationId: string,
+    caseId?: string | null,
+  ): Promise<DocumentRef[]> {
+    if (!organizationId) return [];
+    try {
+      const rows = await DocumentRepo.listRefsForScope(organizationId, { consultationId, caseId });
+      return rows.map((d) => ({ id: d.id, name: d.name }));
+    } catch (err) {
+      logger.warn("Chat: could not load scope documents for id redaction", { err, consultationId });
+      return [];
+    }
+  }
+
+  /**
+   * Replaces file ids in a set of Decision Records with file names, and re-checks each quote
+   * against its document's own text once that document is known (chat-wonder could not resolve
+   * a label that was an id, so it marked the evidence unverified). Only ever upgrades `verified`.
+   * `docs` may be passed in when the caller already loaded them.
+   */
+  static async sanitizeDecisionPayload(
+    payload: DecisionRecordsPayload,
+    scope: { organizationId: string | null | undefined; consultationId: string; caseId?: string | null },
+    docs?: DocumentRef[],
+  ): Promise<DecisionRecordsPayload> {
+    if (!decisionRecordsNeedSanitizing(payload)) return payload;
+    const refs = docs ?? (await ChatSvc.scopeDocumentRefs(scope.organizationId, scope.consultationId, scope.caseId));
+
+    let texts: Map<string, string> | undefined;
+    const inScope = new Set(refs.map((d) => d.id.toLowerCase()));
+    const wanted = new Set<string>();
+    for (const rec of payload.records) {
+      for (const e of [...rec.evidenceFor, ...rec.evidenceAgainst]) {
+        if (!e.quote || e.verified) continue;
+        const id = (e.docId ?? (inScope.has(e.doc.trim().toLowerCase()) ? e.doc.trim() : null))?.toLowerCase();
+        if (id && inScope.has(id)) wanted.add(id);
+      }
+    }
+    if (wanted.size) {
+      try {
+        const raw = await DocumentChunkRepo.findFullTextsByDocuments([...wanted]);
+        texts = new Map([...raw].map(([id, text]) => [id.toLowerCase(), text]));
+      } catch (err) {
+        logger.warn("Chat: could not load document text to re-check decision quotes", { err });
+      }
+    }
+    return sanitizeDecisionRecords(payload, refs, { texts });
   }
 
   static async deleteMessage(organizationId: string, consultationId: string, messageId: string) {
@@ -249,6 +328,14 @@ export default class ChatSvc {
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
     if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
+    }
+
+    // Reject a second concurrent turn outright rather than silently enqueueing it onto the same
+    // Chat Wonder session as the one already running (see hasPendingTurn's doc comment) — every
+    // known client caller (the composer, Mind Map, Audio Overview) already checks its own busy
+    // flag first, but this is what actually closes the gap for a caller that doesn't.
+    if (await ChatRepo.hasPendingTurn(consultationId)) {
+      throw new HttpError("A reply is already generating for this consultation", 409);
     }
 
     // Prefer consultation.caseId; allow per-message caseId for case-portfolio chats
@@ -434,6 +521,10 @@ export default class ChatSvc {
       return;
     }
 
+    // The documents in scope for this turn, as (id, name): every id that reaches a user (live
+    // chunks, the saved answer, Decision Records) is turned into a name first. One light query.
+    const scopeDocs = await ChatSvc.scopeDocumentRefs(organizationId, consultationId, effectiveCaseId ?? consultation.caseId);
+
     // emitToUser is documented as never throwing (lib/socket.ts), but this is called
     // synchronously from inside streamChatWonderMessage's ws.onmessage handler on every
     // chunk — an uncaught throw there would propagate out of that handler and could abort
@@ -514,6 +605,7 @@ export default class ChatSvc {
     let grounding: CaseDocumentGrounding | undefined;
     const scopedDocumentId = await ChatSvc.scopedCaseDocumentId(
       caseDocumentId,
+      organizationId,
       userId,
       consultationId,
       effectiveCaseId,
@@ -721,6 +813,7 @@ export default class ChatSvc {
       // purely a UX nicety on top of the durable checkpoint above, never load-bearing for
       // correctness: a disconnected/refreshed client falls back to the messages API and
       // reading pendingReplyContent, same as it always could.
+      text = redactDocumentIds(text, scopeDocs);
       emitEvent("chat:chunk", { chunk: text });
       chunkCount++;
       if (chunkCount === 1) {
@@ -896,6 +989,16 @@ export default class ChatSvc {
     // (2s/4s/8s) before giving up — a blip delays completion instead of silently losing the
     // reply. If it still fails after retries, the job must NOT be treated as successful:
     // replyStatus is flipped to FAILED and chat:error is emitted, same as an AI failure above.
+    // Whatever the AI wrote, no file id is saved or shown: names only.
+    fullResponse = redactDocumentIds(fullResponse, scopeDocs);
+    if (streamedDecisions) {
+      streamedDecisions = await ChatSvc.sanitizeDecisionPayload(
+        streamedDecisions,
+        { organizationId, consultationId, caseId: effectiveCaseId ?? consultation.caseId },
+        scopeDocs,
+      );
+    }
+
     const assistantTurnPayload: AssistantTurnPayload = {
       consultationId,
       parentMessageId,
@@ -1330,26 +1433,34 @@ export default class ChatSvc {
    * same best-effort shape as every other grounding fallback in this file. */
   private static async scopedCaseDocumentId(
     caseDocumentId: string | undefined,
+    organizationId: string,
     userId: string,
     consultationId: string,
     caseId?: string,
   ): Promise<string | undefined> {
     if (!caseDocumentId) return undefined;
-    const doc = await DocumentRepo.findById(caseDocumentId, userId);
+    // findById is scoped by ORGANIZATION. This used to pass the user id here, which never matches
+    // an organization id, so an explicitly attached document was silently never used for grounding.
+    // documentBelongsToScope below still requires the uploading user, the consultation or the case.
+    const doc = await DocumentRepo.findById(caseDocumentId, organizationId);
     if (!doc) return undefined;
     if (doc.status === "ARCHIVED") return undefined;
     if (!documentBelongsToScope(doc, { userId, consultationId, caseId })) return undefined;
     return doc.id;
   }
 
-  static async getRelatedCases(organizationId: string, consultationId: string) {
+  static async getRelatedCases(organizationId: string, tenantCode: TenantCode, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
     if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 
     const message = await ChatRepo.findLatestAssistantMessage(consultationId);
-    return enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
+    const items = await enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
+    // Enrichment runs first so a related case that arrived with only a bare URL (no
+    // title/case_number/ra_number) has a real title by the time Library resolution needs a
+    // label for its slow (materialize-on-first-sight) path.
+    return resolveRelatedCaseLibraryLinks(items, tenantCode);
   }
 
   /** Starts rendering the audio for a message's already-generated Audio Overview script
@@ -1378,7 +1489,7 @@ export default class ChatSvc {
     if (row.audioStatus === "COMPLETED" && row.audioFile?.s3Key) {
       return {
         status: "COMPLETED" as const,
-        audioFile: { id: row.audioFile.id, fileUrl: await getPresignedGetUrl(row.audioFile.s3Key) },
+        audioFile: { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key) },
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };

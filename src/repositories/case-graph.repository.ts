@@ -27,6 +27,10 @@ export default class CaseGraphRepo {
     return prisma.caseGraphNode.findUnique({ where: { nodeType_refId: { nodeType, refId } } });
   }
 
+  static async deleteNode(nodeType: CaseGraphNodeType, refId: string) {
+    await prisma.caseGraphNode.deleteMany({ where: { nodeType, refId } });
+  }
+
   /** Phase A only ever links one source to a given deadline, so the first match is enough. */
   static async findIncomingSource(nodeType: CaseGraphNodeType, refId: string) {
     const node = await prisma.caseGraphNode.findUnique({
