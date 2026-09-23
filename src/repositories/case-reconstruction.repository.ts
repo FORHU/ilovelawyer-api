@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { getPresignedGetUrl } from "../utils/s3";
+import { getProxyFileUrl } from "../utils/s3";
 import type { ReconstructionClaim } from "../utils/case-reconstruction-claims-parse";
 import type { Scene } from "../utils/case-reconstruction-scenes-parse";
 import { Prisma } from "@prisma/client";
@@ -38,10 +38,10 @@ export default class CaseReconstructionRepo {
       include: { audioFile: true, tableReadFile: true },
     });
     if (row?.audioFile?.s3Key) {
-      row.audioFile.fileUrl = await getPresignedGetUrl(row.audioFile.s3Key);
+      row.audioFile.fileUrl = getProxyFileUrl(row.audioFile.s3Key);
     }
     if (row?.tableReadFile?.s3Key) {
-      row.tableReadFile.fileUrl = await getPresignedGetUrl(row.tableReadFile.s3Key);
+      row.tableReadFile.fileUrl = getProxyFileUrl(row.tableReadFile.s3Key);
     }
     return row;
   }

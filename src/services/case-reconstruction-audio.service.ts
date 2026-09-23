@@ -5,7 +5,7 @@ import FilesRepo from "../repositories/files.repository";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { AWS_S3_BUCKET } from "../config";
-import { getPresignedGetUrl } from "../utils/s3";
+import { getProxyFileUrl } from "../utils/s3";
 import { getPollyClient } from "../utils/polly";
 import { keyFromOutputUri } from "../utils/case-reconstruction-audio.utils";
 import { CASE_RECONSTRUCTION_AUDIO_VOICE_ID, CASE_RECONSTRUCTION_AUDIO_OUTPUT_PREFIX } from "../constants";
@@ -72,7 +72,7 @@ export default class CaseReconstructionAudioSvc {
       const key = AWS_S3_BUCKET ? keyFromOutputUri(task.OutputUri, AWS_S3_BUCKET) : task.OutputUri;
       const file = await FilesRepo.create(`case-reconstruction-${caseId}.mp3`, task.OutputUri, key);
       await CaseReconstructionRepo.updateAudio(caseId, { audioFileId: file.id, audioStatus: "COMPLETED", audioStaleAt: null });
-      return { status: "COMPLETED", audioFile: { id: file.id, fileUrl: await getPresignedGetUrl(key) } };
+      return { status: "COMPLETED", audioFile: { id: file.id, fileUrl: getProxyFileUrl(key) } };
     }
 
     if (status === "failed") {

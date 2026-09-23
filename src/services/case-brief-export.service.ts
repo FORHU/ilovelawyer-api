@@ -5,7 +5,7 @@ import CaseBriefExportRepo from "../repositories/case-brief-export.repository";
 import { buildBriefDocument } from "../utils/case-brief-document";
 import { renderBriefToDocx } from "../utils/case-brief-docx-renderer";
 import { renderBriefToPdf } from "../utils/case-brief-pdf-renderer";
-import { uploadToS3, getPresignedGetUrl } from "../utils/s3";
+import { uploadToS3, getProxyFileUrl } from "../utils/s3";
 
 export type CaseBriefFormat = "docx" | "pdf";
 
@@ -37,7 +37,7 @@ export default class CaseBriefExportSvc {
     const file = await FilesRepo.create(filename, outputUri, key);
     await CaseBriefExportRepo.create(caseId, userId, format, file.id);
 
-    return { file: { id: file.id, fileUrl: await getPresignedGetUrl(key) } };
+    return { file: { id: file.id, fileUrl: getProxyFileUrl(key) } };
   }
 
   /** History listing needs its own access check — unlike export(), it never calls
@@ -54,7 +54,7 @@ export default class CaseBriefExportSvc {
         id: row.id,
         format: row.format as CaseBriefFormat,
         createdAt: row.createdAt,
-        file: { id: row.file.id, fileUrl: row.file.s3Key ? await getPresignedGetUrl(row.file.s3Key) : row.file.fileUrl },
+        file: { id: row.file.id, fileUrl: row.file.s3Key ? getProxyFileUrl(row.file.s3Key) : null },
       })),
     );
     const nextCursor = filters.limit && items.length === filters.limit ? items[items.length - 1]!.id : null;

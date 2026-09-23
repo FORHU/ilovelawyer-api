@@ -19,7 +19,7 @@ import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
-import { getPresignedGetUrl } from "../utils/s3";
+import { getProxyFileUrl } from "../utils/s3";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
@@ -115,7 +115,7 @@ export default class ChatSvc {
         // inline as `[affidavit of loss](#download)`; if it didn't, a "Download …" line is appended.
         let content = m.content;
         if (file?.s3Key) {
-          const url = await getPresignedGetUrl(file.s3Key, undefined, file.filename ?? undefined);
+          const url = getProxyFileUrl(file.s3Key, { filename: file.filename ?? undefined });
           content = content.includes(DOWNLOAD_PLACEHOLDER)
             ? content.split(DOWNLOAD_PLACEHOLDER).join(`(${url})`)
             : `${content}
@@ -1038,7 +1038,7 @@ export default class ChatSvc {
     if (row.audioStatus === "COMPLETED" && row.audioFile?.s3Key) {
       return {
         status: "COMPLETED" as const,
-        audioFile: { id: row.audioFile.id, fileUrl: await getPresignedGetUrl(row.audioFile.s3Key) },
+        audioFile: { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key) },
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };
