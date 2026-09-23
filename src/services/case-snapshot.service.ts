@@ -84,6 +84,26 @@ export default class CaseSnapshotSvc {
     // Separate from citation validity (does the quote match the source): does the cited
     // authority itself exist? Same resolution engine Citation Map uses (resolvedLawId is
     // populated at check time by CitationCheckSvc, or lazily by CitationMapSvc.getSeed).
+    // Decisions are grouped in the Terminal UI by the chat turn that produced them, not by any
+    // category on the record itself (there isn't one — see DecisionRecord's schema comment).
+    // sourceMessageId is the assistant reply; its parentMessageId is the actual user prompt, so
+    // this is a two-hop lookup, batched to avoid an N+1 per decision.
+    const assistantMessageIds = [...new Set(decisions.map((d) => d.sourceMessageId).filter((id): id is string => !!id))];
+    const assistantMessages = await ChatRepo.findManyByIds(assistantMessageIds);
+    const parentMessageIds = [...new Set(assistantMessages.map((m) => m.parentMessageId).filter((id): id is string => !!id))];
+    const userMessages = await ChatRepo.findManyByIds(parentMessageIds);
+    const userMessageById = new Map(userMessages.map((m) => [m.id, m]));
+    const promptByAssistantMessageId = new Map(
+      assistantMessages.map((m) => [m.id, m.parentMessageId ? (userMessageById.get(m.parentMessageId) ?? null) : null]),
+    );
+    const decisionsWithSourcePrompt = decisions.map((decision) => {
+      const prompt = decision.sourceMessageId ? (promptByAssistantMessageId.get(decision.sourceMessageId) ?? null) : null;
+      return {
+        ...decision,
+        sourcePrompt: prompt ? { messageId: prompt.id, consultationId: prompt.consultationId, content: prompt.content, createdAt: prompt.createdAt } : null,
+      };
+    });
+
     const resolvedLawIds = citations.map((c) => c.resolvedLawId).filter((id): id is string => !!id);
     const resolvedLaws = await LawRepo.findManyByIds(resolvedLawIds);
     const lawById = new Map(resolvedLaws.map((law) => [law.id, law]));
@@ -135,7 +155,7 @@ export default class CaseSnapshotSvc {
       damages,
       reconstruction,
       redTeamAssessment,
-      decisions,
+      decisions: decisionsWithSourcePrompt,
       theories,
       annotations,
       staleness,
