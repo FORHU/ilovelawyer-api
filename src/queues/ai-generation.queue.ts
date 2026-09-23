@@ -3,6 +3,7 @@ import RedTeamSvc from "../services/red-team.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
 import TheoryDiffSvc from "../services/theory-diff.service";
+import CaseTimelineSvc from "../services/case-timeline.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
@@ -15,7 +16,8 @@ export type QueuedAiGenerationKind =
   | "theoryDiff"
   | "caseReconstructionScenes"
   | "caseReconstructionTableRead"
-  | "casePostExtraction";
+  | "casePostExtraction"
+  | "timelineGenerate";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -54,6 +56,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
     const { runCasePostExtraction } = await import("./case-post-extraction");
     return runCasePostExtraction(job.caseId, job.userId);
   },
+  timelineGenerate: (job) => CaseTimelineSvc.runQueuedGenerate(job.caseId, job.userId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,

@@ -39,6 +39,7 @@ router.get("/:caseId/ai-jobs/:kind", asyncHandler(CaseTerminalCtrl.getAiJobStatu
 
 router.get("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.listTimeline));
 router.post("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.createTimeline));
+router.post("/:caseId/timeline/generate", asyncHandler(CaseTerminalCtrl.generateTimeline));
 router.patch("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.updateTimeline));
 router.delete("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.deleteTimeline));
 

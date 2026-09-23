@@ -8,6 +8,8 @@ const MAX_SOURCE_LABEL = 200;
 export interface ParsedKeyDate {
   title: string;
   date: string;
+  documentId: string | null;
+  pageNumber: number | null;
 }
 
 export interface ParsedStrategyItem {
@@ -18,7 +20,10 @@ export interface ParsedStrategyItem {
 export interface ParsedCaseStrategy {
   strategy: ParsedStrategyItem[];
   todos: ParsedStrategyItem[];
-  dates: ParsedKeyDate[];
+  /** `undefined` = the [DATES] block itself was missing/unparseable this reply — distinct from
+   * an empty array (block present, model found no dates) so a caller can tell "don't touch the
+   * timeline, this reply didn't address dates at all" from "the timeline really is empty now". */
+  dates: ParsedKeyDate[] | undefined;
 }
 
 /**
@@ -34,7 +39,7 @@ export function extractCaseStrategy(text: string): ParsedCaseStrategy | undefine
   return {
     strategy: (strategy ?? []).slice(0, MAX_ITEMS.STRATEGY),
     todos: (todos ?? []).slice(0, MAX_ITEMS.TODO),
-    dates: (dates ?? []).slice(0, MAX_ITEMS.DATES),
+    dates: dates === undefined ? undefined : dates.slice(0, MAX_ITEMS.DATES),
   };
 }
 
@@ -61,14 +66,16 @@ function extractDateList(text: string): ParsedKeyDate[] | undefined {
   const seen = new Set<string>();
   for (const row of parsed) {
     if (!row || typeof row !== "object") continue;
-    const item = row as { title?: unknown; date?: unknown; label?: unknown };
+    const item = row as { title?: unknown; date?: unknown; label?: unknown; documentId?: unknown; pageNumber?: unknown };
     const title = normalizeLabel(item.title ?? item.label);
     const date = normalizeIsoDate(item.date);
     if (!title || !date) continue;
+    const documentId = typeof item.documentId === "string" && item.documentId.trim() ? item.documentId.trim() : null;
+    const pageNumber = typeof item.pageNumber === "number" && Number.isInteger(item.pageNumber) && item.pageNumber > 0 ? item.pageNumber : null;
     const key = `${title.toLowerCase()}|${date}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    dates.push({ title, date });
+    dates.push({ title, date, documentId, pageNumber });
   }
   return dates;
 }

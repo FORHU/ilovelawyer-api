@@ -94,6 +94,15 @@ export const MESSAGE_PERSISTENCE_QUEUE_URL = process.env.MESSAGE_PERSISTENCE_QUE
  * since SQS has no concept of message "type" routing between consumers. */
 export const CASE_GRAPH_PROMOTION_QUEUE_URL = process.env.CASE_GRAPH_PROMOTION_QUEUE_URL as string;
 export const CLOUDFRONT_URL = process.env.CLOUDFRONT_URL as string;
+/** Signs/verifies the `/files/<jwt>` proxy links minted by getProxyFileUrl (src/utils/s3.ts) —
+ * a missing secret would otherwise sign tokens with the literal string "undefined". */
+export const FILE_TOKEN_SECRET = (() => {
+  const secret = process.env.FILE_TOKEN_SECRET;
+  if (!secret) {
+    throw new Error("FILE_TOKEN_SECRET must be set (signs the /files/<token> proxy links)");
+  }
+  return secret;
+})();
 export const OPENAI_API_KEY = process.env.OPENAI_API_KEY as string;
 export const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL as string;
 export const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD as string;

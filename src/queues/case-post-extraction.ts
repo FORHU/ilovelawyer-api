@@ -8,7 +8,7 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
 /** Wait until a bulk upload burst stops finishing files, then run case-level AI once. */
-const QUIET_SECONDS = 45;
+const QUIET_SECONDS = 20;
 
 /**
  * Contradiction scan + case strategy + findings are case-wide. Running them after every READY
