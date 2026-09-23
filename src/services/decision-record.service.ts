@@ -6,7 +6,9 @@ import CaseEdgeRepo from "../repositories/case-edge.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import AnnotationRepo from "../repositories/annotation.repository";
 import HttpError from "../utils/http-error";
+import DocumentRepo from "../repositories/document.repository";
 import { DecisionRecordItem } from "../utils/response-parser";
+import { DocumentRef, decisionRecordsNeedSanitizing, sanitizeDecisionRecords } from "../utils/document-references";
 
 /**
  * Case-level Decision Records (differentiation program, Phase 1) — see
@@ -18,8 +20,25 @@ import { DecisionRecordItem } from "../utils/response-parser";
  */
 export default class DecisionRecordSvc {
   static async list(caseId: string, userId: string, status?: DecisionStatus) {
-    await CaseAccess.loadAccessibleCase(caseId, userId);
-    return DecisionRecordRepo.list(caseId, status);
+    const accessibleCase = await CaseAccess.loadAccessibleCase(caseId, userId);
+    const rows = await DecisionRecordRepo.list(caseId, status);
+
+    // Records saved before file ids were kept out of them still carry an id as the evidence
+    // label; show the file name instead (see utils/document-references.ts). Nothing is written.
+    if (!rows.some((row) => decisionRecordsNeedSanitizing({ records: [row.payload] }))) return rows;
+    let docs: DocumentRef[] = [];
+    if (accessibleCase.organizationId) {
+      try {
+        docs = (await DocumentRepo.listRefsForScope(accessibleCase.organizationId, { caseId })).map((d) => ({ id: d.id, name: d.name }));
+      } catch {
+        docs = [];
+      }
+    }
+    return rows.map((row) => {
+      if (!decisionRecordsNeedSanitizing({ records: [row.payload] })) return row;
+      const cleaned = sanitizeDecisionRecords({ records: [row.payload as unknown as DecisionRecordItem] }, docs);
+      return { ...row, payload: cleaned.records[0] as unknown as typeof row.payload };
+    });
   }
 
   /**

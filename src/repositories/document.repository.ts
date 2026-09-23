@@ -69,6 +69,18 @@ export default class DocumentRepo {
     });
   }
 
+  /** (id, name) of every document attached to a consultation and/or a case, any status (an
+   * archived document can still be cited by an older answer). Scoped to the organization. Used to
+   * turn the file ids an AI answer or Decision Record may carry into names - see
+   * utils/document-references.ts. */
+  static async listRefsForScope(organizationId: string, scope: { consultationId?: string | null; caseId?: string | null }) {
+    const or: Array<{ consultationId: string } | { caseId: string }> = [];
+    if (scope.consultationId) or.push({ consultationId: scope.consultationId });
+    if (scope.caseId) or.push({ caseId: scope.caseId });
+    if (!or.length) return [];
+    return prisma.document.findMany({ where: { organizationId, OR: or }, select: { id: true, name: true } });
+  }
+
   /** Unscoped by organizationId — used internally by case-level services (refresh, strategy,
    * snapshot, evidence intelligence) that already resolved case access themselves. */
   static async listAllByCase(caseId: string) {
