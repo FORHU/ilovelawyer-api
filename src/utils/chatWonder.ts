@@ -326,6 +326,15 @@ export interface ChatWonderStreamResult {
   researchSteps: TraceStep[];
 }
 
+/** Thrown by streamChatWonderMessage when its AbortSignal fires — the user pressed Stop. Not a
+ * failure: callers (ChatSvc.processChatGenerationJob) treat it as a normal end of the turn. */
+export class GenerationCancelledError extends Error {
+  constructor() {
+    super("Generation cancelled");
+    this.name = "GenerationCancelledError";
+  }
+}
+
 export function streamChatWonderMessage(
   sessionId: string,
   userInput: string,
@@ -339,7 +348,16 @@ export function streamChatWonderMessage(
   // Selects LEGAL_TAG vs. LEGAL_TAG_UK in withLegalTag below — not forwarded as a payload
   // field (see that function's comment for why the tag alone is enough).
   tenantCode?: TenantCode,
+  /** Aborting closes the Chat Wonder socket and rejects with GenerationCancelledError. Closing
+   * the socket is the only stop signal Chat Wonder gets from here. */
+  signal?: AbortSignal,
+  /** Fired once, when the answer text is complete (Chat Wonder's `__END__` frame) - BEFORE the
+   * post-answer extras (timeline, mind map, reasoning, decisions) that can take many more
+   * seconds and that this promise still waits for. Lets the UI tell "text done, analysis still
+   * finishing" apart from "still writing the answer". Never throws into the stream. */
+  onAnswerComplete?: () => void,
 ): Promise<ChatWonderStreamResult> {
+  if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
   return new Promise((resolve, reject) => {
     const streamStartedAt = Date.now();
     logger.info("Chat Wonder: WS connecting", { sessionId, url: CHAT_WONDER_WS_URL });
@@ -377,6 +395,7 @@ export function streamChatWonderMessage(
     const finish = () => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener("abort", onAbort);
       if (postEndTimer) clearTimeout(postEndTimer);
       try {
         ws.close();
@@ -408,25 +427,35 @@ export function streamChatWonderMessage(
     const fail = (err: Error) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener("abort", onAbort);
       if (postEndTimer) clearTimeout(postEndTimer);
       try {
         ws.close();
       } catch {
         // already closing
       }
-      logger.error("Chat Wonder: stream failed", {
+      const streamLog = {
         sessionId,
         totalMs: Date.now() - streamStartedAt,
         connectToSendMs: payloadSentAt ? payloadSentAt - streamStartedAt : undefined,
         timeToFirstChunkMs: firstChunkAt ? firstChunkAt - streamStartedAt : undefined,
-        err,
-      });
+      };
+      if (err instanceof GenerationCancelledError) logger.info("Chat Wonder: stream cancelled by user", streamLog);
+      else logger.error("Chat Wonder: stream failed", { ...streamLog, err });
       reject(err);
     };
+
+    const onAbort = () => fail(new GenerationCancelledError());
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     const armPostEndWait = () => {
       if (postEndTimer) return;
       endFrameAt = Date.now();
+      try {
+        onAnswerComplete?.();
+      } catch (err) {
+        logger.warn("Chat Wonder: onAnswerComplete threw, continuing", { sessionId, err });
+      }
       logger.info("Chat Wonder: __END__ frame received, waiting for structured data", {
         sessionId,
         timeToEndFrameMs: endFrameAt - streamStartedAt,

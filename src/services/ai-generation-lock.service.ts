@@ -3,6 +3,8 @@ import CaseAccess from "../utils/case-access";
 import { AiGenerationKind } from "../constants";
 import { isJobStale, isUniqueConstraintError } from "../utils/ai-generation-lock.utils";
 import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
+import { emitToCase } from "../lib/socket";
+import logger from "../utils/logger";
 
 /**
  * Generic "is a generation currently running" lock, shared by every Chat-Wonder-backed
@@ -10,6 +12,36 @@ import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
  * (a page refresh mid-generation otherwise looks idle, inviting a duplicate click/enqueue).
  */
 export default class AiGenerationLockSvc {
+  /**
+   * Best-effort live push to every viewer of `subjectId` (a caseId) currently watching this
+   * case's Terminal — see lib/socket.ts's AiJobSocketEvent/AiJobSocketPayload. Both begin() and
+   * finish() below are the single choke point every one of the 8 AiGenerationQueue kinds funnels
+   * through (including casePostExtraction, which calls begin() directly with no controller in
+   * front of it — see case-post-extraction.ts) — so putting the emit here, once, covers all of
+   * them. Wrapped in try/catch, same as DocumentExtractionSvc.emit: this is a live-UX shortcut
+   * over the DB-backed GET /ai-jobs/:kind poll, which stays correct regardless of push delivery,
+   * so a throwing/disconnected socket layer must never affect the lock transition itself.
+   */
+  private static emit(
+    subjectId: string,
+    event: "ai-job:started" | "ai-job:done" | "ai-job:failed",
+    kind: AiGenerationKind,
+    row: { status: string; startedAt: Date; finishedAt: Date | null; error: string | null },
+  ): void {
+    try {
+      emitToCase(subjectId, event, {
+        caseId: subjectId,
+        kind,
+        status: row.status,
+        startedAt: row.startedAt.toISOString(),
+        finishedAt: row.finishedAt ? row.finishedAt.toISOString() : null,
+        error: row.error,
+      });
+    } catch (err) {
+      logger.warn("AiGenerationLockSvc: emitToCase failed, continuing without it", { err, event, subjectId, kind });
+    }
+  }
+
   static async getStatus(subjectId: string, kind: AiGenerationKind) {
     return AiGenerationJobRepo.findBySubjectAndKind(subjectId, kind);
   }
@@ -31,7 +63,8 @@ export default class AiGenerationLockSvc {
    */
   static async begin(subjectId: string, kind: AiGenerationKind): Promise<void> {
     try {
-      await AiGenerationJobRepo.create(subjectId, kind);
+      const row = await AiGenerationJobRepo.create(subjectId, kind);
+      this.emit(subjectId, "ai-job:started", kind, row);
       return;
     } catch (err) {
       if (!isUniqueConstraintError(err)) throw err;
@@ -41,7 +74,8 @@ export default class AiGenerationLockSvc {
     if (existing?.status === "IN_PROGRESS" && !isJobStale(existing.startedAt)) {
       throw new HttpError(`${kind} generation is already in progress`, 409);
     }
-    await AiGenerationJobRepo.markInProgress(subjectId, kind);
+    const row = await AiGenerationJobRepo.markInProgress(subjectId, kind);
+    this.emit(subjectId, "ai-job:started", kind, row);
   }
 
   static async finish(
@@ -50,7 +84,8 @@ export default class AiGenerationLockSvc {
     status: "DONE" | "FAILED",
     error?: string,
   ): Promise<void> {
-    await AiGenerationJobRepo.updateStatus(subjectId, kind, status, error);
+    const row = await AiGenerationJobRepo.updateStatus(subjectId, kind, status, error);
+    this.emit(subjectId, status === "DONE" ? "ai-job:done" : "ai-job:failed", kind, row);
   }
 
   /**

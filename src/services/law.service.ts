@@ -14,6 +14,7 @@ import {
   retrieveJurisPh,
   searchJurisPh,
 } from "../utils/juris-ph";
+import { documentNumber, planPhSearch } from "../utils/ph-legal-query";
 
 type LawRow = NonNullable<Awaited<ReturnType<typeof LawRepo.findByJurisSourceId>>>;
 
@@ -40,6 +41,39 @@ export const SEARCH_NOTICE =
   "Summaries, tags, and relevance scores are research aids and may contain errors. " +
   "Always verify against the official text of each result.";
 
+const UNINDEXED_NOTICE =
+  "Executive Orders, Presidential Decrees, Administrative Orders, Memorandum Orders and similar " +
+  "issuances can't be searched here yet; try searching by topic or by the Republic Act that amends them.";
+
+/**
+ * Combines the results of several query variants into one list, deduplicated by juris id.
+ * A single response is returned as-is (juris.ph already applied `limit` and its own ordering).
+ * For a by-number lookup the document with that exact number goes first — semantic search can
+ * rank it 4th-7th behind acts that merely cite it — otherwise the best relevance score wins.
+ */
+function mergeSearchItems(
+  batches: JurisPhItem[][],
+  number: { field: "raNumber" | "caseNumber"; digits: string } | undefined,
+  limit: number,
+): JurisPhItem[] {
+  if (batches.length === 1) return batches[0];
+
+  const seen = new Set<string>();
+  const all: JurisPhItem[] = [];
+  for (const item of batches.flat()) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    all.push(item);
+  }
+
+  if (number) {
+    const isExact = (item: JurisPhItem) =>
+      documentNumber(number.field === "raNumber" ? item.ra_number : item.case_number) === number.digits;
+    return [...all.filter(isExact), ...all.filter((item) => !isExact(item))].slice(0, limit);
+  }
+  return all.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity)).slice(0, limit);
+}
+
 export interface SearchResultItem extends JurisPhItem {
   /** Our Law.id for this juris.ph document. */
   stored_id: string;
@@ -55,7 +89,8 @@ export interface SearchResult {
     query: string;
     limit: number;
     count: number;
-    /** "juris.ph" | "cache" for PH; "uk-legal-mcp" | "cache" for UK. */
+    /** "juris.ph" | "cache" for PH; "uk-legal-mcp" | "cache" for UK. "none" when the query was
+     * recognised as a document type we don't index (PH EO/PD/AO/MO) and nothing was searched. */
     source: string;
   };
   notice: string;
@@ -233,24 +268,47 @@ export default class LawSvc {
     const { category, q, limit } = params;
     const dataset = DATASET_BY_CATEGORY[category];
 
-    // 1. Local DB first.
-    const localRows = await LawRepo.localSearch({ category, q, limit });
-    if (localRows.length > 0) return LawSvc.toStoredResult(dataset, q, limit, localRows);
+    // Acronyms ("VAWC") and number formats ("RA 9262" / "GR 203335") are expanded into the
+    // queries worth running — see planPhSearch. An ordinary query comes back as itself.
+    const plan = planPhSearch(category, q);
 
-    // 2. Local miss — go to juris.ph and write through.
-    const tenantId = await LawRepo.resolvePhTenantId();
-
-    let live: Awaited<ReturnType<typeof searchJurisPh>>;
-    try {
-      live = await searchJurisPh(dataset, q, limit);
-    } catch (err) {
-      if (err instanceof JurisPhUnavailableError) {
-        throw new HttpError("juris.ph is unavailable and no matching laws are stored locally", 502);
-      }
-      throw err;
+    // EO/PD/AO/MO/BP/CA/Act No. aren't in juris.ph's datasets; a search would only return
+    // unrelated acts that happen to mention the number.
+    if (plan.kind === "unindexed") {
+      return {
+        items: [],
+        meta: { dataset, query: q, limit, count: 0, source: "none" },
+        notice: `${plan.label} isn't searchable in this library yet. ${UNINDEXED_NOTICE}`,
+      };
     }
 
-    const items = await LawSvc.storeAndAnnotate(live.items, category, tenantId);
+    // 1. Local DB first. A by-number lookup only counts as a hit on the exact number — a
+    // stored row that merely mentions "Republic Act No. 9262" must not stop us fetching RA 9262.
+    const localRows = await LawRepo.localSearch({ category, terms: plan.localTerms, number: plan.number, limit });
+    const { number } = plan;
+    const localHits = number
+      ? localRows.filter((row) => documentNumber(row[number.field]) === number.digits).slice(0, limit)
+      : localRows;
+    if (localHits.length > 0) return LawSvc.toStoredResult(dataset, q, limit, localHits);
+
+    // 2. Local miss — go to juris.ph (all query variants in parallel) and write through.
+    const tenantId = await LawRepo.resolvePhTenantId();
+
+    const settled = await Promise.allSettled(plan.remoteQueries.map((rq) => searchJurisPh(dataset, rq, limit)));
+    const responses = settled.flatMap((s) => (s.status === "fulfilled" ? [s.value] : []));
+    if (responses.length === 0) {
+      // Every variant failed: same outcome as the single-query path always had.
+      const errors = settled.flatMap((s) => (s.status === "rejected" ? [s.reason] : []));
+      const other = errors.find((err) => !(err instanceof JurisPhUnavailableError));
+      if (other) throw other;
+      throw new HttpError("juris.ph is unavailable and no matching laws are stored locally", 502);
+    }
+
+    const items = await LawSvc.storeAndAnnotate(
+      mergeSearchItems(responses.map((r) => r.items), number, limit),
+      category,
+      tenantId,
+    );
 
     // Dedup hits: refresh only the relevance score.
     await Promise.all(
@@ -261,7 +319,7 @@ export default class LawSvc {
       items,
       meta: {
         dataset,
-        query: live.meta?.query ?? q,
+        query: responses.length === 1 ? (responses[0].meta?.query ?? q) : q,
         limit,
         count: items.length,
         source: "juris.ph",
