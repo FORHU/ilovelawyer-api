@@ -1,9 +1,20 @@
 /**
- * Ask a benchmark's questions against its seeded case through ChatSvc.sendMessage — the real
- * production path (case context + ranked chunks + manifest + whole-case inline + [legal ai] tag)
- * — and save the answers for grading.
+ * Ask a benchmark's questions against its seeded case through the real worker path —
+ * ChatSvc.processChatGenerationJob (case context + ranked chunks + manifest + whole-case inline +
+ * [legal ai] tag + Jev triage when USE_JEV_MESSAGE_TRIAGE is on) — and save the answers for grading.
+ * Bypasses ChatSvc.enqueueChatGeneration on purpose: that hands the job to the real SQS queue and
+ * the deployed worker would run it with ITS flags (see scripts/jev-consultation-benchmark.ts).
  *
  *   npx ts-node scripts/run-benchmark.ts --bench brackenmoor --org magni-beatae-tempora [--only Q2] [--label after-fix]
+ *
+ * --consultation <id> targets an arbitrary consultation instead of the seeded benchmark one — the
+ * case it belongs to is used for grounding, whatever its name. Pair with --case on
+ * grade-benchmark.ts so the grader reads the same bundle.
+ *
+ * --rebuild <answers-folder> re-writes Qn.md from the DB using the userMessageIds in that folder's
+ * run.json, without asking anything again. A long legal answer is persisted as a MessageGroup of
+ * several assistant rows (one per topic), so the reply is reassembled from every row hanging off
+ * the user message, in groupOrder.
  *
  * Streams from whatever CHAT_WONDER_WS_URL / CHAT_WONDER_API_URL the .env points at. To
  * benchmark uncommitted chat-wonder code, run it locally and override both:
@@ -22,6 +33,10 @@ import * as fs from "fs";
 import * as path from "path";
 import prisma from "../src/lib/prisma";
 import ChatSvc from "../src/services/chat.service";
+import ChatRepo from "../src/repositories/chat.repository";
+import { getChatWonderSessionId } from "../src/utils/chatWonder";
+import { ChatGenerationJob } from "../src/queues/chat-generation.queue";
+import { TenantCode } from "../src/types/tenant-code";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -33,6 +48,35 @@ const BENCH_DIR = path.resolve(__dirname, "..", "benchmarks", BENCH_SLUG);
 
 function stripTraceFrames(text: string): string {
   return text.replace(/\[TRACE\][\s\S]*?\[\/TRACE\]/g, "");
+}
+
+/** The persisted reply to a user message: every assistant row hanging off it, in groupOrder (a
+ * multi-topic answer is split into one row per topic — see MessageGroup in the schema), joined
+ * back into one document. Also returns the ids so run.json can point at them. */
+async function assembleReply(userMessageId: string): Promise<{ content: string; parts: number; ids: string[] }> {
+  const rows = await prisma.message.findMany({
+    where: { parentMessageId: userMessageId, role: "assistant" },
+    orderBy: [{ groupOrder: "asc" }, { createdAt: "asc" }],
+    select: { id: true, content: true },
+  });
+  return { content: rows.map((r) => r.content).join("\n\n"), parts: rows.length, ids: rows.map((r) => r.id) };
+}
+
+async function rebuild(answersDir: string) {
+  const runPath = path.join(answersDir, "run.json");
+  const run = JSON.parse(fs.readFileSync(runPath, "utf-8"));
+  for (const entry of run.questions) {
+    if (!entry.userMessageId) continue;
+    const reply = await assembleReply(entry.userMessageId);
+    const clean = stripTraceFrames(reply.content).trim();
+    fs.writeFileSync(path.join(answersDir, `${entry.id}.md`), clean);
+    entry.chars = clean.length;
+    entry.words = clean.split(/\s+/).length;
+    entry.parts = reply.parts;
+    entry.assistantMessageIds = reply.ids;
+    console.log(`${entry.id}: ${reply.parts} parts, ${clean.length} chars`);
+  }
+  fs.writeFileSync(runPath, JSON.stringify(run, null, 2));
 }
 
 /** Tool-call histogram + verifier/gate events from a chat-wonder log, sliced from `since`. */
@@ -58,6 +102,9 @@ function profileFromLog(logPath: string, since: number) {
 }
 
 async function main() {
+  const rebuildArg = arg("rebuild");
+  if (rebuildArg) return rebuild(path.join(BENCH_DIR, "answers", rebuildArg));
+
   const questionsPath = path.join(BENCH_DIR, "questions.json");
   if (!fs.existsSync(questionsPath)) throw new Error(`No benchmark at ${BENCH_DIR}`);
   const q = JSON.parse(fs.readFileSync(questionsPath, "utf-8"));
@@ -71,12 +118,18 @@ async function main() {
   const orgArg = arg("org") || "";
   const org = await prisma.organization.findFirst({ where: { OR: [{ slug: orgArg }, { id: orgArg }] } });
   if (!org) throw new Error("--org <slug|id> is required and must exist");
-  const caseRow = await prisma.case.findFirst({ where: { organizationId: org.id, caseName: q.caseName } });
-  if (!caseRow) throw new Error(`Benchmark case not seeded in ${org.slug} — run scripts/seed-benchmark.ts first`);
-  const consultation = await prisma.consultation.findFirst({
-    where: { caseId: caseRow.id, title: { in: [`Benchmark: ${BENCH_SLUG}`, "Brackenmoor Wharf Benchmark (D21)"] } },
-  });
-  if (!consultation) throw new Error("Benchmark consultation not found — re-run the seed script");
+  const consultationArg = arg("consultation");
+  const consultation = consultationArg
+    ? await prisma.consultation.findFirst({ where: { id: consultationArg, organizationId: org.id } })
+    : await prisma.consultation.findFirst({
+        where: {
+          case: { organizationId: org.id, caseName: q.caseName },
+          title: { in: [`Benchmark: ${BENCH_SLUG}`, "Brackenmoor Wharf Benchmark (D21)"] },
+        },
+      });
+  if (!consultation) throw new Error(consultationArg ? `Consultation ${consultationArg} not found in ${org.slug}` : "Benchmark consultation not found — re-run the seed script");
+  if (!consultation.caseId) throw new Error(`Consultation ${consultation.id} is not linked to a case`);
+  const caseRow = await prisma.case.findUniqueOrThrow({ where: { id: consultation.caseId } });
   const docs = await prisma.document.findMany({ where: { caseId: caseRow.id }, select: { ragStatus: true } });
   const ready = docs.filter((d) => d.ragStatus === "READY").length;
   if (ready < docs.length) console.warn(`WARNING: only ${ready}/${docs.length} documents READY`);
@@ -89,36 +142,62 @@ async function main() {
     benchmark: BENCH_SLUG,
     ranAt: new Date().toISOString(),
     caseId: caseRow.id,
+    caseName: caseRow.caseName,
     consultationId: consultation.id,
     chatWonder: { ws: process.env.CHAT_WONDER_WS_URL, api: process.env.CHAT_WONDER_API_URL },
+    jev: { messageTriage: process.env.USE_JEV_MESSAGE_TRIAGE === "true" },
     questions: [] as any[],
   };
+  const tenant = (q.tenant ?? "UK") as TenantCode;
 
   for (const item of q.questions) {
     if (only && item.id !== only) continue;
     const prompt = `${q.preamble}\n\n${item.title.toUpperCase()}\n\n${item.prompt}`;
     console.log(`\n=== ${item.id} — ${item.title}`);
+    // What enqueueChatGeneration does before the queue hand-off, then the worker itself.
+    const sessionId = await getChatWonderSessionId();
+    const userMessage = await ChatRepo.createMessage(consultation.id, "user", prompt, consultation.userId, undefined, undefined, undefined, undefined, "PENDING");
+    const job: ChatGenerationJob = {
+      jobId: userMessage.id,
+      organizationId: org.id,
+      tenantCode: tenant,
+      userId: consultation.userId,
+      consultationId: consultation.id,
+      sessionId,
+      userInput: prompt,
+      effectiveCaseId: caseRow.id,
+      enqueuedAt: Date.now(),
+    };
     const t0 = Date.now();
-    let text = "";
-    let chunks = 0;
     let error: string | undefined;
     try {
-      await ChatSvc.sendMessage(org.id, q.tenant ?? "UK", consultation.userId, consultation.id, "", prompt, (c) => {
-        text += c;
-        chunks++;
-        if (chunks % 50 === 0) process.stdout.write(".");
-      });
+      await ChatSvc.processChatGenerationJob(job);
     } catch (e) {
       error = (e as Error).message;
       console.error(`\n${item.id} failed:`, error);
     }
     const seconds = (Date.now() - t0) / 1000;
-    const clean = stripTraceFrames(text).trim();
+    const reply = await assembleReply(userMessage.id);
+    const parent = await prisma.message.findUnique({ where: { id: userMessage.id }, select: { replyStatus: true, urgent: true, urgencyProbability: true } });
+    const clean = stripTraceFrames(reply.content).trim();
     fs.writeFileSync(path.join(outDir, `${item.id}.md`), clean);
-    const entry: any = { id: item.id, title: item.title, seconds: Math.round(seconds * 10) / 10, chars: clean.length, words: clean.split(/\s+/).length, error };
+    const entry: any = {
+      id: item.id,
+      title: item.title,
+      seconds: Math.round(seconds * 10) / 10,
+      chars: clean.length,
+      words: clean.split(/\s+/).length,
+      error,
+      userMessageId: userMessage.id,
+      assistantMessageIds: reply.ids,
+      parts: reply.parts,
+      replyStatus: parent?.replyStatus ?? null,
+      jevUrgent: parent?.urgent ?? null,
+      jevProbability: parent?.urgencyProbability ?? null,
+    };
     if (logPath && fs.existsSync(logPath)) entry.profile = profileFromLog(logPath, t0);
     run.questions.push(entry);
-    console.log(`\n${item.id}: ${clean.length} chars, ${seconds.toFixed(1)}s${entry.profile ? `, tools ${JSON.stringify(entry.profile.tools)}` : ""}`);
+    console.log(`\n${item.id}: ${clean.length} chars in ${reply.parts} parts, ${seconds.toFixed(1)}s, replyStatus=${entry.replyStatus}, jev urgent=${entry.jevUrgent} p=${entry.jevProbability}${entry.profile ? `, tools ${JSON.stringify(entry.profile.tools)}` : ""}`);
   }
 
   fs.writeFileSync(path.join(outDir, "run.json"), JSON.stringify(run, null, 2));
@@ -130,4 +209,8 @@ main()
     console.error(e);
     process.exitCode = 1;
   })
-  .finally(() => prisma.$disconnect());
+  .finally(async () => {
+    await prisma.$disconnect();
+    // The redis client retries forever when nothing is listening; don't let it hold the process open.
+    setTimeout(() => process.exit(process.exitCode ?? 0), 500).unref();
+  });

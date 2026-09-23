@@ -169,6 +169,11 @@ model Consultation {
   caseId         String?
   title          String?
   createdAt      DateTime @default(now())
+  // When the most recent Jev-triaged user message was flagged urgent (see message-triage.ts).
+  // Set on an urgent turn, cleared on the next routine one, so the consultation list can badge
+  // and sort chats that currently need attention without walking every message. Null when
+  // triage is off or has never run for this consultation.
+  urgentAt       DateTime?
 
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -211,6 +216,19 @@ model Message {
   // instead of a bare "thinking" indicator until the real persisted reply lands. Cleared
   // once replyStatus flips to DONE.
   pendingReplyContent String?             @db.Text
+  // Jev triage result for a user-role message (see message-triage.ts / USE_JEV_MESSAGE_TRIAGE):
+  // urgency flag + probability, and what the user is asking for (intent — one of
+  // MESSAGE_INTENTS in message-triage.ts, a string rather than an enum so a new intent never
+  // needs a migration) with its confidence. All four null when triage didn't run (flag off, Jev
+  // error, or a message from before these columns existed) — never a mix. Always null on
+  // assistant messages.
+  urgent              Boolean?
+  urgencyProbability  Float?
+  intent              String?
+  intentConfidence    Float?
+  // Jev's probability that the message depends on a document/file/email the user thinks they
+  // supplied. Stored so "answered about a document it never had" is queryable after the fact.
+  refersToAttachment  Float?
 
   consultation    Consultation           @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -226,6 +244,7 @@ model Message {
   researchSteps   MessageResearchSteps?
   documents       Document[]
   generatedDocument MessageGeneratedDocument?
+  groundingChecks AnswerGroundingCheck[]
 
   @@index([consultationId])
   @@index([userId])
@@ -1844,4 +1863,39 @@ enum AiGenerationStatus {
   IN_PROGRESS
   DONE
   FAILED
+}
+
+/// One checkable claim pulled out of an assistant answer and what the bundle says about it — see
+/// docs/plans/grounding-verifier.md. Written after the answer is already persisted, so a failure
+/// here can never cost the lawyer their reply; a turn with no rows simply was not verified.
+model AnswerGroundingCheck {
+  id           String   @id @default(uuid())
+  /// The assistant Message this verifies.
+  messageId    String
+  caseId       String?
+  /// "ABSENCE_CLAIM" (the answer said material was unavailable) or "ASSERTION" (the answer stated
+  /// a fact and cited a document for it).
+  kind         String
+  /// The sentence from the answer, so a verdict can be read without re-deriving it.
+  assertion    String   @db.Text
+  /// The reference exactly as the answer wrote it: "D14 Part 2", "D20.1 para. 6".
+  citation     String?
+  /// Resolved bundle document, null when the reference named nothing resolvable.
+  documentId   String?
+  /// What was actually checked against — kept so a disputed verdict can be audited.
+  passage      String?  @db.Text
+  /// FALSE_ABSENCE | NOT_SUPPLIED | CORRECT_ABSENCE | UNRESOLVED | SUPPORTED | UNSUPPORTED |
+  /// CONTRADICTED. A string rather than an enum so a new verdict never needs a migration, the
+  /// same reasoning as AI_GENERATION_KINDS and MESSAGE_INTENTS.
+  verdict      String
+  /// Null when the verdict was reached without Jev (every absence verdict is decided by lookup).
+  confidence   Float?
+  /// Criterion E: ASSERTED_BY_PARTY | STATED_BY_WITNESS | SHOWN_BY_DOCUMENT | ESTABLISHED.
+  evidenceKind String?
+  createdAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([caseId, verdict])
 }
