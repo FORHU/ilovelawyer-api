@@ -15,6 +15,7 @@ import {
   searchJurisPh,
 } from "../utils/juris-ph";
 import { documentNumber, planPhSearch } from "../utils/ph-legal-query";
+import { fetchLawFullText } from "../utils/law-fulltext";
 
 type LawRow = NonNullable<Awaited<ReturnType<typeof LawRepo.findByJurisSourceId>>>;
 
@@ -229,6 +230,9 @@ export interface DocumentResult {
     pdf_url: string | null;
     source_url: string | null;
     juris_url: string;
+    /** Verbatim document text, PDF-extracted on first view (see fetchLawFullText). Null when no
+     * source url exists or extraction failed — the client falls back to summary fields/PDF. */
+    full_text: string | null;
   };
   detail: {
     fetched: boolean;
@@ -428,7 +432,8 @@ export default class LawSvc {
 
     const existing = await LawRepo.findByJurisSourceId(id);
     if (existing && existing.detailFetchedAt) {
-      return LawSvc.toDocumentResult(dataset, existing, "cache");
+      const row = await LawSvc.ensureFullText(existing);
+      return LawSvc.toDocumentResult(dataset, row, "cache");
     }
 
     const tenantId = await LawRepo.resolvePhTenantId();
@@ -438,7 +443,10 @@ export default class LawSvc {
       retrieved = await retrieveJurisPh(dataset, id);
     } catch (err) {
       if (err instanceof JurisPhUnavailableError) {
-        if (existing) return LawSvc.toDocumentResult(dataset, existing, "cache");
+        if (existing) {
+          const row = await LawSvc.ensureFullText(existing);
+          return LawSvc.toDocumentResult(dataset, row, "cache");
+        }
         throw new HttpError("juris.ph is unavailable and this document is not stored locally", 502);
       }
       throw err;
@@ -450,7 +458,16 @@ export default class LawSvc {
       toCreateInput(retrieved.item, category, tenantId),
       toDetailInput(retrieved.detail),
     );
-    return LawSvc.toDocumentResult(dataset, row, "juris.ph");
+    const withFullText = await LawSvc.ensureFullText(row);
+    return LawSvc.toDocumentResult(dataset, withFullText, "juris.ph");
+  }
+
+  /** Fetches and persists `Law.fullText` on first view (see fetchLawFullText); a no-op on every
+   * later view since `fullTextFetchedAt` is stamped whether or not text was recovered. */
+  private static async ensureFullText(row: LawRow): Promise<LawRow> {
+    if (row.fullTextFetchedAt) return row;
+    const fullText = await fetchLawFullText(row);
+    return LawRepo.updateDetail(row.id, { fullText, fullTextFetchedAt: new Date() });
   }
 
   /** A stored Law row → the detail-page response. */
@@ -479,6 +496,7 @@ export default class LawSvc {
         pdf_url: row.pdfUrl,
         source_url: row.sourceUrl,
         juris_url: row.jurisUrl,
+        full_text: row.fullText,
       },
       detail: {
         fetched: row.detailFetchedAt !== null,

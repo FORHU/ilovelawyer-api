@@ -1,5 +1,6 @@
 import { JURIS_PH_API_URL } from "../config";
 import HttpError from "./http-error";
+import { documentNumber } from "./ph-legal-query";
 
 // ── juris.ph public API ──────────────────────────────────────────────────────
 // One base (JURIS_PH_API_URL, e.g. https://juris.ph/api). This module appends the segment:
@@ -167,7 +168,6 @@ export const JURIS_PH_CASE_TYPES = [
   "Administrative",
   "Labor",
   "Constitutional",
-  "Commercial",
 ] as const;
 
 export const JURIS_PH_TOPICS = [
@@ -238,6 +238,32 @@ function jsonArr(v: unknown): unknown[] | null {
   return Array.isArray(v) && v.length > 0 ? v : null;
 }
 
+/** Best-effort public source link for a Republic Act — juris.ph's own payload carries no PDF or
+ * source url for this dataset at all (only an internal `datasets/markdown/repacts/...` path used
+ * to build its own index), confirmed by inspecting the raw retrieve payload directly. Its
+ * `basename` (`ra_<number>_<year>`) matches LawPhil's own URL convention exactly, which is
+ * expected since LawPhil is the de-facto canonical mirror most PH legal scrapers key off. Null
+ * when either half is missing — the caller (fetchLawFullText) treats that as "no source".
+ */
+function lawPhilRepublicActUrl(raNumber: string | undefined, year: number | null): string | null {
+  const digits = documentNumber(raNumber);
+  if (!digits || !year) return null;
+  return `https://lawphil.net/statutes/repacts/ra${year}/ra_${digits}_${year}.html`;
+}
+
+/** juris.ph's jurisprudence dataset mixes two upstreams per decision: some carry a direct
+ * `source_pdf_url` (fetched from sc.judiciary.gov.ph — preferred, a real PDF); others (payload
+ * `source: "lawphil"`, no source_pdf_url at all) only carry an internal `path` like
+ * `lawphil.net/judjuris/juri2025/oct2025/gr_279010_2025.md` — that's the real page's path with
+ * its extension swapped, confirmed by fetching it directly. Only path shapes from this dataset's
+ * lawphil-sourced rows match (republic-acts' `path` is an unrelated internal-only string), so
+ * this is a no-op for any other payload shape. */
+function lawPhilUrlFromPath(path: unknown): string | null {
+  const p = str(path);
+  if (!p || !p.startsWith("lawphil.net/") || !p.endsWith(".md")) return null;
+  return `https://${p.slice(0, -3)}.html`;
+}
+
 /** juris.ph's raw Qdrant payload → the same normalized JurisPhItem shape `/api/v1/search`
  * returns, so write-through (toCreateInput) and the frontend need no browse-specific branch. */
 function pointToItem(dataset: JurisPhDataset, point: QdrantPoint): JurisPhItem {
@@ -256,7 +282,7 @@ function pointToItem(dataset: JurisPhDataset, point: QdrantPoint): JurisPhItem {
       tags: strArr(p.tags),
       url: `https://juris.ph/case/${point.id}`,
       pdf_url: str(p.source_pdf_url) ?? null,
-      source_url: str(p.source_url) ?? null,
+      source_url: str(p.source_url) ?? lawPhilUrlFromPath(p.path) ?? null,
       case_number: str(p.case_number),
       case_title: str(p.case_title),
       case_type: str(p.case_type),
@@ -269,14 +295,16 @@ function pointToItem(dataset: JurisPhDataset, point: QdrantPoint): JurisPhItem {
     };
   }
 
+  const raNumber = str(p.ra_bill_number);
   return {
     id: point.id,
     year,
     tags: strArr(p.tags),
     url: `https://juris.ph/republic-act/${point.id}`,
+    // No embeddable PDF exists for republic-acts — LawPhil (below) serves plain HTML, not a PDF.
     pdf_url: null,
-    source_url: null,
-    ra_number: str(p.ra_bill_number),
+    source_url: lawPhilRepublicActUrl(raNumber, year),
+    ra_number: raNumber,
     title: str(p.title),
     summary: str(p.summary),
   };
