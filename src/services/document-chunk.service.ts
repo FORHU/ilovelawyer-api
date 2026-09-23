@@ -287,8 +287,11 @@ export default class DocumentChunkSvc {
     let used = 0;
     for (const row of rows) {
       if (!scopedDocIds.has(row.caseDocumentId) || !allowedDocIds.has(row.caseDocumentId)) continue;
-      const name = nameById.get(row.caseDocumentId) ?? row.caseDocumentId;
-      const header = `Document "${name}" (id: ${row.caseDocumentId}, page ${row.pageNumber ?? "?"}):`;
+      // Name only, never the id: an id printed here is an id the AI can echo into its answer or
+      // its Decision Records, where a user then reads it. (Chat Wonder still gets the ids it needs
+      // through its own manifest; this text is for reading, not for fetching.)
+      const name = nameById.get(row.caseDocumentId)?.trim() || "Untitled document";
+      const header = `Document "${name}" (page ${row.pageNumber ?? "?"}):`;
       let body = row.chunkText;
       const room = charCap - used - header.length - 2;
       if (room <= 0) break;
@@ -300,7 +303,8 @@ export default class DocumentChunkSvc {
     if (!blocks.length) return "";
     return (
       "[CASE DOCUMENTS — files the user uploaded. Reference them directly when relevant; " +
-      "do NOT treat them as public legal precedent. Do not ask the user to re-upload these files.]\n\n" +
+      "do NOT treat them as public legal precedent. Do not ask the user to re-upload these files. " +
+      "Refer to each file by its name; never write a file id.]\n\n" +
       blocks.join("\n\n")
     );
   }

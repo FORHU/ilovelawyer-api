@@ -48,6 +48,25 @@ export const redis = {
     }
   },
 
+  /** Sets many presence flags (value irrelevant) with one expiry. Best-effort like set(). */
+  async markMany(keys: string[], ttlSeconds: number): Promise<void> {
+    if (!keys.length || !client.isReady) return;
+    try {
+      await Promise.all(keys.map((k) => client.set(k, "1", { EX: ttlSeconds })));
+    } catch {}
+  },
+
+  /** Presence check that tells "not there" (false) apart from "cannot tell" (null: Redis is not
+   * reachable). Callers that gate access must decide what null means; get() cannot express it. */
+  async exists(key: string): Promise<boolean | null> {
+    if (!client.isReady) return null;
+    try {
+      return (await client.exists(key)) === 1;
+    } catch {
+      return null;
+    }
+  },
+
   /** Best-effort single-key invalidation — a miss just means the next read falls through to the
    * DB, same as any other cache miss, so a failed/unready client is safe to swallow. */
   async del(key: string): Promise<void> {

@@ -73,6 +73,7 @@ export default class EventRepo {
     title: string;
     type?: string;
     dateTime: Date;
+    endDateTime?: Date;
     clientEmail?: string;
     notes?: string;
     status?: string;
