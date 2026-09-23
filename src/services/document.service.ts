@@ -62,7 +62,7 @@ export default class DocumentSvc {
   static async create(
     organizationId: string,
     userId: string,
-    data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string },
+    data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string; fileSize?: number },
   ) {
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
@@ -72,6 +72,7 @@ export default class DocumentSvc {
       caseId: data.caseId,
       consultationId: data.consultationId,
       mimeType: data.contentType,
+      fileSize: data.fileSize,
     });
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(doc.id);
     return doc;
@@ -82,7 +83,7 @@ export default class DocumentSvc {
   static async createMany(
     organizationId: string,
     userId: string,
-    items: { key: string; name: string; contentType?: string }[],
+    items: { key: string; name: string; contentType?: string; fileSize?: number }[],
     caseId?: string,
     consultationId?: string,
   ) {
@@ -103,6 +104,7 @@ export default class DocumentSvc {
         name: items[i].name,
         fileId: file.id,
         mimeType: items[i].contentType,
+        fileSize: items[i].fileSize,
       }));
 
       const createdDocuments = await DocumentRepo.createManyAndReturn(userDocumentData, tx);

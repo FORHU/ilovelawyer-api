@@ -21,7 +21,7 @@ export default class DocumentRepo {
   static async create(
     organizationId: string,
     userId: string,
-    data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string },
+    data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string; fileSize?: number },
   ) {
     return prisma.document.create({ data: { organizationId, userId, ...data }, include: { file: true } });
   }

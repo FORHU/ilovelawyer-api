@@ -36,6 +36,7 @@ export const createDocumentSchema = Joi.alternatives().try(
     key: Joi.string().required(),
     name: allowedFilename,
     contentType: Joi.string().optional(),
+    fileSize: Joi.number().integer().min(0).optional(),
     caseId: Joi.string().optional(),
     consultationId: Joi.string().optional(),
   }),
@@ -46,6 +47,7 @@ export const createDocumentSchema = Joi.alternatives().try(
           key: Joi.string().required(),
           name: allowedFilename,
           contentType: Joi.string().optional(),
+          fileSize: Joi.number().integer().min(0).optional(),
         }),
       )
       .min(1)
