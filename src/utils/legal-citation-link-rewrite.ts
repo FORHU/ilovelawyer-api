@@ -41,7 +41,12 @@ const WIRE_CATEGORY: Record<TenantCode, Record<LawCategory, string>> = {
 };
 
 interface Resolution {
-  lawId: string;
+  /** The Library detail route's `[id]` segment — NOT uniformly `Law.id`. Per
+   * law.controller.ts's own doc comment on GET /api/law/document, that endpoint's `id` is
+   * "the juris source id for PH and our Law.id uuid for UK" — a real, tenant-dependent
+   * asymmetry in the existing API contract, not something this module gets to normalize away.
+   * UK resolvers set this to `Law.id`; the PH resolver sets it to the juris.ph item id instead. */
+  routeId: string;
   category: LawCategory;
 }
 
@@ -50,7 +55,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function libraryHref(tenantCode: TenantCode, resolution: Resolution): string {
-  return `/homepage/library/laws/${resolution.lawId}?category=${WIRE_CATEGORY[tenantCode][resolution.category]}`;
+  return `/homepage/library/laws/${resolution.routeId}?category=${WIRE_CATEGORY[tenantCode][resolution.category]}`;
 }
 
 // The model is instructed to suffix a citation label with a literal " Law"/" Jurisprudence"
@@ -99,7 +104,7 @@ async function resolveUkHref(href: string, label: string): Promise<Resolution | 
 
   const jurisSourceId = isLegislation ? normalizeUkLegislationUrl(href) : href;
   const existing = await LawRepo.findByJurisSourceId(jurisSourceId);
-  if (existing) return { lawId: existing.id, category };
+  if (existing) return { routeId: existing.id, category };
 
   const strippedLabel = stripCitationSuffix(label);
   if (isLegislation) {
@@ -110,12 +115,12 @@ async function resolveUkHref(href: string, label: string): Promise<Resolution | 
     // real phrasing, so it's tried first; the OSCOLA resolver is only a fallback for the rare
     // case the label already happens to be in strict citation form (e.g. a bare "SI YYYY/N").
     const byTitle = await resolveUkLegislationTitleToLaw(strippedLabel);
-    if (byTitle) return { lawId: byTitle.lawId, category };
+    if (byTitle) return { routeId: byTitle.lawId, category };
   }
 
   const resolved = await resolveUkCitationToLaw(strippedLabel);
   if (!resolved) return null;
-  return { lawId: resolved.lawId, category };
+  return { routeId: resolved.lawId, category };
 }
 
 const JURIS_PH_PATH_RE = /^\/(case|republic-act)\/([^/?#]+)/;
@@ -123,7 +128,14 @@ const JURIS_PH_PATH_RE = /^\/(case|republic-act)\/([^/?#]+)/;
 /** PH citation URLs (juris-ph.ts) already embed the exact juris.ph item id that
  * `Law.jurisSourceId` is keyed on (`https://juris.ph/case/{id}` / `.../republic-act/{id}`), so
  * this is an exact-id lookup, not a fuzzy title match — reuses LawSvc.getDocument, the same
- * write-through-on-miss path the Library detail page itself uses. */
+ * write-through-on-miss path the Library detail page itself uses, purely to materialize the row
+ * (and confirm it's real) on first sight.
+ *
+ * The returned `routeId` is that same juris.ph id, NOT `doc.item.stored_id` (our internal
+ * `Law.id`) — GET /api/law/document takes "the juris source id for PH and our Law.id uuid for
+ * UK" (law.controller.ts), so the Library route for a PH document is keyed on the juris.ph id
+ * throughout, unlike UK's. Using `stored_id` here would 404 the detail page: confirmed live
+ * (a citation resolved to a Library link that failed to load until this was fixed). */
 async function resolvePhHref(href: string): Promise<Resolution | null> {
   let url: URL;
   try {
@@ -138,8 +150,8 @@ async function resolvePhHref(href: string): Promise<Resolution | null> {
   const id = decodeURIComponent(match[2]);
 
   try {
-    const doc = await LawSvc.getDocument({ category, id });
-    return { lawId: doc.item.stored_id, category };
+    await LawSvc.getDocument({ category, id });
+    return { routeId: id, category };
   } catch {
     return null;
   }
@@ -256,18 +268,13 @@ function fallbackTitle(url: string): string {
  * `{title, url, case_number, ra_number}` directly (no markdown/HTML parsing needed), but the
  * `url` was never run through any Library resolution at all, so it still always pointed
  * externally. This applies the exact same resolution + no-external-navigation policy as
- * `rewriteLegalCitationLinks` (see its doc comment), reusing `resolveUkHref` directly rather
- * than a second implementation.
- *
- * UK only for now — PH's related cases come from a different external source (juris.ph) with
- * its own follow-up planned separately; PH items are returned unchanged.
+ * `rewriteLegalCitationLinks` (see its doc comment), reusing `resolveUkHref`/`resolvePhHref`
+ * directly rather than a second implementation.
  */
 export async function resolveRelatedCaseLibraryLinks(
   items: RelatedCase[],
   tenantCode: TenantCode,
 ): Promise<RelatedCase[]> {
-  if (tenantCode !== "UK") return items;
-
   const strip = (item: RelatedCase): RelatedCase => ({
     ...item,
     url: null,
@@ -280,8 +287,10 @@ export async function resolveRelatedCaseLibraryLinks(
       if (!isKnownLawHost(item.url, tenantCode)) return strip(item);
 
       try {
-        const label = item.title ?? item.case_number ?? item.ra_number ?? "";
-        const resolution = await resolveUkHref(item.url, label);
+        const resolution =
+          tenantCode === "UK"
+            ? await resolveUkHref(item.url, item.title ?? item.case_number ?? item.ra_number ?? "")
+            : await resolvePhHref(item.url);
         return resolution ? { ...item, url: libraryHref(tenantCode, resolution) } : strip(item);
       } catch (err) {
         logger.warn("Related case link resolution failed, stripping the external link", { err, url: item.url });

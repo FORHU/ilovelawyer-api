@@ -129,12 +129,18 @@ describe("rewriteLegalCitationLinks", () => {
 });
 
 describe("resolveRelatedCaseLibraryLinks", () => {
-  // PH related cases come from juris.ph and are explicitly out of scope for this pass (planned
-  // as a separate follow-up) — must be returned byte-for-byte unchanged, url included.
-  it("leaves PH items completely unchanged, even ones with a url", async () => {
-    const items = [relatedCase({ title: "A PH case", url: "https://juris.ph/case/abc" })];
+  it("leaves a PH item with no url at all unchanged", async () => {
+    const items = [relatedCase({ title: "No URL here" })];
     const result = await resolveRelatedCaseLibraryLinks(items, "PH");
     expect(result).to.deep.equal(items);
+  });
+
+  // A PH item pointing somewhere that isn't juris.ph (e.g. a stray legislation.gov.uk link) has
+  // no chance of matching the PH Library — same no-external-navigation policy as the UK path.
+  it("strips the url of a PH item pointing to an unrecognized host, keeping everything else", async () => {
+    const items = [relatedCase({ title: "Some UK Act", url: "https://www.legislation.gov.uk/ukpga/1967/87" })];
+    const result = await resolveRelatedCaseLibraryLinks(items, "PH");
+    expect(result).to.deep.equal([{ ...items[0], url: null }]);
   });
 
   it("leaves a UK item with no url at all unchanged", async () => {
