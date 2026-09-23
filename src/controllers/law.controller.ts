@@ -11,6 +11,8 @@ import { getLawSourceProvider } from "../legal/law-source/law-source.registry";
 import { legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
 import { UK_LEGISLATION_BASE_URL } from "../config";
 import { lawSearchSchema, lawDocumentSchema, lawBrowseSchema } from "../validation/law.validation";
+import logger from "../utils/logger";
+import { OUTBOUND_FETCH_HEADERS } from "../utils/law-fulltext";
 
 export default class LawCtrl {
   /**
@@ -80,8 +82,11 @@ export default class LawCtrl {
 
   /**
    * GET /api/law/:lawId/pdf — same-origin proxy for a stored law's official PDF (see law.route.ts).
-   * legislation.gov.uk and the TNA judgment site both refuse framing (X-Frame-Options: DENY), so
-   * the browser can't embed those URLs directly; this streams the bytes back from our origin.
+   * Several upstreams refuse framing outright (legislation.gov.uk, the TNA judgment site) and,
+   * per user report, so does juris.ph's own PDF host for PH jurisprudence/republic-acts — a
+   * direct top-level navigation (our "open in a new tab" link) renders fine, but the same URL as
+   * an <iframe src> comes back blank because of X-Frame-Options / CSP frame-ancestors. Re-serving
+   * the bytes from our own origin sidesteps that for every source, not just UK's.
    * Returns 502 when the upstream is unreachable or answers with anything other than a PDF (e.g.
    * legislation.gov.uk's AWS-WAF challenge page) — the client falls back to a "View source" link.
    */
@@ -89,32 +94,34 @@ export default class LawCtrl {
     const law = await LawRepo.findById(req.params.lawId);
     if (!law) throw new HttpError("Law not found", 404);
 
-    let upstream: string | null;
-    if (law.category === "REPUBLIC_ACT") {
-      const parts = legislationUrlParts(law.jurisUrl);
-      upstream = parts
-        ? `${UK_LEGISLATION_BASE_URL}/${parts.type}/${parts.year}/${parts.number}/data.pdf`
-        : null;
-    } else {
-      upstream = law.pdfUrl ?? `${law.jurisUrl.replace(/\/+$/, "")}/data.pdf`;
-    }
+    // UK legislation stores no pdfUrl (see legislationHitToCreateInput) — its PDF only exists at
+    // this derived legislation.gov.uk path. Every other document (PH jurisprudence, PH
+    // republic-acts, UK case law) already has its direct PDF url in pdfUrl.
+    const ukLegislationParts = legislationUrlParts(law.jurisUrl);
+    const upstream = ukLegislationParts
+      ? `${UK_LEGISLATION_BASE_URL}/${ukLegislationParts.type}/${ukLegislationParts.year}/${ukLegislationParts.number}/data.pdf`
+      : law.pdfUrl;
     if (!upstream) throw new HttpError("No PDF available for this document", 404);
 
     let upstreamRes: globalThis.Response;
     try {
       upstreamRes = await fetch(upstream, {
         signal: AbortSignal.timeout(20_000),
-        headers: {
-          "user-agent": "Mozilla/5.0 (compatible; ilovelawyer/1.0; +https://ilovelawyer.com)",
-          accept: "application/pdf,*/*",
-        },
+        headers: { ...OUTBOUND_FETCH_HEADERS, accept: "application/pdf,*/*" },
       });
-    } catch {
+    } catch (err) {
+      logger.warn("Law PDF proxy: upstream fetch failed", { lawId: law.id, upstream, err });
       throw new HttpError("The official document source is unavailable right now", 502);
     }
 
     const contentType = (upstreamRes.headers.get("content-type") ?? "").toLowerCase();
     if (!upstreamRes.ok || !contentType.includes("pdf")) {
+      logger.warn("Law PDF proxy: upstream returned non-PDF response", {
+        lawId: law.id,
+        upstream,
+        status: upstreamRes.status,
+        contentType,
+      });
       throw new HttpError("The official document source is unavailable right now", 502);
     }
 

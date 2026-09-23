@@ -409,6 +409,9 @@ export class UkLawSourceProvider implements LawSourceProvider {
         pdf_url: row.pdfUrl,
         source_url: row.sourceUrl,
         juris_url: row.jurisUrl,
+        // UK documents render via the same-origin /pdf proxy (legislationUrlParts), not a
+        // PDF-extracted fullText — this pipeline is PH-only (LawSvc.getDocument).
+        full_text: null,
       },
       detail: {
         fetched: row.detailFetchedAt !== null,
