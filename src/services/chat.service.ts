@@ -27,7 +27,7 @@ import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
 import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
-import { rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
+import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 
 /** How a running chat turn is stopped — see ChatSvc.processChatGenerationJob/cancelChatGeneration. */
 interface GenerationControl {
@@ -1198,14 +1198,18 @@ export default class ChatSvc {
     return doc.id;
   }
 
-  static async getRelatedCases(organizationId: string, consultationId: string) {
+  static async getRelatedCases(organizationId: string, tenantCode: TenantCode, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
     if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
 
     const message = await ChatRepo.findLatestAssistantMessage(consultationId);
-    return enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
+    const items = await enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
+    // Enrichment runs first so a related case that arrived with only a bare URL (no
+    // title/case_number/ra_number) has a real title by the time Library resolution needs a
+    // label for its slow (materialize-on-first-sight) path.
+    return resolveRelatedCaseLibraryLinks(items, tenantCode);
   }
 
   /** Starts rendering the audio for a message's already-generated Audio Overview script

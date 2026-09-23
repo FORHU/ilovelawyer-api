@@ -3,6 +3,7 @@ import LawRepo from "../repositories/law.repository";
 import LawSvc from "../services/law.service";
 import { UK_CASELAW_BASE_URL, UK_LEGISLATION_BASE_URL } from "../config";
 import { TenantCode } from "../types/tenant-code";
+import type { RelatedCase } from "./chatWonder";
 import { normalizeUkLegislationUrl, resolveUkCitationToLaw, resolveUkLegislationTitleToLaw } from "./uk-citation-resolution";
 import logger from "./logger";
 
@@ -225,4 +226,67 @@ export async function rewriteLegalCitationLinks(
     logger.warn("Legal citation link rewrite: failed, keeping original links", { err, tenantCode });
     return { content, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 };
   }
+}
+
+function hasOwnLabel(item: RelatedCase): boolean {
+  return !!(item.title?.trim() || item.case_number?.trim() || item.ra_number?.trim());
+}
+
+// The Sources panel derives a readable label from `url` (host + path) for an item that arrived
+// with no title/case_number/ra_number at all — its only source of identifying text. Stripping
+// `url` on an unresolved citation (the no-external-navigation policy) would leave such an item
+// with nothing to display at all, a real regression from "external link with a derived label" to
+// "blank row." Backfilling `title` with the same kind of derivation before stripping keeps the
+// row identifiable without a clickable link. legislation.gov.uk items rarely hit this: they
+// already got a real title from enrichRelatedCaseTitles (chat.service.ts) before this function
+// ever runs — this is mainly a safety net for a bare TNA case URL that also fails resolution.
+function fallbackTitle(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./i, "");
+    return `${host}${u.pathname === "/" ? "" : u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * The Related Cases / "authorities cited" panel (Sources panel) is a second, structurally
+ * separate citation surface from the inline chat prose above — its items already carry
+ * `{title, url, case_number, ra_number}` directly (no markdown/HTML parsing needed), but the
+ * `url` was never run through any Library resolution at all, so it still always pointed
+ * externally. This applies the exact same resolution + no-external-navigation policy as
+ * `rewriteLegalCitationLinks` (see its doc comment), reusing `resolveUkHref` directly rather
+ * than a second implementation.
+ *
+ * UK only for now — PH's related cases come from a different external source (juris.ph) with
+ * its own follow-up planned separately; PH items are returned unchanged.
+ */
+export async function resolveRelatedCaseLibraryLinks(
+  items: RelatedCase[],
+  tenantCode: TenantCode,
+): Promise<RelatedCase[]> {
+  if (tenantCode !== "UK") return items;
+
+  const strip = (item: RelatedCase): RelatedCase => ({
+    ...item,
+    url: null,
+    title: hasOwnLabel(item) ? item.title : fallbackTitle(item.url!),
+  });
+
+  return Promise.all(
+    items.map(async (item) => {
+      if (!item.url) return item;
+      if (!isKnownLawHost(item.url, tenantCode)) return strip(item);
+
+      try {
+        const label = item.title ?? item.case_number ?? item.ra_number ?? "";
+        const resolution = await resolveUkHref(item.url, label);
+        return resolution ? { ...item, url: libraryHref(tenantCode, resolution) } : strip(item);
+      } catch (err) {
+        logger.warn("Related case link resolution failed, stripping the external link", { err, url: item.url });
+        return strip(item);
+      }
+    }),
+  );
 }

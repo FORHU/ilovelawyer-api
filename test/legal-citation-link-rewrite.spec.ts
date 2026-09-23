@@ -1,6 +1,27 @@
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { isKnownLawHost, rewriteLegalCitationLinks, stripCitationSuffix } from "../src/utils/legal-citation-link-rewrite";
+import {
+  isKnownLawHost,
+  resolveRelatedCaseLibraryLinks,
+  rewriteLegalCitationLinks,
+  stripCitationSuffix,
+} from "../src/utils/legal-citation-link-rewrite";
+import type { RelatedCase } from "../src/utils/chatWonder";
+
+function relatedCase(overrides: Partial<RelatedCase>): RelatedCase {
+  return {
+    type: "case",
+    title: null,
+    url: null,
+    case_number: null,
+    ra_number: null,
+    year: null,
+    snippet: null,
+    relevance: null,
+    vetted: false,
+    ...overrides,
+  };
+}
 
 describe("stripCitationSuffix", () => {
   it("strips a trailing ' Law' suffix", () => {
@@ -104,5 +125,54 @@ describe("rewriteLegalCitationLinks", () => {
       attemptedCount: 0,
       strippedCount: 2,
     });
+  });
+});
+
+describe("resolveRelatedCaseLibraryLinks", () => {
+  // PH related cases come from juris.ph and are explicitly out of scope for this pass (planned
+  // as a separate follow-up) — must be returned byte-for-byte unchanged, url included.
+  it("leaves PH items completely unchanged, even ones with a url", async () => {
+    const items = [relatedCase({ title: "A PH case", url: "https://juris.ph/case/abc" })];
+    const result = await resolveRelatedCaseLibraryLinks(items, "PH");
+    expect(result).to.deep.equal(items);
+  });
+
+  it("leaves a UK item with no url at all unchanged", async () => {
+    const items = [relatedCase({ title: "No URL here" })];
+    const result = await resolveRelatedCaseLibraryLinks(items, "UK");
+    expect(result).to.deep.equal(items);
+  });
+
+  // Same no-external-navigation policy as rewriteLegalCitationLinks: a related case pointing
+  // somewhere that could never be a Library item must not stay a clickable external link.
+  it("strips the url of a UK item pointing to an unrecognized host, keeping everything else", async () => {
+    const items = [relatedCase({ title: "Some Debate", url: "https://hansard.parliament.uk/commons/2020" })];
+    const result = await resolveRelatedCaseLibraryLinks(items, "UK");
+    expect(result).to.deep.equal([{ ...items[0], url: null }]);
+  });
+
+  it("resolves independent items in one pass, each on its own merits", async () => {
+    const items = [
+      relatedCase({ title: "Keeps no url", url: null }),
+      relatedCase({ title: "Gets stripped", url: "https://hansard.parliament.uk/x" }),
+    ];
+    const result = await resolveRelatedCaseLibraryLinks(items, "UK");
+    expect(result[0]).to.deep.equal(items[0]);
+    expect(result[1]).to.deep.equal({ ...items[1], url: null });
+  });
+
+  // Sources panel derives its displayed label from `url` when title/case_number/ra_number are
+  // all null (a bare-URL related case) — nulling the url on strip must not leave the row with
+  // nothing at all to show, so a host+path fallback title is backfilled in that case only.
+  it("backfills a host+path fallback title when stripping a bare-URL item with no other label", async () => {
+    const items = [relatedCase({ url: "https://hansard.parliament.uk/commons/2020" })];
+    const result = await resolveRelatedCaseLibraryLinks(items, "UK");
+    expect(result).to.deep.equal([{ ...items[0], url: null, title: "hansard.parliament.uk/commons/2020" }]);
+  });
+
+  it("does not overwrite an existing title when stripping", async () => {
+    const items = [relatedCase({ title: "Some Debate", url: "https://hansard.parliament.uk/commons/2020" })];
+    const result = await resolveRelatedCaseLibraryLinks(items, "UK");
+    expect(result).to.deep.equal([{ ...items[0], url: null }]);
   });
 });
