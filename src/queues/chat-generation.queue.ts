@@ -1,4 +1,6 @@
 import ChatSvc from "../services/chat.service";
+import ChatRepo from "../repositories/chat.repository";
+import { emitToUser } from "../lib/socket";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { MESSAGE_PERSISTENCE_QUEUE_URL } from "../config";
 import { TenantCode } from "../types/tenant-code";
@@ -52,6 +54,15 @@ const VISIBILITY_TIMEOUT_SECONDS = 300;
 // Team actions on AiGenerationQueue) — I/O-bound (WebSocket to Chat Wonder), not CPU/memory
 // heavy, so a higher concurrency keeps response latency reasonable under load.
 const CONCURRENCY = 10;
+
+// Generous ceiling for a turn to legitimately still be PENDING — ChatSvc.processChatGenerationJob
+// can itself wait up to ATTACHMENT_READY_MAX_WAIT_MS (10 min) before generation even starts, on
+// top of however long Chat Wonder actually takes. Past this, a turn is almost certainly orphaned
+// (see findStalePendingMessages's doc comment), not just slow — swept below rather than left to
+// hang on an event that's never coming. Checked on a slower cadence since it's a safety net, not
+// a latency-sensitive path.
+const STALE_PENDING_CEILING_MS = 15 * 60_000;
+const SWEEP_INTERVAL_MS = 2 * 60_000;
 
 interface WaitItem {
   job: ChatGenerationJob;
@@ -156,7 +167,48 @@ export default class ChatGenerationQueue {
   private static async run(): Promise<void> {
     logger.info("Chat generation queue started", { queueUrl: MESSAGE_PERSISTENCE_QUEUE_URL, concurrency: CONCURRENCY });
     void this.fetchLoop();
+    void this.sweepLoop();
     this.pump();
+  }
+
+  /** Independent of fetchLoop/pump on purpose: a turn stuck because ITS OWN worker hung (the
+   * exact failure mode this exists to catch) would never notice its own staleness — this has
+   * to be a separate loop that doesn't depend on any one job's promise ever settling. */
+  private static async sweepLoop(): Promise<void> {
+    while (this.running) {
+      await sleep(SWEEP_INTERVAL_MS);
+      try {
+        await this.sweepStalePending();
+      } catch (err) {
+        logger.error("Chat generation: stale-pending sweep failed", { err });
+      }
+    }
+  }
+
+  private static async sweepStalePending(): Promise<void> {
+    const cutoff = new Date(Date.now() - STALE_PENDING_CEILING_MS);
+    const stale = await ChatRepo.findStalePendingMessages(cutoff);
+    if (stale.length === 0) return;
+
+    logger.warn("Chat generation: sweeping stale PENDING turns to FAILED", {
+      count: stale.length,
+      messageIds: stale.map((m) => m.id),
+    });
+
+    for (const message of stale) {
+      try {
+        await ChatRepo.setReplyStatus(message.id, "FAILED", { clearPendingContent: true });
+        if (message.userId) {
+          emitToUser(message.userId, "chat:error", {
+            consultationId: message.consultationId,
+            messageId: message.id,
+            message: "Generation timed out",
+          });
+        }
+      } catch (err) {
+        logger.error("Chat generation: failed to sweep stale PENDING turn", { err, messageId: message.id });
+      }
+    }
   }
 
   private static async fetchLoop(): Promise<void> {

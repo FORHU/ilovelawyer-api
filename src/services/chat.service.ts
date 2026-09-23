@@ -198,6 +198,14 @@ export default class ChatSvc {
       throw new HttpError("Consultation not found", 404);
     }
 
+    // Reject a second concurrent turn outright rather than silently enqueueing it onto the same
+    // Chat Wonder session as the one already running (see hasPendingTurn's doc comment) — every
+    // known client caller (the composer, Mind Map, Audio Overview) already checks its own busy
+    // flag first, but this is what actually closes the gap for a caller that doesn't.
+    if (await ChatRepo.hasPendingTurn(consultationId)) {
+      throw new HttpError("A reply is already generating for this consultation", 409);
+    }
+
     // Prefer consultation.caseId; allow per-message caseId for case-portfolio chats
     // whose consultation was created without a case link.
     let effectiveCaseId = consultation.caseId ?? undefined;
