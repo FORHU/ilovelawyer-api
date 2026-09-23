@@ -174,10 +174,17 @@ async function runTurn(consultationId: string, c: Case): Promise<TurnResult> {
   }
   const ms = Date.now() - start;
 
-  const reply = await prisma.message.findFirst({
+  // Every assistant row hanging off the user message, in groupOrder: a multi-topic answer is split
+  // into one row per topic (MessageGroup in the schema), so findFirst returned an arbitrary
+  // fragment and made long answers look short. Join them back into the document the user sees.
+  const replyParts = await prisma.message.findMany({
     where: { parentMessageId: userMessage.id, role: "assistant" },
+    orderBy: [{ groupOrder: "asc" }, { createdAt: "asc" }],
     select: { id: true, content: true },
   });
+  const reply = replyParts.length
+    ? { id: replyParts.map((r) => r.id).join(","), content: replyParts.map((r) => r.content).join("\n\n") }
+    : null;
   const parent = await prisma.message.findUnique({
     where: { id: userMessage.id },
     select: { replyStatus: true, urgent: true, urgencyProbability: true, intent: true, intentConfidence: true, consultation: { select: { urgentAt: true } } },
@@ -271,7 +278,7 @@ async function main() {
     `Context injected on an urgent DRAFT_PLEADING turn (triageContextFor; urgency block only on urgent turns, intent hint only for document/pleading/analysis/paralegal intents at ≥ 0.7 confidence):`,
     ``,
     "```",
-    triageContextFor({ urgent: true, probability: 0.99, intent: "DRAFT_PLEADING", intentConfidence: 0.9, intentProbabilities: {}, refersToAttachment: 0.1 }),
+    triageContextFor({ urgent: true, probability: 0.99, intent: "DRAFT_PLEADING", intentConfidence: 0.9, intentProbabilities: {}, refersToAttachment: 0.1, replyLanguage: "ENGLISH", replyLanguageConfidence: 0.99 }),
     "```",
     ``,
     `| Case | Expected | Jev urgent (p) | Jev intent | Injected | Persisted urgent / urgentAt | replyStatus | Chars | Urgency words | First checklist | Total | First chunk |`,
