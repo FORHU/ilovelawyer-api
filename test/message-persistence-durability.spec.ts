@@ -379,6 +379,34 @@ describe("streamChatWonderMessage and [Error] frames", () => {
     }
   });
 
+  it("calls onAnswerComplete exactly once, at __END__ and after the answer chunks, before the stream resolves", async () => {
+    script = ["First part. ", "Second part.__END__", "[DONE]"];
+    const order: string[] = [];
+    const result = await streamChatWonderMessage(
+      "s6",
+      "hello",
+      () => order.push("chunk"),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => order.push("answer-complete"),
+    );
+    order.push("resolved");
+
+    expect(result.content).to.equal("First part. Second part.");
+    expect(order).to.deep.equal(["chunk", "chunk", "answer-complete", "resolved"]);
+  });
+
+  it("a throwing onAnswerComplete cannot break the stream", async () => {
+    script = ["The answer.__END__", "[DONE]"];
+    const result = await streamChatWonderMessage("s7", "hello", () => {}, undefined, undefined, undefined, undefined, undefined, () => {
+      throw new Error("ui callback blew up");
+    });
+    expect(result.content).to.equal("The answer.");
+  });
+
   it("merges [TRACE] start/result frames into researchSteps and keeps them out of content (ilovelawyer-api#119)", async () => {
     script = [
       '[TRACE]{"id":"t1","phase":"start","tool":"search_jurisprudence","label":"Searching case law"}[/TRACE]',

@@ -13,6 +13,9 @@ const CACHE_TTL_S = 300; // 5 minutes
 // A flat case-wide count (the old DEFAULT_CASE_CHUNK_LIMIT = 20) let a case with many documents
 // silently exclude whole documents whose chunks didn't win a case-wide top-K slot.
 const DEFAULT_PER_DOCUMENT_CHUNK_FLOOR = 3;
+/** Used only when no chunk clears the similarity floor (see relevantChunksForScope). */
+const FALLBACK_DOCUMENT_LIMIT = 8;
+const FALLBACK_CHUNKS_PER_DOCUMENT = 2;
 // Unrelated to the floor above — this is a single document's own top-K when it's the sole
 // grounding source (relevantChunksForDocument), where the "many documents crowd out a few"
 // failure mode this plan targets doesn't apply.
@@ -190,11 +193,24 @@ export default class DocumentChunkSvc {
         "caseId" in scope
           ? await DocumentChunkRepo.findRelevantByCase(scope.caseId, queryEmbedding, perDocumentFloor)
           : await DocumentChunkRepo.findRelevantByConsultation(scope.consultationId, queryEmbedding, perDocumentFloor);
+      // Nothing cleared the similarity floor — typical for a vague turn ("what are these files")
+      // against a short or non-speech transcript. Returning no chunks made formatGroundingContext
+      // emit nothing, so the model claimed no files were attached even though they were READY.
+      // Fall back to each document's opening chunks so it at least knows what the files are.
+      const chunkIds = rows.length
+        ? rows.map((r) => r.id)
+        : (
+            await Promise.all(
+              readyDocIds.slice(0, FALLBACK_DOCUMENT_LIMIT).map(async (id) =>
+                (await DocumentChunkRepo.findIdsByDocument(id)).slice(0, FALLBACK_CHUNKS_PER_DOCUMENT),
+              ),
+            )
+          ).flat();
       return {
         caseDocumentIds: readyDocIds,
         // Already similarity-desc (and globally capped) from findRelevantByCase/Consultation —
         // formatGroundingContext relies on this order when filling the char budget.
-        caseDocumentChunkIds: rows.map((r) => r.id),
+        caseDocumentChunkIds: chunkIds,
       };
     } catch {
       return {

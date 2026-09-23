@@ -532,6 +532,8 @@ enum MessageReplyStatus {
   PENDING
   DONE
   FAILED
+  // The user pressed Stop while the reply was still generating — see ChatSvc.cancelChatGeneration.
+  CANCELLED
 }
 
 model ConsultationInvite {

@@ -1,5 +1,6 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, RagStatus } from "@prisma/client";
 import prisma from "../lib/prisma";
+import { emitToUser, type DocumentSocketEvent, type DocumentSocketPayload } from "../lib/socket";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import OrganizationRepo from "../repositories/organization.repository";
@@ -19,7 +20,55 @@ function isMediaDocument(mimeType?: string | null, filename?: string): boolean {
   return !!ext && MEDIA_DOCUMENT_EXTENSIONS.includes(ext);
 }
 
+/**
+ * Transcribes mp3/mp4 evidence. Music, sound effects and silent screen recordings complete
+ * successfully in Transcribe but return zero words — an empty transcript would otherwise fall
+ * into the "no text extracted" branch, mark the document FAILED, and get re-swept (and
+ * re-transcribed, billably) forever. A short placeholder indexes it as a normal READY document
+ * so the file is still findable by name and the case's evidence list isn't stuck on an error.
+ */
+async function transcribeMedia(s3Key: string, documentId: string, filename: string): Promise<string> {
+  const transcript = (await transcribeS3Media(s3Key, `document-${documentId}`)).trim();
+  if (transcript) return transcript;
+  logger.info("Document extraction: media has no recognizable speech", { documentId, name: filename });
+  return `[Audio/video file "${filename}" — no speech was detected, so there is no transcript to index.]`;
+}
+
 export default class DocumentExtractionSvc {
+  /**
+   * Best-effort live push to the uploader (same `user:<id>` room chat uses). Document.ragStatus
+   * in the DB is the source of truth and the web app still reconciles from it, so a failed or
+   * skipped emit only costs latency — it must never affect the job, hence the try/catch even
+   * though emitToUser documents itself as never throwing.
+   */
+  private static emit(
+    doc: { id: string; userId: string; caseId: string | null; consultationId: string | null },
+    event: DocumentSocketEvent,
+    ragStatus: RagStatus,
+    extra: Pick<DocumentSocketPayload, "pageCount" | "category"> = {},
+  ): void {
+    try {
+      const payload: DocumentSocketPayload = {
+        documentId: doc.id,
+        caseId: doc.caseId,
+        consultationId: doc.consultationId,
+        ragStatus,
+        ...extra,
+      };
+      emitToUser(doc.userId, event, payload);
+    } catch (err) {
+      logger.warn("Document extraction: emitToUser failed, continuing without it", { err, event, documentId: doc.id });
+    }
+  }
+
+  /** Writes ragStatus, then pushes `event`. `updateRagStatus` returns the row, so the emit needs
+   * no extra query and works even where the document was never loaded (the catch block). Throws
+   * exactly what updateRagStatus throws (e.g. P2025 for a deleted document) — no emit then. */
+  private static async setStatus(documentId: string, ragStatus: RagStatus, event: DocumentSocketEvent): Promise<void> {
+    const doc = await DocumentRepo.updateRagStatus(documentId, ragStatus);
+    DocumentExtractionSvc.emit(doc, event, ragStatus);
+  }
+
   /**
    * Extraction → chunking → embedding → storage pipeline for a Case Document (ADR 0010).
    * Pulled by `DocumentExtractionQueue` after confirm/PATCH/bulk-confirm — never throws,
@@ -30,7 +79,7 @@ export default class DocumentExtractionSvc {
       const doc = await DocumentRepo.findByIdWithFile(documentId);
       if (!doc?.file?.s3Key) {
         logger.error("Document extraction: no file/s3Key for document", { documentId });
-        await DocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentExtractionSvc.setStatus(documentId, "FAILED", "document:failed");
         return;
       }
 
@@ -39,6 +88,8 @@ export default class DocumentExtractionSvc {
       }
 
       logger.info("Document extraction: started", { documentId, name: doc.name });
+      // Also resets a re-run FAILED row's badge back to "indexing" on a connected client.
+      DocumentExtractionSvc.emit(doc, "document:started", "PENDING");
 
       // Stage timings — the only way to tell "this document is slow because of OCR/rate
       // limiting/queue backlog" apart from each other after the fact, since none of that
@@ -54,7 +105,7 @@ export default class DocumentExtractionSvc {
       const { pages, method, ocrAttempted } = buffer
         ? await extractPages(buffer, doc.mimeType, doc.name, doc.file.s3Key)
         : {
-            pages: [{ pageNumber: 1, text: await transcribeS3Media(doc.file.s3Key, `document-${documentId}`) }],
+            pages: [{ pageNumber: 1, text: await transcribeMedia(doc.file.s3Key, documentId, doc.name) }],
             method: "text" as const,
             ocrAttempted: false,
           };
@@ -78,7 +129,7 @@ export default class DocumentExtractionSvc {
       // Empty extraction (scanned PDF with failed OCR) counts as failed, not ready.
       if (trimmedPages.length === 0) {
         logger.warn("Document extraction: no text extracted", { documentId, name: doc.name, ocrAttempted });
-        await DocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentExtractionSvc.setStatus(documentId, "FAILED", "document:failed");
         return;
       }
 
@@ -113,7 +164,7 @@ export default class DocumentExtractionSvc {
       const tChunked = Date.now();
       if (chunks.length === 0) {
         logger.warn("Document extraction: no chunks", { documentId, name: doc.name });
-        await DocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentExtractionSvc.setStatus(documentId, "FAILED", "document:failed");
         return;
       }
 
@@ -189,7 +240,7 @@ export default class DocumentExtractionSvc {
           chunkCount,
           embeddedCount,
         });
-        await DocumentRepo.updateRagStatus(documentId, "FAILED");
+        await DocumentExtractionSvc.setStatus(documentId, "FAILED", "document:failed");
         return;
       }
 
@@ -197,11 +248,21 @@ export default class DocumentExtractionSvc {
       logger.info("Document extraction: ready", { documentId, name: doc.name, chunks: embeddedChunks.length });
 
       const category = await categoryPromise;
+      let savedCategory: string | null = doc.category ?? null;
       if (category) {
-        await DocumentRepo.updateCategory(documentId, category).catch((categoryErr) => {
-          logger.warn("Failed to save document category", { categoryErr, documentId });
-        });
+        await DocumentRepo.updateCategory(documentId, category)
+          .then(() => {
+            savedCategory = category;
+          })
+          .catch((categoryErr) => {
+            logger.warn("Failed to save document category", { categoryErr, documentId });
+          });
       }
+
+      // After the category write (not right after READY) so a client that refetches on this
+      // event already sees the category. The DB row has been READY since a moment ago, so a
+      // client that polls instead loses nothing.
+      DocumentExtractionSvc.emit(doc, "document:ready", "READY", { pageCount: pages.length, category: savedCategory });
 
       if (doc.caseId) {
         // Best-effort — must never bubble into the outer catch and flip an already-READY
@@ -222,7 +283,11 @@ export default class DocumentExtractionSvc {
       // 429 is transient — leave PENDING so the next boot/retry can embed instead of
       // permanently skipping RAG for this document.
       const ragStatus = isRateLimit(err) ? "PENDING" : "FAILED";
-      await DocumentRepo.updateRagStatus(documentId, ragStatus).catch((updateErr) => {
+      await DocumentExtractionSvc.setStatus(
+        documentId,
+        ragStatus,
+        ragStatus === "PENDING" ? "document:retrying" : "document:failed",
+      ).catch((updateErr) => {
         // P2025: the document was deleted (or its user/org cascaded away) while extraction
         // was still in flight — expected race with delete, not a real failure to surface.
         if (updateErr instanceof Prisma.PrismaClientKnownRequestError && updateErr.code === "P2025") {

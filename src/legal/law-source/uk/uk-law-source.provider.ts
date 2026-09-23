@@ -35,6 +35,7 @@ import {
   legislationDetailInput,
   legislationUrlParts,
 } from "./uk-law-mappers";
+import { planUkLegislationQuery, preferExactRef, preferExactLocalRef, type UkLegislationPlan } from "./uk-legal-query";
 
 /** Newest-first "browse" is match-all search filtered by court. */
 const BROWSE_WILDCARD = "*";
@@ -74,18 +75,47 @@ export class UkLawSourceProvider implements LawSourceProvider {
     const { category, q, limit } = params;
     const wire = UK_WIRE_BY_CATEGORY[category];
 
-    const localRows = await LawRepo.localSearchUk({ category, q, limit });
-    if (localRows.length > 0) {
-      return this.toResult(wire, q, limit, localRows, "cache");
+    if (category === "JURISPRUDENCE") {
+      const localRows = await LawRepo.localSearchUk({ category, q, limit });
+      if (localRows.length > 0) {
+        return this.toResult(wire, q, limit, localRows, "cache");
+      }
+      const tenantId = await LawRepo.resolveUkTenantId();
+      let created: Law[];
+      try {
+        created = await this.searchCaseLaw(q, limit, tenantId);
+      } catch (err) {
+        if (err instanceof UkLegalMcpUnavailableError) {
+          throw new HttpError(
+            "The UK legal source is unavailable and no matching laws are stored locally",
+            502,
+          );
+        }
+        throw err;
+      }
+      return this.toResult(wire, q, limit, created, "uk-legal-mcp");
+    }
+
+    // Legislation: a recognised acronym/short form ("HRA") is expanded to the Act's full
+    // title before either lookup — see planUkLegislationQuery. Case law has no alias table
+    // (FORHU/ilovelawyer-api#152 scopes this to legislation).
+    const plan = planUkLegislationQuery(q);
+    const localRows = await LawRepo.localSearchUk({
+      category,
+      q: plan.query,
+      limit: plan.kind === "alias" ? limit * 5 : limit,
+    });
+    // A stored row can merely mention the alias's Act in passing (an amending Act's title),
+    // so an alias lookup only counts as a hit on the exact document.
+    const localHits = plan.kind === "alias" ? preferExactLocalRef(localRows, plan.ref).slice(0, limit) : localRows;
+    if (localHits.length > 0) {
+      return this.toResult(wire, q, limit, localHits, "cache");
     }
 
     const tenantId = await LawRepo.resolveUkTenantId();
     let created: Law[];
     try {
-      created =
-        category === "JURISPRUDENCE"
-          ? await this.searchCaseLaw(q, limit, tenantId)
-          : await this.searchLegislation(q, limit, tenantId);
+      created = await this.searchLegislation(plan, limit, tenantId);
     } catch (err) {
       if (err instanceof UkLegalMcpUnavailableError) {
         throw new HttpError(
@@ -106,10 +136,13 @@ export class UkLawSourceProvider implements LawSourceProvider {
     );
   }
 
-  private async searchLegislation(q: string, limit: number, tenantId: string): Promise<Law[]> {
-    const { results } = await legislationSearch({ query: q, limit });
+  private async searchLegislation(plan: UkLegislationPlan, limit: number, tenantId: string): Promise<Law[]> {
+    const { results } = await legislationSearch({ query: plan.query, limit });
+    // An amending Act with a near-identical title can outrank the Act the alias meant (seen
+    // live for Equality Act 2010 and Mental Health Act 1983) — put the exact document first.
+    const ordered = plan.kind === "alias" ? preferExactRef(results, plan.ref) : results;
     return this.writeThrough(
-      results.map((hit) => legislationHitToCreateInput(hit, tenantId)),
+      ordered.map((hit) => legislationHitToCreateInput(hit, tenantId)),
     );
   }
 

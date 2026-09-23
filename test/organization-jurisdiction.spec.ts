@@ -40,7 +40,7 @@ describe("Organization jurisdiction is trusted-server-resolved at creation", () 
       .send({ name: `PH Org ${userId}` });
 
     expect(res.status).to.equal(201);
-    expect(res.body.jurisdiction).to.equal("PH");
+    expect(res.body.tenant.code).to.equal("PH");
     createdOrgIds.push(res.body.id);
   });
 
@@ -55,7 +55,7 @@ describe("Organization jurisdiction is trusted-server-resolved at creation", () 
       .send({ name: `UK Org ${userId}` });
 
     expect(res.status).to.equal(201);
-    expect(res.body.jurisdiction).to.equal("UK");
+    expect(res.body.tenant.code).to.equal("UK");
     createdOrgIds.push(res.body.id);
   });
 
@@ -70,7 +70,7 @@ describe("Organization jurisdiction is trusted-server-resolved at creation", () 
       .send({ name: `UK Local Org ${userId}` });
 
     expect(res.status).to.equal(201);
-    expect(res.body.jurisdiction).to.equal("UK");
+    expect(res.body.tenant.code).to.equal("UK");
     createdOrgIds.push(res.body.id);
   });
 

@@ -92,6 +92,25 @@ export default class ChatRepo {
     });
   }
 
+  /** A user turn's current replyStatus (and its checkpointed partial reply) — polled by the
+   * generation worker to notice a Stop from another instance, and read by the cancel endpoint. */
+  static async findReplyState(messageId: string) {
+    return prisma.message.findUnique({
+      where: { id: messageId },
+      select: { id: true, consultationId: true, role: true, userId: true, replyStatus: true, pendingReplyContent: true },
+    });
+  }
+
+  /** PENDING -> CANCELLED as ONE conditional write, so a Stop racing the worker's own DONE/FAILED
+   * flip has exactly one winner. Returns true only if this call is the one that cancelled it. */
+  static async markReplyCancelled(messageId: string, consultationId: string): Promise<boolean> {
+    const { count } = await prisma.message.updateMany({
+      where: { id: messageId, consultationId, role: "user", replyStatus: "PENDING" },
+      data: { replyStatus: "CANCELLED", pendingReplyContent: null },
+    });
+    return count === 1;
+  }
+
   /** Checkpoints the raw accumulated reply text while a turn is still streaming — throttled by
    * the caller (ChatSvc.processChatGenerationJob), not on every chunk. */
   static async checkpointPendingReply(messageId: string, pendingReplyContent: string) {
