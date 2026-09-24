@@ -3,6 +3,7 @@ import path from "path";
 import prisma from "../lib/prisma";
 import DocumentRepo from "../repositories/document.repository";
 import FilesRepo from "../repositories/files.repository";
+import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentChunkSvc from "./document-chunk.service";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
@@ -247,6 +248,8 @@ export default class DocumentSvc {
     // S3 object it points at are not touched by DocumentRepo.delete — mark the File FOR_DELETION
     // so a cleanup sweep can find and remove it later instead of it staying orphaned forever.
     if (doc.fileId) await FilesRepo.markForDeletionIfOrphaned(doc.fileId);
+
+    if (doc.caseId) await CaseTimelineRepo.detachDocument(id);
 
     // Only a READY document actually changes the case's READY corpus — deleting a
     // PENDING/FAILED one has nothing for the fingerprint check to see change.
