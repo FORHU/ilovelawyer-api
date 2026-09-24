@@ -646,6 +646,7 @@ model Case {
   briefExports       CaseBriefExport[]
   terminalWorkspaces TerminalWorkspace[]
   annotations        Annotation[]
+  outlooks           CaseOutlook[]
 
   @@index([userId])
   @@index([organizationId])
@@ -653,10 +654,13 @@ model Case {
 }
 
 model Party {
-  id          String @id @default(uuid())
+  id          String  @id @default(uuid())
   caseId      String
   name        String
   designation String
+  // Lawyer-entered free text shown under the party name (e.g. "Rep. by Hollis & Marr").
+  // Never AI-written.
+  descriptor  String?
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -1171,6 +1175,43 @@ enum RiskSeverity {
   DEADLINE
 }
 
+// ── Case Outlook ─────────────────────────────────────────────────────────────
+
+// The AI's view of where the case is heading, always as a band + confidence and never as a
+// number: a percentage would read as a prediction the model cannot back up.
+enum OutlookBand {
+  FAVORABLE
+  LEANS_FAVORABLE
+  UNCERTAIN
+  LEANS_UNFAVORABLE
+  UNFAVORABLE
+}
+
+enum ConfidenceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// Append-only: every refresh inserts a row, nothing is updated or deleted, so the history is the
+// table itself (latest row = current outlook). A failed or unparseable generation writes nothing
+// and the previous row stays current. See CaseOutlookAiSvc.
+model CaseOutlook {
+  id         String          @id @default(uuid())
+  caseId     String
+  band       OutlookBand
+  confidence ConfidenceLevel
+  rationale  String          @db.Text
+  // [{ label, direction: "HELPS" | "HURTS", sourceDocId? }] — see utils/case-outlook-parse.ts.
+  // sourceDocId is only kept when it names a document on this case.
+  drivers    Json
+  createdAt  DateTime        @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
+}
+
 enum RiskStatus {
   OPEN
   CONFIRMED
@@ -1262,6 +1303,9 @@ model CaseRisk {
   documentId  String?
   chunkId     String?
   pageNumber  Int?
+  // How sure the AI is that this risk is real. Null for lawyer-added risks unless the lawyer
+  // sets it explicitly.
+  confidence  ConfidenceLevel?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 

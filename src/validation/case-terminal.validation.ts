@@ -2,6 +2,7 @@ import Joi from "joi";
 
 const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
 const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
+const CONFIDENCE_LEVELS = ["LOW", "MEDIUM", "HIGH"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
 const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
 const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
@@ -60,6 +61,10 @@ export const createRiskSchema = Joi.object({
   documentId: Joi.string().optional().allow(null),
   chunkId: Joi.string().optional().allow(null),
   pageNumber: Joi.number().integer().min(1).optional().allow(null),
+  confidence: Joi.string()
+    .valid(...CONFIDENCE_LEVELS)
+    .optional()
+    .allow(null),
 });
 
 export const updateRiskSchema = Joi.object({
@@ -75,6 +80,10 @@ export const updateRiskSchema = Joi.object({
   documentId: Joi.string().optional().allow(null),
   chunkId: Joi.string().optional().allow(null),
   pageNumber: Joi.number().integer().min(1).optional().allow(null),
+  confidence: Joi.string()
+    .valid(...CONFIDENCE_LEVELS)
+    .optional()
+    .allow(null),
 }).min(1);
 
 export const upsertMatrixSchema = Joi.object({
