@@ -108,6 +108,7 @@ model User {
   integrationConnectors   IntegrationConnector[]
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
   caseBriefExports        CaseBriefExport[]
+  caseViews               CaseView[]
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -672,8 +673,10 @@ model Case {
   theories           CaseTheory[]
   theoryDiffs        TheoryDiff[]
   briefExports       CaseBriefExport[]
+  views              CaseView[]
   terminalWorkspaces TerminalWorkspace[]
   annotations        Annotation[]
+  outlooks           CaseOutlook[]
 
   @@index([userId])
   @@index([organizationId])
@@ -681,10 +684,13 @@ model Case {
 }
 
 model Party {
-  id          String @id @default(uuid())
+  id          String  @id @default(uuid())
   caseId      String
   name        String
   designation String
+  // Lawyer-entered free text shown under the party name (e.g. "Rep. by Hollis & Marr").
+  // Never AI-written.
+  descriptor  String?
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -755,6 +761,23 @@ enum DocumentStatus {
 // "generating a brief" as far as this history is concerned). `file` is the actual rendered
 // artifact in S3; this row is what makes it findable/listable per case, since File itself has no
 // caseId and is shared across many unrelated purposes (avatars, transcriptions, audio, ...).
+// When each user last opened each case (Workspace, Terminal or the case detail page) — shown as
+// "Last opened" in Case Portfolio. Per user, not per case: a Case is a shared organization
+// resource, and a colleague opening it shouldn't change when *you* last looked at it. One row per
+// (case, user), upserted on open. Deliberately separate from Case.updatedAt ("Last updated"),
+// which tracks real changes/activity rather than views.
+model CaseView {
+  caseId       String
+  userId       String
+  lastOpenedAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, userId])
+  @@index([userId])
+}
+
 model CaseBriefExport {
   id        String   @id @default(uuid())
   caseId    String
@@ -1199,6 +1222,43 @@ enum RiskSeverity {
   DEADLINE
 }
 
+// ── Case Outlook ─────────────────────────────────────────────────────────────
+
+// The AI's view of where the case is heading, always as a band + confidence and never as a
+// number: a percentage would read as a prediction the model cannot back up.
+enum OutlookBand {
+  FAVORABLE
+  LEANS_FAVORABLE
+  UNCERTAIN
+  LEANS_UNFAVORABLE
+  UNFAVORABLE
+}
+
+enum ConfidenceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// Append-only: every refresh inserts a row, nothing is updated or deleted, so the history is the
+// table itself (latest row = current outlook). A failed or unparseable generation writes nothing
+// and the previous row stays current. See CaseOutlookAiSvc.
+model CaseOutlook {
+  id         String          @id @default(uuid())
+  caseId     String
+  band       OutlookBand
+  confidence ConfidenceLevel
+  rationale  String          @db.Text
+  // [{ label, direction: "HELPS" | "HURTS", sourceDocId? }] — see utils/case-outlook-parse.ts.
+  // sourceDocId is only kept when it names a document on this case.
+  drivers    Json
+  createdAt  DateTime        @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
+}
+
 enum RiskStatus {
   OPEN
   CONFIRMED
@@ -1290,6 +1350,9 @@ model CaseRisk {
   documentId  String?
   chunkId     String?
   pageNumber  Int?
+  // How sure the author is that this risk is real. Risks are lawyer-authored (no AI risk
+  // generator exists), so this is optional manual input and null unless set.
+  confidence  ConfidenceLevel?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 

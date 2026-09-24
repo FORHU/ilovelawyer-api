@@ -182,6 +182,73 @@ const swaggerSpec: OAS3Definition = {
             type: "string",
             enum: ["Petitioner / Plaintiff", "Respondent / Defendant", "Intervenor / Third-Party"],
           },
+          descriptor: {
+            type: "string",
+            nullable: true,
+            maxLength: 200,
+            description: "Lawyer-entered line shown under the party name, e.g. \"Rep. by Hollis & Marr\". Never AI-written.",
+          },
+        },
+      },
+      OutlookDriver: {
+        type: "object",
+        required: ["label", "direction"],
+        properties: {
+          label: { type: "string" },
+          direction: { type: "string", enum: ["HELPS", "HURTS"] },
+          sourceDocId: { type: "string", description: "Only present when it names a document on this case." },
+        },
+      },
+      CaseOutlook: {
+        type: "object",
+        description: "AI case outlook as a band + confidence. Never a numeric score or probability.",
+        properties: {
+          id: { type: "string" },
+          band: { type: "string", enum: ["FAVORABLE", "LEANS_FAVORABLE", "UNCERTAIN", "LEANS_UNFAVORABLE", "UNFAVORABLE"] },
+          confidence: {
+            type: "string",
+            enum: ["LOW", "MEDIUM", "HIGH"],
+            description: "Forced to LOW when the case has fewer than 3 READY documents or any OPEN FATAL / MISSING_EVIDENCE risk.",
+          },
+          rationale: { type: "string", description: "Written in the case's language." },
+          drivers: { type: "array", items: { $ref: "#/components/schemas/OutlookDriver" } },
+          createdAt: { type: "string", format: "date-time" },
+          disclaimer: { type: "string", example: "AI assessment, not legal advice.", description: "Show under the outlook gauge." },
+        },
+      },
+      OutlookHistoryItem: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          band: { type: "string", enum: ["FAVORABLE", "LEANS_FAVORABLE", "UNCERTAIN", "LEANS_UNFAVORABLE", "UNFAVORABLE"] },
+          confidence: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      WeeklyTrendPoint: {
+        type: "object",
+        properties: {
+          weekStart: { type: "string", format: "date-time", description: "Monday 00:00 UTC" },
+          added: { type: "integer", description: "Created during this week" },
+          total: { type: "integer", description: "Created up to the end of this week" },
+        },
+      },
+      CaseRisk: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          caseId: { type: "string" },
+          title: { type: "string" },
+          description: { type: "string", nullable: true },
+          severity: { type: "string", enum: ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"] },
+          status: { type: "string", enum: ["OPEN", "CONFIRMED", "ACCEPTED"] },
+          confidence: {
+            type: "string",
+            enum: ["LOW", "MEDIUM", "HIGH"],
+            nullable: true,
+            description: "Optional, set by the lawyer. Null unless set; no AI writes risks.",
+          },
+          createdAt: { type: "string", format: "date-time" },
         },
       },
       UserCase: {
@@ -2289,15 +2356,50 @@ const swaggerSpec: OAS3Definition = {
       get: {
         tags: ["Legal Terminal"],
         summary: "Case command snapshot for all terminal panels",
+        description:
+          "Only the case-outlook-related fields are documented below; the snapshot carries every other Terminal panel's data too. `case.parties[].descriptor` is included via the Party schema.",
         security: [{ bearerAuth: [] }],
         parameters: [{ name: "caseId", in: "path", required: true, schema: { type: "string" } }],
-        responses: { 200: { description: "Snapshot" } },
+        responses: {
+          200: {
+            description: "Snapshot",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    case: { $ref: "#/components/schemas/UserCase" },
+                    risks: { type: "array", items: { $ref: "#/components/schemas/CaseRisk" } },
+                    outlook: {
+                      allOf: [{ $ref: "#/components/schemas/CaseOutlook" }],
+                      nullable: true,
+                      description: "Latest outlook; null until the case's next refresh.",
+                    },
+                    outlookHistory: {
+                      type: "array",
+                      description: "Newest first, up to 20.",
+                      items: { $ref: "#/components/schemas/OutlookHistoryItem" },
+                    },
+                    trends: {
+                      type: "object",
+                      description: "12 weekly buckets for KPI tiles, oldest first. Derived from risk and document timestamps.",
+                      properties: {
+                        openIssues: { type: "array", items: { $ref: "#/components/schemas/WeeklyTrendPoint" } },
+                        evidence: { type: "array", items: { $ref: "#/components/schemas/WeeklyTrendPoint" } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     },
     "/my-cases/{caseId}/refresh": {
       post: {
         tags: ["Legal Terminal"],
-        summary: "Re-extract pending docs, rescan contradictions, promote AI timeline",
+        summary: "Re-extract pending docs, rescan contradictions, regenerate findings and outlook, promote AI timeline",
         description:
           "Queued (AiGenerationQueue / SQS) rather than run inline — returns immediately once the job is claimed. Poll GET /my-cases/{caseId}/ai-jobs/caseRefresh for completion.",
         security: [{ bearerAuth: [] }],

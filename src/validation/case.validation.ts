@@ -12,6 +12,8 @@ export const partySchema = Joi.object({
   designation: Joi.string()
     .valid(...PARTY_DESIGNATIONS)
     .required(),
+  // Lawyer-entered only (e.g. "Rep. by Hollis & Marr"); "" clears it.
+  descriptor: Joi.string().trim().max(200).empty("").allow(null).optional(),
 });
 
 export const createCaseSchema = Joi.object({

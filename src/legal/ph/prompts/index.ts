@@ -1,4 +1,5 @@
 export * from "./case-finding.prompt";
+export * from "./case-outlook.prompt";
 export * from "./case-reconstruction.prompt";
 export * from "./case-strategy.prompt";
 export * from "./chat-title.prompt";

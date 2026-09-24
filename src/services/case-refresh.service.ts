@@ -5,6 +5,7 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import EvidenceIntelligenceSvc from "./evidence-intelligence.service";
 import CaseStrategySvc from "./case-strategy.service";
 import CaseFindingAiSvc from "./case-finding-ai.service";
+import CaseOutlookAiSvc from "./case-outlook-ai.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import ChatRepo from "../repositories/chat.repository";
 import { TimelineItem } from "../utils/response-parser";
@@ -91,6 +92,21 @@ export default class CaseRefreshSvc {
             })
             .catch((err) => {
                 logger.warn("Chat Wonder case finding generation failed", {
+                    err,
+                    caseId,
+                    durationMs: Date.now() - stepStartedAt,
+                });
+            });
+
+        // After findings, since the outlook prompt reads them. A failed outlook never fails the
+        // refresh — the previous outlook just stays current.
+        stepStartedAt = Date.now();
+        await CaseOutlookAiSvc.generateFromDocuments(caseId, userId)
+            .then(() => {
+                logger.info("Refresh analysis: case outlook done", { caseId, durationMs: Date.now() - stepStartedAt });
+            })
+            .catch((err) => {
+                logger.warn("Chat Wonder case outlook generation failed", {
                     err,
                     caseId,
                     durationMs: Date.now() - stepStartedAt,

@@ -80,9 +80,25 @@ export default class ChatRepo {
     groupTitle?: string,
     replyStatus?: MessageReplyStatus,
   ) {
-    return prisma.message.create({
+    const created = await prisma.message.create({
       data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle, replyStatus },
     });
+    // A user turn in a case's chat is activity on that case — bump its "Last updated". Filtered
+    // through the consultation relation so this needs no extra lookup; a standalone (non-case)
+    // consultation matches no Case row and is a no-op. Assistant/system rows are follow-ons to a
+    // user turn and don't need their own bump.
+    if (role === "user") {
+      const now = new Date();
+      prisma.case
+        .updateMany({
+          where: { consultations: { some: { id: consultationId } }, updatedAt: { lt: new Date(now.getTime() - 60_000) } },
+          data: { updatedAt: now },
+        })
+        .catch(() => {
+          // Cosmetic timestamp — never fail the message write over it.
+        });
+    }
+    return created;
   }
 
   /** Flips a user turn's replyStatus once its reply is known to be done or has failed — see
