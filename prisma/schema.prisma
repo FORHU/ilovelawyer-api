@@ -1537,11 +1537,20 @@ model CaseFinding {
   @@index([caseId, category])
 }
 
+enum WitnessStatus {
+  READY
+  ADVERSE
+  OUTSTANDING
+}
+
 model Witness {
   id        String   @id @default(uuid())
   caseId    String
   name      String
   role      String?
+  summary   String?
+  status    WitnessStatus @default(OUTSTANDING)
+  credibility Int    @default(50)
   contact   String?
   notes     String?  @db.Text
   createdAt DateTime @default(now())

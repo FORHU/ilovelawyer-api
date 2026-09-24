@@ -3,6 +3,9 @@ import prisma from "../lib/prisma";
 export interface WitnessInput {
   name: string;
   role?: string | null;
+  summary?: string | null;
+  status?: "READY" | "ADVERSE" | "OUTSTANDING";
+  credibility?: number;
   contact?: string | null;
   notes?: string | null;
 }

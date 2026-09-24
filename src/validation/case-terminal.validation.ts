@@ -165,6 +165,9 @@ export const updateFindingSchema = Joi.object({
 export const createWitnessSchema = Joi.object({
   name: Joi.string().required(),
   role: Joi.string().allow("").optional(),
+  summary: Joi.string().allow("").optional(),
+  status: Joi.string().valid("READY", "ADVERSE", "OUTSTANDING").optional(),
+  credibility: Joi.number().integer().min(0).max(100).optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 });
@@ -172,6 +175,9 @@ export const createWitnessSchema = Joi.object({
 export const updateWitnessSchema = Joi.object({
   name: Joi.string().optional(),
   role: Joi.string().allow("").optional(),
+  summary: Joi.string().allow("").optional(),
+  status: Joi.string().valid("READY", "ADVERSE", "OUTSTANDING").optional(),
+  credibility: Joi.number().integer().min(0).max(100).optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 }).min(1);
