@@ -133,7 +133,6 @@ export default class AiGenerationQueue {
   }
 
   private static async run(): Promise<void> {
-    logger.info("AI generation queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
   }
@@ -194,17 +193,9 @@ export default class AiGenerationQueue {
   private static runOne(item: WaitItem): void {
     this.active += 1;
     const startedAt = Date.now();
-    logger.info("AI generation queue: job started", { kind: item.job.kind, caseId: item.job.caseId });
     void withVisibilityHeartbeat(AI_GENERATION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
       RUNNERS[item.job.kind](item.job),
     )
-      .then(() => {
-        logger.info("AI generation queue: job finished", {
-          kind: item.job.kind,
-          caseId: item.job.caseId,
-          durationMs: Date.now() - startedAt,
-        });
-      })
       // The runner already records FAILED on the AiGenerationJob row (AiGenerationLockSvc
       // .finishWith) — this catch only stops the rejection from going unhandled.
       .catch((err) => {

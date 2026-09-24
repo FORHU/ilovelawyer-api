@@ -40,7 +40,6 @@ export function scheduleCasePostExtraction(caseId: string, userId: string): void
       // RUNNERS comment for the other half of this.
       const AiGenerationQueue = (await import("./ai-generation.queue")).default;
       AiGenerationQueue.enqueue({ kind: "casePostExtraction", caseId, userId }, QUIET_SECONDS);
-      logger.info("Case refresh scheduled", { caseId, userId, source: "auto", delaySeconds: QUIET_SECONDS });
     } catch (err) {
       logger.error("Case post-extraction: failed to schedule via AiGenerationQueue", { err, caseId, userId });
     }
@@ -64,13 +63,11 @@ async function computeReadySetFingerprint(caseId: string): Promise<string> {
 export async function runCasePostExtraction(caseId: string, userId: string): Promise<void> {
   try {
     if (!(await CaseRepo.exists(caseId))) {
-      logger.info("Case post-extraction: case no longer exists, skipping", { caseId });
       return;
     }
 
     const pending = await DocumentRepo.countPendingExtractionByCase(caseId);
     if (pending > 0) {
-      logger.info("Case post-extraction: still pending, waiting", { caseId, userId, pending });
       scheduleCasePostExtraction(caseId, userId);
       return;
     }
@@ -79,9 +76,7 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     const previousFingerprint = await CaseRepo.getReadySetFingerprint(caseId);
     const readySetChanged = fingerprint !== previousFingerprint;
 
-    if (!readySetChanged) {
-      logger.info("Case refresh skipped: READY set unchanged", { caseId, userId, source: "auto" });
-    } else {
+    if (readySetChanged) {
       // Reuses the exact same pipeline (contradictions + case strategy + case findings + AI
       // timeline->Evidence promotion) the lawyer's "Refresh analysis" button runs — see
       // CaseRefreshSvc.refreshInner — so Legal Issues / Strengths / Weaknesses / Attack /
@@ -96,24 +91,17 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
         // finishes (same QUIET_SECONDS backoff as the "still pending" branch above, not a tight
         // retry loop). At most one caseRefresh job for this case is ever IN_PROGRESS at a time.
         if (err instanceof HttpError && err.statusCode === 409) {
-          logger.info("Case refresh coalesced: caseRefresh already in progress, rescheduling", {
-            caseId,
-            userId,
-            source: "auto",
-          });
           scheduleCasePostExtraction(caseId, userId);
           return;
         }
         throw err;
       }
 
-      logger.info("Case refresh job claimed", { caseId, userId, source: "auto" });
       const CaseRefreshSvc = (await import("../services/case-refresh.service")).default;
       // runQueued closes out the lock (DONE/FAILED) itself via AiGenerationLockSvc.finishWith —
       // same as the controller's queued HTTP path (CaseTerminalCtrl.refresh).
       await CaseRefreshSvc.runQueued(caseId, userId, "post-extraction");
       await CaseRepo.setReadySetFingerprint(caseId, fingerprint);
-      logger.info("Case refresh completed", { caseId, userId, source: "auto" });
     }
 
     // Narrative generation is a separate, heavier single-shot call — only auto-run it the first
