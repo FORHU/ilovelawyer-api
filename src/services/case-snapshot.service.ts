@@ -17,9 +17,13 @@ import AnnotationRepo from "../repositories/annotation.repository";
 import CaseGraphRepo from "../repositories/case-graph.repository";
 import ChatRepo from "../repositories/chat.repository";
 import LawRepo from "../repositories/law.repository";
+import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
+import { buildCaseTrends } from "../utils/case-trends";
+import { OutlookDriver } from "../utils/case-outlook-parse";
+import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../constants";
 
 export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
@@ -48,6 +52,8 @@ export default class CaseSnapshotSvc {
       staleness,
       requiredConfirmations,
       latestMindMap,
+      outlook,
+      outlookHistory,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -71,6 +77,8 @@ export default class CaseSnapshotSvc {
       CaseGraphRepo.listStaleForCase(caseId),
       CaseAccess.requiredConfirmations(caseId),
       ChatRepo.findLatestMindMapCreatedAtForCase(caseId),
+      CaseOutlookRepo.latest(caseId),
+      CaseOutlookRepo.history(caseId, OUTLOOK_HISTORY_LIMIT),
     ]);
 
     const now = new Date();
@@ -163,6 +171,21 @@ export default class CaseSnapshotSvc {
         lastGeneratedAt: latestMindMap?.createdAt ?? null,
         isStale: isMindMapStale(latestMindMap?.createdAt ?? null, audit[0]?.createdAt ?? null),
       },
+      // Band + confidence only — the outlook never carries a numeric probability. Null until the
+      // case's first refresh after the outlook shipped (no backfill).
+      outlook: outlook
+        ? {
+            id: outlook.id,
+            band: outlook.band,
+            confidence: outlook.confidence,
+            rationale: outlook.rationale,
+            drivers: outlook.drivers as unknown as OutlookDriver[],
+            createdAt: outlook.createdAt,
+            disclaimer: OUTLOOK_DISCLAIMER,
+          }
+        : null,
+      outlookHistory,
+      trends: buildCaseTrends({ risks, documents, weeks: CASE_TREND_WEEKS, now }),
       riskAnalysis: scoreCaseRisks({
         risks,
         contradictions,

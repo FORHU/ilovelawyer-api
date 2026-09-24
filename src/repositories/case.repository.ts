@@ -4,6 +4,7 @@ import { CaseStatus } from "@prisma/client";
 export interface PartyInput {
   name: string;
   designation: string;
+  descriptor?: string | null;
 }
 
 export interface CaseData {
@@ -66,6 +67,11 @@ export default class CaseRepo {
 
   static async findById(id: string, organizationId: string) {
     return prisma.case.findFirst({ where: { id, organizationId }, include: { parties: true } });
+  }
+
+  /** Unscoped by organization — for background AI jobs that already hold a checked caseId. */
+  static async findLanguage(id: string) {
+    return prisma.case.findUnique({ where: { id }, select: { language: true } });
   }
 
   static async update(id: string, organizationId: string, data: CaseData) {

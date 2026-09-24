@@ -3,6 +3,7 @@ import HttpError from "../utils/http-error";
 import {
   buildRedTeamPrompt,
   buildCaseFindingPrompt,
+  buildCaseOutlookPrompt,
   buildCaseReconstructionPrompt,
   buildCaseStrategyPrompt,
   PH_SOURCE_ANALYSIS_PROMPT,
@@ -11,6 +12,7 @@ import {
 import {
   buildUKRedTeamPrompt,
   buildUKCaseFindingPrompt,
+  buildUKCaseOutlookPrompt,
   buildUKCaseReconstructionPrompt,
   buildUKCaseStrategyPrompt,
   UK_SOURCE_ANALYSIS_PROMPT,
@@ -39,6 +41,17 @@ export function getCaseFindingPromptBuilder(tenantCode: TenantCode) {
       return buildUKCaseFindingPrompt;
     default:
       throw new HttpError(`No case-finding prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getCaseOutlookPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildCaseOutlookPrompt;
+    case "UK":
+      return buildUKCaseOutlookPrompt;
+    default:
+      throw new HttpError(`No case-outlook prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 
