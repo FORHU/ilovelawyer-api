@@ -16,8 +16,16 @@ export default class CaseSvc {
     return CaseRepo.create(organizationId, userId, data);
   }
 
-  static async list(organizationId: string, page: number, limit: number, search?: string, status?: CaseStatus) {
-    return CaseRepo.list(organizationId, page, limit, search, status);
+  static async list(organizationId: string, userId: string, page: number, limit: number, search?: string, status?: CaseStatus) {
+    return CaseRepo.list(organizationId, userId, page, limit, search, status);
+  }
+
+  /** "Last opened" for the requesting user. Org-scoped existence check first so a caseId from
+   * another organization can't be stamped. */
+  static async markOpened(id: string, organizationId: string, userId: string) {
+    const caseRecord = await CaseRepo.findById(id, organizationId);
+    if (!caseRecord) throw new HttpError("Case not found", 404);
+    await CaseRepo.markOpened(id, userId);
   }
 
   static async getById(id: string, organizationId: string) {

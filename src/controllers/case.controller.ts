@@ -34,8 +34,16 @@ export default class CaseCtrl {
     const { error, value } = listCasesSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.list(req.organization!.id, value.page, value.limit, value.search, value.status);
+    const result = await CaseSvc.list(req.organization!.id, req.user.userId, value.page, value.limit, value.search, value.status);
     return res.status(200).json(result);
+  }
+
+  /** POST /api/my-cases/:id/opened — the app calls this when a user opens a case (Workspace,
+   * Terminal or detail page). Explicit POST rather than stamping inside GET /:id, so plain reads
+   * (which the app also does in the background) stay side-effect free. */
+  static async markOpened(req: Request, res: Response) {
+    await CaseSvc.markOpened(req.params.id, req.organization!.id, req.user.userId);
+    return res.status(204).send();
   }
 
   static async getById(req: Request, res: Response) {
