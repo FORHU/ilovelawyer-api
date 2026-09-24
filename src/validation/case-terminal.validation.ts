@@ -168,6 +168,9 @@ export const createWitnessSchema = Joi.object({
   summary: Joi.string().allow("").optional(),
   status: Joi.string().valid("READY", "ADVERSE", "OUTSTANDING").optional(),
   credibility: Joi.number().integer().min(0).max(100).optional(),
+  credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
+  statementDueOn: Joi.date().iso().allow(null).optional(),
+  statementReceived: Joi.boolean().optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 });
@@ -178,6 +181,9 @@ export const updateWitnessSchema = Joi.object({
   summary: Joi.string().allow("").optional(),
   status: Joi.string().valid("READY", "ADVERSE", "OUTSTANDING").optional(),
   credibility: Joi.number().integer().min(0).max(100).optional(),
+  credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
+  statementDueOn: Joi.date().iso().allow(null).optional(),
+  statementReceived: Joi.boolean().optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 }).min(1);

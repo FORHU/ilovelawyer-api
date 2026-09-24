@@ -1551,6 +1551,15 @@ model Witness {
   summary   String?
   status    WitnessStatus @default(OUTSTANDING)
   credibility Int    @default(50)
+  // AI-proposed values — never applied to status/credibility on their own. The displayed score is
+  // credibilityOverride ?? aiCredibility ?? credibility, so re-scoring can't wipe a lawyer's edit.
+  aiCredibility       Int?
+  aiRationale         Json?
+  aiSuggestedStatus   WitnessStatus?
+  credibilityOverride Int?
+  scoredAt            DateTime?
+  statementDueOn      DateTime?
+  statementReceived   Boolean  @default(false)
   contact   String?
   notes     String?  @db.Text
   createdAt DateTime @default(now())

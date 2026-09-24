@@ -18,6 +18,7 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import WitnessScoringSvc from "../services/witness-scoring.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -360,6 +361,16 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await WitnessSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async scoreWitnesses(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await WitnessScoringSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "witnessScoring", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "witnessScoring");
+    return res.status(202).json(status);
   }
 
   static async deleteWitness(req: Request, res: Response) {
