@@ -43,6 +43,8 @@ router.post("/:caseId/timeline/generate", asyncHandler(CaseTerminalCtrl.generate
 router.patch("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.updateTimeline));
 router.delete("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.deleteTimeline));
 
+router.get("/:caseId/grounding-checks", asyncHandler(CaseTerminalCtrl.listGroundingChecks));
+router.get("/:caseId/grounding-checks/:id", asyncHandler(CaseTerminalCtrl.getGroundingCheck));
 router.get("/:caseId/risks", asyncHandler(CaseTerminalCtrl.listRisks));
 router.post("/:caseId/risks", asyncHandler(CaseTerminalCtrl.createRisk));
 router.patch("/:caseId/risks/:id", asyncHandler(CaseTerminalCtrl.updateRisk));

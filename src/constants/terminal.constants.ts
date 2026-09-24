@@ -21,6 +21,7 @@ export const PANEL_IDS = [
   "audioOverview",
   "decisions",
   "theories",
+  "verification",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -227,6 +228,15 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: true,
     minSku: "SOLO",
     description: "The 'Why?' behind a legal answer's conclusions — rule, evidence for and against, the alternative considered and rejected, and what fact would change it. Populated automatically from legal chat turns, not generated on demand.",
+  },
+  {
+    id: "verification",
+    label: "Verification",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description:
+      "What was checked and what failed — citations the bundle does not support or contradicts, and documents an answer said were missing when they were not. Populated automatically from legal chat turns by the grounding verifier; shows nothing until USE_GROUNDING_VERIFIER is on.",
   },
   {
     id: "theories",
