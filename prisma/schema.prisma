@@ -1691,6 +1691,10 @@ model RedTeamAssessment {
   // back onto `content` at render time (components/shared/attributed-text.tsx); `content`
   // itself is never modified, so this stays valid even across future edits/regenerations.
   claims    Json?
+  // Ranked opposing arguments (RedTeamArguments from red-team-arguments-parse.ts) — each one
+  // resolved to the case item it rests on. Null on assessments generated before this existed,
+  // or if the model's [ARGUMENTS] block didn't parse; the panel then shows only `content`.
+  arguments Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
