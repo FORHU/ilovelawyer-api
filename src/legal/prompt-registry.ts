@@ -3,6 +3,7 @@ import HttpError from "../utils/http-error";
 import {
   buildRedTeamPrompt,
   buildWitnessScoringPrompt,
+  buildWitnessExtractPrompt,
   buildCaseFindingPrompt,
   buildCaseOutlookPrompt,
   buildCaseReconstructionPrompt,
@@ -13,6 +14,7 @@ import {
 import {
   buildUKRedTeamPrompt,
   buildUKWitnessScoringPrompt,
+  buildUKWitnessExtractPrompt,
   buildUKCaseFindingPrompt,
   buildUKCaseOutlookPrompt,
   buildUKCaseReconstructionPrompt,
@@ -43,6 +45,17 @@ export function getWitnessScoringPromptBuilder(tenantCode: TenantCode) {
       return buildUKWitnessScoringPrompt;
     default:
       throw new HttpError(`No witness-scoring prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getWitnessExtractPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildWitnessExtractPrompt;
+    case "UK":
+      return buildUKWitnessExtractPrompt;
+    default:
+      throw new HttpError(`No witness-extract prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 

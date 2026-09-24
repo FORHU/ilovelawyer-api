@@ -17,6 +17,14 @@ export interface WitnessInput {
   notes?: string | null;
 }
 
+export interface WitnessAiExtractInput {
+  name: string;
+  role: string | null;
+  summary: string | null;
+  sourceDocumentId: string;
+  sourceQuote: string;
+}
+
 export interface WitnessAiScoreInput {
   aiCredibility: number | null;
   aiRationale: { text: string; source: string | null }[];
@@ -26,11 +34,20 @@ export interface WitnessAiScoreInput {
 
 export default class WitnessRepo {
   static async list(caseId: string) {
-    return prisma.witness.findMany({ where: { caseId }, orderBy: { createdAt: "desc" } });
+    return prisma.witness.findMany({
+      where: { caseId },
+      orderBy: { createdAt: "desc" },
+      // Name of the document an AI-extracted witness was found in, for the panel's source line.
+      include: { sourceDocument: { select: { id: true, name: true } } },
+    });
   }
 
   static async create(caseId: string, data: WitnessInput) {
     return prisma.witness.create({ data: { caseId, ...data } });
+  }
+
+  static async createFromAi(caseId: string, data: WitnessAiExtractInput) {
+    return prisma.witness.create({ data: { caseId, source: "AI", ...data } });
   }
 
   static async update(id: string, caseId: string, data: Partial<WitnessInput>) {

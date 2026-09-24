@@ -4,6 +4,7 @@ import CaseRepo from "../repositories/case.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import CaseReconstructionAudioQueue from "./case-reconstruction-audio.queue";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
+import WitnessExtractSvc from "../services/witness-extract.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
@@ -74,6 +75,12 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       scheduleCasePostExtraction(caseId, userId);
       return;
     }
+
+    // Its own queued job with its own lock, so it runs alongside the refresh below rather than
+    // after it. Scheduled regardless of readySetChanged: it only ever reads documents it hasn't
+    // read yet (Document.witnessesExtractedAt), so an unchanged corpus is a quick no-op, and a
+    // case whose documents predate this job gets backfilled on its next trigger.
+    WitnessExtractSvc.schedule(caseId, userId);
 
     const fingerprint = await computeReadySetFingerprint(caseId);
     const previousFingerprint = await CaseRepo.getReadySetFingerprint(caseId);

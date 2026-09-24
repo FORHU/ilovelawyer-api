@@ -693,6 +693,10 @@ model Document {
   // Lawyer-curated subset of a case's Documents shown in the Case Brief export's Exhibit list —
   // not every uploaded document is an Exhibit just by being uploaded. See CONTEXT.md's Exhibit entry.
   isExhibit Boolean @default(false)
+  // Set once WitnessExtractSvc has read this document, so the automatic post-extraction witness
+  // pass only ever sends new documents to the model — a witness the lawyer deleted is never
+  // re-created from a document that was already read.
+  witnessesExtractedAt DateTime?
   // Archiving is a pure visibility flag, same as Case.status — an ARCHIVED document stays fully
   // intact (chunks, RAG grounding, metadata, relationships) and is only hidden from the active
   // document view by default. See DocumentRepo.list's status param and DocumentRepo.setStatus.
@@ -707,6 +711,7 @@ model Document {
   message      Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
   file         File?               @relation(fields: [fileId], references: [id])
   chunks       CaseDocumentChunk[]
+  extractedWitnesses Witness[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1543,12 +1548,22 @@ enum WitnessStatus {
   OUTSTANDING
 }
 
+enum WitnessSource {
+  MANUAL
+  AI
+}
+
 model Witness {
   id        String   @id @default(uuid())
   caseId    String
   name      String
   role      String?
   summary   String?
+  // AI = found by WitnessExtractSvc in `sourceDocumentId`; `sourceQuote` is the verbatim line it
+  // relied on, checked against that document's text before the row is written.
+  source           WitnessSource @default(MANUAL)
+  sourceDocumentId String?
+  sourceQuote      String?       @db.Text
   status    WitnessStatus @default(OUTSTANDING)
   credibility Int    @default(50)
   // AI-proposed values — never applied to status/credibility on their own. The displayed score is
@@ -1566,6 +1581,7 @@ model Witness {
   updatedAt DateTime @updatedAt
 
   case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceDocument    Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
   sponsoredEvidence EvidenceMatrixItem[]
 
   @@index([caseId])

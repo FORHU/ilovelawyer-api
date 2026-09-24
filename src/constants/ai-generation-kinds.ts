@@ -17,6 +17,7 @@ export const AI_GENERATION_KINDS = [
   "caseReconstructionTableRead",
   "timelineGenerate",
   "witnessScoring",
+  "witnessExtract",
 ] as const;
 
 export type AiGenerationKind = (typeof AI_GENERATION_KINDS)[number];
