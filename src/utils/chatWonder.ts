@@ -368,6 +368,12 @@ export function streamChatWonderMessage(
    * reads "uk law" as Indonesian and "CPR 15.4 defence deadline" as French, and then instructs
    * the model to answer in that language. */
   replyLanguage?: string,
+  /** `resolveOnAnswerEnd`: settle with the answer text as soon as `__END__` arrives and close the
+   * socket, instead of waiting up to STRUCTURED_DATA_WAIT_MS for the post-answer extras
+   * (timeline, mind map, reasoning, decisions). For one-shot calls that only want the text —
+   * e.g. MindMapSvc.expandNode — where that wait would otherwise dominate the latency. The
+   * returned extras are then always empty. */
+  opts?: { resolveOnAnswerEnd?: boolean },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -469,6 +475,10 @@ export function streamChatWonderMessage(
         onAnswerComplete?.();
       } catch (err) {
         logger.warn("Chat Wonder: onAnswerComplete threw, continuing", { sessionId, err });
+      }
+      if (opts?.resolveOnAnswerEnd) {
+        finish();
+        return;
       }
       logger.info("Chat Wonder: __END__ frame received, waiting for structured data", {
         sessionId,

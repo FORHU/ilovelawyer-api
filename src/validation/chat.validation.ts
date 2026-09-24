@@ -1,4 +1,5 @@
 import Joi from "joi";
+import { MIND_MAP_LIMITS } from "../constants/mind-map-limits.constants";
 
 export const listConsultationsSchema = Joi.object({ caseId: Joi.string().guid().optional() });
 
@@ -28,4 +29,19 @@ export const sendMessageSchema = Joi.object({
     return helpers.message({ custom: '"message" must not be empty unless "documentIds" is provided' });
   }
   return value;
+});
+
+// Mind map expand/undo (MindMapSvc). messageId picks a specific message's map; without it the
+// consultation's active (newest) map is used. nodeId is a path id ("legalBasis.2") — or, for a map
+// saved before ids were normalized, the model's own id, which the service still resolves.
+export const expandMindMapNodeSchema = Joi.object({
+  messageId: Joi.string().guid().optional(),
+  nodeId: Joi.string().trim().min(1).max(200).required(),
+  count: Joi.number().integer().min(MIND_MAP_LIMITS.expandMin).max(MIND_MAP_LIMITS.expandMax).optional(),
+});
+
+export const revertMindMapSchema = Joi.object({
+  messageId: Joi.string().guid().optional(),
+  /** The version the client is looking at — a stale undo is refused instead of undoing a newer change. */
+  version: Joi.number().integer().min(1).optional(),
 });

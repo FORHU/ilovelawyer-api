@@ -275,13 +275,41 @@ model MessageTimeline {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }
 
+/// `data` is always the current tree — what every reader (chat history, Studio) shows. `version`
+/// counts edits to it (1 = as generated); every version, the current one included, is kept in
+/// MindMapRevision so "Undo expand" can step back. `createdAt` stays the *generation* time on
+/// purpose: CaseSnapshot's Stale badge compares it with case activity, and expanding a node
+/// doesn't rebuild the rest of the map from newer case facts.
 model MessageMindMap {
   id        String   @id @default(uuid())
   messageId String   @unique
   data      Json
+  version   Int      @default(1)
   createdAt DateTime @default(now())
 
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  message   Message           @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  revisions MindMapRevision[]
+}
+
+/// One saved version of a MessageMindMap's tree. Written lazily: a map that was never expanded
+/// has no rows (its version-1 row is backfilled on the first expand). Undo deletes the newest
+/// row and restores the one before it, so this is a linear undo stack, not a branching history.
+model MindMapRevision {
+  id               String   @id @default(uuid())
+  messageMindMapId String
+  version          Int
+  data             Json
+  /// "generate" | "expand" | "edit" | "auto" — a string, not an enum, for the same reason as
+  /// AiGenerationJob.kind: new reasons shouldn't need a migration.
+  reason           String
+  /// Path id of the expanded/edited node; null for "generate"/"auto".
+  nodeId           String?
+  createdById      String?
+  createdAt        DateTime @default(now())
+
+  mindMap MessageMindMap @relation(fields: [messageMindMapId], references: [id], onDelete: Cascade)
+
+  @@unique([messageMindMapId, version])
 }
 
 model MessageRelatedCases {

@@ -161,7 +161,12 @@ export default class CaseSnapshotSvc {
       staleness,
       mindMap: {
         lastGeneratedAt: latestMindMap?.createdAt ?? null,
-        isStale: isMindMapStale(latestMindMap?.createdAt ?? null, audit[0]?.createdAt ?? null),
+        // Expanding/undoing on the map itself writes mindMap.* audit rows — those are the map
+        // changing, not the case moving on without it, so they mustn't flag it stale.
+        isStale: isMindMapStale(
+          latestMindMap?.createdAt ?? null,
+          audit.find((a) => !a.action.startsWith("mindMap."))?.createdAt ?? null,
+        ),
       },
       riskAnalysis: scoreCaseRisks({
         risks,

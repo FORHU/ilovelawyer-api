@@ -8,6 +8,7 @@ export const AI_GENERATION_KINDS = [
   "caseStrategy",
   "caseFinding",
   "mindMap",
+  "mindMapExpand",
   "audioOverviewScript",
   "citationExpand",
   "caseTheoryPropose",

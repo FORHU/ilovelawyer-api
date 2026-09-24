@@ -2,6 +2,9 @@
 // structured-data blocks Chat Wonder embeds in AI response text, and strips them
 // from the text before it's persisted/displayed as a chat message.
 
+import { MIND_MAP_LIMITS, MIND_MAP_FIXED_BRANCH_IDS } from "../constants/mind-map-limits.constants";
+import logger from "./logger";
+
 export interface TimelineItem {
   title: string;
   date?: string;
@@ -10,10 +13,19 @@ export interface TimelineItem {
 }
 
 export interface MindMapItem {
+  /** Path-based and stable across regenerations — see normalizeMindMap. */
   id: string;
   label: string;
   description?: string;
   isRoot?: boolean;
+  /** Levels below the root; the root is 0. Absent on maps saved before normalizeMindMap set it. */
+  depth?: number;
+  /** This node has (or could have) more below it than the tree carries — either the model said
+   * so or normalizeMindMap trimmed children to stay inside MIND_MAP_LIMITS. */
+  hasMore?: boolean;
+  /** The model's own id for this node, kept only when it differs from the path id. */
+  sourceId?: string;
+  media?: unknown[];
   children: MindMapItem[];
 }
 
@@ -88,7 +100,101 @@ function isMindMapShape(v: unknown): v is MindMapItem {
   return Boolean(anyV.id || anyV.nodes || anyV.label || anyV.children);
 }
 
-/** Unwraps Chat Wonder / LLM wrappers (`mindMap`, `root`) down to a renderable tree. */
+// Same child-key aliases the app's renderer accepts (components/chat/mind-map/index.tsx).
+function mindMapChildren(item: any): any[] {
+  const kids = item.children ?? item.items ?? item.nodes ?? item.subnodes ?? item.branches ?? item.subitems;
+  return Array.isArray(kids) ? kids.filter((k) => k && typeof k === "object" && !Array.isArray(k)) : [];
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const v of values) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+function fixedBranchId(item: any): string | undefined {
+  for (const raw of [item.id, item.label]) {
+    if (typeof raw !== "string") continue;
+    const key = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (MIND_MAP_FIXED_BRANCH_IDS[key]) return MIND_MAP_FIXED_BRANCH_IDS[key];
+  }
+  return undefined;
+}
+
+function subtreeSize(src: any): number {
+  return 1 + mindMapChildren(src).reduce((n, kid) => n + subtreeSize(kid), 0);
+}
+
+function toMindMapNode(src: any, id: string, depth: number): MindMapItem {
+  const node: MindMapItem = { id, label: firstText(src.label, src.text, src.title) ?? "Untitled", children: [] };
+  const description = firstText(src.description, src.details, src.summary);
+  if (description) node.description = description;
+  if (depth === 0) node.isRoot = true;
+  node.depth = depth;
+  if (src.hasMore === true) node.hasMore = true;
+  // An already-normalized tree carries sourceId and a path id — keep the original model id
+  // rather than recording the path id as the "source", so normalizing twice changes nothing.
+  const sourceId = firstText(src.sourceId, src.id);
+  if (sourceId && sourceId !== id) node.sourceId = sourceId;
+  if (Array.isArray(src.media)) node.media = src.media;
+  return node;
+}
+
+/**
+ * Rebuilds the tree with stable, path-based ids and enforces MIND_MAP_LIMITS.
+ *
+ * Model-chosen ids change on every generation, which reset collapse state and would leave
+ * nothing for a per-node action to point at. Instead: `root`; the five fixed first-level
+ * branches by name (`legalBasis`, `keyFacts`, …), any other first-level node `b<n>`; everything
+ * deeper `<parent id>.<n>` (`legalBasis.1.2`). Walks breadth-first, so when the tree is over
+ * the node cap it's the deepest/last nodes that go and every kept level stays complete; a node
+ * that lost children is marked `hasMore`.
+ */
+function canonicalizeMindMap(tree: any): { root: MindMapItem; trimmed: number } {
+  const { maxDepth, maxNodes } = MIND_MAP_LIMITS;
+  const root = toMindMapNode(tree, "root", 0);
+  const queue: { src: any; node: MindMapItem }[] = [{ src: tree, node: root }];
+  const usedTopIds = new Set<string>();
+  let count = 1;
+  let trimmed = 0;
+
+  for (let q = 0; q < queue.length; q++) {
+    const { src, node } = queue[q];
+    const kids = mindMapChildren(src);
+    const depth = node.depth ?? 0;
+    if (depth >= maxDepth) {
+      if (kids.length) {
+        node.hasMore = true;
+        trimmed += kids.reduce((n, kid) => n + subtreeSize(kid), 0);
+      }
+      continue;
+    }
+    for (let i = 0; i < kids.length; i++) {
+      if (count >= maxNodes) {
+        node.hasMore = true;
+        trimmed += kids.slice(i).reduce((n, kid) => n + subtreeSize(kid), 0);
+        break;
+      }
+      let id: string;
+      if (depth === 0) {
+        const fixed = fixedBranchId(kids[i]);
+        id = fixed && !usedTopIds.has(fixed) ? fixed : `b${i + 1}`;
+        usedTopIds.add(id);
+      } else {
+        id = `${node.id}.${i + 1}`;
+      }
+      const child = toMindMapNode(kids[i], id, depth + 1);
+      node.children.push(child);
+      queue.push({ src: kids[i], node: child });
+      count++;
+    }
+  }
+  return { root, trimmed };
+}
+
+/** Unwraps Chat Wonder / LLM wrappers (`mindMap`, `root`) down to a renderable tree, then
+ * gives it stable ids and keeps it inside MIND_MAP_LIMITS (see canonicalizeMindMap). */
 export function normalizeMindMap(v: unknown): MindMapItem | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
   const anyV: any = v;
@@ -101,7 +207,11 @@ export function normalizeMindMap(v: unknown): MindMapItem | undefined {
         ? anyV.root
         : anyV;
   if (!isMindMapShape(tree)) return undefined;
-  return tree as MindMapItem;
+  const { root, trimmed } = canonicalizeMindMap(tree);
+  if (trimmed > 0) {
+    logger.warn("Mind map trimmed to MIND_MAP_LIMITS", { trimmedNodes: trimmed, ...MIND_MAP_LIMITS });
+  }
+  return root;
 }
 
 /**
