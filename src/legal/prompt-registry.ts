@@ -2,6 +2,7 @@ import { TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
 import {
   buildRedTeamPrompt,
+  buildWitnessScoringPrompt,
   buildCaseFindingPrompt,
   buildCaseOutlookPrompt,
   buildCaseReconstructionPrompt,
@@ -11,6 +12,7 @@ import {
 } from "./ph/prompts";
 import {
   buildUKRedTeamPrompt,
+  buildUKWitnessScoringPrompt,
   buildUKCaseFindingPrompt,
   buildUKCaseOutlookPrompt,
   buildUKCaseReconstructionPrompt,
@@ -30,6 +32,17 @@ export function getRedTeamPromptBuilder(tenantCode: TenantCode) {
       return buildUKRedTeamPrompt;
     default:
       throw new HttpError(`No red-team prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getWitnessScoringPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildWitnessScoringPrompt;
+    case "UK":
+      return buildUKWitnessScoringPrompt;
+    default:
+      throw new HttpError(`No witness-scoring prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 

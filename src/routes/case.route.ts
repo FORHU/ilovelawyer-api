@@ -85,6 +85,7 @@ router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFindi
 
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
+router.post("/:caseId/witnesses/score", asyncHandler(CaseTerminalCtrl.scoreWitnesses));
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
 
