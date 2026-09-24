@@ -11,7 +11,9 @@ import { buildContradictionPrompt } from "../constants";
 import { extractContradictionHits, uniqueContradictionHits } from "../utils/contradiction-scan";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import logger from "../utils/logger";
-import { PrivilegeStatus, HearsayCategory } from "@prisma/client";
+import { PrivilegeStatus, HearsayCategory, ContradictionStatus } from "@prisma/client";
+import { contradictionKey } from "../utils/contradiction-key";
+import { classifyContradictionWithJev, isContradictionJevEnabled } from "../utils/contradiction-nature-jev";
 import { TenantCode } from "../types/tenant-code";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 
@@ -116,7 +118,58 @@ export default class EvidenceIntelligenceSvc {
       logger.warn("Chat Wonder contradiction scan failed; using regex fallback", { err, caseId });
     }
 
-    return EvidenceRepo.replaceContradictions(caseId, hits);
+    // Every scan rebuilds the table, so carry the lawyer's triage and Jev's classification over
+    // to each re-found contradiction; only ones not seen before get sent to Jev.
+    const previous = new Map((await EvidenceRepo.listContradictions(caseId)).map((row) => [contradictionKey(row), row]));
+    const docName = new Map(ready.map((d) => [d.id, d.name]));
+    const jev = isContradictionJevEnabled();
+    const fresh = hits.filter((hit) => !previous.has(contradictionKey(hit)));
+    const natures = jev ? await classifyNatures(fresh, docName) : new Map<ContradictionHit, NatureRow>();
+
+    const rows = hits.map((hit) => {
+      const prev = previous.get(contradictionKey(hit));
+      if (prev) {
+        return {
+          ...hit,
+          status: prev.status,
+          resolutionNote: prev.resolutionNote,
+          resolvedAt: prev.resolvedAt,
+          resolvedById: prev.resolvedById,
+          nature: prev.nature ?? natures.get(hit)?.nature ?? null,
+          natureConfidence: prev.natureConfidence ?? natures.get(hit)?.natureConfidence ?? null,
+        };
+      }
+      return { ...hit, ...(natures.get(hit) ?? {}) };
+    });
+    logger.info("Contradiction scan: carried over", {
+      caseId,
+      total: hits.length,
+      carriedOver: hits.length - fresh.length,
+      jevClassified: natures.size,
+    });
+    return EvidenceRepo.replaceContradictions(caseId, rows);
+  }
+
+  static async updateContradiction(
+    caseId: string,
+    id: string,
+    userId: string,
+    data: { status: ContradictionStatus; resolutionNote?: string | null },
+  ) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const row = await EvidenceRepo.updateContradictionStatus(id, caseId, {
+      status: data.status,
+      resolutionNote: data.resolutionNote?.trim() || null,
+      resolvedById: userId,
+    });
+    if (!row) throw new HttpError("Contradiction not found", 404);
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId: userId,
+      action: "evidence.contradiction.status",
+      payload: { id, status: data.status },
+    });
+    return row;
   }
 
   static async traces(caseId: string, userId: string, documentId: string) {
@@ -142,6 +195,34 @@ export default class EvidenceIntelligenceSvc {
 }
 
 type ReadyDoc = { id: string; name: string };
+
+type NatureRow = { nature: "DIRECT" | "INFERENTIAL" | "NOT_A_CONFLICT"; natureConfidence: number };
+
+// Jev calls in flight at once while classifying a scan's new contradictions.
+const JEV_CONCURRENCY = 5;
+
+/** Jev's DIRECT/INFERENTIAL/NOT_A_CONFLICT read for each hit. A failed call leaves that hit out of
+ * the map (nature stays null) — never a guessed classification. */
+async function classifyNatures(hits: ContradictionHit[], docName: Map<string, string>): Promise<Map<ContradictionHit, NatureRow>> {
+  const out = new Map<ContradictionHit, NatureRow>();
+  for (let i = 0; i < hits.length; i += JEV_CONCURRENCY) {
+    await Promise.all(
+      hits.slice(i, i + JEV_CONCURRENCY).map(async (hit) => {
+        try {
+          const r = await classifyContradictionWithJev({
+            factKey: hit.factKey,
+            left: { document: docName.get(hit.leftDocumentId) ?? "Document A", excerpt: hit.leftExcerpt, value: hit.leftValue },
+            right: { document: docName.get(hit.rightDocumentId) ?? "Document B", excerpt: hit.rightExcerpt, value: hit.rightValue },
+          });
+          out.set(hit, { nature: r.nature, natureConfidence: r.confidence });
+        } catch (err) {
+          logger.warn("Contradiction scan: Jev classification failed for one hit", { err, factKey: hit.factKey });
+        }
+      }),
+    );
+  }
+  return out;
+}
 
 async function scanWithRegex(ready: ReadyDoc[]): Promise<ContradictionHit[]> {
   const perDoc: { documentId: string; facts: ReturnType<typeof extractFacts> }[] = [];

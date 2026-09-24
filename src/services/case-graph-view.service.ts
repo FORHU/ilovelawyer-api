@@ -176,6 +176,11 @@ export default class CaseGraphViewSvc {
           leftValue: contradiction.leftValue,
           rightValue: contradiction.rightValue,
           confidence: contradiction.confidence,
+          status: contradiction.status,
+          resolutionNote: contradiction.resolutionNote,
+          resolvedAt: contradiction.resolvedAt,
+          nature: contradiction.nature,
+          natureConfidence: contradiction.natureConfidence,
         },
       };
     });

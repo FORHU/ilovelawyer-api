@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { PrivilegeStatus, HearsayCategory } from "@prisma/client";
+import { PrivilegeStatus, HearsayCategory, ContradictionStatus, ContradictionNature } from "@prisma/client";
 
 export default class EvidenceRepo {
   static async listMatrix(caseId: string) {
@@ -67,6 +67,14 @@ export default class EvidenceRepo {
       leftValue: string;
       rightValue: string;
       confidence: number;
+      // Carried over from the previous scan's matching row, or set fresh — see
+      // EvidenceIntelligenceSvc.scanContradictionsInner.
+      status?: ContradictionStatus;
+      resolutionNote?: string | null;
+      resolvedAt?: Date | null;
+      resolvedById?: string | null;
+      nature?: ContradictionNature | null;
+      natureConfidence?: number | null;
     }[],
   ) {
     await prisma.$transaction([
@@ -80,5 +88,24 @@ export default class EvidenceRepo {
         : []),
     ]);
     return this.listContradictions(caseId);
+  }
+
+  static async updateContradictionStatus(
+    id: string,
+    caseId: string,
+    data: { status: ContradictionStatus; resolutionNote: string | null; resolvedById: string | null },
+  ) {
+    const existing = await prisma.evidenceContradiction.findFirst({ where: { id, caseId } });
+    if (!existing) return null;
+    const open = data.status === "OPEN";
+    return prisma.evidenceContradiction.update({
+      where: { id },
+      data: {
+        status: data.status,
+        resolutionNote: open ? null : data.resolutionNote,
+        resolvedAt: open ? null : new Date(),
+        resolvedById: open ? null : data.resolvedById,
+      },
+    });
   }
 }

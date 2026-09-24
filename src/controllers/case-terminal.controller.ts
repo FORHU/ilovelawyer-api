@@ -50,6 +50,7 @@ import {
   updateFindingSchema,
   createWitnessSchema,
   updateWitnessSchema,
+  updateContradictionSchema,
   createDamageSchema,
   updateDamageSchema,
   createClaimSchema,
@@ -222,6 +223,13 @@ export default class CaseTerminalCtrl {
 
   static async scanContradictions(req: Request, res: Response) {
     const result = await EvidenceIntelligenceSvc.scanContradictions(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async updateContradiction(req: Request, res: Response) {
+    const { error, value } = updateContradictionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await EvidenceIntelligenceSvc.updateContradiction(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
   }
 

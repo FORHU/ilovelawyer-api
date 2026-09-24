@@ -175,6 +175,11 @@ export const createWitnessSchema = Joi.object({
   notes: Joi.string().allow("").optional(),
 });
 
+export const updateContradictionSchema = Joi.object({
+  status: Joi.string().valid("OPEN", "RESOLVED", "DISMISSED").required(),
+  resolutionNote: Joi.string().allow("", null).max(2000).optional(),
+});
+
 export const updateWitnessSchema = Joi.object({
   name: Joi.string().optional(),
   role: Joi.string().allow("").optional(),

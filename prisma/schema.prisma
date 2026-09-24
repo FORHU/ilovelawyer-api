@@ -1406,11 +1406,34 @@ model EvidenceContradiction {
   leftValue       String
   rightValue      String
   confidence      Float    @default(0.5)
+  // Lawyer's triage. Every scan rebuilds this table (EvidenceRepo.replaceContradictions), so these
+  // and the Jev fields below are carried over to the re-found row with the same fingerprint (see
+  // contradictionKey) — a resolved contradiction stays resolved across rescans.
+  status          ContradictionStatus @default(OPEN)
+  resolutionNote  String?  @db.Text
+  resolvedAt      DateTime?
+  resolvedById    String?
+  // Jev's read of the two passages (USE_JEV_CONTRADICTIONS) — null when the flag was off at scan
+  // time or the call failed; the panel then falls back to banding `confidence`.
+  nature           ContradictionNature?
+  natureConfidence Float?
   createdAt       DateTime @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+}
+
+enum ContradictionStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum ContradictionNature {
+  DIRECT
+  INFERENTIAL
+  NOT_A_CONFLICT
 }
 
 model CitationCheck {
