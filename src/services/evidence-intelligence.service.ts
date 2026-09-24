@@ -14,6 +14,7 @@ import logger from "../utils/logger";
 import { PrivilegeStatus, HearsayCategory, ContradictionStatus } from "@prisma/client";
 import { contradictionKey } from "../utils/contradiction-key";
 import { classifyContradictionWithJev, isContradictionJevEnabled } from "../utils/contradiction-nature-jev";
+import FullContradictionScanSvc, { FullScanHit, isFullContradictionScanEnabled } from "./full-contradiction-scan.service";
 import { TenantCode } from "../types/tenant-code";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 
@@ -102,6 +103,18 @@ export default class EvidenceIntelligenceSvc {
     return AiGenerationLockSvc.run(caseId, "contradictions", () => EvidenceIntelligenceSvc.scanContradictionsInner(caseId));
   }
 
+  /** Fast half of the panel's queued "Scan" — access check + claiming the job row, so a 403/409
+   * comes back immediately. A full-bundle scan can take minutes, far past an HTTP request. */
+  static async beginQueuedScan(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.begin(caseId, "contradictions");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginQueuedScan has claimed the job row. */
+  static async runQueuedScan(caseId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "contradictions", () => EvidenceIntelligenceSvc.scanContradictionsInner(caseId));
+  }
+
   private static async scanContradictionsInner(caseId: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
@@ -118,15 +131,37 @@ export default class EvidenceIntelligenceSvc {
       logger.warn("Chat Wonder contradiction scan failed; using regex fallback", { err, caseId });
     }
 
+    // Full-bundle scan: every chunk, Jev-checked pairs, exhibit/page locators. Added to the sample
+    // scan's hits, not replacing them — it only sees dates/amounts/durations, the sample scan also
+    // catches names and wording. A sample hit the full scan also found (same documents, same two
+    // values) is dropped in favour of the full scan's, which says where in the bundle each side is.
+    let fullHits: FullScanHit[] = [];
+    if (isFullContradictionScanEnabled()) {
+      try {
+        fullHits = (await FullContradictionScanSvc.scan(caseId, ready, tenantCode)).hits;
+      } catch (err) {
+        logger.warn("Full contradiction scan failed; keeping the sample scan's results only", { err, caseId });
+      }
+    }
+    let allHits: (ContradictionHit | FullScanHit)[] = hits;
+    if (fullHits.length) {
+      const sameConflict = (h: ContradictionHit) =>
+        [`${h.leftDocumentId}=${h.leftValue}`, `${h.rightDocumentId}=${h.rightValue}`].sort().join("|");
+      const covered = new Set(fullHits.map(sameConflict));
+      allHits = [...hits.filter((h) => !covered.has(sameConflict(h))), ...fullHits];
+    }
+
     // Every scan rebuilds the table, so carry the lawyer's triage and Jev's classification over
-    // to each re-found contradiction; only ones not seen before get sent to Jev.
+    // to each re-found contradiction; only ones not seen before, and not already classified by
+    // the full scan, get sent to Jev.
     const previous = new Map((await EvidenceRepo.listContradictions(caseId)).map((row) => [contradictionKey(row), row]));
     const docName = new Map(ready.map((d) => [d.id, d.name]));
     const jev = isContradictionJevEnabled();
-    const fresh = hits.filter((hit) => !previous.has(contradictionKey(hit)));
+    const fresh = allHits.filter((hit) => !previous.has(contradictionKey(hit)) && !("nature" in hit));
     const natures = jev ? await classifyNatures(fresh, docName) : new Map<ContradictionHit, NatureRow>();
 
-    const rows = hits.map((hit) => {
+    const rows = allHits.map((hit) => {
+      const own = "nature" in hit ? { nature: hit.nature, natureConfidence: hit.natureConfidence } : null;
       const prev = previous.get(contradictionKey(hit));
       if (prev) {
         return {
@@ -135,16 +170,17 @@ export default class EvidenceIntelligenceSvc {
           resolutionNote: prev.resolutionNote,
           resolvedAt: prev.resolvedAt,
           resolvedById: prev.resolvedById,
-          nature: prev.nature ?? natures.get(hit)?.nature ?? null,
-          natureConfidence: prev.natureConfidence ?? natures.get(hit)?.natureConfidence ?? null,
+          nature: prev.nature ?? own?.nature ?? natures.get(hit)?.nature ?? null,
+          natureConfidence: prev.natureConfidence ?? own?.natureConfidence ?? natures.get(hit)?.natureConfidence ?? null,
         };
       }
       return { ...hit, ...(natures.get(hit) ?? {}) };
     });
     logger.info("Contradiction scan: carried over", {
       caseId,
-      total: hits.length,
-      carriedOver: hits.length - fresh.length,
+      total: allHits.length,
+      fullScan: fullHits.length,
+      carriedOver: allHits.filter((hit) => previous.has(contradictionKey(hit))).length,
       jevClassified: natures.size,
     });
     return EvidenceRepo.replaceContradictions(caseId, rows);

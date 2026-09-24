@@ -75,6 +75,8 @@ export default class EvidenceRepo {
       resolvedById?: string | null;
       nature?: ContradictionNature | null;
       natureConfidence?: number | null;
+      leftLocator?: string | null;
+      rightLocator?: string | null;
     }[],
   ) {
     await prisma.$transaction([

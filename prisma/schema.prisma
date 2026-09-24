@@ -627,6 +627,7 @@ model Case {
   risks              CaseRisk[]
   evidenceMatrix     EvidenceMatrixItem[]
   contradictions     EvidenceContradiction[]
+  factPairChecks     FactPairCheck[]
   citationChecks     CitationCheck[]
   deadlines          ProceduralDeadline[]
   procedureItems     ProcedureItem[]
@@ -1417,11 +1418,31 @@ model EvidenceContradiction {
   // time or the call failed; the panel then falls back to banding `confidence`.
   nature           ContradictionNature?
   natureConfidence Float?
+  // Where in the document each side sits (e.g. "D13 p.2") — set by the full-bundle scan, which
+  // often pairs two exhibits inside one merged PDF, so the document name alone can't tell them apart.
+  leftLocator      String?
+  rightLocator     String?
   createdAt       DateTime @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+}
+
+/// Jev's verdict on one candidate pair from the full-bundle contradiction scan
+/// (full-contradiction-scan.service.ts), cached so a rescan never pays to re-check a pair —
+/// including the NOT_A_CONFLICT ones, which never become EvidenceContradiction rows.
+model FactPairCheck {
+  id         String              @id @default(uuid())
+  caseId     String
+  pairKey    String
+  nature     ContradictionNature
+  confidence Float
+  checkedAt  DateTime            @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, pairKey])
 }
 
 enum ContradictionStatus {

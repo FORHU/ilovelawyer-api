@@ -40,8 +40,12 @@ export interface ContradictionNatureInput {
 }
 
 export interface ContradictionNatureResult {
+  /** After the NOT_A_CONFLICT floor — what to show for a contradiction a scan already claimed. */
   nature: ContradictionNatureValue;
   confidence: number;
+  /** Jev's own answer, before the floor. The full-bundle scan uses this instead: there the pair
+   * was proposed by code, not claimed by a scan, so an unsure NOT_A_CONFLICT means "drop it". */
+  rawNature: ContradictionNatureValue;
 }
 
 /** Throws on a Jev failure — the caller stores null rather than a guess. */
@@ -70,5 +74,5 @@ export async function classifyContradictionWithJev(input: ContradictionNatureInp
   const downgraded = raw === "NOT_A_CONFLICT" && answer.confidence < NOT_A_CONFLICT_MIN_CONFIDENCE;
   const nature: ContradictionNatureValue = downgraded ? "INFERENTIAL" : raw;
   logger.info("Jev response", { feature: "contradiction-nature", nature, rawNature: raw, downgraded, confidence: answer.confidence });
-  return { nature, confidence: answer.confidence };
+  return { nature, confidence: answer.confidence, rawNature: raw };
 }

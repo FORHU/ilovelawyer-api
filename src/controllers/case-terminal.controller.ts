@@ -221,9 +221,15 @@ export default class CaseTerminalCtrl {
     return res.status(204).send();
   }
 
+  /** Queued via AiGenerationQueue (SQS) — a full-bundle scan outlasts an HTTP request. The panel
+   * follows the "contradictions" job status and refreshes when it's DONE. */
   static async scanContradictions(req: Request, res: Response) {
-    const result = await EvidenceIntelligenceSvc.scanContradictions(req.params.caseId, req.user.userId);
-    return res.status(200).json(result);
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await EvidenceIntelligenceSvc.beginQueuedScan(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "contradictions", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "contradictions");
+    return res.status(202).json(status);
   }
 
   static async updateContradiction(req: Request, res: Response) {

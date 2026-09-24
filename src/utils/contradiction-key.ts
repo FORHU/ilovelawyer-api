@@ -10,8 +10,16 @@ export function contradictionKey(row: {
   rightDocumentId: string;
   leftValue: string;
   rightValue: string;
+  leftLocator?: string | null;
+  rightLocator?: string | null;
 }): string {
   const norm = (v: string) => v.toLowerCase().replace(/\s+/g, " ").trim();
-  const sides = [`${row.leftDocumentId}=${norm(row.leftValue)}`, `${row.rightDocumentId}=${norm(row.rightValue)}`].sort();
+  // Locators (full-bundle scan only) are part of the key: the same two values can conflict in
+  // several places inside one merged PDF, and each is its own contradiction.
+  const at = (loc?: string | null) => (loc ? `@${loc}` : "");
+  const sides = [
+    `${row.leftDocumentId}${at(row.leftLocator)}=${norm(row.leftValue)}`,
+    `${row.rightDocumentId}${at(row.rightLocator)}=${norm(row.rightValue)}`,
+  ].sort();
   return [row.kind, row.factKey, ...sides].join("|");
 }

@@ -60,12 +60,12 @@ describe("classifyContradictionWithJev", () => {
 
   it("keeps a confident verdict", async () => {
     reply = { choice: "DIRECT", confidence: 0.9 };
-    expect(await classifyContradictionWithJev(input)).to.deep.equal({ nature: "DIRECT", confidence: 0.9 });
+    expect(await classifyContradictionWithJev(input)).to.deep.equal({ nature: "DIRECT", confidence: 0.9, rawNature: "DIRECT" });
   });
 
   it("records an unsure NOT_A_CONFLICT as INFERENTIAL, so a real conflict isn't talked away", async () => {
     reply = { choice: "NOT_A_CONFLICT", confidence: 0.55 };
-    expect((await classifyContradictionWithJev(input)).nature).to.equal("INFERENTIAL");
+    expect(await classifyContradictionWithJev(input)).to.include({ nature: "INFERENTIAL", rawNature: "NOT_A_CONFLICT" });
     reply = { choice: "NOT_A_CONFLICT", confidence: 0.85 };
     expect((await classifyContradictionWithJev(input)).nature).to.equal("NOT_A_CONFLICT");
   });

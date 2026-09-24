@@ -2,6 +2,7 @@ import CaseRefreshSvc from "../services/case-refresh.service";
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
 import WitnessExtractSvc from "../services/witness-extract.service";
+import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
 import TheoryDiffSvc from "../services/theory-diff.service";
@@ -21,7 +22,8 @@ export type QueuedAiGenerationKind =
   | "casePostExtraction"
   | "timelineGenerate"
   | "witnessScoring"
-  | "witnessExtract";
+  | "witnessExtract"
+  | "contradictions";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -65,6 +67,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // No controller in front of this one — it's enqueued by runCasePostExtraction and claims its
   // own lock (see WitnessExtractSvc.runQueued), same as casePostExtraction.
   witnessExtract: (job) => WitnessExtractSvc.runQueued(job.caseId, job.userId),
+  contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,
