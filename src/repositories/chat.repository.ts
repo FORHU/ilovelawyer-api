@@ -216,6 +216,17 @@ export default class ChatRepo {
     });
   }
 
+  /** Lean id/content/parent lookup for several messages at once — used by CaseSnapshotSvc to
+   * resolve DecisionRecord.sourceMessageId (the assistant reply) back to the user prompt that
+   * triggered it, for grouping decisions by turn without an N+1 query per record. */
+  static async findManyByIds(messageIds: string[]) {
+    if (!messageIds.length) return [];
+    return prisma.message.findMany({
+      where: { id: { in: messageIds } },
+      select: { id: true, content: true, parentMessageId: true, consultationId: true, createdAt: true },
+    });
+  }
+
   static async saveReasoning(messageId: string, data: ReasoningExplanation) {
     return prisma.messageReasoning.create({
       data: {
@@ -272,10 +283,22 @@ export default class ChatRepo {
     return prisma.message.findFirst({ where: { parentMessageId, role: "assistant" }, select: { id: true } });
   }
 
+  /**
+   * The assistant reply for the most recently *submitted* turn — not the most recently
+   * *finished* one. Ordering by the reply's own createdAt (when generation completed) is wrong
+   * once two turns for the same consultation can run concurrently (no per-consultation lock
+   * exists on the chat-generation queue): a turn asked first can finish generating after a turn
+   * asked second, land a later createdAt, and get served as "latest" — surfacing stale Related
+   * Cases after a newer prompt. The parent (user) message's createdAt is set synchronously when
+   * the request is accepted, before any generation happens, so it tracks true submission order
+   * regardless of how long each turn's generation takes. Excludes any assistant row with no
+   * parent to order by (shouldn't occur for a normal turn, but would otherwise sort first under
+   * Postgres's NULLS FIRST default for DESC).
+   */
   static async findLatestAssistantMessage(consultationId: string) {
     return prisma.message.findFirst({
-      where: { consultationId, role: "assistant" },
-      orderBy: { createdAt: "desc" },
+      where: { consultationId, role: "assistant", parentMessageId: { not: null } },
+      orderBy: { parent: { createdAt: "desc" } },
       include: { relatedCases: true },
     });
   }
