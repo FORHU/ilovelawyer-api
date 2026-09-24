@@ -108,6 +108,7 @@ model User {
   integrationConnectors   IntegrationConnector[]
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
   caseBriefExports        CaseBriefExport[]
+  caseViews               CaseView[]
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -644,6 +645,7 @@ model Case {
   theories           CaseTheory[]
   theoryDiffs        TheoryDiff[]
   briefExports       CaseBriefExport[]
+  views              CaseView[]
   terminalWorkspaces TerminalWorkspace[]
   annotations        Annotation[]
   outlooks           CaseOutlook[]
@@ -731,6 +733,23 @@ enum DocumentStatus {
 // "generating a brief" as far as this history is concerned). `file` is the actual rendered
 // artifact in S3; this row is what makes it findable/listable per case, since File itself has no
 // caseId and is shared across many unrelated purposes (avatars, transcriptions, audio, ...).
+// When each user last opened each case (Workspace, Terminal or the case detail page) — shown as
+// "Last opened" in Case Portfolio. Per user, not per case: a Case is a shared organization
+// resource, and a colleague opening it shouldn't change when *you* last looked at it. One row per
+// (case, user), upserted on open. Deliberately separate from Case.updatedAt ("Last updated"),
+// which tracks real changes/activity rather than views.
+model CaseView {
+  caseId       String
+  userId       String
+  lastOpenedAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, userId])
+  @@index([userId])
+}
+
 model CaseBriefExport {
   id        String   @id @default(uuid())
   caseId    String
