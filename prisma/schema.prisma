@@ -1303,8 +1303,8 @@ model CaseRisk {
   documentId  String?
   chunkId     String?
   pageNumber  Int?
-  // How sure the AI is that this risk is real. Null for lawyer-added risks unless the lawyer
-  // sets it explicitly.
+  // How sure the author is that this risk is real. Risks are lawyer-authored (no AI risk
+  // generator exists), so this is optional manual input and null unless set.
   confidence  ConfidenceLevel?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt

@@ -23,7 +23,7 @@ import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
 import { buildCaseTrends } from "../utils/case-trends";
 import { OutlookDriver } from "../utils/case-outlook-parse";
-import { CASE_TREND_WEEKS, OUTLOOK_HISTORY_LIMIT } from "../constants";
+import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../constants";
 
 export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
@@ -181,6 +181,7 @@ export default class CaseSnapshotSvc {
             rationale: outlook.rationale,
             drivers: outlook.drivers as unknown as OutlookDriver[],
             createdAt: outlook.createdAt,
+            disclaimer: OUTLOOK_DISCLAIMER,
           }
         : null,
       outlookHistory,

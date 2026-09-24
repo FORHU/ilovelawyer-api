@@ -14,6 +14,7 @@ import DocumentRepo from "../src/repositories/document.repository";
 import EvidenceIntelligenceSvc from "../src/services/evidence-intelligence.service";
 import CaseStrategySvc from "../src/services/case-strategy.service";
 import CaseFindingAiSvc from "../src/services/case-finding-ai.service";
+import CaseOutlookAiSvc from "../src/services/case-outlook-ai.service";
 import ChatRepo from "../src/repositories/chat.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
@@ -26,6 +27,7 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     scanContradictions: EvidenceIntelligenceSvc.scanContradictions,
     generateStrategy: CaseStrategySvc.generateFromDocuments,
     generateFindings: CaseFindingAiSvc.generateFromDocuments,
+    generateOutlook: CaseOutlookAiSvc.generateFromDocuments,
     listConsultationIdsByCase: ChatRepo.listConsultationIdsByCase,
     markRefreshed: CaseRepo.markRefreshed,
     writeAudit: OrganizationRepo.writeAudit,
@@ -42,6 +44,7 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (EvidenceIntelligenceSvc as any).scanContradictions = async () => [];
     (CaseStrategySvc as any).generateFromDocuments = async () => ({});
     (CaseFindingAiSvc as any).generateFromDocuments = async () => ({});
+    (CaseOutlookAiSvc as any).generateFromDocuments = async () => null;
     (ChatRepo as any).listConsultationIdsByCase = async () => [];
     (CaseRepo as any).markRefreshed = async () => ({ count: 1 });
     (OrganizationRepo as any).writeAudit = async (data: any) => {
@@ -57,6 +60,7 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (EvidenceIntelligenceSvc as any).scanContradictions = originals.scanContradictions;
     (CaseStrategySvc as any).generateFromDocuments = originals.generateStrategy;
     (CaseFindingAiSvc as any).generateFromDocuments = originals.generateFindings;
+    (CaseOutlookAiSvc as any).generateFromDocuments = originals.generateOutlook;
     (ChatRepo as any).listConsultationIdsByCase = originals.listConsultationIdsByCase;
     (CaseRepo as any).markRefreshed = originals.markRefreshed;
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
@@ -75,5 +79,22 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
     expect(audits).to.have.length(1);
     expect(audits[0].payload).to.include({ reason: "post-extraction" });
+  });
+
+  it("still completes the refresh when the outlook step throws", async () => {
+    (CaseOutlookAiSvc as any).generateFromDocuments = async () => {
+      throw new Error("chat-wonder timeout");
+    };
+    await CaseRefreshSvc.runQueued("case-1", "user-1");
+    expect(audits).to.have.length(1);
+    expect(audits[0]).to.include({ action: "case.refresh" });
+  });
+
+  it("runs the outlook after findings, since its prompt reads them", async () => {
+    const order: string[] = [];
+    (CaseFindingAiSvc as any).generateFromDocuments = async () => void order.push("findings");
+    (CaseOutlookAiSvc as any).generateFromDocuments = async () => void order.push("outlook");
+    await CaseRefreshSvc.runQueued("case-1", "user-1");
+    expect(order).to.deep.equal(["findings", "outlook"]);
   });
 });

@@ -10,7 +10,7 @@ export interface RiskInput {
   documentId?: string | null;
   chunkId?: string | null;
   pageNumber?: number | null;
-  // AI-assessed; lawyer-added risks leave it null unless they set it.
+  // Optional, lawyer-set — no AI writes risks (see the CaseRisk schema comment).
   confidence?: ConfidenceLevel | null;
 }
 

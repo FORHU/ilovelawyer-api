@@ -213,6 +213,7 @@ const swaggerSpec: OAS3Definition = {
           rationale: { type: "string", description: "Written in the case's language." },
           drivers: { type: "array", items: { $ref: "#/components/schemas/OutlookDriver" } },
           createdAt: { type: "string", format: "date-time" },
+          disclaimer: { type: "string", example: "AI assessment, not legal advice.", description: "Show under the outlook gauge." },
         },
       },
       OutlookHistoryItem: {
@@ -245,7 +246,7 @@ const swaggerSpec: OAS3Definition = {
             type: "string",
             enum: ["LOW", "MEDIUM", "HIGH"],
             nullable: true,
-            description: "Null for lawyer-added risks unless set explicitly.",
+            description: "Optional, set by the lawyer. Null unless set; no AI writes risks.",
           },
           createdAt: { type: "string", format: "date-time" },
         },
@@ -2398,7 +2399,7 @@ const swaggerSpec: OAS3Definition = {
     "/my-cases/{caseId}/refresh": {
       post: {
         tags: ["Legal Terminal"],
-        summary: "Re-extract pending docs, rescan contradictions, promote AI timeline",
+        summary: "Re-extract pending docs, rescan contradictions, regenerate findings and outlook, promote AI timeline",
         description:
           "Queued (AiGenerationQueue / SQS) rather than run inline — returns immediately once the job is claimed. Poll GET /my-cases/{caseId}/ai-jobs/caseRefresh for completion.",
         security: [{ bearerAuth: [] }],
