@@ -1,6 +1,7 @@
 import CaseAccess from "../utils/case-access";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import WitnessRepo from "../repositories/witness.repository";
+import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import { getWitnessScoringPromptBuilder } from "../legal/prompt-registry";
@@ -10,6 +11,10 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
 const MAX_EXCERPT = 160;
+// Per-document and total caps on the sponsored-document text sent to the model, so a witness
+// with a very long affidavit (or a case with many sponsored documents) can't blow the prompt.
+const MAX_DOC_CHARS = 4000;
+const MAX_TOTAL_DOC_CHARS = 40000;
 
 function clip(text: string): string {
   return text.length > MAX_EXCERPT ? `${text.slice(0, MAX_EXCERPT)}…` : text;
@@ -44,6 +49,15 @@ export default class WitnessScoringSvc {
     const docNameById = new Map(snapshot.documents.map((d) => [d.id, d.name]));
     const contradictions = snapshot.evidence.contradictions;
 
+    const sponsoredDocIds = [
+      ...new Set(snapshot.evidence.matrix.filter((m) => m.sponsoringWitnessId).map((m) => m.documentId)),
+    ];
+    const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(sponsoredDocIds);
+    const perDocChars = Math.max(
+      500,
+      Math.min(MAX_DOC_CHARS, Math.floor(MAX_TOTAL_DOC_CHARS / Math.max(1, sponsoredDocIds.length))),
+    );
+
     const witnesses = snapshot.witnesses.map((w) => ({
       id: w.id,
       name: w.name,
@@ -55,6 +69,7 @@ export default class WitnessScoringSvc {
         .map((item) => ({
           name: docNameById.get(item.documentId) ?? "Unnamed document",
           hearsay: item.hearsayCategory,
+          excerpt: fullTexts.get(item.documentId)?.slice(0, perDocChars),
           contradictions: contradictions
             .filter((c) => c.leftDocumentId === item.documentId || c.rightDocumentId === item.documentId)
             .map((c) => `"${clip(c.leftExcerpt)}" vs "${clip(c.rightExcerpt)}"`),

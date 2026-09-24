@@ -11,7 +11,7 @@ export interface WitnessScoringPromptData {
     summary?: string | null;
     statementReceived: boolean;
     /** Documents this witness sponsors, with the contradictions each is part of. */
-    sponsoredEvidence: { name: string; hearsay: string; contradictions: string[] }[];
+    sponsoredEvidence: { name: string; hearsay: string; contradictions: string[]; excerpt?: string }[];
   }[];
   timeline: { title: string; occurredOn?: string | Date | null }[];
 }
@@ -29,7 +29,8 @@ function renderWitnessBlock(w: WitnessScoringPromptData["witnesses"][number]): s
       : w.sponsoredEvidence
           .map((e) => {
             const c = e.contradictions.length ? ` | contradicted: ${e.contradictions.join(" ; ")}` : "";
-            return `  - ${e.name} [hearsay: ${e.hearsay}]${c}`;
+            const text = e.excerpt ? `\n    text: """${e.excerpt}"""` : "\n    text: (not available)";
+            return `  - ${e.name} [hearsay: ${e.hearsay}]${c}${text}`;
           })
           .join("\n");
   return [
@@ -58,7 +59,8 @@ ${timelineText}
 INSTRUCTIONS:
 Use ONLY the data above. Do not use outside knowledge and do not invent facts.
 For each witness, assess how credible their account is likely to be, considering: whether they have first-hand knowledge (role and what they can speak to), whether their sponsored evidence is corroborated or contradicted, hearsay exposure, and whether a written statement has been received.
-If a witness has no sponsored evidence and too little other information to judge, set "credibility" to null and give one reason saying what is missing. Never guess a number.
+Base the score on what the sponsored document text actually says: internal consistency, specificity (dates, places, amounts, sources of knowledge), first-hand versus second-hand knowledge, and agreement or conflict with the other witnesses' texts and with the contradictions listed.
+If the text of a witness's sponsored evidence is not available, or there is too little information to judge, set "credibility" to null and give one reason saying what is missing. Never use 50 as a filler for "unknown" — use null. Use a score near 50 only when the evidence is genuinely balanced.
 "credibility" is an integer 0-100 (0 = not credible, 50 = neutral, 100 = highly credible).
 "suggestedStatus" is one of READY (credible, statement in hand), ADVERSE (contradicted or likely to hurt our case) or OUTSTANDING (statement or key information still missing). It is only a suggestion for the lawyer.
 Give 2-4 short reasons per witness. Each reason's "source" must name the evidence item, contradiction or timeline entry it relies on, or be null.
