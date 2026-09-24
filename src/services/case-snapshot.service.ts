@@ -81,6 +81,11 @@ export default class CaseSnapshotSvc {
       CaseOutlookRepo.history(caseId, OUTLOOK_HISTORY_LIMIT),
     ]);
 
+    // listAllByCase is unscoped by status (its other callers need archived documents for id
+    // lookups), but archiving is a visibility flag — an ARCHIVED document must not count toward
+    // the Evidence panel's totals, trends or risk score, same as the Workspace list hiding it.
+    const activeDocuments = documents.filter((doc) => doc.status !== "ARCHIVED");
+
     const now = new Date();
     const nextEvent = events.find((event) => event.dateTime >= now) ?? events[0] ?? null;
     const nextTimeline = timeline.find((item) => item.occurredOn && item.occurredOn > now)
@@ -125,7 +130,7 @@ export default class CaseSnapshotSvc {
 
     return {
       case: caseRecord,
-      documents: documents.map((doc) => ({
+      documents: activeDocuments.map((doc) => ({
         id: doc.id,
         name: doc.name,
         ragStatus: doc.ragStatus,
@@ -185,11 +190,11 @@ export default class CaseSnapshotSvc {
           }
         : null,
       outlookHistory,
-      trends: buildCaseTrends({ risks, documents, weeks: CASE_TREND_WEEKS, now }),
+      trends: buildCaseTrends({ risks, documents: activeDocuments, weeks: CASE_TREND_WEEKS, now }),
       riskAnalysis: scoreCaseRisks({
         risks,
         contradictions,
-        documents,
+        documents: activeDocuments,
         citations,
         deadlines,
         matrix: evidenceMatrix,
