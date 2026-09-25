@@ -80,3 +80,21 @@ describe("recomputeFromStored", () => {
     expect(item?.options?.map((o) => o.value)).to.deep.equal(["WEEKS", "MONTHS", "OVER_YEAR"]);
   });
 });
+
+import { describeOverrides } from "../src/utils/witness-recompute";
+
+describe("describeOverrides", () => {
+  it("lists a lawyer's answers in plain words for the panel", () => {
+    const list = describeOverrides({ E: ov("CONFIRMED") });
+    expect(list).to.have.length(1);
+    expect(list[0].factor).to.equal("E");
+    expect(list[0].label).to.equal("Corroboration");
+    expect(list[0].answerLabel).to.contain("independent documents");
+    expect(list[0].note).to.equal("checked with the client");
+  });
+
+  it("is empty when nothing is set, and recompute carries it", () => {
+    expect(describeOverrides(null)).to.deep.equal([]);
+    expect(recomputeFromStored(stored(), { E: ov("CONFIRMED") }, true).aiFactors.overrideList).to.have.length(1);
+  });
+});

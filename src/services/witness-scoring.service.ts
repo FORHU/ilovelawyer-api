@@ -11,7 +11,7 @@ import { FACTOR_KEYS, RUBRIC_VERSION, scoreWitness, type FactorKey } from "../ut
 import { classifyWitnessWithJev, type JevFactors } from "../utils/witness-rubric-jev";
 import { buildNeeds } from "../utils/witness-needs";
 import { parseOverrides, resolveFactors, type FactorOverrides } from "../utils/witness-factor-resolve";
-import { parseStoredFactors, recomputeFromStored } from "../utils/witness-recompute";
+import { describeOverrides, parseStoredFactors, recomputeFromStored } from "../utils/witness-recompute";
 import { RUBRIC } from "../utils/witness-rubric";
 import CaseGraphSvc from "./case-graph.service";
 import HttpError from "../utils/http-error";
@@ -220,6 +220,7 @@ export default class WitnessScoringSvc {
           sponsoredDocumentCount: w.sponsoredEvidence.length,
           answers,
           aiNeeds: row?.needs ?? {},
+          unsure: Object.fromEntries(FACTOR_KEYS.map((k) => [k, !!audit[k].lowConfidence && !audit[k].overriddenTo])),
         });
         // Rows are only written when there is something to show for the witness.
         if (!row && !jev) return;
@@ -240,7 +241,8 @@ export default class WitnessScoringSvc {
             // Kept so a lawyer's factor override can rebuild the score and needs without a rescore.
             aiNeeds: row?.needs ?? {},
             sponsoredDocumentCount: w.sponsoredEvidence.length,
-            reviewCount: FACTOR_KEYS.filter((k) => audit[k].lowConfidence).length,
+            reviewCount: FACTOR_KEYS.filter((k) => audit[k].lowConfidence && !audit[k].overriddenTo).length,
+            overrideList: describeOverrides(overrides),
           },
           aiRubricVersion: RUBRIC_VERSION,
           scoredAt,

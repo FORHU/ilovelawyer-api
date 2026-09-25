@@ -1,4 +1,4 @@
-import { FACTOR_KEYS, RUBRIC_VERSION, scoreWitness, type FactorAnswers, type FactorKey } from "./witness-rubric";
+import { FACTOR_DEFINITIONS, FACTOR_KEYS, RUBRIC, RUBRIC_VERSION, scoreWitness, type FactorAnswers, type FactorKey } from "./witness-rubric";
 import { buildNeeds, type WitnessNeed } from "./witness-needs";
 import type { FactorAudit, FactorOverrides } from "./witness-factor-resolve";
 import { parseOverrides } from "./witness-factor-resolve";
@@ -15,6 +15,32 @@ export interface StoredFactors {
   aiNeeds?: Partial<Record<FactorKey, string>>;
   sponsoredDocumentCount?: number;
   reviewCount?: number;
+  /** The lawyer's own answers in plain words, for the panel's "set by you" list. */
+  overrideList?: OverrideView[];
+}
+
+export interface OverrideView {
+  factor: FactorKey;
+  label: string;
+  answerLabel: string;
+  note: string;
+  at: string;
+}
+
+export function describeOverrides(overrides: FactorOverrides | null): OverrideView[] {
+  const out: OverrideView[] = [];
+  for (const factor of FACTOR_KEYS) {
+    const o = overrides?.[factor];
+    if (!o?.answer) continue;
+    out.push({
+      factor,
+      label: RUBRIC[factor].label,
+      answerLabel: FACTOR_DEFINITIONS[factor].options[o.answer] ?? o.answer,
+      note: o.note,
+      at: o.at,
+    });
+  }
+  return out;
 }
 
 export function parseStoredFactors(raw: unknown): StoredFactors | null {
@@ -58,7 +84,8 @@ export function recomputeFromStored(
   const sponsoredDocumentCount =
     stored.sponsoredDocumentCount ?? ((stored.needs ?? []).some((n) => n.key === "DOCUMENT") ? 0 : 1);
   const aiNeeds = recoverAiNeeds(stored);
-  const needs = buildNeeds({ statementReceived, sponsoredDocumentCount, answers, aiNeeds });
+  const unsure = Object.fromEntries(FACTOR_KEYS.map((k) => [k, !!factors[k].lowConfidence && !factors[k].overriddenTo]));
+  const needs = buildNeeds({ statementReceived, sponsoredDocumentCount, answers, aiNeeds, unsure });
   return {
     aiCredibility: rubric.score,
     aiSuggestedStatus: rubric.suggestedStatus,
@@ -75,6 +102,7 @@ export function recomputeFromStored(
       aiNeeds,
       sponsoredDocumentCount,
       reviewCount: FACTOR_KEYS.filter((k) => factors[k].lowConfidence && !factors[k].overriddenTo).length,
+      overrideList: describeOverrides(overrides),
     },
   };
 }

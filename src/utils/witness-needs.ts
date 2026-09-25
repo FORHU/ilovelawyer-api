@@ -23,11 +23,14 @@ export interface NeedsInput {
   statementReceived: boolean;
   sponsoredDocumentCount: number;
   answers: FactorAnswers;
-  /** Chat Wonder's suggested next step per factor it could not answer. */
+  /** Chat Wonder's suggested next step per factor. */
   aiNeeds: Partial<Record<FactorKey, string>>;
+  /** Factors that have an answer Jev was unsure of. They still count in the score, so a lawyer is
+   * asked to confirm them, or set the answer themselves. */
+  unsure?: Partial<Record<FactorKey, boolean>>;
 }
 
-export function buildNeeds({ statementReceived, sponsoredDocumentCount, answers, aiNeeds }: NeedsInput): WitnessNeed[] {
+export function buildNeeds({ statementReceived, sponsoredDocumentCount, answers, aiNeeds, unsure }: NeedsInput): WitnessNeed[] {
   const needs: WitnessNeed[] = [];
   if (!statementReceived) {
     needs.push({
@@ -46,10 +49,14 @@ export function buildNeeds({ statementReceived, sponsoredDocumentCount, answers,
     return needs;
   }
   for (const factor of FACTOR_KEYS) {
-    if (answers[factor]) continue;
+    const unanswered = !answers[factor];
+    if (!unanswered && !unsure?.[factor]) continue;
+    const fallback = unanswered
+      ? `Not shown in the papers: ${FACTOR_DEFINITIONS[factor].question} Add the detail to the case, or set it yourself.`
+      : `Jev was unsure of this answer: ${FACTOR_DEFINITIONS[factor].question} Confirm it against the papers, or set it yourself.`;
     needs.push({
       key: `FACTOR_${factor}`,
-      text: aiNeeds[factor] ?? `Not shown in the papers: ${FACTOR_DEFINITIONS[factor].question} Add the detail to the case, or set it yourself.`,
+      text: aiNeeds[factor] ?? fallback,
       link: "FACTOR",
       factor,
       question: FACTOR_DEFINITIONS[factor].question,

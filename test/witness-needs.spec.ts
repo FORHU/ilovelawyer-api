@@ -47,3 +47,26 @@ describe("extractWitnessFactors needs", () => {
     expect(out[0].needs).to.deep.equal({ E: "Ask the bank" });
   });
 });
+
+describe("buildNeeds for answers Jev was unsure of", () => {
+  const answered = { A: "OWN", B: "SPECIFIC", C: "WEEKS", D: "NONE", E: "CONFIRMED", F: "NONE", G: "NONE" };
+
+  it("asks the lawyer to confirm an answer that counts but was unsure, using the model's next step", () => {
+    const needs = buildNeeds({
+      statementReceived: true,
+      sponsoredDocumentCount: 1,
+      answers: answered,
+      aiNeeds: { E: "Ask the bank for the ledger." },
+      unsure: { E: true },
+    });
+    expect(needs.map((n) => n.key)).to.deep.equal(["FACTOR_E"]);
+    expect(needs[0].text).to.equal("Ask the bank for the ledger.");
+    expect(needs[0].options?.length).to.be.greaterThan(0);
+  });
+
+  it("uses a plain fallback when there is no next step, and skips confident answers", () => {
+    const needs = buildNeeds({ statementReceived: true, sponsoredDocumentCount: 1, answers: answered, aiNeeds: {}, unsure: { B: true } });
+    expect(needs).to.have.length(1);
+    expect(needs[0].text).to.contain("Jev was unsure");
+  });
+});
