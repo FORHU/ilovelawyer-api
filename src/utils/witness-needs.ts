@@ -14,6 +14,9 @@ export interface WitnessNeed {
   text: string;
   link: NeedLink | null;
   factor?: FactorKey;
+  /** For a FACTOR item: what is being asked and the options a lawyer can pick, in plain words. */
+  question?: string;
+  options?: { value: string; label: string }[];
 }
 
 export interface NeedsInput {
@@ -49,6 +52,8 @@ export function buildNeeds({ statementReceived, sponsoredDocumentCount, answers,
       text: aiNeeds[factor] ?? `Not shown in the papers: ${FACTOR_DEFINITIONS[factor].question} Add the detail to the case, or set it yourself.`,
       link: "FACTOR",
       factor,
+      question: FACTOR_DEFINITIONS[factor].question,
+      options: Object.entries(FACTOR_DEFINITIONS[factor].options).map(([value, label]) => ({ value, label })),
     });
   }
   return needs;

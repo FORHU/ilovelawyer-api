@@ -15,8 +15,12 @@ export interface FactorAudit {
   documentName: string | null;
   /** What Chat Wonder answered, kept when it differs from the final answer. */
   aiAnswer?: string | null;
-  /** Jev's answer before the confidence floor, kept when the floor dropped it. */
+  /** Jev's own answer when it did not produce one (NOT_SHOWN or an unknown option). */
   jevRawAnswer?: string | null;
+  /** The answer counts but Jev was unsure, so the lawyer should check it. */
+  lowConfidence?: boolean;
+  /** Set when a lawyer's override replaces `answer` in the score. */
+  overriddenTo?: string;
 }
 
 export interface FactorOverride {
@@ -39,8 +43,7 @@ function validOption(key: FactorKey, value: string | null | undefined): string |
 }
 
 /**
- * Final answer per factor. Precedence: a lawyer's override, then Jev (when it ran and cleared its
- * confidence floor), then Chat Wonder's answer — and Chat Wonder's answer only counts if its quote
+ * Final answer per factor. Precedence: a lawyer's override, then Jev (when it ran), then Chat Wonder's answer — and Chat Wonder's answer only counts if its quote
  * was found in the source text. A Jev answer stands without a quote, since Jev read the same text;
  * a Chat Wonder answer has nothing else to stand on. Anything left over is not assessable (null).
  */
@@ -64,32 +67,24 @@ export function resolveFactors(
       documentName: check.verified ? check.documentName ?? cw.document : cw.document,
     };
 
-    const override = overrides?.[key];
-    if (override) {
-      const answer = validOption(key, override.answer);
-      answers[key] = answer;
-      audit[key] = { answer, by: "OVERRIDE", confidence: null, ...evidence, aiAnswer: cw.answer };
-      continue;
-    }
-
     const jevAnswer = jev ? jev[key] : null;
+    let answer: string | null;
+    let entry: FactorAudit;
     if (jevAnswer && jevAnswer.answer) {
-      answers[key] = jevAnswer.answer;
-      audit[key] = {
-        answer: jevAnswer.answer,
+      answer = jevAnswer.answer;
+      entry = {
+        answer,
         by: "JEV",
         confidence: jevAnswer.confidence,
+        lowConfidence: jevAnswer.lowConfidence,
         ...evidence,
         ...(cwAnswer !== jevAnswer.answer ? { aiAnswer: cw.answer } : {}),
       };
-      continue;
-    }
-
-    // Jev ran but was unsure or said NOT_SHOWN: that is the answer. Falling back to Chat Wonder here
-    // would put back the unstable impression Jev was brought in to remove.
-    if (jev) {
-      answers[key] = null;
-      audit[key] = {
+    } else if (jev) {
+      // Jev ran and said NOT_SHOWN (the papers don't show it): that is the answer. Falling back to Chat
+      // Wonder here would put back the unstable impression Jev was brought in to remove.
+      answer = null;
+      entry = {
         answer: null,
         by: "NONE",
         confidence: jevAnswer?.confidence ?? null,
@@ -97,11 +92,21 @@ export function resolveFactors(
         aiAnswer: cw.answer,
         jevRawAnswer: jevAnswer?.rawAnswer ?? null,
       };
-      continue;
+    } else {
+      answer = cwCounts ? cwAnswer : null;
+      entry = { answer, by: cwCounts ? "AI" : "NONE", confidence: null, ...evidence };
     }
 
-    answers[key] = cwCounts ? cwAnswer : null;
-    audit[key] = { answer: answers[key] ?? null, by: cwCounts ? "AI" : "NONE", confidence: null, ...evidence };
+    // A lawyer's answer wins, but the classifier's own stays in the audit, so removing the override
+    // restores it and the record shows what the app itself found.
+    const override = overrides?.[key];
+    const overrideAnswer = override ? validOption(key, override.answer) : null;
+    if (overrideAnswer) {
+      entry = { ...entry, overriddenTo: overrideAnswer };
+      answer = overrideAnswer;
+    }
+    answers[key] = answer;
+    audit[key] = entry;
   }
   return { answers, audit };
 }

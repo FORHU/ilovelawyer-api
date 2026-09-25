@@ -8,18 +8,13 @@ import { FACTOR_DEFINITIONS, FACTOR_KEYS, RUBRIC, type FactorKey } from "./witne
  * Jev answers the seven fixed questions from the same case data, so each factor is one choice among
  * defined options with a confidence rather than the author model's impression. The score itself is
  * computed by witness-rubric.ts from those answers. One request per witness, all factors together.
- * Off unless USE_JEV_WITNESS=true — run scripts/jev-witness-benchmark.ts against lawyer-labelled
- * witnesses to set the floor below before relying on it.
+ * Always on: a Jev failure falls back to Chat Wonder's answers for that witness.
  */
 
-export function isWitnessJevEnabled(): boolean {
-  return process.env.USE_JEV_WITNESS === "true";
-}
-
-/** Below this an answer is treated as not assessable rather than counted. Not assessable lowers the
- * coverage shown next to the score; a low-confidence guess would move the score itself, so the
- * cautious side is to leave it out. Provisional — re-set from the witness benchmark. */
-export const FACTOR_MIN_CONFIDENCE = 0.6;
+/** Below this an answer still counts, but is flagged for the lawyer to check. Dropping answers at a
+ * confidence cutoff made scores move between runs, because answers near the line flipped in and
+ * out; Jev's choices themselves were identical every time. Provisional, not yet benchmarked. */
+export const FACTOR_REVIEW_CONFIDENCE = 0.6;
 
 /** The extra option every question carries, so "the papers don't say" is an answer, not a guess. */
 export const NOT_SHOWN = "NOT_SHOWN";
@@ -37,8 +32,9 @@ export interface JevFactorAnswer {
   /** Null when Jev said NOT_SHOWN, or was below the confidence floor, or gave an unknown option. */
   answer: string | null;
   confidence: number;
-  /** Jev's own answer before the floor, kept so a floor-triggered drop is visible in the audit. */
   rawAnswer: string | null;
+  /** True when the answer counts but Jev was below FACTOR_REVIEW_CONFIDENCE, so the lawyer should check it. */
+  lowConfidence: boolean;
 }
 
 export type JevFactors = Record<FactorKey, JevFactorAnswer>;
@@ -52,14 +48,15 @@ function questionText(key: FactorKey): string {
   return `Reading only \`state\`, about \`witness\`: ${def.question} Answer from what the documents actually say, not from an impression of the witness.\n${options}`;
 }
 
-/** Applies the floor and maps NOT_SHOWN / unknown options to null. Exported for testing. */
+/** Maps NOT_SHOWN / unknown options to null and flags a low-confidence answer. Exported for testing. */
 export function normalizeJevAnswer(key: FactorKey, raw: unknown, confidence: number): JevFactorAnswer {
   const value = typeof raw === "string" ? raw : null;
   const known = value !== null && Object.prototype.hasOwnProperty.call(RUBRIC[key].options, value);
   return {
-    answer: known && confidence >= FACTOR_MIN_CONFIDENCE ? value : null,
+    answer: known ? value : null,
     confidence,
     rawAnswer: value,
+    lowConfidence: known && confidence < FACTOR_REVIEW_CONFIDENCE,
   };
 }
 

@@ -80,6 +80,28 @@ export default class WitnessRepo {
     });
   }
 
+  /** Writes a recompute after a lawyer's factor override: the derived score fields and the overrides. */
+  static async saveRecompute(
+    id: string,
+    caseId: string,
+    data: {
+      aiCredibility: number | null;
+      aiSuggestedStatus: WitnessStatusInput;
+      aiFactors: unknown;
+      factorOverrides: unknown;
+    },
+  ) {
+    return prisma.witness.updateMany({
+      where: { id, caseId },
+      data: {
+        aiCredibility: data.aiCredibility,
+        aiSuggestedStatus: data.aiSuggestedStatus,
+        aiFactors: data.aiFactors as Prisma.InputJsonValue,
+        factorOverrides: (data.factorOverrides ?? Prisma.DbNull) as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   static async delete(id: string, caseId: string) {
     const result = await prisma.witness.deleteMany({ where: { id, caseId } });
     return result.count > 0;

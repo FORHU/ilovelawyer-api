@@ -204,6 +204,12 @@ export const updateWitnessSchema = Joi.object({
   notes: Joi.string().allow("").optional(),
 }).min(1);
 
+export const witnessFactorSchema = Joi.object({
+  // null clears the lawyer's answer, which restores what the app itself found.
+  answer: Joi.string().max(40).allow(null).required(),
+  note: Joi.string().max(500).allow("").default(""),
+});
+
 export const createDamageSchema = Joi.object({
   category: Joi.string()
     .valid(...DAMAGE_CATEGORIES)

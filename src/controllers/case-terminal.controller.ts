@@ -50,6 +50,7 @@ import {
   updateFindingSchema,
   createWitnessSchema,
   updateWitnessSchema,
+  witnessFactorSchema,
   updateContradictionSchema,
   createDamageSchema,
   updateDamageSchema,
@@ -374,6 +375,20 @@ export default class CaseTerminalCtrl {
     const { error, value } = updateWitnessSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await WitnessSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async setWitnessFactor(req: Request, res: Response) {
+    const { error, value } = witnessFactorSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await WitnessScoringSvc.setFactorOverride(
+      req.params.caseId,
+      req.params.id,
+      req.user.userId,
+      req.params.factor,
+      value.answer,
+      value.note,
+    );
     return res.status(200).json(result);
   }
 

@@ -88,6 +88,7 @@ router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
 router.post("/:caseId/witnesses/score", asyncHandler(CaseTerminalCtrl.scoreWitnesses));
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
+router.patch("/:caseId/witnesses/:id/factors/:factor", asyncHandler(CaseTerminalCtrl.setWitnessFactor));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
 
 router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
