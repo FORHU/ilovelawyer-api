@@ -5,7 +5,7 @@ import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import AiGenerationQueue from "../queues/ai-generation.queue";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { expandCaseMindMapNodeSchema, revertCaseMindMapSchema } from "../validation/chat.validation";
+import { editCaseMindMapNodeSchema, expandCaseMindMapNodeSchema, revertCaseMindMapSchema } from "../validation/chat.validation";
 
 /** The case's document-built mind map (CaseMindMapSvc) — what Studio's Mind Map panel shows.
  * The chat-generated per-consultation maps have their own endpoints under /chat/consultations. */
@@ -36,6 +36,14 @@ export default class CaseMindMapCtrl {
       nodeId: value.nodeId,
       count: value.count,
     });
+    return res.status(200).json(result);
+  }
+
+  /** PATCH /api/my-cases/:caseId/mind-map — a manual rename / add / delete (MindMapSvc.editCaseNode). */
+  static async edit(req: Request, res: Response) {
+    const { error, value } = editCaseMindMapNodeSchema.validate(req.body, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+    const result = await MindMapSvc.editCaseNode({ userId: req.user.userId, caseId: req.params.caseId, edit: value });
     return res.status(200).json(result);
   }
 

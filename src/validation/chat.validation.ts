@@ -46,7 +46,19 @@ export const revertMindMapSchema = Joi.object({
   version: Joi.number().integer().min(1).optional(),
 });
 
-// The same two actions on the case's document-built map (CaseMindMapCtrl) — no messageId, a case
+// A manual edit on a map (MindMapSvc.editNode): rename a node, add a point under it, or delete it.
+const mindMapLabel = Joi.string().trim().min(1).max(120);
+const mindMapDescription = Joi.string().trim().allow("").max(2000);
+export const editMindMapNodeSchema = Joi.object({
+  messageId: Joi.string().guid().optional(),
+  op: Joi.string().valid("add", "rename", "delete").required(),
+  nodeId: Joi.string().trim().min(1).max(200).required(),
+  label: Joi.when("op", { is: "delete", then: Joi.forbidden(), otherwise: mindMapLabel.required() }),
+  description: Joi.when("op", { is: "delete", then: Joi.forbidden(), otherwise: mindMapDescription.optional() }),
+});
+
+// The same actions on the case's document-built map (CaseMindMapCtrl) — no messageId, a case
 // has exactly one.
 export const expandCaseMindMapNodeSchema = expandMindMapNodeSchema.fork(["messageId"], (s) => s.forbidden());
 export const revertCaseMindMapSchema = revertMindMapSchema.fork(["messageId"], (s) => s.forbidden());
+export const editCaseMindMapNodeSchema = editMindMapNodeSchema.fork(["messageId"], (s) => s.forbidden());

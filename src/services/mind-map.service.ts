@@ -11,8 +11,10 @@ import { MindMapItem, normalizeMindMap } from "../utils/response-parser";
 import {
   appendMindMapChildren,
   countMindMapNodes,
+  deleteMindMapNode,
   findMindMapNode,
   parseExpandedChildren,
+  renameMindMapNode,
 } from "../utils/mind-map-tree";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DocumentChunkSvc from "./document-chunk.service";
@@ -63,7 +65,17 @@ export interface MindMapChange {
   version: number;
   mindMap: MindMapItem;
   expandedNodeId?: string;
+  /** Edits only — the node that was renamed, the new child that was added, or (delete) the
+   * parent the removed node sat under. */
+  editedNodeId?: string;
 }
+
+/** A lawyer's own change to a map (Studio/chat detail panel). `nodeId` is the node acted on —
+ * for "add", the parent the new point goes under. */
+export type MindMapEdit =
+  | { op: "add"; nodeId: string; label: string; description?: string }
+  | { op: "rename"; nodeId: string; label: string; description?: string }
+  | { op: "delete"; nodeId: string };
 
 const STALE_MESSAGE = "The mind map changed since you last loaded it";
 
@@ -227,6 +239,67 @@ export default class MindMapSvc {
       });
       return { kind: ref.kind, caseId, messageId: ref.messageId, expandedNodeId: nodeId, version: saved.version, mindMap: saved.mindMap };
     });
+  }
+
+  /** A manual edit on a consultation's map. */
+  static async editNode(t: ConsultationTarget & { edit: MindMapEdit }): Promise<MindMapChange> {
+    return MindMapSvc.editOnMap(await MindMapSvc.loadConsultationMap(t), t.userId, t.edit);
+  }
+
+  /** A manual edit on the case's map. Like an expand, it keeps the post-upload refresh from
+   * rebuilding over the map (CaseMindMapSvc skips a map with user changes). */
+  static async editCaseNode(t: CaseTarget & { edit: MindMapEdit }): Promise<MindMapChange> {
+    return MindMapSvc.editOnMap(await MindMapSvc.loadCaseMap(t), t.userId, t.edit);
+  }
+
+  /**
+   * Applies one edit and saves it as a `reason: "edit"` revision, so Undo steps back over it
+   * exactly like an expand. Same fixed-shape rules as expand: nothing is done to the root, the
+   * five first-level branches can't be deleted, and "add" respects MIND_MAP_LIMITS.
+   */
+  private static async editOnMap(ref: MapRef, userId: string, change: MindMapEdit): Promise<MindMapChange> {
+    const found = findMindMapNode(MindMapSvc.normalized(ref.data), change.nodeId);
+    if (!found) throw new HttpError("Node not found on this mind map", 404);
+    if (found.node.isRoot) throw new HttpError("The map's root can't be edited", 400);
+    if (change.op === "delete" && (found.node.depth ?? 0) <= 1) {
+      throw new HttpError("The map's top-level branches are fixed and can't be deleted", 400);
+    }
+    const nodeId = found.node.id;
+
+    let editedNodeId = nodeId;
+    const saved = await MindMapSvc.saveWithRetry(ref, (latestTree) => {
+      const target = findMindMapNode(latestTree, nodeId);
+      if (!target) throw new HttpError("This node was removed by someone else", 409);
+      if (change.op === "rename") {
+        return renameMindMapNode(latestTree, nodeId, { label: change.label, description: change.description });
+      }
+      if (change.op === "delete") {
+        editedNodeId = target.parent!.id;
+        return deleteMindMapNode(latestTree, nodeId);
+      }
+      MindMapSvc.roomFor(latestTree, target.node, 1);
+      const next = appendMindMapChildren(latestTree, nodeId, [
+        change.description ? { label: change.label, description: change.description } : { label: change.label },
+      ]);
+      const parent = next ? findMindMapNode(next, nodeId) : null;
+      editedNodeId = parent?.node.children[parent.node.children.length - 1]?.id ?? nodeId;
+      return next;
+    }, { reason: "edit", nodeId, userId });
+
+    await OrganizationRepo.writeAudit({
+      caseId: ref.caseId,
+      actorId: userId,
+      action: "mindMap.edit",
+      payload: { kind: ref.kind, messageId: ref.messageId, op: change.op, nodeId, version: saved.version },
+    });
+    return {
+      kind: ref.kind,
+      caseId: ref.caseId,
+      messageId: ref.messageId,
+      version: saved.version,
+      mindMap: saved.mindMap,
+      editedNodeId,
+    };
   }
 
   /** Steps the map back one version. `expectedVersion`, when the client sends it, makes a stale

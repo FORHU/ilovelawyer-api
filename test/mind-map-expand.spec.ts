@@ -21,6 +21,7 @@ import DocumentChunkSvc from "../src/services/document-chunk.service";
 import MindMapSvc from "../src/services/mind-map.service";
 import { MindMapItem, normalizeMindMap } from "../src/utils/response-parser";
 import { findMindMapNode } from "../src/utils/mind-map-tree";
+import { editMindMapNodeSchema } from "../src/validation/chat.validation";
 
 const legacyMap = {
   id: "r",
@@ -262,5 +263,57 @@ describe("Mind map expand", () => {
     );
     expect((row.data as MindMapItem).children).to.not.equal(undefined);
     expect(row.version).to.equal(2);
+  });
+
+  describe("manual edits", () => {
+    it("renames a node and saves it as an edit revision", async () => {
+      const result = await MindMapSvc.editNode({ ...target, edit: { op: "rename", nodeId: "legalBasis.1", label: "Breach of the note" } });
+      expect(result.editedNodeId).to.equal("legalBasis.1");
+      expect(findMindMapNode(result.mindMap, "legalBasis.1")!.node.label).to.equal("Breach of the note");
+      expect(revisions.map((r) => r.reason)).to.deep.equal(["generate", "edit"]);
+      expect(audits).to.deep.equal(["mindMap.edit"]);
+      expect(prompts).to.have.length(0);
+    });
+
+    it("adds a point and returns the new child's id", async () => {
+      const result = await MindMapSvc.editNode({ ...target, edit: { op: "add", nodeId: "keyFacts", label: "Loan of PHP 500,000" } });
+      expect(result.editedNodeId).to.equal("keyFacts.1");
+      expect(findMindMapNode(result.mindMap, "keyFacts.1")!.node.label).to.equal("Loan of PHP 500,000");
+    });
+
+    it("deletes a point, returning its parent", async () => {
+      const result = await MindMapSvc.editNode({ ...target, edit: { op: "delete", nodeId: "legalBasis.1" } });
+      expect(result.editedNodeId).to.equal("legalBasis");
+      expect(findMindMapNode(result.mindMap, "legalBasis")!.node.children).to.deep.equal([]);
+    });
+
+    it("refuses to delete a top-level branch or edit the root", async () => {
+      for (const edit of [
+        { op: "delete" as const, nodeId: "legalBasis" },
+        { op: "rename" as const, nodeId: "root", label: "x" },
+      ]) {
+        await MindMapSvc.editNode({ ...target, edit }).then(
+          () => expect.fail("expected a 400"),
+          (err) => expect(err.statusCode).to.equal(400),
+        );
+      }
+    });
+
+    it("refuses to add past the node cap", async () => {
+      const full: any = { label: "Case", children: [{ label: "Legal Basis", children: [] }] };
+      for (let i = 0; i < 148; i++) full.children.push({ label: `n${i}`, children: [] });
+      row = { ...row, data: full };
+      await MindMapSvc.editNode({ ...target, edit: { op: "add", nodeId: "legalBasis", label: "One more" } }).then(
+        () => expect.fail("expected a 422"),
+        (err) => expect(err.code).to.equal("MAX_NODES"),
+      );
+    });
+
+    it("validates the request per op", () => {
+      expect(editMindMapNodeSchema.validate({ op: "rename", nodeId: "a.1" }).error).to.not.equal(undefined);
+      expect(editMindMapNodeSchema.validate({ op: "delete", nodeId: "a.1", label: "x" }).error).to.not.equal(undefined);
+      expect(editMindMapNodeSchema.validate({ op: "add", nodeId: "a", label: " Point ", description: "" }).value.label).to.equal("Point");
+      expect(editMindMapNodeSchema.validate({ op: "move", nodeId: "a" }).error).to.not.equal(undefined);
+    });
   });
 });

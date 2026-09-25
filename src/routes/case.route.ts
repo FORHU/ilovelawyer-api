@@ -43,6 +43,7 @@ router.get("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.listTimeline));
 router.post("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.createTimeline));
 router.post("/:caseId/timeline/generate", asyncHandler(CaseTerminalCtrl.generateTimeline));
 router.get("/:caseId/mind-map", asyncHandler(CaseMindMapCtrl.get));
+router.patch("/:caseId/mind-map", asyncHandler(CaseMindMapCtrl.edit));
 router.post("/:caseId/mind-map/generate", asyncHandler(CaseMindMapCtrl.generate));
 router.post("/:caseId/mind-map/expand", asyncHandler(CaseMindMapCtrl.expand));
 router.post("/:caseId/mind-map/revert", asyncHandler(CaseMindMapCtrl.revert));

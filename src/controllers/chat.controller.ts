@@ -12,6 +12,7 @@ import {
   sendMessageSchema,
   expandMindMapNodeSchema,
   revertMindMapSchema,
+  editMindMapNodeSchema,
 } from "../validation/chat.validation";
 
 export default class ChatCtrl {
@@ -163,6 +164,20 @@ export default class ChatCtrl {
       messageId: value.messageId,
       nodeId: value.nodeId,
       count: value.count,
+    });
+    return res.status(200).json(result);
+  }
+
+  static async editMindMapNode(req: Request, res: Response) {
+    const { error, value } = editMindMapNodeSchema.validate(req.body, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+    const { messageId, ...edit } = value;
+    const result = await MindMapSvc.editNode({
+      organizationId: req.organization!.id,
+      userId: req.user.userId,
+      consultationId: req.params.consultationId,
+      messageId,
+      edit,
     });
     return res.status(200).json(result);
   }

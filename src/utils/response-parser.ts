@@ -163,21 +163,71 @@ function toMindMapNode(src: any, id: string, depth: number): MindMapItem {
   return node;
 }
 
+/** A child's number under its parent when its id is already `<prefix><n>` (a path id from an
+ * earlier normalize), else null. */
+function keptNumber(id: unknown, prefix: string): number | null {
+  if (typeof id !== "string" || !id.startsWith(prefix)) return null;
+  const rest = id.slice(prefix.length);
+  return /^[1-9]\d*$/.test(rest) ? Number(rest) : null;
+}
+
+/**
+ * Ids for one sibling group. A child that already carries a valid, unclaimed path id keeps it —
+ * so deleting a node (MindMapSvc.editNode) doesn't renumber the siblings after it, which would
+ * move collapse state and in-flight expands onto the wrong node. When nothing in the group has
+ * one yet (a fresh model tree), ids follow position; otherwise new children take the next number
+ * after the highest one kept.
+ */
+function childIds(parentId: string, kids: any[], depth: number): string[] {
+  if (depth === 0) {
+    const used = new Set<string>();
+    const kept = kids.map((kid) => {
+      const fixed = fixedBranchId(kid);
+      const id = fixed ?? (keptNumber(kid.id, "b") !== null ? kid.id : null);
+      if (!id || used.has(id)) return null;
+      used.add(id);
+      return id as string;
+    });
+    let next = Math.max(0, ...[...used].map((id) => keptNumber(id, "b") ?? 0)) + 1;
+    return kept.map((id, i) => {
+      if (id) return id;
+      const positional = `b${i + 1}`;
+      if (!used.has(positional)) {
+        used.add(positional);
+        return positional;
+      }
+      while (used.has(`b${next}`)) next++;
+      used.add(`b${next}`);
+      return `b${next}`;
+    });
+  }
+  const prefix = `${parentId}.`;
+  const used = new Set<number>();
+  const kept = kids.map((kid) => {
+    const n = keptNumber(kid.id, prefix);
+    if (n === null || used.has(n)) return null;
+    used.add(n);
+    return n;
+  });
+  if (used.size === 0) return kids.map((_, i) => `${prefix}${i + 1}`);
+  let next = Math.max(...used) + 1;
+  return kept.map((n) => `${prefix}${n ?? next++}`);
+}
+
 /**
  * Rebuilds the tree with stable, path-based ids and enforces MIND_MAP_LIMITS.
  *
  * Model-chosen ids change on every generation, which reset collapse state and would leave
  * nothing for a per-node action to point at. Instead: `root`; the five fixed first-level
  * branches by name (`legalBasis`, `keyFacts`, …), any other first-level node `b<n>`; everything
- * deeper `<parent id>.<n>` (`legalBasis.1.2`). Walks breadth-first, so when the tree is over
- * the node cap it's the deepest/last nodes that go and every kept level stays complete; a node
- * that lost children is marked `hasMore`.
+ * deeper `<parent id>.<n>` (`legalBasis.1.2`) — see childIds for how existing ids survive edits.
+ * Walks breadth-first, so when the tree is over the node cap it's the deepest/last nodes that go
+ * and every kept level stays complete; a node that lost children is marked `hasMore`.
  */
 function canonicalizeMindMap(tree: any): { root: MindMapItem; trimmed: number } {
   const { maxDepth, maxNodes } = MIND_MAP_LIMITS;
   const root = toMindMapNode(tree, "root", 0);
   const queue: { src: any; node: MindMapItem }[] = [{ src: tree, node: root }];
-  const usedTopIds = new Set<string>();
   let count = 1;
   let trimmed = 0;
 
@@ -192,21 +242,14 @@ function canonicalizeMindMap(tree: any): { root: MindMapItem; trimmed: number } 
       }
       continue;
     }
+    const ids = childIds(node.id, kids, depth);
     for (let i = 0; i < kids.length; i++) {
       if (count >= maxNodes) {
         node.hasMore = true;
         trimmed += kids.slice(i).reduce((n, kid) => n + subtreeSize(kid), 0);
         break;
       }
-      let id: string;
-      if (depth === 0) {
-        const fixed = fixedBranchId(kids[i]);
-        id = fixed && !usedTopIds.has(fixed) ? fixed : `b${i + 1}`;
-        usedTopIds.add(id);
-      } else {
-        id = `${node.id}.${i + 1}`;
-      }
-      const child = toMindMapNode(kids[i], id, depth + 1);
+      const child = toMindMapNode(kids[i], ids[i], depth + 1);
       node.children.push(child);
       queue.push({ src: kids[i], node: child });
       count++;

@@ -86,3 +86,32 @@ export function appendMindMapChildren(root: MindMapItem, nodeId: string, childre
   // anything over MIND_MAP_LIMITS — MindMapSvc already capped `children` so nothing is cut here.
   return normalizeMindMap(copy) ?? null;
 }
+
+/** Returns a new normalized tree with the node's label (and, when given, description — "" clears
+ * it) replaced. Doesn't mutate `root`; null if the node isn't in this tree. */
+export function renameMindMapNode(
+  root: MindMapItem,
+  nodeId: string,
+  change: { label: string; description?: string },
+): MindMapItem | null {
+  const copy: MindMapItem = JSON.parse(JSON.stringify(root));
+  const found = findMindMapNode(copy, nodeId);
+  if (!found) return null;
+  found.node.label = change.label;
+  if (change.description !== undefined) {
+    if (change.description) found.node.description = change.description;
+    else delete found.node.description;
+  }
+  return normalizeMindMap(copy) ?? null;
+}
+
+/** Returns a new normalized tree without the node and everything under it. Siblings keep their
+ * ids (see childIds in response-parser.ts). Doesn't mutate `root`; null if the node isn't in this
+ * tree or is the root. */
+export function deleteMindMapNode(root: MindMapItem, nodeId: string): MindMapItem | null {
+  const copy: MindMapItem = JSON.parse(JSON.stringify(root));
+  const found = findMindMapNode(copy, nodeId);
+  if (!found?.parent) return null;
+  found.parent.children = found.parent.children.filter((c) => c !== found.node);
+  return normalizeMindMap(copy) ?? null;
+}

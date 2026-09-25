@@ -4,8 +4,10 @@ import { normalizeMindMap, MindMapItem } from "../src/utils/response-parser";
 import {
   appendMindMapChildren,
   countMindMapNodes,
+  deleteMindMapNode,
   findMindMapNode,
   parseExpandedChildren,
+  renameMindMapNode,
 } from "../src/utils/mind-map-tree";
 import MindMapSvc from "../src/services/mind-map.service";
 import { MIND_MAP_LIMITS } from "../src/constants/mind-map-limits.constants";
@@ -137,6 +139,40 @@ describe("mind-map-tree", () => {
       expect(() => MindMapSvc.roomFor(map, node, 3))
         .to.throw()
         .with.property("code", "MAX_DEPTH");
+    });
+  });
+
+  describe("edits keep ids stable", () => {
+    const withThree = appendMindMapChildren(map, "legalBasis", [{ label: "Estoppel" }])!; // legalBasis.1..3
+
+    it("deleting a node doesn't renumber the siblings after it", () => {
+      const next = deleteMindMapNode(withThree, "legalBasis.2")!;
+      expect(findMindMapNode(next, "legalBasis")!.node.children.map((c) => [c.id, c.label])).to.deep.equal([
+        ["legalBasis.1", "Art. 1170 breach"],
+        ["legalBasis.3", "Estoppel"],
+      ]);
+    });
+
+    it("a point added after a delete takes the next number, not the gap", () => {
+      const next = appendMindMapChildren(deleteMindMapNode(withThree, "legalBasis.2")!, "legalBasis", [{ label: "Laches" }])!;
+      expect(findMindMapNode(next, "legalBasis.4")!.node.label).to.equal("Laches");
+      expect(findMindMapNode(next, "legalBasis.2")).to.equal(null);
+    });
+
+    it("deleting removes the whole subtree and refuses the root", () => {
+      const deep = appendMindMapChildren(map, "keyFacts.1", [{ label: "Notarised" }])!;
+      const next = deleteMindMapNode(deep, "keyFacts.1")!;
+      expect(findMindMapNode(next, "keyFacts.1.1")).to.equal(null);
+      expect(countMindMapNodes(next)).to.equal(countMindMapNodes(map) - 1);
+      expect(deleteMindMapNode(map, "root")).to.equal(null);
+    });
+
+    it("renames, and an empty description clears it", () => {
+      const described = renameMindMapNode(map, "legalBasis.1", { label: "Breach of contract", description: "Art. 1170" })!;
+      expect(findMindMapNode(described, "legalBasis.1")!.node).to.include({ label: "Breach of contract", description: "Art. 1170" });
+      const cleared = renameMindMapNode(described, "legalBasis.1", { label: "Breach", description: "" })!;
+      expect(findMindMapNode(cleared, "legalBasis.1")!.node.description).to.equal(undefined);
+      expect(renameMindMapNode(map, "nope", { label: "x" })).to.equal(null);
     });
   });
 });
