@@ -17,6 +17,9 @@ export function isTagAllowed(category: FindingCategory, tag: FindingTag): boolea
   return FINDING_TAGS_BY_CATEGORY[category].includes(tag);
 }
 
+/** Tags only the lawyer sets — never taken from the drafting model or derived by Jev. */
+export const WORKFLOW_TAGS: readonly FindingTag[] = ["BRIEFING", "RESOLVED", "CLOSED"];
+
 export function buildCaseFindingPrompt(docs: { id: string; name: string }[]): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
 
@@ -67,6 +70,9 @@ Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. 
 - "detail": who bears the burden on this issue and on what, in one line (max 160 characters) — e.g. "Employer bears the burden of proving just cause".
 - "burden": which side bears that burden — "CLAIMANT" (the party that brought the case: complainant, petitioner or plaintiff), "RESPONDENT" (the party defending it), "SHARED", or null if the documents don't say enough to tell.
 - "status": "CONTESTED" if the documents show the parties taking opposing positions on this issue, otherwise "OPEN".
+[WEAKNESSES] objects also carry two more fields:
+- "detail": the concrete work that would close this weakness, in one line (max 160 characters) — e.g. "Obtain the certified payroll for 4–8 August". null if nothing in the documents suggests a fix.
+- "status": "MATERIAL" if the other side could use it to defeat a claim or an element of one, otherwise "MINOR".
 If none: leave the array empty.
 `;
 }

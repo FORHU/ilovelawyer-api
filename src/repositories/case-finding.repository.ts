@@ -51,10 +51,14 @@ export default class CaseFindingRepo {
     return prisma.caseFinding.update({ where: { id }, data });
   }
 
-  /** Stores an on-demand Jev check. Leaves tag/impact alone — Jev never overrides a pill the
-   * lawyer may have chosen; the panel shows its read beside it instead. */
-  static async setJevCheck(id: string, check: Prisma.InputJsonValue) {
-    return prisma.caseFinding.update({ where: { id }, data: { jev: check, jevCheckedAt: new Date() } });
+  /** Stores an on-demand Jev check, and the impact number when the category has one. Leaves the
+   * tag alone — Jev never overrides a pill the lawyer may have chosen; the panel shows its read
+   * beside it instead. */
+  static async setJevCheck(id: string, check: Prisma.InputJsonValue, impact?: number) {
+    return prisma.caseFinding.update({
+      where: { id },
+      data: { jev: check, jevCheckedAt: new Date(), ...(impact !== undefined ? { impact } : {}) },
+    });
   }
 
   static async delete(id: string, caseId: string) {
