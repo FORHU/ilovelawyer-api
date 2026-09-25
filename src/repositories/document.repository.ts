@@ -89,6 +89,20 @@ export default class DocumentRepo {
 
   /** Unscoped by organizationId — used internally by case-level services (refresh, strategy,
    * snapshot, evidence intelligence) that already resolved case access themselves. */
+  /** READY case documents WitnessExtractSvc hasn't read yet, oldest first. */
+  static async listPendingWitnessExtraction(caseId: string) {
+    return prisma.document.findMany({
+      where: { caseId, ragStatus: "READY", witnessesExtractedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true },
+    });
+  }
+
+  static async markWitnessesExtracted(ids: string[]) {
+    if (!ids.length) return;
+    await prisma.document.updateMany({ where: { id: { in: ids } }, data: { witnessesExtractedAt: new Date() } });
+  }
+
   static async listAllByCase(caseId: string) {
     return prisma.document.findMany({
       where: { caseId },

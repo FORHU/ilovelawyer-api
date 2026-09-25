@@ -113,6 +113,14 @@ export default class CaseRepo {
     return prisma.case.findUnique({ where: { id }, select: { language: true } });
   }
 
+  /** Unscoped, same as findLanguage — the case header a background AI prompt opens with. */
+  static async findPromptHeader(id: string) {
+    return prisma.case.findUnique({
+      where: { id },
+      select: { caseName: true, actionType: true, jurisdiction: true, ukJurisdiction: true },
+    });
+  }
+
   static async update(id: string, organizationId: string, data: CaseData) {
     const { parties, ...caseFields } = data;
 

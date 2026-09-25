@@ -171,6 +171,35 @@ export default class DocumentChunkRepo {
    * initial call uses the default (rank 1..perDocumentFloor); a follow-up "load more relevant
    * chunks" call passes `startRank = perDocumentFloor + 1` (etc.) to fetch the next slice
    * per document instead of re-returning the same top chunks. */
+  /**
+   * For each of `chunkIds`, its `perChunk` most similar other chunks among the same set with
+   * cosine similarity >= `minSimilarity` — pairs of passages likely about the same thing. Computed
+   * in Postgres (never pulls embeddings into JS); the set is the few hundred chunks that contain
+   * a fact, so the self-join stays small. Each unordered pair may appear from both sides.
+   */
+  static async findSimilarChunkPairs(
+    chunkIds: string[],
+    minSimilarity: number,
+    perChunk: number,
+    client: DbClient = prisma,
+  ): Promise<{ a: string; b: string; similarity: number }[]> {
+    if (chunkIds.length < 2) return [];
+    return client.$queryRaw<{ a: string; b: string; similarity: number }[]>`
+      WITH pairs AS (
+        SELECT x.id AS a, y.id AS b, 1 - (x.embedding <=> y.embedding) AS similarity
+        FROM "CaseDocumentChunk" x
+        JOIN "CaseDocumentChunk" y ON x.id <> y.id
+        WHERE x.id = ANY(${chunkIds}) AND y.id = ANY(${chunkIds})
+          AND x.embedding IS NOT NULL AND y.embedding IS NOT NULL
+      ), ranked AS (
+        SELECT a, b, similarity, ROW_NUMBER() OVER (PARTITION BY a ORDER BY similarity DESC) AS rn
+        FROM pairs
+        WHERE similarity >= ${minSimilarity}
+      )
+      SELECT a, b, similarity::float8 AS similarity FROM ranked WHERE rn <= ${perChunk}
+    `;
+  }
+
   static async findRelevantByCase(
     caseId: string,
     queryEmbedding: number[],

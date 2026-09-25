@@ -56,6 +56,7 @@ router.put("/:caseId/evidence/matrix/:documentId", asyncHandler(CaseTerminalCtrl
 router.post("/:caseId/evidence/matrix/:documentId/custody", asyncHandler(CaseTerminalCtrl.addCustodyEvent));
 router.delete("/:caseId/evidence/matrix/:documentId/custody/:eventId", asyncHandler(CaseTerminalCtrl.deleteCustodyEvent));
 router.post("/:caseId/evidence/contradictions/scan", asyncHandler(CaseTerminalCtrl.scanContradictions));
+router.patch("/:caseId/evidence/contradictions/:id", asyncHandler(CaseTerminalCtrl.updateContradiction));
 router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl.traces));
 
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
@@ -85,6 +86,7 @@ router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFindi
 
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
+router.post("/:caseId/witnesses/score", asyncHandler(CaseTerminalCtrl.scoreWitnesses));
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
 

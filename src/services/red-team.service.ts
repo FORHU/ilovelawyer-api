@@ -4,6 +4,9 @@ import RedTeamRepo from "../repositories/red-team.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getRedTeamPromptBuilder } from "../legal/prompt-registry";
 import { extractRedTeamClaims } from "../utils/red-team-claims-parse";
+import { extractRedTeamArguments, RedTeamSourceItem } from "../utils/red-team-arguments-parse";
+import { RedTeamPromptData } from "../constants/red-team.constants";
+import { isRedTeamJevEnabled, verifyRedTeamArgumentsWithJev, RedTeamJevContext } from "../utils/red-team-jev";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -25,6 +28,39 @@ function truncateGracefully(text: string, max: number): string {
   return `${safe}\n\n*(Response truncated — exceeded the display limit. Regenerate for a fresh attempt.)*`;
 }
 
+/** Every case item the prompt shows the model, as the citable sources for [ARGUMENTS]. */
+function sourceItems(data: RedTeamPromptData): RedTeamSourceItem[] {
+  return [
+    ...data.legalIssues.map((label) => ({ kind: "LEGAL_ISSUE" as const, label })),
+    ...data.weaknesses.map((label) => ({ kind: "WEAKNESS" as const, label })),
+    ...data.contradictions.flatMap((c) => [
+      { kind: "CONTRADICTION" as const, label: c.leftExcerpt },
+      { kind: "CONTRADICTION" as const, label: c.rightExcerpt },
+    ]),
+    ...data.timeline.map((t) => ({ kind: "TIMELINE" as const, label: t.title })),
+    ...data.documents.map((d) => ({ kind: "DOCUMENT" as const, label: d.name })),
+    ...data.witnesses.map((w) => ({ kind: "WITNESS" as const, label: w.name })),
+    ...data.damages.filter((d) => d.description).map((d) => ({ kind: "DAMAGE" as const, label: d.description! })),
+    ...data.parties.map((p) => ({ kind: "PARTY" as const, label: p.name })),
+  ];
+}
+
+/** The same case data the prompt showed the author model, as the state Jev judges against. */
+export function jevContext(data: RedTeamPromptData, opponent: string | null): RedTeamJevContext {
+  return {
+    opponent,
+    legalIssues: data.legalIssues,
+    weaknesses: data.weaknesses,
+    contradictions: data.contradictions.map((c) => `"${c.leftExcerpt}" vs "${c.rightExcerpt}"`),
+    timeline: data.timeline.map((t) => {
+      const d = t.occurredOn ? new Date(t.occurredOn) : null;
+      return `${d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : "undated"} — ${t.title}`;
+    }),
+    witnesses: data.witnesses.map((w) => (w.role ? `${w.name} (${w.role})` : w.name)),
+    parties: data.parties.map((p) => `${p.name} (${p.designation})`),
+  };
+}
+
 function cleanContent(text: string): string {
   const stripped = text
     .replace(/__END__$/g, "")
@@ -35,6 +71,9 @@ function cleanContent(text: string): string {
     // reads the assessment prose, never the raw attribution JSON.
     .replace(/\[CLAIMS\][\s\S]*?\[\/CLAIMS\]/gi, "")
     .replace(/\[CLAIMS\][\s\S]*$/gi, "")
+    // Same for [ARGUMENTS] (extractRedTeamArguments) — rendered as the ranked list, not as text.
+    .replace(/\[ARGUMENTS\][\s\S]*?\[\/ARGUMENTS\]/gi, "")
+    .replace(/\[ARGUMENTS\][\s\S]*$/gi, "")
     .trim();
   return truncateGracefully(stripped, MAX_CONTENT_CHARS);
 }
@@ -63,16 +102,15 @@ export default class RedTeamSvc {
     await AiGenerationLockSvc.finishWith(caseId, "redTeam", () => RedTeamSvc.generateInner(caseId, userId));
   }
 
-  private static async generateInner(caseId: string, userId: string) {
-    const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+  /** The case data the red-team prompt is built from — also what Jev judges against, and what
+   * scripts/jev-red-team-benchmark.ts --harvest snapshots, so all three see the same input. */
+  static async promptDataFor(caseId: string, userId: string): Promise<RedTeamPromptData> {
     const snapshot = await CaseSnapshotSvc.get(caseId, userId);
-
-    const buildRedTeamPrompt = getRedTeamPromptBuilder(tenantCode);
-    const prompt = buildRedTeamPrompt({
+    return {
       caseName: snapshot.case.caseName,
       actionType: snapshot.case.actionType,
       // Case.jurisdiction is the case's own free-text court/venue field — unrelated to the
-      // tenantCode above (which only selects which PH/UK prompt template to render).
+      // tenant code (which only selects which PH/UK prompt template to render).
       jurisdiction: snapshot.case.jurisdiction,
       // UK tenant only — read by buildUKRedTeamPrompt to pick England & Wales / Scotland /
       // Northern Ireland framing; ignored by the PH builder.
@@ -91,7 +129,14 @@ export default class RedTeamSvc {
       })),
       witnesses: snapshot.witnesses.map((w) => ({ name: w.name, role: w.role })),
       damages: snapshot.damages.map((d) => ({ category: d.category, description: d.description, amount: d.amount })),
-    });
+    };
+  }
+
+  private static async generateInner(caseId: string, userId: string) {
+    const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    const buildRedTeamPrompt = getRedTeamPromptBuilder(tenantCode);
+    const promptData = await RedTeamSvc.promptDataFor(caseId, userId);
+    const prompt = buildRedTeamPrompt(promptData);
 
     // A single blocking REST call (callChatWonderRest) waits for the entire response before
     // returning — a real 4-section threat assessment routinely takes long enough to generate
@@ -110,16 +155,27 @@ export default class RedTeamSvc {
 
     // Extracted from the raw reply before cleanContent strips the [CLAIMS] block out of it.
     const claims = extractRedTeamClaims(result.content);
+    let args = extractRedTeamArguments(
+      result.content,
+      sourceItems(promptData),
+      promptData.parties.map((p) => p.name),
+    );
+    // Jev re-rates the author model's own strength/impact against the case data (see red-team-jev.ts).
+    if (args && args.arguments.length > 0 && isRedTeamJevEnabled()) {
+      args = await verifyRedTeamArgumentsWithJev(args, jevContext(promptData, args.opponent));
+    }
 
     const content = cleanContent(result.content);
     logger.info("Chat Wonder red team assessment reply", {
       caseId,
       contentChars: content.length,
       claimCount: claims?.length ?? 0,
+      argumentCount: args?.arguments.length ?? null,
+      jevRated: isRedTeamJevEnabled(),
     });
     if (!content) throw new HttpError("Chat Wonder returned no assessment text", 502);
 
-    const row = await RedTeamRepo.upsert(caseId, content, claims);
+    const row = await RedTeamRepo.upsert(caseId, content, claims, args);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "redTeam.generate", payload: { id: row.id } });
     return row;
   }

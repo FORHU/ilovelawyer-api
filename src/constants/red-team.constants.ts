@@ -16,6 +16,25 @@ export interface RedTeamPromptData {
   damages: { category: string; description?: string | null; amount?: number | null }[];
 }
 
+/** Shared by the PH and UK red-team builders so the [ARGUMENTS] contract (parsed by
+ * red-team-arguments-parse.ts) can never drift between them. */
+export const RED_TEAM_ARGUMENTS_INSTRUCTIONS = `RANKED ARGUMENTS
+After the assessment above, also output an [ARGUMENTS] block: the opposing side's best arguments against the user's case, as JSON, so the lawyer can see at a glance which attacks matter most.
+- "opponent": the name of the opposing party exactly as written in [Parties] above, or null if you cannot tell which party is the opponent.
+- "riskOfLoss": the same "Risk of Total Loss" percentage (integer 0-100) you gave in section 4, or null if you gave none.
+- "arguments": 3 to 8 entries, one per distinct argument, each with:
+  - "title": the argument in at most 8 words (e.g. "AWOL from 4 August").
+  - "gist": at most 8 words on how it plays out (e.g. "Facially neutral just cause").
+  - "strength": "STRONG", "MODERATE" or "WEAK" — how likely the argument is to succeed for the opponent.
+  - "impact": an integer from -10 to 10 — how many points this argument moves the case toward the opponent if raised. Positive = it hurts the user; negative = it is likely to backfire on the opponent.
+  - "source": the exact text of the ONE item in [Legal Issues], [Evidence & Timeline], [Contradictions], [Weaknesses], [Witnesses], [Damages & Remedies] or [Parties] above that the argument rests on, copied verbatim. An argument whose source is not one of those items is discarded.
+  - "reasoning": one or two sentences on why the argument works or fails.
+If the case data is too thin to build any argument, return an empty "arguments" array.
+
+[ARGUMENTS]
+{"opponent": "...", "riskOfLoss": 25, "arguments": [{"title": "...", "gist": "...", "strength": "STRONG", "impact": 8, "source": "...", "reasoning": "..."}]}
+[/ARGUMENTS]`;
+
 function bulletList(items: string[]): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "(none recorded)";
 }
@@ -97,6 +116,8 @@ Attack the core [Legal Issues]. If the user relies on a specific Supreme Court d
 Review the [Damages & Remedies]. Ruthlessly evaluate the likelihood of the court awarding these amounts (e.g., strict proof required for Actual Damages, high bar for Exemplary Damages). Provide a deterministic "Risk of Total Loss" percentage (0-100%) and advise on the lowest settlement offer the user should accept to avoid a catastrophic loss at trial.
 
 If a section's underlying data is empty ("(none recorded)"), say so plainly rather than inventing content for it.
+
+${RED_TEAM_ARGUMENTS_INSTRUCTIONS}
 
 CLAIM ATTRIBUTION
 After the assessment above, also output a [CLAIMS] block: a JSON array classifying the load-bearing sentences you wrote, so a lawyer can see at a glance what's grounded in the case data above versus your own inference.

@@ -5,6 +5,7 @@
 // identical to the PH version (see ../../ph/prompts/red-team.prompt.ts) since both feed the same
 // downstream markdown renderer.
 import type { RedTeamPromptData } from "../../ph/prompts";
+import { RED_TEAM_ARGUMENTS_INSTRUCTIONS } from "../../../constants/red-team.constants";
 
 interface UKJurisdictionFraming {
   roleLabel: string;
@@ -147,6 +148,8 @@ Attack the core [Legal Issues]. If the user relies on a specific line of authori
 Review the [Damages & Remedies]. Ruthlessly evaluate the likelihood of the court awarding these amounts (e.g. ${framing.damagesNote}). Provide a deterministic "Risk of Total Loss" percentage (0-100%) and advise on the lowest settlement offer the user should accept to avoid a catastrophic loss at trial.
 
 If a section's underlying data is empty ("(none recorded)"), say so plainly rather than inventing content for it.
+
+${RED_TEAM_ARGUMENTS_INSTRUCTIONS}
 
 CLAIM ATTRIBUTION
 After the assessment above, also output a [CLAIMS] block: a JSON array classifying the load-bearing sentences you wrote, so a lawyer can see at a glance what's grounded in the case data above versus your own inference.
