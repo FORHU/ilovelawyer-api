@@ -98,3 +98,40 @@ describe("describeOverrides", () => {
     expect(recomputeFromStored(stored(), { E: ov("CONFIRMED") }, true).aiFactors.overrideList).to.have.length(1);
   });
 });
+
+import { describeFactors } from "../src/utils/witness-recompute";
+
+describe("describeFactors", () => {
+  const base = () => stored().factors;
+
+  it("gives each factor its answer in plain words, with the quote and where it was found", () => {
+    const f = base();
+    f.A = { ...f.A, answer: "OWN", by: "JEV", confidence: 0.94, quote: "I saw him sign", quoteVerified: true, documentName: "Affidavit" };
+    const view = describeFactors(f, null).find((v) => v.factor === "A")!;
+    expect(view.label).to.equal("Basis of knowledge");
+    expect(view.answerLabel).to.contain("personally saw");
+    expect(view.quote).to.equal("I saw him sign");
+    expect(view.quoteVerified).to.equal(true);
+    expect(view.documentName).to.equal("Affidavit");
+  });
+
+  it("says so when the papers do not show a factor", () => {
+    expect(describeFactors(base(), null).find((v) => v.factor === "C")!.answerLabel).to.equal(null);
+  });
+
+  it("shows where Chat Wonder read the same papers differently", () => {
+    const f = base();
+    f.D = { ...f.D, answer: "NONE", aiAnswer: "MINOR" };
+    const view = describeFactors(f, null).find((v) => v.factor === "D")!;
+    expect(view.otherReading).to.contain("small inconsistencies");
+  });
+
+  it("shows a lawyer's answer and note in place of the app's, and stops flagging it as unsure", () => {
+    const f = base();
+    f.F = { ...f.F, lowConfidence: true, overriddenTo: "CENTRAL" };
+    const view = describeFactors(f, { F: { answer: "CENTRAL", note: "checked with client", by: "u", at: "t" } }).find((v) => v.factor === "F")!;
+    expect(view.answerLabel).to.contain("point the case depends on");
+    expect(view.override?.note).to.equal("checked with client");
+    expect(view.lowConfidence).to.equal(false);
+  });
+});

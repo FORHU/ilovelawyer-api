@@ -17,6 +17,57 @@ export interface StoredFactors {
   reviewCount?: number;
   /** The lawyer's own answers in plain words, for the panel's "set by you" list. */
   overrideList?: OverrideView[];
+  /** One row per factor for the panel's "Why?" table: the answer, who gave it, and its evidence. */
+  factorView?: FactorView[];
+}
+
+/** Everything a lawyer needs to check one factor without opening the documents first. */
+export interface FactorView {
+  factor: FactorKey;
+  label: string;
+  /** Plain-words answer that counts in the score, or null when the papers don't show it. */
+  answerLabel: string | null;
+  by: "JEV" | "AI" | "NONE";
+  confidence: number | null;
+  lowConfidence: boolean;
+  /** The passage the model cited, copied word for word, and whether it was found in the document. */
+  quote: string | null;
+  quoteVerified: boolean;
+  documentName: string | null;
+  /** Set when Chat Wonder read the same papers differently from the answer that counts. */
+  otherReading?: string;
+  /** Set when a lawyer replaced the app's answer. */
+  override?: { answerLabel: string; note: string };
+}
+
+function optionLabel(factor: FactorKey, answer: string | null | undefined): string | null {
+  if (!answer) return null;
+  return FACTOR_DEFINITIONS[factor].options[answer.toUpperCase()] ?? null;
+}
+
+export function describeFactors(factors: Record<FactorKey, FactorAudit>, overrides: FactorOverrides | null): FactorView[] {
+  return FACTOR_KEYS.map((factor) => {
+    const f = factors[factor];
+    const overrideAnswer = f.overriddenTo ?? null;
+    const own = optionLabel(factor, f.answer);
+    const view: FactorView = {
+      factor,
+      label: RUBRIC[factor].label,
+      answerLabel: overrideAnswer ? optionLabel(factor, overrideAnswer) : own,
+      by: f.by === "OVERRIDE" ? "NONE" : f.by,
+      confidence: f.confidence,
+      lowConfidence: !!f.lowConfidence && !overrideAnswer,
+      quote: f.quote,
+      quoteVerified: f.quoteVerified,
+      documentName: f.documentName,
+    };
+    const other = optionLabel(factor, f.aiAnswer);
+    if (other && f.answer && f.aiAnswer && f.aiAnswer.toUpperCase() !== f.answer) view.otherReading = other;
+    if (overrideAnswer) {
+      view.override = { answerLabel: optionLabel(factor, overrideAnswer) ?? overrideAnswer, note: overrides?.[factor]?.note ?? "" };
+    }
+    return view;
+  });
 }
 
 export interface OverrideView {
@@ -103,6 +154,7 @@ export function recomputeFromStored(
       sponsoredDocumentCount,
       reviewCount: FACTOR_KEYS.filter((k) => factors[k].lowConfidence && !factors[k].overriddenTo).length,
       overrideList: describeOverrides(overrides),
+      factorView: describeFactors(factors, overrides),
     },
   };
 }

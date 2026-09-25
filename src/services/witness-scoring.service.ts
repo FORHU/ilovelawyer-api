@@ -11,7 +11,7 @@ import { FACTOR_KEYS, RUBRIC_VERSION, scoreWitness, type FactorKey } from "../ut
 import { classifyWitnessWithJev, type JevFactors } from "../utils/witness-rubric-jev";
 import { buildNeeds } from "../utils/witness-needs";
 import { parseOverrides, resolveFactors, type FactorOverrides } from "../utils/witness-factor-resolve";
-import { describeOverrides, parseStoredFactors, recomputeFromStored } from "../utils/witness-recompute";
+import { describeFactors, describeOverrides, parseStoredFactors, recomputeFromStored } from "../utils/witness-recompute";
 import { RUBRIC } from "../utils/witness-rubric";
 import CaseGraphSvc from "./case-graph.service";
 import HttpError from "../utils/http-error";
@@ -243,6 +243,7 @@ export default class WitnessScoringSvc {
             sponsoredDocumentCount: w.sponsoredEvidence.length,
             reviewCount: FACTOR_KEYS.filter((k) => audit[k].lowConfidence && !audit[k].overriddenTo).length,
             overrideList: describeOverrides(overrides),
+            factorView: describeFactors(audit, overrides),
           },
           aiRubricVersion: RUBRIC_VERSION,
           scoredAt,
