@@ -63,6 +63,10 @@ Reply with these five blocks and nothing else. No markdown, no [Sources], no rel
 [/DEFENSE_STRATEGY]
 
 Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. "label" is the finding itself (max 160 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this finding is drawn from — null if it isn't tied to one specific document. Max 8 items per block.
+[LEGAL_ISSUES] objects also carry three more fields:
+- "detail": who bears the burden on this issue and on what, in one line (max 160 characters) — e.g. "Employer bears the burden of proving just cause".
+- "burden": which side bears that burden — "CLAIMANT" (the party that brought the case: complainant, petitioner or plaintiff), "RESPONDENT" (the party defending it), "SHARED", or null if the documents don't say enough to tell.
+- "status": "CONTESTED" if the documents show the parties taking opposing positions on this issue, otherwise "OPEN".
 If none: leave the array empty.
 `;
 }

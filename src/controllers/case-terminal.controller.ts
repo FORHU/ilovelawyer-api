@@ -11,6 +11,7 @@ import UkCitationMapSvc from "../services/uk-citation-map.service";
 import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
 import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
+import FindingJevSvc from "../services/finding-jev.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
 import CaseClaimSvc from "../services/case-claim.service";
@@ -350,6 +351,11 @@ export default class CaseTerminalCtrl {
     const { error, value } = updateFindingSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseFindingSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async jevCheckFinding(req: Request, res: Response) {
+    const result = await FindingJevSvc.checkOne(req.params.caseId, req.params.id, req.user.userId);
     return res.status(200).json(result);
   }
 

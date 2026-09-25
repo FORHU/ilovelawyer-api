@@ -6,6 +6,7 @@ import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import FindingJevSvc from "./finding-jev.service";
 import logger from "../utils/logger";
 
 // Mirrors CaseStrategySvc.generateFromDocuments — same prompt->parse->replace-AI-rows shape,
@@ -64,6 +65,9 @@ ${pack.text || "(no indexed text)"}
     });
 
     if (!parsed) return CaseFindingRepo.list(caseId);
-    return CaseFindingRepo.replaceAiFindings(caseId, parsed);
+    // Jev re-rates the categories it has a check for (see finding-jev.service.ts).
+    const rows = await FindingJevSvc.verifyParsed(caseId, parsed);
+    logger.info("Case findings verified", { caseId, jevChecked: rows.filter((r) => r.jev !== undefined).length });
+    return CaseFindingRepo.replaceAiFindings(caseId, rows);
   }
 }

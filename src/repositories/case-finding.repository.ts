@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { FindingCategory, FindingTag } from "@prisma/client";
+import { FindingCategory, FindingTag, Prisma } from "@prisma/client";
 import { AI_FINDING_NOTE } from "../constants";
 
 export interface FindingInput {
@@ -10,6 +10,22 @@ export interface FindingInput {
   detail?: string | null;
   tag?: FindingTag | null;
   position?: number | null;
+}
+
+/** One AI-generated row as replaceAiFindings stores it. The Jev fields are only set when a Jev
+ * check ran and succeeded (see FindingJevSvc.verifyParsed). */
+export interface AiFindingRow {
+  category: FindingCategory;
+  label: string;
+  sourceLabel: string | null;
+  detail?: string | null;
+  tag?: FindingTag | null;
+  impact?: number | null;
+  position?: number | null;
+  jev?: Prisma.InputJsonValue;
+  modelTag?: FindingTag | null;
+  modelImpact?: number | null;
+  jevCheckedAt?: Date | null;
 }
 
 export default class CaseFindingRepo {
@@ -35,6 +51,12 @@ export default class CaseFindingRepo {
     return prisma.caseFinding.update({ where: { id }, data });
   }
 
+  /** Stores an on-demand Jev check. Leaves tag/impact alone — Jev never overrides a pill the
+   * lawyer may have chosen; the panel shows its read beside it instead. */
+  static async setJevCheck(id: string, check: Prisma.InputJsonValue) {
+    return prisma.caseFinding.update({ where: { id }, data: { jev: check, jevCheckedAt: new Date() } });
+  }
+
   static async delete(id: string, caseId: string) {
     const result = await prisma.caseFinding.deleteMany({ where: { id, caseId } });
     return result.count > 0;
@@ -45,19 +67,13 @@ export default class CaseFindingRepo {
    * Manually-created findings are untouched. */
   static async replaceAiFindings(
     caseId: string,
-    items: { category: FindingCategory; label: string; sourceLabel: string | null }[],
+    items: AiFindingRow[],
   ) {
     await prisma.$transaction(async (tx) => {
       await tx.caseFinding.deleteMany({ where: { caseId, notes: AI_FINDING_NOTE } });
       if (items.length === 0) return;
       await tx.caseFinding.createMany({
-        data: items.map((item) => ({
-          caseId,
-          category: item.category,
-          label: item.label,
-          sourceLabel: item.sourceLabel,
-          notes: AI_FINDING_NOTE,
-        })),
+        data: items.map((item) => ({ ...item, caseId, notes: AI_FINDING_NOTE })),
       });
     });
     return this.list(caseId);

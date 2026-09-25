@@ -83,6 +83,7 @@ router.get("/:caseId/findings", asyncHandler(CaseTerminalCtrl.listFindings));
 router.post("/:caseId/findings", asyncHandler(CaseTerminalCtrl.createFinding));
 router.patch("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.updateFinding));
 router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFinding));
+router.post("/:caseId/findings/:id/jev-check", asyncHandler(CaseTerminalCtrl.jevCheckFinding));
 
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));

@@ -11,6 +11,9 @@ export interface CaseJevContext {
   timeline: string[];
   witnesses: string[];
   parties: string[];
+  /** The case's pleaded claims (CaseClaim). Optional so Red Team's request stays as it was; the
+   * finding checks send it, since "is this issue raised?" is mostly a question about them. */
+  claims?: string[];
 }
 
 // Enough to judge against, without resending a long timeline for each of up to eight items.
@@ -33,6 +36,10 @@ export function formatParty(p: { name: string; designation: string }): string {
   return `${p.name} (${p.designation})`;
 }
 
+export function formatClaim(c: { title: string; causeOfAction?: string | null }): string {
+  return c.causeOfAction ? `${c.title} (${c.causeOfAction})` : c.title;
+}
+
 /** The `caseData` block of a Jev request, each list capped at MAX_CONTEXT_ITEMS. */
 export function caseDataState(context: CaseJevContext) {
   const clip = (items: string[]) => items.slice(0, MAX_CONTEXT_ITEMS);
@@ -43,5 +50,6 @@ export function caseDataState(context: CaseJevContext) {
     contradictions: clip(context.contradictions),
     timeline: clip(context.timeline),
     witnesses: clip(context.witnesses),
+    ...(context.claims ? { claims: clip(context.claims) } : {}),
   };
 }
