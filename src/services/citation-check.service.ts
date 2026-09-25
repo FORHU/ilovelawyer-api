@@ -144,7 +144,7 @@ export default class CitationCheckSvc {
     };
   }
 
-  private static async resolveAuthority(
+  static async resolveAuthority(
     citedReference: string | undefined,
     tenantCode: TenantCode,
   ): Promise<ResolvedCitationAuthority> {

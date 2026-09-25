@@ -65,6 +65,10 @@ router.patch("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.updateCitat
 router.delete("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.deleteCitation));
 router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
 
+router.post("/:caseId/authorities", asyncHandler(CaseTerminalCtrl.createAuthority));
+router.patch("/:caseId/authorities/:id", asyncHandler(CaseTerminalCtrl.updateAuthority));
+router.delete("/:caseId/authorities/:id", asyncHandler(CaseTerminalCtrl.deleteAuthority));
+
 router.get("/:caseId/graph-view", asyncHandler(CaseTerminalCtrl.graphView));
 
 router.get("/:caseId/edges", asyncHandler(CaseEdgeCtrl.list));
