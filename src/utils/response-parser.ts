@@ -29,12 +29,34 @@ export interface MindMapItem {
   /** Case documents this point comes from — set on document-built case maps (CaseMindMapSvc),
    * which drops any id that isn't one of the case's documents before saving. */
   sources?: MindMapSource[];
+  /** What Jev found when it checked this node against the passage it cites (mind-map-jev.ts).
+   * Absent until checked, and cleared when the node's text is edited. */
+  check?: MindMapNodeCheck;
+  /** Set when a document this point cited was removed or archived and the map wasn't rebuilt
+   * (someone had expanded it) — the citation is gone, the point stays for the lawyer to judge. */
+  sourceRemoved?: boolean;
   children: MindMapItem[];
 }
 
 export interface MindMapSource {
   documentId: string;
   page?: number;
+}
+
+export const MIND_MAP_CHECK_VERDICTS = ["SUPPORTED", "UNSUPPORTED", "CONTRADICTED"] as const;
+
+export interface MindMapNodeCheck {
+  verdict: (typeof MIND_MAP_CHECK_VERDICTS)[number];
+  confidence: number;
+  /** assertion-check.ts's EVIDENCE_KINDS — what the cited passage amounts to. */
+  evidenceKind: string;
+  /** The source the verdict was reached on (a node's first cited document). */
+  documentId: string;
+  page?: number;
+  /** False when the verdict was reached on the document's most relevant chunks because no page
+   * was cited or that page had no text — weaker evidence, same as the grounding check's flag. */
+  located: boolean;
+  checkedAt: string;
 }
 
 export interface AudioOverviewTurn {
@@ -142,6 +164,24 @@ function mindMapSources(raw: unknown): MindMapSource[] {
   return out;
 }
 
+function mindMapCheck(raw: any): MindMapNodeCheck | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  if (!(MIND_MAP_CHECK_VERDICTS as readonly string[]).includes(raw.verdict)) return undefined;
+  if (typeof raw.documentId !== "string" || !raw.documentId || typeof raw.evidenceKind !== "string") return undefined;
+  const confidence = Number(raw.confidence);
+  const check: MindMapNodeCheck = {
+    verdict: raw.verdict,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+    evidenceKind: raw.evidenceKind,
+    documentId: raw.documentId,
+    located: raw.located === true,
+    checkedAt: typeof raw.checkedAt === "string" ? raw.checkedAt : "",
+  };
+  const page = Number(raw.page);
+  if (Number.isInteger(page) && page > 0) check.page = page;
+  return check;
+}
+
 function subtreeSize(src: any): number {
   return 1 + mindMapChildren(src).reduce((n, kid) => n + subtreeSize(kid), 0);
 }
@@ -160,6 +200,9 @@ function toMindMapNode(src: any, id: string, depth: number): MindMapItem {
   if (Array.isArray(src.media)) node.media = src.media;
   const sources = mindMapSources(src.sources);
   if (sources.length) node.sources = sources;
+  const check = mindMapCheck(src.check);
+  if (check) node.check = check;
+  if (src.sourceRemoved === true) node.sourceRemoved = true;
   return node;
 }
 

@@ -332,6 +332,14 @@ model CaseMindMap {
   readySetFingerprint String?
   /// How many READY documents it was built from (Studio's "From 5 documents").
   documentCount       Int      @default(0)
+  /// Exactly which documents it was built from (READY, not archived) — so the Stale badge can
+  /// say what changed ("2 added, 1 removed") and a map that isn't rebuilt can drop citations to
+  /// removed ones. The fingerprint above only says *that* the set changed.
+  documentIds         String[] @default([])
+  /// Set when the case's last document was removed or archived: the map was built entirely from
+  /// documents that are no longer in the case, so it's hidden rather than shown (Studio/Terminal
+  /// treat it as no map). Kept, with its versions, rather than deleted; the next build clears it.
+  retiredAt           DateTime?
   /// Last auto/regenerate build. Expanding doesn't move it — see MessageMindMap.createdAt.
   generatedAt         DateTime @default(now())
   createdAt           DateTime @default(now())

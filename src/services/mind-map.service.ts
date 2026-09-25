@@ -12,11 +12,14 @@ import {
   appendMindMapChildren,
   countMindMapNodes,
   deleteMindMapNode,
+  keepOnlyCaseSources,
   findMindMapNode,
   parseExpandedChildren,
   renameMindMapNode,
 } from "../utils/mind-map-tree";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import CaseMindMapSvc from "./case-mind-map.service";
+import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkSvc from "./document-chunk.service";
 
 /** How many times a save retries after another expand/undo landed on the same map mid-flight.
@@ -103,6 +106,9 @@ export default class MindMapSvc {
     await CaseAccess.loadAccessibleCase(t.caseId, t.userId);
     const row = await MindMapRepo.findCaseMap(t.caseId);
     if (!row) throw new HttpError("Mind map not found", 404);
+    // Retired: every document it was built from is gone (CaseMindMapSvc) — nothing to change
+    // until the next build brings it back.
+    if (row.retiredAt) throw new HttpError("This map's documents were removed from the case", 409);
     return { kind: "case", id: row.id, data: row.data, version: row.version, caseId: t.caseId };
   }
 
@@ -173,6 +179,11 @@ export default class MindMapSvc {
 
       const siblings = (found.parent?.children ?? []).filter((c) => c.id !== nodeId).map((c) => c.label);
       const existingChildren = found.node.children.map((c) => c.label);
+      // The case map's points cite a document (and get checked against it); chat maps don't.
+      const documents =
+        ref.kind === "case"
+          ? (await DocumentRepo.listAllByCase(caseId)).filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }))
+          : [];
       const prompt = getMindMapExpandPromptBuilder(tenantCode)({
         caseName: caseRecord.caseName,
         actionType: caseRecord.actionType,
@@ -182,6 +193,7 @@ export default class MindMapSvc {
         existingChildren,
         count,
         ukJurisdiction,
+        documents,
       });
 
       // The case documents most relevant to this branch — chat-wonder reads these chunks as
@@ -228,8 +240,16 @@ export default class MindMapSvc {
         if (!target) throw new HttpError("This node was removed while it was being expanded", 409);
         // Another expand may have used up room since the first check.
         const fits = MindMapSvc.roomFor(latestTree, target.node, children.length);
-        return appendMindMapChildren(latestTree, nodeId, children.slice(0, fits));
+        const next = appendMindMapChildren(latestTree, nodeId, children.slice(0, fits));
+        if (next && documents.length) keepOnlyCaseSources(next, new Set(documents.map((d) => d.id)));
+        return next;
       }, { reason: "expand", nodeId, userId });
+
+      if (ref.kind === "case") {
+        const before = new Set(found.node.children.map((c) => c.id));
+        const added = (findMindMapNode(saved.mindMap, nodeId)?.node.children ?? []).filter((c) => !before.has(c.id));
+        CaseMindMapSvc.checkInBackground(caseId, new Set(added.map((c) => c.id)));
+      }
 
       await OrganizationRepo.writeAudit({
         caseId,

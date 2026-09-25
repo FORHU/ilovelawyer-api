@@ -186,6 +186,8 @@ describe("Mind map expand", () => {
     expect(prompt).to.contain("Unpaid loan › Legal Basis › Art. 1170 breach");
     expect(prompt).to.contain("Cruz v. Reyes");
     expect(prompt).to.contain("Add 3 new child nodes");
+    // A chat map cites nothing, so its expand prompt asks for no sources.
+    expect(prompt).to.not.contain("## DOCUMENTS");
   });
 
   it("accepts the model id a client holding an old, un-normalized map sends", async () => {

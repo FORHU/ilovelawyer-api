@@ -115,10 +115,11 @@ export default class CaseRefreshSvc {
             });
 
         // After strategy/findings, since the map prompt reads them (key dates, findings, to-dos).
-        // Skips itself when the documents haven't changed or someone has expanded the map — see
-        // CaseMindMapSvc. A failed build never fails the refresh; the previous map stays.
+        // The automatic run skips itself when the documents haven't changed; "Refresh analysis"
+        // rebuilds anyway, since it just re-ran those findings. Neither overwrites a map someone
+        // has expanded — see CaseMindMapSvc. A failed build never fails the refresh.
         stepStartedAt = Date.now();
-        await CaseMindMapSvc.generateFromDocuments(caseId, userId)
+        await CaseMindMapSvc.generateFromDocuments(caseId, userId, reason === "manual" ? "refresh" : "auto")
             .then((result) => {
                 logger.info("Refresh analysis: case mind map done", {
                     caseId,

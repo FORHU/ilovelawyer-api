@@ -12,6 +12,9 @@ export interface MindMapExpandPromptData {
   count: number;
   /** UK tenant only — read by buildUKMindMapExpandPrompt. */
   ukJurisdiction?: string | null;
+  /** The case's documents — given on the case map only, whose points cite a document and page
+   * (and are then checked against it by Jev). Chat maps don't cite. */
+  documents?: { id: string; name: string }[];
 }
 
 /** Output tag MindMapSvc parses the new children from (see parseExpandedChildren). */
@@ -41,20 +44,24 @@ ${list(d.siblings)}
 ## ALREADY UNDER IT (do not repeat — add different points)
 ${list(d.existingChildren)}
 
-## RULES
+${d.documents?.length ? `## DOCUMENTS\n${d.documents.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n")}\n\n` : ""}## RULES
 - Exactly ${d.count} children, or fewer if the documents and the node genuinely support fewer. Never pad.
 - "label": at most 8 words, specific (names, dates, sums, sections), not a generic category.
 - "description": 1-3 sentences of the actual reasoning or evidence, citing the document or authority
   it comes from where there is one. Markdown allowed.
 - Do not invent parties, amounts, dates, or authorities that are not in the documents.
 - Write in the same language as the node labels above.
-- Leaves only: no nested "children".
+- Leaves only: no nested "children".${
+    d.documents?.length
+      ? `\n- "sources": the documents each point comes from, as [{"documentId": "<id from DOCUMENTS>", "page": <number or null>}].\n  Use only ids from the DOCUMENTS list; omit "sources" when a point isn't from a document.`
+      : ""
+  }
 
 ## OUTPUT
 Reply with this block and nothing else. No prose, no markdown fences, no [Sources], no related cases.
 
 [${MIND_MAP_CHILDREN_TAG}]
-[{"label": "...", "description": "..."}]
+${d.documents?.length ? `[{"label": "...", "description": "...", "sources": [{"documentId": "...", "page": 1}]}]` : `[{"label": "...", "description": "..."}]`}
 [/${MIND_MAP_CHILDREN_TAG}]`;
 }
 

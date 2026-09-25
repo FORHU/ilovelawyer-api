@@ -100,6 +100,22 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       // same as the controller's queued HTTP path (CaseTerminalCtrl.refresh).
       await CaseRefreshSvc.runQueued(caseId, userId, "post-extraction");
       await CaseRepo.setReadySetFingerprint(caseId, fingerprint);
+    } else {
+      // Archiving/unarchiving a document leaves the case's READY set — and so the rest of the
+      // analysis — alone, but the case mind map leaves archived documents out (it follows chat
+      // grounding; see mindMapDocumentIds). Bring just the map back in step when its document set
+      // moved without the READY set moving.
+      const CaseMindMapSvc = (await import("../services/case-mind-map.service")).default;
+      if (await CaseMindMapSvc.documentsChangedSinceBuild(caseId)) {
+        try {
+          await CaseMindMapSvc.generateFromDocuments(caseId, userId);
+        } catch (err) {
+          // A map build (a Regenerate, or the refresh's own) is already running — try again after
+          // it, same backoff as a busy caseRefresh above.
+          if (err instanceof HttpError && err.statusCode === 409) scheduleCasePostExtraction(caseId, userId);
+          else logger.warn("Case post-extraction: mind map resync failed", { err, caseId });
+        }
+      }
     }
 
     // Narrative generation is a separate, heavier single-shot call — only auto-run it the first

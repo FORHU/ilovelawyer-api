@@ -92,7 +92,16 @@ describe("Case mind map (built from documents)", () => {
   });
 
   // In-memory CaseMindMap row + its revisions.
-  let map: { id: string; caseId: string; data: unknown; version: number; readySetFingerprint: string | null } | null;
+  let map: {
+    id: string;
+    caseId: string;
+    data: unknown;
+    version: number;
+    readySetFingerprint: string | null;
+    documentIds: string[];
+    retiredAt: Date | null;
+  } | null;
+  let syncSaves: MindMapItem[];
   let revisionReasons: string[];
   let documents: { id: string; name: string; ragStatus: string }[];
   let audits: string[];
@@ -135,6 +144,12 @@ describe("Case mind map (built from documents)", () => {
     patch(DocumentChunkSvc, "relevantChunksForCase", async () => ({ caseDocumentIds: [], caseDocumentChunkIds: [] }));
 
     patch(MindMapRepo, "findCaseMap", async () => (map ? { ...map } : null));
+    patch(MindMapRepo, "findCaseMapMeta", async () => (map ? { ...map } : null));
+    patch(MindMapRepo, "retireCaseMap", async () => {
+      map = { ...map!, retiredAt: new Date() };
+      return map;
+    });
+    syncSaves = [];
     patch(MindMapRepo, "findById", async () => (map ? { ...map } : null));
     patch(MindMapRepo, "caseMapHasUserChanges", async () => {
       const newest = revisionReasons[revisionReasons.length - 1];
@@ -148,12 +163,21 @@ describe("Case mind map (built from documents)", () => {
         throw new MindMapVersionConflictError();
       }
       if ((map?.version ?? null) !== p.expectedVersion) throw new MindMapVersionConflictError();
-      map = { id: "cmm1", caseId: p.caseId, data: p.data, version: (map?.version ?? 0) + 1, readySetFingerprint: p.readySetFingerprint };
+      map = {
+        id: "cmm1",
+        caseId: p.caseId,
+        data: p.data,
+        version: (map?.version ?? 0) + 1,
+        readySetFingerprint: p.readySetFingerprint,
+        documentIds: p.documentIds,
+        retiredAt: null,
+      };
       revisionReasons.push("auto");
       return { id: "cmm1", version: map.version };
     });
     patch(MindMapRepo, "saveNewVersion", async (p: any) => {
       if (p.expectedVersion !== map!.version) throw new MindMapVersionConflictError();
+      if (p.reason === "sync") syncSaves.push(p.data);
       map = { ...map!, data: p.data, version: p.expectedVersion + 1 };
       revisionReasons.push(p.reason);
       return { version: map.version };
@@ -254,11 +278,87 @@ describe("Case mind map (built from documents)", () => {
     expect(prompts).to.have.length(1);
   });
 
+  it("hands a fresh build to Jev in the background (Stage 6)", async () => {
+    const checked: (Set<string> | undefined)[] = [];
+    patch(CaseMindMapSvc, "checkInBackground", (_caseId: string, onlyIds?: Set<string>) => checked.push(onlyIds));
+    await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+    expect(checked).to.deep.equal([undefined]);
+  });
+
+  describe("keeping the map in step with the case's documents (Stage 7)", () => {
+    const DOC_C = "33333333-3333-3333-3333-333333333333";
+
+    it("leaves archived documents out of the build", async () => {
+      documents.push({ id: DOC_C, name: "Old draft.pdf", ragStatus: "READY", status: "ARCHIVED" } as any);
+      await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+      expect(prompts[0]).to.not.contain("Old draft.pdf");
+      expect(map!.documentIds).to.deep.equal([DOC_A, DOC_B].sort());
+    });
+
+    it("retires the map when its last document goes, and rebuilds it fresh when documents return", async () => {
+      await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+      const kept = documents;
+      documents = kept.map((d) => ({ ...d, status: "ARCHIVED" }) as any);
+      expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1")).skipped).to.equal("retired");
+      expect(map!.retiredAt).to.not.equal(null);
+      expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1")).skipped).to.equal("noDocuments");
+
+      // Even an expanded map is rebuilt once it's retired — the documents it was built from are gone.
+      revisionReasons.push("expand");
+      documents = kept;
+      expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1")).skipped).to.equal(null);
+      expect(map!.retiredAt).to.equal(null);
+    });
+
+    it('"Refresh analysis" rebuilds even when the documents are unchanged — but not over expansions', async () => {
+      await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+      expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1", "refresh")).skipped).to.equal(null);
+      expect(map!.version).to.equal(2);
+      revisionReasons.push("expand");
+      expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1", "refresh")).skipped).to.equal("userChanges");
+    });
+
+    it("on an expanded map, drops citations to a removed document and marks those points", async () => {
+      await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+      revisionReasons.push("expand");
+      documents = documents.filter((d) => d.id !== DOC_B);
+
+      expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1")).skipped).to.equal("userChanges");
+      expect(syncSaves).to.have.length(1);
+      const tree = map!.data as MindMapItem;
+      expect(findMindMapNode(tree, "keyFacts.1")!.node).to.include({ sourceRemoved: true });
+      expect(findMindMapNode(tree, "keyFacts.1")!.node.sources).to.equal(undefined);
+      // A point citing only documents that are still there is untouched.
+      expect(findMindMapNode(tree, "legalBasis.1")!.node.sourceRemoved).to.equal(undefined);
+    });
+
+    it("documentsChangedSinceBuild: true after an archive, false otherwise, and false with no map", async () => {
+      expect(await CaseMindMapSvc.documentsChangedSinceBuild("case1")).to.equal(false);
+      await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+      expect(await CaseMindMapSvc.documentsChangedSinceBuild("case1")).to.equal(false);
+      documents = documents.map((d) => (d.id === DOC_B ? ({ ...d, status: "ARCHIVED" } as any) : d));
+      expect(await CaseMindMapSvc.documentsChangedSinceBuild("case1")).to.equal(true);
+    });
+  });
+
   describe("expand and undo on the case map", () => {
     beforeEach(async () => {
       await CaseMindMapSvc.generateFromDocuments("case1", "u1");
       prompts = [];
       replyFrames = [`[MINDMAP_CHILDREN]${JSON.stringify([{ label: "Note signed 3 March" }])}[/MINDMAP_CHILDREN]`];
+    });
+
+    it("asks for sources on the case map, keeps only real case documents, and has Jev check just the new points", async () => {
+      const checked: (Set<string> | undefined)[] = [];
+      patch(CaseMindMapSvc, "checkInBackground", (_caseId: string, onlyIds?: Set<string>) => checked.push(onlyIds));
+      replyFrames = [
+        `[MINDMAP_CHILDREN]${JSON.stringify([{ label: "Note signed 3 March", sources: [{ documentId: DOC_A, page: 1 }, { documentId: "invented-id" }] }])}[/MINDMAP_CHILDREN]`,
+      ];
+      const result = await MindMapSvc.expandCaseNode({ userId: "u1", caseId: "case1", nodeId: "legalBasis.1" });
+      expect(prompts[0]).to.contain("## DOCUMENTS");
+      expect(prompts[0]).to.contain(DOC_A);
+      expect(findMindMapNode(result.mindMap, "legalBasis.1.1")!.node.sources).to.deep.equal([{ documentId: DOC_A, page: 1 }]);
+      expect(checked).to.deep.equal([new Set(["legalBasis.1.1"])]);
     });
 
     it("expands a node on the case map and returns it as a case change", async () => {

@@ -8,6 +8,7 @@ import {
   findMindMapNode,
   parseExpandedChildren,
   renameMindMapNode,
+  syncRemovedSources,
 } from "../src/utils/mind-map-tree";
 import MindMapSvc from "../src/services/mind-map.service";
 import { MIND_MAP_LIMITS } from "../src/constants/mind-map-limits.constants";
@@ -173,6 +174,42 @@ describe("mind-map-tree", () => {
       const cleared = renameMindMapNode(described, "legalBasis.1", { label: "Breach", description: "" })!;
       expect(findMindMapNode(cleared, "legalBasis.1")!.node.description).to.equal(undefined);
       expect(renameMindMapNode(map, "nope", { label: "x" })).to.equal(null);
+    });
+  });
+
+  describe("syncRemovedSources", () => {
+    const cited = normalizeMindMap({
+      label: "Case",
+      children: [
+        {
+          label: "Legal Basis",
+          children: [
+            {
+              label: "Two sources",
+              sources: [{ documentId: "keep" }, { documentId: "gone", page: 2 }],
+              check: { verdict: "SUPPORTED", confidence: 0.9, evidenceKind: "SHOWN_BY_DOCUMENT", documentId: "gone", located: true, checkedAt: "" },
+              children: [],
+            },
+            { label: "Only the gone one", sources: [{ documentId: "gone" }], children: [] },
+            { label: "Only kept", sources: [{ documentId: "keep" }], children: [] },
+          ],
+        },
+      ],
+    })!;
+
+    it("drops citations to removed documents, clears a check against one, and marks the point", () => {
+      const result = syncRemovedSources(cited, new Set(["keep"]))!;
+      expect(result.changed).to.equal(2);
+      const [both, gone, kept] = findMindMapNode(result.tree, "legalBasis")!.node.children;
+      expect(both).to.deep.include({ sources: [{ documentId: "keep" }], sourceRemoved: true });
+      expect(both.check).to.equal(undefined);
+      expect(gone.sources).to.equal(undefined);
+      expect(gone.sourceRemoved).to.equal(true);
+      expect(kept.sourceRemoved).to.equal(undefined);
+    });
+
+    it("returns null when nothing cites a removed document", () => {
+      expect(syncRemovedSources(cited, new Set(["keep", "gone"]))).to.equal(null);
     });
   });
 });

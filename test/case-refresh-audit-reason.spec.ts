@@ -19,6 +19,7 @@ import ChatRepo from "../src/repositories/chat.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import CaseSnapshotSvc from "../src/services/case-snapshot.service";
+import CaseMindMapSvc from "../src/services/case-mind-map.service";
 
 describe("CaseRefreshSvc.runQueued — audit reason", () => {
   const originals = {
@@ -33,7 +34,9 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     writeAudit: OrganizationRepo.writeAudit,
     lockFinishWith: AiGenerationLockSvc.finishWith,
     snapshotGet: CaseSnapshotSvc.get,
+    mapGenerate: CaseMindMapSvc.generateFromDocuments,
   };
+  let mapReasons: (string | undefined)[];
 
   let audits: any[];
 
@@ -52,6 +55,11 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     };
     (AiGenerationLockSvc as any).finishWith = async (_caseId: string, _kind: string, fn: () => Promise<unknown>) => fn();
     (CaseSnapshotSvc as any).get = async () => ({});
+    mapReasons = [];
+    (CaseMindMapSvc as any).generateFromDocuments = async (_c: string, _u: string, reason?: string) => {
+      mapReasons.push(reason);
+      return { skipped: null, map: null };
+    };
   });
 
   afterEach(() => {
@@ -66,6 +74,13 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
     (AiGenerationLockSvc as any).finishWith = originals.lockFinishWith;
     (CaseSnapshotSvc as any).get = originals.snapshotGet;
+    (CaseMindMapSvc as any).generateFromDocuments = originals.mapGenerate;
+  });
+
+  it('"Refresh analysis" rebuilds the case mind map ("refresh"); the automatic run only when documents changed ("auto")', async () => {
+    await CaseRefreshSvc.runQueued("case-1", "user-1");
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(mapReasons).to.deep.equal(["refresh", "auto"]);
   });
 
   it("defaults to reason: manual when the caller doesn't specify one (the controller's queued path)", async () => {

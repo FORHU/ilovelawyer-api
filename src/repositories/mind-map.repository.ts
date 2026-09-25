@@ -15,7 +15,9 @@ export class MindMapVersionConflictError extends Error {
  * map (CaseMindMap). Both have the same `data`/`version` contract and share MindMapRevision. */
 export type MindMapKind = "message" | "case";
 
-export type MindMapRevisionReason = "generate" | "auto" | "expand" | "edit";
+/** "check" = Jev's verdicts merged onto the map (mind-map-jev.ts); "sync" = citations to removed
+ * documents dropped (CaseMindMapSvc). Neither is a user change. */
+export type MindMapRevisionReason = "generate" | "auto" | "expand" | "edit" | "check" | "sync";
 
 const asJson = (tree: MindMapItem) => tree as unknown as Prisma.InputJsonValue;
 const ownerField = (kind: MindMapKind) => (kind === "message" ? "messageMindMapId" : "caseMindMapId");
@@ -62,7 +64,7 @@ export default class MindMapRepo {
   static async findCaseMapMeta(caseId: string) {
     return prisma.caseMindMap.findUnique({
       where: { caseId },
-      select: { id: true, version: true, generatedAt: true, documentCount: true, readySetFingerprint: true },
+      select: { id: true, version: true, generatedAt: true, documentCount: true, readySetFingerprint: true, documentIds: true, retiredAt: true },
     });
   }
 
@@ -72,16 +74,13 @@ export default class MindMapRepo {
       : prisma.caseMindMap.findUnique({ where: { id } });
   }
 
-  /** Whether anyone expanded/edited the case map since its last build — the newest revision is a
-   * user change rather than an "auto" build. Undoing every expansion puts an "auto" revision back
-   * on top, so the map becomes rebuildable again. */
+  /** Whether anyone expanded/edited the case map since its last build. Asked as "any expand/edit
+   * after the newest build" rather than "is the newest version a user change" — Jev's "check"
+   * versions land on top of both builds and expansions, and must neither make an expanded map
+   * look safe to overwrite nor make a fresh build look expanded. Undoing every expansion removes
+   * them, so the map becomes rebuildable again. */
   static async caseMapHasUserChanges(caseMindMapId: string): Promise<boolean> {
-    const newest = await prisma.mindMapRevision.findFirst({
-      where: { caseMindMapId },
-      orderBy: { version: "desc" },
-      select: { reason: true },
-    });
-    return Boolean(newest && newest.reason !== "auto" && newest.reason !== "generate");
+    return (await MindMapRepo.countCaseMapChangesSinceBuild(caseMindMapId)) > 0;
   }
 
   /** Expands/edits on the case map since its newest build — what Regenerate would throw away
@@ -110,9 +109,11 @@ export default class MindMapRepo {
     expectedVersion: number;
     previousData: MindMapItem;
     data: MindMapItem;
-    reason: "expand" | "edit";
-    nodeId: string;
-    userId: string;
+    reason: "expand" | "edit" | "check" | "sync";
+    /** The node acted on; absent for "check", which touches many. */
+    nodeId?: string;
+    /** Absent for "check" (a background job, not a person). */
+    userId?: string;
   }) {
     const owner = ownerField(p.kind);
     const nextVersion = p.expectedVersion + 1;
@@ -143,8 +144,8 @@ export default class MindMapRepo {
           version: nextVersion,
           data: asJson(p.data),
           reason: p.reason,
-          nodeId: p.nodeId,
-          createdById: p.userId,
+          nodeId: p.nodeId ?? null,
+          createdById: p.userId ?? null,
         },
       });
       return { version: nextVersion };
@@ -162,11 +163,18 @@ export default class MindMapRepo {
     expectedVersion: number | null;
     data: MindMapItem;
     readySetFingerprint: string;
-    documentCount: number;
+    documentIds: string[];
     userId?: string;
   }) {
     return prisma.$transaction(async (tx) => {
-      const meta = { readySetFingerprint: p.readySetFingerprint, documentCount: p.documentCount, generatedAt: new Date() };
+      // A build is always of the case's current documents, so it also un-retires the map.
+      const meta = {
+        readySetFingerprint: p.readySetFingerprint,
+        documentIds: p.documentIds,
+        documentCount: p.documentIds.length,
+        generatedAt: new Date(),
+        retiredAt: null,
+      };
       let id: string;
       let version: number;
       if (p.expectedVersion === null) {
@@ -188,6 +196,12 @@ export default class MindMapRepo {
       });
       return { id, version };
     });
+  }
+
+  /** Hides the case map because every document it was built from is gone (see
+   * CaseMindMap.retiredAt). Keeps the row and its versions; the next build clears it. */
+  static async retireCaseMap(caseMindMapId: string) {
+    return prisma.caseMindMap.update({ where: { id: caseMindMapId }, data: { retiredAt: new Date() } });
   }
 
   /** Steps back one version: restores the revision before `expectedVersion` and drops every

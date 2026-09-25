@@ -9,11 +9,16 @@ import OrganizationRepo from "../repositories/organization.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getMindMapDocumentsPromptBuilder } from "../legal/prompt-registry";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
-import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
+import { fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import { extractMindMap, MindMapItem } from "../utils/response-parser";
+import { keepOnlyCaseSources, syncRemovedSources } from "../utils/mind-map-tree";
+import { applyMindMapChecks, checkMindMapNodes, isMindMapJevEnabled, nodesToCheck } from "../utils/mind-map-jev";
 import { CASE_MIND_MAP_AUTO } from "../config";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
+
+// Re-exported for callers/tests that knew it here first.
+export { keepOnlyCaseSources };
 
 /** Key dates the prompt lists — enough to anchor Key Facts without crowding out the excerpts. */
 const MAX_KEY_DATES = 40;
@@ -24,20 +29,34 @@ export const CHAT_MIND_MAP_CONTEXT_MAX_CHARS = 6000;
 
 const LANGUAGE_NAMES: Record<string, string> = { en: "English", tl: "Filipino (Tagalog)", ko: "Korean" };
 
-export type CaseMindMapBuildReason = "auto" | "manual";
+/** "auto" = after documents change (post-upload refresh); "refresh" = the lawyer's "Refresh
+ * analysis", which re-runs the findings/strategy the map is built from; "manual" = Regenerate on
+ * the map itself. */
+export type CaseMindMapBuildReason = "auto" | "refresh" | "manual";
 
 /** Why a build didn't replace the map — logged, and returned so callers/tests can tell. */
-export type CaseMindMapSkip = "disabled" | "noDocuments" | "unchanged" | "userChanges" | "unusableReply" | "changedWhileBuilding";
+export type CaseMindMapSkip =
+  | "disabled"
+  | "noDocuments"
+  | "retired"
+  | "unchanged"
+  | "userChanges"
+  | "unusableReply"
+  | "changedWhileBuilding";
 
 /**
  * The case's mind map, built straight from its uploaded documents — the map equivalent of the
  * timeline's key dates: CaseRefreshSvc runs it after case strategy/findings on every post-upload
  * refresh, and Studio shows it (see CaseMindMap's schema comment).
  *
- * An automatic run never overwrites work: it skips when the READY document set hasn't changed
- * since the last build, and when anyone has expanded or edited the map since then (the map then
- * shows Stale and the lawyer decides whether to Regenerate). A manual Regenerate ("manual")
- * rebuilds regardless.
+ * Built from the case's documents that are indexed and not archived (mindMapDocumentIds).
+ *
+ * An automatic run never overwrites work: it skips when those documents haven't changed since the
+ * last build ("Refresh analysis" rebuilds anyway, since the findings/strategy it reads were just
+ * re-run), and when anyone has expanded or edited the map since then — the map then shows Stale,
+ * citations to removed documents are dropped (syncRemovedSources), and the lawyer decides whether
+ * to Regenerate. When the last document goes, the map is retired rather than left up. A manual
+ * Regenerate ("manual") rebuilds regardless.
  */
 export default class CaseMindMapSvc {
   /** The case map for Studio, plus how many expands/edits a Regenerate would replace. Null
@@ -109,6 +128,94 @@ export default class CaseMindMapSvc {
     });
   }
 
+  /** Fire-and-forget checkCaseMap — logs rather than throws, since nothing is waiting on it. */
+  static checkInBackground(caseId: string, onlyIds?: Set<string>): void {
+    if (!isMindMapJevEnabled()) return;
+    CaseMindMapSvc.checkCaseMap(caseId, onlyIds).catch((err) => {
+      logger.warn("Case mind map: Jev check failed", { err, caseId });
+    });
+  }
+
+  /**
+   * Has Jev check the case map's cited points (all of them after a build, `onlyIds` after an
+   * expand) and saves the verdicts as a "check" version — which isn't a user change, so it never
+   * blocks an automatic rebuild (see MindMapRepo.caseMapHasUserChanges). The checks run on the
+   * map as it was read; the save re-reads the latest map and only attaches a verdict to a node
+   * that still says what Jev saw (applyMindMapChecks), retrying if the map moved on meanwhile.
+   * Returns how many verdicts landed. No-op unless USE_JEV_MINDMAP=true.
+   */
+  static async checkCaseMap(caseId: string, onlyIds?: Set<string>): Promise<number> {
+    if (!isMindMapJevEnabled()) return 0;
+    const map = await MindMapRepo.findCaseMap(caseId);
+    if (!map) return 0;
+    const nodes = nodesToCheck(map.data as unknown as MindMapItem, onlyIds);
+    if (!nodes.length) return 0;
+
+    const startedAt = Date.now();
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    const results = await checkMindMapNodes(nodes, new Map(docs.map((d) => [d.id, d.name])));
+    if (!results.length) return 0;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const latest = await MindMapRepo.findCaseMap(caseId);
+      if (!latest) return 0;
+      const { tree, applied } = applyMindMapChecks(latest.data as unknown as MindMapItem, results);
+      if (!applied) return 0;
+      try {
+        await MindMapRepo.saveNewVersion({
+          kind: "case",
+          mindMapId: latest.id,
+          expectedVersion: latest.version,
+          previousData: latest.data as unknown as MindMapItem,
+          data: tree,
+          reason: "check",
+        });
+        const counts = results.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.check.verdict]: (acc[r.check.verdict] ?? 0) + 1 }), {});
+        logger.info("Case mind map: Jev checks saved", { caseId, checked: results.length, applied, ...counts, durationMs: Date.now() - startedAt });
+        return applied;
+      } catch (err) {
+        if (!(err instanceof MindMapVersionConflictError) || attempt === 3) throw err;
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * Whether the map is out of step with the case's documents — for the post-upload job when the
+   * case's own READY set didn't change (so no full refresh runs) but the map's set did: a document
+   * was archived or unarchived. False when there's no map yet; building a first map is the full
+   * refresh's job.
+   */
+  static async documentsChangedSinceBuild(caseId: string): Promise<boolean> {
+    const map = await MindMapRepo.findCaseMapMeta(caseId);
+    if (!map) return false;
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    if (map.retiredAt) return mindMapDocumentIds(docs).length > 0;
+    return map.readySetFingerprint !== fingerprintMindMapDocuments(docs);
+  }
+
+  /** Step 31: drops citations to removed documents on a map the refresh isn't rebuilding, saved
+   * as a "sync" version (not a user change). Returns how many points changed; 0 when none, or
+   * when the map moved on meanwhile (the next refresh tries again). */
+  private static async syncRemovedDocuments(map: { id: string; version: number; data: unknown }, current: Set<string>): Promise<number> {
+    const result = syncRemovedSources(map.data as unknown as MindMapItem, current);
+    if (!result) return 0;
+    try {
+      await MindMapRepo.saveNewVersion({
+        kind: "case",
+        mindMapId: map.id,
+        expectedVersion: map.version,
+        previousData: map.data as unknown as MindMapItem,
+        data: result.tree,
+        reason: "sync",
+      });
+      return result.changed;
+    } catch (err) {
+      if (err instanceof MindMapVersionConflictError) return 0;
+      throw err;
+    }
+  }
+
   private static async build(caseId: string, userId: string | undefined, reason: CaseMindMapBuildReason) {
     const startedAt = Date.now();
     const skip = async (skipped: CaseMindMapSkip, extra: object = {}) => {
@@ -117,14 +224,30 @@ export default class CaseMindMapSvc {
     };
 
     const docs = await DocumentRepo.listAllByCase(caseId);
-    const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
-    if (!ready.length) return skip("noDocuments");
-
+    const currentIds = mindMapDocumentIds(docs);
+    const current = new Set(currentIds);
+    const ready = docs.filter((d) => current.has(d.id)).map((d) => ({ id: d.id, name: d.name }));
     const existing = await MindMapRepo.findCaseMap(caseId);
-    const fingerprint = await computeReadySetFingerprint(caseId);
-    if (existing && reason === "auto") {
-      if (existing.readySetFingerprint === fingerprint) return skip("unchanged");
-      if (await MindMapRepo.caseMapHasUserChanges(existing.id)) return skip("userChanges");
+
+    if (!ready.length) {
+      // Every document the map was built from is gone (deleted or archived): hide it rather than
+      // keep showing points drawn from documents that are no longer in the case.
+      if (existing && !existing.retiredAt) {
+        await MindMapRepo.retireCaseMap(existing.id);
+        return skip("retired");
+      }
+      return skip("noDocuments");
+    }
+
+    const fingerprint = fingerprintMindMapDocuments(docs);
+    // A retired map's documents are all gone, so it's rebuilt fresh whatever happened to it
+    // before; Regenerate ("manual") always rebuilds.
+    if (existing && !existing.retiredAt && reason !== "manual") {
+      if (reason === "auto" && existing.readySetFingerprint === fingerprint) return skip("unchanged");
+      if (await MindMapRepo.caseMapHasUserChanges(existing.id)) {
+        const syncedPoints = await CaseMindMapSvc.syncRemovedDocuments(existing, current);
+        return skip("userChanges", { syncedPoints });
+      }
     }
 
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
@@ -179,7 +302,7 @@ ${pack.text || "(no indexed text)"}
     const dropped = keepOnlyCaseSources(tree, new Set(ready.map((d) => d.id)));
 
     const save = (expectedVersion: number | null) =>
-      MindMapRepo.saveCaseBuild({ caseId, expectedVersion, data: tree, readySetFingerprint: fingerprint, documentCount: ready.length, userId });
+      MindMapRepo.saveCaseBuild({ caseId, expectedVersion, data: tree, readySetFingerprint: fingerprint, documentIds: currentIds, userId });
     try {
       let saved;
       try {
@@ -207,6 +330,9 @@ ${pack.text || "(no indexed text)"}
         action: "mindMap.build",
         payload: { reason, version: saved.version, documents: ready.length },
       });
+      // After the save, not before: the map is on screen now and the verdicts arrive as they're
+      // ready — the build (and the refresh pipeline waiting on it) never waits on Jev.
+      CaseMindMapSvc.checkInBackground(caseId);
       return { skipped: null, map: await MindMapRepo.findCaseMap(caseId) };
     } catch (err) {
       // Someone expanded the map while the model was running — their change wins; the map goes
@@ -215,23 +341,6 @@ ${pack.text || "(no indexed text)"}
       throw err;
     }
   }
-}
-
-/** Drops `sources` entries whose documentId isn't one of the case's READY documents (the model
- * can mistype or invent ids). Mutates `tree`; returns how many were dropped. */
-export function keepOnlyCaseSources(tree: MindMapItem, allowed: Set<string>): number {
-  let dropped = 0;
-  const walk = (node: MindMapItem) => {
-    if (node.sources) {
-      const kept = node.sources.filter((s) => allowed.has(s.documentId));
-      dropped += node.sources.length - kept.length;
-      if (kept.length) node.sources = kept;
-      else delete node.sources;
-    }
-    node.children.forEach(walk);
-  };
-  walk(tree);
-  return dropped;
 }
 
 function countNodes(node: MindMapItem): number {

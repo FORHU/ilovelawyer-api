@@ -21,7 +21,7 @@ import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
-import { fingerprintReadyDocuments } from "../utils/ready-set-fingerprint";
+import { diffDocumentIds, fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import MindMapRepo from "../repositories/mind-map.repository";
 import { buildCaseTrends } from "../utils/case-trends";
 import { OutlookDriver } from "../utils/case-outlook-parse";
@@ -186,15 +186,28 @@ export default class CaseSnapshotSvc {
         ),
       },
       // The document-built case map (CaseMindMapSvc) — null until the case's first build. Stale
-      // means the READY document set changed since it was built: a rebuild was skipped (someone
-      // had expanded it) or hasn't run yet. Expanding it never makes it stale.
+      // means its documents (indexed, not archived) changed since it was built: a rebuild was
+      // skipped (someone had expanded it) or hasn't run yet; documentsAdded/Removed say how.
+      // Expanding it never makes it stale. `retired` = every document it was built from is gone,
+      // and the app hides it.
       caseMindMap: caseMindMap
-        ? {
-            version: caseMindMap.version,
-            generatedAt: caseMindMap.generatedAt,
-            documentCount: caseMindMap.documentCount,
-            isStale: caseMindMap.readySetFingerprint !== fingerprintReadyDocuments(documents),
-          }
+        ? (() => {
+            const current = mindMapDocumentIds(documents);
+            // Maps built before documentIds was recorded only have the fingerprint: they can say
+            // whether they're stale, not what changed.
+            const known = caseMindMap.documentIds.length > 0;
+            const { added, removed } = known ? diffDocumentIds(caseMindMap.documentIds, current) : { added: [], removed: [] };
+            const changed = known ? added.length + removed.length > 0 : caseMindMap.readySetFingerprint !== fingerprintMindMapDocuments(documents);
+            return {
+              version: caseMindMap.version,
+              generatedAt: caseMindMap.generatedAt,
+              documentCount: caseMindMap.documentCount,
+              retired: Boolean(caseMindMap.retiredAt),
+              isStale: !caseMindMap.retiredAt && changed,
+              documentsAdded: added.length,
+              documentsRemoved: removed.length,
+            };
+          })()
         : null,
       // Band + confidence only — the outlook never carries a numeric probability. Null until the
       // case's first refresh after the outlook shipped (no backfill).
