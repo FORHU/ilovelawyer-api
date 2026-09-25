@@ -152,7 +152,8 @@ export function syncRemovedSources(root: MindMapItem, current: Set<string>): { t
   let changed = 0;
   const walk = (node: MindMapItem) => {
     const citesRemoved = node.sources?.some((s) => !current.has(s.documentId)) ?? false;
-    const checkRemoved = node.check ? !current.has(node.check.documentId) : false;
+    // Only a verdict reached on a cited page depends on that document; a case-data one doesn't.
+    const checkRemoved = node.check?.documentId ? !current.has(node.check.documentId) : false;
     if (citesRemoved || checkRemoved) {
       const kept = (node.sources ?? []).filter((s) => current.has(s.documentId));
       if (kept.length) node.sources = kept;

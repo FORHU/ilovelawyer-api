@@ -13,7 +13,7 @@ import { fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-
 import { extractMindMap, MindMapItem } from "../utils/response-parser";
 import { keepOnlyCaseSources, syncRemovedSources } from "../utils/mind-map-tree";
 import { formatLawyerChanges, formatMindMapOutline, lawyerChangesSince } from "../utils/mind-map-lawyer-changes";
-import { applyMindMapChecks, checkMindMapNodes, isMindMapJevEnabled, nodesToCheck } from "../utils/mind-map-jev";
+import { applyMindMapChecks, checkMindMapNodes, isMindMapJevEnabled, nodesToCheck, type MindMapJevContext } from "../utils/mind-map-jev";
 import { CASE_MIND_MAP_AUTO } from "../config";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import HttpError from "../utils/http-error";
@@ -208,32 +208,65 @@ export default class CaseMindMapSvc {
     });
   }
 
-  /** Fire-and-forget checkCaseMap — logs rather than throws, since nothing is waiting on it. */
-  static checkInBackground(caseId: string, onlyIds?: Set<string>): void {
+  /** The case data mind-map points are judged against — read from the case snapshot, the same
+   * source the Red Team's Jev context comes from (RedTeamSvc.promptDataFor / jevContext), plus the
+   * strengths and damages a map's points also speak to. */
+  static async jevContext(caseId: string, userId: string): Promise<MindMapJevContext> {
+    // Dynamic: the snapshot service reads the case map's status through this service's repository.
+    const CaseSnapshotSvc = (await import("./case-snapshot.service")).default;
+    const snapshot = await CaseSnapshotSvc.get(caseId, userId);
+    const findings = (category: string) => snapshot.findings.filter((f) => f.category === category).map((f) => f.label);
+    return {
+      parties: snapshot.case.parties.map((p) => `${p.name} (${p.designation})`),
+      legalIssues: findings("LEGAL_ISSUE"),
+      strengths: findings("STRENGTH"),
+      weaknesses: findings("WEAKNESS"),
+      contradictions: snapshot.evidence.contradictions.map((c) => `"${c.leftExcerpt}" vs "${c.rightExcerpt}"`),
+      timeline: snapshot.timeline.map((t) => {
+        const d = t.occurredOn ? new Date(t.occurredOn) : null;
+        return `${d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : "undated"} — ${t.title}`;
+      }),
+      witnesses: snapshot.witnesses.map((w) => (w.role ? `${w.name} (${w.role})` : w.name)),
+      damages: snapshot.damages.filter((d) => d.description).map((d) => d.description as string),
+    };
+  }
+
+  /** Fire-and-forget checkCaseMap — logs rather than throws, since nothing is waiting on it.
+   * `userId`: whose access reads the case data Jev judges against (CaseSnapshotSvc.get); with none
+   * (a build no user started) nothing is checked. */
+  static checkInBackground(caseId: string, userId: string | undefined, onlyIds?: Set<string>): void {
     if (!isMindMapJevEnabled()) return;
-    CaseMindMapSvc.checkCaseMap(caseId, onlyIds).catch((err) => {
+    if (!userId) {
+      logger.info("Case mind map: Jev check skipped, no user to read the case data as", { caseId });
+      return;
+    }
+    CaseMindMapSvc.checkCaseMap(caseId, userId, onlyIds).catch((err) => {
       logger.warn("Case mind map: Jev check failed", { err, caseId });
     });
   }
 
   /**
-   * Has Jev check the case map's cited points (all of them after a build, `onlyIds` after an
-   * expand) and saves the verdicts as a "check" version — which isn't a user change, so it never
+   * Has Jev check the case map's points against the case data, the way the Red Team's arguments
+   * are (all of them after a build, `onlyIds` after an expand; see mind-map-jev.ts), and saves the
+   * verdicts as a "check" version — which isn't a user change, so it never
    * blocks an automatic rebuild (see MindMapRepo.caseMapHasUserChanges). The checks run on the
    * map as it was read; the save re-reads the latest map and only attaches a verdict to a node
    * that still says what Jev saw (applyMindMapChecks), retrying if the map moved on meanwhile.
    * Returns how many verdicts landed. No-op unless USE_JEV_MINDMAP=true.
    */
-  static async checkCaseMap(caseId: string, onlyIds?: Set<string>): Promise<number> {
+  static async checkCaseMap(caseId: string, userId: string, onlyIds?: Set<string>): Promise<number> {
     if (!isMindMapJevEnabled()) return 0;
     const map = await MindMapRepo.findCaseMap(caseId);
     if (!map) return 0;
-    const nodes = nodesToCheck(map.data as unknown as MindMapItem, onlyIds);
-    if (!nodes.length) return 0;
+    const points = nodesToCheck(map.data as unknown as MindMapItem, onlyIds);
+    if (!points.length) return 0;
 
     const startedAt = Date.now();
-    const docs = await DocumentRepo.listAllByCase(caseId);
-    const results = await checkMindMapNodes(nodes, new Map(docs.map((d) => [d.id, d.name])));
+    const [docs, context] = await Promise.all([
+      DocumentRepo.listAllByCase(caseId),
+      CaseMindMapSvc.jevContext(caseId, userId),
+    ]);
+    const results = await checkMindMapNodes(points, context, new Map(docs.map((d) => [d.id, d.name])));
     if (!results.length) return 0;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -414,7 +447,7 @@ ${pack.text || "(no indexed text)"}
       });
       // After the save, not before: the map is on screen now and the verdicts arrive as they're
       // ready — the build (and the refresh pipeline waiting on it) never waits on Jev.
-      CaseMindMapSvc.checkInBackground(caseId);
+      CaseMindMapSvc.checkInBackground(caseId, userId);
       return { skipped: null, map: await MindMapRepo.findCaseMap(caseId) };
     } catch (err) {
       // Someone expanded the map while the model was running — their change wins; the map goes

@@ -248,7 +248,7 @@ export default class MindMapSvc {
       if (ref.kind === "case") {
         const before = new Set(found.node.children.map((c) => c.id));
         const added = (findMindMapNode(saved.mindMap, nodeId)?.node.children ?? []).filter((c) => !before.has(c.id));
-        CaseMindMapSvc.checkInBackground(caseId, new Set(added.map((c) => c.id)));
+        CaseMindMapSvc.checkInBackground(caseId, userId, new Set(added.map((c) => c.id)));
       }
 
       await OrganizationRepo.writeAudit({

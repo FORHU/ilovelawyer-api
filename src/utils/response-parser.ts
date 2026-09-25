@@ -29,7 +29,8 @@ export interface MindMapItem {
   /** Case documents this point comes from — set on document-built case maps (CaseMindMapSvc),
    * which drops any id that isn't one of the case's documents before saving. */
   sources?: MindMapSource[];
-  /** What Jev found when it checked this node against the passage it cites (mind-map-jev.ts).
+  /** What Jev found when it checked this node against the case data and any passage it cites
+   * (mind-map-jev.ts).
    * Absent until checked, and cleared when the node's text is edited. */
   check?: MindMapNodeCheck;
   /** Set when a document this point cited was removed or archived and the map wasn't rebuilt
@@ -48,14 +49,18 @@ export const MIND_MAP_CHECK_VERDICTS = ["SUPPORTED", "UNSUPPORTED", "CONTRADICTE
 export interface MindMapNodeCheck {
   verdict: (typeof MIND_MAP_CHECK_VERDICTS)[number];
   confidence: number;
-  /** assertion-check.ts's EVIDENCE_KINDS — what the cited passage amounts to. */
-  evidenceKind: string;
-  /** The source the verdict was reached on (a node's first cited document). */
-  documentId: string;
+  /** What Jev judged against: the case data alone ("caseData"), or the case data plus the page the
+   * point cites ("document"). Checks saved before case-data judging have no basis: "document". */
+  basis: "caseData" | "document";
+  /** assertion-check.ts's EVIDENCE_KINDS — what the cited passage amounts to. Only on checks
+   * saved before case-data judging (mind-map-jev.ts no longer asks it). */
+  evidenceKind?: string;
+  /** The cited document the verdict was reached on ("document" basis only). */
+  documentId?: string;
   page?: number;
-  /** False when the verdict was reached on the document's most relevant chunks because no page
-   * was cited or that page had no text — weaker evidence, same as the grounding check's flag. */
-  located: boolean;
+  /** False when the cited passage was the document's most relevant chunks because no page was
+   * cited or that page had no text — weaker evidence. "document" basis only. */
+  located?: boolean;
   checkedAt: string;
 }
 
@@ -167,18 +172,25 @@ function mindMapSources(raw: unknown): MindMapSource[] {
 function mindMapCheck(raw: any): MindMapNodeCheck | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   if (!(MIND_MAP_CHECK_VERDICTS as readonly string[]).includes(raw.verdict)) return undefined;
-  if (typeof raw.documentId !== "string" || !raw.documentId || typeof raw.evidenceKind !== "string") return undefined;
+  const hasDocument = typeof raw.documentId === "string" && raw.documentId !== "";
+  // A "document" check without its document says nothing checkable — drop it. Older checks have
+  // no basis and always named a document.
+  const basis: MindMapNodeCheck["basis"] = raw.basis === "caseData" ? "caseData" : "document";
+  if (basis === "document" && !hasDocument) return undefined;
   const confidence = Number(raw.confidence);
   const check: MindMapNodeCheck = {
     verdict: raw.verdict,
     confidence: Number.isFinite(confidence) ? confidence : 0,
-    evidenceKind: raw.evidenceKind,
-    documentId: raw.documentId,
-    located: raw.located === true,
+    basis,
     checkedAt: typeof raw.checkedAt === "string" ? raw.checkedAt : "",
   };
-  const page = Number(raw.page);
-  if (Number.isInteger(page) && page > 0) check.page = page;
+  if (hasDocument) {
+    check.documentId = raw.documentId;
+    check.located = raw.located === true;
+    const page = Number(raw.page);
+    if (Number.isInteger(page) && page > 0) check.page = page;
+  }
+  if (typeof raw.evidenceKind === "string" && raw.evidenceKind) check.evidenceKind = raw.evidenceKind;
   return check;
 }
 

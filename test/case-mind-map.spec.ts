@@ -280,7 +280,7 @@ describe("Case mind map (built from documents)", () => {
 
   it("hands a fresh build to Jev in the background (Stage 6)", async () => {
     const checked: (Set<string> | undefined)[] = [];
-    patch(CaseMindMapSvc, "checkInBackground", (_caseId: string, onlyIds?: Set<string>) => checked.push(onlyIds));
+    patch(CaseMindMapSvc, "checkInBackground", (_caseId: string, _userId: string | undefined, onlyIds?: Set<string>) => checked.push(onlyIds));
     await CaseMindMapSvc.generateFromDocuments("case1", "u1");
     expect(checked).to.deep.equal([undefined]);
   });
@@ -350,7 +350,7 @@ describe("Case mind map (built from documents)", () => {
 
     it("asks for sources on the case map, keeps only real case documents, and has Jev check just the new points", async () => {
       const checked: (Set<string> | undefined)[] = [];
-      patch(CaseMindMapSvc, "checkInBackground", (_caseId: string, onlyIds?: Set<string>) => checked.push(onlyIds));
+      patch(CaseMindMapSvc, "checkInBackground", (_caseId: string, _userId: string | undefined, onlyIds?: Set<string>) => checked.push(onlyIds));
       replyFrames = [
         `[MINDMAP_CHILDREN]${JSON.stringify([{ label: "Note signed 3 March", sources: [{ documentId: DOC_A, page: 1 }, { documentId: "invented-id" }] }])}[/MINDMAP_CHILDREN]`,
       ];

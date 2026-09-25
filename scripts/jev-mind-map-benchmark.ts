@@ -1,18 +1,20 @@
 /**
  * Stage 6, step 29 of the mind map plan — is Jev right about case mind map nodes? Scores
- * checkAssertionWithJev (via mind-map-jev.ts's passage loading) against lawyer-labelled nodes, the
+ * mind-map-jev.ts's judgeMindMapPoint (each point judged against the case data, plus the page it
+ * cites when it cites one — the same request a build makes) against lawyer-labelled nodes, the
  * gate for switching USE_JEV_MINDMAP on.
  *
- *   npx ts-node scripts/jev-mind-map-benchmark.ts --export <caseId>   # write nodes to label
- *   npx ts-node scripts/jev-mind-map-benchmark.ts                     # score the labelled file
+ *   npx ts-node scripts/jev-mind-map-benchmark.ts --export <caseId> --as <userId>   # nodes to label
+ *   npx ts-node scripts/jev-mind-map-benchmark.ts                                   # score the file
  *
  * --export needs the database: it takes the case's document-built map (CaseMindMap), and writes
- * every node that cites a document — with the passage mind-map-jev.ts would hand Jev — to
- * benchmarks/mind-map/nodes.json, `expected` left null for a lawyer to fill in (SUPPORTED if the
- * passage bears the node out, UNSUPPORTED if it doesn't establish it, CONTRADICTED if it says the
- * opposite). Existing entries are kept; new ones are appended.
+ * every point a build would check (nodesToCheck, without its cap) — with the case data and any
+ * cited passage mind-map-jev.ts would hand Jev — to benchmarks/mind-map/nodes.json, `expected`
+ * left null for a lawyer to fill in (SUPPORTED if the case data bears the point out, UNSUPPORTED if
+ * it doesn't establish it, CONTRADICTED if it says the opposite). `--as` is the user whose access
+ * reads the case data (the case snapshot). Existing entries are kept; new ones are appended.
  *
- * Scoring needs TYPESAFE_API_KEY only — the passage is stored in the file, so a labelled set runs
+ * Scoring needs TYPESAFE_API_KEY only — the inputs are stored in the file, so a labelled set runs
  * anywhere. Rows with `expected: null` are skipped.
  *
  * Ship gate, same as the grounding check's: no false CONTRADICTED verdicts (a wrong accusation is
@@ -26,8 +28,15 @@ import * as path from "path";
 import prisma from "../src/lib/prisma";
 import MindMapRepo from "../src/repositories/mind-map.repository";
 import DocumentRepo from "../src/repositories/document.repository";
-import { checkAssertionWithJev, AssertionVerdict } from "../src/utils/assertion-check";
-import { loadCitedPassage, nodeAssertion } from "../src/utils/mind-map-jev";
+import CaseMindMapSvc from "../src/services/case-mind-map.service";
+import {
+  judgeMindMapPoint,
+  loadCitedPassage,
+  nodeAssertion,
+  nodesToCheck,
+  type MindMapJevContext,
+  type SupportVerdict,
+} from "../src/utils/mind-map-jev";
 import { MindMapItem } from "../src/utils/response-parser";
 
 const LABEL_FILE = path.resolve(__dirname, "..", "benchmarks", "mind-map", "nodes.json");
@@ -37,11 +46,14 @@ const MIN_LABELLED = 20;
 interface LabelledNode {
   /** `<caseId>:<nodeId>` — stable across re-exports, so labels aren't duplicated. */
   id: string;
+  /** The first-level branch it sits under (Key Facts, Risks…). */
+  branch: string;
   assertion: string;
-  citation: string;
-  passage: string;
-  located: boolean;
-  expected: AssertionVerdict | null;
+  /** The case data it's judged against, as at export. */
+  context: MindMapJevContext;
+  /** The page it cites, when it cites one. */
+  cited?: { document: string; text: string; located: boolean };
+  expected: SupportVerdict | null;
   /** Who labelled it and from what — e.g. "A. Cruz, 2026-09-26, read p. 2 of the note". */
   provenance: string;
 }
@@ -55,33 +67,35 @@ function readLabels(): LabelledNode[] {
   return fs.existsSync(LABEL_FILE) ? (JSON.parse(fs.readFileSync(LABEL_FILE, "utf8")) as LabelledNode[]) : [];
 }
 
-async function exportCase(caseId: string) {
+async function exportCase(caseId: string, userId: string) {
   const map = await MindMapRepo.findCaseMap(caseId);
   if (!map) throw new Error(`Case ${caseId} has no document-built mind map yet.`);
   const names = new Map((await DocumentRepo.listAllByCase(caseId)).map((d) => [d.id, d.name]));
+  const context = await CaseMindMapSvc.jevContext(caseId, userId);
   const existing = readLabels();
   const known = new Set(existing.map((n) => n.id));
   const added: LabelledNode[] = [];
-  // Every cited node, not just the 60 a build would check (nodesToCheck) — labelling wants the
-  // whole set.
-  const cited: MindMapItem[] = [];
-  const walk = (node: MindMapItem) => {
-    if (node.sources?.length) cited.push(node);
-    node.children.forEach(walk);
-  };
-  walk(map.data as unknown as MindMapItem);
-  for (const node of cited) {
+  // Every point a build would check, not just the first MIND_MAP_JEV_MAX_NODES — labelling wants
+  // the whole set.
+  for (const { node, branch } of nodesToCheck(map.data as unknown as MindMapItem, undefined, Infinity)) {
     const id = `${caseId}:${node.id}`;
     if (known.has(id)) continue;
-    const passage = await loadCitedPassage(node);
-    if (!passage) continue;
-    const source = node.sources![0]!;
+    const source = node.sources?.[0];
+    const passage = source ? await loadCitedPassage(node) : null;
     added.push({
       id,
+      branch,
       assertion: nodeAssertion(node),
-      citation: [names.get(source.documentId) ?? source.documentId, source.page ? `p. ${source.page}` : null].filter(Boolean).join(", "),
-      passage: passage.passage,
-      located: passage.located,
+      context,
+      ...(passage && source
+        ? {
+            cited: {
+              document: [names.get(source.documentId) ?? "the cited document", source.page ? `p. ${source.page}` : null].filter(Boolean).join(", "),
+              text: passage.passage,
+              located: passage.located,
+            },
+          }
+        : {}),
       expected: null,
       provenance: "",
     });
@@ -94,7 +108,7 @@ async function exportCase(caseId: string) {
 async function score() {
   const labelled = readLabels().filter((n) => n.expected !== null);
   if (!labelled.length) {
-    console.log(`No labelled nodes in ${LABEL_FILE}. Run with --export <caseId> first, then fill in "expected".`);
+    console.log(`No labelled nodes in ${LABEL_FILE}. Run with --export <caseId> --as <userId> first, then fill in "expected".`);
     return;
   }
   if (!process.env.TYPESAFE_API_KEY) {
@@ -102,7 +116,7 @@ async function score() {
     return;
   }
 
-  const rows: string[] = [`| Node | Expected | Jev | ✓ | Passage |`, `| --- | --- | --- | --- | --- |`];
+  const rows: string[] = [`| Node | Expected | Jev | ✓ | Judged against |`, `| --- | --- | --- | --- | --- |`];
   const misses: string[] = [];
   const perVerdict: Record<string, { n: number; correct: number }> = {};
   let correct = 0;
@@ -110,7 +124,11 @@ async function score() {
   let falseContradicted = 0;
   for (const node of labelled) {
     try {
-      const got = await checkAssertionWithJev(node.assertion, node.passage, node.citation);
+      const got = await judgeMindMapPoint(
+        { branch: node.branch, text: node.assertion },
+        node.context,
+        node.cited ? { document: node.cited.document, text: node.cited.text } : undefined,
+      );
       scored++;
       const ok = got.verdict === node.expected;
       perVerdict[node.expected!] = perVerdict[node.expected!] ?? { n: 0, correct: 0 };
@@ -122,7 +140,7 @@ async function score() {
         misses.push(`${node.id}: expected ${node.expected}, got ${got.verdict} (${Math.round(got.confidence * 100)}%) — ${node.assertion.slice(0, 80)}`);
         if (got.verdict === "CONTRADICTED") falseContradicted++;
       }
-      rows.push(`| ${node.id} | ${node.expected} | ${got.verdict} (${Math.round(got.confidence * 100)}%) | ${ok ? "yes" : "**no**"} | ${node.located ? "cited page" : "fallback chunks"} |`);
+      rows.push(`| ${node.id} | ${node.expected} | ${got.verdict} (${Math.round(got.confidence * 100)}%) | ${ok ? "yes" : "**no**"} | ${!node.cited ? "case data" : node.cited.located ? "case data + cited page" : "case data + fallback chunks"} |`);
       console.log(`${node.id}: ${node.expected} → ${got.verdict} (${Math.round(got.confidence * 100)}%)${ok ? "" : " ✗"}`);
     } catch (err) {
       rows.push(`| ${node.id} | ${node.expected} | _error_ | — | — |`);
@@ -161,8 +179,11 @@ async function score() {
 
 async function main() {
   const caseId = arg("export");
-  if (caseId) await exportCase(caseId);
-  else await score();
+  if (caseId) {
+    const userId = arg("as");
+    if (!userId) throw new Error("--export needs --as <userId>: the user whose access reads the case data.");
+    await exportCase(caseId, userId);
+  } else await score();
 }
 
 main()
