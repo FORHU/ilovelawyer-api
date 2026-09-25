@@ -1561,6 +1561,20 @@ enum FindingCategory {
   DEFENSE_STRATEGY
 }
 
+// The pill on a Legal Issues / Weaknesses / Strengths row. One enum for all three categories;
+// which values a category may use is FINDING_TAGS_BY_CATEGORY (case-finding.constants.ts).
+enum FindingTag {
+  CONTESTED
+  BRIEFING
+  OPEN
+  RESOLVED
+  MATERIAL
+  MINOR
+  CLOSED
+  STRONG
+  MODERATE
+}
+
 // A short strategic-assessment entry, categorized by FindingCategory. Backs five Terminal
 // panels (Legal Issues / Weaknesses / Strengths / Attack Strategies / Defense Strategies)
 // from one table, mirroring how ProcedureItem.kind already distinguishes STRATEGY vs TODO.
@@ -1568,17 +1582,32 @@ enum FindingCategory {
 // as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
 // manually-created rows (different/no notes) are left alone.
 model CaseFinding {
-  id          String          @id @default(uuid())
-  caseId      String
-  category    FindingCategory
-  label       String
-  notes       String?
+  id           String          @id @default(uuid())
+  caseId       String
+  category     FindingCategory
+  label        String
+  notes        String?
   // Which source document an AI-generated finding is grounded in (see CaseFindingAiSvc,
   // case-finding-parse.ts). Null for lawyer-entered findings and for AI findings the model
   // didn't attribute to a specific document.
-  sourceLabel String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  sourceLabel  String?
+  // The row's sub-line: who bears the burden (Legal Issues), the work that would close it
+  // (Weaknesses), or the document reference (Strengths).
+  detail       String?
+  tag          FindingTag?
+  // -10..10, the same scale as Red Team's argument impact. Null when nothing scored it.
+  impact       Int?
+  // Display order within a category; null rows sort by createdAt after the ordered ones.
+  position     Int?
+  // Jev's check of this finding (per-category shape, see the *-jev.ts utils). Null when Jev
+  // wasn't run or its call failed; tag/impact are then the model's or the lawyer's own.
+  jev          Json?
+  // The drafting model's own tag/impact, kept for comparison once Jev has replaced them.
+  modelTag     FindingTag?
+  modelImpact  Int?
+  jevCheckedAt DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 

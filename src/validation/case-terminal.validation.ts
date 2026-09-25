@@ -5,6 +5,7 @@ const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
 const CONFIDENCE_LEVELS = ["LOW", "MEDIUM", "HIGH"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
 const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
+const FINDING_TAGS = ["CONTESTED", "BRIEFING", "OPEN", "RESOLVED", "MATERIAL", "MINOR", "CLOSED", "STRONG", "MODERATE"];
 const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
 const PRIVILEGE_STATUSES = ["NONE", "ATTORNEY_CLIENT", "WORK_PRODUCT"];
 const HEARSAY_CATEGORIES = [
@@ -155,11 +156,23 @@ export const createFindingSchema = Joi.object({
     .required(),
   label: Joi.string().required(),
   notes: Joi.string().allow("").optional(),
+  detail: Joi.string().allow("", null).max(500).optional(),
+  // Whether the tag fits the category is checked in CaseFindingSvc (FINDING_TAGS_BY_CATEGORY).
+  tag: Joi.string()
+    .valid(...FINDING_TAGS)
+    .allow(null)
+    .optional(),
 });
 
 export const updateFindingSchema = Joi.object({
   label: Joi.string().optional(),
   notes: Joi.string().allow("").optional(),
+  detail: Joi.string().allow("", null).max(500).optional(),
+  tag: Joi.string()
+    .valid(...FINDING_TAGS)
+    .allow(null)
+    .optional(),
+  position: Joi.number().integer().min(0).allow(null).optional(),
 }).min(1);
 
 export const createWitnessSchema = Joi.object({

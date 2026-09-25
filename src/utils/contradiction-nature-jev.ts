@@ -1,6 +1,7 @@
 import { choice } from "@typesafe-ai/sdk";
 import { getTypeSafeClient } from "./typesafeClient";
 import logger from "./logger";
+import { applyFloor, readChoice } from "./jev-common";
 
 /**
  * Jev as a second reader of each scanned contradiction: given the two passages the scan paired,
@@ -68,11 +69,8 @@ export async function classifyContradictionWithJev(input: ContradictionNatureInp
   });
 
   const answer = response.answers.nature;
-  const raw: ContradictionNatureValue = (CONTRADICTION_NATURES as readonly string[]).includes(answer.choice as string)
-    ? (answer.choice as ContradictionNatureValue)
-    : "INFERENTIAL";
-  const downgraded = raw === "NOT_A_CONFLICT" && answer.confidence < NOT_A_CONFLICT_MIN_CONFIDENCE;
-  const nature: ContradictionNatureValue = downgraded ? "INFERENTIAL" : raw;
+  const raw = readChoice<ContradictionNatureValue>(answer.choice, CONTRADICTION_NATURES, "INFERENTIAL");
+  const { value: nature, downgraded } = applyFloor(raw, answer.confidence, "NOT_A_CONFLICT", NOT_A_CONFLICT_MIN_CONFIDENCE, "INFERENTIAL");
   logger.info("Jev response", { feature: "contradiction-nature", nature, rawNature: raw, downgraded, confidence: answer.confidence });
   return { nature, confidence: answer.confidence, rawNature: raw };
 }

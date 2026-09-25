@@ -1,4 +1,21 @@
+import { FindingCategory, FindingTag } from "@prisma/client";
+
 export const AI_FINDING_NOTE = "AI";
+
+/** Which pills a category's rows may carry. Attack/Defense Strategies have none yet. Jev only
+ * ever derives CONTESTED/OPEN, MATERIAL/MINOR and STRONG/MODERATE — BRIEFING, RESOLVED and
+ * CLOSED are workflow states only the lawyer sets. */
+export const FINDING_TAGS_BY_CATEGORY: Record<FindingCategory, readonly FindingTag[]> = {
+  LEGAL_ISSUE: ["CONTESTED", "BRIEFING", "OPEN", "RESOLVED"],
+  WEAKNESS: ["MATERIAL", "MINOR", "CLOSED"],
+  STRENGTH: ["STRONG", "MODERATE"],
+  ATTACK_STRATEGY: [],
+  DEFENSE_STRATEGY: [],
+};
+
+export function isTagAllowed(category: FindingCategory, tag: FindingTag): boolean {
+  return FINDING_TAGS_BY_CATEGORY[category].includes(tag);
+}
 
 export function buildCaseFindingPrompt(docs: { id: string; name: string }[]): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
