@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma";
+import CaseRepo from "./case.repository";
 
 export default class EventRepo {
   /**
@@ -83,7 +84,9 @@ export default class EventRepo {
     dateSource?: string;
     reminderLeadMinutes?: number;
   }) {
-    return prisma.event.create({ data: { organizationId, userId, ...data } });
+    const created = await prisma.event.create({ data: { organizationId, userId, ...data } });
+    CaseRepo.touchSafe(data.caseId);
+    return created;
   }
 
   static async updateById(id: string, organizationId: string, userId: string, userEmail: string, data: object) {

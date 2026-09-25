@@ -1,5 +1,6 @@
 import prisma from "../lib/prisma";
 import { DecisionStatus, Prisma } from "@prisma/client";
+import CaseRepo from "./case.repository";
 
 export interface DecisionRecordCreateInput {
   sourceMessageId: string | null;
@@ -10,7 +11,9 @@ export interface DecisionRecordCreateInput {
 
 export default class DecisionRecordRepo {
   static async create(caseId: string, data: DecisionRecordCreateInput) {
-    return prisma.decisionRecord.create({ data: { caseId, ...data } });
+    const created = await prisma.decisionRecord.create({ data: { caseId, ...data } });
+    CaseRepo.touchSafe(caseId);
+    return created;
   }
 
   static async list(caseId: string, status?: DecisionStatus) {

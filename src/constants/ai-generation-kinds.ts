@@ -7,6 +7,7 @@ export const AI_GENERATION_KINDS = [
   "contradictions",
   "caseStrategy",
   "caseFinding",
+  "caseOutlook",
   "mindMap",
   "audioOverviewScript",
   "citationExpand",
@@ -15,6 +16,8 @@ export const AI_GENERATION_KINDS = [
   "caseReconstructionScenes",
   "caseReconstructionTableRead",
   "timelineGenerate",
+  "witnessScoring",
+  "witnessExtract",
 ] as const;
 
 export type AiGenerationKind = (typeof AI_GENERATION_KINDS)[number];

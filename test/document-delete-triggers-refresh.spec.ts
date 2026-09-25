@@ -10,6 +10,7 @@ import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import DocumentSvc from "../src/services/document.service";
 import DocumentRepo from "../src/repositories/document.repository";
+import CaseTimelineRepo from "../src/repositories/case-timeline.repository";
 import * as CasePostExtraction from "../src/queues/case-post-extraction";
 
 describe("DocumentSvc.delete — schedules the automatic refresh trigger", () => {
@@ -17,11 +18,18 @@ describe("DocumentSvc.delete — schedules the automatic refresh trigger", () =>
     findById: DocumentRepo.findById,
     delete: DocumentRepo.delete,
     schedule: CasePostExtraction.scheduleCasePostExtraction,
+    detachDocument: CaseTimelineRepo.detachDocument,
   };
   let scheduled: { caseId: string; userId: string }[];
+  let detached: string[];
 
   beforeEach(() => {
     scheduled = [];
+    detached = [];
+    (CaseTimelineRepo as any).detachDocument = async (documentId: string) => {
+      detached.push(documentId);
+      return { count: 0 };
+    };
     (CasePostExtraction as any).scheduleCasePostExtraction = (caseId: string, userId: string) => {
       scheduled.push({ caseId, userId });
     };
@@ -32,6 +40,7 @@ describe("DocumentSvc.delete — schedules the automatic refresh trigger", () =>
     (DocumentRepo as any).findById = originals.findById;
     (DocumentRepo as any).delete = originals.delete;
     (CasePostExtraction as any).scheduleCasePostExtraction = originals.schedule;
+    (CaseTimelineRepo as any).detachDocument = originals.detachDocument;
   });
 
   it("schedules a refresh, attributed to the deleting user, when a READY case document is removed", async () => {
@@ -76,5 +85,24 @@ describe("DocumentSvc.delete — schedules the automatic refresh trigger", () =>
     expect(threw?.statusCode).to.equal(404);
     expect(deleteCalled).to.equal(false);
     expect(scheduled).to.have.length(0);
+    expect(detached).to.have.length(0);
+  });
+
+  // documentId on CaseTimelineEvent has no foreign key — without this, a deleted document's
+  // timeline rows keep pointing at an id nothing resolves.
+  it("detaches the case's timeline rows from the deleted document, whatever its ragStatus", async () => {
+    (DocumentRepo as any).findById = async () => ({ id: "doc-1", caseId: "case-1", ragStatus: "FAILED" });
+
+    await DocumentSvc.delete("doc-1", "org-1", "user-1");
+
+    expect(detached).to.deep.equal(["doc-1"]);
+  });
+
+  it("does not touch the timeline for a document with no case", async () => {
+    (DocumentRepo as any).findById = async () => ({ id: "doc-1", caseId: null, ragStatus: "READY" });
+
+    await DocumentSvc.delete("doc-1", "org-1", "user-1");
+
+    expect(detached).to.have.length(0);
   });
 });

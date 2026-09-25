@@ -15,6 +15,7 @@ router.get("/", asyncHandler(CaseCtrl.list));
 router.get("/:id", asyncHandler(CaseCtrl.getById));
 router.patch("/:id", asyncHandler(CaseCtrl.update));
 router.delete("/:id", asyncHandler(CaseCtrl.delete));
+router.post("/:id/opened", asyncHandler(CaseCtrl.markOpened));
 router.post("/:id/archive", asyncHandler(CaseCtrl.archive));
 router.post("/:id/unarchive", asyncHandler(CaseCtrl.unarchive));
 router.post("/archive", asyncHandler(CaseCtrl.archiveMany));
@@ -43,6 +44,8 @@ router.post("/:caseId/timeline/generate", asyncHandler(CaseTerminalCtrl.generate
 router.patch("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.updateTimeline));
 router.delete("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.deleteTimeline));
 
+router.get("/:caseId/grounding-checks", asyncHandler(CaseTerminalCtrl.listGroundingChecks));
+router.get("/:caseId/grounding-checks/:id", asyncHandler(CaseTerminalCtrl.getGroundingCheck));
 router.get("/:caseId/risks", asyncHandler(CaseTerminalCtrl.listRisks));
 router.post("/:caseId/risks", asyncHandler(CaseTerminalCtrl.createRisk));
 router.patch("/:caseId/risks/:id", asyncHandler(CaseTerminalCtrl.updateRisk));
@@ -53,6 +56,7 @@ router.put("/:caseId/evidence/matrix/:documentId", asyncHandler(CaseTerminalCtrl
 router.post("/:caseId/evidence/matrix/:documentId/custody", asyncHandler(CaseTerminalCtrl.addCustodyEvent));
 router.delete("/:caseId/evidence/matrix/:documentId/custody/:eventId", asyncHandler(CaseTerminalCtrl.deleteCustodyEvent));
 router.post("/:caseId/evidence/contradictions/scan", asyncHandler(CaseTerminalCtrl.scanContradictions));
+router.patch("/:caseId/evidence/contradictions/:id", asyncHandler(CaseTerminalCtrl.updateContradiction));
 router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl.traces));
 
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
@@ -82,6 +86,7 @@ router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFindi
 
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
+router.post("/:caseId/witnesses/score", asyncHandler(CaseTerminalCtrl.scoreWitnesses));
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
 

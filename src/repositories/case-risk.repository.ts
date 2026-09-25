@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { RiskSeverity, RiskStatus } from "@prisma/client";
+import { ConfidenceLevel, RiskSeverity, RiskStatus } from "@prisma/client";
 
 export interface RiskInput {
   title: string;
@@ -10,6 +10,8 @@ export interface RiskInput {
   documentId?: string | null;
   chunkId?: string | null;
   pageNumber?: number | null;
+  // Optional, lawyer-set — no AI writes risks (see the CaseRisk schema comment).
+  confidence?: ConfidenceLevel | null;
 }
 
 export default class CaseRiskRepo {

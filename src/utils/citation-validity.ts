@@ -101,7 +101,7 @@ export async function evaluateCitationWithJev(quote: string, official: string): 
   return { status: answer.choice, notes };
 }
 
-/** Pilot flag — see docs/Jev integration doc. Unset/false keeps evaluateCitationHeuristic's
+/** Pilot flag — see benchmarks/jev-report-2026-09-21.md. Unset/false keeps evaluateCitationHeuristic's
  * INVALID-by-default behavior for the ambiguous case. */
 const USE_JEV_VALIDITY = process.env.USE_JEV_VALIDITY === "true";
 

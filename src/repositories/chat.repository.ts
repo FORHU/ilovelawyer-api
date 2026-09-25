@@ -58,6 +58,13 @@ export default class ChatRepo {
         researchSteps: true,
         documents: { include: { file: true } },
         generatedDocument: { include: { file: true } },
+        // Verification rows for this reply (docs/plans/grounding-verifier.md). `passage` is
+        // deliberately excluded: it is the slab of bundle text the verdict was reached against,
+        // useful when auditing one row but far too heavy to ship on every message in a thread.
+        groundingChecks: {
+          select: { id: true, kind: true, assertion: true, citation: true, documentId: true, verdict: true, confidence: true, evidenceKind: true },
+          orderBy: { createdAt: "asc" },
+        },
       },
     });
   }
@@ -73,9 +80,25 @@ export default class ChatRepo {
     groupTitle?: string,
     replyStatus?: MessageReplyStatus,
   ) {
-    return prisma.message.create({
+    const created = await prisma.message.create({
       data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle, replyStatus },
     });
+    // A user turn in a case's chat is activity on that case — bump its "Last updated". Filtered
+    // through the consultation relation so this needs no extra lookup; a standalone (non-case)
+    // consultation matches no Case row and is a no-op. Assistant/system rows are follow-ons to a
+    // user turn and don't need their own bump.
+    if (role === "user") {
+      const now = new Date();
+      prisma.case
+        .updateMany({
+          where: { consultations: { some: { id: consultationId } }, updatedAt: { lt: new Date(now.getTime() - 60_000) } },
+          data: { updatedAt: now },
+        })
+        .catch(() => {
+          // Cosmetic timestamp — never fail the message write over it.
+        });
+    }
+    return created;
   }
 
   /** Flips a user turn's replyStatus once its reply is known to be done or has failed — see
@@ -138,6 +161,30 @@ export default class ChatRepo {
     return count === 1;
   }
 
+  /** Records a Jev triage result (urgency + intent) on the user Message and mirrors urgency onto
+   * the consultation's urgentAt (set on an urgent turn, cleared on a routine one — the
+   * consultation list reads that column, not the messages). One transaction so they can't
+   * disagree. */
+  static async setMessageTriage(
+    messageId: string,
+    consultationId: string,
+    triage: { urgent: boolean; probability: number; intent: string; intentConfidence: number; refersToAttachment: number },
+  ) {
+    return prisma.$transaction([
+      prisma.message.update({
+        where: { id: messageId },
+        data: {
+          urgent: triage.urgent,
+          urgencyProbability: triage.probability,
+          intent: triage.intent,
+          intentConfidence: triage.intentConfidence,
+          refersToAttachment: triage.refersToAttachment,
+        },
+      }),
+      prisma.consultation.update({ where: { id: consultationId }, data: { urgentAt: triage.urgent ? new Date() : null } }),
+    ]);
+  }
+
   /** Checkpoints the raw accumulated reply text while a turn is still streaming — throttled by
    * the caller (ChatSvc.processChatGenerationJob), not on every chunk. */
   static async checkpointPendingReply(messageId: string, pendingReplyContent: string) {
@@ -182,6 +229,17 @@ export default class ChatRepo {
     return prisma.message.findUnique({
       where: { id: messageId },
       include: { timeline: true, mindMap: true, relatedCases: true, reasoning: true },
+    });
+  }
+
+  /** Lean id/content/parent lookup for several messages at once — used by CaseSnapshotSvc to
+   * resolve DecisionRecord.sourceMessageId (the assistant reply) back to the user prompt that
+   * triggered it, for grouping decisions by turn without an N+1 query per record. */
+  static async findManyByIds(messageIds: string[]) {
+    if (!messageIds.length) return [];
+    return prisma.message.findMany({
+      where: { id: { in: messageIds } },
+      select: { id: true, content: true, parentMessageId: true, consultationId: true, createdAt: true },
     });
   }
 
@@ -241,10 +299,22 @@ export default class ChatRepo {
     return prisma.message.findFirst({ where: { parentMessageId, role: "assistant" }, select: { id: true } });
   }
 
+  /**
+   * The assistant reply for the most recently *submitted* turn — not the most recently
+   * *finished* one. Ordering by the reply's own createdAt (when generation completed) is wrong
+   * once two turns for the same consultation can run concurrently (no per-consultation lock
+   * exists on the chat-generation queue): a turn asked first can finish generating after a turn
+   * asked second, land a later createdAt, and get served as "latest" — surfacing stale Related
+   * Cases after a newer prompt. The parent (user) message's createdAt is set synchronously when
+   * the request is accepted, before any generation happens, so it tracks true submission order
+   * regardless of how long each turn's generation takes. Excludes any assistant row with no
+   * parent to order by (shouldn't occur for a normal turn, but would otherwise sort first under
+   * Postgres's NULLS FIRST default for DESC).
+   */
   static async findLatestAssistantMessage(consultationId: string) {
     return prisma.message.findFirst({
-      where: { consultationId, role: "assistant" },
-      orderBy: { createdAt: "desc" },
+      where: { consultationId, role: "assistant", parentMessageId: { not: null } },
+      orderBy: { parent: { createdAt: "desc" } },
       include: { relatedCases: true },
     });
   }

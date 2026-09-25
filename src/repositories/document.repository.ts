@@ -1,5 +1,6 @@
 import prisma from "../lib/prisma";
 import { Prisma, RagStatus, DocumentStatus } from "@prisma/client";
+import CaseRepo from "./case.repository";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -23,14 +24,19 @@ export default class DocumentRepo {
     userId: string,
     data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string; fileSize?: number },
   ) {
-    return prisma.document.create({ data: { organizationId, userId, ...data }, include: { file: true } });
+    const created = await prisma.document.create({ data: { organizationId, userId, ...data }, include: { file: true } });
+    CaseRepo.touchSafe(data.caseId);
+    return created;
   }
 
   /** No `include` here — createManyAndReturn only supports including relations under Prisma's
    * relationJoins preview feature, which this project doesn't enable. Callers already have the
    * just-created File rows in scope (same transaction) and merge fileUrl in manually. */
   static async createManyAndReturn(items: NewUserDocument[], client: DbClient = prisma) {
-    return client.document.createManyAndReturn({ data: items });
+    const created = await client.document.createManyAndReturn({ data: items });
+    // Uploading documents is real work on a case — bump its "Last updated" (see CaseRepo.touch).
+    for (const caseId of new Set(items.map((item) => item.caseId))) CaseRepo.touchSafe(caseId);
+    return created;
   }
 
   /** Lightweight id/name/category lookup for the case-document manifest sent to chat-wonder-v2-api
@@ -83,6 +89,20 @@ export default class DocumentRepo {
 
   /** Unscoped by organizationId — used internally by case-level services (refresh, strategy,
    * snapshot, evidence intelligence) that already resolved case access themselves. */
+  /** READY case documents WitnessExtractSvc hasn't read yet, oldest first. */
+  static async listPendingWitnessExtraction(caseId: string) {
+    return prisma.document.findMany({
+      where: { caseId, ragStatus: "READY", witnessesExtractedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true },
+    });
+  }
+
+  static async markWitnessesExtracted(ids: string[]) {
+    if (!ids.length) return;
+    await prisma.document.updateMany({ where: { id: { in: ids } }, data: { witnessesExtractedAt: new Date() } });
+  }
+
   static async listAllByCase(caseId: string) {
     return prisma.document.findMany({
       where: { caseId },
@@ -129,6 +149,12 @@ export default class DocumentRepo {
   /** Links documents already uploaded (via presign + confirm) to the message they were sent
    * alongside. Scoped to organizationId and consultationId so a caller can't link someone else's
    * document, or one from a different consultation, by guessing an id. */
+  /** How many documents were sent with this specific user message (linkToMessage above) — the
+   * worker's "is anything actually attached?" check for the missing-attachment guard. */
+  static async countForMessage(messageId: string) {
+    return prisma.document.count({ where: { messageId } });
+  }
+
   static async linkToMessage(ids: string[], messageId: string, organizationId: string, consultationId: string) {
     await prisma.document.updateMany({ where: { id: { in: ids }, organizationId, consultationId }, data: { messageId } });
   }

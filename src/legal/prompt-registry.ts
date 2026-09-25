@@ -2,7 +2,10 @@ import { TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
 import {
   buildRedTeamPrompt,
+  buildWitnessScoringPrompt,
+  buildWitnessExtractPrompt,
   buildCaseFindingPrompt,
+  buildCaseOutlookPrompt,
   buildCaseReconstructionPrompt,
   buildCaseStrategyPrompt,
   PH_SOURCE_ANALYSIS_PROMPT,
@@ -10,7 +13,10 @@ import {
 } from "./ph/prompts";
 import {
   buildUKRedTeamPrompt,
+  buildUKWitnessScoringPrompt,
+  buildUKWitnessExtractPrompt,
   buildUKCaseFindingPrompt,
+  buildUKCaseOutlookPrompt,
   buildUKCaseReconstructionPrompt,
   buildUKCaseStrategyPrompt,
   UK_SOURCE_ANALYSIS_PROMPT,
@@ -31,6 +37,28 @@ export function getRedTeamPromptBuilder(tenantCode: TenantCode) {
   }
 }
 
+export function getWitnessScoringPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildWitnessScoringPrompt;
+    case "UK":
+      return buildUKWitnessScoringPrompt;
+    default:
+      throw new HttpError(`No witness-scoring prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getWitnessExtractPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildWitnessExtractPrompt;
+    case "UK":
+      return buildUKWitnessExtractPrompt;
+    default:
+      throw new HttpError(`No witness-extract prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
 export function getCaseFindingPromptBuilder(tenantCode: TenantCode) {
   switch (tenantCode) {
     case "PH":
@@ -39,6 +67,17 @@ export function getCaseFindingPromptBuilder(tenantCode: TenantCode) {
       return buildUKCaseFindingPrompt;
     default:
       throw new HttpError(`No case-finding prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getCaseOutlookPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildCaseOutlookPrompt;
+    case "UK":
+      return buildUKCaseOutlookPrompt;
+    default:
+      throw new HttpError(`No case-outlook prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 

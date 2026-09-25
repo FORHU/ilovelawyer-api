@@ -108,6 +108,7 @@ model User {
   integrationConnectors   IntegrationConnector[]
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
   caseBriefExports        CaseBriefExport[]
+  caseViews               CaseView[]
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -169,6 +170,11 @@ model Consultation {
   caseId         String?
   title          String?
   createdAt      DateTime @default(now())
+  // When the most recent Jev-triaged user message was flagged urgent (see message-triage.ts).
+  // Set on an urgent turn, cleared on the next routine one, so the consultation list can badge
+  // and sort chats that currently need attention without walking every message. Null when
+  // triage is off or has never run for this consultation.
+  urgentAt       DateTime?
 
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -211,6 +217,19 @@ model Message {
   // instead of a bare "thinking" indicator until the real persisted reply lands. Cleared
   // once replyStatus flips to DONE.
   pendingReplyContent String?             @db.Text
+  // Jev triage result for a user-role message (see message-triage.ts / USE_JEV_MESSAGE_TRIAGE):
+  // urgency flag + probability, and what the user is asking for (intent — one of
+  // MESSAGE_INTENTS in message-triage.ts, a string rather than an enum so a new intent never
+  // needs a migration) with its confidence. All four null when triage didn't run (flag off, Jev
+  // error, or a message from before these columns existed) — never a mix. Always null on
+  // assistant messages.
+  urgent              Boolean?
+  urgencyProbability  Float?
+  intent              String?
+  intentConfidence    Float?
+  // Jev's probability that the message depends on a document/file/email the user thinks they
+  // supplied. Stored so "answered about a document it never had" is queryable after the fact.
+  refersToAttachment  Float?
 
   consultation    Consultation           @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -226,6 +245,7 @@ model Message {
   researchSteps   MessageResearchSteps?
   documents       Document[]
   generatedDocument MessageGeneratedDocument?
+  groundingChecks AnswerGroundingCheck[]
 
   @@index([consultationId])
   @@index([userId])
@@ -607,6 +627,7 @@ model Case {
   risks              CaseRisk[]
   evidenceMatrix     EvidenceMatrixItem[]
   contradictions     EvidenceContradiction[]
+  factPairChecks     FactPairCheck[]
   citationChecks     CitationCheck[]
   deadlines          ProceduralDeadline[]
   procedureItems     ProcedureItem[]
@@ -625,8 +646,10 @@ model Case {
   theories           CaseTheory[]
   theoryDiffs        TheoryDiff[]
   briefExports       CaseBriefExport[]
+  views              CaseView[]
   terminalWorkspaces TerminalWorkspace[]
   annotations        Annotation[]
+  outlooks           CaseOutlook[]
 
   @@index([userId])
   @@index([organizationId])
@@ -634,10 +657,13 @@ model Case {
 }
 
 model Party {
-  id          String @id @default(uuid())
+  id          String  @id @default(uuid())
   caseId      String
   name        String
   designation String
+  // Lawyer-entered free text shown under the party name (e.g. "Rep. by Hollis & Marr").
+  // Never AI-written.
+  descriptor  String?
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -668,6 +694,10 @@ model Document {
   // Lawyer-curated subset of a case's Documents shown in the Case Brief export's Exhibit list —
   // not every uploaded document is an Exhibit just by being uploaded. See CONTEXT.md's Exhibit entry.
   isExhibit Boolean @default(false)
+  // Set once WitnessExtractSvc has read this document, so the automatic post-extraction witness
+  // pass only ever sends new documents to the model — a witness the lawyer deleted is never
+  // re-created from a document that was already read.
+  witnessesExtractedAt DateTime?
   // Archiving is a pure visibility flag, same as Case.status — an ARCHIVED document stays fully
   // intact (chunks, RAG grounding, metadata, relationships) and is only hidden from the active
   // document view by default. See DocumentRepo.list's status param and DocumentRepo.setStatus.
@@ -682,6 +712,7 @@ model Document {
   message      Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
   file         File?               @relation(fields: [fileId], references: [id])
   chunks       CaseDocumentChunk[]
+  extractedWitnesses Witness[]
 
   @@index([userId])
   @@index([organizationId])
@@ -708,6 +739,23 @@ enum DocumentStatus {
 // "generating a brief" as far as this history is concerned). `file` is the actual rendered
 // artifact in S3; this row is what makes it findable/listable per case, since File itself has no
 // caseId and is shared across many unrelated purposes (avatars, transcriptions, audio, ...).
+// When each user last opened each case (Workspace, Terminal or the case detail page) — shown as
+// "Last opened" in Case Portfolio. Per user, not per case: a Case is a shared organization
+// resource, and a colleague opening it shouldn't change when *you* last looked at it. One row per
+// (case, user), upserted on open. Deliberately separate from Case.updatedAt ("Last updated"),
+// which tracks real changes/activity rather than views.
+model CaseView {
+  caseId       String
+  userId       String
+  lastOpenedAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, userId])
+  @@index([userId])
+}
+
 model CaseBriefExport {
   id        String   @id @default(uuid())
   caseId    String
@@ -1152,6 +1200,43 @@ enum RiskSeverity {
   DEADLINE
 }
 
+// ── Case Outlook ─────────────────────────────────────────────────────────────
+
+// The AI's view of where the case is heading, always as a band + confidence and never as a
+// number: a percentage would read as a prediction the model cannot back up.
+enum OutlookBand {
+  FAVORABLE
+  LEANS_FAVORABLE
+  UNCERTAIN
+  LEANS_UNFAVORABLE
+  UNFAVORABLE
+}
+
+enum ConfidenceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// Append-only: every refresh inserts a row, nothing is updated or deleted, so the history is the
+// table itself (latest row = current outlook). A failed or unparseable generation writes nothing
+// and the previous row stays current. See CaseOutlookAiSvc.
+model CaseOutlook {
+  id         String          @id @default(uuid())
+  caseId     String
+  band       OutlookBand
+  confidence ConfidenceLevel
+  rationale  String          @db.Text
+  // [{ label, direction: "HELPS" | "HURTS", sourceDocId? }] — see utils/case-outlook-parse.ts.
+  // sourceDocId is only kept when it names a document on this case.
+  drivers    Json
+  createdAt  DateTime        @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
+}
+
 enum RiskStatus {
   OPEN
   CONFIRMED
@@ -1243,6 +1328,9 @@ model CaseRisk {
   documentId  String?
   chunkId     String?
   pageNumber  Int?
+  // How sure the author is that this risk is real. Risks are lawyer-authored (no AI risk
+  // generator exists), so this is optional manual input and null unless set.
+  confidence  ConfidenceLevel?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -1319,11 +1407,54 @@ model EvidenceContradiction {
   leftValue       String
   rightValue      String
   confidence      Float    @default(0.5)
+  // Lawyer's triage. Every scan rebuilds this table (EvidenceRepo.replaceContradictions), so these
+  // and the Jev fields below are carried over to the re-found row with the same fingerprint (see
+  // contradictionKey) — a resolved contradiction stays resolved across rescans.
+  status          ContradictionStatus @default(OPEN)
+  resolutionNote  String?  @db.Text
+  resolvedAt      DateTime?
+  resolvedById    String?
+  // Jev's read of the two passages (USE_JEV_CONTRADICTIONS) — null when the flag was off at scan
+  // time or the call failed; the panel then falls back to banding `confidence`.
+  nature           ContradictionNature?
+  natureConfidence Float?
+  // Where in the document each side sits (e.g. "D13 p.2") — set by the full-bundle scan, which
+  // often pairs two exhibits inside one merged PDF, so the document name alone can't tell them apart.
+  leftLocator      String?
+  rightLocator     String?
   createdAt       DateTime @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+}
+
+/// Jev's verdict on one candidate pair from the full-bundle contradiction scan
+/// (full-contradiction-scan.service.ts), cached so a rescan never pays to re-check a pair —
+/// including the NOT_A_CONFLICT ones, which never become EvidenceContradiction rows.
+model FactPairCheck {
+  id         String              @id @default(uuid())
+  caseId     String
+  pairKey    String
+  nature     ContradictionNature
+  confidence Float
+  checkedAt  DateTime            @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, pairKey])
+}
+
+enum ContradictionStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum ContradictionNature {
+  DIRECT
+  INFERENTIAL
+  NOT_A_CONFLICT
 }
 
 model CitationCheck {
@@ -1455,17 +1586,46 @@ model CaseFinding {
   @@index([caseId, category])
 }
 
+enum WitnessStatus {
+  READY
+  ADVERSE
+  OUTSTANDING
+}
+
+enum WitnessSource {
+  MANUAL
+  AI
+}
+
 model Witness {
   id        String   @id @default(uuid())
   caseId    String
   name      String
   role      String?
+  summary   String?
+  // AI = found by WitnessExtractSvc in `sourceDocumentId`; `sourceQuote` is the verbatim line it
+  // relied on, checked against that document's text before the row is written.
+  source           WitnessSource @default(MANUAL)
+  sourceDocumentId String?
+  sourceQuote      String?       @db.Text
+  status    WitnessStatus @default(OUTSTANDING)
+  credibility Int    @default(50)
+  // AI-proposed values — never applied to status/credibility on their own. The displayed score is
+  // credibilityOverride ?? aiCredibility ?? credibility, so re-scoring can't wipe a lawyer's edit.
+  aiCredibility       Int?
+  aiRationale         Json?
+  aiSuggestedStatus   WitnessStatus?
+  credibilityOverride Int?
+  scoredAt            DateTime?
+  statementDueOn      DateTime?
+  statementReceived   Boolean  @default(false)
   contact   String?
   notes     String?  @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceDocument    Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
   sponsoredEvidence EvidenceMatrixItem[]
 
   @@index([caseId])
@@ -1575,6 +1735,10 @@ model RedTeamAssessment {
   // back onto `content` at render time (components/shared/attributed-text.tsx); `content`
   // itself is never modified, so this stays valid even across future edits/regenerations.
   claims    Json?
+  // Ranked opposing arguments (RedTeamArguments from red-team-arguments-parse.ts) — each one
+  // resolved to the case item it rests on. Null on assessments generated before this existed,
+  // or if the model's [ARGUMENTS] block didn't parse; the panel then shows only `content`.
+  arguments Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1844,4 +2008,39 @@ enum AiGenerationStatus {
   IN_PROGRESS
   DONE
   FAILED
+}
+
+/// One checkable claim pulled out of an assistant answer and what the bundle says about it — see
+/// docs/plans/grounding-verifier.md. Written after the answer is already persisted, so a failure
+/// here can never cost the lawyer their reply; a turn with no rows simply was not verified.
+model AnswerGroundingCheck {
+  id           String   @id @default(uuid())
+  /// The assistant Message this verifies.
+  messageId    String
+  caseId       String?
+  /// "ABSENCE_CLAIM" (the answer said material was unavailable) or "ASSERTION" (the answer stated
+  /// a fact and cited a document for it).
+  kind         String
+  /// The sentence from the answer, so a verdict can be read without re-deriving it.
+  assertion    String   @db.Text
+  /// The reference exactly as the answer wrote it: "D14 Part 2", "D20.1 para. 6".
+  citation     String?
+  /// Resolved bundle document, null when the reference named nothing resolvable.
+  documentId   String?
+  /// What was actually checked against — kept so a disputed verdict can be audited.
+  passage      String?  @db.Text
+  /// FALSE_ABSENCE | NOT_SUPPLIED | CORRECT_ABSENCE | UNRESOLVED | SUPPORTED | UNSUPPORTED |
+  /// CONTRADICTED. A string rather than an enum so a new verdict never needs a migration, the
+  /// same reasoning as AI_GENERATION_KINDS and MESSAGE_INTENTS.
+  verdict      String
+  /// Null when the verdict was reached without Jev (every absence verdict is decided by lookup).
+  confidence   Float?
+  /// Criterion E: ASSERTED_BY_PARTY | STATED_BY_WITNESS | SHOWN_BY_DOCUMENT | ESTABLISHED.
+  evidenceKind String?
+  createdAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([caseId, verdict])
 }

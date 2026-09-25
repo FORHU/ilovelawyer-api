@@ -4,6 +4,7 @@ import { CaseStatus } from "@prisma/client";
 export interface PartyInput {
   name: string;
   designation: string;
+  descriptor?: string | null;
 }
 
 export interface CaseData {
@@ -34,7 +35,10 @@ export default class CaseRepo {
     });
   }
 
-  static async list(organizationId: string, page: number, limit: number, search?: string, status: CaseStatus = "ACTIVE") {
+  /** `userId` scopes the joined "Last opened" (CaseView) to the requesting user — each row comes
+   * back with a flat `lastOpenedAt` (null if this user has never opened that case) instead of the
+   * raw `views` relation. */
+  static async list(organizationId: string, userId: string, page: number, limit: number, search?: string, status: CaseStatus = "ACTIVE") {
     const skip = (page - 1) * limit;
 
     const where = {
@@ -57,15 +61,64 @@ export default class CaseRepo {
         skip,
         take: limit,
         orderBy: { updatedAt: "desc" },
-        include: { parties: true },
+        include: { parties: true, views: { where: { userId }, select: { lastOpenedAt: true } } },
       }),
     ]);
 
-    return { total, data: rows };
+    const data = rows.map(({ views, ...row }) => ({ ...row, lastOpenedAt: views[0]?.lastOpenedAt ?? null }));
+    return { total, data };
+  }
+
+  /** Records that `userId` just opened the case. Upsert on the (case, user) key. The caller has
+   * already checked the case belongs to the organization. */
+  static async markOpened(caseId: string, userId: string) {
+    const now = new Date();
+    return prisma.caseView.upsert({
+      where: { caseId_userId: { caseId, userId } },
+      create: { caseId, userId, lastOpenedAt: now },
+      update: { lastOpenedAt: now },
+    });
+  }
+
+  /** Stamps "something happened on this case" onto Case.updatedAt, which Case Portfolio shows as
+   * "Last updated" and sorts by. Prisma's @updatedAt only fires when the Case row itself is
+   * written, and most in-case work (documents, chat, decisions, events) writes to other tables —
+   * so those write paths call this.
+   * updateMany, not update, so a case deleted mid-flight is a silent no-op (same as markRefreshed).
+   * The `lt` guard throttles it to at most one Case write per minute, so chatty paths (every chat
+   * turn) don't hammer the row. Best-effort: callers must not let a failure here fail the user's
+   * action — see CaseRepo.touchSafe. */
+  static async touch(id: string) {
+    const now = new Date();
+    return prisma.case.updateMany({
+      where: { id, updatedAt: { lt: new Date(now.getTime() - 60_000) } },
+      data: { updatedAt: now },
+    });
+  }
+
+  /** Fire-and-forget wrapper around touch for write paths — never throws or delays the caller. */
+  static touchSafe(id: string | null | undefined) {
+    if (!id) return;
+    CaseRepo.touch(id).catch(() => {
+      // Cosmetic timestamp — losing one bump must never fail the real write it rides along with.
+    });
   }
 
   static async findById(id: string, organizationId: string) {
     return prisma.case.findFirst({ where: { id, organizationId }, include: { parties: true } });
+  }
+
+  /** Unscoped by organization — for background AI jobs that already hold a checked caseId. */
+  static async findLanguage(id: string) {
+    return prisma.case.findUnique({ where: { id }, select: { language: true } });
+  }
+
+  /** Unscoped, same as findLanguage — the case header a background AI prompt opens with. */
+  static async findPromptHeader(id: string) {
+    return prisma.case.findUnique({
+      where: { id },
+      select: { caseName: true, actionType: true, jurisdiction: true, ukJurisdiction: true },
+    });
   }
 
   static async update(id: string, organizationId: string, data: CaseData) {

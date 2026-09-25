@@ -7,7 +7,7 @@ import { containsQuote } from "./citation-validity";
 import { getTypeSafeClient } from "./typesafeClient";
 import logger from "./logger";
 
-/** Pilot flag for the Jev-based path below — see docs/Jev integration doc. Unset/false keeps the
+/** Pilot flag for the Jev-based path below — see benchmarks/jev-report-2026-09-21.md. Unset/false keeps the
  * existing chat-wonder + regex path. */
 const USE_JEV_PROPOSITION = process.env.USE_JEV_PROPOSITION === "true";
 

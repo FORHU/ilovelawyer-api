@@ -17,9 +17,13 @@ import AnnotationRepo from "../repositories/annotation.repository";
 import CaseGraphRepo from "../repositories/case-graph.repository";
 import ChatRepo from "../repositories/chat.repository";
 import LawRepo from "../repositories/law.repository";
+import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
+import { buildCaseTrends } from "../utils/case-trends";
+import { OutlookDriver } from "../utils/case-outlook-parse";
+import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../constants";
 
 export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
@@ -48,6 +52,8 @@ export default class CaseSnapshotSvc {
       staleness,
       requiredConfirmations,
       latestMindMap,
+      outlook,
+      outlookHistory,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -71,7 +77,14 @@ export default class CaseSnapshotSvc {
       CaseGraphRepo.listStaleForCase(caseId),
       CaseAccess.requiredConfirmations(caseId),
       ChatRepo.findLatestMindMapCreatedAtForCase(caseId),
+      CaseOutlookRepo.latest(caseId),
+      CaseOutlookRepo.history(caseId, OUTLOOK_HISTORY_LIMIT),
     ]);
+
+    // listAllByCase is unscoped by status (its other callers need archived documents for id
+    // lookups), but archiving is a visibility flag — an ARCHIVED document must not count toward
+    // the Evidence panel's totals, trends or risk score, same as the Workspace list hiding it.
+    const activeDocuments = documents.filter((doc) => doc.status !== "ARCHIVED");
 
     const now = new Date();
     const nextEvent = events.find((event) => event.dateTime >= now) ?? events[0] ?? null;
@@ -84,6 +97,26 @@ export default class CaseSnapshotSvc {
     // Separate from citation validity (does the quote match the source): does the cited
     // authority itself exist? Same resolution engine Citation Map uses (resolvedLawId is
     // populated at check time by CitationCheckSvc, or lazily by CitationMapSvc.getSeed).
+    // Decisions are grouped in the Terminal UI by the chat turn that produced them, not by any
+    // category on the record itself (there isn't one — see DecisionRecord's schema comment).
+    // sourceMessageId is the assistant reply; its parentMessageId is the actual user prompt, so
+    // this is a two-hop lookup, batched to avoid an N+1 per decision.
+    const assistantMessageIds = [...new Set(decisions.map((d) => d.sourceMessageId).filter((id): id is string => !!id))];
+    const assistantMessages = await ChatRepo.findManyByIds(assistantMessageIds);
+    const parentMessageIds = [...new Set(assistantMessages.map((m) => m.parentMessageId).filter((id): id is string => !!id))];
+    const userMessages = await ChatRepo.findManyByIds(parentMessageIds);
+    const userMessageById = new Map(userMessages.map((m) => [m.id, m]));
+    const promptByAssistantMessageId = new Map(
+      assistantMessages.map((m) => [m.id, m.parentMessageId ? (userMessageById.get(m.parentMessageId) ?? null) : null]),
+    );
+    const decisionsWithSourcePrompt = decisions.map((decision) => {
+      const prompt = decision.sourceMessageId ? (promptByAssistantMessageId.get(decision.sourceMessageId) ?? null) : null;
+      return {
+        ...decision,
+        sourcePrompt: prompt ? { messageId: prompt.id, consultationId: prompt.consultationId, content: prompt.content, createdAt: prompt.createdAt } : null,
+      };
+    });
+
     const resolvedLawIds = citations.map((c) => c.resolvedLawId).filter((id): id is string => !!id);
     const resolvedLaws = await LawRepo.findManyByIds(resolvedLawIds);
     const lawById = new Map(resolvedLaws.map((law) => [law.id, law]));
@@ -97,7 +130,7 @@ export default class CaseSnapshotSvc {
 
     return {
       case: caseRecord,
-      documents: documents.map((doc) => ({
+      documents: activeDocuments.map((doc) => ({
         id: doc.id,
         name: doc.name,
         ragStatus: doc.ragStatus,
@@ -135,7 +168,7 @@ export default class CaseSnapshotSvc {
       damages,
       reconstruction,
       redTeamAssessment,
-      decisions,
+      decisions: decisionsWithSourcePrompt,
       theories,
       annotations,
       staleness,
@@ -143,10 +176,25 @@ export default class CaseSnapshotSvc {
         lastGeneratedAt: latestMindMap?.createdAt ?? null,
         isStale: isMindMapStale(latestMindMap?.createdAt ?? null, audit[0]?.createdAt ?? null),
       },
+      // Band + confidence only — the outlook never carries a numeric probability. Null until the
+      // case's first refresh after the outlook shipped (no backfill).
+      outlook: outlook
+        ? {
+            id: outlook.id,
+            band: outlook.band,
+            confidence: outlook.confidence,
+            rationale: outlook.rationale,
+            drivers: outlook.drivers as unknown as OutlookDriver[],
+            createdAt: outlook.createdAt,
+            disclaimer: OUTLOOK_DISCLAIMER,
+          }
+        : null,
+      outlookHistory,
+      trends: buildCaseTrends({ risks, documents: activeDocuments, weeks: CASE_TREND_WEEKS, now }),
       riskAnalysis: scoreCaseRisks({
         risks,
         contradictions,
-        documents,
+        documents: activeDocuments,
         citations,
         deadlines,
         matrix: evidenceMatrix,
