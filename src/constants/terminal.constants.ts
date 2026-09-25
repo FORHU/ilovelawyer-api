@@ -42,6 +42,12 @@ export interface PanelLayout {
   x?: number;
   /** Top edge as a 0–1 fraction of the workspace. Independent of other panes. */
   y?: number;
+  /** Columns mode only: which column (0-based) this pane is stacked in. */
+  columnIndex?: number;
+  /** Tabs mode only: which of the 2 groups this pane's tab lives in. */
+  tabGroup?: number;
+  /** Protects this pane's own slot from move/resize/reassignment. */
+  pinned?: boolean;
 }
 
 export interface WorkspaceLayout {
@@ -49,6 +55,13 @@ export interface WorkspaceLayout {
   /** Optional — absent on workspaces saved before arrangement modes existed, treated as "columns". */
   arrangement?: ArrangementValue;
   panels: PanelLayout[];
+  /** Columns mode: how many columns and their widths as fractions summing to 1. */
+  columnCount?: number;
+  columnWidths?: number[];
+  /** Tabs mode: the 2 groups' width split and each group's active tab. */
+  tabsSplit?: number;
+  tabsActiveA?: PanelId;
+  tabsActiveB?: PanelId;
 }
 
 export interface PanelCatalogEntry {

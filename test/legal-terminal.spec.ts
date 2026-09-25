@@ -89,6 +89,35 @@ describe("Legal Terminal — workspace catalog", () => {
     expect(command?.width).to.equal(0.4);
     expect(command?.height).to.equal(0.5);
   });
+
+  it("keeps Columns and Tabs arrangement state when saving a workspace", () => {
+    const layout = normalizeLayout(
+      {
+        preset: "PANE_4",
+        arrangement: "columns",
+        columnCount: 3,
+        columnWidths: [0.5, 0.3, 0.2],
+        tabsSplit: 0.6,
+        tabsActiveA: "evidence",
+        tabsActiveB: "not-a-panel",
+        panels: [
+          { id: "command", visible: true, order: 0, width: 1, height: 0.5, columnIndex: 2, tabGroup: 1, pinned: true },
+          { id: "evidence", visible: true, order: 1, width: 1, height: 1 },
+        ],
+      },
+      "SOLO",
+    );
+    expect(layout.columnCount).to.equal(3);
+    expect(layout.columnWidths).to.deep.equal([0.5, 0.3, 0.2]);
+    expect(layout.tabsSplit).to.equal(0.6);
+    expect(layout.tabsActiveA).to.equal("evidence");
+    expect(layout.tabsActiveB).to.equal(undefined);
+    const command = layout.panels.find((p) => p.id === "command");
+    expect(command?.columnIndex).to.equal(2);
+    expect(command?.tabGroup).to.equal(1);
+    expect(command?.pinned).to.equal(true);
+    expect(layout.panels.find((p) => p.id === "evidence")?.columnIndex).to.equal(undefined);
+  });
 });
 
 describe("Legal Terminal — PH deadline engine", () => {

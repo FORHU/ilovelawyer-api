@@ -29,7 +29,7 @@ import CaseMindMapSvc, { keepOnlyCaseSources } from "../src/services/case-mind-m
 import MindMapSvc from "../src/services/mind-map.service";
 import { MindMapItem, normalizeMindMap } from "../src/utils/response-parser";
 import { findMindMapNode } from "../src/utils/mind-map-tree";
-import { fingerprintReadyDocuments } from "../src/utils/ready-set-fingerprint";
+import { computeReadySetFingerprint } from "../src/utils/ready-set-fingerprint";
 
 const DOC_A = "11111111-1111-1111-1111-111111111111";
 const DOC_B = "22222222-2222-2222-2222-222222222222";
@@ -203,7 +203,7 @@ describe("Case mind map (built from documents)", () => {
     expect(tree.children.map((c) => c.id)).to.deep.equal(["legalBasis", "keyFacts", "remedies", "risks", "nextSteps"]);
     expect(findMindMapNode(tree, "legalBasis.1")!.node.sources).to.deep.equal([{ documentId: DOC_A, page: 2 }]);
     expect(findMindMapNode(tree, "keyFacts.1")!.node.sources).to.deep.equal([{ documentId: DOC_B }]);
-    expect(map!.readySetFingerprint).to.equal(fingerprintReadyDocuments(documents));
+    expect(map!.readySetFingerprint).to.equal(computeReadySetFingerprint(documents));
     expect(audits).to.deep.equal(["mindMap.build"]);
 
     const prompt = prompts[0];
@@ -400,9 +400,9 @@ describe("case mind map helpers", () => {
     expect(tree.children[0].sources).to.deep.equal([{ documentId: "a", page: 3 }, { documentId: "b" }]);
   });
 
-  it("fingerprintReadyDocuments ignores order and non-READY documents", () => {
-    const a = fingerprintReadyDocuments([{ id: "1", ragStatus: "READY" }, { id: "2", ragStatus: "READY" }, { id: "3", ragStatus: "PENDING" }]);
-    const b = fingerprintReadyDocuments([{ id: "2", ragStatus: "READY" }, { id: "1", ragStatus: "READY" }]);
+  it("computeReadySetFingerprint ignores order and non-READY documents", () => {
+    const a = computeReadySetFingerprint([{ id: "1", ragStatus: "READY" }, { id: "2", ragStatus: "READY" }, { id: "3", ragStatus: "PENDING" }]);
+    const b = computeReadySetFingerprint([{ id: "2", ragStatus: "READY" }, { id: "1", ragStatus: "READY" }]);
     expect(a).to.equal(b);
   });
 });

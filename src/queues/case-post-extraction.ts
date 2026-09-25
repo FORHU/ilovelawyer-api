@@ -3,13 +3,13 @@ import CaseRepo from "../repositories/case.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import CaseReconstructionAudioQueue from "./case-reconstruction-audio.queue";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
+import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import WitnessExtractSvc from "../services/witness-extract.service";
 import HttpError from "../utils/http-error";
-import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
 
 /** Wait until a bulk upload burst stops finishing files, then run case-level AI once. */
-const QUIET_SECONDS = 20;
+const QUIET_SECONDS = 45;
 
 /**
  * Contradiction scan + case strategy + findings are case-wide. Running them after every READY
@@ -70,7 +70,8 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     // case whose documents predate this job gets backfilled on its next trigger.
     WitnessExtractSvc.schedule(caseId, userId);
 
-    const fingerprint = await computeReadySetFingerprint(caseId);
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    const fingerprint = computeReadySetFingerprint(docs);
     const previousFingerprint = await CaseRepo.getReadySetFingerprint(caseId);
     const readySetChanged = fingerprint !== previousFingerprint;
 
@@ -98,8 +99,11 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       const CaseRefreshSvc = (await import("../services/case-refresh.service")).default;
       // runQueued closes out the lock (DONE/FAILED) itself via AiGenerationLockSvc.finishWith —
       // same as the controller's queued HTTP path (CaseTerminalCtrl.refresh).
+      // refreshInner itself persists the fingerprint on success (see CaseRefreshSvc) — shared
+      // with the manual "Refresh analysis" path, so a manual click also counts as "the last
+      // successful refresh" for this skip-check, not just an auto-triggered one.
       await CaseRefreshSvc.runQueued(caseId, userId, "post-extraction");
-      await CaseRepo.setReadySetFingerprint(caseId, fingerprint);
+      logger.info("Case refresh completed", { caseId, userId, source: "auto" });
     } else {
       // Archiving/unarchiving a document leaves the case's READY set — and so the rest of the
       // analysis — alone, but the case mind map leaves archived documents out (it follows chat

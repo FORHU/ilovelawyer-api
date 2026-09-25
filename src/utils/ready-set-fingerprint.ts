@@ -1,21 +1,16 @@
 import crypto from "crypto";
-import DocumentRepo from "../repositories/document.repository";
 
 function hashIds(ids: string[]): string {
   return crypto.createHash("sha256").update([...ids].sort().join(",")).digest("hex");
 }
 
-/** Hash of a sorted READY document id set. Pure, so callers that already hold the case's
- * documents (CaseSnapshotSvc) don't need another query. */
-export function fingerprintReadyDocuments(docs: { id: string; ragStatus: string }[]): string {
+/** Hash of a case's sorted READY document id set — compared against Case.readySetFingerprint to
+ * skip a redundant Chat Wonder refresh when the READY corpus hasn't actually changed since the
+ * last successful run. Shared by both the automatic post-extraction path (case-post-extraction.ts)
+ * and the manual "Refresh analysis" pipeline (CaseRefreshSvc), since either one can be the "last
+ * successful refresh" the other needs to compare against. */
+export function computeReadySetFingerprint(docs: { id: string; ragStatus: string }[]): string {
   return hashIds(docs.filter((d) => d.ragStatus === "READY").map((d) => d.id));
-}
-
-/** The case's current READY-set hash — compared against Case.readySetFingerprint by the
- * post-upload refresh (case-post-extraction.ts) to skip a redundant Chat Wonder run when nothing
- * actually changed (a same-file re-upload, or a delete immediately followed by a re-add). */
-export async function computeReadySetFingerprint(caseId: string): Promise<string> {
-  return fingerprintReadyDocuments(await DocumentRepo.listAllByCase(caseId));
 }
 
 /**

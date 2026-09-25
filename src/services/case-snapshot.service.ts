@@ -3,6 +3,7 @@ import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import CaseRiskRepo from "../repositories/case-risk.repository";
 import EvidenceRepo from "../repositories/evidence.repository";
 import CitationCheckRepo from "../repositories/citation-check.repository";
+import CaseAuthorityRepo from "../repositories/case-authority.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -25,6 +26,7 @@ import { diffDocumentIds, fingerprintMindMapDocuments, mindMapDocumentIds } from
 import MindMapRepo from "../repositories/mind-map.repository";
 import { buildCaseTrends } from "../utils/case-trends";
 import { OutlookDriver } from "../utils/case-outlook-parse";
+import { summarizeAuthorities } from "../utils/authority-summary";
 import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../constants";
 
 export default class CaseSnapshotSvc {
@@ -39,6 +41,7 @@ export default class CaseSnapshotSvc {
       evidenceMatrix,
       contradictions,
       citations,
+      authorities,
       deadlines,
       procedureItems,
       accesses,
@@ -65,6 +68,7 @@ export default class CaseSnapshotSvc {
       EvidenceRepo.listMatrix(caseId),
       EvidenceRepo.listContradictions(caseId),
       CitationCheckRepo.list(caseId),
+      CaseAuthorityRepo.list(caseId),
       ProceduralDeadlineRepo.list(caseId),
       ProceduralDeadlineRepo.listProcedureItems(caseId),
       OrganizationRepo.listCaseAccess(caseId),
@@ -121,16 +125,15 @@ export default class CaseSnapshotSvc {
       };
     });
 
-    const resolvedLawIds = citations.map((c) => c.resolvedLawId).filter((id): id is string => !!id);
+    const resolvedLawIds = [...citations, ...authorities].map((c) => c.resolvedLawId).filter((id): id is string => !!id);
     const resolvedLaws = await LawRepo.findManyByIds(resolvedLawIds);
     const lawById = new Map(resolvedLaws.map((law) => [law.id, law]));
-    const citationsWithAuthority = citations.map((citation) => {
-      const law = citation.resolvedLawId ? lawById.get(citation.resolvedLawId) : undefined;
-      return {
-        ...citation,
-        resolvedAuthority: law ? { lawId: law.id, title: law.title, jurisUrl: law.jurisUrl } : null,
-      };
-    });
+    const withResolvedAuthority = <T extends { resolvedLawId: string | null }>(row: T) => {
+      const law = row.resolvedLawId ? lawById.get(row.resolvedLawId) : undefined;
+      return { ...row, resolvedAuthority: law ? { lawId: law.id, title: law.title, jurisUrl: law.jurisUrl } : null };
+    };
+    const citationsWithAuthority = citations.map(withResolvedAuthority);
+    const authoritiesWithLaw = authorities.map(withResolvedAuthority);
 
     return {
       case: caseRecord,
@@ -164,7 +167,7 @@ export default class CaseSnapshotSvc {
       nextDate,
       fatalRisks,
       evidence: { matrix: evidenceMatrix, contradictions },
-      law: { citations: citationsWithAuthority },
+      law: { citations: citationsWithAuthority, authorities: authoritiesWithLaw, summary: summarizeAuthorities(authorities) },
       procedure: { deadlines, items: procedureItems, requiredConfirmations },
       teamAudit: { accesses, audit },
       findings,
