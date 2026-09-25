@@ -8,6 +8,8 @@ import CaseClaimRepo from "../repositories/case-claim.repository";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import EvidenceRepo from "../repositories/evidence.repository";
 import WitnessRepo from "../repositories/witness.repository";
+import DocumentRepo from "../repositories/document.repository";
+import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import { AI_FINDING_NOTE } from "../constants";
 import type { ParsedCaseFinding } from "../utils/case-finding-parse";
@@ -21,11 +23,14 @@ import {
 } from "../utils/case-jev-context";
 import * as LegalIssueJev from "../utils/legal-issue-jev";
 import * as WeaknessJev from "../utils/weakness-jev";
+import * as StrengthJev from "../utils/strength-jev";
+import { embedText } from "../utils/embedding";
 
 // Jev's checks are stored as-is in CaseFinding.jev; the panel reads the per-category shape.
 const asJson = (value: unknown) => value as Prisma.InputJsonValue;
 
 interface CheckTarget {
+  caseId: string;
   label: string;
   detail: string | null;
   sourceLabel: string | null;
@@ -64,7 +69,20 @@ const CHECKERS: Partial<Record<FindingCategory, FindingChecker>> = {
     // "Ordered by how early it will surface."
     order: (a, b) => WeaknessJev.compareBySurfacing(a as WeaknessJev.WeaknessJevCheck, b as WeaknessJev.WeaknessJevCheck),
   },
+  STRENGTH: {
+    enabled: StrengthJev.isStrengthJevEnabled,
+    async run(target, context) {
+      const passages = await FindingJevSvc.sourcePassages(target.caseId, target.label, target.sourceLabel);
+      const check = await StrengthJev.checkStrengthWithJev({ ...target, passages }, context);
+      return { check, tag: StrengthJev.tagFromCheck(check), impact: StrengthJev.impactFromCheck(check) };
+    },
+    // "The documents that do the most work."
+    order: (a, b) => StrengthJev.compareByWeight(a as StrengthJev.StrengthJevCheck, b as StrengthJev.StrengthJevCheck),
+  },
 };
+
+const MAX_SOURCE_PASSAGES = 3;
+const MAX_PASSAGE_CHARS = 1200;
 
 /** The context minus the row being judged — a finding can't be its own evidence. */
 function withoutSelf(context: CaseJevContext, category: FindingCategory, label: string): CaseJevContext {
@@ -79,10 +97,29 @@ function withoutSelf(context: CaseJevContext, category: FindingCategory, label: 
 
 /**
  * Runs the per-category Jev checks for CaseFinding rows: over a freshly generated batch before
- * it's saved (verifyParsed), and on request for one row (checkOne). Legal Issues and Weaknesses
- * have a check so far (CHECKERS).
+ * it's saved (verifyParsed), and on request for one row (checkOne). Legal Issues, Weaknesses and
+ * Strengths have a check (CHECKERS); Attack and Defense Strategies don't.
  */
 export default class FindingJevSvc {
+  /** The passages of the finding's cited document (matched by name, as the model cites it) that
+   * best match the finding — so Jev can check the document says what the panel shows beside it.
+   * [] when there's no cited document, it isn't indexed, or the lookup fails; the check then says
+   * it judged against the case data alone. */
+  static async sourcePassages(caseId: string, label: string, sourceLabel: string | null): Promise<string[]> {
+    if (!sourceLabel) return [];
+    try {
+      const docs = await DocumentRepo.listAllByCase(caseId);
+      const doc = docs.find((d) => d.name === sourceLabel && d.ragStatus === "READY");
+      if (!doc) return [];
+      const ids = await DocumentChunkRepo.findRelevantByDocument(doc.id, await embedText(label), MAX_SOURCE_PASSAGES);
+      const chunks = await DocumentChunkRepo.findTextsByIds(ids);
+      return chunks.map((c) => `${c.pageNumber ? `[p. ${c.pageNumber}] ` : ""}${c.chunkText.slice(0, MAX_PASSAGE_CHARS)}`);
+    } catch (err) {
+      logger.warn("Finding Jev: couldn't read the cited document's passages", { err, caseId, sourceLabel });
+      return [];
+    }
+  }
+
   /** The case data a finding is judged against — the same lists Red Team sends, plus claims.
    * `findings` supplies the Legal Issues / Weaknesses lists, so a batch still being generated
    * can be judged against itself rather than the rows it's about to replace. */
@@ -136,7 +173,7 @@ export default class FindingJevSvc {
       rows.map(async (row, i) => {
         if (!active.has(row.category)) return null;
         try {
-          const target = { label: row.label, detail: row.detail ?? null, sourceLabel: row.sourceLabel, modelBurden: parsed[i].burden };
+          const target = { caseId, label: row.label, detail: row.detail ?? null, sourceLabel: row.sourceLabel, modelBurden: parsed[i].burden };
           const result = await CHECKERS[row.category]!.run(target, withoutSelf(context, row.category, row.label));
           rows[i] = {
             ...row,
@@ -185,7 +222,7 @@ export default class FindingJevSvc {
     let result: CheckResult;
     try {
       result = await checker.run(
-        { label: row.label, detail: row.detail, sourceLabel: row.sourceLabel, modelBurden: previous?.modelBurden ?? null },
+        { caseId, label: row.label, detail: row.detail, sourceLabel: row.sourceLabel, modelBurden: previous?.modelBurden ?? null },
         context,
       );
     } catch (err) {
