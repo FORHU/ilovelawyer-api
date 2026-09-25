@@ -43,6 +43,7 @@ import {
   checkCitationSchema,
   createAuthoritySchema,
   updateAuthoritySchema,
+  updateCitationSchema,
   createDeadlineSchema,
   confirmDeadlineSchema,
   createProcedureItemSchema,
@@ -290,6 +291,18 @@ export default class CaseTerminalCtrl {
 
   static async deleteAuthority(req: Request, res: Response) {
     await CaseAuthoritySvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async updateCitation(req: Request, res: Response) {
+    const { error, value } = updateCitationSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CitationCheckSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteCitation(req: Request, res: Response) {
+    await CitationCheckSvc.delete(req.params.caseId, req.params.id, req.user.userId);
     return res.status(204).send();
   }
 

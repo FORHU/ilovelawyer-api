@@ -61,6 +61,8 @@ router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl
 
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
 router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
+router.patch("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.updateCitation));
+router.delete("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.deleteCitation));
 router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
 
 router.post("/:caseId/authorities", asyncHandler(CaseTerminalCtrl.createAuthority));

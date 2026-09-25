@@ -136,6 +136,17 @@ export const updateAuthoritySchema = Joi.object({
   findingId: Joi.string().allow(null).optional(),
 }).min(1);
 
+// A field left out is kept as-is; "" or null clears it (the edit form sends every field, so a
+// lawyer emptying the pinpoint or reference box actually removes it). The quote itself can't be
+// emptied — a citation with no quoted text isn't a citation.
+export const updateCitationSchema = Joi.object({
+  quotedText: Joi.string().trim().min(1).optional(),
+  citedReference: Joi.string().allow("", null).optional(),
+  sourceUrl: Joi.string().allow("", null).optional(),
+  officialText: Joi.string().allow("", null).optional(),
+  pinpoint: Joi.string().allow("", null).optional(),
+}).min(1);
+
 export const createDeadlineSchema = Joi.object({
   ruleCode: Joi.string().required(),
   triggerDate: Joi.string().required(),

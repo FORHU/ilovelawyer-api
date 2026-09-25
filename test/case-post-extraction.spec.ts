@@ -154,6 +154,9 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     let refreshCalls: { caseId: string; userId: string }[] = [];
     (CaseRefreshSvc as any).runQueued = async (caseId: string, userId: string) => {
       refreshCalls.push({ caseId, userId });
+      // Stands in for the whole CaseRefreshSvc pipeline, so it must reproduce refreshInner's
+      // real fingerprint stamping (see case-refresh.service.ts) — that's what this test asserts.
+      await CaseRepo.setReadySetFingerprint(caseId, fingerprintOf(["d1"]));
     };
 
     await runCasePostExtraction("case-1", "user-1");
@@ -166,10 +169,14 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     // Simulates the 2,000-document-upload edge case: every document's extraction finishing
     // schedules its own delayed message, but only the first one to actually run finds a
     // changed fingerprint — every later one (even a much later one, past a restart) is a no-op.
-    (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1", "d2", "d3"]);
+    const readyIds = ["d1", "d2", "d3"];
+    (DocumentRepo as any).listAllByCase = async () => readyDocs(readyIds);
     let refreshCalls = 0;
-    (CaseRefreshSvc as any).runQueued = async () => {
+    (CaseRefreshSvc as any).runQueued = async (caseId: string) => {
       refreshCalls += 1;
+      // See the fingerprint-stamping comment above — refreshInner does this for real now, and
+      // it's precisely that stamp which makes the 2nd/3rd trigger see an unchanged fingerprint.
+      await CaseRepo.setReadySetFingerprint(caseId, fingerprintOf(readyIds));
     };
 
     await runCasePostExtraction("case-1", "user-1");
