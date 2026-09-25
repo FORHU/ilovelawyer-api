@@ -45,3 +45,8 @@ export const revertMindMapSchema = Joi.object({
   /** The version the client is looking at — a stale undo is refused instead of undoing a newer change. */
   version: Joi.number().integer().min(1).optional(),
 });
+
+// The same two actions on the case's document-built map (CaseMindMapCtrl) — no messageId, a case
+// has exactly one.
+export const expandCaseMindMapNodeSchema = expandMindMapNodeSchema.fork(["messageId"], (s) => s.forbidden());
+export const revertCaseMindMapSchema = revertMindMapSchema.fork(["messageId"], (s) => s.forbidden());

@@ -26,7 +26,15 @@ export interface MindMapItem {
   /** The model's own id for this node, kept only when it differs from the path id. */
   sourceId?: string;
   media?: unknown[];
+  /** Case documents this point comes from — set on document-built case maps (CaseMindMapSvc),
+   * which drops any id that isn't one of the case's documents before saving. */
+  sources?: MindMapSource[];
   children: MindMapItem[];
+}
+
+export interface MindMapSource {
+  documentId: string;
+  page?: number;
 }
 
 export interface AudioOverviewTurn {
@@ -122,6 +130,18 @@ function fixedBranchId(item: any): string | undefined {
   return undefined;
 }
 
+function mindMapSources(raw: unknown): MindMapSource[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MindMapSource[] = [];
+  for (const item of raw) {
+    const documentId = typeof item?.documentId === "string" ? item.documentId.trim() : "";
+    if (!documentId) continue;
+    const page = Number(item.page);
+    out.push(Number.isInteger(page) && page > 0 ? { documentId, page } : { documentId });
+  }
+  return out;
+}
+
 function subtreeSize(src: any): number {
   return 1 + mindMapChildren(src).reduce((n, kid) => n + subtreeSize(kid), 0);
 }
@@ -138,6 +158,8 @@ function toMindMapNode(src: any, id: string, depth: number): MindMapItem {
   const sourceId = firstText(src.sourceId, src.id);
   if (sourceId && sourceId !== id) node.sourceId = sourceId;
   if (Array.isArray(src.media)) node.media = src.media;
+  const sources = mindMapSources(src.sources);
+  if (sources.length) node.sources = sources;
   return node;
 }
 

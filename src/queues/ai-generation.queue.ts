@@ -7,6 +7,7 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
 import TheoryDiffSvc from "../services/theory-diff.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
+import CaseMindMapSvc from "../services/case-mind-map.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
@@ -23,7 +24,8 @@ export type QueuedAiGenerationKind =
   | "timelineGenerate"
   | "witnessScoring"
   | "witnessExtract"
-  | "contradictions";
+  | "contradictions"
+  | "caseMindMapGenerate";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -68,6 +70,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // own lock (see WitnessExtractSvc.runQueued), same as casePostExtraction.
   witnessExtract: (job) => WitnessExtractSvc.runQueued(job.caseId, job.userId),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
+  caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,

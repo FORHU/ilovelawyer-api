@@ -292,12 +292,15 @@ model MessageMindMap {
   revisions MindMapRevision[]
 }
 
-/// One saved version of a MessageMindMap's tree. Written lazily: a map that was never expanded
-/// has no rows (its version-1 row is backfilled on the first expand). Undo deletes the newest
-/// row and restores the one before it, so this is a linear undo stack, not a branching history.
+/// One saved version of a mind map's tree — a chat message's map (MessageMindMap) or a case's
+/// document-built map (CaseMindMap); exactly one of the two ids is set. Written lazily for
+/// message maps (their version-1 row is backfilled on the first expand); every auto build of a
+/// case map writes one. Undo deletes the newest row and restores the one before it, so this is a
+/// linear undo stack, not a branching history.
 model MindMapRevision {
   id               String   @id @default(uuid())
-  messageMindMapId String
+  messageMindMapId String?
+  caseMindMapId    String?
   version          Int
   data             Json
   /// "generate" | "expand" | "edit" | "auto" — a string, not an enum, for the same reason as
@@ -308,9 +311,34 @@ model MindMapRevision {
   createdById      String?
   createdAt        DateTime @default(now())
 
-  mindMap MessageMindMap @relation(fields: [messageMindMapId], references: [id], onDelete: Cascade)
+  mindMap     MessageMindMap? @relation(fields: [messageMindMapId], references: [id], onDelete: Cascade)
+  caseMindMap CaseMindMap?    @relation(fields: [caseMindMapId], references: [id], onDelete: Cascade)
 
   @@unique([messageMindMapId, version])
+  @@unique([caseMindMapId, version])
+}
+
+/// The case's mind map built straight from its uploaded documents (CaseMindMapSvc), as opposed
+/// to a MessageMindMap, which a chat turn produced. One per case, rebuilt by the post-upload
+/// refresh (CaseRefreshSvc) whenever the READY document set changes — unless someone has
+/// expanded/edited it since the last build, in which case it's left alone and goes Stale.
+/// Same `data`/`version` contract as MessageMindMap.
+model CaseMindMap {
+  id                  String   @id @default(uuid())
+  caseId              String   @unique
+  data                Json
+  version             Int      @default(1)
+  /// Case.readySetFingerprint as of the build — which documents this map was built from.
+  readySetFingerprint String?
+  /// How many READY documents it was built from (Studio's "From 5 documents").
+  documentCount       Int      @default(0)
+  /// Last auto/regenerate build. Expanding doesn't move it — see MessageMindMap.createdAt.
+  generatedAt         DateTime @default(now())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  case      Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  revisions MindMapRevision[]
 }
 
 model MessageRelatedCases {
@@ -678,6 +706,7 @@ model Case {
   terminalWorkspaces TerminalWorkspace[]
   annotations        Annotation[]
   outlooks           CaseOutlook[]
+  mindMap            CaseMindMap?
 
   @@index([userId])
   @@index([organizationId])

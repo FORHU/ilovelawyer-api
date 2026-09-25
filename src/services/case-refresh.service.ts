@@ -6,6 +6,7 @@ import EvidenceIntelligenceSvc from "./evidence-intelligence.service";
 import CaseStrategySvc from "./case-strategy.service";
 import CaseFindingAiSvc from "./case-finding-ai.service";
 import CaseOutlookAiSvc from "./case-outlook-ai.service";
+import CaseMindMapSvc from "./case-mind-map.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import ChatRepo from "../repositories/chat.repository";
 import { TimelineItem } from "../utils/response-parser";
@@ -107,6 +108,26 @@ export default class CaseRefreshSvc {
             })
             .catch((err) => {
                 logger.warn("Chat Wonder case outlook generation failed", {
+                    err,
+                    caseId,
+                    durationMs: Date.now() - stepStartedAt,
+                });
+            });
+
+        // After strategy/findings, since the map prompt reads them (key dates, findings, to-dos).
+        // Skips itself when the documents haven't changed or someone has expanded the map — see
+        // CaseMindMapSvc. A failed build never fails the refresh; the previous map stays.
+        stepStartedAt = Date.now();
+        await CaseMindMapSvc.generateFromDocuments(caseId, userId)
+            .then((result) => {
+                logger.info("Refresh analysis: case mind map done", {
+                    caseId,
+                    skipped: result.skipped,
+                    durationMs: Date.now() - stepStartedAt,
+                });
+            })
+            .catch((err) => {
+                logger.warn("Chat Wonder case mind map build failed", {
                     err,
                     caseId,
                     durationMs: Date.now() - stepStartedAt,

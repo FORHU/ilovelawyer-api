@@ -21,6 +21,8 @@ import CaseTheoryRepo from "../src/repositories/case-theory.repository";
 import AnnotationRepo from "../src/repositories/annotation.repository";
 import CaseGraphRepo from "../src/repositories/case-graph.repository";
 import ChatRepo from "../src/repositories/chat.repository";
+import MindMapRepo from "../src/repositories/mind-map.repository";
+import { fingerprintReadyDocuments } from "../src/utils/ready-set-fingerprint";
 import LawRepo from "../src/repositories/law.repository";
 import CaseOutlookRepo from "../src/repositories/case-outlook.repository";
 import prisma from "../src/lib/prisma";
@@ -75,6 +77,7 @@ describe("CaseSnapshotSvc.get — outlook fields", () => {
       [AnnotationRepo, "list", empty],
       [CaseGraphRepo, "listStaleForCase", empty],
       [ChatRepo, "findLatestMindMapCreatedAtForCase", none],
+      [MindMapRepo, "findCaseMapMeta", none],
       [ChatRepo, "findManyByIds", empty],
       [LawRepo, "findManyByIds", empty],
       [CaseOutlookRepo, "latest", async () => latest],
@@ -135,5 +138,24 @@ describe("CaseSnapshotSvc.get — outlook fields", () => {
     expect(snapshot.trends.evidence).to.have.length(CASE_TREND_WEEKS);
     expect(snapshot.trends.openIssues[CASE_TREND_WEEKS - 1].total).to.equal(1);
     expect(snapshot.trends.evidence[CASE_TREND_WEEKS - 1].total).to.equal(1);
+  });
+
+  it("reports the case mind map, stale only when the READY documents changed since its build", async () => {
+    expect((await CaseSnapshotSvc.get("case-1", "user-1")).caseMindMap).to.equal(null);
+
+    const meta = { id: "cmm1", version: 3, generatedAt: new Date("2026-09-24"), documentCount: 1 };
+    const original = MindMapRepo.findCaseMapMeta;
+    try {
+      MindMapRepo.findCaseMapMeta = (async () => ({
+        ...meta,
+        readySetFingerprint: fingerprintReadyDocuments([{ id: "doc-1", ragStatus: "READY" }]),
+      })) as any;
+      expect((await CaseSnapshotSvc.get("case-1", "user-1")).caseMindMap).to.deep.include({ version: 3, documentCount: 1, isStale: false });
+
+      MindMapRepo.findCaseMapMeta = (async () => ({ ...meta, readySetFingerprint: "built-from-other-documents" })) as any;
+      expect((await CaseSnapshotSvc.get("case-1", "user-1")).caseMindMap?.isStale).to.equal(true);
+    } finally {
+      MindMapRepo.findCaseMapMeta = original;
+    }
   });
 });

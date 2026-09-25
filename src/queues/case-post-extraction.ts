@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import DocumentRepo from "../repositories/document.repository";
 import CaseRepo from "../repositories/case.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
@@ -6,6 +5,7 @@ import CaseReconstructionAudioQueue from "./case-reconstruction-audio.queue";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import WitnessExtractSvc from "../services/witness-extract.service";
 import HttpError from "../utils/http-error";
+import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
 
 /** Wait until a bulk upload burst stops finishing files, then run case-level AI once. */
@@ -45,15 +45,6 @@ export function scheduleCasePostExtraction(caseId: string, userId: string): void
       logger.error("Case post-extraction: failed to schedule via AiGenerationQueue", { err, caseId, userId });
     }
   })();
-}
-
-/** Hash of the case's current sorted READY document id set — compared against
- * Case.readySetFingerprint to skip a redundant Chat Wonder run when nothing actually changed
- * (a same-file re-upload, or a delete immediately followed by a re-add). */
-async function computeReadySetFingerprint(caseId: string): Promise<string> {
-  const docs = await DocumentRepo.listAllByCase(caseId);
-  const readyIds = docs.filter((d) => d.ragStatus === "READY").map((d) => d.id).sort();
-  return crypto.createHash("sha256").update(readyIds.join(",")).digest("hex");
 }
 
 /** Run by AiGenerationQueue's worker once a "casePostExtraction" message's SQS delay elapses.

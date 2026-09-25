@@ -21,6 +21,8 @@ import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
+import { fingerprintReadyDocuments } from "../utils/ready-set-fingerprint";
+import MindMapRepo from "../repositories/mind-map.repository";
 import { buildCaseTrends } from "../utils/case-trends";
 import { OutlookDriver } from "../utils/case-outlook-parse";
 import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../constants";
@@ -54,6 +56,7 @@ export default class CaseSnapshotSvc {
       latestMindMap,
       outlook,
       outlookHistory,
+      caseMindMap,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -79,6 +82,7 @@ export default class CaseSnapshotSvc {
       ChatRepo.findLatestMindMapCreatedAtForCase(caseId),
       CaseOutlookRepo.latest(caseId),
       CaseOutlookRepo.history(caseId, OUTLOOK_HISTORY_LIMIT),
+      MindMapRepo.findCaseMapMeta(caseId),
     ]);
 
     // listAllByCase is unscoped by status (its other callers need archived documents for id
@@ -181,6 +185,17 @@ export default class CaseSnapshotSvc {
           audit.find((a) => !a.action.startsWith("mindMap."))?.createdAt ?? null,
         ),
       },
+      // The document-built case map (CaseMindMapSvc) — null until the case's first build. Stale
+      // means the READY document set changed since it was built: a rebuild was skipped (someone
+      // had expanded it) or hasn't run yet. Expanding it never makes it stale.
+      caseMindMap: caseMindMap
+        ? {
+            version: caseMindMap.version,
+            generatedAt: caseMindMap.generatedAt,
+            documentCount: caseMindMap.documentCount,
+            isStale: caseMindMap.readySetFingerprint !== fingerprintReadyDocuments(documents),
+          }
+        : null,
       // Band + confidence only — the outlook never carries a numeric probability. Null until the
       // case's first refresh after the outlook shipped (no backfill).
       outlook: outlook

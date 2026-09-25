@@ -128,7 +128,7 @@ describe("Mind map expand", () => {
       revisions.push({ version: row.version, data: p.data, reason: p.reason });
       return { version: row.version };
     }) as any;
-    MindMapRepo.revertOneVersion = (async (_id: string, expected: number) => {
+    MindMapRepo.revertOneVersion = (async (_kind: string, _id: string, expected: number) => {
       const previous = [...revisions].reverse().find((r) => r.version < expected)!;
       row = { ...row, data: previous.data, version: previous.version };
       revisions = revisions.filter((r) => r.version <= previous.version);
