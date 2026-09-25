@@ -17,5 +17,5 @@ export interface CaseWithParties {
   jurisdiction?: string | null;
   ukJurisdiction?: string | null;
   notes?: string | null;
-  parties?: { name: string; designation: string }[];
+  parties?: { name: string; designation: string; descriptor?: string | null }[];
 }

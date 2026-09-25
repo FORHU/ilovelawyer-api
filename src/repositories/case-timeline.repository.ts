@@ -119,6 +119,18 @@ export default class CaseTimelineRepo {
     return prisma.caseTimelineEvent.update({ where: { id }, data });
   }
 
+  /** documentId/chunkId have no foreign key, so deleting a Document leaves them dangling — called
+   * from DocumentSvc.delete to detach its timeline rows instead. A detached AI key-date row then
+   * falls under replaceAiKeyDates' "no documentId" rule (dropped unless the next run still
+   * reports it); a detached row tied to a deleted id would otherwise sit out of every run's scope
+   * forever. */
+  static async detachDocument(documentId: string) {
+    return prisma.caseTimelineEvent.updateMany({
+      where: { documentId },
+      data: { documentId: null, chunkId: null },
+    });
+  }
+
   static async delete(id: string, caseId: string) {
     const result = await prisma.caseTimelineEvent.deleteMany({ where: { id, caseId } });
     return result.count > 0;

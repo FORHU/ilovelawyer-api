@@ -21,6 +21,7 @@ import CaseRefreshSvc from "../src/services/case-refresh.service";
 import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../src/services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../src/queues/case-reconstruction-audio.queue";
+import WitnessExtractSvc from "../src/services/witness-extract.service";
 import HttpError from "../src/utils/http-error";
 
 function fingerprintOf(ids: string[]): string {
@@ -49,14 +50,22 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     reconstructionGenerate: CaseReconstructionSvc.generate,
     startAudioJob: CaseReconstructionAudioSvc.startAudioJob,
     audioEnqueue: CaseReconstructionAudioQueue.enqueue,
+    witnessSchedule: WitnessExtractSvc.schedule,
   };
 
   let sent: { queueUrl: string; body: string; delaySeconds?: number }[];
   let fingerprintStore: Record<string, string | null>;
   let caseExistsStore: Record<string, boolean>;
+  // WitnessExtractSvc.schedule enqueues its own "witnessExtract" message — stubbed out of `sent`
+  // so these tests keep counting only the refresh's own (re)schedule messages.
+  let witnessScheduled: string[];
 
   beforeEach(() => {
     sent = [];
+    witnessScheduled = [];
+    (WitnessExtractSvc as any).schedule = (caseId: string) => {
+      witnessScheduled.push(caseId);
+    };
     fingerprintStore = {};
     caseExistsStore = { "case-1": true };
 
@@ -93,6 +102,7 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseReconstructionSvc as any).generate = originals.reconstructionGenerate;
     (CaseReconstructionAudioSvc as any).startAudioJob = originals.startAudioJob;
     (CaseReconstructionAudioQueue as any).enqueue = originals.audioEnqueue;
+    (WitnessExtractSvc as any).schedule = originals.witnessSchedule;
   });
 
   // ── Phase 3: durable debounce ─────────────────────────────────────────────────────────────
@@ -144,6 +154,9 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     let refreshCalls: { caseId: string; userId: string }[] = [];
     (CaseRefreshSvc as any).runQueued = async (caseId: string, userId: string) => {
       refreshCalls.push({ caseId, userId });
+      // Stands in for the whole CaseRefreshSvc pipeline, so it must reproduce refreshInner's
+      // real fingerprint stamping (see case-refresh.service.ts) — that's what this test asserts.
+      await CaseRepo.setReadySetFingerprint(caseId, fingerprintOf(["d1"]));
     };
 
     await runCasePostExtraction("case-1", "user-1");
@@ -156,10 +169,14 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     // Simulates the 2,000-document-upload edge case: every document's extraction finishing
     // schedules its own delayed message, but only the first one to actually run finds a
     // changed fingerprint — every later one (even a much later one, past a restart) is a no-op.
-    (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1", "d2", "d3"]);
+    const readyIds = ["d1", "d2", "d3"];
+    (DocumentRepo as any).listAllByCase = async () => readyDocs(readyIds);
     let refreshCalls = 0;
-    (CaseRefreshSvc as any).runQueued = async () => {
+    (CaseRefreshSvc as any).runQueued = async (caseId: string) => {
       refreshCalls += 1;
+      // See the fingerprint-stamping comment above — refreshInner does this for real now, and
+      // it's precisely that stamp which makes the 2nd/3rd trigger see an unchanged fingerprint.
+      await CaseRepo.setReadySetFingerprint(caseId, fingerprintOf(readyIds));
     };
 
     await runCasePostExtraction("case-1", "user-1");
@@ -187,6 +204,20 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     expect(refreshCalls).to.equal(0);
     expect(sent).to.have.length(1); // the reschedule message, so the corpus change isn't lost
     expect(fingerprintStore["case-1"]).to.be.undefined; // not stamped — nothing actually ran
+  });
+
+  it("schedules witness extraction once extraction has settled, even when the READY set is unchanged", async () => {
+    (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1"]);
+    fingerprintStore["case-1"] = fingerprintOf(["d1"]);
+    await runCasePostExtraction("case-1", "user-1");
+    expect(witnessScheduled).to.deep.equal(["case-1"]);
+  });
+
+  it("does not schedule witness extraction while documents are still extracting", async () => {
+    (DocumentRepo as any).countPendingExtractionByCase = async () => 2;
+    await runCasePostExtraction("case-1", "user-1");
+    await flush();
+    expect(witnessScheduled).to.deep.equal([]);
   });
 
   it("propagates a non-409 lock error instead of silently swallowing it", async () => {

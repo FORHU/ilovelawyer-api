@@ -2,6 +2,7 @@ import Joi from "joi";
 
 const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
 const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
+const CONFIDENCE_LEVELS = ["LOW", "MEDIUM", "HIGH"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
 const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
 const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
@@ -60,6 +61,10 @@ export const createRiskSchema = Joi.object({
   documentId: Joi.string().optional().allow(null),
   chunkId: Joi.string().optional().allow(null),
   pageNumber: Joi.number().integer().min(1).optional().allow(null),
+  confidence: Joi.string()
+    .valid(...CONFIDENCE_LEVELS)
+    .optional()
+    .allow(null),
 });
 
 export const updateRiskSchema = Joi.object({
@@ -75,6 +80,10 @@ export const updateRiskSchema = Joi.object({
   documentId: Joi.string().optional().allow(null),
   chunkId: Joi.string().optional().allow(null),
   pageNumber: Joi.number().integer().min(1).optional().allow(null),
+  confidence: Joi.string()
+    .valid(...CONFIDENCE_LEVELS)
+    .optional()
+    .allow(null),
 }).min(1);
 
 export const upsertMatrixSchema = Joi.object({
@@ -108,6 +117,17 @@ export const checkCitationSchema = Joi.object({
   legalRagId: Joi.string().optional(),
   pinpoint: Joi.string().optional(),
 });
+
+// A field left out is kept as-is; "" or null clears it (the edit form sends every field, so a
+// lawyer emptying the pinpoint or reference box actually removes it). The quote itself can't be
+// emptied — a citation with no quoted text isn't a citation.
+export const updateCitationSchema = Joi.object({
+  quotedText: Joi.string().trim().min(1).optional(),
+  citedReference: Joi.string().allow("", null).optional(),
+  sourceUrl: Joi.string().allow("", null).optional(),
+  officialText: Joi.string().allow("", null).optional(),
+  pinpoint: Joi.string().allow("", null).optional(),
+}).min(1);
 
 export const createDeadlineSchema = Joi.object({
   ruleCode: Joi.string().required(),
@@ -156,13 +176,30 @@ export const updateFindingSchema = Joi.object({
 export const createWitnessSchema = Joi.object({
   name: Joi.string().required(),
   role: Joi.string().allow("").optional(),
+  summary: Joi.string().allow("").optional(),
+  status: Joi.string().valid("READY", "ADVERSE", "OUTSTANDING").optional(),
+  credibility: Joi.number().integer().min(0).max(100).optional(),
+  credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
+  statementDueOn: Joi.date().iso().allow(null).optional(),
+  statementReceived: Joi.boolean().optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
+});
+
+export const updateContradictionSchema = Joi.object({
+  status: Joi.string().valid("OPEN", "RESOLVED", "DISMISSED").required(),
+  resolutionNote: Joi.string().allow("", null).max(2000).optional(),
 });
 
 export const updateWitnessSchema = Joi.object({
   name: Joi.string().optional(),
   role: Joi.string().allow("").optional(),
+  summary: Joi.string().allow("").optional(),
+  status: Joi.string().valid("READY", "ADVERSE", "OUTSTANDING").optional(),
+  credibility: Joi.number().integer().min(0).max(100).optional(),
+  credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
+  statementDueOn: Joi.date().iso().allow(null).optional(),
+  statementReceived: Joi.boolean().optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 }).min(1);

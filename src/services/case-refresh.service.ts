@@ -5,12 +5,14 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import EvidenceIntelligenceSvc from "./evidence-intelligence.service";
 import CaseStrategySvc from "./case-strategy.service";
 import CaseFindingAiSvc from "./case-finding-ai.service";
+import CaseOutlookAiSvc from "./case-outlook-ai.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import ChatRepo from "../repositories/chat.repository";
 import { TimelineItem } from "../utils/response-parser";
 import OrganizationRepo from "../repositories/organization.repository";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
 
 export default class CaseRefreshSvc {
@@ -97,6 +99,21 @@ export default class CaseRefreshSvc {
                 });
             });
 
+        // After findings, since the outlook prompt reads them. A failed outlook never fails the
+        // refresh — the previous outlook just stays current.
+        stepStartedAt = Date.now();
+        await CaseOutlookAiSvc.generateFromDocuments(caseId, userId)
+            .then(() => {
+                logger.info("Refresh analysis: case outlook done", { caseId, durationMs: Date.now() - stepStartedAt });
+            })
+            .catch((err) => {
+                logger.warn("Chat Wonder case outlook generation failed", {
+                    err,
+                    caseId,
+                    durationMs: Date.now() - stepStartedAt,
+                });
+            });
+
         const consultations = await ChatRepo.listConsultationIdsByCase(caseId);
         for (const consultation of consultations) {
             const messages = await ChatRepo.listMessagesByConsultation(
@@ -119,6 +136,11 @@ export default class CaseRefreshSvc {
         }
 
         await CaseRepo.markRefreshed(caseId);
+        // Persisted here (not only in the automatic post-extraction path) so a manual "Refresh
+        // analysis" click also counts as "the last successful refresh" for the fingerprint skip —
+        // otherwise an auto-trigger for the same still-unchanged READY set right after a manual
+        // click would see a stale/missing fingerprint and burn the three Chat Wonder calls again.
+        await CaseRepo.setReadySetFingerprint(caseId, computeReadySetFingerprint(docs));
         await OrganizationRepo.writeAudit({
             caseId,
             actorId: userId,

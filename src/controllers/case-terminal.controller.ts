@@ -18,6 +18,7 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
+import WitnessScoringSvc from "../services/witness-scoring.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -39,6 +40,7 @@ import {
   upsertMatrixSchema,
   addCustodyEventSchema,
   checkCitationSchema,
+  updateCitationSchema,
   createDeadlineSchema,
   confirmDeadlineSchema,
   createProcedureItemSchema,
@@ -49,6 +51,7 @@ import {
   updateFindingSchema,
   createWitnessSchema,
   updateWitnessSchema,
+  updateContradictionSchema,
   createDamageSchema,
   updateDamageSchema,
   createClaimSchema,
@@ -219,8 +222,21 @@ export default class CaseTerminalCtrl {
     return res.status(204).send();
   }
 
+  /** Queued via AiGenerationQueue (SQS) — a full-bundle scan outlasts an HTTP request. The panel
+   * follows the "contradictions" job status and refreshes when it's DONE. */
   static async scanContradictions(req: Request, res: Response) {
-    const result = await EvidenceIntelligenceSvc.scanContradictions(req.params.caseId, req.user.userId);
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await EvidenceIntelligenceSvc.beginQueuedScan(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "contradictions", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "contradictions");
+    return res.status(202).json(status);
+  }
+
+  static async updateContradiction(req: Request, res: Response) {
+    const { error, value } = updateContradictionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await EvidenceIntelligenceSvc.updateContradiction(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
   }
 
@@ -254,6 +270,18 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await CitationCheckSvc.check(req.params.caseId, req.user.userId, value);
     return res.status(201).json(result);
+  }
+
+  static async updateCitation(req: Request, res: Response) {
+    const { error, value } = updateCitationSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CitationCheckSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteCitation(req: Request, res: Response) {
+    await CitationCheckSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
   }
 
   static async procedureRules(req: Request, res: Response) {
@@ -360,6 +388,16 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await WitnessSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async scoreWitnesses(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await WitnessScoringSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "witnessScoring", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "witnessScoring");
+    return res.status(202).json(status);
   }
 
   static async deleteWitness(req: Request, res: Response) {

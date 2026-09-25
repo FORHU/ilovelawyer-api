@@ -31,5 +31,8 @@ export default class WitnessSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const deleted = await WitnessRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Witness not found", 404);
+    // CaseGraphViewSvc's "witnesses" view reads CaseGraphNode, never Witness directly — without
+    // this the row keeps rendering as a ghost "Unnamed witness".
+    await CaseGraphSvc.removeNode("WITNESS", id);
   }
 }

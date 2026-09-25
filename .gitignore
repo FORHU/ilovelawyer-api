@@ -12,3 +12,6 @@ dist/
 Thumbs.db
 /docs
 /benchmarks
+
+# local-only scripts
+prisma/seeders/adhoc-*.ts

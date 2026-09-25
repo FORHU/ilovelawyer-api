@@ -15,6 +15,7 @@ router.get("/", asyncHandler(CaseCtrl.list));
 router.get("/:id", asyncHandler(CaseCtrl.getById));
 router.patch("/:id", asyncHandler(CaseCtrl.update));
 router.delete("/:id", asyncHandler(CaseCtrl.delete));
+router.post("/:id/opened", asyncHandler(CaseCtrl.markOpened));
 router.post("/:id/archive", asyncHandler(CaseCtrl.archive));
 router.post("/:id/unarchive", asyncHandler(CaseCtrl.unarchive));
 router.post("/archive", asyncHandler(CaseCtrl.archiveMany));
@@ -55,10 +56,13 @@ router.put("/:caseId/evidence/matrix/:documentId", asyncHandler(CaseTerminalCtrl
 router.post("/:caseId/evidence/matrix/:documentId/custody", asyncHandler(CaseTerminalCtrl.addCustodyEvent));
 router.delete("/:caseId/evidence/matrix/:documentId/custody/:eventId", asyncHandler(CaseTerminalCtrl.deleteCustodyEvent));
 router.post("/:caseId/evidence/contradictions/scan", asyncHandler(CaseTerminalCtrl.scanContradictions));
+router.patch("/:caseId/evidence/contradictions/:id", asyncHandler(CaseTerminalCtrl.updateContradiction));
 router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl.traces));
 
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
 router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
+router.patch("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.updateCitation));
+router.delete("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.deleteCitation));
 router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
 
 router.get("/:caseId/graph-view", asyncHandler(CaseTerminalCtrl.graphView));
@@ -84,6 +88,7 @@ router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFindi
 
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
+router.post("/:caseId/witnesses/score", asyncHandler(CaseTerminalCtrl.scoreWitnesses));
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
 
