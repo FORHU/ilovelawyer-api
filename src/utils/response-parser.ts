@@ -2,6 +2,9 @@
 // structured-data blocks Chat Wonder embeds in AI response text, and strips them
 // from the text before it's persisted/displayed as a chat message.
 
+import { MIND_MAP_LIMITS, MIND_MAP_FIXED_BRANCH_IDS } from "../constants/mind-map-limits.constants";
+import logger from "./logger";
+
 export interface TimelineItem {
   title: string;
   date?: string;
@@ -10,11 +13,55 @@ export interface TimelineItem {
 }
 
 export interface MindMapItem {
+  /** Path-based and stable across regenerations — see normalizeMindMap. */
   id: string;
   label: string;
   description?: string;
   isRoot?: boolean;
+  /** Levels below the root; the root is 0. Absent on maps saved before normalizeMindMap set it. */
+  depth?: number;
+  /** This node has (or could have) more below it than the tree carries — either the model said
+   * so or normalizeMindMap trimmed children to stay inside MIND_MAP_LIMITS. */
+  hasMore?: boolean;
+  /** The model's own id for this node, kept only when it differs from the path id. */
+  sourceId?: string;
+  media?: unknown[];
+  /** Case documents this point comes from — set on document-built case maps (CaseMindMapSvc),
+   * which drops any id that isn't one of the case's documents before saving. */
+  sources?: MindMapSource[];
+  /** What Jev found when it checked this node against the case data and any passage it cites
+   * (mind-map-jev.ts).
+   * Absent until checked, and cleared when the node's text is edited. */
+  check?: MindMapNodeCheck;
+  /** Set when a document this point cited was removed or archived and the map wasn't rebuilt
+   * (someone had expanded it) — the citation is gone, the point stays for the lawyer to judge. */
+  sourceRemoved?: boolean;
   children: MindMapItem[];
+}
+
+export interface MindMapSource {
+  documentId: string;
+  page?: number;
+}
+
+export const MIND_MAP_CHECK_VERDICTS = ["SUPPORTED", "UNSUPPORTED", "CONTRADICTED"] as const;
+
+export interface MindMapNodeCheck {
+  verdict: (typeof MIND_MAP_CHECK_VERDICTS)[number];
+  confidence: number;
+  /** What Jev judged against: the case data alone ("caseData"), or the case data plus the page the
+   * point cites ("document"). Checks saved before case-data judging have no basis: "document". */
+  basis: "caseData" | "document";
+  /** assertion-check.ts's EVIDENCE_KINDS — what the cited passage amounts to. Only on checks
+   * saved before case-data judging (mind-map-jev.ts no longer asks it). */
+  evidenceKind?: string;
+  /** The cited document the verdict was reached on ("document" basis only). */
+  documentId?: string;
+  page?: number;
+  /** False when the cited passage was the document's most relevant chunks because no page was
+   * cited or that page had no text — weaker evidence. "document" basis only. */
+  located?: boolean;
+  checkedAt: string;
 }
 
 export interface AudioOverviewTurn {
@@ -88,7 +135,186 @@ function isMindMapShape(v: unknown): v is MindMapItem {
   return Boolean(anyV.id || anyV.nodes || anyV.label || anyV.children);
 }
 
-/** Unwraps Chat Wonder / LLM wrappers (`mindMap`, `root`) down to a renderable tree. */
+// Same child-key aliases the app's renderer accepts (components/chat/mind-map/index.tsx).
+function mindMapChildren(item: any): any[] {
+  const kids = item.children ?? item.items ?? item.nodes ?? item.subnodes ?? item.branches ?? item.subitems;
+  return Array.isArray(kids) ? kids.filter((k) => k && typeof k === "object" && !Array.isArray(k)) : [];
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const v of values) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+function fixedBranchId(item: any): string | undefined {
+  for (const raw of [item.id, item.label]) {
+    if (typeof raw !== "string") continue;
+    const key = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (MIND_MAP_FIXED_BRANCH_IDS[key]) return MIND_MAP_FIXED_BRANCH_IDS[key];
+  }
+  return undefined;
+}
+
+function mindMapSources(raw: unknown): MindMapSource[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MindMapSource[] = [];
+  for (const item of raw) {
+    const documentId = typeof item?.documentId === "string" ? item.documentId.trim() : "";
+    if (!documentId) continue;
+    const page = Number(item.page);
+    out.push(Number.isInteger(page) && page > 0 ? { documentId, page } : { documentId });
+  }
+  return out;
+}
+
+function mindMapCheck(raw: any): MindMapNodeCheck | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  if (!(MIND_MAP_CHECK_VERDICTS as readonly string[]).includes(raw.verdict)) return undefined;
+  const hasDocument = typeof raw.documentId === "string" && raw.documentId !== "";
+  // A "document" check without its document says nothing checkable — drop it. Older checks have
+  // no basis and always named a document.
+  const basis: MindMapNodeCheck["basis"] = raw.basis === "caseData" ? "caseData" : "document";
+  if (basis === "document" && !hasDocument) return undefined;
+  const confidence = Number(raw.confidence);
+  const check: MindMapNodeCheck = {
+    verdict: raw.verdict,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+    basis,
+    checkedAt: typeof raw.checkedAt === "string" ? raw.checkedAt : "",
+  };
+  if (hasDocument) {
+    check.documentId = raw.documentId;
+    check.located = raw.located === true;
+    const page = Number(raw.page);
+    if (Number.isInteger(page) && page > 0) check.page = page;
+  }
+  if (typeof raw.evidenceKind === "string" && raw.evidenceKind) check.evidenceKind = raw.evidenceKind;
+  return check;
+}
+
+function subtreeSize(src: any): number {
+  return 1 + mindMapChildren(src).reduce((n, kid) => n + subtreeSize(kid), 0);
+}
+
+function toMindMapNode(src: any, id: string, depth: number): MindMapItem {
+  const node: MindMapItem = { id, label: firstText(src.label, src.text, src.title) ?? "Untitled", children: [] };
+  const description = firstText(src.description, src.details, src.summary);
+  if (description) node.description = description;
+  if (depth === 0) node.isRoot = true;
+  node.depth = depth;
+  if (src.hasMore === true) node.hasMore = true;
+  // An already-normalized tree carries sourceId and a path id — keep the original model id
+  // rather than recording the path id as the "source", so normalizing twice changes nothing.
+  const sourceId = firstText(src.sourceId, src.id);
+  if (sourceId && sourceId !== id) node.sourceId = sourceId;
+  if (Array.isArray(src.media)) node.media = src.media;
+  const sources = mindMapSources(src.sources);
+  if (sources.length) node.sources = sources;
+  const check = mindMapCheck(src.check);
+  if (check) node.check = check;
+  if (src.sourceRemoved === true) node.sourceRemoved = true;
+  return node;
+}
+
+/** A child's number under its parent when its id is already `<prefix><n>` (a path id from an
+ * earlier normalize), else null. */
+function keptNumber(id: unknown, prefix: string): number | null {
+  if (typeof id !== "string" || !id.startsWith(prefix)) return null;
+  const rest = id.slice(prefix.length);
+  return /^[1-9]\d*$/.test(rest) ? Number(rest) : null;
+}
+
+/**
+ * Ids for one sibling group. A child that already carries a valid, unclaimed path id keeps it —
+ * so deleting a node (MindMapSvc.editNode) doesn't renumber the siblings after it, which would
+ * move collapse state and in-flight expands onto the wrong node. When nothing in the group has
+ * one yet (a fresh model tree), ids follow position; otherwise new children take the next number
+ * after the highest one kept.
+ */
+function childIds(parentId: string, kids: any[], depth: number): string[] {
+  if (depth === 0) {
+    const used = new Set<string>();
+    const kept = kids.map((kid) => {
+      const fixed = fixedBranchId(kid);
+      const id = fixed ?? (keptNumber(kid.id, "b") !== null ? kid.id : null);
+      if (!id || used.has(id)) return null;
+      used.add(id);
+      return id as string;
+    });
+    let next = Math.max(0, ...[...used].map((id) => keptNumber(id, "b") ?? 0)) + 1;
+    return kept.map((id, i) => {
+      if (id) return id;
+      const positional = `b${i + 1}`;
+      if (!used.has(positional)) {
+        used.add(positional);
+        return positional;
+      }
+      while (used.has(`b${next}`)) next++;
+      used.add(`b${next}`);
+      return `b${next}`;
+    });
+  }
+  const prefix = `${parentId}.`;
+  const used = new Set<number>();
+  const kept = kids.map((kid) => {
+    const n = keptNumber(kid.id, prefix);
+    if (n === null || used.has(n)) return null;
+    used.add(n);
+    return n;
+  });
+  if (used.size === 0) return kids.map((_, i) => `${prefix}${i + 1}`);
+  let next = Math.max(...used) + 1;
+  return kept.map((n) => `${prefix}${n ?? next++}`);
+}
+
+/**
+ * Rebuilds the tree with stable, path-based ids and enforces MIND_MAP_LIMITS.
+ *
+ * Model-chosen ids change on every generation, which reset collapse state and would leave
+ * nothing for a per-node action to point at. Instead: `root`; the five fixed first-level
+ * branches by name (`legalBasis`, `keyFacts`, …), any other first-level node `b<n>`; everything
+ * deeper `<parent id>.<n>` (`legalBasis.1.2`) — see childIds for how existing ids survive edits.
+ * Walks breadth-first, so when the tree is over the node cap it's the deepest/last nodes that go
+ * and every kept level stays complete; a node that lost children is marked `hasMore`.
+ */
+function canonicalizeMindMap(tree: any): { root: MindMapItem; trimmed: number } {
+  const { maxDepth, maxNodes } = MIND_MAP_LIMITS;
+  const root = toMindMapNode(tree, "root", 0);
+  const queue: { src: any; node: MindMapItem }[] = [{ src: tree, node: root }];
+  let count = 1;
+  let trimmed = 0;
+
+  for (let q = 0; q < queue.length; q++) {
+    const { src, node } = queue[q];
+    const kids = mindMapChildren(src);
+    const depth = node.depth ?? 0;
+    if (depth >= maxDepth) {
+      if (kids.length) {
+        node.hasMore = true;
+        trimmed += kids.reduce((n, kid) => n + subtreeSize(kid), 0);
+      }
+      continue;
+    }
+    const ids = childIds(node.id, kids, depth);
+    for (let i = 0; i < kids.length; i++) {
+      if (count >= maxNodes) {
+        node.hasMore = true;
+        trimmed += kids.slice(i).reduce((n, kid) => n + subtreeSize(kid), 0);
+        break;
+      }
+      const child = toMindMapNode(kids[i], ids[i], depth + 1);
+      node.children.push(child);
+      queue.push({ src: kids[i], node: child });
+      count++;
+    }
+  }
+  return { root, trimmed };
+}
+
+/** Unwraps Chat Wonder / LLM wrappers (`mindMap`, `root`) down to a renderable tree, then
+ * gives it stable ids and keeps it inside MIND_MAP_LIMITS (see canonicalizeMindMap). */
 export function normalizeMindMap(v: unknown): MindMapItem | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
   const anyV: any = v;
@@ -101,7 +327,11 @@ export function normalizeMindMap(v: unknown): MindMapItem | undefined {
         ? anyV.root
         : anyV;
   if (!isMindMapShape(tree)) return undefined;
-  return tree as MindMapItem;
+  const { root, trimmed } = canonicalizeMindMap(tree);
+  if (trimmed > 0) {
+    logger.warn("Mind map trimmed to MIND_MAP_LIMITS", { trimmedNodes: trimmed, ...MIND_MAP_LIMITS });
+  }
+  return root;
 }
 
 /**
@@ -125,6 +355,16 @@ export function parseStructuredDataPayload(raw: string): {
   const nested = anyV.mindMap ?? anyV.mindmap ?? anyV.mind_map;
   const mindMap = nested ? normalizeMindMap(nested) : normalizeMindMap(parsed);
   return { timeline, mindMap };
+}
+
+/**
+ * Chat Wonder's dedicated `[MINDMAP_DATA]{...tree...}` frame — the map in a frame of its own,
+ * sent after `__END__` only on turns that asked for a map (chat-wonder's `_generate_mind_map`,
+ * replacing the map inside `[STRUCTURED_DATA]`). A bare tree or a `{"mindMap": {...}}` wrapper
+ * both work; normalized like every other map (path ids, MIND_MAP_LIMITS).
+ */
+export function parseMindMapDataPayload(raw: string): MindMapItem | undefined {
+  return normalizeMindMap(safeJsonParse(raw));
 }
 
 /**
@@ -397,6 +637,7 @@ export function stripStructuredBlocks(text: string): string {
     .replace(/\[MINDMAP\][\s\S]*?\[\/MINDMAP\]/gi, "")
     .replace(/\[TRACE\][\s\S]*?\[\/TRACE\]/gi, "")
     .replace(/\[STRUCTURED_DATA\][\s\S]*?(?:\[DONE\]|$)/gi, "")
+    .replace(/\[MINDMAP_DATA\][\s\S]*?(?:\[DONE\]|$)/gi, "")
     .replace(/\[DONE\]/gi, "");
 
   const startTags = [/\[TIMELINE\]/i, /\[MINDMAP\]/i, /\[TRACE\]/i];

@@ -50,7 +50,6 @@ export default class CitationExtractionQueue {
   }
 
   private static async run(): Promise<void> {
-    logger.info("Citation extraction queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
   }

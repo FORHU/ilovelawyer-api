@@ -21,6 +21,8 @@ import CaseTheoryRepo from "../src/repositories/case-theory.repository";
 import AnnotationRepo from "../src/repositories/annotation.repository";
 import CaseGraphRepo from "../src/repositories/case-graph.repository";
 import ChatRepo from "../src/repositories/chat.repository";
+import MindMapRepo from "../src/repositories/mind-map.repository";
+import { fingerprintMindMapDocuments } from "../src/utils/ready-set-fingerprint";
 import LawRepo from "../src/repositories/law.repository";
 import CaseOutlookRepo from "../src/repositories/case-outlook.repository";
 import prisma from "../src/lib/prisma";
@@ -75,6 +77,7 @@ describe("CaseSnapshotSvc.get — outlook fields", () => {
       [AnnotationRepo, "list", empty],
       [CaseGraphRepo, "listStaleForCase", empty],
       [ChatRepo, "findLatestMindMapCreatedAtForCase", none],
+      [MindMapRepo, "findCaseMapMeta", none],
       [ChatRepo, "findManyByIds", empty],
       [LawRepo, "findManyByIds", empty],
       [CaseOutlookRepo, "latest", async () => latest],
@@ -135,5 +138,58 @@ describe("CaseSnapshotSvc.get — outlook fields", () => {
     expect(snapshot.trends.evidence).to.have.length(CASE_TREND_WEEKS);
     expect(snapshot.trends.openIssues[CASE_TREND_WEEKS - 1].total).to.equal(1);
     expect(snapshot.trends.evidence[CASE_TREND_WEEKS - 1].total).to.equal(1);
+  });
+
+  it("reports the case mind map: stale when its documents changed, with what changed", async () => {
+    expect((await CaseSnapshotSvc.get("case-1", "user-1")).caseMindMap).to.equal(null);
+
+    // The case has one indexed document, doc-1 (see the listAllByCase stub).
+    const meta = { id: "cmm1", version: 3, generatedAt: new Date("2026-09-24"), documentCount: 1, retiredAt: null };
+    const original = MindMapRepo.findCaseMapMeta;
+    const withMeta = async (extra: object) => {
+      MindMapRepo.findCaseMapMeta = (async () => ({ ...meta, ...extra })) as any;
+      return (await CaseSnapshotSvc.get("case-1", "user-1")).caseMindMap;
+    };
+    try {
+      expect(await withMeta({ documentIds: ["doc-1"], readySetFingerprint: "x" })).to.deep.include({
+        version: 3,
+        documentCount: 1,
+        isStale: false,
+        retired: false,
+        documentsAdded: 0,
+        documentsRemoved: 0,
+      });
+      // Built from doc-0 and doc-9; the case now has doc-1 instead.
+      expect(await withMeta({ documentIds: ["doc-0", "doc-9"], readySetFingerprint: "x" })).to.deep.include({
+        isStale: true,
+        documentsAdded: 1,
+        documentsRemoved: 2,
+      });
+      // A map built before documentIds was recorded falls back to the fingerprint: stale or not, no counts.
+      expect(await withMeta({ documentIds: [], readySetFingerprint: fingerprintMindMapDocuments([{ id: "doc-1", ragStatus: "READY" }]) })).to.deep.include({
+        isStale: false,
+        documentsAdded: 0,
+      });
+      expect((await withMeta({ documentIds: [], readySetFingerprint: "built-from-other-documents" }))?.isStale).to.equal(true);
+      // Retired maps are hidden, never "stale".
+      expect(await withMeta({ documentIds: ["doc-0"], readySetFingerprint: "x", retiredAt: new Date() })).to.deep.include({ retired: true, isStale: false });
+    } finally {
+      MindMapRepo.findCaseMapMeta = original;
+    }
+  });
+
+  it("leaves an archived document out of the case map's document set", async () => {
+    const original = { meta: MindMapRepo.findCaseMapMeta, docs: DocumentRepo.listAllByCase };
+    try {
+      DocumentRepo.listAllByCase = (async () => [
+        { id: "doc-1", name: "Contract", ragStatus: "READY", status: "ACTIVE", createdAt: new Date() },
+        { id: "doc-2", name: "Old draft", ragStatus: "READY", status: "ARCHIVED", createdAt: new Date() },
+      ]) as any;
+      MindMapRepo.findCaseMapMeta = (async () => ({ id: "cmm1", version: 1, generatedAt: new Date(), documentCount: 2, retiredAt: null, documentIds: ["doc-1", "doc-2"], readySetFingerprint: "x" })) as any;
+      expect((await CaseSnapshotSvc.get("case-1", "user-1")).caseMindMap).to.deep.include({ isStale: true, documentsRemoved: 1, documentsAdded: 0 });
+    } finally {
+      MindMapRepo.findCaseMapMeta = original.meta;
+      DocumentRepo.listAllByCase = original.docs;
+    }
   });
 });

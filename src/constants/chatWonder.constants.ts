@@ -33,24 +33,14 @@ export const STRUCTURED_DATA_WAIT_MS = 60_000;
 
 // Case-only feature (ilovelawyer-app/CONTEXT.md's Mind Map entry) — only ever appended when
 // the message belongs to a case-linked Conversation. See streamChatWonderMessage's `caseId`
-// param and docs/mind-map-generation-backend-handoff.md in ilovelawyer-app.
+// param. The diagram itself no longer comes from the answer: it used to ask for an inline
+// [MINDMAP]{...} tag here, but chat.service.ts always preferred the separate
+// `[STRUCTURED_DATA]` tree (chat-wonder's _generate_structured_data), so that inline tree was
+// asked for on every map request and then thrown away. What's left only keeps the answer from
+// drawing its own text version of the map next to the real diagram.
 export const MINDMAP_RULE = `
 
 When the user asks you to generate, build, update, or show a visual case strategy map, mind map, or
-case structure diagram, include a tag in your response in this exact format:
-
-[MINDMAP]{"id":"root","label":"Case Analysis","isRoot":true,"children":[{"id":"...","label":"...","description":"...","children":[]}]}[/MINDMAP]
-
-Rules:
-- Output valid JSON only inside the tags — no markdown code fences, no comments.
-- Root object: "id" ("root"), "label" (short title), "isRoot": true, "children" (array).
-- Each child: "id" (unique string), "label" (short title), "description" (optional, longer
-  explanation, markdown allowed), "children" (array — empty if it's a leaf).
-- Nest as many levels as the case reasonably supports.
-- If the case doesn't have enough established facts yet, still output a minimal tree (a root plus one
-  or two children such as "Facts not yet established") instead of only explaining in prose why you
-  can't build a full one — the prose explanation can still stay, the tag should be there either way.
-- Do NOT draw the map as ASCII art, a table, or any other plain-text representation — only the tagged
-  JSON block renders as a diagram; everything outside the tag is shown to the user as ordinary text,
-  and the tag itself is stripped out before they see it.
-- If the user did not ask for a visual map, do not include this tag at all.`;
+case structure diagram, the diagram is generated and shown to them separately from your reply. Do NOT
+draw the map yourself as ASCII art, a tree of bullet points, a table, or any other plain-text
+representation, and do not output JSON for it. Answer with the legal analysis the map should reflect.`;

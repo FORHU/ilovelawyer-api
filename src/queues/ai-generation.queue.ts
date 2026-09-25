@@ -7,6 +7,7 @@ import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
 import TheoryDiffSvc from "../services/theory-diff.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
+import CaseMindMapSvc from "../services/case-mind-map.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
@@ -23,7 +24,9 @@ export type QueuedAiGenerationKind =
   | "timelineGenerate"
   | "witnessScoring"
   | "witnessExtract"
-  | "contradictions";
+  | "contradictions"
+  | "caseMindMapGenerate"
+  | "caseMindMapResync";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -68,6 +71,10 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // own lock (see WitnessExtractSvc.runQueued), same as casePostExtraction.
   witnessExtract: (job) => WitnessExtractSvc.runQueued(job.caseId, job.userId),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
+  caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
+  // No controller either: the one coalesced retry after a document change found a map build
+  // running (CaseMindMapSvc.scheduleResync). Claims the "caseMindMap" lock itself.
+  caseMindMapResync: (job) => CaseMindMapSvc.runResync(job.caseId, job.userId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,
@@ -144,7 +151,6 @@ export default class AiGenerationQueue {
   }
 
   private static async run(): Promise<void> {
-    logger.info("AI generation queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
   }
@@ -205,17 +211,9 @@ export default class AiGenerationQueue {
   private static runOne(item: WaitItem): void {
     this.active += 1;
     const startedAt = Date.now();
-    logger.info("AI generation queue: job started", { kind: item.job.kind, caseId: item.job.caseId });
     void withVisibilityHeartbeat(AI_GENERATION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
       RUNNERS[item.job.kind](item.job),
     )
-      .then(() => {
-        logger.info("AI generation queue: job finished", {
-          kind: item.job.kind,
-          caseId: item.job.caseId,
-          durationMs: Date.now() - startedAt,
-        });
-      })
       // The runner already records FAILED on the AiGenerationJob row (AiGenerationLockSvc
       // .finishWith) — this catch only stops the rejection from going unhandled.
       .catch((err) => {

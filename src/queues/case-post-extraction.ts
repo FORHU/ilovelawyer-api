@@ -41,7 +41,6 @@ export function scheduleCasePostExtraction(caseId: string, userId: string): void
       // RUNNERS comment for the other half of this.
       const AiGenerationQueue = (await import("./ai-generation.queue")).default;
       AiGenerationQueue.enqueue({ kind: "casePostExtraction", caseId, userId }, QUIET_SECONDS);
-      logger.info("Case refresh scheduled", { caseId, userId, source: "auto", delaySeconds: QUIET_SECONDS });
     } catch (err) {
       logger.error("Case post-extraction: failed to schedule via AiGenerationQueue", { err, caseId, userId });
     }
@@ -56,13 +55,11 @@ export function scheduleCasePostExtraction(caseId: string, userId: string): void
 export async function runCasePostExtraction(caseId: string, userId: string): Promise<void> {
   try {
     if (!(await CaseRepo.exists(caseId))) {
-      logger.info("Case post-extraction: case no longer exists, skipping", { caseId });
       return;
     }
 
     const pending = await DocumentRepo.countPendingExtractionByCase(caseId);
     if (pending > 0) {
-      logger.info("Case post-extraction: still pending, waiting", { caseId, userId, pending });
       scheduleCasePostExtraction(caseId, userId);
       return;
     }
@@ -78,9 +75,7 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     const previousFingerprint = await CaseRepo.getReadySetFingerprint(caseId);
     const readySetChanged = fingerprint !== previousFingerprint;
 
-    if (!readySetChanged) {
-      logger.info("Case refresh skipped: READY set unchanged", { caseId, userId, source: "auto" });
-    } else {
+    if (readySetChanged) {
       // Reuses the exact same pipeline (contradictions + case strategy + case findings + AI
       // timeline->Evidence promotion) the lawyer's "Refresh analysis" button runs — see
       // CaseRefreshSvc.refreshInner — so Legal Issues / Strengths / Weaknesses / Attack /
@@ -95,18 +90,12 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
         // finishes (same QUIET_SECONDS backoff as the "still pending" branch above, not a tight
         // retry loop). At most one caseRefresh job for this case is ever IN_PROGRESS at a time.
         if (err instanceof HttpError && err.statusCode === 409) {
-          logger.info("Case refresh coalesced: caseRefresh already in progress, rescheduling", {
-            caseId,
-            userId,
-            source: "auto",
-          });
           scheduleCasePostExtraction(caseId, userId);
           return;
         }
         throw err;
       }
 
-      logger.info("Case refresh job claimed", { caseId, userId, source: "auto" });
       const CaseRefreshSvc = (await import("../services/case-refresh.service")).default;
       // runQueued closes out the lock (DONE/FAILED) itself via AiGenerationLockSvc.finishWith —
       // same as the controller's queued HTTP path (CaseTerminalCtrl.refresh).
@@ -115,6 +104,22 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       // successful refresh" for this skip-check, not just an auto-triggered one.
       await CaseRefreshSvc.runQueued(caseId, userId, "post-extraction");
       logger.info("Case refresh completed", { caseId, userId, source: "auto" });
+    } else {
+      // Archiving/unarchiving a document leaves the case's READY set — and so the rest of the
+      // analysis — alone, but the case mind map leaves archived documents out (it follows chat
+      // grounding; see mindMapDocumentIds). Bring just the map back in step when its document set
+      // moved without the READY set moving.
+      const { default: CaseMindMapSvc, isCaseMindMapBusy } = await import("../services/case-mind-map.service");
+      if (await CaseMindMapSvc.documentsChangedSinceBuild(caseId)) {
+        try {
+          await CaseMindMapSvc.generateFromDocuments(caseId, userId);
+        } catch (err) {
+          // A map build (a Regenerate, or the refresh's own) is already running — one coalesced
+          // map-only retry after it, however many archive/unarchive clicks land meanwhile.
+          if (isCaseMindMapBusy(err)) await CaseMindMapSvc.scheduleResync(caseId, userId);
+          else logger.warn("Case post-extraction: mind map resync failed", { err, caseId });
+        }
+      }
     }
 
     // Narrative generation is a separate, heavier single-shot call — only auto-run it the first

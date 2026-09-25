@@ -173,9 +173,12 @@ export default class DocumentSvc {
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
   }
 
-  /** Archiving/unarchiving is independent of delete and never affects RAG grounding, chat, or
-   * case refresh — same reasoning as Case.archive/unarchive, this only changes which of the
-   * Document view's Active/Archived tabs the document shows up in. */
+  /** Archiving/unarchiving is independent of delete. It moves the document between the Document
+   * view's Active/Archived tabs and takes it out of (or back into) chat grounding (see
+   * DocumentChunkSvc.relevantChunksForScope's ACTIVE filter). The case's analysis refresh
+   * (findings, strategy, contradictions) still reads archived documents; the case mind map follows
+   * chat instead and leaves them out, so both schedule the post-upload job, which rebuilds only the
+   * map when only the map's document set moved (see runCasePostExtraction). */
   static async archive(id: string, organizationId: string, actorId: string) {
     const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED");
     if (!updated) throw new HttpError("Document not found", 404);
@@ -183,7 +186,15 @@ export default class DocumentSvc {
     // Without this, chat-wonder's listByDocument/listByCaseOrConsultation callbacks would keep
     // serving this document out of Redis for up to CACHE_TTL_S after it's archived.
     await DocumentChunkSvc.invalidateCacheForDocument(updated);
+    await DocumentSvc.scheduleMindMapResync(updated, actorId);
     return mapDocumentToDto(updated);
+  }
+
+  /** The post-upload job for an archived/unarchived case document that's indexed — see archive(). */
+  private static async scheduleMindMapResync(doc: { caseId: string | null; ragStatus: string }, actorId: string) {
+    if (!doc.caseId || doc.ragStatus !== "READY") return;
+    const { scheduleCasePostExtraction } = await import("../queues/case-post-extraction");
+    scheduleCasePostExtraction(doc.caseId, actorId);
   }
 
   static async unarchive(id: string, organizationId: string, actorId: string) {
@@ -193,6 +204,7 @@ export default class DocumentSvc {
     // Same reasoning as archive() above, in reverse — listByCaseOrConsultation's cached array
     // from while this document was excluded shouldn't linger past the moment it's restored.
     await DocumentChunkSvc.invalidateCacheForDocument(updated);
+    await DocumentSvc.scheduleMindMapResync(updated, actorId);
     return mapDocumentToDto(updated);
   }
 

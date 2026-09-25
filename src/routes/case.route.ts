@@ -5,6 +5,7 @@ import resolveOrganization from "../middleware/resolve-organization.middleware";
 import CaseCtrl from "../controllers/case.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
 import CaseEdgeCtrl from "../controllers/case-edge.controller";
+import CaseMindMapCtrl from "../controllers/case-mind-map.controller";
 
 const router = express.Router();
 
@@ -41,6 +42,11 @@ router.get("/:caseId/ai-jobs/:kind", asyncHandler(CaseTerminalCtrl.getAiJobStatu
 router.get("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.listTimeline));
 router.post("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.createTimeline));
 router.post("/:caseId/timeline/generate", asyncHandler(CaseTerminalCtrl.generateTimeline));
+router.get("/:caseId/mind-map", asyncHandler(CaseMindMapCtrl.get));
+router.patch("/:caseId/mind-map", asyncHandler(CaseMindMapCtrl.edit));
+router.post("/:caseId/mind-map/generate", asyncHandler(CaseMindMapCtrl.generate));
+router.post("/:caseId/mind-map/expand", asyncHandler(CaseMindMapCtrl.expand));
+router.post("/:caseId/mind-map/revert", asyncHandler(CaseMindMapCtrl.revert));
 router.patch("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.updateTimeline));
 router.delete("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.deleteTimeline));
 

@@ -22,7 +22,9 @@ import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../src/services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../src/queues/case-reconstruction-audio.queue";
 import WitnessExtractSvc from "../src/services/witness-extract.service";
+import CaseMindMapSvc from "../src/services/case-mind-map.service";
 import HttpError from "../src/utils/http-error";
+import { redis } from "../src/lib/redis";
 
 function fingerprintOf(ids: string[]): string {
   return crypto.createHash("sha256").update([...ids].sort().join(",")).digest("hex");
@@ -51,7 +53,12 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     startAudioJob: CaseReconstructionAudioSvc.startAudioJob,
     audioEnqueue: CaseReconstructionAudioQueue.enqueue,
     witnessSchedule: WitnessExtractSvc.schedule,
+    mapChanged: CaseMindMapSvc.documentsChangedSinceBuild,
+    mapGenerate: CaseMindMapSvc.generateFromDocuments,
   };
+  let mapChanged: boolean;
+  let mapBuilds: { caseId: string; reason?: string }[];
+  let mapBuildError: Error | null;
 
   let sent: { queueUrl: string; body: string; delaySeconds?: number }[];
   let fingerprintStore: Record<string, string | null>;
@@ -87,6 +94,15 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseReconstructionSvc as any).generate = async () => ({ id: "recon-1" });
     (CaseReconstructionAudioSvc as any).startAudioJob = async () => {};
     (CaseReconstructionAudioQueue as any).enqueue = () => {};
+    mapChanged = false;
+    mapBuilds = [];
+    mapBuildError = null;
+    (CaseMindMapSvc as any).documentsChangedSinceBuild = async () => mapChanged;
+    (CaseMindMapSvc as any).generateFromDocuments = async (caseId: string, _userId: string, reason?: string) => {
+      if (mapBuildError) throw mapBuildError;
+      mapBuilds.push({ caseId, reason });
+      return { skipped: null, map: null };
+    };
   });
 
   afterEach(() => {
@@ -103,6 +119,49 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseReconstructionAudioSvc as any).startAudioJob = originals.startAudioJob;
     (CaseReconstructionAudioQueue as any).enqueue = originals.audioEnqueue;
     (WitnessExtractSvc as any).schedule = originals.witnessSchedule;
+    (CaseMindMapSvc as any).documentsChangedSinceBuild = originals.mapChanged;
+    (CaseMindMapSvc as any).generateFromDocuments = originals.mapGenerate;
+  });
+
+  // ── Stage 7: an archive/unarchive moves only the mind map's document set ─────────────────
+
+  describe("mind map resync when only its documents moved", () => {
+    beforeEach(() => {
+      (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1", "d2"]);
+      fingerprintStore["case-1"] = fingerprintOf(["d1", "d2"]);
+    });
+
+    it("rebuilds just the map when the READY set is unchanged but the map's documents moved", async () => {
+      let refreshed = false;
+      (CaseRefreshSvc as any).runQueued = async () => {
+        refreshed = true;
+      };
+      mapChanged = true;
+      await runCasePostExtraction("case-1", "user-1");
+      expect(refreshed).to.equal(false);
+      expect(mapBuilds).to.deep.equal([{ caseId: "case-1", reason: undefined }]);
+    });
+
+    it("does nothing to the map when its documents didn't move either", async () => {
+      await runCasePostExtraction("case-1", "user-1");
+      expect(mapBuilds).to.deep.equal([]);
+    });
+
+    it("queues a map-only retry, not the whole job, when a map build is already running", async () => {
+      mapChanged = true;
+      mapBuildError = new HttpError("caseMindMap generation is already in progress", 409);
+      // No retry queued yet: stubbed, so a flag left in a local Redis can't coalesce this one away.
+      const originalSetIfAbsent = redis.setIfAbsent;
+      (redis as any).setIfAbsent = async () => true;
+      try {
+        await runCasePostExtraction("case-1", "user-1");
+      } finally {
+        (redis as any).setIfAbsent = originalSetIfAbsent;
+      }
+      await flush();
+      expect(sent.map((m) => JSON.parse(m.body).kind)).to.deep.equal(["caseMindMapResync"]);
+      expect(sent[0].delaySeconds).to.equal(60);
+    });
   });
 
   // ── Phase 3: durable debounce ─────────────────────────────────────────────────────────────
