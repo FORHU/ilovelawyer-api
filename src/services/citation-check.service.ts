@@ -83,7 +83,7 @@ export default class CitationCheckSvc {
     return { ...row, resolvedAuthority: resolved.authority };
   }
 
-  private static async resolveAuthority(
+  static async resolveAuthority(
     citedReference: string | undefined,
     tenantCode: TenantCode,
   ): Promise<ResolvedCitationAuthority> {
