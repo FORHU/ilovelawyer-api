@@ -637,6 +637,7 @@ model Case {
   witnesses          Witness[]
   damageClaims       DamageClaim[]
   claims             CaseClaim[]
+  citationGrounds    CitationGround[]
   reconstruction     CaseReconstruction?
   redTeamAssessment  RedTeamAssessment?
   graphNodes         CaseGraphNode[]
@@ -1484,8 +1485,9 @@ model CitationCheck {
   // no officialText to classify against at all.
   propositionType CitationPropositionType?
 
-  case        Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  resolvedLaw Law? @relation("ResolvedLaw", fields: [resolvedLawId], references: [id], onDelete: SetNull)
+  case        Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  resolvedLaw Law?             @relation("ResolvedLaw", fields: [resolvedLawId], references: [id], onDelete: SetNull)
+  grounds     CitationGround[]
 
   @@index([caseId])
   @@index([resolvedLawId])
@@ -1686,16 +1688,59 @@ model DamageClaim {
 // distinct from DamageClaim, which is a monetary damages line item sought under one or more
 // of these claims, not the legal theory itself.
 model CaseClaim {
-  id            String   @id @default(uuid())
+  id            String          @id @default(uuid())
   caseId        String
   title         String
   causeOfAction String?
-  description   String?  @db.Text
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  description   String?         @db.Text
+  // AI = proposed by ClaimExtractSvc from the pleadings; sourceLabel/sourceQuote then say which
+  // document and the verbatim line it was found in (checked against that document's text).
+  source        AuthoringSource @default(MANUAL)
+  sourceLabel   String?
+  sourceQuote   String?         @db.Text
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case    Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  grounds CitationGround[]
 
+  @@index([caseId])
+}
+
+enum AuthoringSource {
+  MANUAL
+  AI
+}
+
+// How an authority attaches to a pleaded ground in the Citation Map: SUBSTANTIVE when it states
+// the rule the claim rests on, PROCEDURAL when it sets a procedure whose breach is the ground.
+enum GroundRole {
+  SUBSTANTIVE
+  PROCEDURAL
+}
+
+// One authority (a CitationCheck) attached to one pleaded ground (a CaseClaim) — the Citation
+// Map's list view. AI links are replaced wholesale on each mapping run (CitationGroundSvc);
+// MANUAL ones are left alone.
+model CitationGround {
+  id              String          @id @default(uuid())
+  caseId          String
+  citationCheckId String
+  claimId         String
+  role            GroundRole
+  source          AuthoringSource
+  // The mapping model's one-line reason for the link. Null on manual links.
+  reason          String?
+  // Jev's check of the link (citation-ground-jev.ts). Null when Jev wasn't run or failed.
+  jev             Json?
+  jevCheckedAt    DateTime?
+  createdAt       DateTime        @default(now())
+
+  case          Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  citationCheck CitationCheck @relation(fields: [citationCheckId], references: [id], onDelete: Cascade)
+  claim         CaseClaim     @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@unique([citationCheckId, claimId])
   @@index([caseId])
 }
 

@@ -7,3 +7,4 @@ export * from "./legal-source-cache.prompt";
 export * from "./red-team.prompt";
 export * from "./witness-scoring.prompt";
 export * from "./witness-extract.prompt";
+export * from "./claim-extract.prompt";

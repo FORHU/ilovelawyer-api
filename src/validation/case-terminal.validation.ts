@@ -234,6 +234,12 @@ export const updateClaimSchema = Joi.object({
   description: Joi.string().allow("").optional(),
 }).min(1);
 
+export const createCitationGroundSchema = Joi.object({
+  citationCheckId: Joi.string().required(),
+  claimId: Joi.string().required(),
+  role: Joi.string().valid("SUBSTANTIVE", "PROCEDURAL").required(),
+});
+
 export const updateReconstructionSchema = Joi.object({
   narrative: Joi.string().optional(),
   narrativeCourt: Joi.string().allow("").optional(),

@@ -12,6 +12,8 @@ import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
 import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
 import FindingJevSvc from "../services/finding-jev.service";
+import ClaimExtractSvc from "../services/claim-extract.service";
+import CitationGroundSvc from "../services/citation-ground.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
 import CaseClaimSvc from "../services/case-claim.service";
@@ -55,6 +57,7 @@ import {
   createDamageSchema,
   updateDamageSchema,
   createClaimSchema,
+  createCitationGroundSchema,
   updateClaimSchema,
   updateReconstructionSchema,
   graphViewSchema,
@@ -258,11 +261,44 @@ export default class CaseTerminalCtrl {
     if (tenantCode !== "PH" && tenantCode !== "UK") {
       throw new HttpError("Citation Map is not available for this jurisdiction — coming soon", 501);
     }
-    const result =
+    const seed =
       tenantCode === "UK"
         ? await UkCitationMapSvc.getSeed(req.params.caseId, req.user.userId)
         : await CitationMapSvc.getSeed(req.params.caseId, req.user.userId);
-    return res.status(200).json(result);
+    // getSeed has already checked case access. Claims and their authority links feed the list view.
+    return res.status(200).json({ ...seed, ...(await CitationGroundSvc.forSeed(req.params.caseId)) });
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async extractClaims(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await ClaimExtractSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "claimExtract", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "claimExtract");
+    return res.status(202).json(status);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async mapCitationGrounds(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CitationGroundSvc.beginQueuedMap(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "citationGrounds", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "citationGrounds");
+    return res.status(202).json(status);
+  }
+
+  static async createCitationGround(req: Request, res: Response) {
+    const { error, value } = createCitationGroundSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CitationGroundSvc.createManual(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async deleteCitationGround(req: Request, res: Response) {
+    await CitationGroundSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
   }
 
   static async checkCitation(req: Request, res: Response) {
