@@ -12,6 +12,7 @@ import { TimelineItem } from "../utils/response-parser";
 import OrganizationRepo from "../repositories/organization.repository";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
 
 export default class CaseRefreshSvc {
@@ -135,6 +136,11 @@ export default class CaseRefreshSvc {
         }
 
         await CaseRepo.markRefreshed(caseId);
+        // Persisted here (not only in the automatic post-extraction path) so a manual "Refresh
+        // analysis" click also counts as "the last successful refresh" for the fingerprint skip —
+        // otherwise an auto-trigger for the same still-unchanged READY set right after a manual
+        // click would see a stale/missing fingerprint and burn the three Chat Wonder calls again.
+        await CaseRepo.setReadySetFingerprint(caseId, computeReadySetFingerprint(docs));
         await OrganizationRepo.writeAudit({
             caseId,
             actorId: userId,
