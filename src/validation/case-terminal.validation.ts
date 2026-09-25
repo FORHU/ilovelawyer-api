@@ -189,6 +189,7 @@ export const updateWitnessSchema = Joi.object({
   credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
   statementDueOn: Joi.date().iso().allow(null).optional(),
   statementReceived: Joi.boolean().optional(),
+  needsDone: Joi.array().items(Joi.string().max(60)).max(30).optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 }).min(1);

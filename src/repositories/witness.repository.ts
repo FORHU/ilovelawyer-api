@@ -13,6 +13,8 @@ export interface WitnessInput {
   credibilityOverride?: number | null;
   statementDueOn?: Date | null;
   statementReceived?: boolean;
+  /** Keys of ticked-off "what's needed" items. */
+  needsDone?: string[];
   contact?: string | null;
   notes?: string | null;
 }
@@ -29,6 +31,9 @@ export interface WitnessAiScoreInput {
   aiCredibility: number | null;
   aiRationale: { text: string; source: string | null }[];
   aiSuggestedStatus: WitnessStatusInput | null;
+  /** Rubric audit: per-factor answers plus the computed band, flags and coverage. */
+  aiFactors: unknown;
+  aiRubricVersion: number;
   scoredAt: Date;
 }
 
@@ -60,7 +65,11 @@ export default class WitnessRepo {
   static async saveAiScore(id: string, caseId: string, data: WitnessAiScoreInput) {
     return prisma.witness.updateMany({
       where: { id, caseId },
-      data: { ...data, aiRationale: data.aiRationale as unknown as Prisma.InputJsonValue },
+      data: {
+        ...data,
+        aiRationale: data.aiRationale as unknown as Prisma.InputJsonValue,
+        aiFactors: data.aiFactors as Prisma.InputJsonValue,
+      },
     });
   }
 
