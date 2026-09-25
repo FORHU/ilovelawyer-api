@@ -597,6 +597,19 @@ export default class ChatSvc {
       caseRecord = await CaseSvc.getById(effectiveCaseId, organizationId);
     }
     const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
+    // The lawyer's hand edits to the case's strategy map (added/reworded/removed points), so the
+    // answer reflects their current view of the case. Empty unless they've edited it since its
+    // last build; best-effort — a failed read just leaves it out of this turn.
+    const mindMapChangesContext = caseRecord
+      ? await CaseMindMapSvc.lawyerChangesContext(caseRecord.id).catch((err) => {
+          logger.warn("Chat: case mind map changes unavailable, sending the turn without them", {
+            err,
+            consultationId,
+            caseId: caseRecord?.id,
+          });
+          return "";
+        })
+      : "";
 
     // Grounding priority:
     // 1. Explicit caseDocumentId on this message (single-doc ranking) — only if it belongs
@@ -739,7 +752,7 @@ export default class ChatSvc {
       }
     }
 
-    const resolvedContext = [caseContext, documentContext, groundingContext, transcriptContext, triageContext]
+    const resolvedContext = [caseContext, mindMapChangesContext, documentContext, groundingContext, transcriptContext, triageContext]
       .filter(Boolean)
       .join("\n\n");
     logger.info("Chat: grounding/RAG context resolved", {
@@ -747,6 +760,7 @@ export default class ChatSvc {
       messageId: parentMessageId,
       caseDocumentChunks: grounding?.caseDocumentIds.length ?? 0,
       transcriptChunks: transcriptGrounding?.transcriptionIds.length ?? 0,
+      mindMapChangesChars: mindMapChangesContext.length,
       urgent: triage?.urgent ?? false,
       intent: triage?.intent ?? null,
       contextChars: resolvedContext.length,
@@ -919,7 +933,8 @@ export default class ChatSvc {
               if (!signal.aborted) emitEvent("chat:answer-complete", {});
             },
             replyLanguage,
-            mindMapContext || undefined,
+            // Any turn that asks for a map, case or not: chat-wonder builds one only on this flag.
+            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined },
           );
         const result =
           generationKind && effectiveCaseId
@@ -1412,9 +1427,9 @@ export default class ChatSvc {
     signal?: AbortSignal,
     onAnswerComplete?: () => void,
     replyLanguage?: string,
-    mindMapContext?: string,
+    mindMap?: { mindMapRequested: boolean; mindMapContext?: string },
   ) {
-    const opts = mindMapContext ? { mindMapContext } : undefined;
+    const opts = mindMap?.mindMapRequested ? mindMap : undefined;
     try {
       return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
     } catch (err) {

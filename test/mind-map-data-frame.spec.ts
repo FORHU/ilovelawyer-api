@@ -20,6 +20,7 @@ import CaseFindingRepo from "../src/repositories/case-finding.repository";
 import CaseTimelineRepo from "../src/repositories/case-timeline.repository";
 import ProceduralDeadlineRepo from "../src/repositories/procedural-deadline.repository";
 import DocumentRepo from "../src/repositories/document.repository";
+import MindMapRepo from "../src/repositories/mind-map.repository";
 
 const tree = (label: string) => ({
   id: "root",
@@ -63,7 +64,7 @@ describe("[MINDMAP_DATA] frame and case_mind_map_context", () => {
     afterEnd = [];
   });
 
-  const stream = (opts?: { mindMapContext?: string }) =>
+  const stream = (opts?: { mindMapRequested?: boolean; mindMapContext?: string; skipLegalVerify?: boolean }) =>
     streamChatWonderMessage("sess-1", "Please generate a visual strategy map", () => {}, undefined, undefined, "case-1", "PH", undefined, undefined, undefined, opts);
 
   it("reads a map sent in its own frame, normalized", async () => {
@@ -102,6 +103,23 @@ describe("[MINDMAP_DATA] frame and case_mind_map_context", () => {
     expect(payloads[1]).to.not.have.property("case_mind_map_context");
   });
 
+  it("sends mind_map_requested only on a turn that asked for a map", async () => {
+    afterEnd = [];
+    await stream({ mindMapRequested: true });
+    await stream();
+    expect(payloads[0].mind_map_requested).to.equal(true);
+    // The case turn's MINDMAP_RULE mentions "mind map" too, so the flag, not the text, is the signal.
+    expect(payloads[1]).to.not.have.property("mind_map_requested");
+  });
+
+  it("sends skip_legal_verify only when asked", async () => {
+    afterEnd = [];
+    await stream({ skipLegalVerify: true });
+    await stream();
+    expect(payloads[0].skip_legal_verify).to.equal(true);
+    expect(payloads[1]).to.not.have.property("skip_legal_verify");
+  });
+
   it("parseMindMapDataPayload accepts a bare tree or a {mindMap} wrapper", () => {
     expect(parseMindMapDataPayload(JSON.stringify(tree("Bare")))?.label).to.equal("Bare");
     expect(parseMindMapDataPayload(JSON.stringify({ mindMap: tree("Wrapped") }))?.label).to.equal("Wrapped");
@@ -120,11 +138,14 @@ describe("CaseMindMapSvc.buildChatContext", () => {
     timeline: CaseTimelineRepo.list,
     procedure: ProceduralDeadlineRepo.listProcedureItems,
     documents: DocumentRepo.listAllByCase,
+    findCaseMap: MindMapRepo.findCaseMap,
   };
   let findingCount: number;
 
   beforeEach(() => {
     findingCount = 1;
+    // No case map here; mind-map-lawyer-changes.spec.ts covers the outline that one adds.
+    MindMapRepo.findCaseMap = (async () => null) as any;
     CaseRepo.findPromptHeader = (async () => ({ caseName: "Cruz v. Reyes", actionType: "Collection", jurisdiction: null, ukJurisdiction: null })) as any;
     CaseFindingRepo.list = (async () =>
       Array.from({ length: findingCount }, (_, i) => ({ category: "LEGAL_ISSUE", label: `Default on the note ${i}` }))) as any;
@@ -145,6 +166,7 @@ describe("CaseMindMapSvc.buildChatContext", () => {
     CaseTimelineRepo.list = originals.timeline;
     ProceduralDeadlineRepo.listProcedureItems = originals.procedure;
     DocumentRepo.listAllByCase = originals.documents;
+    MindMapRepo.findCaseMap = originals.findCaseMap;
   });
 
   it("summarises the case: header, findings, key dates, strategy and indexed documents", async () => {

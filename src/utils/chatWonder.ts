@@ -375,11 +375,20 @@ export function streamChatWonderMessage(
    * e.g. MindMapSvc.expandNode — where that wait would otherwise dominate the latency. The
    * returned extras are then always empty.
    *
+   * `mindMapRequested`: sent as `mind_map_requested`, the only thing that makes chat-wonder build
+   * a map (its `[MINDMAP_DATA]` frame). It can't infer that from the text: MINDMAP_RULE, appended
+   * to every case turn, itself says "mind map".
+   *
    * `mindMapContext`: the case digest (CaseMindMapSvc.buildChatContext) sent as
    * `case_mind_map_context` on a turn that asked for a map, for chat-wonder's map generator to
    * ground the tree in the case rather than the answer text alone. Chat-wonder builds that don't
-   * read it drop unknown fields (ChatRequest.model_fields), so sending it is always safe. */
-  opts?: { resolveOnAnswerEnd?: boolean; mindMapContext?: string },
+   * read either field drop unknown fields (ChatRequest.model_fields), so sending them is always safe.
+   *
+   * `skipLegalVerify`: sent as `skip_legal_verify`, turning off chat-wonder's verify→refine
+   * self-check for this turn. For one-shot calls whose reply is structured output rather than an
+   * answer (CaseMindMapSvc's document-built map), where a quotation/contradiction audit only adds a
+   * rewrite round. */
+  opts?: { resolveOnAnswerEnd?: boolean; mindMapRequested?: boolean; mindMapContext?: string; skipLegalVerify?: boolean },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -515,7 +524,9 @@ export function streamChatWonderMessage(
             case_document_manifest?: { id: string; name: string; category: string | null }[];
             case_document_texts?: { id: string; name: string; text: string }[];
             reply_language?: string;
+            mind_map_requested?: boolean;
             case_mind_map_context?: string;
+            skip_legal_verify?: boolean;
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -527,6 +538,12 @@ export function streamChatWonderMessage(
           }
           if (replyLanguage) {
             payload.reply_language = replyLanguage;
+          }
+          if (opts?.mindMapRequested) {
+            payload.mind_map_requested = true;
+          }
+          if (opts?.skipLegalVerify) {
+            payload.skip_legal_verify = true;
           }
           if (opts?.mindMapContext) {
             payload.case_mind_map_context = opts.mindMapContext;

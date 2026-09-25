@@ -96,6 +96,21 @@ export default class MindMapRepo {
     });
   }
 
+  /** The case map's newest build and every version after it, oldest first — what
+   * lawyerChangesSince (mind-map-lawyer-changes.ts) replays to find the lawyer's own edits. */
+  static async listCaseVersionsSinceBuild(caseMindMapId: string) {
+    const build = await prisma.mindMapRevision.findFirst({
+      where: { caseMindMapId, reason: "auto" },
+      orderBy: { version: "desc" },
+      select: { version: true },
+    });
+    return prisma.mindMapRevision.findMany({
+      where: { caseMindMapId, version: { gte: build?.version ?? 0 } },
+      orderBy: { version: "asc" },
+      select: { reason: true, data: true },
+    });
+  }
+
   /**
    * Replaces a map's tree and records it as a new revision, but only if the map is still at
    * `expectedVersion` — otherwise throws MindMapVersionConflictError and writes nothing.

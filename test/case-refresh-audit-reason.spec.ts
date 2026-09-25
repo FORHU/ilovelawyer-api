@@ -20,6 +20,7 @@ import OrganizationRepo from "../src/repositories/organization.repository";
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import CaseSnapshotSvc from "../src/services/case-snapshot.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
+import HttpError from "../src/utils/http-error";
 
 describe("CaseRefreshSvc.runQueued — audit reason", () => {
   const originals = {
@@ -103,6 +104,40 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     await CaseRefreshSvc.runQueued("case-1", "user-1");
     expect(audits).to.have.length(1);
     expect(audits[0]).to.include({ action: "case.refresh" });
+  });
+
+  it("queues a map retry when another map build holds the lock, and still completes the refresh", async () => {
+    const scheduled: string[] = [];
+    const originalSchedule = CaseMindMapSvc.scheduleResync;
+    (CaseMindMapSvc as any).scheduleResync = async (caseId: string) => {
+      scheduled.push(caseId);
+      return true;
+    };
+    (CaseMindMapSvc as any).generateFromDocuments = async () => {
+      throw new HttpError("caseMindMap generation is already in progress", 409);
+    };
+    try {
+      await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    } finally {
+      (CaseMindMapSvc as any).scheduleResync = originalSchedule;
+    }
+    expect(scheduled).to.deep.equal(["case-1"]);
+    expect(audits).to.have.length(1);
+  });
+
+  it("doesn't queue a map retry for a build that failed for another reason", async () => {
+    const scheduled: string[] = [];
+    const originalSchedule = CaseMindMapSvc.scheduleResync;
+    (CaseMindMapSvc as any).scheduleResync = async (caseId: string) => void scheduled.push(caseId);
+    (CaseMindMapSvc as any).generateFromDocuments = async () => {
+      throw new Error("chat-wonder timeout");
+    };
+    try {
+      await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    } finally {
+      (CaseMindMapSvc as any).scheduleResync = originalSchedule;
+    }
+    expect(scheduled).to.deep.equal([]);
   });
 
   it("runs the outlook after findings, since its prompt reads them", async () => {

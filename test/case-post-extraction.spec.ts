@@ -24,6 +24,7 @@ import CaseReconstructionAudioQueue from "../src/queues/case-reconstruction-audi
 import WitnessExtractSvc from "../src/services/witness-extract.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
 import HttpError from "../src/utils/http-error";
+import { redis } from "../src/lib/redis";
 
 function fingerprintOf(ids: string[]): string {
   return crypto.createHash("sha256").update([...ids].sort().join(",")).digest("hex");
@@ -146,12 +147,20 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
       expect(mapBuilds).to.deep.equal([]);
     });
 
-    it("tries again later when a map build is already running", async () => {
+    it("queues a map-only retry, not the whole job, when a map build is already running", async () => {
       mapChanged = true;
       mapBuildError = new HttpError("caseMindMap generation is already in progress", 409);
-      await runCasePostExtraction("case-1", "user-1");
+      // No retry queued yet: stubbed, so a flag left in a local Redis can't coalesce this one away.
+      const originalSetIfAbsent = redis.setIfAbsent;
+      (redis as any).setIfAbsent = async () => true;
+      try {
+        await runCasePostExtraction("case-1", "user-1");
+      } finally {
+        (redis as any).setIfAbsent = originalSetIfAbsent;
+      }
       await flush();
-      expect(sent.map((m) => JSON.parse(m.body).kind)).to.deep.equal(["casePostExtraction"]);
+      expect(sent.map((m) => JSON.parse(m.body).kind)).to.deep.equal(["caseMindMapResync"]);
+      expect(sent[0].delaySeconds).to.equal(60);
     });
   });
 

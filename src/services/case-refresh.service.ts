@@ -6,7 +6,7 @@ import EvidenceIntelligenceSvc from "./evidence-intelligence.service";
 import CaseStrategySvc from "./case-strategy.service";
 import CaseFindingAiSvc from "./case-finding-ai.service";
 import CaseOutlookAiSvc from "./case-outlook-ai.service";
-import CaseMindMapSvc from "./case-mind-map.service";
+import CaseMindMapSvc, { isCaseMindMapBusy } from "./case-mind-map.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import ChatRepo from "../repositories/chat.repository";
 import { TimelineItem } from "../utils/response-parser";
@@ -117,7 +117,9 @@ export default class CaseRefreshSvc {
         // After strategy/findings, since the map prompt reads them (key dates, findings, to-dos).
         // The automatic run skips itself when the documents haven't changed; "Refresh analysis"
         // rebuilds anyway, since it just re-ran those findings. Neither overwrites a map someone
-        // has expanded — see CaseMindMapSvc. A failed build never fails the refresh.
+        // has expanded — see CaseMindMapSvc. A failed build never fails the refresh. Another build
+        // already running (a Regenerate) may have read the documents before this change, so a busy
+        // lock queues one coalesced retry rather than losing it (CaseMindMapSvc.scheduleResync).
         stepStartedAt = Date.now();
         await CaseMindMapSvc.generateFromDocuments(caseId, userId, reason === "manual" ? "refresh" : "auto")
             .then((result) => {
@@ -127,7 +129,11 @@ export default class CaseRefreshSvc {
                     durationMs: Date.now() - stepStartedAt,
                 });
             })
-            .catch((err) => {
+            .catch(async (err) => {
+                if (isCaseMindMapBusy(err)) {
+                    await CaseMindMapSvc.scheduleResync(caseId, userId);
+                    return;
+                }
                 logger.warn("Chat Wonder case mind map build failed", {
                     err,
                     caseId,

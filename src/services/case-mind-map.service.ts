@@ -12,9 +12,12 @@ import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import { fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import { extractMindMap, MindMapItem } from "../utils/response-parser";
 import { keepOnlyCaseSources, syncRemovedSources } from "../utils/mind-map-tree";
+import { formatLawyerChanges, formatMindMapOutline, lawyerChangesSince } from "../utils/mind-map-lawyer-changes";
 import { applyMindMapChecks, checkMindMapNodes, isMindMapJevEnabled, nodesToCheck } from "../utils/mind-map-jev";
 import { CASE_MIND_MAP_AUTO } from "../config";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import HttpError from "../utils/http-error";
+import { redis } from "../lib/redis";
 import logger from "../utils/logger";
 
 // Re-exported for callers/tests that knew it here first.
@@ -26,8 +29,22 @@ const MAX_KEY_DATES = 40;
 /** Cap on the case digest sent with a chat map request (buildChatContext) — it rides along with
  * the whole chat turn, so it stays a summary, not a second copy of the case. */
 export const CHAT_MIND_MAP_CONTEXT_MAX_CHARS = 6000;
+/** Cap on the current map's outline sent with it (the lawyer's changes marked), on top of the digest. */
+export const CHAT_MIND_MAP_OUTLINE_MAX_CHARS = 5000;
 
 const LANGUAGE_NAMES: Record<string, string> = { en: "English", tl: "Filipino (Tagalog)", ko: "Korean" };
+
+/** Delay before the retry after a document change found a map build running — about one build. */
+export const CASE_MIND_MAP_RESYNC_DELAY_SECONDS = 60;
+/** Life of the "retry already queued" flag: well past the retry's delay plus queue wait, and short
+ * enough that a lost queue message only holds up later retries briefly. */
+const RESYNC_FLAG_TTL_SECONDS = 10 * 60;
+const resyncFlagKey = (caseId: string) => `case-mind-map:resync-queued:${caseId}`;
+
+/** The 409 AiGenerationLockSvc.begin throws while another "caseMindMap" build holds the lock. */
+export function isCaseMindMapBusy(err: unknown): boolean {
+  return err instanceof HttpError && err.statusCode === 409;
+}
 
 /** "auto" = after documents change (post-upload refresh); "refresh" = the lawyer's "Refresh
  * analysis", which re-runs the findings/strategy the map is built from; "manual" = Regenerate on
@@ -73,15 +90,17 @@ export default class CaseMindMapSvc {
    * The case digest a chat turn that asks for a map sends along (`case_mind_map_context`), so
    * chat-wonder's map generator can build the tree from the case — its findings, key dates,
    * strategy and documents — instead of only the answer text it just wrote. Same inputs as a
-   * document build's prompt, minus the excerpts (the turn already carries document grounding).
+   * document build's prompt, minus the excerpts (the turn already carries document grounding),
+   * plus the case map as it stands now, with the lawyer's own edits marked.
    */
   static async buildChatContext(caseId: string): Promise<string> {
-    const [header, findings, timeline, procedureItems, docs] = await Promise.all([
+    const [header, findings, timeline, procedureItems, docs, current] = await Promise.all([
       CaseRepo.findPromptHeader(caseId),
       CaseFindingRepo.list(caseId),
       CaseTimelineRepo.list(caseId),
       ProceduralDeadlineRepo.listProcedureItems(caseId),
       DocumentRepo.listAllByCase(caseId),
+      CaseMindMapSvc.currentMapWithLawyerChanges(caseId),
     ]);
     const section = (title: string, lines: string[]) => (lines.length ? `${title}:\n${lines.map((l) => `- ${l}`).join("\n")}` : "");
     const text = [
@@ -99,7 +118,29 @@ export default class CaseMindMapSvc {
     ]
       .filter(Boolean)
       .join("\n\n");
-    return text.length > CHAT_MIND_MAP_CONTEXT_MAX_CHARS ? `${text.slice(0, CHAT_MIND_MAP_CONTEXT_MAX_CHARS)}\n…` : text;
+    const digest = text.length > CHAT_MIND_MAP_CONTEXT_MAX_CHARS ? `${text.slice(0, CHAT_MIND_MAP_CONTEXT_MAX_CHARS)}\n…` : text;
+    // The map as it stands, with the lawyer's own changes marked, so a map asked for in chat
+    // builds on it rather than starting over. Capped on its own (formatMindMapOutline).
+    const outline = current ? formatMindMapOutline(current.tree, current.changes, CHAT_MIND_MAP_OUTLINE_MAX_CHARS) : "";
+    return [digest, outline].filter(Boolean).join("\n\n");
+  }
+
+  /**
+   * What every case chat turn tells chat-wonder about the lawyer's hand edits to the case map
+   * (added, reworded and removed points; see formatLawyerChanges) — only the changes, not the
+   * whole map, so an ordinary turn stays cheap. Empty when the case has no map or no such edits.
+   */
+  static async lawyerChangesContext(caseId: string): Promise<string> {
+    const current = await CaseMindMapSvc.currentMapWithLawyerChanges(caseId);
+    return current ? formatLawyerChanges(current.tree, current.changes) : "";
+  }
+
+  /** The case map on screen and the lawyer's edits since its build; null with no live map. */
+  private static async currentMapWithLawyerChanges(caseId: string) {
+    const map = await MindMapRepo.findCaseMap(caseId);
+    if (!map || map.retiredAt) return null;
+    const versions = await MindMapRepo.listCaseVersionsSinceBuild(map.id);
+    return { tree: map.data as unknown as MindMapItem, changes: lawyerChangesSince(versions) };
   }
 
   /** The post-upload refresh's step (CaseRefreshSvc.refreshInner). Holds its own "caseMindMap"
@@ -111,6 +152,45 @@ export default class CaseMindMapSvc {
       return { skipped: "disabled" as CaseMindMapSkip, map: await MindMapRepo.findCaseMap(caseId) };
     }
     return AiGenerationLockSvc.run(caseId, "caseMindMap", () => CaseMindMapSvc.build(caseId, userId, reason));
+  }
+
+  /**
+   * A document change reached the map while another build held its lock (a Regenerate, or another
+   * refresh's build) — that build may have read the documents before the change, so queue one
+   * retry for after it instead of dropping the change.
+   *
+   * Coalesced: a Redis flag (SET NX) marks "a retry is queued", so any number of changes while the
+   * build runs queue one retry, not one per document. runResync clears the flag before it builds,
+   * so a change that lands during the retry's own build queues the next one. When Redis can't be
+   * reached it queues anyway: a spare retry is a cheap no-op ("unchanged"), a lost one leaves the
+   * map behind. Returns whether this call queued the retry.
+   */
+  static async scheduleResync(caseId: string, userId: string): Promise<boolean> {
+    const claimed = await redis.setIfAbsent(resyncFlagKey(caseId), userId, RESYNC_FLAG_TTL_SECONDS);
+    if (claimed === false) {
+      logger.info("Case mind map: resync already queued, coalesced", { caseId });
+      return false;
+    }
+    // Dynamic: ai-generation.queue.ts imports this service at the top level.
+    const AiGenerationQueue = (await import("../queues/ai-generation.queue")).default;
+    AiGenerationQueue.enqueue({ kind: "caseMindMapResync", caseId, userId }, CASE_MIND_MAP_RESYNC_DELAY_SECONDS);
+    logger.info("Case mind map: resync queued behind a running build", { caseId, delaySeconds: CASE_MIND_MAP_RESYNC_DELAY_SECONDS });
+    return true;
+  }
+
+  /** The queued retry (see scheduleResync). An automatic build, so the usual rules hold: skipped
+   * when the documents already match the map (the running build caught the change after all), and
+   * never over a map someone has expanded or edited. Still busy → queues the next retry. */
+  static async runResync(caseId: string, userId: string): Promise<void> {
+    await redis.del(resyncFlagKey(caseId));
+    if (!(await CaseRepo.exists(caseId))) return;
+    try {
+      const result = await CaseMindMapSvc.generateFromDocuments(caseId, userId, "auto");
+      logger.info("Case mind map: resync done", { caseId, skipped: result.skipped });
+    } catch (err) {
+      if (isCaseMindMapBusy(err)) await CaseMindMapSvc.scheduleResync(caseId, userId);
+      else logger.warn("Case mind map: resync failed", { err, caseId });
+    }
   }
 
   /** Fast, synchronous half of a Studio "Regenerate" on the case map — same beginQueued/
@@ -280,11 +360,13 @@ ${pack.text || "(no indexed text)"}
 
     // One-shot over the WS path (not callChatWonderRest): a full map is a long reply, and the
     // REST call can hit the edge proxy's timeout — see RedTeamSvc. resolveOnAnswerEnd skips the
-    // post-answer extras this call never uses.
+    // post-answer extras this call never uses. skipLegalVerify: the reply is the map's JSON, not
+    // an answer, so chat-wonder's quotation/contradiction self-check would only add a rewrite round.
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
     const call = (sessionId: string) =>
       streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, {
         resolveOnAnswerEnd: true,
+        skipLegalVerify: true,
       });
     let result;
     try {

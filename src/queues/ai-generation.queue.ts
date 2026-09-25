@@ -25,7 +25,8 @@ export type QueuedAiGenerationKind =
   | "witnessScoring"
   | "witnessExtract"
   | "contradictions"
-  | "caseMindMapGenerate";
+  | "caseMindMapGenerate"
+  | "caseMindMapResync";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -71,6 +72,9 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   witnessExtract: (job) => WitnessExtractSvc.runQueued(job.caseId, job.userId),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
   caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
+  // No controller either: the one coalesced retry after a document change found a map build
+  // running (CaseMindMapSvc.scheduleResync). Claims the "caseMindMap" lock itself.
+  caseMindMapResync: (job) => CaseMindMapSvc.runResync(job.caseId, job.userId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,

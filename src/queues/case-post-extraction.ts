@@ -105,14 +105,14 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       // analysis — alone, but the case mind map leaves archived documents out (it follows chat
       // grounding; see mindMapDocumentIds). Bring just the map back in step when its document set
       // moved without the READY set moving.
-      const CaseMindMapSvc = (await import("../services/case-mind-map.service")).default;
+      const { default: CaseMindMapSvc, isCaseMindMapBusy } = await import("../services/case-mind-map.service");
       if (await CaseMindMapSvc.documentsChangedSinceBuild(caseId)) {
         try {
           await CaseMindMapSvc.generateFromDocuments(caseId, userId);
         } catch (err) {
-          // A map build (a Regenerate, or the refresh's own) is already running — try again after
-          // it, same backoff as a busy caseRefresh above.
-          if (err instanceof HttpError && err.statusCode === 409) scheduleCasePostExtraction(caseId, userId);
+          // A map build (a Regenerate, or the refresh's own) is already running — one coalesced
+          // map-only retry after it, however many archive/unarchive clicks land meanwhile.
+          if (isCaseMindMapBusy(err)) await CaseMindMapSvc.scheduleResync(caseId, userId);
           else logger.warn("Case post-extraction: mind map resync failed", { err, caseId });
         }
       }

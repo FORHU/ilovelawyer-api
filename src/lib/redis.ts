@@ -48,6 +48,17 @@ export const redis = {
     }
   },
 
+  /** Sets `key` only if it isn't there yet (SET NX EX). True when this call set it, false when it
+   * already existed, null when Redis can't tell (not reachable) — the caller decides what that means. */
+  async setIfAbsent(key: string, value: unknown, ttlSeconds: number): Promise<boolean | null> {
+    if (!client.isReady) return null;
+    try {
+      return (await client.set(key, JSON.stringify(value), { EX: ttlSeconds, NX: true })) === "OK";
+    } catch {
+      return null;
+    }
+  },
+
   /** Sets many presence flags (value irrelevant) with one expiry. Best-effort like set(). */
   async markMany(keys: string[], ttlSeconds: number): Promise<void> {
     if (!keys.length || !client.isReady) return;
