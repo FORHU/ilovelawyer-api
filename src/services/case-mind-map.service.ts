@@ -18,6 +18,10 @@ import logger from "../utils/logger";
 /** Key dates the prompt lists — enough to anchor Key Facts without crowding out the excerpts. */
 const MAX_KEY_DATES = 40;
 
+/** Cap on the case digest sent with a chat map request (buildChatContext) — it rides along with
+ * the whole chat turn, so it stays a summary, not a second copy of the case. */
+export const CHAT_MIND_MAP_CONTEXT_MAX_CHARS = 6000;
+
 const LANGUAGE_NAMES: Record<string, string> = { en: "English", tl: "Filipino (Tagalog)", ko: "Korean" };
 
 export type CaseMindMapBuildReason = "auto" | "manual";
@@ -44,6 +48,39 @@ export default class CaseMindMapSvc {
     if (!map) return null;
     const { readySetFingerprint: _fingerprint, ...rest } = map;
     return { ...rest, expandedCount: await MindMapRepo.countCaseMapChangesSinceBuild(map.id) };
+  }
+
+  /**
+   * The case digest a chat turn that asks for a map sends along (`case_mind_map_context`), so
+   * chat-wonder's map generator can build the tree from the case — its findings, key dates,
+   * strategy and documents — instead of only the answer text it just wrote. Same inputs as a
+   * document build's prompt, minus the excerpts (the turn already carries document grounding).
+   */
+  static async buildChatContext(caseId: string): Promise<string> {
+    const [header, findings, timeline, procedureItems, docs] = await Promise.all([
+      CaseRepo.findPromptHeader(caseId),
+      CaseFindingRepo.list(caseId),
+      CaseTimelineRepo.list(caseId),
+      ProceduralDeadlineRepo.listProcedureItems(caseId),
+      DocumentRepo.listAllByCase(caseId),
+    ]);
+    const section = (title: string, lines: string[]) => (lines.length ? `${title}:\n${lines.map((l) => `- ${l}`).join("\n")}` : "");
+    const text = [
+      header ? `Case: ${[header.caseName, header.actionType, header.jurisdiction].filter(Boolean).join(" — ")}` : "",
+      section("Findings", findings.map((f) => `${f.category}: ${f.label}`)),
+      section(
+        "Key dates",
+        timeline.slice(0, MAX_KEY_DATES).map((t) => `${t.occurredOn ? t.occurredOn.toISOString().slice(0, 10) : "undated"} — ${t.title}`),
+      ),
+      section(
+        "Strategy and to-dos",
+        procedureItems.filter((p) => p.kind === "STRATEGY" || p.kind === "TODO").map((p) => `${p.kind}: ${p.label}`),
+      ),
+      section("Documents", docs.filter((d) => d.ragStatus === "READY").map((d) => d.name)),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return text.length > CHAT_MIND_MAP_CONTEXT_MAX_CHARS ? `${text.slice(0, CHAT_MIND_MAP_CONTEXT_MAX_CHARS)}\n…` : text;
   }
 
   /** The post-upload refresh's step (CaseRefreshSvc.refreshInner). Holds its own "caseMindMap"

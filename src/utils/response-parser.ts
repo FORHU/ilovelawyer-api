@@ -303,6 +303,16 @@ export function parseStructuredDataPayload(raw: string): {
 }
 
 /**
+ * Chat Wonder's dedicated `[MINDMAP_DATA]{...tree...}` frame — the map in a frame of its own,
+ * sent after `__END__` only on turns that asked for a map (chat-wonder's `_generate_mind_map`,
+ * replacing the map inside `[STRUCTURED_DATA]`). A bare tree or a `{"mindMap": {...}}` wrapper
+ * both work; normalized like every other map (path ids, MIND_MAP_LIMITS).
+ */
+export function parseMindMapDataPayload(raw: string): MindMapItem | undefined {
+  return normalizeMindMap(safeJsonParse(raw));
+}
+
+/**
  * Chat Wonder's dedicated `[AUDIO_OVERVIEW_DATA]{"turns":[...]}` frame (the_server.py's
  * `_generate_audio_overview_script`, gated by `_wants_audio_overview` — only sent when the
  * hidden Audio Overview trigger message asked for it, unlike STRUCTURED_DATA which is
@@ -572,6 +582,7 @@ export function stripStructuredBlocks(text: string): string {
     .replace(/\[MINDMAP\][\s\S]*?\[\/MINDMAP\]/gi, "")
     .replace(/\[TRACE\][\s\S]*?\[\/TRACE\]/gi, "")
     .replace(/\[STRUCTURED_DATA\][\s\S]*?(?:\[DONE\]|$)/gi, "")
+    .replace(/\[MINDMAP_DATA\][\s\S]*?(?:\[DONE\]|$)/gi, "")
     .replace(/\[DONE\]/gi, "");
 
   const startTags = [/\[TIMELINE\]/i, /\[MINDMAP\]/i, /\[TRACE\]/i];

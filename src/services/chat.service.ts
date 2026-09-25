@@ -28,6 +28,7 @@ import NotificationSvc from "./notification.service";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getProxyFileUrl } from "../utils/s3";
+import CaseMindMapSvc from "./case-mind-map.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
@@ -884,6 +885,20 @@ export default class ChatSvc {
         const onSessionRotated = (newSessionId: string) => {
           emitEvent("chat:session-rotated", { sessionId: newSessionId });
         };
+        // A map request on a case also sends the case digest, for chat-wonder's map generator
+        // (see streamChatWonderMessage's mindMapContext). Best-effort: without it the map is
+        // still built, just from the answer alone — same as before.
+        const mindMapContext =
+          wantsMindMap && effectiveCaseId
+            ? await CaseMindMapSvc.buildChatContext(effectiveCaseId).catch((err) => {
+                logger.warn("Chat: case mind map context unavailable, sending the turn without it", {
+                  err,
+                  consultationId,
+                  caseId: effectiveCaseId,
+                });
+                return undefined;
+              })
+            : undefined;
         const runStream = () =>
           ChatSvc.streamWithSessionRetry(
             consultationId,
@@ -904,6 +919,7 @@ export default class ChatSvc {
               if (!signal.aborted) emitEvent("chat:answer-complete", {});
             },
             replyLanguage,
+            mindMapContext || undefined,
           );
         const result =
           generationKind && effectiveCaseId
@@ -1396,9 +1412,11 @@ export default class ChatSvc {
     signal?: AbortSignal,
     onAnswerComplete?: () => void,
     replyLanguage?: string,
+    mindMapContext?: string,
   ) {
+    const opts = mindMapContext ? { mindMapContext } : undefined;
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage);
+      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
     } catch (err) {
       if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
       const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
@@ -1406,7 +1424,7 @@ export default class ChatSvc {
       // set a response header — nothing has been written to the HTTP response yet at
       // this point, since "Unknown session." always arrives before any real content.
       onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage);
+      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
     }
   }
 

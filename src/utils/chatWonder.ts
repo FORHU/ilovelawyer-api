@@ -22,6 +22,7 @@ import { registerTurnDocuments } from "../services/case-document-callback-scope.
 import { embedText } from "./embedding";
 import {
   parseStructuredDataPayload,
+  parseMindMapDataPayload,
   parseAudioOverviewPayload,
   parseReasoningPayload,
   parseDecisionsPayload,
@@ -372,8 +373,13 @@ export function streamChatWonderMessage(
    * socket, instead of waiting up to STRUCTURED_DATA_WAIT_MS for the post-answer extras
    * (timeline, mind map, reasoning, decisions). For one-shot calls that only want the text —
    * e.g. MindMapSvc.expandNode — where that wait would otherwise dominate the latency. The
-   * returned extras are then always empty. */
-  opts?: { resolveOnAnswerEnd?: boolean },
+   * returned extras are then always empty.
+   *
+   * `mindMapContext`: the case digest (CaseMindMapSvc.buildChatContext) sent as
+   * `case_mind_map_context` on a turn that asked for a map, for chat-wonder's map generator to
+   * ground the tree in the case rather than the answer text alone. Chat-wonder builds that don't
+   * read it drop unknown fields (ChatRequest.model_fields), so sending it is always safe. */
+  opts?: { resolveOnAnswerEnd?: boolean; mindMapContext?: string },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -385,6 +391,9 @@ export function streamChatWonderMessage(
     let settled = false;
     let relatedCases: RelatedCase[] = [];
     let structuredMindMap: MindMapItem | undefined;
+    // From the dedicated [MINDMAP_DATA] frame — wins over the map inside [STRUCTURED_DATA]
+    // whichever arrives first, since a build that sends it generates the map on purpose.
+    let dedicatedMindMap: MindMapItem | undefined;
     let structuredTimeline: TimelineItem[] | undefined;
     let audioOverviewTurns: AudioOverviewTurn[] | undefined;
     let reasoningExplanation: ReasoningExplanation | undefined;
@@ -433,7 +442,7 @@ export function streamChatWonderMessage(
       resolve({
         content: accumulated,
         relatedCases,
-        mindMap: structuredMindMap,
+        mindMap: dedicatedMindMap ?? structuredMindMap,
         timeline: structuredTimeline,
         audioOverview: audioOverviewTurns,
         reasoning: reasoningExplanation,
@@ -506,6 +515,7 @@ export function streamChatWonderMessage(
             case_document_manifest?: { id: string; name: string; category: string | null }[];
             case_document_texts?: { id: string; name: string; text: string }[];
             reply_language?: string;
+            case_mind_map_context?: string;
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -517,6 +527,9 @@ export function streamChatWonderMessage(
           }
           if (replyLanguage) {
             payload.reply_language = replyLanguage;
+          }
+          if (opts?.mindMapContext) {
+            payload.case_mind_map_context = opts.mindMapContext;
           }
           // Always send case_document_ids (including []) so chat-wonder replaces
           // session-scoped active_case_documents instead of keeping prior-case docs.
@@ -537,6 +550,7 @@ export function streamChatWonderMessage(
             case_document_texts: payload.case_document_texts
               ? `[${payload.case_document_texts.length} docs, ${payload.case_document_texts.reduce((n, d) => n + d.text.length, 0)} chars]`
               : undefined,
+            case_mind_map_context: payload.case_mind_map_context ? `[${payload.case_mind_map_context.length} chars]` : undefined,
             connectToSendMs: payloadSentAt - streamStartedAt,
           });
           ws.send(JSON.stringify(payload));
@@ -591,6 +605,21 @@ export function streamChatWonderMessage(
         const parsed = parseStructuredDataPayload(payload);
         if (parsed.mindMap) structuredMindMap = parsed.mindMap;
         if (parsed.timeline) structuredTimeline = parsed.timeline;
+        if (doneIdx !== -1) finish();
+        return;
+      }
+
+      // Only on turns that asked for a map, from a chat-wonder build with a dedicated map
+      // generator — older builds keep sending the map inside [STRUCTURED_DATA] above, and both
+      // are read, so either build works against this API.
+      const mindMapIdx = message.indexOf("[MINDMAP_DATA]");
+      if (mindMapIdx !== -1) {
+        let payload = message.slice(mindMapIdx + "[MINDMAP_DATA]".length);
+        const doneIdx = payload.indexOf("[DONE]");
+        if (doneIdx !== -1) payload = payload.slice(0, doneIdx);
+        const parsed = parseMindMapDataPayload(payload);
+        if (parsed) dedicatedMindMap = parsed;
+        else logger.warn("Chat Wonder: unreadable [MINDMAP_DATA] frame", { sessionId, chars: payload.length });
         if (doneIdx !== -1) finish();
         return;
       }
