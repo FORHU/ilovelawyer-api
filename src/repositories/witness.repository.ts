@@ -13,8 +13,8 @@ export interface WitnessInput {
   credibilityOverride?: number | null;
   statementDueOn?: Date | null;
   statementReceived?: boolean;
-  /** Keys of ticked-off "what's needed" items. */
-  needsDone?: string[];
+  /** Ticked-off "what's needed" items, each with its proof document. Built by WitnessSvc. */
+  needsDone?: unknown[];
   contact?: string | null;
   notes?: string | null;
 }
@@ -48,7 +48,10 @@ export default class WitnessRepo {
   }
 
   static async create(caseId: string, data: WitnessInput) {
-    return prisma.witness.create({ data: { caseId, ...data } });
+    const { needsDone, ...rest } = data;
+    return prisma.witness.create({
+      data: { caseId, ...rest, ...(needsDone ? { needsDone: needsDone as Prisma.InputJsonValue } : {}) },
+    });
   }
 
   static async createFromAi(caseId: string, data: WitnessAiExtractInput) {
@@ -58,7 +61,11 @@ export default class WitnessRepo {
   static async update(id: string, caseId: string, data: Partial<WitnessInput>) {
     const existing = await prisma.witness.findFirst({ where: { id, caseId } });
     if (!existing) return null;
-    return prisma.witness.update({ where: { id }, data });
+    const { needsDone, ...rest } = data;
+    return prisma.witness.update({
+      where: { id },
+      data: { ...rest, ...(needsDone ? { needsDone: needsDone as Prisma.InputJsonValue } : {}) },
+    });
   }
 
   /** Writes only the ai* columns — never status/credibility/credibilityOverride. */

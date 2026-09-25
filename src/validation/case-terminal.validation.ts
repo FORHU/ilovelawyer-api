@@ -189,7 +189,17 @@ export const updateWitnessSchema = Joi.object({
   credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
   statementDueOn: Joi.date().iso().allow(null).optional(),
   statementReceived: Joi.boolean().optional(),
-  needsDone: Joi.array().items(Joi.string().max(60)).max(30).optional(),
+  // Each tick needs a proof document from this case's Documents; by/at are set server-side.
+  needsDone: Joi.array()
+    .items(
+      Joi.object({
+        key: Joi.string().max(60).required(),
+        documentId: Joi.string().max(60).required(),
+        note: Joi.string().max(500).allow("").optional(),
+      }),
+    )
+    .max(30)
+    .optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 }).min(1);
