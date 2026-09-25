@@ -63,6 +63,9 @@ router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
 router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
 router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
 router.post("/:caseId/citation-grounds/map", asyncHandler(CaseTerminalCtrl.mapCitationGrounds));
+router.post("/:caseId/citation-map/sweep", asyncHandler(CaseTerminalCtrl.sweepAdverseCitations));
+router.post("/:caseId/citation-map/adverse/:id/accept", asyncHandler(CaseTerminalCtrl.acceptAdverseHit));
+router.post("/:caseId/citation-map/adverse/:id/dismiss", asyncHandler(CaseTerminalCtrl.dismissAdverseHit));
 router.post("/:caseId/citation-grounds", asyncHandler(CaseTerminalCtrl.createCitationGround));
 router.delete("/:caseId/citation-grounds/:id", asyncHandler(CaseTerminalCtrl.deleteCitationGround));
 

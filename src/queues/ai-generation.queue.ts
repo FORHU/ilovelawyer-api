@@ -4,6 +4,7 @@ import WitnessScoringSvc from "../services/witness-scoring.service";
 import WitnessExtractSvc from "../services/witness-extract.service";
 import ClaimExtractSvc from "../services/claim-extract.service";
 import CitationGroundSvc from "../services/citation-ground.service";
+import AdverseSweepSvc from "../services/adverse-sweep.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -27,6 +28,7 @@ export type QueuedAiGenerationKind =
   | "witnessExtract"
   | "claimExtract"
   | "citationGrounds"
+  | "adverseSweep"
   | "contradictions";
 
 export interface QueuedAiGenerationJob {
@@ -73,6 +75,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   witnessExtract: (job) => WitnessExtractSvc.runQueued(job.caseId, job.userId),
   claimExtract: (job) => ClaimExtractSvc.runQueued(job.caseId, job.userId),
   citationGrounds: (job) => CitationGroundSvc.runQueuedMap(job.caseId, job.userId),
+  adverseSweep: (job) => AdverseSweepSvc.runQueued(job.caseId, job.userId),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
 };
 

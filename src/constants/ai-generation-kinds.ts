@@ -20,6 +20,7 @@ export const AI_GENERATION_KINDS = [
   "witnessExtract",
   "claimExtract",
   "citationGrounds",
+  "adverseSweep",
 ] as const;
 
 export type AiGenerationKind = (typeof AI_GENERATION_KINDS)[number];
