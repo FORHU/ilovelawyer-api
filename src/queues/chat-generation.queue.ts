@@ -111,19 +111,7 @@ export default class ChatGenerationQueue {
     if (!job?.jobId) return;
     job.enqueuedAt = job.enqueuedAt ?? Date.now();
 
-    logger.info("Chat generation: enqueueing job", {
-      jobId: job.jobId,
-      consultationId: job.consultationId,
-    });
-
     sendMessage(MESSAGE_PERSISTENCE_QUEUE_URL, JSON.stringify(job))
-      .then((sqsMessageId) => {
-        logger.info("Chat generation: enqueued to SQS", {
-          jobId: job.jobId,
-          consultationId: job.consultationId,
-          sqsMessageId,
-        });
-      })
       .catch((err) => {
         logger.error("Failed to enqueue chat generation job — falling back to in-process", {
           err,
@@ -156,16 +144,11 @@ export default class ChatGenerationQueue {
       logger.error("Chat generation queue: MESSAGE_PERSISTENCE_QUEUE_URL is not set, refusing to start");
       return;
     }
-    // Logs the actual URL being polled — handy while testing, especially if this is
-    // temporarily pointed at a queue shared with another consumer: confirms at a glance which
-    // physical SQS queue this worker is actually attached to.
-    logger.info("Chat generation queue: starting", { queueUrl: MESSAGE_PERSISTENCE_QUEUE_URL, concurrency: CONCURRENCY });
     this.running = true;
     void this.run();
   }
 
   private static async run(): Promise<void> {
-    logger.info("Chat generation queue started", { queueUrl: MESSAGE_PERSISTENCE_QUEUE_URL, concurrency: CONCURRENCY });
     void this.fetchLoop();
     void this.sweepLoop();
     this.pump();
@@ -229,12 +212,6 @@ export default class ChatGenerationQueue {
           void deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, message.receiptHandle).catch(() => {});
           continue;
         }
-        logger.info("Chat generation: received job from SQS", {
-          jobId: job.jobId,
-          consultationId: job.consultationId,
-          sqsMessageId: message.messageId,
-          queueWaitMs: job.enqueuedAt ? Date.now() - job.enqueuedAt : undefined,
-        });
         this.memoryWait.push({ job, receiptHandle: message.receiptHandle, sqsMessageId: message.messageId });
       }
       this.pump();
@@ -283,31 +260,9 @@ export default class ChatGenerationQueue {
   private static runOne(item: WaitItem): void {
     this.active += 1;
     const startedAt = Date.now();
-    logger.info("Chat generation: job started", {
-      jobId: item.job.jobId,
-      consultationId: item.job.consultationId,
-      userId: item.job.userId,
-      effectiveCaseId: item.job.effectiveCaseId,
-      sqsMessageId: item.sqsMessageId,
-      // Preview only, not the full prompt — enough to eyeball "is this the turn I just sent"
-      // during testing without dumping potentially long/sensitive chat text into the log.
-      userInputPreview: item.job.userInput.length > 80 ? `${item.job.userInput.slice(0, 80)}…` : item.job.userInput,
-      source: item.receiptHandle ? "sqs" : "in-process-fallback",
-      queueWaitMs: item.job.enqueuedAt ? startedAt - item.job.enqueuedAt : undefined,
-      activeJobs: this.active,
-      waitingJobs: this.memoryWait.length,
-    });
     void withVisibilityHeartbeat(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
       ChatSvc.processChatGenerationJob(item.job),
     )
-      .then(() => {
-        logger.info("Chat generation: job finished", {
-          jobId: item.job.jobId,
-          consultationId: item.job.consultationId,
-          sqsMessageId: item.sqsMessageId,
-          durationMs: Date.now() - startedAt,
-        });
-      })
       // processChatGenerationJob already records FAILED on the Message row and emits
       // chat:error before rethrowing — this catch only stops the rejection from going
       // unhandled; see the class doc comment for why this queue always acks regardless.
@@ -323,13 +278,6 @@ export default class ChatGenerationQueue {
       .finally(async () => {
         if (item.receiptHandle) {
           await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle)
-            .then(() => {
-              logger.info("Chat generation: acked SQS message", {
-                jobId: item.job.jobId,
-                sqsMessageId: item.sqsMessageId,
-                totalMs: item.job.enqueuedAt ? Date.now() - item.job.enqueuedAt : undefined,
-              });
-            })
             .catch((err) => {
               logger.error("Chat generation queue: failed to delete message", {
                 err,
@@ -339,11 +287,6 @@ export default class ChatGenerationQueue {
             });
         }
         this.active -= 1;
-        logger.info("Chat generation: job slot freed", {
-          jobId: item.job.jobId,
-          activeJobs: this.active,
-          waitingJobs: this.memoryWait.length,
-        });
         this.pump();
       });
   }

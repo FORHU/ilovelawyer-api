@@ -76,6 +76,9 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
       height: clampRatio(row.height),
       x: Number.isFinite(Number(row.x)) ? clampRatio(row.x) : undefined,
       y: Number.isFinite(Number(row.y)) ? clampRatio(row.y) : undefined,
+      columnIndex: clampInt(row.columnIndex, 0, MAX_COLUMNS - 1),
+      tabGroup: clampInt(row.tabGroup, 0, 1),
+      pinned: row.pinned === true ? true : undefined,
     });
   }
 
@@ -100,7 +103,32 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     }
   }
 
-  return { preset, arrangement, panels };
+  // The arrangement-mode fields below are what make a Columns/Tabs layout survive a reload —
+  // dropping them turned every saved Columns layout into a legacy Free one on the client
+  // (it treats a missing columnCount as "pre-rework save") and snapped panes back to old x/y.
+  const columnWidths = Array.isArray(raw.columnWidths)
+    ? raw.columnWidths.slice(0, MAX_COLUMNS).map((w) => clampRatio(w))
+    : undefined;
+  const tabsSplit = typeof raw.tabsSplit === "number" && Number.isFinite(raw.tabsSplit) ? clampRatio(raw.tabsSplit) : undefined;
+
+  return {
+    preset,
+    arrangement,
+    panels,
+    columnCount: clampInt(raw.columnCount, 1, MAX_COLUMNS),
+    columnWidths,
+    tabsSplit,
+    tabsActiveA: isPanelId(raw.tabsActiveA) ? raw.tabsActiveA : undefined,
+    tabsActiveB: isPanelId(raw.tabsActiveB) ? raw.tabsActiveB : undefined,
+  };
+}
+
+const MAX_COLUMNS = 8;
+
+/** Integer within [min, max], or undefined when absent/invalid so the key is omitted on save. */
+function clampInt(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 function clampRatio(value: unknown): number {

@@ -276,13 +276,77 @@ model MessageTimeline {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }
 
+/// `data` is always the current tree — what every reader (chat history, Studio) shows. `version`
+/// counts edits to it (1 = as generated); every version, the current one included, is kept in
+/// MindMapRevision so "Undo expand" can step back. `createdAt` stays the *generation* time on
+/// purpose: CaseSnapshot's Stale badge compares it with case activity, and expanding a node
+/// doesn't rebuild the rest of the map from newer case facts.
 model MessageMindMap {
   id        String   @id @default(uuid())
   messageId String   @unique
   data      Json
+  version   Int      @default(1)
   createdAt DateTime @default(now())
 
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  message   Message           @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  revisions MindMapRevision[]
+}
+
+/// One saved version of a mind map's tree — a chat message's map (MessageMindMap) or a case's
+/// document-built map (CaseMindMap); exactly one of the two ids is set. Written lazily for
+/// message maps (their version-1 row is backfilled on the first expand); every auto build of a
+/// case map writes one. Undo deletes the newest row and restores the one before it, so this is a
+/// linear undo stack, not a branching history.
+model MindMapRevision {
+  id               String   @id @default(uuid())
+  messageMindMapId String?
+  caseMindMapId    String?
+  version          Int
+  data             Json
+  /// "generate" | "expand" | "edit" | "auto" — a string, not an enum, for the same reason as
+  /// AiGenerationJob.kind: new reasons shouldn't need a migration.
+  reason           String
+  /// Path id of the expanded/edited node; null for "generate"/"auto".
+  nodeId           String?
+  createdById      String?
+  createdAt        DateTime @default(now())
+
+  mindMap     MessageMindMap? @relation(fields: [messageMindMapId], references: [id], onDelete: Cascade)
+  caseMindMap CaseMindMap?    @relation(fields: [caseMindMapId], references: [id], onDelete: Cascade)
+
+  @@unique([messageMindMapId, version])
+  @@unique([caseMindMapId, version])
+}
+
+/// The case's mind map built straight from its uploaded documents (CaseMindMapSvc), as opposed
+/// to a MessageMindMap, which a chat turn produced. One per case, rebuilt by the post-upload
+/// refresh (CaseRefreshSvc) whenever the READY document set changes — unless someone has
+/// expanded/edited it since the last build, in which case it's left alone and goes Stale.
+/// Same `data`/`version` contract as MessageMindMap.
+model CaseMindMap {
+  id                  String   @id @default(uuid())
+  caseId              String   @unique
+  data                Json
+  version             Int      @default(1)
+  /// Case.readySetFingerprint as of the build — which documents this map was built from.
+  readySetFingerprint String?
+  /// How many READY documents it was built from (Studio's "From 5 documents").
+  documentCount       Int      @default(0)
+  /// Exactly which documents it was built from (READY, not archived) — so the Stale badge can
+  /// say what changed ("2 added, 1 removed") and a map that isn't rebuilt can drop citations to
+  /// removed ones. The fingerprint above only says *that* the set changed.
+  documentIds         String[] @default([])
+  /// Set when the case's last document was removed or archived: the map was built entirely from
+  /// documents that are no longer in the case, so it's hidden rather than shown (Studio/Terminal
+  /// treat it as no map). Kept, with its versions, rather than deleted; the next build clears it.
+  retiredAt           DateTime?
+  /// Last auto/regenerate build. Expanding doesn't move it — see MessageMindMap.createdAt.
+  generatedAt         DateTime @default(now())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  case      Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  revisions MindMapRevision[]
 }
 
 model MessageRelatedCases {
@@ -629,6 +693,7 @@ model Case {
   contradictions     EvidenceContradiction[]
   factPairChecks     FactPairCheck[]
   citationChecks     CitationCheck[]
+  authorities        CaseAuthority[]
   deadlines          ProceduralDeadline[]
   procedureItems     ProcedureItem[]
   accesses           CaseAccess[]
@@ -650,6 +715,7 @@ model Case {
   terminalWorkspaces TerminalWorkspace[]
   annotations        Annotation[]
   outlooks           CaseOutlook[]
+  mindMap            CaseMindMap?
 
   @@index([userId])
   @@index([organizationId])
@@ -909,6 +975,7 @@ model Law {
   citedFrom      CitationEdge[]  @relation("CitedFrom")
   citedTo        CitationEdge[]  @relation("CitedTo")
   citationChecks CitationCheck[] @relation("ResolvedLaw")
+  authorities    CaseAuthority[]
 
   @@index([category, tenantId])
   @@index([year])
@@ -1580,10 +1647,58 @@ model CaseFinding {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case        Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  authorities CaseAuthority[]
 
   @@index([caseId])
   @@index([caseId, category])
+}
+
+enum AuthorityKind {
+  STATUTE
+  CASE
+}
+
+// How an authority bears on the case — separate from CitationCheck.status, which only says
+// whether a lawyer's quote matches its source. ADVERSE here means the authority hurts our side.
+enum AuthorityStance {
+  STATUTE
+  ON_POINT
+  ADVERSE
+}
+
+enum AuthoritySource {
+  MANUAL
+  AI
+}
+
+// Authority (statute or case) relied on for a case's grounds — backs the Terminal's Law &
+// Precedent panel. findingId points at a CaseFinding with category LEGAL_ISSUE (the "ground");
+// null when the authority isn't tied to one. Dismissing an authority deletes the row.
+model CaseAuthority {
+  id            String          @id @default(uuid())
+  caseId        String
+  kind          AuthorityKind
+  stance        AuthorityStance
+  title         String
+  subtitle      String?
+  citation      String?
+  rationale     String?         @db.Text
+  findingId     String?
+  resolvedLawId String?
+  source        AuthoritySource @default(MANUAL)
+  // Jev's second opinion on `stance` (see authority-stance-jev.ts) — never overwrites it; the panel
+  // only offers it when it disagrees. Null when the USE_JEV_AUTHORITY flag is off or Jev failed.
+  jevStance     AuthorityStance?
+  jevConfidence Float?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  case        Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  finding     CaseFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  resolvedLaw Law?         @relation(fields: [resolvedLawId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
 }
 
 enum WitnessStatus {

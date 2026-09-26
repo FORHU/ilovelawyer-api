@@ -19,7 +19,6 @@ export default class AccountDeletionQueue {
   static start(): void {
     if (this.running) return;
     this.running = true;
-    logger.info("Account deletion queue started", { pollIntervalMs: POLL_INTERVAL_MS });
     void this.tick();
     setInterval(() => void this.tick(), POLL_INTERVAL_MS);
   }
@@ -54,7 +53,6 @@ export default class AccountDeletionQueue {
 
       await AuthRepo.deleteSessionsByUserId(user.id);
       await AuthRepo.deleteUser(user.id);
-      logger.info("Account deletion queue: hard-deleted user", { userId: user.id });
     } catch (err) {
       logger.error("Account deletion queue: failed to hard-delete user", { err, userId: user.id });
     }

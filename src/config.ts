@@ -67,6 +67,11 @@ export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;
 export const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY as string;
 export const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET as string;
 export const AWS_REGION = process.env.AWS_REGION as string;
+/** Region of AWS_S3_BUCKET, when it differs from AWS_REGION. London runs its queues, Polly and
+ * Textract in eu-west-2 but shares Singapore's ap-southeast-1 document bucket, and a presigned
+ * URL is signed for one specific region — sign for the wrong one and S3 rejects it outright.
+ * Defaults to AWS_REGION, so single-region deployments need not set it. */
+export const AWS_S3_REGION = process.env.AWS_S3_REGION || AWS_REGION;
 /** Redirects the SQS client (only) at a local emulator (LocalStack) instead of real AWS — see
  * src/lib/sqs.ts. Left unset in production, which keeps talking to real AWS unchanged. Local
  * dev sets this to http://localhost:4566 (see .env.example) so each developer's own LocalStack
@@ -111,3 +116,8 @@ export const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD as string;
  * yet (a Windows/winget quirk, not something restarting nodemon alone fixes) — point this at
  * the binary directly instead. */
 export const FFMPEG_PATH = process.env.FFMPEG_PATH || "ffmpeg";
+
+/** Build the case mind map from uploaded documents as part of the post-upload refresh
+ * (CaseMindMapSvc, called from CaseRefreshSvc). On unless set to "false" — the kill switch for
+ * this automatic run only; a lawyer's explicit Regenerate on the case map still works. */
+export const CASE_MIND_MAP_AUTO = process.env.CASE_MIND_MAP_AUTO !== "false";
