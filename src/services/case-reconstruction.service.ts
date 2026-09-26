@@ -6,6 +6,7 @@ import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import CaseFindingRepo from "../repositories/case-finding.repository";
 import FilesRepo from "../repositories/files.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
+import CaseReconstructionEventsRepo from "../repositories/case-reconstruction-events.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getCaseReconstructionPromptBuilder } from "../legal/prompt-registry";
 import { extractRegisterNarratives, extractReconstructionGaps } from "../utils/case-reconstruction-parse";
@@ -21,6 +22,13 @@ import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
 import { cleanRegister } from "../utils/case-reconstruction.utils";
+import { extractBundleFacts, BundleFact } from "../utils/bundle-facts";
+import { buildDateAnchorPack, buildCaseReconstructionEventsPrompt } from "../utils/case-reconstruction-events-prompt";
+import { parseRawEvents, auditEventsDetailed, summariseDrops } from "../utils/case-reconstruction-events-parse";
+import { assessEvents, markUnchecked, isJevReconstructionEnabled } from "../utils/reconstruction-event-assess";
+import { checkAssertionWithJev } from "../utils/assertion-check";
+import { classifyEventPhrasingWithJev } from "../utils/event-phrasing-jev";
+import { findEventBlockers, blockersMessage } from "../utils/reconstruction-prerequisites";
 
 export default class CaseReconstructionSvc {
   static async get(caseId: string, userId: string) {
@@ -259,6 +267,98 @@ Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACT
     }
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.generateScenes", payload: { sceneCount: scenes.length } });
     return CaseReconstructionRepo.get(caseId);
+  }
+
+  /** The dated event chain: each event a factual proposition with one source quote checked against
+   * the document, then — when USE_JEV_RECONSTRUCTION is on — a Verified / Disputed / Unverified
+   * status from Jev (see reconstruction-event-assess.ts). Its own action, like scenes, and built from
+   * the case's documents alone: it does not need the narrative and is stored in its own table. */
+  static async generateEvents(caseId: string, userId?: string) {
+    if (userId) await CaseAccess.assertCanEdit(caseId, userId);
+    return AiGenerationLockSvc.run(caseId, "caseReconstructionEvents", () => CaseReconstructionSvc.generateEventsInner(caseId, userId));
+  }
+
+  /** Refuses before the job is queued, so the lawyer gets the answer in the response — with what to
+   * fill in or wait for — rather than a job that fails later. */
+  static async beginQueuedEvents(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await CaseReconstructionSvc.assertEventPrerequisites(caseId);
+    await AiGenerationLockSvc.begin(caseId, "caseReconstructionEvents");
+  }
+
+  /** 422 naming every missing prerequisite (see reconstruction-prerequisites.ts): `message` reads as
+   * a sentence, `blockers` lets a client list them. Returns the documents it loaded so the caller needn't. */
+  private static async assertEventPrerequisites(caseId: string) {
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    const blockers = findEventBlockers({ documents: docs.map((d) => ({ name: d.name, ragStatus: d.ragStatus })) });
+    if (blockers.length) throw new HttpError(blockersMessage(blockers), 422, "EVENT_PREREQUISITES", { blockers });
+    return { docs };
+  }
+
+  static async runQueuedEvents(caseId: string, userId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "caseReconstructionEvents", () =>
+      CaseReconstructionSvc.generateEventsInner(caseId, userId),
+    );
+  }
+
+  private static async generateEventsInner(caseId: string, userId?: string) {
+    // Checked again here, not just when queued: documents can change between the request and the job.
+    const { docs } = await CaseReconstructionSvc.assertEventPrerequisites(caseId);
+    const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
+
+    // Every date in every chunk, not just the sampled excerpt pack — the chain is seeded from these.
+    const facts: BundleFact[] = [];
+    for (const doc of ready) {
+      const chunks = await DocumentChunkRepo.findTextsByIds(await DocumentChunkRepo.findIdsByDocument(doc.id));
+      // UK bundles write 03/04/2024 as 3 April; PH (and US-style) documents as March 4.
+      facts.push(...extractBundleFacts(chunks, { numericDayFirst: tenantCode === "UK" }));
+    }
+    const pack = await buildFactExcerptPack(ready);
+    const prompt = buildCaseReconstructionEventsPrompt({
+      docs: ready,
+      anchors: buildDateAnchorPack(facts, new Map(ready.map((d) => [d.id, d.name]))),
+      excerpts: pack.text,
+    });
+
+    let sessionId = await getChatWonderSessionId();
+    let result: { content: string };
+    try {
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+    } catch {
+      sessionId = await getChatWonderSessionId();
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+    }
+
+    const raw = parseRawEvents(result.content);
+    if (!raw) throw new HttpError("Chat Wonder returned no usable event chain", 502);
+
+    // Full text, not scenes' 20,000-character cut: a quote from late in a long document must still resolve.
+    const fullTextByDocId = await DocumentChunkRepo.findFullTextsByDocuments(ready.map((d) => d.id));
+    const { events: audited, dropped } = auditEventsDetailed(raw, new Set(ready.map((d) => d.id)), fullTextByDocId);
+    if (dropped.length) {
+      // A dropped quote costs a real event its Verified badge; this is how the cause gets found
+      // (cosmetic / wrong document / paraphrase — see diagnoseDroppedQuote).
+      logger.warn("Case reconstruction events: source quotes dropped", { caseId, dropped: dropped.length, of: raw.length, byKind: summariseDrops(dropped) });
+      for (const d of dropped.slice(0, 10)) logger.info("Case reconstruction events: dropped quote", { caseId, ...d, quote: d.quote?.slice(0, 200) });
+    }
+    const events = isJevReconstructionEnabled()
+      ? await assessEvents(audited, { facts, fullTextByDocId, docNames: new Map(ready.map((d) => [d.id, d.name])) }, { classifyPhrasing: classifyEventPhrasingWithJev, checkAssertion: checkAssertionWithJev })
+      : markUnchecked(audited);
+
+    logger.info("Case reconstruction events", {
+      caseId,
+      eventCount: events.length,
+      droppedQuotes: dropped.length,
+      sourced: events.filter((e) => e.sourceRef).length,
+      jev: isJevReconstructionEnabled(),
+      verified: events.filter((e) => e.status === "VERIFIED").length,
+      disputed: events.filter((e) => e.status === "DISPUTED").length,
+    });
+
+    await CaseReconstructionEventsRepo.upsert(caseId, events);
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.generateEvents", payload: { eventCount: events.length } });
+    return CaseReconstructionEventsRepo.get(caseId);
   }
 
   /** Rung 2 — multi-voice audio rendered from `scenes` (one Polly voice per actor, a narrator

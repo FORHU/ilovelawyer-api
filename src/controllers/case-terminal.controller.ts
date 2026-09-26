@@ -510,6 +510,17 @@ export default class CaseTerminalCtrl {
     return res.status(202).json(status);
   }
 
+  /** Dated event chain with Jev-checked statuses. Queued via AiGenerationQueue (SQS) — see
+   * refresh() above for why. */
+  static async generateReconstructionEvents(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseReconstructionSvc.beginQueuedEvents(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseReconstructionEvents", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionEvents");
+    return res.status(202).json(status);
+  }
+
   /** Grounded Reconstruction Rung 2 (differentiation program, Phase 3). Queued via
    * AiGenerationQueue (SQS) — see refresh() above for why. */
   static async generateTableRead(req: Request, res: Response) {

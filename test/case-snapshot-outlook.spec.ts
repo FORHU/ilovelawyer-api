@@ -15,6 +15,7 @@ import CaseFindingRepo from "../src/repositories/case-finding.repository";
 import WitnessRepo from "../src/repositories/witness.repository";
 import DamageClaimRepo from "../src/repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../src/repositories/case-reconstruction.repository";
+import CaseReconstructionEventsRepo from "../src/repositories/case-reconstruction-events.repository";
 import RedTeamRepo from "../src/repositories/red-team.repository";
 import DecisionRecordRepo from "../src/repositories/decision-record.repository";
 import CaseTheoryRepo from "../src/repositories/case-theory.repository";
@@ -71,6 +72,7 @@ describe("CaseSnapshotSvc.get — outlook fields", () => {
       [WitnessRepo, "list", empty],
       [DamageClaimRepo, "list", empty],
       [CaseReconstructionRepo, "get", none],
+      [CaseReconstructionEventsRepo, "get", none],
       [RedTeamRepo, "get", none],
       [DecisionRecordRepo, "list", empty],
       [CaseTheoryRepo, "list", empty],
