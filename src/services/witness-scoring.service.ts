@@ -6,7 +6,14 @@ import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import { getWitnessScoringPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
-import { extractWitnessScores } from "../utils/witness-scoring-parse";
+import { extractWitnessFactors, quoteAppearsIn, type WitnessFactorRow } from "../utils/witness-scoring-parse";
+import { FACTOR_KEYS, RUBRIC_VERSION, scoreWitness, type FactorKey } from "../utils/witness-rubric";
+import { classifyWitnessWithJev, type JevFactors } from "../utils/witness-rubric-jev";
+import { buildNeeds } from "../utils/witness-needs";
+import { parseOverrides, resolveFactors, type FactorOverrides } from "../utils/witness-factor-resolve";
+import { describeFactors, describeOverrides, parseStoredFactors, recomputeFromStored } from "../utils/witness-recompute";
+import { RUBRIC } from "../utils/witness-rubric";
+import CaseGraphSvc from "./case-graph.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
@@ -15,6 +22,14 @@ const MAX_EXCERPT = 160;
 // with a very long affidavit (or a case with many sponsored documents) can't blow the prompt.
 const MAX_DOC_CHARS = 4000;
 const MAX_TOTAL_DOC_CHARS = 40000;
+// What one witness's documents may contribute to another witness's Jev request (corroboration).
+const MAX_OTHER_DOC_CHARS = 1500;
+
+function formatDay(value?: string | Date | null): string {
+  if (!value) return "undated";
+  const date = typeof value === "string" ? new Date(value) : value;
+  return Number.isNaN(date.getTime()) ? "undated" : date.toISOString().slice(0, 10);
+}
 
 function clip(text: string): string {
   return text.length > MAX_EXCERPT ? `${text.slice(0, MAX_EXCERPT)}…` : text;
@@ -34,6 +49,53 @@ export default class WitnessScoringSvc {
       throw new HttpError("Add at least one witness before scoring.", 400);
     }
     await AiGenerationLockSvc.begin(caseId, "witnessScoring");
+  }
+
+  /**
+   * A lawyer sets, or clears, the answer to one rubric factor. No model is called: the score, band,
+   * flags, suggested status and needs are rebuilt from the stored answers plus the overrides. A note
+   * is required with an answer, and who and when are stamped here.
+   */
+  static async setFactorOverride(
+    caseId: string,
+    witnessId: string,
+    userId: string,
+    factor: string,
+    answer: string | null,
+    note: string,
+  ) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const key = FACTOR_KEYS.find((k) => k === factor);
+    if (!key) throw new HttpError("Unknown factor.", 400);
+    if (answer !== null && !Object.prototype.hasOwnProperty.call(RUBRIC[key].options, answer)) {
+      throw new HttpError("That is not one of this factor's options.", 400);
+    }
+    if (answer !== null && !note.trim()) throw new HttpError("Add a note saying why.", 400);
+
+    const witness = (await WitnessRepo.list(caseId)).find((w) => w.id === witnessId);
+    if (!witness) throw new HttpError("Witness not found", 404);
+    const stored = parseStoredFactors(witness.aiFactors);
+    if (!stored) throw new HttpError("Score this witness first.", 400);
+
+    const overrides: FactorOverrides = { ...(parseOverrides(witness.factorOverrides) ?? {}) };
+    if (answer === null) delete overrides[key];
+    else overrides[key] = { answer, note: note.trim(), by: userId, at: new Date().toISOString() };
+
+    const next = recomputeFromStored(stored, overrides, witness.statementReceived);
+    await WitnessRepo.saveRecompute(witnessId, caseId, {
+      aiCredibility: next.aiCredibility,
+      aiSuggestedStatus: next.aiSuggestedStatus,
+      aiFactors: next.aiFactors,
+      factorOverrides: Object.keys(overrides).length ? overrides : null,
+    });
+    await CaseGraphSvc.markStale(caseId, "WITNESS", witnessId, "Witness factor changed");
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId: userId,
+      action: "witness.factor_override",
+      payload: { id: witnessId, factor: key, answer },
+    });
+    return (await WitnessRepo.list(caseId)).find((w) => w.id === witnessId);
   }
 
   /** Run by AiGenerationQueue's worker after beginQueued has claimed the job row. */
@@ -96,26 +158,104 @@ export default class WitnessScoringSvc {
       result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
     }
 
-    const scores = extractWitnessScores(result.content, new Set(witnesses.map((w) => w.id)));
-    logger.info("Chat Wonder witness scoring reply", { caseId, scoreCount: scores?.length ?? 0 });
-    if (!scores || scores.length === 0) throw new HttpError("Chat Wonder returned no witness scores", 502);
+    const rows = extractWitnessFactors(result.content, new Set(witnesses.map((w) => w.id)));
+    logger.info("Chat Wonder witness scoring reply", { caseId, rowCount: rows?.length ?? 0 });
+    // Jev decides the answers; Chat Wonder supplies quotes, reasons and next steps. If Chat Wonder
+    // returned nothing, Jev can still score, so this is not an error by itself.
+    const rowById = new Map((rows ?? []).map((r) => [r.witnessId, r]));
+
+    // Everything the model was shown, so a quoted passage can be checked against a real source.
+    const corpus: { name: string; text: string }[] = [
+      ...[...fullTexts].map(([id, text]) => ({ name: docNameById.get(id) ?? "Unnamed document", text })),
+      ...contradictions.map((c) => ({ name: "Contradiction", text: `${c.leftExcerpt} ${c.rightExcerpt}` })),
+      ...snapshot.timeline.map((t) => ({ name: "Timeline", text: t.title })),
+    ];
+    const checkQuote = (quote: string) => {
+      const hit = corpus.find((c) => quoteAppearsIn(quote, c.text));
+      return { verified: !!hit, documentName: hit?.name ?? null };
+    };
+
+    const stored = new Map((await WitnessRepo.list(caseId)).map((w) => [w.id, w]));
+    const timeline = snapshot.timeline.map((t) => ({ date: formatDay(t.occurredOn), title: t.title }));
 
     const scoredAt = new Date();
+    let savedCount = 0;
     await Promise.all(
-      scores.map((s) =>
-        WitnessRepo.saveAiScore(s.witnessId, caseId, {
-          aiCredibility: s.credibility,
-          aiRationale: s.reasons,
-          aiSuggestedStatus: s.suggestedStatus,
+      witnesses.map(async (w) => {
+        const row: WitnessFactorRow | undefined = rowById.get(w.id);
+        const emptyFactors = Object.fromEntries(
+          FACTOR_KEYS.map((k) => [k, { answer: null, quote: null, document: null }]),
+        ) as WitnessFactorRow["factors"];
+
+        let jev: JevFactors | null = null;
+        {
+          try {
+            jev = await classifyWitnessWithJev({
+              witness: { name: w.name, role: w.role ?? null, summary: w.summary ?? null, statementReceived: w.statementReceived },
+              sponsoredDocuments: w.sponsoredEvidence.map((e) => ({
+                name: e.name,
+                hearsay: e.hearsay,
+                text: e.excerpt ?? null,
+                contradictions: e.contradictions,
+              })),
+              otherWitnesses: witnesses
+                .filter((o) => o.id !== w.id)
+                .map((o) => ({
+                  name: o.name,
+                  documents: o.sponsoredEvidence.map((e) => ({ name: e.name, text: e.excerpt?.slice(0, MAX_OTHER_DOC_CHARS) ?? null })),
+                })),
+              timeline,
+            });
+          } catch (err) {
+            logger.warn("Witness scoring: Jev failed, using Chat Wonder's answers", { err, witnessId: w.id });
+          }
+        }
+
+        const overrides = parseOverrides(stored.get(w.id)?.factorOverrides);
+        const { answers, audit } = resolveFactors(row?.factors ?? emptyFactors, jev, overrides, checkQuote);
+        const rubric = scoreWitness(answers, w.statementReceived);
+        const reasons = row?.reasons ?? [];
+        const needs = buildNeeds({
+          statementReceived: w.statementReceived,
+          sponsoredDocumentCount: w.sponsoredEvidence.length,
+          answers,
+          aiNeeds: row?.needs ?? {},
+          unsure: Object.fromEntries(FACTOR_KEYS.map((k) => [k, !!audit[k].lowConfidence && !audit[k].overriddenTo])),
+        });
+        // Rows are only written when there is something to show for the witness.
+        if (!row && !jev) return;
+        savedCount += 1;
+
+        await WitnessRepo.saveAiScore(w.id, caseId, {
+          aiCredibility: rubric.score,
+          aiRationale: reasons,
+          aiSuggestedStatus: rubric.suggestedStatus,
+          aiFactors: {
+            factors: audit,
+            earned: rubric.earned,
+            assessable: rubric.assessable,
+            band: rubric.band,
+            flags: rubric.flags,
+            insufficientReason: rubric.insufficientReason,
+            needs,
+            // Kept so a lawyer's factor override can rebuild the score and needs without a rescore.
+            aiNeeds: row?.needs ?? {},
+            sponsoredDocumentCount: w.sponsoredEvidence.length,
+            reviewCount: FACTOR_KEYS.filter((k) => audit[k].lowConfidence && !audit[k].overriddenTo).length,
+            overrideList: describeOverrides(overrides),
+            factorView: describeFactors(audit, overrides),
+          },
+          aiRubricVersion: RUBRIC_VERSION,
           scoredAt,
-        }),
-      ),
+        });
+      }),
     );
+    if (savedCount === 0) throw new HttpError("No witness could be scored", 502);
     await OrganizationRepo.writeAudit({
       caseId,
       actorId: userId,
       action: "witness.score",
-      payload: { count: scores.length },
+      payload: { count: savedCount, rubricVersion: RUBRIC_VERSION },
     });
   }
 }
