@@ -70,7 +70,7 @@ export function contentWords(sentence: string): Set<string> {
   return out;
 }
 
-function overlapOf(a: Set<string>, b: Set<string>): { shared: number; overlap: number } {
+export function overlapOf(a: Set<string>, b: Set<string>): { shared: number; overlap: number } {
   let shared = 0;
   for (const w of a) if (b.has(w)) shared += 1;
   const denom = Math.min(a.size, b.size);

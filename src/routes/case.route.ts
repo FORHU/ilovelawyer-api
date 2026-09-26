@@ -116,6 +116,7 @@ router.get("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.getReconstru
 router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.generateReconstruction));
 router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));
 router.post("/:caseId/reconstruction/scenes", asyncHandler(CaseTerminalCtrl.generateReconstructionScenes));
+router.post("/:caseId/reconstruction/events", asyncHandler(CaseTerminalCtrl.generateReconstructionEvents));
 router.post("/:caseId/reconstruction/table-read", asyncHandler(CaseTerminalCtrl.generateTableRead));
 router.post("/:caseId/reconstruction/audio", asyncHandler(CaseTerminalCtrl.generateReconstructionAudio));
 router.get("/:caseId/reconstruction/audio/poll", asyncHandler(CaseTerminalCtrl.pollReconstructionAudio));

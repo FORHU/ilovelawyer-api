@@ -703,6 +703,7 @@ model Case {
   damageClaims       DamageClaim[]
   claims             CaseClaim[]
   reconstruction     CaseReconstruction?
+  reconstructionEvents CaseReconstructionEvents?
   redTeamAssessment  RedTeamAssessment?
   graphNodes         CaseGraphNode[]
   graphEdges         CaseGraphEdge[]
@@ -1788,6 +1789,22 @@ model CaseClaim {
 // One narrative per Case (not a list, unlike CaseFinding) — regenerated in place by AI on
 // demand (a dedicated action, not bundled into the general Refresh, since long-form
 // generation is a heavier/slower single call) and editable afterward by the lawyer.
+// Case Reconstruction's dated event chain (Events tab). Its own table, not a column on
+// CaseReconstruction: the chain is built from the case's documents, not from the narrative, and
+// CaseReconstruction rows only exist once a narrative has been generated. Each event is a factual
+// proposition with one quote-verified source and a Verified / Disputed / Unverified status — see
+// ReconstructionEvent in case-reconstruction-events-parse.ts. Statuses come from Jev only when
+// USE_JEV_RECONSTRUCTION=true; otherwise every event is Unverified.
+model CaseReconstructionEvents {
+  id        String   @id @default(uuid())
+  caseId    String   @unique
+  events    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
 model CaseReconstruction {
   id                String    @id @default(uuid())
   caseId            String    @unique
