@@ -49,7 +49,11 @@ Reply with these five blocks and nothing else. No markdown, no [Sources], no rel
 []
 [/DEFENSE_STRATEGY]
 
-Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. "label" is the finding itself (max 160 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this finding is drawn from — null if it isn't tied to one specific document. Max 8 items per block.
+LEGAL_ISSUES, WEAKNESSES and STRENGTHS are JSON arrays of {"label": "...", "sourceLabel": "..."}. "label" is the finding itself (max 160 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this finding is drawn from — null if it isn't tied to one specific document.
+
+ATTACK_STRATEGY and DEFENSE_STRATEGY are JSON arrays of {"label": "...", "sourceLabel": "...", "readiness": "READY|DRAFTING|BLOCKED", "readinessNote": "..."}. "readiness" is whether this move is usable now: READY if it can be used as-is with what's already available; DRAFTING if it's a sound direction but still needs work, with nothing specific shown as missing; BLOCKED only if the documents explicitly show a specific missing prerequisite (a certification, exhibit, affidavit, or similar) that has to be obtained first — never guess BLOCKED from silence. "readinessNote" is one short sentence explaining the status: what's missing (BLOCKED), what's left to do (DRAFTING), or why it's ready (READY).
+
+Max 8 items per block.
 If none: leave the array empty.
 `;
 }

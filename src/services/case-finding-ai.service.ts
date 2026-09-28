@@ -5,6 +5,7 @@ import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder"
 import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { isStrategyReadinessJevEnabled, suggestStrategyReadiness } from "../utils/strategy-readiness-jev";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
 
@@ -64,6 +65,21 @@ ${pack.text || "(no indexed text)"}
     });
 
     if (!parsed) return CaseFindingRepo.list(caseId);
-    return CaseFindingRepo.replaceAiFindings(caseId, parsed);
+
+    const withJev = isStrategyReadinessJevEnabled()
+      ? await Promise.all(
+          parsed.map(async (item) => {
+            if (item.readiness === null) return item;
+            const jev = await suggestStrategyReadiness({
+              label: item.label,
+              sourceLabel: item.sourceLabel,
+              readinessNote: item.readinessNote,
+            });
+            return { ...item, jevReadiness: jev?.readiness ?? null, jevConfidence: jev?.confidence ?? null };
+          }),
+        )
+      : parsed;
+
+    return CaseFindingRepo.replaceAiFindings(caseId, withJev);
   }
 }

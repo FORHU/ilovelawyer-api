@@ -186,9 +186,13 @@ export const createFindingSchema = Joi.object({
   notes: Joi.string().allow("").optional(),
 });
 
+const findingReadiness = Joi.string().valid("READY", "DRAFTING", "BLOCKED");
+
 export const updateFindingSchema = Joi.object({
   label: Joi.string().optional(),
   notes: Joi.string().allow("").optional(),
+  readiness: findingReadiness.optional(),
+  readinessNote: Joi.string().allow("", null).optional(),
 }).min(1);
 
 export const createWitnessSchema = Joi.object({

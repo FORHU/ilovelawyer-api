@@ -156,7 +156,10 @@ export function buildBriefDocument(snapshot: CaseSnapshotResult): BriefDocument 
       for (const item of items) {
         const tag = aiTag(item.notes, AI_FINDING_NOTE, item.sourceLabel);
         const notesText = item.notes && item.notes !== AI_FINDING_NOTE ? ` — ${item.notes}` : "";
-        blocks.push({ type: "paragraph", text: `${item.label}${notesText}${tag}` });
+        const readinessText = item.readiness
+          ? ` [${item.readiness}${item.readinessNote ? ` — ${item.readinessNote}` : ""}]`
+          : "";
+        blocks.push({ type: "paragraph", text: `${item.label}${notesText}${tag}${readinessText}` });
       }
     }
 

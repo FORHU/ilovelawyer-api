@@ -13,11 +13,18 @@ const TAGS: Record<FindingCategory, string> = {
 const MAX_ITEMS = 8;
 const MAX_LABEL = 160;
 const MAX_SOURCE_LABEL = 200;
+const MAX_READINESS_NOTE = 200;
+
+const READINESS_VALUES = new Set(["READY", "DRAFTING", "BLOCKED"]);
+// Only these two categories carry readiness — see case-finding.constants.ts / uk/prompts/case-finding.prompt.ts.
+const READINESS_CATEGORIES = new Set<FindingCategory>(["ATTACK_STRATEGY", "DEFENSE_STRATEGY"]);
 
 export interface ParsedCaseFinding {
   category: FindingCategory;
   label: string;
   sourceLabel: string | null;
+  readiness: "READY" | "DRAFTING" | "BLOCKED" | null;
+  readinessNote: string | null;
 }
 
 /** `undefined` = no tagged blocks found/parseable at all. Empty array = the model found
@@ -31,8 +38,15 @@ export function extractCaseFindings(text: string): ParsedCaseFinding[] | undefin
     const items = extractItemList(cleaned, TAGS[category]);
     if (items === undefined) continue;
     anyTagFound = true;
+    const carriesReadiness = READINESS_CATEGORIES.has(category);
     for (const item of items.slice(0, MAX_ITEMS)) {
-      results.push({ category, label: item.label, sourceLabel: item.sourceLabel });
+      results.push({
+        category,
+        label: item.label,
+        sourceLabel: item.sourceLabel,
+        readiness: carriesReadiness ? (item.readiness ?? "DRAFTING") : null,
+        readinessNote: carriesReadiness ? item.readinessNote : null,
+      });
     }
   }
 
@@ -42,6 +56,8 @@ export function extractCaseFindings(text: string): ParsedCaseFinding[] | undefin
 interface ParsedItem {
   label: string;
   sourceLabel: string | null;
+  readiness: "READY" | "DRAFTING" | "BLOCKED" | null;
+  readinessNote: string | null;
 }
 
 function extractItemList(text: string, tag: string): ParsedItem[] | undefined {
@@ -75,13 +91,19 @@ function extractItemList(text: string, tag: string): ParsedItem[] | undefined {
 
 function normalizeItem(row: unknown): ParsedItem {
   if (typeof row === "string") {
-    return { label: row.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL), sourceLabel: null };
+    return { label: row.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL), sourceLabel: null, readiness: null, readinessNote: null };
   }
   if (row && typeof row === "object" && "label" in row) {
-    const r = row as { label: unknown; sourceLabel?: unknown };
+    const r = row as { label: unknown; sourceLabel?: unknown; readiness?: unknown; readinessNote?: unknown };
     const label = String(r.label).replace(/\s+/g, " ").trim().slice(0, MAX_LABEL);
     const sourceLabel = typeof r.sourceLabel === "string" ? r.sourceLabel.trim().slice(0, MAX_SOURCE_LABEL) || null : null;
-    return { label, sourceLabel };
+    const readiness =
+      typeof r.readiness === "string" && READINESS_VALUES.has(r.readiness.toUpperCase())
+        ? (r.readiness.toUpperCase() as "READY" | "DRAFTING" | "BLOCKED")
+        : null;
+    const readinessNote =
+      typeof r.readinessNote === "string" ? r.readinessNote.replace(/\s+/g, " ").trim().slice(0, MAX_READINESS_NOTE) || null : null;
+    return { label, sourceLabel, readiness, readinessNote };
   }
-  return { label: "", sourceLabel: null };
+  return { label: "", sourceLabel: null, readiness: null, readinessNote: null };
 }
