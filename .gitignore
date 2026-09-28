@@ -15,3 +15,6 @@ Thumbs.db
 
 # local-only scripts
 prisma/seeders/adhoc-*.ts
+
+# private copy of Prisma's query engine used by `npm run dev` (scripts/with-engine-copy.js)
+.prisma-engine/
