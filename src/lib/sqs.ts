@@ -10,11 +10,18 @@ import { AWS_SQS_ENDPOINT } from "../config";
 import { awsClientConfig } from "./aws-client-config";
 import logger from "../utils/logger";
 
+// LocalStack's own test credentials, for when SQS points at it. LocalStack files queues under an
+// account derived from the access key: signed with a real AWS key (which dev .env files have, for
+// S3), requests land in *that* account, while the queues — and the `000000000000` in every
+// *_QUEUE_URL in .env.example — are under the test account. Every enqueue then failed with
+// "The specified queue does not exist". These are LocalStack's documented defaults, not secrets.
+const LOCALSTACK_CREDENTIALS = { accessKeyId: "test", secretAccessKey: "test" };
+
 const client = new SQSClient({
   ...awsClientConfig,
   // Only SQS is redirected to LocalStack in dev — S3/Polly/Textract (src/utils/s3.ts,
-  // src/utils/polly.ts, src/utils/ocr.ts) keep talking to real AWS with the same credentials.
-  ...(AWS_SQS_ENDPOINT ? { endpoint: AWS_SQS_ENDPOINT } : {}),
+  // src/utils/polly.ts, src/utils/ocr.ts) keep talking to real AWS with the real credentials.
+  ...(AWS_SQS_ENDPOINT ? { endpoint: AWS_SQS_ENDPOINT, credentials: LOCALSTACK_CREDENTIALS } : {}),
 });
 
 // Long-poll the whole 20s window — this is what makes SQS receive behave like Redis's BRPOP

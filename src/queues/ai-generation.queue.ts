@@ -120,18 +120,22 @@ export default class AiGenerationQueue {
   private static active = 0;
   private static memoryWait: WaitItem[] = [];
 
-  /** `delaySeconds` is only meaningful on the real SQS path — the in-memory fallback below (used
-   * when sendMessage itself fails, e.g. the queue is misconfigured/unreachable) runs the job
-   * immediately regardless, same as it always has for the other kinds. That's an accepted
-   * degraded-mode trade-off: an infra outage turns a delayed/debounced trigger into an immediate
-   * one rather than dropping it, and casePostExtraction's own pending/fingerprint checks
-   * (case-post-extraction.ts) still guard against that being wasteful. */
+  /** When sendMessage fails (queue misconfigured/unreachable), the job runs in memory instead of
+   * being dropped — and still waits `delaySeconds` first. It used to run immediately, and that
+   * mattered: witnessExtract and casePostExtraction each enqueue the other with a delay, so with
+   * the delay skipped they re-triggered each other ~30×/s, flooding the API and its logs (hit for
+   * real on 2026-09-28 with LocalStack queues in the wrong region). With the delay kept, a queue
+   * outage only makes things slow, not a storm. */
   static enqueue(job: QueuedAiGenerationJob, delaySeconds?: number): void {
     const body = JSON.stringify(job);
     sendMessage(AI_GENERATION_QUEUE_URL, body, delaySeconds).catch((err) => {
-      logger.error("Failed to enqueue AI generation job", { err, job });
-      this.memoryWait.push({ job, receiptHandle: null });
-      this.pump();
+      logger.error("Failed to enqueue AI generation job", { err, job, delaySeconds });
+      const runInMemory = () => {
+        this.memoryWait.push({ job, receiptHandle: null });
+        this.pump();
+      };
+      if (delaySeconds && delaySeconds > 0) setTimeout(runInMemory, delaySeconds * 1000);
+      else runInMemory();
     });
   }
 

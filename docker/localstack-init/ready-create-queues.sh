@@ -14,5 +14,7 @@ for q in \
   message-persistence \
   case-graph-promotion
 do
-  awslocal sqs create-queue --queue-name "$q" --output text
+  # --region: the API's AWS_REGION. Without it awslocal uses us-east-1, and the API — looking in
+  # ap-southeast-1 — finds no queues at all (see src/lib/sqs.ts).
+  awslocal sqs create-queue --region ap-southeast-1 --queue-name "$q" --output text
 done
