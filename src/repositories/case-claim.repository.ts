@@ -15,6 +15,11 @@ export default class CaseClaimRepo {
     return prisma.caseClaim.create({ data: { caseId, ...data } });
   }
 
+  /** A claim ClaimExtractSvc found in the pleadings, with where it was found. */
+  static async createFromAi(caseId: string, data: { title: string; causeOfAction: string | null; sourceLabel: string; sourceQuote: string }) {
+    return prisma.caseClaim.create({ data: { caseId, source: "AI", ...data } });
+  }
+
   static async update(id: string, caseId: string, data: Partial<CaseClaimInput>) {
     const existing = await prisma.caseClaim.findFirst({ where: { id, caseId } });
     if (!existing) return null;

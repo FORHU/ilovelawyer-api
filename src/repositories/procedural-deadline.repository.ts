@@ -1,5 +1,6 @@
 import prisma from "../lib/prisma";
 import { AI_PROCEDURE_NOTE } from "../constants";
+import { planAiProcedureItems } from "../utils/procedure-item-reconcile";
 
 export default class ProceduralDeadlineRepo {
   static async list(caseId: string) {
@@ -39,6 +40,10 @@ export default class ProceduralDeadlineRepo {
     return prisma.proceduralDeadline.update({ where: { id }, data });
   }
 
+  static async clearConfirmations(deadlineId: string) {
+    return prisma.proceduralDeadlineConfirmation.deleteMany({ where: { deadlineId } });
+  }
+
   static async confirm(deadlineId: string, userId: string, confirmed: boolean, note?: string) {
     return prisma.proceduralDeadlineConfirmation.upsert({
       where: { deadlineId_userId: { deadlineId, userId } },
@@ -51,28 +56,49 @@ export default class ProceduralDeadlineRepo {
     return prisma.procedureItem.findMany({ where: { caseId }, orderBy: { createdAt: "asc" } });
   }
 
-  static async createProcedureItem(caseId: string, data: { kind: string; label: string; notes?: string | null }) {
+  static async createProcedureItem(caseId: string, data: { kind: string; label: string; notes?: string | null; sourceLabel?: string | null }) {
     return prisma.procedureItem.create({ data: { caseId, ...data } });
   }
 
+  /** Reconciles rather than replaces — see planAiProcedureItems: ticked items survive a refresh. */
   static async replaceAiProcedureItems(
     caseId: string,
     items: { kind: string; label: string; sourceLabel: string | null }[],
   ) {
     await prisma.$transaction(async (tx) => {
-      await tx.procedureItem.deleteMany({ where: { caseId, notes: AI_PROCEDURE_NOTE } });
-      if (items.length === 0) return;
-      await tx.procedureItem.createMany({
-        data: items.map((item) => ({
-          caseId,
-          kind: item.kind,
-          label: item.label,
-          sourceLabel: item.sourceLabel,
-          notes: AI_PROCEDURE_NOTE,
-        })),
+      const existing = await tx.procedureItem.findMany({
+        where: { caseId, notes: AI_PROCEDURE_NOTE },
+        select: { id: true, kind: true, label: true, done: true, sourceLabel: true },
       });
+      const plan = planAiProcedureItems(existing, items);
+      if (plan.remove.length) await tx.procedureItem.deleteMany({ where: { caseId, id: { in: plan.remove } } });
+      for (const row of plan.update) {
+        await tx.procedureItem.update({ where: { id: row.id }, data: { sourceLabel: row.sourceLabel } });
+      }
+      if (plan.create.length) {
+        await tx.procedureItem.createMany({
+          data: plan.create.map((item) => ({
+            caseId,
+            kind: item.kind,
+            label: item.label,
+            sourceLabel: item.sourceLabel,
+            notes: AI_PROCEDURE_NOTE,
+          })),
+        });
+      }
     });
     return this.listProcedureItems(caseId);
+  }
+
+  /** Attaches Jev verdicts, but only to rows that still say exactly what Jev judged — a lawyer may
+   * have edited the label while the check ran. Returns how many landed. */
+  static async saveChecks(caseId: string, results: { id: string; label: string; check: object }[]) {
+    let applied = 0;
+    for (const r of results) {
+      const { count } = await prisma.procedureItem.updateMany({ where: { id: r.id, caseId, label: r.label }, data: { check: r.check } });
+      applied += count;
+    }
+    return applied;
   }
 
   static async updateProcedureItem(id: string, caseId: string, data: { done?: boolean; notes?: string | null; label?: string }) {

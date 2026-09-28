@@ -112,13 +112,46 @@ export default class ProceduralDeadlineSvc {
       calculationNotes: computation.calculationNotes,
     });
     await CaseGraphSvc.clearStale("PROCEDURAL_DEADLINE", deadlineId);
+    // Confirmations vouch for a specific date. If the date moved, they no longer apply — a
+    // dual-confirmed deadline must not stay "confirmed" against a date nobody confirmed.
+    const dueDateChanged = row.computedDueDate.getTime() !== deadline.computedDueDate.getTime();
+    if (dueDateChanged) await ProceduralDeadlineRepo.clearConfirmations(deadlineId);
     await OrganizationRepo.writeAudit({
       caseId,
       actorId: userId,
       action: "deadline.recompute",
-      payload: { id: deadlineId, due: row.computedDueDate },
+      payload: {
+        id: deadlineId,
+        due: row.computedDueDate,
+        previousDue: deadline.computedDueDate,
+        confirmationsCleared: dueDateChanged,
+      },
     });
     return row;
+  }
+
+  /**
+   * The one-click "recompute all" behind the Case Strategy panel's stale-deadline banner: runs the
+   * same deterministic recompute() on every deadline the case graph has flagged stale (its source
+   * timeline event moved). Still an explicit lawyer action, never automatic — a due date is a legal
+   * fact, so it only changes when someone asks. One deadline failing (e.g. a Scotland case with no
+   * rules) is reported and doesn't stop the rest. A changed date clears that deadline's
+   * confirmations (see recompute), so the panel re-prompts for them.
+   */
+  static async recomputeStale(caseId: string, userId: string) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const stale = (await CaseGraphSvc.listStaleForCase(caseId)).filter((n) => n.nodeType === "PROCEDURAL_DEADLINE");
+    const recomputed: { id: string; computedDueDate: Date }[] = [];
+    const failed: { id: string; error: string }[] = [];
+    for (const node of stale) {
+      try {
+        const row = await ProceduralDeadlineSvc.recompute(caseId, node.refId, userId);
+        recomputed.push({ id: row.id, computedDueDate: row.computedDueDate });
+      } catch (err) {
+        failed.push({ id: node.refId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { recomputed, failed };
   }
 
   static async confirm(caseId: string, deadlineId: string, userId: string, confirmed: boolean, note?: string) {
@@ -144,9 +177,9 @@ export default class ProceduralDeadlineSvc {
     };
   }
 
-  static async createItem(caseId: string, userId: string, body: { kind: string; label: string; notes?: string }) {
+  static async createItem(caseId: string, userId: string, body: { kind: string; label: string; notes?: string; sourceLabel?: string | null }) {
     await CaseAccess.assertCanEdit(caseId, userId);
-    return ProceduralDeadlineRepo.createProcedureItem(caseId, body);
+    return ProceduralDeadlineRepo.createProcedureItem(caseId, { ...body, sourceLabel: body.sourceLabel || null });
   }
 
   static async updateItem(caseId: string, id: string, userId: string, body: { done?: boolean; notes?: string; label?: string }) {

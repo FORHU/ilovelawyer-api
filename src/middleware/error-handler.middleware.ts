@@ -20,7 +20,7 @@ export default function errorHandler(err: unknown, _req: Request, res: Response,
   }
 
   if (err instanceof HttpError) {
-    return res.status(err.statusCode).json(err.code ? { message: err.message, code: err.code } : { message: err.message });
+    return res.status(err.statusCode).json({ message: err.message, ...(err.code ? { code: err.code } : {}), ...(err.details ?? {}) });
   }
 
   // Multer throws its own error type (not an HttpError) when it rejects an upload

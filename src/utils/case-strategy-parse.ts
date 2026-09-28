@@ -1,7 +1,10 @@
 import { parseAiJson } from "./response-parser";
 import { stripChatWonderNoise } from "./chat-wonder-noise";
 
-const MAX_ITEMS = { STRATEGY: 8, TODO: 12, DATES: 20 };
+// Safety ceilings against a runaway reply, not a product limit: a real case has as many to-dos and
+// key dates as its documents support (a large bundle has hundreds), so these sit far above any
+// plausible answer. The prompt itself sets no count.
+const MAX_ITEMS = { STRATEGY: 100, TODO: 300, DATES: 300 };
 const MAX_LABEL = 160;
 const MAX_SOURCE_LABEL = 200;
 

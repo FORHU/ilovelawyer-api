@@ -11,7 +11,8 @@ import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import type { TenantCode } from "../types/tenant-code";
-import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, CLIENT_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
+import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
+import { originForTenantCode } from "../utils/tenant-host";
 import {
   BCRYPT_SALT_ROUNDS,
   OTP_EXPIRY_MS,
@@ -381,7 +382,11 @@ export default class AuthSvc {
       const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
       await AuthRepo.setResetToken(user.id, token, expiresAt);
 
-      const resetLink = `${CLIENT_URL[0]}/reset-password?token=${token}`;
+      // A tenant-scoped account's reset link should land on its own subdomain (uk./ph.), not
+      // always the bare CLIENT_URL[0] — same reasoning as admin.service.ts's login link.
+      // user.tenant is already on hand from findByEmail's include, so no extra lookup needed.
+      const origin = originForTenantCode(user.tenant?.code);
+      const resetLink = `${origin}/reset-password?token=${token}`;
       const html = await renderTemplate("reset-password", {
         name: user.name || "User",
         resetLink,

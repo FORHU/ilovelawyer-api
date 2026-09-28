@@ -1,7 +1,6 @@
 import { parseAiJson } from "./response-parser";
 import { stripChatWonderNoise } from "./chat-wonder-noise";
-
-export type WitnessStatusValue = "READY" | "ADVERSE" | "OUTSTANDING";
+import { FACTOR_KEYS, RUBRIC, type FactorKey } from "./witness-rubric";
 
 export interface WitnessScoreReason {
   text: string;
@@ -10,22 +9,32 @@ export interface WitnessScoreReason {
   source: string | null;
 }
 
-export interface WitnessScore {
-  witnessId: string;
-  /** Null when the model said there isn't enough case data to score this witness. */
-  credibility: number | null;
-  suggestedStatus: WitnessStatusValue | null;
-  reasons: WitnessScoreReason[];
+export interface WitnessFactorAnswer {
+  /** One of the factor's options, or null when the model said the papers don't show it. */
+  answer: string | null;
+  /** Verbatim passage the model relied on. Checked against the source text by the caller. */
+  quote: string | null;
+  /** Name of the document the quote is from. */
+  document: string | null;
 }
 
+export interface WitnessFactorRow {
+  witnessId: string;
+  factors: Record<FactorKey, WitnessFactorAnswer>;
+  reasons: WitnessScoreReason[];
+  /** Next step the model suggested for each factor it could not answer. */
+  needs: Partial<Record<FactorKey, string>>;
+}
+
+const MAX_NEED = 300;
 const MAX_REASONS = 4;
 const MAX_TEXT = 400;
 const MAX_SOURCE = 200;
-const VALID_STATUSES = new Set<string>(["READY", "ADVERSE", "OUTSTANDING"]);
+const MAX_QUOTE = 600;
 
 /** `undefined` = no [SCORES] block found/parseable (distinct from an empty array). Only ids in
  * `knownIds` survive, so a hallucinated witness can never create or touch a row. Never throws. */
-export function extractWitnessScores(text: string, knownIds: Set<string>): WitnessScore[] | undefined {
+export function extractWitnessFactors(text: string, knownIds: Set<string>): WitnessFactorRow[] | undefined {
   const cleaned = stripChatWonderNoise(text);
   const closed = cleaned.match(/\[SCORES\]([\s\S]*?)\[\/SCORES\]/i);
   let jsonStr = closed ? closed[1].trim() : "";
@@ -40,44 +49,76 @@ export function extractWitnessScores(text: string, knownIds: Set<string>): Witne
   if (!Array.isArray(parsed)) return undefined;
 
   const seen = new Set<string>();
-  const results: WitnessScore[] = [];
+  const results: WitnessFactorRow[] = [];
   for (const row of parsed) {
-    const score = normalizeScore(row, knownIds);
-    if (score && !seen.has(score.witnessId)) {
-      seen.add(score.witnessId);
-      results.push(score);
+    const normalized = normalizeRow(row, knownIds);
+    if (normalized && !seen.has(normalized.witnessId)) {
+      seen.add(normalized.witnessId);
+      results.push(normalized);
     }
   }
   return results;
 }
 
-function normalizeScore(row: unknown, knownIds: Set<string>): WitnessScore | null {
+function clean(value: unknown, max: number): string | null {
+  return typeof value === "string" ? value.trim().slice(0, max) || null : null;
+}
+
+function normalizeFactor(key: FactorKey, raw: unknown): WitnessFactorAnswer {
+  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const answerRaw = typeof r.answer === "string" ? r.answer.trim().toUpperCase() : "";
+  // An answer that isn't one of the factor's options is dropped: not assessable, never a guess.
+  const answer = Object.prototype.hasOwnProperty.call(RUBRIC[key].options, answerRaw) ? answerRaw : null;
+  return { answer, quote: clean(r.quote, MAX_QUOTE), document: clean(r.document, MAX_SOURCE) };
+}
+
+function normalizeRow(row: unknown, knownIds: Set<string>): WitnessFactorRow | null {
   if (!row || typeof row !== "object") return null;
   const r = row as Record<string, unknown>;
 
   const witnessId = typeof r.witnessId === "string" ? r.witnessId.trim() : "";
   if (!knownIds.has(witnessId)) return null;
 
-  const rawCredibility = typeof r.credibility === "number" ? r.credibility : Number(r.credibility);
-  const credibility =
-    r.credibility === null || r.credibility === undefined || !Number.isFinite(rawCredibility)
-      ? null
-      : Math.min(100, Math.max(0, Math.round(rawCredibility)));
-
-  const statusRaw = typeof r.suggestedStatus === "string" ? r.suggestedStatus.trim().toUpperCase() : "";
-  const suggestedStatus = VALID_STATUSES.has(statusRaw) ? (statusRaw as WitnessStatusValue) : null;
+  const rawFactors = r.factors && typeof r.factors === "object" ? (r.factors as Record<string, unknown>) : {};
+  const factors = {} as Record<FactorKey, WitnessFactorAnswer>;
+  for (const key of FACTOR_KEYS) factors[key] = normalizeFactor(key, rawFactors[key]);
 
   const reasons: WitnessScoreReason[] = [];
   if (Array.isArray(r.reasons)) {
     for (const item of r.reasons.slice(0, MAX_REASONS)) {
       if (!item || typeof item !== "object") continue;
       const ir = item as Record<string, unknown>;
-      const text = typeof ir.text === "string" ? ir.text.trim().slice(0, MAX_TEXT) : "";
+      const text = clean(ir.text, MAX_TEXT);
       if (!text) continue;
-      const source = typeof ir.source === "string" ? ir.source.trim().slice(0, MAX_SOURCE) || null : null;
-      reasons.push({ text, source });
+      reasons.push({ text, source: clean(ir.source, MAX_SOURCE) });
     }
   }
 
-  return { witnessId, credibility, suggestedStatus, reasons };
+  const needs: Partial<Record<FactorKey, string>> = {};
+  if (Array.isArray(r.needs)) {
+    for (const item of r.needs) {
+      if (!item || typeof item !== "object") continue;
+      const ir = item as Record<string, unknown>;
+      const factor = typeof ir.factor === "string" ? (ir.factor.trim().toUpperCase() as FactorKey) : null;
+      const text = clean(ir.text, MAX_NEED);
+      if (factor && FACTOR_KEYS.includes(factor) && text && !needs[factor]) needs[factor] = text;
+    }
+  }
+
+  return { witnessId, factors, reasons, needs };
+}
+
+function normalizeForMatch(text: string): string {
+  return text
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** True when `quote` appears verbatim in `source` (ignoring case, curly quotes and whitespace). */
+export function quoteAppearsIn(quote: string, source: string): boolean {
+  const q = normalizeForMatch(quote);
+  return q.length > 0 && normalizeForMatch(source).includes(q);
 }
