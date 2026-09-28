@@ -21,6 +21,7 @@ import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
+import { audioOverviewFilename } from "../utils/audio-overview-filename";
 import { checkAudioOverviewTurns, isAudioOverviewJevEnabled } from "../utils/audio-overview-jev";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
 import GroundingVerifierSvc from "./grounding-verifier.service";
@@ -1543,7 +1544,10 @@ export default class ChatSvc {
     if (row.audioStatus === "COMPLETED" && row.audioFile?.s3Key) {
       return {
         status: "COMPLETED" as const,
-        audioFile: { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key) },
+        audioFile: {
+          id: row.audioFile.id,
+          fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }),
+        },
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };

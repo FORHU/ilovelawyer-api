@@ -1,6 +1,7 @@
 import CaseAccess from "../utils/case-access";
 import ChatRepo from "../repositories/chat.repository";
 import { getProxyFileUrl } from "../utils/s3";
+import { audioOverviewFilename } from "../utils/audio-overview-filename";
 import type { AudioOverviewTurn } from "../utils/response-parser";
 import type { AudioOverviewTurnCheck } from "../utils/audio-overview-jev";
 
@@ -21,7 +22,7 @@ export default class AudioOverviewHistorySvc {
       status: row.audioStatus,
       turns: row.turns as unknown as AudioOverviewTurn[],
       checks: (row.checks as unknown as AudioOverviewTurnCheck[] | null) ?? [],
-      audio: row.audioFile?.s3Key ? { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key) } : null,
+      audio: row.audioFile?.s3Key ? { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }) } : null,
     }));
     const nextCursor = filters.limit && items.length === filters.limit ? items[items.length - 1]!.id : null;
     return { items, nextCursor };
