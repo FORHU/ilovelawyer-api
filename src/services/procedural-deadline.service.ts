@@ -177,9 +177,9 @@ export default class ProceduralDeadlineSvc {
     };
   }
 
-  static async createItem(caseId: string, userId: string, body: { kind: string; label: string; notes?: string }) {
+  static async createItem(caseId: string, userId: string, body: { kind: string; label: string; notes?: string; sourceLabel?: string | null }) {
     await CaseAccess.assertCanEdit(caseId, userId);
-    return ProceduralDeadlineRepo.createProcedureItem(caseId, body);
+    return ProceduralDeadlineRepo.createProcedureItem(caseId, { ...body, sourceLabel: body.sourceLabel || null });
   }
 
   static async updateItem(caseId: string, id: string, userId: string, body: { done?: boolean; notes?: string; label?: string }) {

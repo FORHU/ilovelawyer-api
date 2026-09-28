@@ -56,7 +56,7 @@ export default class ProceduralDeadlineRepo {
     return prisma.procedureItem.findMany({ where: { caseId }, orderBy: { createdAt: "asc" } });
   }
 
-  static async createProcedureItem(caseId: string, data: { kind: string; label: string; notes?: string | null }) {
+  static async createProcedureItem(caseId: string, data: { kind: string; label: string; notes?: string | null; sourceLabel?: string | null }) {
     return prisma.procedureItem.create({ data: { caseId, ...data } });
   }
 
@@ -88,6 +88,17 @@ export default class ProceduralDeadlineRepo {
       }
     });
     return this.listProcedureItems(caseId);
+  }
+
+  /** Attaches Jev verdicts, but only to rows that still say exactly what Jev judged — a lawyer may
+   * have edited the label while the check ran. Returns how many landed. */
+  static async saveChecks(caseId: string, results: { id: string; label: string; check: object }[]) {
+    let applied = 0;
+    for (const r of results) {
+      const { count } = await prisma.procedureItem.updateMany({ where: { id: r.id, caseId, label: r.label }, data: { check: r.check } });
+      applied += count;
+    }
+    return applied;
   }
 
   static async updateProcedureItem(id: string, caseId: string, data: { done?: boolean; notes?: string | null; label?: string }) {
