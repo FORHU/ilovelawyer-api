@@ -20,6 +20,7 @@ import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.se
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
+import AudioOverviewHistorySvc from "../services/audio-overview-history.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -64,6 +65,7 @@ import {
   graphViewSchema,
   exportBriefSchema,
   exportBriefHistorySchema,
+  audioOverviewHistorySchema,
   listDecisionsSchema,
   disputeDecisionSchema,
   createTheorySchema,
@@ -596,6 +598,16 @@ export default class CaseTerminalCtrl {
     const { error, value } = exportBriefHistorySchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseBriefExportSvc.listHistory(req.params.caseId, req.user.userId, {
+      limit: value.limit,
+      cursor: value.cursor,
+    });
+    return res.status(200).json(result);
+  }
+
+  static async audioOverviewHistory(req: Request, res: Response) {
+    const { error, value } = audioOverviewHistorySchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await AudioOverviewHistorySvc.list(req.params.caseId, req.user.userId, {
       limit: value.limit,
       cursor: value.cursor,
     });
