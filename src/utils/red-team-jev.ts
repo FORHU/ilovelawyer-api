@@ -1,6 +1,8 @@
 import { choice, score } from "@typesafe-ai/sdk";
 import { getTypeSafeClient } from "./typesafeClient";
 import logger from "./logger";
+import { applyFloor, isUncertain, normalizeScore, readChoice } from "./jev-common";
+import { caseDataState, CaseJevContext } from "./case-jev-context";
 import type { RedTeamArgument, RedTeamArguments, RedTeamArgumentStrength } from "./red-team-arguments-parse";
 
 /**
@@ -28,9 +30,6 @@ export type SupportVerdict = (typeof SUPPORT_VERDICTS)[number];
 /** Same rule and reason as assertion-check.ts's floor: CONTRADICTED is the accusatory verdict, so
  * below this it's reported as UNSUPPORTED. Provisional — re-set from the red-team benchmark. */
 export const CONTRADICTION_MIN_CONFIDENCE = 0.7;
-/** Below this a likelihood/severity Score is spread across levels; the panel marks the row as an
- * uncertain rating rather than presenting the label as settled. Provisional, like the floor above. */
-export const UNCERTAIN_SCORE_CONFIDENCE = 0.5;
 
 // Ordered lowest → highest, as Score requires. Concrete situations, no numbers (see the Score docs).
 export const LIKELIHOOD_LEVELS = [
@@ -47,15 +46,7 @@ export const SEVERITY_LEVELS = [
   "If accepted, it disposes of the whole case — for example dismissal on a procedural ground, or a complete defence to liability.",
 ] as const;
 
-export interface RedTeamJevContext {
-  opponent: string | null;
-  legalIssues: string[];
-  weaknesses: string[];
-  contradictions: string[];
-  timeline: string[];
-  witnesses: string[];
-  parties: string[];
-}
+export type RedTeamJevContext = CaseJevContext;
 
 export interface RedTeamJevRating {
   support: SupportVerdict;
@@ -82,10 +73,6 @@ export interface VerifiedRedTeamArguments extends Omit<RedTeamArguments, "argume
   arguments: VerifiedRedTeamArgument[];
 }
 
-// Caps on the case context handed to Jev per argument — enough to judge against, without
-// resending a long timeline for each of up to eight arguments.
-const MAX_CONTEXT_ITEMS = 25;
-
 /** Strength label from the likelihood Score alone — the label answers "will this work?". */
 export function strengthFromLikelihood(likelihood: number): RedTeamArgumentStrength {
   if (likelihood >= 2 / 3) return "STRONG";
@@ -105,10 +92,6 @@ export function impactFromRatings(likelihood: number, severity: number, support:
   return support === "SUPPORTED" ? clamped : Math.min(0, clamped);
 }
 
-function clip<T>(items: T[]): T[] {
-  return items.slice(0, MAX_CONTEXT_ITEMS);
-}
-
 /** Throws on a Jev failure — verifyRedTeamArgumentsWithJev decides what that means. */
 export async function rateArgumentWithJev(arg: RedTeamArgument, context: RedTeamJevContext): Promise<RedTeamJevRating> {
   const client = getTypeSafeClient();
@@ -116,14 +99,7 @@ export async function rateArgumentWithJev(arg: RedTeamArgument, context: RedTeam
     opponent: context.opponent ?? "the opposing party",
     argument: { title: arg.title, gist: arg.gist ?? "", reasoning: arg.reasoning ?? "" },
     citedItem: { kind: arg.source.kind, text: arg.source.label },
-    caseData: {
-      parties: clip(context.parties),
-      legalIssues: clip(context.legalIssues),
-      weaknesses: clip(context.weaknesses),
-      contradictions: clip(context.contradictions),
-      timeline: clip(context.timeline),
-      witnesses: clip(context.witnesses),
-    },
+    caseData: caseDataState(context),
   };
   logger.info("Jev request", { feature: "red-team", title: arg.title, sourceKind: arg.source.kind });
 
@@ -146,23 +122,16 @@ export async function rateArgumentWithJev(arg: RedTeamArgument, context: RedTeam
   });
 
   const s = response.answers.support;
-  const raw: SupportVerdict = (SUPPORT_VERDICTS as readonly string[]).includes(s.choice as string)
-    ? (s.choice as SupportVerdict)
-    : "UNSUPPORTED";
-  const downgraded = raw === "CONTRADICTED" && s.confidence < CONTRADICTION_MIN_CONFIDENCE;
-  const top = LIKELIHOOD_LEVELS.length - 1;
-  const likelihood = Math.max(0, Math.min(1, response.answers.likelihood.score / top));
-  const severity = Math.max(0, Math.min(1, response.answers.severity.score / (SEVERITY_LEVELS.length - 1)));
+  const raw = readChoice<SupportVerdict>(s.choice, SUPPORT_VERDICTS, "UNSUPPORTED");
+  const { value: support, downgraded } = applyFloor(raw, s.confidence, "CONTRADICTED", CONTRADICTION_MIN_CONFIDENCE, "UNSUPPORTED");
   const rating: RedTeamJevRating = {
-    support: downgraded ? "UNSUPPORTED" : raw,
+    support,
     supportConfidence: s.confidence,
-    likelihood,
+    likelihood: normalizeScore(response.answers.likelihood.score, LIKELIHOOD_LEVELS),
     likelihoodConfidence: response.answers.likelihood.confidence,
-    severity,
+    severity: normalizeScore(response.answers.severity.score, SEVERITY_LEVELS),
     severityConfidence: response.answers.severity.confidence,
-    uncertain:
-      response.answers.likelihood.confidence < UNCERTAIN_SCORE_CONFIDENCE ||
-      response.answers.severity.confidence < UNCERTAIN_SCORE_CONFIDENCE,
+    uncertain: isUncertain(response.answers.likelihood.confidence, response.answers.severity.confidence),
   };
 
   logger.info("Jev response", {

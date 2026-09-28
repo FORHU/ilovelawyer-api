@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { FindingCategory } from "@prisma/client";
+import { FindingCategory, FindingTag } from "@prisma/client";
 import { AI_FINDING_NOTE } from "../constants";
 
 export interface FindingInput {
@@ -7,14 +7,22 @@ export interface FindingInput {
   label: string;
   notes?: string | null;
   sourceLabel?: string | null;
+  detail?: string | null;
+  tag?: FindingTag | null;
+  position?: number | null;
 }
 
 export default class CaseFindingRepo {
   static async list(caseId: string, category?: FindingCategory) {
     return prisma.caseFinding.findMany({
       where: { caseId, ...(category ? { category } : {}) },
-      orderBy: { createdAt: "desc" },
+      // Positioned rows first, in order; the rest newest first, as before position existed.
+      orderBy: [{ position: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
     });
+  }
+
+  static async find(id: string, caseId: string) {
+    return prisma.caseFinding.findFirst({ where: { id, caseId } });
   }
 
   static async create(caseId: string, data: FindingInput) {
