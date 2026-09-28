@@ -16,6 +16,7 @@ import {
 } from "../utils/juris-ph";
 import { documentNumber, planPhSearch } from "../utils/ph-legal-query";
 import { fetchLawFullText } from "../utils/law-fulltext";
+import { LawPreview, toLawPreview } from "../utils/law-preview";
 
 type LawRow = NonNullable<Awaited<ReturnType<typeof LawRepo.findByJurisSourceId>>>;
 
@@ -460,6 +461,16 @@ export default class LawSvc {
     );
     const withFullText = await LawSvc.ensureFullText(row);
     return LawSvc.toDocumentResult(dataset, withFullText, "juris.ph");
+  }
+
+  /** The chat citation hover card's data — DB-only, unlike getDocument above: no juris.ph
+   * retrieve and no ensureFullText, since it runs on every hover. A citation only links to the
+   * Library once legal-citation-link-rewrite.ts has already materialized its row, so a stored
+   * row is all this ever needs. */
+  static async getPreview(params: { category: LawCategory; id: string }): Promise<LawPreview> {
+    const row = await LawRepo.findByJurisSourceId(params.id);
+    if (!row || row.category !== params.category) throw new HttpError("No such law document", 404);
+    return toLawPreview(row);
   }
 
   /** Fetches and persists `Law.fullText` on first view (see fetchLawFullText); a no-op on every

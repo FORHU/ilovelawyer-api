@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import { Law, LawCategory } from "@prisma/client";
 import LawRepo from "../../../repositories/law.repository";
 import HttpError from "../../../utils/http-error";
+import { LawPreview, toLawPreview } from "../../../utils/law-preview";
 import {
   caseLawSearch,
   legislationSearch,
@@ -306,6 +307,13 @@ export class UkLawSourceProvider implements LawSourceProvider {
       }
       throw err;
     }
+  }
+
+  /** DB-only, unlike getDocument above — no MCP detail fill on a hover. */
+  async getPreview(params: { category: LawCategory; id: string }): Promise<LawPreview> {
+    const row = await LawRepo.findById(params.id);
+    if (!row || row.category !== params.category) throw new HttpError("No such law document", 404);
+    return toLawPreview(row);
   }
 
   private async fillCaseLawDetail(row: Law): Promise<Law> {

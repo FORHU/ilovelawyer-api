@@ -1,6 +1,7 @@
 import { LawCategory } from "@prisma/client";
 import { TenantCode } from "../../types/tenant-code";
 import type { SearchResult, BrowseResult, DocumentResult } from "../../services/law.service";
+import type { LawPreview } from "../../utils/law-preview";
 
 /**
  * One tenantCode's live legal-source surface for the Library tab: search, faceted browse, and
@@ -53,4 +54,9 @@ export interface LawSourceProvider {
   }): Promise<BrowseResult>;
 
   getDocument(params: { category: LawCategory; id: string }): Promise<DocumentResult>;
+
+  /** The chat citation hover card's data, same `id` convention as `getDocument`. DB-only — no
+   * upstream call and no full-text extraction, since it runs on every hover. Throws
+   * HttpError(404) when the row isn't stored (or is stored under another category). */
+  getPreview(params: { category: LawCategory; id: string }): Promise<LawPreview>;
 }
