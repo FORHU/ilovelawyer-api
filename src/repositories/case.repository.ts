@@ -184,6 +184,11 @@ export default class CaseRepo {
   }
 
   /** updateMany, not update — same case-deleted-mid-flight tolerance as markRefreshed above. */
+  static async setFindingsFormatVersion(id: string, version: number) {
+    return prisma.case.updateMany({ where: { id }, data: { findingsFormatVersion: version } });
+  }
+
+  /** updateMany, not update — same case-deleted-mid-flight tolerance as markRefreshed above. */
   static async setReadySetFingerprint(id: string, fingerprint: string) {
     return prisma.case.updateMany({ where: { id }, data: { readySetFingerprint: fingerprint } });
   }
