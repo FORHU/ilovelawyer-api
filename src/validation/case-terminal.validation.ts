@@ -164,6 +164,9 @@ export const createProcedureItemSchema = Joi.object({
   kind: Joi.string().required(),
   label: Joi.string().required(),
   notes: Joi.string().optional(),
+  // Where a to-do sent over from another panel ("To checklist") came from, e.g. the finding or
+  // document it was raised on — shown as the item's source, same as an AI item's.
+  sourceLabel: Joi.string().max(200).optional().allow(null, ""),
 });
 
 export const updateProcedureItemSchema = Joi.object({

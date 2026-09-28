@@ -1624,6 +1624,10 @@ model ProcedureItem {
   // CaseStrategySvc, case-strategy-parse.ts). Null for lawyer-entered items and for AI items
   // the model didn't attribute to a specific document.
   sourceLabel String?
+  // Jev's verdict on a STRATEGY item against the case data (case-strategy-jev.ts):
+  // { verdict, confidence, checkedAt }. Null for to-dos, lawyer-entered items, and when
+  // USE_JEV_CASE_STRATEGY is off.
+  check       Json?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

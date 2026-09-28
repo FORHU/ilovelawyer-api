@@ -10,6 +10,7 @@ import GroundingVerifierSvc from "../services/grounding-verifier.service";
 import CitationMapSvc from "../services/citation-map.service";
 import UkCitationMapSvc from "../services/uk-citation-map.service";
 import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
+import CaseStrategySvc from "../services/case-strategy.service";
 import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
 import FindingJevSvc from "../services/finding-jev.service";
@@ -166,6 +167,23 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "timelineGenerate", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "timelineGenerate");
     return res.status(202).json(status);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — refreshes only the Case Strategy panel's pass (plan,
+   * to-dos, key dates), so a lawyer whose panel is flagged stale doesn't pay for a full Refresh
+   * analysis. Ticked to-dos survive (see planAiProcedureItems). */
+  static async refreshStrategy(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseStrategySvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseStrategyRefresh", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseStrategyRefresh");
+    return res.status(202).json(status);
+  }
+
+  static async recomputeStaleDeadlines(req: Request, res: Response) {
+    const result = await ProceduralDeadlineSvc.recomputeStale(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
   }
 
   static async listRisks(req: Request, res: Response) {
