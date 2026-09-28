@@ -1,3 +1,5 @@
+import { formatDamageForPrompt, type DamagePromptHead } from "../utils/damages-compute";
+
 export interface RedTeamPromptData {
   caseName: string;
   actionType?: string | null;
@@ -13,7 +15,12 @@ export interface RedTeamPromptData {
   timeline: { title: string; occurredOn?: string | Date | null }[];
   contradictions: { kind: string; leftValue: string; rightValue: string; leftExcerpt: string; rightExcerpt: string }[];
   witnesses: { name: string; role?: string | null }[];
-  damages: { category: string; description?: string | null; amount?: number | null }[];
+  /** Each head with how firm it is (status, range, basis, pending evidence) — see
+   * formatDamageForPrompt. `description` is still what [ARGUMENTS] cites as a DAMAGE source. */
+  damages: DamagePromptHead[];
+  /** Case totals from damages-compute, so the model deflates the modeled claim rather than
+   * re-adding the heads itself. Absent when the case has no heads. */
+  damagesTotals?: { currency: string; total: number; low: number; high: number; provisional: boolean } | null;
 }
 
 /** Shared by the PH and UK red-team builders so the [ARGUMENTS] contract (parsed by
@@ -39,6 +46,17 @@ function bulletList(items: string[]): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "(none recorded)";
 }
 
+/** [Damages & Remedies] body, shared by the PH and UK builders: one line per head, then the
+ * modeled total and exposure range. */
+export function damagesSection(data: Pick<RedTeamPromptData, "damages" | "damagesTotals">): string {
+  const lines = bulletList(data.damages.map(formatDamageForPrompt));
+  const t = data.damagesTotals;
+  if (!t || data.damages.length === 0) return lines;
+  const range = t.low !== t.total || t.high !== t.total ? `; exposure range ${t.low}–${t.high}` : "";
+  return `${lines}
+- TOTAL (${t.currency}): ${t.total}${range}${t.provisional ? " — provisional, some inputs are not yet proven" : ""}`;
+}
+
 function formatDate(value?: string | Date | null): string {
   if (!value) return "undated";
   const date = typeof value === "string" ? new Date(value) : value;
@@ -59,9 +77,7 @@ export function buildRedTeamPrompt(data: RedTeamPromptData): string {
   );
   const weaknessesText = bulletList(data.weaknesses);
   const witnessesText = bulletList(data.witnesses.map((w) => (w.role ? `${w.name} — ${w.role}` : w.name)));
-  const damagesText = bulletList(
-    data.damages.map((d) => `${d.category}${d.amount != null ? `: ${d.amount}` : ""}${d.description ? ` — ${d.description}` : ""}`),
-  );
+  const damagesText = damagesSection(data);
 
   return `[legal ai]
 

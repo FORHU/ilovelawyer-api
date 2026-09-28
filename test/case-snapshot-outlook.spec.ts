@@ -57,6 +57,7 @@ describe("CaseSnapshotSvc.get — outlook fields", () => {
         parties: [{ id: "p1", name: "Acme", designation: "Petitioner / Plaintiff", descriptor: "Rep. by Hollis & Marr" }],
       })],
       [CaseAccess, "requiredConfirmations", empty],
+      [CaseAccess, "resolveTenantCode", async () => "PH"],
       [DocumentRepo, "listAllByCase", async () => [{ id: "doc-1", name: "Contract", ragStatus: "READY", createdAt: new Date() }]],
       [CaseTimelineRepo, "list", empty],
       [CaseRiskRepo, "list", async () => [{ id: "r1", title: "Late notice", severity: "MAJOR", status: "OPEN", confidence: "MEDIUM", createdAt: new Date() }]],

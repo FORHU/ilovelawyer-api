@@ -6,6 +6,7 @@ const CONFIDENCE_LEVELS = ["LOW", "MEDIUM", "HIGH"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
 const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
 const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
+const DAMAGE_STATUSES = ["PROVISIONAL", "SUPPORTED", "CERTIFIED"];
 const PRIVILEGE_STATUSES = ["NONE", "ATTORNEY_CLIENT", "WORK_PRODUCT"];
 const HEARSAY_CATEGORIES = [
   "DIRECT_EVIDENCE",
@@ -239,20 +240,54 @@ export const witnessFactorSchema = Joi.object({
   note: Joi.string().max(500).allow("").default(""),
 });
 
+// See DamageBasis in utils/damages-compute.ts. A RATE_X_PERIOD period is either `months` or both
+// dates — never neither, never both, so the stored inputs say unambiguously what was computed.
+const damageBasisSchema = Joi.alternatives().try(
+  Joi.object({ kind: Joi.string().valid("FIXED").required() }),
+  Joi.object({
+    kind: Joi.string().valid("RATE_X_PERIOD").required(),
+    monthlyRate: Joi.number().min(0).required(),
+    months: Joi.number().min(0).max(1200),
+    fromDate: Joi.date().iso(),
+    untilDate: Joi.date().iso().min(Joi.ref("fromDate")),
+  })
+    .xor("months", "fromDate")
+    .and("fromDate", "untilDate"),
+  Joi.object({
+    kind: Joi.string().valid("PERCENT_OF").required(),
+    percent: Joi.number().min(0).max(100).required(),
+    categories: Joi.array()
+      .items(Joi.string().valid(...DAMAGE_CATEGORIES))
+      .min(1)
+      .unique()
+      .required(),
+  }),
+);
+
+const damageFields = {
+  label: Joi.string().allow("", null).max(200).optional(),
+  description: Joi.string().allow("").optional(),
+  amount: Joi.number().min(0).optional().allow(null),
+  basis: damageBasisSchema.allow(null).optional(),
+  amountLow: Joi.number().min(0).optional().allow(null),
+  amountHigh: Joi.number().min(0).optional().allow(null),
+  status: Joi.string().valid(...DAMAGE_STATUSES).optional(),
+  pendingEvidence: Joi.string().allow("", null).max(300).optional(),
+  legalBasis: Joi.string().allow("", null).max(500).optional(),
+};
+
 export const createDamageSchema = Joi.object({
   category: Joi.string()
     .valid(...DAMAGE_CATEGORIES)
     .required(),
-  description: Joi.string().allow("").optional(),
-  amount: Joi.number().min(0).optional().allow(null),
+  ...damageFields,
 });
 
 export const updateDamageSchema = Joi.object({
   category: Joi.string()
     .valid(...DAMAGE_CATEGORIES)
     .optional(),
-  description: Joi.string().allow("").optional(),
-  amount: Joi.number().min(0).optional().allow(null),
+  ...damageFields,
 }).min(1);
 
 export const createClaimSchema = Joi.object({
