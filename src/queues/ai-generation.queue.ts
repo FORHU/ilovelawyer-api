@@ -8,6 +8,7 @@ import CaseTheorySvc from "../services/case-theory.service";
 import TheoryDiffSvc from "../services/theory-diff.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseMindMapSvc from "../services/case-mind-map.service";
+import CaseStrategySvc from "../services/case-strategy.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
@@ -23,6 +24,7 @@ export type QueuedAiGenerationKind =
   | "caseReconstructionTableRead"
   | "casePostExtraction"
   | "timelineGenerate"
+  | "caseStrategyRefresh"
   | "witnessScoring"
   | "witnessExtract"
   | "contradictions"
@@ -68,6 +70,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
     return runCasePostExtraction(job.caseId, job.userId);
   },
   timelineGenerate: (job) => CaseTimelineSvc.runQueuedGenerate(job.caseId, job.userId),
+  caseStrategyRefresh: (job) => CaseStrategySvc.runQueued(job.caseId, job.userId),
   witnessScoring: (job) => WitnessScoringSvc.runQueued(job.caseId, job.userId),
   // No controller in front of this one — it's enqueued by runCasePostExtraction and claims its
   // own lock (see WitnessExtractSvc.runQueued), same as casePostExtraction.

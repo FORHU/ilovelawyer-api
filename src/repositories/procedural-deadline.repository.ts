@@ -40,6 +40,10 @@ export default class ProceduralDeadlineRepo {
     return prisma.proceduralDeadline.update({ where: { id }, data });
   }
 
+  static async clearConfirmations(deadlineId: string) {
+    return prisma.proceduralDeadlineConfirmation.deleteMany({ where: { deadlineId } });
+  }
+
   static async confirm(deadlineId: string, userId: string, confirmed: boolean, note?: string) {
     return prisma.proceduralDeadlineConfirmation.upsert({
       where: { deadlineId_userId: { deadlineId, userId } },

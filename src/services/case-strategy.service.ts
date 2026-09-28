@@ -7,9 +7,26 @@ import { extractCaseStrategy } from "../utils/case-strategy-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import CaseTimelineSvc from "./case-timeline.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import OrganizationRepo from "../repositories/organization.repository";
+import { STRATEGY_GENERATED_ACTION } from "../utils/strategy-staleness";
 import logger from "../utils/logger";
 
 export default class CaseStrategySvc {
+  /** Fast half of a lawyer-triggered refresh of the Case Strategy panel — access check + claiming
+   * the AiGenerationJob row — called from the controller before handing off to AiGenerationQueue
+   * (SQS), same begin/runQueued split as Refresh analysis and Timeline generate. Refreshes only
+   * this panel's pass (plan, to-dos, key dates), not contradictions/findings/outlook/map. */
+  static async beginQueued(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.begin(caseId, "caseStrategyRefresh");
+  }
+
+  static async runQueued(caseId: string, userId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "caseStrategyRefresh", async () => {
+      await CaseStrategySvc.generateFromDocuments(caseId, userId);
+    });
+  }
+
   static async generateFromDocuments(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
     return AiGenerationLockSvc.run(caseId, "caseStrategy", () => CaseStrategySvc.generateFromDocumentsInner(caseId, userId));
@@ -121,6 +138,12 @@ ${pack.text || "(no indexed text)"}
       logger.info("Chat Wonder case strategy: timeline write done", { caseId, durationMs: Date.now() - tWriteStart });
     }
 
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId: userId,
+      action: STRATEGY_GENERATED_ACTION,
+      payload: { strategy: parsed.strategy.length, todos: parsed.todos.length, dates: parsed.dates?.length ?? null },
+    });
     logger.info("Chat Wonder case strategy: total", { caseId, totalMs: Date.now() - tStart });
     return ProceduralDeadlineRepo.listProcedureItems(caseId);
   }
