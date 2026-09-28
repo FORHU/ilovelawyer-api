@@ -81,6 +81,26 @@ export default class LawCtrl {
   }
 
   /**
+   * GET /api/law/preview — the chat citation hover card: title, reference, year, court and a
+   * short snippet. Same query as /document (`id` is the juris source id for PH, `Law.id` for UK),
+   * but DB-only and small — see LawSourceProvider.getPreview. Law rows don't change after
+   * they're stored, so the browser may cache it for an hour.
+   */
+  static async getPreview(req: Request, res: Response) {
+    const provider = getLawSourceProvider(getTenantContext(req).tenantCode);
+
+    const { error, value } = lawDocumentSchema(provider).validate(req.query, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await provider.getPreview({
+      category: provider.parseCategory(value.category),
+      id: value.id,
+    });
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    return res.status(200).json(result);
+  }
+
+  /**
    * GET /api/law/:lawId/pdf — same-origin proxy for a stored law's official PDF (see law.route.ts).
    * Several upstreams refuse framing outright (legislation.gov.uk, the TNA judgment site) and,
    * per user report, so does juris.ph's own PDF host for PH jurisprudence/republic-acts — a
