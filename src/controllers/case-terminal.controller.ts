@@ -5,6 +5,7 @@ import CaseRiskSvc from "../services/case-risk.service";
 import CaseRefreshSvc from "../services/case-refresh.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CitationCheckSvc from "../services/citation-check.service";
+import CaseAuthoritySvc from "../services/case-authority.service";
 import GroundingVerifierSvc from "../services/grounding-verifier.service";
 import CitationMapSvc from "../services/citation-map.service";
 import UkCitationMapSvc from "../services/uk-citation-map.service";
@@ -40,6 +41,9 @@ import {
   upsertMatrixSchema,
   addCustodyEventSchema,
   checkCitationSchema,
+  createAuthoritySchema,
+  updateAuthoritySchema,
+  updateCitationSchema,
   createDeadlineSchema,
   confirmDeadlineSchema,
   createProcedureItemSchema,
@@ -50,6 +54,7 @@ import {
   updateFindingSchema,
   createWitnessSchema,
   updateWitnessSchema,
+  witnessFactorSchema,
   updateContradictionSchema,
   createDamageSchema,
   updateDamageSchema,
@@ -271,6 +276,37 @@ export default class CaseTerminalCtrl {
     return res.status(201).json(result);
   }
 
+  static async createAuthority(req: Request, res: Response) {
+    const { error, value } = createAuthoritySchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseAuthoritySvc.create(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async updateAuthority(req: Request, res: Response) {
+    const { error, value } = updateAuthoritySchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CaseAuthoritySvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteAuthority(req: Request, res: Response) {
+    await CaseAuthoritySvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async updateCitation(req: Request, res: Response) {
+    const { error, value } = updateCitationSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CitationCheckSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteCitation(req: Request, res: Response) {
+    await CitationCheckSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
   static async procedureRules(req: Request, res: Response) {
     const { tenantCode } = getTenantContext(req);
     return res.status(200).json(ProceduralDeadlineSvc.rules(tenantCode));
@@ -377,6 +413,20 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  static async setWitnessFactor(req: Request, res: Response) {
+    const { error, value } = witnessFactorSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await WitnessScoringSvc.setFactorOverride(
+      req.params.caseId,
+      req.params.id,
+      req.user.userId,
+      req.params.factor,
+      value.answer,
+      value.note,
+    );
+    return res.status(200).json(result);
+  }
+
   /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
   static async scoreWitnesses(req: Request, res: Response) {
     const { caseId } = req.params;
@@ -472,6 +522,17 @@ export default class CaseTerminalCtrl {
     await CaseReconstructionSvc.beginQueuedScenes(caseId, userId);
     AiGenerationQueue.enqueue({ kind: "caseReconstructionScenes", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionScenes");
+    return res.status(202).json(status);
+  }
+
+  /** Dated event chain with Jev-checked statuses. Queued via AiGenerationQueue (SQS) — see
+   * refresh() above for why. */
+  static async generateReconstructionEvents(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseReconstructionSvc.beginQueuedEvents(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseReconstructionEvents", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionEvents");
     return res.status(202).json(status);
   }
 

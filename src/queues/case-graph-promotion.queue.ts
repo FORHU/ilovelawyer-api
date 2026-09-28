@@ -78,30 +78,13 @@ export default class CaseGraphPromotionQueue {
     // Nothing to promote — skip the round trip through SQS entirely.
     if (!payload.timeline?.length && !payload.decisions?.records.length) return;
     payload.enqueuedAt = payload.enqueuedAt ?? Date.now();
-    const sendStartedAt = Date.now();
-
-    logger.info("Case graph promotion: enqueueing", {
-      parentMessageId: payload.parentMessageId,
-      assistantMessageId: payload.assistantMessageId,
-      consultationId: payload.consultationId,
-    });
 
     sendMessage(CASE_GRAPH_PROMOTION_QUEUE_URL, JSON.stringify(payload))
-      .then((sqsMessageId) => {
-        logger.info("Case graph promotion: enqueued to SQS", {
-          parentMessageId: payload.parentMessageId,
-          assistantMessageId: payload.assistantMessageId,
-          consultationId: payload.consultationId,
-          sqsMessageId,
-          sqsSendMs: Date.now() - sendStartedAt,
-        });
-      })
       .catch(async (err) => {
         logger.error("Failed to enqueue case graph promotion job", {
           err,
           parentMessageId: payload.parentMessageId,
           assistantMessageId: payload.assistantMessageId,
-          sqsSendMs: Date.now() - sendStartedAt,
         });
         // The chat message is already durable regardless of this failure — never drop the
         // enrichment work either, though. If the worker loop is running, hand it to
@@ -137,7 +120,6 @@ export default class CaseGraphPromotionQueue {
   }
 
   private static async run(): Promise<void> {
-    logger.info("Case graph promotion queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
   }
@@ -161,13 +143,6 @@ export default class CaseGraphPromotionQueue {
           void deleteMessage(CASE_GRAPH_PROMOTION_QUEUE_URL, message.receiptHandle).catch(() => {});
           continue;
         }
-        logger.info("Case graph promotion: received job from SQS", {
-          parentMessageId: payload.parentMessageId,
-          assistantMessageId: payload.assistantMessageId,
-          consultationId: payload.consultationId,
-          sqsMessageId: message.messageId,
-          queueWaitMs: payload.enqueuedAt ? Date.now() - payload.enqueuedAt : undefined,
-        });
         this.memoryWait.push({ payload, receiptHandle: message.receiptHandle, sqsMessageId: message.messageId });
       }
       this.pump();
@@ -206,15 +181,6 @@ export default class CaseGraphPromotionQueue {
   private static runOne(item: WaitItem): void {
     this.active += 1;
     const startedAt = Date.now();
-    logger.info("Case graph promotion: starting", {
-      parentMessageId: item.payload.parentMessageId,
-      assistantMessageId: item.payload.assistantMessageId,
-      consultationId: item.payload.consultationId,
-      sqsMessageId: item.sqsMessageId,
-      queueWaitMs: item.payload.enqueuedAt ? startedAt - item.payload.enqueuedAt : undefined,
-      activeJobs: this.active,
-      waitingJobs: this.memoryWait.length,
-    });
     // SQS-delivered jobs get one attempt here and rely on redelivery: the message is acked
     // only after promoteAssistantTurnToCaseGraph resolves. A failed job is left un-acked so it
     // reappears after VISIBILITY_TIMEOUT_SECONDS and is retried by whichever instance receives
@@ -226,23 +192,8 @@ export default class CaseGraphPromotionQueue {
       : () => promoteWithRetry(item.payload);
     void withVisibilityHeartbeat(CASE_GRAPH_PROMOTION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, job)
       .then(async () => {
-        logger.info("Case graph promotion: succeeded", {
-          parentMessageId: item.payload.parentMessageId,
-          assistantMessageId: item.payload.assistantMessageId,
-          consultationId: item.payload.consultationId,
-          sqsMessageId: item.sqsMessageId,
-          processingMs: Date.now() - startedAt,
-        });
         if (item.receiptHandle) {
           await deleteMessage(CASE_GRAPH_PROMOTION_QUEUE_URL, item.receiptHandle)
-            .then(() => {
-              logger.info("Case graph promotion: acked SQS message", {
-                parentMessageId: item.payload.parentMessageId,
-                assistantMessageId: item.payload.assistantMessageId,
-                sqsMessageId: item.sqsMessageId,
-                totalMs: item.payload.enqueuedAt ? Date.now() - item.payload.enqueuedAt : undefined,
-              });
-            })
             .catch((err) => {
               // Promoted but not acked: SQS will redeliver. promoteAssistantTurnToCaseGraph's
               // own idempotency guard (see DecisionRecordRepo.existsForSourceMessage) makes
@@ -273,11 +224,6 @@ export default class CaseGraphPromotionQueue {
       })
       .finally(() => {
         this.active -= 1;
-        logger.info("Case graph promotion: job slot freed", {
-          assistantMessageId: item.payload.assistantMessageId,
-          activeJobs: this.active,
-          waitingJobs: this.memoryWait.length,
-        });
         this.pump();
       });
   }

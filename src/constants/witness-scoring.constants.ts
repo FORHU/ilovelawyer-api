@@ -1,3 +1,5 @@
+import { FACTOR_DEFINITIONS, FACTOR_KEYS, RUBRIC } from "../utils/witness-rubric";
+
 export interface WitnessScoringPromptData {
   caseName: string;
   actionType?: string | null;
@@ -14,6 +16,16 @@ export interface WitnessScoringPromptData {
     sponsoredEvidence: { name: string; hearsay: string; contradictions: string[]; excerpt?: string }[];
   }[];
   timeline: { title: string; occurredOn?: string | Date | null }[];
+}
+
+function renderFactorQuestions(): string {
+  return FACTOR_KEYS.map((k) => {
+    const def = FACTOR_DEFINITIONS[k];
+    const options = Object.keys(RUBRIC[k].options)
+      .map((o) => `    ${o} — ${def.options[o]}`)
+      .join("\n");
+    return `${k}. ${RUBRIC[k].label}: ${def.question}\n${options}`;
+  }).join("\n");
 }
 
 function formatDate(value?: string | Date | null): string {
@@ -58,16 +70,17 @@ ${timelineText}
 
 INSTRUCTIONS:
 Use ONLY the data above. Do not use outside knowledge and do not invent facts.
-For each witness, assess how credible their account is likely to be, considering: whether they have first-hand knowledge (role and what they can speak to), whether their sponsored evidence is corroborated or contradicted, hearsay exposure, and whether a written statement has been received.
-Base the score on what the sponsored document text actually says: internal consistency, specificity (dates, places, amounts, sources of knowledge), first-hand versus second-hand knowledge, and agreement or conflict with the other witnesses' texts and with the contradictions listed.
-If the text of a witness's sponsored evidence is not available, or there is too little information to judge, set "credibility" to null and give one reason saying what is missing. Never use 50 as a filler for "unknown" — use null. Use a score near 50 only when the evidence is genuinely balanced.
-"credibility" is an integer 0-100 (0 = not credible, 50 = neutral, 100 = highly credible).
-"suggestedStatus" is one of READY (credible, statement in hand), ADVERSE (contradicted or likely to hurt our case) or OUTSTANDING (statement or key information still missing). It is only a suggestion for the lawyer.
-Give 2-4 short reasons per witness. Each reason's "source" must name the evidence item, contradiction or timeline entry it relies on, or be null.
+Do not score the witnesses. For each witness, answer the fixed questions below from what their sponsored document text actually says and from the contradictions, other witnesses' texts and timeline listed. The application computes the score itself.
+${renderFactorQuestions()}
+Rules for every answer:
+- Pick exactly one option per factor, using the option names shown. If the data above does not let you tell, answer null. Never guess and never pick a middle option as filler.
+- Every non-null answer needs a "quote": a passage copied word for word from the text above that your answer relies on, and the "document" it comes from. For C, quote the passage that dates the account or events. For F, quote the listed contradiction. If you cannot quote it, answer null.
+- For every one of the seven factors, whether or not you answered it, add one entry to "needs": a short, concrete next step that would settle or firm up that factor, such as who to ask for which record, or what to get the witness to confirm. It may be something outside this system. Do not invent facts or name people or documents that are not in the data above.
+- Give 2-4 short "reasons" per witness, each naming the evidence item, contradiction or timeline entry it relies on in "source", or null.
 
 Respond with a short plain-text summary, then the machine-readable block below, exactly in this format:
 [SCORES]
-[{"witnessId":"<id from above>","credibility":72,"suggestedStatus":"READY","reasons":[{"text":"...","source":"..."}]}]
+[{"witnessId":"<id from above>","factors":{"A":{"answer":"OWN","quote":"...","document":"..."},"B":{"answer":null,"quote":null,"document":null},"C":{},"D":{},"E":{},"F":{},"G":{}},"reasons":[{"text":"...","source":"..."}],"needs":[{"factor":"E","text":"..."}]}]
 [/SCORES]`;
 }
 

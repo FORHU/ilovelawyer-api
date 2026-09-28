@@ -29,6 +29,9 @@ router.get(
   "/consultations/:consultationId/messages/:messageId/audio-overview/audio/poll",
   asyncHandler(ChatCtrl.pollAudioOverviewAudio),
 );
+router.post("/consultations/:consultationId/mind-map/expand", asyncHandler(ChatCtrl.expandMindMapNode));
+router.post("/consultations/:consultationId/mind-map/revert", asyncHandler(ChatCtrl.revertMindMap));
+router.patch("/consultations/:consultationId/mind-map", asyncHandler(ChatCtrl.editMindMapNode));
 
 // Invites
 router.post("/consultations/:consultationId/invites", asyncHandler(InviteCtrl.create));
