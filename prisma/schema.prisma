@@ -1644,14 +1644,13 @@ model CaseFinding {
   // case-finding-parse.ts). Null for lawyer-entered findings and for AI findings the model
   // didn't attribute to a specific document.
   sourceLabel   String?
-  // ATTACK_STRATEGY/DEFENSE_STRATEGY only — is this move usable now, still being drafted, or
-  // blocked on a missing prerequisite (see case-finding-parse.ts). Null for the other three
-  // categories and for rows predating this field.
+  // ATTACK_STRATEGY only — is this move usable now, still being drafted, or blocked on a missing
+  // prerequisite (see case-finding-parse.ts). Null for every other category.
   readiness     FindingReadiness?
   readinessNote String?
   // Jev's second opinion on `readiness` (see strategy-readiness-jev.ts) — never overwrites it;
   // the panel only offers it when it disagrees. Null when USE_JEV_STRATEGY_READINESS is off,
-  // the row isn't ATTACK_STRATEGY/DEFENSE_STRATEGY, or Jev failed.
+  // the row isn't ATTACK_STRATEGY, or Jev failed.
   jevReadiness  FindingReadiness?
   jevConfidence Float?
   createdAt     DateTime          @default(now())

@@ -3,7 +3,7 @@ import { describe, it } from "mocha";
 import { extractCaseFindings } from "../src/utils/case-finding-parse";
 
 describe("case finding parse — readiness", () => {
-  it("reads readiness/readinessNote on ATTACK_STRATEGY/DEFENSE_STRATEGY only", () => {
+  it("reads readiness/readinessNote on ATTACK_STRATEGY only, leaves Defense Strategy plain", () => {
     const text = `
 [LEGAL_ISSUES]
 [{"label": "Was there just cause?", "sourceLabel": null}]
@@ -22,7 +22,7 @@ describe("case finding parse — readiness", () => {
 [/ATTACK_STRATEGY]
 
 [DEFENSE_STRATEGY]
-[{"label": "Press the twin-notice gap independently", "sourceLabel": null, "readiness": "READY", "readinessNote": "Ready for the position paper"}]
+[{"label": "Press the twin-notice gap independently", "sourceLabel": null}]
 [/DEFENSE_STRATEGY]
 `;
     const parsed = extractCaseFindings(text);
@@ -36,21 +36,17 @@ describe("case finding parse — readiness", () => {
     expect(attack.readinessNote).to.equal("Certification not yet obtained");
 
     const defense = parsed!.find((f) => f.category === "DEFENSE_STRATEGY")!;
-    expect(defense.readiness).to.equal("READY");
+    expect(defense.readiness).to.equal(null);
+    expect(defense.readinessNote).to.equal(null);
   });
 
-  it("defaults a missing/invalid readiness to DRAFTING for attack/defense items", () => {
+  it("defaults a missing/invalid readiness to DRAFTING for attack items", () => {
     const text = `
 [ATTACK_STRATEGY]
 [{"label": "Press the point independently", "sourceLabel": null}]
 [/ATTACK_STRATEGY]
-
-[DEFENSE_STRATEGY]
-[{"label": "Hold the line on notice", "sourceLabel": null, "readiness": "NOT_A_REAL_VALUE"}]
-[/DEFENSE_STRATEGY]
 `;
     const parsed = extractCaseFindings(text);
     expect(parsed!.find((f) => f.category === "ATTACK_STRATEGY")!.readiness).to.equal("DRAFTING");
-    expect(parsed!.find((f) => f.category === "DEFENSE_STRATEGY")!.readiness).to.equal("DRAFTING");
   });
 });

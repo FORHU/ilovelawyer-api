@@ -16,8 +16,9 @@ const MAX_SOURCE_LABEL = 200;
 const MAX_READINESS_NOTE = 200;
 
 const READINESS_VALUES = new Set(["READY", "DRAFTING", "BLOCKED"]);
-// Only these two categories carry readiness — see case-finding.constants.ts / uk/prompts/case-finding.prompt.ts.
-const READINESS_CATEGORIES = new Set<FindingCategory>(["ATTACK_STRATEGY", "DEFENSE_STRATEGY"]);
+// ATTACK_STRATEGY only carries readiness — see case-finding.constants.ts / uk/prompts/case-finding.prompt.ts.
+// Defense Strategy tracks something different (an anticipated defense + our answer to it), not readiness.
+const READINESS_CATEGORIES = new Set<FindingCategory>(["ATTACK_STRATEGY"]);
 
 export interface ParsedCaseFinding {
   category: FindingCategory;
