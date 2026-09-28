@@ -11,6 +11,7 @@ import CaseFindingRepo from "../repositories/case-finding.repository";
 import WitnessRepo from "../repositories/witness.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
+import CaseReconstructionEventsRepo from "../repositories/case-reconstruction-events.repository";
 import RedTeamRepo from "../repositories/red-team.repository";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import CaseTheoryRepo from "../repositories/case-theory.repository";
@@ -50,6 +51,7 @@ export default class CaseSnapshotSvc {
       witnesses,
       damages,
       reconstruction,
+      reconstructionEvents,
       redTeamAssessment,
       decisions,
       theories,
@@ -77,6 +79,7 @@ export default class CaseSnapshotSvc {
       WitnessRepo.list(caseId),
       DamageClaimRepo.list(caseId),
       CaseReconstructionRepo.get(caseId),
+      CaseReconstructionEventsRepo.get(caseId),
       RedTeamRepo.get(caseId),
       DecisionRecordRepo.list(caseId),
       CaseTheoryRepo.list(caseId),
@@ -174,6 +177,9 @@ export default class CaseSnapshotSvc {
       witnesses,
       damages,
       reconstruction,
+      // The dated event chain (Events tab) — separate from `reconstruction`, which only exists once a
+      // narrative has been generated. Named apart from `events`, which is the calendar.
+      reconstructionEvents,
       redTeamAssessment,
       decisions: decisionsWithSourcePrompt,
       theories,

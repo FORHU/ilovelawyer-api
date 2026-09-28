@@ -19,6 +19,7 @@ export type QueuedAiGenerationKind =
   | "caseTheoryPropose"
   | "theoryDiff"
   | "caseReconstructionScenes"
+  | "caseReconstructionEvents"
   | "caseReconstructionTableRead"
   | "casePostExtraction"
   | "timelineGenerate"
@@ -60,6 +61,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   caseTheoryPropose: (job) => CaseTheorySvc.runQueuedPropose(job.caseId, job.userId),
   theoryDiff: (job) => TheoryDiffSvc.runQueuedDiff(job.caseId, job.userId, job.theoryAId!, job.theoryBId!),
   caseReconstructionScenes: (job) => CaseReconstructionSvc.runQueuedScenes(job.caseId, job.userId),
+  caseReconstructionEvents: (job) => CaseReconstructionSvc.runQueuedEvents(job.caseId, job.userId),
   caseReconstructionTableRead: (job) => CaseReconstructionSvc.runQueuedTableRead(job.caseId, job.userId),
   casePostExtraction: async (job) => {
     const { runCasePostExtraction } = await import("./case-post-extraction");
