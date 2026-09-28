@@ -9,3 +9,4 @@ export * from "./mind-map-expand.prompt";
 export * from "./witness-scoring.prompt";
 export * from "./witness-extract.prompt";
 export * from "./mind-map-documents.prompt";
+export * from "./damages-extract.prompt";

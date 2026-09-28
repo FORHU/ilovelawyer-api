@@ -14,6 +14,7 @@ import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
+import DamagesExtractSvc from "../services/damages-extract.service";
 import CaseClaimSvc from "../services/case-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
@@ -459,6 +460,15 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await DamageClaimSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
+  }
+
+  /** Queues a damages pass over every document of the case (DamagesExtractSvc.propose); the panel
+   * follows ai-jobs/damagesExtract for completion. */
+  static async proposeDamages(req: Request, res: Response) {
+    const { caseId } = req.params;
+    await DamagesExtractSvc.propose(caseId, req.user.userId);
+    const status = await AiGenerationLockSvc.getStatus(caseId, "damagesExtract");
+    return res.status(202).json(status);
   }
 
   static async deleteDamage(req: Request, res: Response) {

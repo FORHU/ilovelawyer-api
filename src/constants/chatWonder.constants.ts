@@ -26,6 +26,10 @@ export const LEGAL_TAG = "[legal ai]";
  * UK tool whitelist and prompt) without depending on that field at all. See
  * streamChatWonderMessage's withLegalTag, which picks between this and LEGAL_TAG. */
 export const LEGAL_TAG_UK = "[legal ai uk]";
+/** the_server.py::process_persona's tool-free "extract" persona: structured extraction from text
+ * already in the prompt, with no legal tools, verify pass or post-answer extras. See
+ * streamChatWonderMessage's `extract` option. */
+export const EXTRACT_TAG = "[extract]";
 /** Legal persona sends `__END__` first, then runs `[STRUCTURED_DATA]` (timeline + mind
  * map), reasoning, and (when triggered) audio overview as concurrent lightweight LLM
  * calls before `[DONE]`. Wait this long after `__END__` for all of that. */

@@ -4,6 +4,7 @@ import {
   buildRedTeamPrompt,
   buildWitnessScoringPrompt,
   buildWitnessExtractPrompt,
+  buildDamagesExtractPrompt,
   buildCaseFindingPrompt,
   buildCaseOutlookPrompt,
   buildCaseReconstructionPrompt,
@@ -17,6 +18,7 @@ import {
   buildUKRedTeamPrompt,
   buildUKWitnessScoringPrompt,
   buildUKWitnessExtractPrompt,
+  buildUKDamagesExtractPrompt,
   buildUKCaseFindingPrompt,
   buildUKCaseOutlookPrompt,
   buildUKCaseReconstructionPrompt,
@@ -60,6 +62,17 @@ export function getWitnessExtractPromptBuilder(tenantCode: TenantCode) {
       return buildUKWitnessExtractPrompt;
     default:
       throw new HttpError(`No witness-extract prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getDamagesExtractPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildDamagesExtractPrompt;
+    case "UK":
+      return buildUKDamagesExtractPrompt;
+    default:
+      throw new HttpError(`No damages-extract prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 

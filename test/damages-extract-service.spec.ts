@@ -1,0 +1,184 @@
+/**
+ * DamagesExtractSvc end to end: pending documents → [extract] prompt → [DAMAGES] reply → verified,
+ * deduped AI heads → recompute → audit. Chat Wonder is a local `ws` server replying with a scripted
+ * block (same idiom as mind-map-data-frame.spec.ts); repositories are monkeypatched, no DB.
+ */
+import { expect } from "chai";
+import { describe, it, before, after, beforeEach, afterEach } from "mocha";
+import { AddressInfo } from "net";
+import WebSocket, { WebSocketServer } from "ws";
+
+import * as config from "../src/config";
+import * as chatWonder from "../src/utils/chatWonder";
+import DamagesExtractSvc from "../src/services/damages-extract.service";
+import DamageClaimSvc from "../src/services/damage-claim.service";
+import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
+import CaseGraphSvc from "../src/services/case-graph.service";
+import CaseRepo from "../src/repositories/case.repository";
+import DocumentRepo from "../src/repositories/document.repository";
+import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
+import DamageClaimRepo from "../src/repositories/damage-claim.repository";
+import CaseFindingRepo from "../src/repositories/case-finding.repository";
+import OrganizationRepo from "../src/repositories/organization.repository";
+import CaseAccess from "../src/utils/case-access";
+import HttpError from "../src/utils/http-error";
+
+const PAYSLIP = "PAYSLIP August 2025. Basic monthly salary: P27,000.00. Net pay: P24,310.00";
+const COMPLAINT = "Complainant prays for P200,000.00 as moral damages and P100,000.00 as exemplary damages.";
+
+describe("DamagesExtractSvc", () => {
+  let server: WebSocketServer;
+  let reply: string;
+  let payloads: any[];
+  let originalWsUrl: string;
+  const restore: (() => void)[] = [];
+
+  let pending: { id: string; name: string }[];
+  let existing: any[];
+  let created: any[];
+  let marked: string[][];
+  let audits: any[];
+  let recomputed: number;
+  let scheduled: number;
+
+  function patch(target: object, key: string, value: unknown) {
+    const original = (target as any)[key];
+    (target as any)[key] = value;
+    restore.push(() => ((target as any)[key] = original));
+  }
+
+  before(() => {
+    server = new WebSocketServer({ port: 0 });
+    server.on("connection", (socket: WebSocket) => {
+      socket.on("message", (raw) => {
+        payloads.push(JSON.parse(raw.toString()));
+        socket.send(reply);
+        socket.send("__END__");
+        socket.send("[DONE]");
+      });
+    });
+    const { port } = server.address() as AddressInfo;
+    originalWsUrl = config.CHAT_WONDER_WS_URL;
+    (config as any).CHAT_WONDER_WS_URL = `ws://127.0.0.1:${port}/chat-stream`;
+  });
+
+  after(() => {
+    (config as any).CHAT_WONDER_WS_URL = originalWsUrl;
+    server.close();
+  });
+
+  beforeEach(() => {
+    payloads = [];
+    pending = [
+      { id: "doc-pay", name: "Payslip.pdf" },
+      { id: "doc-cmp", name: "Complaint.pdf" },
+    ];
+    existing = [];
+    created = [];
+    marked = [];
+    audits = [];
+    recomputed = 0;
+    scheduled = 0;
+    reply = `[DAMAGES]${JSON.stringify([
+      { category: "ACTUAL", label: "Backwages", basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000 }, pendingEvidence: "payroll certification", documentId: "doc-pay", quote: "Basic monthly salary: P27,000.00" },
+      { category: "MORAL", label: "Moral damages", basis: { kind: "FIXED", amount: 200000 }, documentId: "doc-cmp", quote: "P200,000.00 as moral damages" },
+      { category: "EXEMPLARY", label: "Exemplary", basis: { kind: "FIXED", amount: 150000 }, documentId: "doc-cmp", quote: "P100,000.00 as exemplary damages" },
+    ])}[/DAMAGES]`;
+
+    patch(chatWonder, "getChatWonderSessionId", async () => "sess-1");
+    patch(CaseRepo, "exists", async () => true);
+    patch(CaseRepo, "findPromptHeader", async () => ({ caseName: "Cruz v. Acme", actionType: "Illegal dismissal" }));
+    patch(CaseAccess, "resolveTenantCode", async () => "PH");
+    patch(CaseAccess, "assertCanEdit", async () => ({ id: "case-1" }));
+    patch(DocumentRepo, "listPendingDamagesExtraction", async () => pending);
+    patch(DocumentRepo, "markDamagesExtracted", async (ids: string[]) => void marked.push(ids));
+    patch(DocumentChunkRepo, "findFullTextsByDocuments", async () => new Map([["doc-pay", PAYSLIP], ["doc-cmp", COMPLAINT]]));
+    patch(DamageClaimRepo, "list", async () => [...existing, ...created]);
+    patch(DamageClaimRepo, "createFromAi", async (_caseId: string, data: any) => {
+      const row = { id: `new-${created.length}`, ...data, sourceQuote: data.sourceQuote };
+      created.push(row);
+      return row;
+    });
+    patch(CaseGraphSvc, "ensureNode", async () => ({}));
+    patch(DamageClaimSvc, "recompute", async () => void recomputed++);
+    patch(CaseFindingRepo, "list", async () => []);
+    patch(OrganizationRepo, "writeAudit", async (a: any) => void audits.push(a));
+    patch(AiGenerationLockSvc, "begin", async () => {});
+    patch(AiGenerationLockSvc, "finishWith", async (_c: string, _k: string, fn: () => Promise<unknown>) => fn());
+    patch(AiGenerationLockSvc, "getStatus", async () => null);
+    patch(DamagesExtractSvc, "schedule", () => void scheduled++);
+  });
+
+  afterEach(() => {
+    while (restore.length) restore.pop()!();
+  });
+
+  it("sends the prompt under the [extract] persona, not the legal one", async () => {
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(payloads).to.have.length(1);
+    expect(payloads[0].user_input.startsWith("[extract] ")).to.equal(true);
+    expect(payloads[0].user_input).to.not.match(/\[legal ai/i);
+    expect(payloads[0].user_input).to.include("--- DOCUMENT id: doc-pay | name: Payslip.pdf ---");
+  });
+
+  it("creates only verified heads, as AI heads with their source, and marks the batch read", async () => {
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    // Exemplary's 150000 isn't in its quote (which says 100,000), so it is dropped.
+    expect(created.map((h) => h.category)).to.deep.equal(["ACTUAL", "MORAL"]);
+    expect(created[0]).to.include({ sourceDocumentId: "doc-pay", sourceQuote: "Basic monthly salary: P27,000.00", pendingEvidence: "payroll certification" });
+    expect(created[1]).to.include({ amount: 200000 });
+    expect(marked).to.deep.equal([["doc-pay", "doc-cmp"]]);
+    expect(recomputed).to.equal(1);
+    expect(audits[0]).to.include({ action: "damage.extract" });
+    expect(audits[0].payload.ids).to.deep.equal(["new-0", "new-1"]);
+  });
+
+  it("skips heads the case already has", async () => {
+    existing = [{ id: "mine", category: "MORAL", label: null }];
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(created.map((h) => h.category)).to.deep.equal(["ACTUAL"]);
+    expect(payloads[0].user_input).to.include("- MORAL");
+  });
+
+  it("leaves documents unread, and fails the job, when the reply has no [DAMAGES] block", async () => {
+    reply = "I could not find anything.";
+    const err = await DamagesExtractSvc.runQueued("case-1", "user-1").catch((e) => e);
+    expect(err).to.be.instanceOf(HttpError);
+    expect(marked).to.deep.equal([]);
+    expect(created).to.deep.equal([]);
+  });
+
+  it("writes no audit and runs no recompute when nothing new was found", async () => {
+    reply = "[DAMAGES][][/DAMAGES]";
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(marked).to.have.length(1);
+    expect(audits).to.deep.equal([]);
+    expect(recomputed).to.equal(0);
+  });
+
+  it("does nothing without pending documents", async () => {
+    pending = [];
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(payloads).to.deep.equal([]);
+  });
+
+  it("reschedules itself when more documents are waiting than one batch reads", async () => {
+    pending = Array.from({ length: 9 }, (_, i) => ({ id: i === 0 ? "doc-pay" : `d${i}`, name: `D${i}` }));
+    reply = "[DAMAGES][][/DAMAGES]";
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(marked[0]).to.have.length(8);
+    expect(scheduled).to.equal(1);
+  });
+
+  it("propose() re-reads every document, and refuses while a pass is running", async () => {
+    let cleared = 0;
+    patch(DocumentRepo, "clearDamagesExtracted", async () => void cleared++);
+    await DamagesExtractSvc.propose("case-1", "user-1");
+    expect([cleared, scheduled]).to.deep.equal([1, 1]);
+
+    patch(AiGenerationLockSvc, "getStatus", async () => ({ status: "IN_PROGRESS", startedAt: new Date() }));
+    const err = await DamagesExtractSvc.propose("case-1", "user-1").catch((e) => e);
+    expect(err.statusCode).to.equal(409);
+    expect(cleared).to.equal(1);
+  });
+});

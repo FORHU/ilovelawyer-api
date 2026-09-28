@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { DamageCategory, DamageStatus, Prisma } from "@prisma/client";
+import { DamageCategory, DamageJevSupport, DamageStatus, Prisma } from "@prisma/client";
 import type { DamageBasis } from "../utils/damages-compute";
 
 export interface DamageClaimInput {
@@ -13,6 +13,23 @@ export interface DamageClaimInput {
   status?: DamageStatus;
   pendingEvidence?: string | null;
   legalBasis?: string | null;
+}
+
+export interface DamageAiExtractInput {
+  category: DamageCategory;
+  label: string | null;
+  basis: DamageBasis;
+  amount: number | null;
+  legalBasis: string | null;
+  pendingEvidence: string | null;
+  sourceDocumentId: string;
+  sourceQuote: string;
+}
+
+export interface DamageJevInput {
+  jevSupport: DamageJevSupport | null;
+  jevAwardability: number | null;
+  jevConfidence: number | null;
 }
 
 // A Json? column can't take a bare null — Prisma needs DbNull to clear it.
@@ -40,6 +57,20 @@ export default class DamageClaimRepo {
     const existing = await prisma.damageClaim.findFirst({ where: { id, caseId } });
     if (!existing) return null;
     return prisma.damageClaim.update({ where: { id }, data: toData(data) });
+  }
+
+  /** A head proposed by DamagesExtractSvc — always source AI and PROVISIONAL, with the document and
+   * verbatim quote it came from. */
+  static async createFromAi(caseId: string, data: DamageAiExtractInput) {
+    const { basis, ...rest } = data;
+    return prisma.damageClaim.create({
+      data: { caseId, source: "AI", status: "PROVISIONAL", ...rest, basis: basis as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  /** Writes only the jev* columns — never amount, status or range (see damages-jev.ts). */
+  static async saveJev(id: string, caseId: string, data: DamageJevInput) {
+    await prisma.damageClaim.updateMany({ where: { id, caseId }, data: { ...data, jevCheckedAt: new Date() } });
   }
 
   /** Writes recomputed amounts back in one transaction (see DamageClaimSvc.recompute). */

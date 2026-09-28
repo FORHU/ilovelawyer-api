@@ -105,6 +105,7 @@ router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitn
 
 router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
 router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
+router.post("/:caseId/damages/propose", asyncHandler(CaseTerminalCtrl.proposeDamages));
 router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage));
 router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
 

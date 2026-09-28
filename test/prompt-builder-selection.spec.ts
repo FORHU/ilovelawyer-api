@@ -7,6 +7,7 @@ import {
   getCaseStrategyPromptBuilder,
   getSourceAnalysisPromptTemplate,
   getChatTitlePromptBuilder,
+  getDamagesExtractPromptBuilder,
 } from "../src/legal/prompt-registry";
 
 const emptyRedTeamData = {
@@ -52,6 +53,18 @@ describe("Prompt builder jurisdiction selection", () => {
       const prompt = getCaseFindingPromptBuilder(jurisdiction)(docs);
       expect(prompt).to.include("[LEGAL_ISSUES]");
       expect(prompt).to.include("[DEFENSE_STRATEGY]");
+    }
+  });
+
+  it("damages-extract prompts diverge by jurisdiction but share the [DAMAGES] contract", () => {
+    const data = { caseName: "Cruz v. Acme", existingHeads: [], documents: [{ id: "d1", name: "Payslip", text: "Salary: P27,000" }] };
+    const ph = getDamagesExtractPromptBuilder("PH")(data);
+    const uk = getDamagesExtractPromptBuilder("UK")(data);
+    expect(ph).to.include("Philippines").and.to.include("13th month pay");
+    expect(uk).to.include("United Kingdom").and.to.include("injury to feelings");
+    for (const prompt of [ph, uk]) {
+      expect(prompt).to.include("[DAMAGES]").and.to.include("[/DAMAGES]");
+      expect(prompt).to.include("never a total");
     }
   });
 
