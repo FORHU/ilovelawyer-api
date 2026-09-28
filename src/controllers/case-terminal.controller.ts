@@ -58,6 +58,7 @@ import {
   updateFindingSchema,
   createWitnessSchema,
   updateWitnessSchema,
+  witnessFactorSchema,
   updateContradictionSchema,
   createDamageSchema,
   updateDamageSchema,
@@ -480,6 +481,20 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  static async setWitnessFactor(req: Request, res: Response) {
+    const { error, value } = witnessFactorSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await WitnessScoringSvc.setFactorOverride(
+      req.params.caseId,
+      req.params.id,
+      req.user.userId,
+      req.params.factor,
+      value.answer,
+      value.note,
+    );
+    return res.status(200).json(result);
+  }
+
   /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
   static async scoreWitnesses(req: Request, res: Response) {
     const { caseId } = req.params;
@@ -575,6 +590,17 @@ export default class CaseTerminalCtrl {
     await CaseReconstructionSvc.beginQueuedScenes(caseId, userId);
     AiGenerationQueue.enqueue({ kind: "caseReconstructionScenes", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionScenes");
+    return res.status(202).json(status);
+  }
+
+  /** Dated event chain with Jev-checked statuses. Queued via AiGenerationQueue (SQS) — see
+   * refresh() above for why. */
+  static async generateReconstructionEvents(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseReconstructionSvc.beginQueuedEvents(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseReconstructionEvents", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionEvents");
     return res.status(202).json(status);
   }
 

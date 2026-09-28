@@ -67,9 +67,41 @@ _Avoid_: `chunkId` as a sourceRef field — the plan's own sketch used one, but 
 Multi-voice audio rendered from a case's `scenes` — one Polly voice per actor (deterministic per case, `table-read-voices.ts`'s `castForCase`), a narrator voice for action lines — reusing Audio Overview's synthesize-many-short-turns-then-ffmpeg-concat pipeline (`mergeCastTurnsToMp3`) rather than case reconstruction narration's single-voice async Polly task, for the same reason Audio Overview needed it: many short clips beat one call's length limits. `CaseReconstruction.tableReadStaleAt` is set whenever `scenes` is regenerated underneath it.
 _Status: Rungs 1-2 built (scene script, table read audio) plus a Storyboard tab. Storyboard is a scope adaptation of Rung 3, not literal page-image rendering: this codebase has no PDF-to-image pipeline (only `pdf-parse` for text), so each scene's storyboard card shows its verified sourceRefs as text (document name, page, verbatim quote) rather than a rendered/cropped page image. True image rendering is a separate, deliberate infra decision (a new dependency, likely with native build tooling) — not attempted blind. Rung 4 (video) stays out of scope per the plan itself._
 
+### Event Chain (Grounded Reconstruction)
+
+**Event Chain**:
+The case's dated events in order, each written as a fact, resting on one quote from a case document, and marked Verified, Disputed or Unverified. It is built from the case's documents alone and does not depend on the narrative or the scenes.
+_Avoid_: Timeline (the lawyer-curated list of dated entries is a separate thing), Event on its own (already a calendar entry), narrative
+
+**Proposition**:
+An event written as a plain statement of what happened ("the employee was absent without leave from 4 August"), never as a report that someone said it ("abandonment is alleged to begin on 4 August"). Who asserts it is recorded next to it, so the statement itself can be tested against the rest of the case.
+_Avoid_: Allegation, and Claim for the event text (Case Claim already means something else)
+
+**Source Quote**:
+The one passage, copied word for word from a case document, that an event rests on. An event whose quote cannot be found in that document has no source and can never be Verified.
+_Avoid_: Citation (that means a legal authority), excerpt
+
+**Verified**:
+An event a document shows, or that is admitted or established, or that a party or witness asserts and an independent document confirms — and that nothing in the record contradicts.
+
+**Disputed** (Event Chain):
+An event that something in the case record contradicts: its own source, or another document. Only a conflict makes an event Disputed — never "only one side says so", and never "could not be checked"; those are Unverified.
+_Avoid_: reading it as a lawyer disagreeing with an AI conclusion — that is a Decision Record's disputed status, a different thing that shares the word
+
+**Unverified**:
+An event the record neither confirms nor contradicts: a claim only one party makes, a witness account nothing else backs, an event with no findable source, or one that could not be checked. It is silence, not doubt.
+
+**Corroboration**:
+An independent case document that shows the same event a party or witness asserts. It is what moves such an account from Unverified to Verified. A record's silence (no entry for someone) is never corroboration.
+
 ## Example dialogue
 
 > **Dev:** "Should logout delete the User's row in the DB?"
 > **Domain expert:** "No — logout only ever touches a Session, never the User. It deletes the one Session tied to the refresh token the client sent."
 > **Dev:** "So if I'm logged in on my phone and laptop, logging out on my phone kills both?"
 > **Domain expert:** "No — each device gets its own Session when it logs in. Logging out on your phone deletes only your phone's Session row; your laptop's Session is untouched."
+
+> **Dev:** "The employee's affidavit gives her start date and nothing else in the case mentions it. Is that Disputed?"
+> **Domain expert:** "No — Unverified. Disputed needs something that contradicts it. Nobody contests the start date; nothing confirms it either."
+> **Dev:** "And the termination letter says she was absent from 4 August, but payroll shows she worked every day that week?"
+> **Domain expert:** "That one is Disputed, even though the letter really does say it. The letter shows the employer's claim, and the payroll contradicts the claim."
