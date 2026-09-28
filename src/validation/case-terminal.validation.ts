@@ -365,6 +365,13 @@ export const addTheoryClaimSchema = Joi.object({
   graphNodeId: Joi.string().optional(),
 });
 
+export const updateTheoryClaimSchema = Joi.object({
+  statement: Joi.string().optional(),
+  stance: Joi.string()
+    .valid(...THEORY_STANCES)
+    .optional(),
+}).min(1);
+
 export const addTheoryAssumptionSchema = Joi.object({
   statement: Joi.string().required(),
 });

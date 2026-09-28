@@ -169,6 +169,9 @@ model Consultation {
   organizationId String
   caseId         String?
   title          String?
+  // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
+  // Null while untitled.
+  titleSource    ConsultationTitleSource?
   createdAt      DateTime @default(now())
   // When the most recent Jev-triaged user message was flagged urgent (see message-triage.ts).
   // Set on an urgent turn, cleared on the next routine one, so the consultation list can badge
@@ -607,6 +610,15 @@ enum AudioOverviewStatus {
   IN_PROGRESS
   COMPLETED
   FAILED
+}
+
+/// AUTO: generated from the conversation, kept current as the topic develops.
+/// PROVISIONAL: a stand-in (e.g. for a gibberish first message), replaced by the next real one.
+/// USER: set or renamed by the user — the AI never touches it.
+enum ConsultationTitleSource {
+  AUTO
+  PROVISIONAL
+  USER
 }
 
 enum MessageRole {

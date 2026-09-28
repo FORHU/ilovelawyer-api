@@ -18,6 +18,8 @@ import GeneratedDocumentExportSvc from "./generated-document-export.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
+import type { ChatTitleContext } from "../legal/shared/chat-title-context";
+import { buildChatRetitlePrompt } from "../legal/shared/chat-retitle.prompt";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
@@ -34,7 +36,7 @@ import CaseMindMapSvc from "./case-mind-map.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
-import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
+import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL, PROVISIONAL_UNCLEAR_TITLE, KEEP_TITLE_SENTINEL, SMALL_TALK_TITLE_SENTINEL, PROVISIONAL_GREETING_TITLE } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 
@@ -570,21 +572,41 @@ export default class ChatSvc {
       });
     }
 
-    const needsTitle = consultation.title === null;
+    // Untitled or only provisionally titled -> generate one. AI-titled -> check it still fits
+    // (refreshTitle). Renamed by the user -> leave it alone. A null source on a titled row is
+    // treated as AI-titled (pre-titleSource rows are backfilled AUTO; this is belt and braces).
+    const needsTitle = consultation.title === null || consultation.titleSource === "PROVISIONAL";
+    const canRefreshTitle = !needsTitle && consultation.titleSource !== "USER";
 
     // content stays a stored empty string for a file-only send (see ADR) — everything the AI
     // and title generation actually see substitutes in a fixed stand-in instead.
     const effectiveUserInput = userInput.trim() ? userInput : ATTACHMENT_ONLY_PROMPT;
 
+    // File names give the title something to go on when the message itself is vague ("what are
+    // these documents?") — often the only real signal of what the consultation is about.
+    const attachmentNames = needsTitle || canRefreshTitle
+      ? await DocumentRepo.listNamesByMessage(parentMessageId).catch(() => [] as string[])
+      : [];
+
+    if (canRefreshTitle && consultation.title && (isSubstantive(userInput) || attachmentNames.length > 0)) {
+      void ChatSvc.refreshTitle({ consultationId, tenantCode, userId, currentTitle: consultation.title, attachmentNames });
+    }
+
+    // Pass 1 runs alongside the reply (usually done in 1-2s). Its outcome is kept so the
+    // post-reply pass (titleAfterReply, below) can tell whether it still needs to run.
+    let titlePass: Promise<TitleOutcome> = Promise.resolve("saved");
     if (needsTitle) {
       const titleStartedAt = Date.now();
-      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode, userId).catch((err) => {
-        logger.error("Chat title: generation failed (non-fatal — reply unaffected, retries next message)", {
+      titlePass = ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode, userId, {
+        attachmentNames,
+      }).catch((err) => {
+        logger.error("Chat title: generation failed (non-fatal — reply unaffected, retried after the reply)", {
           consultationId,
           tenantCode,
           err,
           elapsedMs: Date.now() - titleStartedAt,
         });
+        return "failed" as const;
       });
     }
 
@@ -1094,6 +1116,19 @@ export default class ChatSvc {
       });
     }
 
+    if (needsTitle && assistantMessage) {
+      void ChatSvc.titleAfterReply({
+        consultationId,
+        tenantCode,
+        userId,
+        userInput: effectiveUserInput,
+        typedInput: userInput,
+        attachmentNames,
+        fullResponse,
+        firstPass: titlePass,
+      });
+    }
+
     // Grounding verification (docs/plans/grounding-verifier.md). Deliberately after chat:done:
     // the lawyer already has the reply, and this only attaches what the bundle says about the
     // claims in it. Fire-and-forget, never awaited — GroundingVerifierSvc.verifyAnswer swallows
@@ -1557,17 +1592,27 @@ export default class ChatSvc {
   /** tenantCode defaults to PH to preserve scripts/backfill-titles.ts's existing single-arg
    * call signature — callers that know the tenant's actual tenantCode (generateAndSaveTitle
    * below) must pass it explicitly. */
-  static buildTitlePrompt(userMessage: string, tenantCode: TenantCode = "PH"): string {
-    return getChatTitlePromptBuilder(tenantCode)(userMessage);
+  static buildTitlePrompt(userMessage: string, tenantCode: TenantCode = "PH", context: ChatTitleContext = {}): string {
+    return getChatTitlePromptBuilder(tenantCode)(userMessage, context);
   }
 
   static parseTitle(raw: string): string {
     return raw
       .split("\n")[0]
-      .replace(/^["'""'']|["'""'']$/g, "")
+      // Double quotes never belong in a title; single quotes only as apostrophes inside a word
+      // ("Driver's"). Quotes the model puts around a word ('Hi') are dropped as a pair instead of
+      // one end being trimmed off and the other left dangling.
+      .replace(/["\u201C\u201D]/g, "")
+      // (\u2026except a plural possessive: "Parents' Custody" keeps its apostrophe.)
+      .replace(/(^|[\s(])['\u2018\u2019]|['\u2018\u2019](?=[),:;.!?]|$)|(?<![sS])['\u2018\u2019](?=\s)/g, "$1")
       .replace(/\.$/, "")
       .trim()
       .slice(0, TITLE_MAX_CHARS);
+  }
+
+  /** The title prompts' "only a greeting / small talk" answer (see SMALL_TALK_TITLE_SENTINEL). */
+  static isSmallTalkTitle(title: string): boolean {
+    return title.trim().toUpperCase().replace(/[^A-Z_]/g, "") === SMALL_TALK_TITLE_SENTINEL;
   }
 
   /** True when a parsed title is the title prompts' explicit "couldn't confidently categorize
@@ -1589,62 +1634,230 @@ export default class ChatSvc {
     return /^[^:]{2,}:\s*\S/.test(t);
   }
 
+  /** "saved" — a title was written. "unclear" — the model deliberately declined (nothing coherent
+   * to title). "failed" — no usable reply from the model (empty, error text, off-format), which
+   * says nothing about the input — titleAfterReply retries those and, failing again, falls back
+   * to a title built from the message/file names rather than leaving it untitled. */
   private static async generateAndSaveTitle(
     consultationId: string,
     userMessage: string,
     tenantCode: TenantCode,
     userId: string,
-  ): Promise<void> {
-    const cacheKey = titleCacheKey(userMessage, tenantCode);
+    context: ChatTitleContext = {},
+  ): Promise<TitleOutcome> {
+    // Keyed on the attachment names too: the same vague "what is this?" over different files
+    // must not reuse one cached title. Never cached with a reply excerpt (unique per turn).
+    const cacheable = !context.replyExcerpt;
+    const cacheKey = titleCacheKey(
+      [userMessage, ...(context.attachmentNames ?? [])].join("\n"),
+      tenantCode,
+    );
     const startedAt = Date.now();
 
-    let title = await redis.get<string>(cacheKey);
+    let title = cacheable ? await redis.get<string>(cacheKey) : null;
     // Titles cached before isValidTitle existed may be error text — regenerate instead.
     if (title && !ChatSvc.isValidTitle(title)) title = null;
 
     if (title) {
       logger.info("Chat title: cache hit", { consultationId, tenantCode });
     } else {
-      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode));
+      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode, context));
       if (!raw) {
-        logger.info("Chat title: model returned no content, leaving untitled (retries next message)", {
+        logger.info("Chat title: model returned no content", {
           consultationId,
           tenantCode,
           elapsedMs: Date.now() - startedAt,
         });
-        return;
+        return "failed";
       }
       title = ChatSvc.parseTitle(raw);
       // Left untitled rather than saved — gibberish/unclear input stays untitled (frontend
       // falls back to "Untitled consultation") instead of a fabricated legal category, and
       // since consultation.title stays null, the next message's send retries generation with
       // whatever the user says next.
-      if (!title || ChatSvc.isUnclearTitle(title)) {
-        logger.info(
-          !title
-            ? "Chat title: parsed title was empty, leaving untitled"
-            : "Chat title: model returned UNCLEAR_INPUT sentinel (working as intended), leaving untitled",
-          { consultationId, tenantCode, raw: raw.slice(0, 120) },
-        );
-        return;
-      }
-      if (!ChatSvc.isValidTitle(title)) {
-        logger.warn("Chat title: model reply wasn't a valid title (error text or off-format), leaving untitled", {
+      if (title && ChatSvc.isUnclearTitle(title)) {
+        logger.info("Chat title: model returned UNCLEAR_INPUT sentinel (working as intended)", {
           consultationId,
           tenantCode,
           raw: raw.slice(0, 120),
         });
-        return;
+        return "unclear";
       }
-      redis.set(cacheKey, title, TITLE_CACHE_TTL);
+      if (title && ChatSvc.isSmallTalkTitle(title)) {
+        logger.info("Chat title: greeting/small talk, provisional title", { consultationId, tenantCode });
+        return "smalltalk";
+      }
+      if (!title || !ChatSvc.isValidTitle(title)) {
+        logger.warn("Chat title: model reply wasn't a valid title (empty, error text or off-format)", {
+          consultationId,
+          tenantCode,
+          raw: raw.slice(0, 120),
+        });
+        return "failed";
+      }
+      if (cacheable) redis.set(cacheKey, title, TITLE_CACHE_TTL);
     }
 
-    await ChatRepo.updateConsultation(consultationId, title);
-    logger.info("Chat title: saved", { consultationId, tenantCode, title, elapsedMs: Date.now() - startedAt });
+    const saved = await ChatSvc.saveTitle(consultationId, userId, title, "AUTO");
+    logger.info(saved ? "Chat title: saved" : "Chat title: user renamed it meanwhile, not overwritten", {
+      consultationId,
+      tenantCode,
+      title,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return "saved";
+  }
+
+  /** A provisional title only fills an empty slot — an existing provisional title is left as it
+   * is rather than flipping between "New Consultation" and "Unclear Request" each message. */
+  private static async saveProvisionalIfUntitled(consultationId: string, userId: string, title: string): Promise<void> {
+    const current = await ChatRepo.findConsultationTitleState(consultationId);
+    if (current?.title) return;
+    await ChatSvc.saveTitle(consultationId, userId, title, "PROVISIONAL");
+  }
+
+  /** Saves an AI/provisional title unless the user has set their own (see saveGeneratedTitle). */
+  private static async saveTitle(
+    consultationId: string,
+    userId: string,
+    title: string,
+    source: "AUTO" | "PROVISIONAL",
+  ): Promise<boolean> {
+    const saved = await ChatRepo.saveGeneratedTitle(consultationId, title, source);
+    if (!saved) return false;
     // Pushed the moment it's saved (title generation usually finishes in 1-2s, well before the
     // reply itself) rather than waiting for the frontend's end-of-turn refetch, so the sidebar/
     // header title updates immediately instead of trailing behind the topic breakdown, which
     // only becomes available once the full reply is persisted.
     emitToUser(userId, "chat:title-updated", { consultationId, title });
+    return true;
+  }
+
+  /**
+   * Smart re-titling: on each substantive new message in an AI-titled consultation, asks the
+   * model whether the title still fits the conversation (usually KEEP) or should become a
+   * sharper/new one. Runs alongside the reply like the first title pass. Never throws, never
+   * touches a user-set title (saveGeneratedTitle is conditional).
+   */
+  private static async refreshTitle(p: {
+    consultationId: string;
+    tenantCode: TenantCode;
+    userId: string;
+    currentTitle: string;
+    attachmentNames: string[];
+  }): Promise<void> {
+    try {
+      // Includes the new message: it's saved before generation starts.
+      const userMessages = await ChatRepo.listRecentUserMessageContents(p.consultationId, RETITLE_MESSAGE_WINDOW);
+      if (userMessages.length === 0) return;
+      const raw = await generateTitleViaWs(
+        buildChatRetitlePrompt({
+          jurisdiction: p.tenantCode === "UK" ? "UK" : "Philippine",
+          currentTitle: p.currentTitle,
+          userMessages,
+          attachmentNames: p.attachmentNames,
+        }),
+      );
+      const title = raw ? ChatSvc.parseTitle(raw) : "";
+      if (!title || title.toUpperCase().includes(KEEP_TITLE_SENTINEL) || ChatSvc.isUnclearTitle(title)) return;
+      if (!ChatSvc.isValidTitle(title) || title.toLowerCase() === p.currentTitle.trim().toLowerCase()) return;
+      const saved = await ChatSvc.saveTitle(p.consultationId, p.userId, title, "AUTO");
+      if (saved) logger.info("Chat title: refreshed", { consultationId: p.consultationId, from: p.currentTitle, to: title });
+    } catch (err) {
+      logger.warn("Chat title: refresh failed (non-fatal, title unchanged)", { consultationId: p.consultationId, err });
+    }
+  }
+
+  /**
+   * Second title pass, once the reply is saved: a vague first message ("what are these
+   * documents?", a bare file upload) is usually only titleable from what the answer says about
+   * it. Runs only if pass 1 didn't save a title. If the model still gives nothing usable — an
+   * outage, error text, off-format — falls back to a title built from the file names or the
+   * message itself; only a deliberate "nothing coherent here" (gibberish) stays untitled.
+   * Never throws: a title problem must not surface as a failed turn.
+   */
+  private static async titleAfterReply(p: {
+    consultationId: string;
+    tenantCode: TenantCode;
+    userId: string;
+    userInput: string;
+    typedInput: string;
+    attachmentNames: string[];
+    fullResponse: string;
+    firstPass: Promise<TitleOutcome>;
+  }): Promise<void> {
+    try {
+      const first = await p.firstPass;
+      if (first === "saved") return;
+      // A greeting has nothing more to title after the reply either (the reply is a greeting
+      // back) — skip the second call and hold a neutral placeholder until a real question.
+      if (first === "smalltalk") {
+        await ChatSvc.saveProvisionalIfUntitled(p.consultationId, p.userId, PROVISIONAL_GREETING_TITLE);
+        return;
+      }
+      // Pass 1 may have lost a race with a rename, or saved via another instance. A provisional
+      // title doesn't count — this pass exists to replace it.
+      const current = await ChatRepo.findConsultationTitleState(p.consultationId);
+      if (current?.title && current.titleSource !== "PROVISIONAL") return;
+
+      const replyExcerpt = stripStructuredBlocks(p.fullResponse);
+      const second = await ChatSvc.generateAndSaveTitle(p.consultationId, p.userInput, p.tenantCode, p.userId, {
+        attachmentNames: p.attachmentNames,
+        replyExcerpt,
+      }).catch(() => "failed" as const);
+      if (second === "saved") return;
+      if (second === "smalltalk") {
+        await ChatSvc.saveProvisionalIfUntitled(p.consultationId, p.userId, PROVISIONAL_GREETING_TITLE);
+        return;
+      }
+
+      const fallback = second === "failed" ? fallbackTitle(p.typedInput, p.attachmentNames) : null;
+      if (!fallback) {
+        // Nothing coherent to title (gibberish): a provisional title beats "Untitled
+        // consultation", and the next real message replaces it (needsTitle in the send path).
+        await ChatSvc.saveProvisionalIfUntitled(p.consultationId, p.userId, PROVISIONAL_UNCLEAR_TITLE);
+        return;
+      }
+      await ChatSvc.saveTitle(p.consultationId, p.userId, fallback, "AUTO");
+      logger.info("Chat title: saved fallback title (model unavailable)", {
+        consultationId: p.consultationId,
+        title: fallback,
+      });
+    } catch (err) {
+      logger.error("Chat title: post-reply pass failed (non-fatal)", { consultationId: p.consultationId, err });
+    }
   }
 }
+
+type TitleOutcome = "saved" | "unclear" | "smalltalk" | "failed";
+
+/** How many recent user messages the re-title prompt sees — enough for the thread's direction. */
+const RETITLE_MESSAGE_WINDOW = 6;
+
+/** A message worth re-checking the title for: two or more real words ("thanks" / "ok" / "asdf"
+ * never change what a consultation is about, so they don't cost a model call). */
+function isSubstantive(text: string): boolean {
+  return (text.match(/\p{L}{2,}/gu) ?? []).length >= 2;
+}
+
+/** Last resort when the title model is unavailable: "Document Review: <first file>" for an
+ * upload, otherwise the start of the message itself. Null when there's nothing wordlike to use. */
+function fallbackTitle(typedInput: string, attachmentNames: string[]): string | null {
+  const clip = (text: string) => {
+    const clean = text.replace(/\s+/g, " ").trim();
+    if (clean.length <= TITLE_MAX_CHARS) return clean;
+    const cut = clean.slice(0, TITLE_MAX_CHARS - 1);
+    return `${cut.slice(0, cut.lastIndexOf(" ") > 20 ? cut.lastIndexOf(" ") : cut.length)}…`;
+  };
+  // With files attached the message is usually the vague part ("what are these?") — the file
+  // name says more about the matter.
+  const file = attachmentNames[0]?.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[_-]+/g, " ").trim();
+  if (file) return clip(`Document Review: ${file}`);
+  const text = typedInput.trim().replace(/[?.!]+$/, "");
+  // Two or more letter-words: a real phrase, not "asdf" or a lone emoji.
+  if ((text.match(/\p{L}{2,}/gu) ?? []).length >= 2) {
+    return clip(text.charAt(0).toUpperCase() + text.slice(1));
+  }
+  return null;
+}
+

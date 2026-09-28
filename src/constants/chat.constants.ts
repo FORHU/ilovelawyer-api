@@ -19,3 +19,17 @@ export const ATTACHMENT_ONLY_PROMPT =
 // consultation untitled (falls back to the frontend's own "Untitled consultation" copy) instead
 // of saving it as a literal title.
 export const UNCLEAR_TITLE_SENTINEL = "UNCLEAR_INPUT";
+
+// Saved as a PROVISIONAL title when a consultation opens with gibberish — better than
+// "Untitled consultation", and replaced as soon as the user sends something real.
+export const PROVISIONAL_UNCLEAR_TITLE = "Unclear Request";
+
+// The title prompts output this for a greeting/pleasantry/small talk ("hi", "thanks") — nothing to
+// title yet, but not "unclear" either. Saved as a PROVISIONAL "New Consultation" instead of being
+// forced into a fake "General Question: ..." title; the first real question replaces it.
+export const SMALL_TALK_TITLE_SENTINEL = "SMALL_TALK";
+export const PROVISIONAL_GREETING_TITLE = "New Consultation";
+
+// What the re-title prompt (legal/shared/chat-retitle.prompt.ts) outputs when the current title
+// still fits — the usual answer, since most follow-ups don't change what a consultation is about.
+export const KEEP_TITLE_SENTINEL = "KEEP_TITLE";
