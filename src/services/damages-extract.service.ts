@@ -11,7 +11,10 @@ import DamageClaimSvc from "./damage-claim.service";
 import { getDamagesExtractPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { damageHeadKey, extractDamageHeads } from "../utils/damages-extract-parse";
-import { DamageJevContext, DamageJevHead, verifyDamageHeadsWithJev } from "../utils/damages-jev";
+import { checkPendingEvidence, DamageJevContext, DamageJevHead, verifyDamageHeadsWithJev } from "../utils/damages-jev";
+import { describeDamageBasis } from "../utils/damages-compute";
+import { figuresDiffer, mergeProposedBasis, parseDamageProposal, type DamageProposal } from "../utils/damages-proposal";
+import type { ExtractedDamageHead } from "../utils/damages-extract-parse";
 import { isJobStale } from "../utils/ai-generation-lock.utils";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -34,9 +37,10 @@ const BUSY_RETRY_SECONDS = 30;
  * Verifiable by construction, same as WitnessExtractSvc: every head carries the document it came
  * from and a verbatim quote that extractDamageHeads has found in that document's text, holding
  * every figure the head uses. The model proposes inputs only — DamageClaimSvc.recompute does the
- * arithmetic. Additive only: it never edits or deletes a head, skips heads the case already has,
- * and marks each document read (Document.damagesExtractedAt) so a head the lawyer removed isn't
- * re-created from the same document. New heads are PROVISIONAL until a lawyer says otherwise.
+ * arithmetic. It never edits or deletes a head: a figure for a head the case already has is stored
+ * as a suggested update (proposeUpdate) for the lawyer to apply or dismiss. Each document is marked
+ * read (Document.damagesExtractedAt) so a head the lawyer removed isn't re-created from the same
+ * document. New heads are PROVISIONAL until a lawyer says otherwise.
  */
 export default class DamagesExtractSvc {
   static schedule(caseId: string, userId: string, delaySeconds?: number): void {
@@ -54,7 +58,7 @@ export default class DamagesExtractSvc {
   /**
    * POST /:caseId/damages/propose — reads every document of the case again, for cases whose
    * documents were read before this pass existed or whose heads the lawyer wants re-proposed.
-   * Heads already on the case are still skipped. 409 while a pass is running.
+   * Heads already on the case are never duplicated (see proposeUpdate). 409 while a pass is running.
    */
   static async propose(caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
@@ -106,7 +110,11 @@ export default class DamagesExtractSvc {
       actionType: header?.actionType,
       jurisdiction: header?.jurisdiction,
       ukJurisdiction: header?.ukJurisdiction,
-      existingHeads: existing.map((h) => (h.label ? `${h.category} — ${h.label}` : h.category)),
+      existingHeads: existing.map((h) => {
+        const name = h.label ? `${h.category} — ${h.label}` : h.category;
+        const figures = describeDamageBasis(h.basis) ?? (h.amount != null ? String(h.amount) : null);
+        return figures ? `${name}: ${figures}` : name;
+      }),
       documents: batch.map((d) => ({ id: d.id, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) })),
     });
 
@@ -129,8 +137,22 @@ export default class DamagesExtractSvc {
     // Documents stay unmarked on an unparseable reply, so the next run reads them again.
     if (found === undefined) throw new HttpError("Chat Wonder returned no [DAMAGES] block", 502);
 
-    const knownKeys = new Set(existing.map((h) => damageHeadKey(h.category, h.label)));
-    const fresh = found.filter((h) => !knownKeys.has(damageHeadKey(h.category, h.label)));
+    const byKey = new Map(existing.map((h) => [damageHeadKey(h.category, h.label), h]));
+    const fresh = found.filter((h) => !byKey.has(damageHeadKey(h.category, h.label)));
+    // A figure for a head the case already has becomes a suggested update, never an edit.
+    const docById = new Map(batch.map((d) => [d.id, d]));
+    const proposedIds: string[] = [];
+    for (const h of found) {
+      const row = byKey.get(damageHeadKey(h.category, h.label));
+      const doc = docById.get(h.documentId);
+      if (!row || !doc) continue;
+      const proposed = await DamagesExtractSvc.proposeUpdate(caseId, row, h, {
+        name: doc.name,
+        category: (doc as { category?: string | null }).category ?? null,
+        text: fullTexts.get(doc.id) ?? null,
+      });
+      if (proposed) proposedIds.push(row.id);
+    }
     const created = [];
     for (const h of fresh) {
       const row = await DamageClaimRepo.createFromAi(caseId, {
@@ -161,14 +183,63 @@ export default class DamagesExtractSvc {
       });
     }
 
+    if (proposedIds.length > 0) {
+      await OrganizationRepo.writeAudit({
+        caseId,
+        actorId: userId,
+        action: "damage.propose-update",
+        payload: { ids: proposedIds, documentIds: batch.map((d) => d.id) },
+      });
+    }
+
     logger.info("Damages extract: batch done", {
       caseId,
       docCount: batch.length,
       proposed: found.length,
       created: created.length,
+      updatesProposed: proposedIds.length,
       remaining: pending.length - batch.length,
     });
     return pending.length > batch.length;
+  }
+
+  /**
+   * Offers `found` as an update to the head `row` when the document says something new: different
+   * figures, or — for a head still waiting on evidence — the very evidence it was waiting on
+   * (checkPendingEvidence), in which case applying the update also certifies it. Stored in
+   * aiProposedBasis; the head itself is never touched. Returns whether a proposal was written.
+   */
+  static async proposeUpdate(
+    caseId: string,
+    row: { id: string; basis: unknown; amount: number | null; status: string; pendingEvidence: string | null; aiProposedBasis?: unknown },
+    found: ExtractedDamageHead,
+    doc: { name: string; category: string | null; text: string | null },
+  ): Promise<boolean> {
+    const differ = figuresDiffer(row, found);
+    const waitingOn = row.status !== "CERTIFIED" && row.pendingEvidence ? row.pendingEvidence : null;
+    const satisfiesPending = waitingOn ? await checkPendingEvidence(waitingOn, doc) : null;
+    if (!differ && satisfiesPending !== true) return false;
+
+    const proposal: DamageProposal = {
+      basis: mergeProposedBasis(row.basis, found.basis),
+      amount: found.basis.kind === "FIXED" ? found.amount : null,
+      sourceDocumentId: found.documentId,
+      documentName: doc.name,
+      sourceQuote: found.quote,
+      satisfiesPending,
+      proposedAt: new Date().toISOString(),
+    };
+    const current = parseDamageProposal(row.aiProposedBasis);
+    if (
+      current &&
+      current.sourceDocumentId === proposal.sourceDocumentId &&
+      JSON.stringify(current.basis) === JSON.stringify(proposal.basis) &&
+      current.amount === proposal.amount
+    ) {
+      return false;
+    }
+    await DamageClaimRepo.setProposal(row.id, caseId, proposal);
+    return true;
   }
 
   /**

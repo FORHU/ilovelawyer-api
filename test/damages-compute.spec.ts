@@ -3,6 +3,7 @@ import { describe, it } from "mocha";
 import {
   computeDamagesSummary,
   DamageHeadInput,
+  describeDamageBasis,
   formatDamageForPrompt,
   hasBasisInputs,
   monthsBetween,
@@ -121,6 +122,51 @@ describe("computeDamagesSummary", () => {
       }),
     ]);
     expect(s.heads[0]!.amount).to.equal(30000 * 6.5);
+  });
+});
+
+describe("backwage accrual", () => {
+  const asOf = new Date("2026-09-28T08:00:00Z");
+  const accruing = (extra: Record<string, unknown> = {}) =>
+    head({
+      id: "a",
+      category: "ACTUAL",
+      basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000, fromDate: "2025-03-28", untilDate: "asOf", ...extra },
+    });
+
+  it("runs the period to the as-of day and reports that day", () => {
+    const s = computeDamagesSummary([accruing()], "PH", asOf);
+    expect(s.heads[0]!.amount).to.equal(27000 * 18);
+    expect(s.asOf).to.equal("2026-09-28");
+  });
+
+  it("keeps growing as the as-of day moves", () => {
+    const later = computeDamagesSummary([accruing()], "PH", new Date("2026-10-28T08:00:00Z"));
+    expect(later.heads[0]!.amount).to.equal(27000 * 19);
+  });
+
+  it("sets the high end from a projected finality date, never below what has accrued", () => {
+    const s = computeDamagesSummary([accruing({ highUntilDate: "2027-03-28" })], "PH", asOf);
+    expect(s.heads[0]!.high).to.equal(27000 * 24);
+    expect(s.high).to.equal(27000 * 24);
+
+    const past = computeDamagesSummary([accruing({ highUntilDate: "2026-01-28" })], "PH", asOf);
+    expect(past.heads[0]!.high).to.equal(27000 * 18);
+  });
+
+  it("lets an explicit amountHigh win over the projected date", () => {
+    const s = computeDamagesSummary([{ ...accruing({ highUntilDate: "2027-03-28" }), amountHigh: 500000 }], "PH", asOf);
+    expect(s.heads[0]!.high).to.equal(500000);
+  });
+
+  it("reports no as-of day when nothing accrues", () => {
+    expect(computeDamagesSummary(MOCKUP, "PH", asOf).asOf).to.equal(null);
+  });
+
+  it("says a period accrues when describing it", () => {
+    expect(describeDamageBasis({ kind: "RATE_X_PERIOD", monthlyRate: 27000, fromDate: "2025-03-28", untilDate: "asOf" })).to.match(
+      /^27000 × [\d.]+ months \(accruing to today\)$/,
+    );
   });
 });
 

@@ -249,10 +249,14 @@ const damageBasisSchema = Joi.alternatives().try(
     monthlyRate: Joi.number().min(0).required(),
     months: Joi.number().min(0).max(1200),
     fromDate: Joi.date().iso(),
-    untilDate: Joi.date().iso().min(Joi.ref("fromDate")),
+    // "asOf" = keep accruing to today (backwages run until the decision is final).
+    untilDate: Joi.alternatives().try(Joi.string().valid("asOf"), Joi.date().iso().min(Joi.ref("fromDate"))),
+    // Projected finality date — sets the head's high end when no amountHigh is given.
+    highUntilDate: Joi.date().iso().min(Joi.ref("fromDate")),
   })
     .xor("months", "fromDate")
-    .and("fromDate", "untilDate"),
+    .and("fromDate", "untilDate")
+    .with("highUntilDate", "fromDate"),
   Joi.object({
     kind: Joi.string().valid("PERCENT_OF").required(),
     percent: Joi.number().min(0).max(100).required(),

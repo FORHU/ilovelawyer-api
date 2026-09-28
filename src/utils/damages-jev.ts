@@ -1,6 +1,8 @@
 import { choice, score } from "@typesafe-ai/sdk";
 import { getTypeSafeClient } from "./typesafeClient";
-import { describeDamageBasis } from "./damages-compute";
+import { describeDamageBasis, parseDamageBasis } from "./damages-compute";
+import { evidenceNameMatches } from "./damages-proposal";
+import { checkProofWithJev, PROOF_CONFIRM_MIN_CONFIDENCE } from "./witness-need-proof-jev";
 import logger from "./logger";
 
 /**
@@ -62,7 +64,21 @@ export interface DamageJevRating {
 
 const MAX_CONTEXT_ITEMS = 25;
 
+/**
+ * The one figure an AI head took from its source quote: a monthly rate, a stated amount or a
+ * percentage. The support question compares the quote with this alone — the period and the
+ * resulting amount are the lawyer's inputs, so a quote reading "salary £2,900" must not be judged
+ * against "£87 accrued over one day".
+ */
+export function quotedFigureOf(basis: unknown, amount: number | null): string | null {
+  const b = parseDamageBasis(basis);
+  if (b.kind === "RATE_X_PERIOD") return `${b.monthlyRate} per month`;
+  if (b.kind === "PERCENT_OF") return `${b.percent}%`;
+  return amount != null ? String(amount) : null;
+}
+
 export function buildDamageJevState(head: DamageJevHead, context: DamageJevContext) {
+  const quotedFigure = head.sourceQuote ? quotedFigureOf(head.basis, head.amount) : null;
   return {
     head: {
       category: head.category,
@@ -71,6 +87,7 @@ export function buildDamageJevState(head: DamageJevHead, context: DamageJevConte
       basis: describeDamageBasis(head.basis) ?? "a fixed amount",
     },
     ...(head.sourceQuote ? { quote: head.sourceQuote } : {}),
+    ...(quotedFigure ? { quotedFigure } : {}),
     caseData: {
       legalIssues: context.legalIssues.slice(0, MAX_CONTEXT_ITEMS),
       strengths: context.strengths.slice(0, MAX_CONTEXT_ITEMS),
@@ -81,7 +98,7 @@ export function buildDamageJevState(head: DamageJevHead, context: DamageJevConte
 
 /** Throws on a Jev failure — verifyDamageHeadsWithJev decides what that means. */
 export async function rateDamageHeadWithJev(head: DamageJevHead, context: DamageJevContext): Promise<DamageJevRating> {
-  const withQuote = !!head.sourceQuote;
+  const withQuote = !!head.sourceQuote && quotedFigureOf(head.basis, head.amount) !== null;
   logger.info("Jev request", { feature: "damages", headId: head.id, category: head.category, withQuote });
   const response = await getTypeSafeClient().systemOne({
     state: buildDamageJevState(head, context),
@@ -89,7 +106,7 @@ export async function rateDamageHeadWithJev(head: DamageJevHead, context: Damage
       ...(withQuote
         ? {
             support: choice(
-              "`head` is one head of damages in a lawyer's damages model, and `quote` is the line from a case document it was built from. Classify the relationship between `quote` and the figures in `head` (its amount or basis, and what they are for): SUPPORTED if `quote` states those figures for that purpose; UNSUPPORTED if `quote` does not state them or states them for something else; CONTRADICTED if `quote` states a different figure for the same thing.",
+              "`head` is one head of damages in a lawyer's damages model. `quote` is the line from a case document it was built from, and `quotedFigure` is the one figure taken from that line (a monthly rate, a stated amount or a percentage); the head's period and resulting amount are the lawyer's own inputs, not taken from the quote, so ignore them. Classify the relationship between `quote` and `quotedFigure` for what `head` is: SUPPORTED if `quote` states that figure for that purpose; UNSUPPORTED if `quote` does not state it or states it for something else; CONTRADICTED if `quote` states a different figure for the same thing.",
               { SUPPORTED: null, UNSUPPORTED: null, CONTRADICTED: null },
             ),
           }
@@ -141,4 +158,28 @@ export async function verifyDamageHeadsWithJev(
     }),
   );
   return out;
+}
+
+/**
+ * Is `doc` the evidence a head is waiting on (DamageClaim.pendingEvidence, e.g. "payroll
+ * certification")? Decides whether applying a proposed update may also certify the head.
+ *
+ * With USE_JEV_DAMAGES on, Jev reads the document (the same fit check that guards a witness
+ * "what's needed" tick): true only for SATISFIES at or above PROOF_CONFIRM_MIN_CONFIDENCE, false for
+ * DOES_NOT_SATISFY, null for PARTLY / CANNOT_TELL / a weak SATISFIES — the figures can still be
+ * offered, but the head stays provisional. Off, it falls back to the document's name
+ * (evidenceNameMatches), which can only say yes or "can't tell". Never throws.
+ */
+export async function checkPendingEvidence(
+  pendingEvidence: string,
+  doc: { name: string; category?: string | null; text: string | null },
+): Promise<boolean | null> {
+  if (!isDamagesJevEnabled()) return evidenceNameMatches(pendingEvidence, doc);
+  const result = await checkProofWithJev({
+    requirement: pendingEvidence,
+    document: { name: doc.name, category: doc.category ?? null, summary: null, text: doc.text },
+  });
+  if (result.verdict === "SATISFIES" && result.confidence >= PROOF_CONFIRM_MIN_CONFIDENCE) return true;
+  if (result.verdict === "DOES_NOT_SATISFY") return false;
+  return null;
 }

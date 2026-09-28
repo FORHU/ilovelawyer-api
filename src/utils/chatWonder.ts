@@ -400,6 +400,10 @@ export function streamChatWonderMessage(
     mindMapContext?: string;
     skipLegalVerify?: boolean;
     extract?: boolean;
+    /** Sent as `case_damages`: the case's Damages & Remedies model (DamageClaimSvc.chatContext),
+     * which chat-wonder's legal personas inject so answers quote the lawyer's own figures. A
+     * chat-wonder build that doesn't know the field drops it. */
+    caseDamages?: unknown;
   },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
@@ -539,6 +543,7 @@ export function streamChatWonderMessage(
             mind_map_requested?: boolean;
             case_mind_map_context?: string;
             skip_legal_verify?: boolean;
+            case_damages?: unknown;
           } = {
             type: "chat",
             user_input: opts?.extract
@@ -558,6 +563,9 @@ export function streamChatWonderMessage(
           }
           if (opts?.skipLegalVerify) {
             payload.skip_legal_verify = true;
+          }
+          if (opts?.caseDamages) {
+            payload.case_damages = opts.caseDamages;
           }
           if (opts?.mindMapContext) {
             payload.case_mind_map_context = opts.mindMapContext;

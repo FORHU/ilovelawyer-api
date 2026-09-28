@@ -17,8 +17,18 @@ export type DamageStatusValue = (typeof DAMAGE_STATUSES)[number];
 export type DamageBasis =
   /** The amount is whatever the lawyer entered (DamageClaim.amount). */
   | { kind: "FIXED" }
-  /** monthlyRate × months, or × the months between fromDate and untilDate (ISO dates). */
-  | { kind: "RATE_X_PERIOD"; monthlyRate: number; months?: number; fromDate?: string; untilDate?: string }
+  /** monthlyRate × months, or × the months between fromDate and untilDate (ISO dates). untilDate
+   * "asOf" keeps the period running to the day the summary is computed — backwages accrue until
+   * the decision becomes final. highUntilDate, a projected finality date, sets the head's high end
+   * the same way when no explicit amountHigh is given. */
+  | {
+      kind: "RATE_X_PERIOD";
+      monthlyRate: number;
+      months?: number;
+      fromDate?: string;
+      untilDate?: string;
+      highUntilDate?: string;
+    }
   /** percent% of the sum of the case's heads in `categories` — e.g. attorney's fees at 10% of
    * Actual + Moral + Exemplary. Only non-PERCENT_OF heads count toward the base, so two derived
    * heads can never feed each other. */
@@ -62,7 +72,13 @@ export interface DamagesSummary {
   provisional: boolean;
   /** Distinct pendingEvidence of the provisional heads, in head order. */
   pendingEvidence: string[];
+  /** The day accruing heads (untilDate "asOf") were computed to, as YYYY-MM-DD; null when no head
+   * accrues. */
+  asOf: string | null;
 }
+
+/** untilDate value meaning "up to the day the summary is computed". */
+export const AS_OF = "asOf";
 
 const STATUS_RANK: Record<DamageStatusValue, number> = { PROVISIONAL: 0, SUPPORTED: 1, CERTIFIED: 2 };
 
@@ -90,12 +106,16 @@ export function parseDamageBasis(raw: unknown): DamageBasis {
   if (b.kind === "RATE_X_PERIOD") {
     const monthlyRate = finite(b.monthlyRate);
     if (monthlyRate === undefined) return { kind: "FIXED" };
+    // Unset fields are left out rather than set to undefined, so a parsed basis round-trips to the
+    // same JSON it was stored as.
+    const months = finite(b.months);
     return {
       kind: "RATE_X_PERIOD",
       monthlyRate,
-      months: finite(b.months),
-      fromDate: typeof b.fromDate === "string" ? b.fromDate : undefined,
-      untilDate: typeof b.untilDate === "string" ? b.untilDate : undefined,
+      ...(months !== undefined ? { months } : {}),
+      ...(typeof b.fromDate === "string" ? { fromDate: b.fromDate } : {}),
+      ...(typeof b.untilDate === "string" ? { untilDate: b.untilDate } : {}),
+      ...(typeof b.highUntilDate === "string" ? { highUntilDate: b.highUntilDate } : {}),
     };
   }
   if (b.kind === "PERCENT_OF") {
@@ -128,10 +148,20 @@ export function monthsBetween(from: string, until: string): number | undefined {
   return round2(months + days / 30);
 }
 
-function periodMonths(basis: Extract<DamageBasis, { kind: "RATE_X_PERIOD" }>): number | undefined {
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function periodMonths(basis: Extract<DamageBasis, { kind: "RATE_X_PERIOD" }>, asOf: Date = new Date()): number | undefined {
   if (basis.months !== undefined) return basis.months;
-  if (basis.fromDate && basis.untilDate) return monthsBetween(basis.fromDate, basis.untilDate);
+  if (basis.fromDate && basis.untilDate) {
+    return monthsBetween(basis.fromDate, basis.untilDate === AS_OF ? isoDay(asOf) : basis.untilDate);
+  }
   return undefined;
+}
+
+function accrues(basis: DamageBasis): boolean {
+  return basis.kind === "RATE_X_PERIOD" && basis.months === undefined && basis.untilDate === AS_OF;
 }
 
 /** Does this head have the inputs its basis needs? CERTIFIED is refused without them. */
@@ -151,7 +181,12 @@ export function niceCeiling(value: number): number {
   return round2(Math.ceil(value / step - 1e-9) * step);
 }
 
-export function computeDamagesSummary(heads: DamageHeadInput[], tenantCode?: TenantCode | null): DamagesSummary {
+export function computeDamagesSummary(
+  heads: DamageHeadInput[],
+  tenantCode?: TenantCode | null,
+  /** "Today" for accruing heads; injectable so the result is testable. */
+  asOf: Date = new Date(),
+): DamagesSummary {
   const parsed = heads.map((head) => ({ head, basis: parseDamageBasis(head.basis) }));
 
   // Pass 1: every head that isn't derived from other heads.
@@ -159,16 +194,21 @@ export function computeDamagesSummary(heads: DamageHeadInput[], tenantCode?: Ten
   for (const { head, basis } of parsed) {
     if (basis.kind === "PERCENT_OF") continue;
     let amount: number | null;
+    let projectedHigh: number | null = null;
     if (basis.kind === "RATE_X_PERIOD") {
-      const months = periodMonths(basis);
+      const months = periodMonths(basis, asOf);
       amount = months === undefined ? null : round2(basis.monthlyRate * months);
+      const highMonths =
+        basis.fromDate && basis.highUntilDate ? monthsBetween(basis.fromDate, basis.highUntilDate) : undefined;
+      if (highMonths !== undefined) projectedHigh = round2(basis.monthlyRate * highMonths);
     } else {
       amount = head.amount;
     }
     base.set(head.id, {
       amount,
       low: head.amountLow ?? amount,
-      high: head.amountHigh ?? amount,
+      // A projected finality date never lowers the high end below what has already accrued.
+      high: head.amountHigh ?? (projectedHigh !== null ? Math.max(projectedHigh, amount ?? 0) : amount),
     });
   }
 
@@ -225,6 +265,7 @@ export function computeDamagesSummary(heads: DamageHeadInput[], tenantCode?: Ten
     heads: results,
     provisional: results.some((r) => r.effectiveStatus === "PROVISIONAL"),
     pendingEvidence,
+    asOf: parsed.some((p) => accrues(p.basis)) ? isoDay(asOf) : null,
   };
 }
 
@@ -233,7 +274,8 @@ export function describeDamageBasis(raw: unknown): string | null {
   const basis = parseDamageBasis(raw);
   if (basis.kind === "RATE_X_PERIOD") {
     const months = periodMonths(basis);
-    return months === undefined ? `${basis.monthlyRate} monthly, period not set` : `${basis.monthlyRate} × ${months} months`;
+    if (months === undefined) return `${basis.monthlyRate} monthly, period not set`;
+    return `${basis.monthlyRate} × ${months} months${accrues(basis) ? " (accruing to today)" : ""}`;
   }
   if (basis.kind === "PERCENT_OF") return `${basis.percent}% of ${basis.categories.join(" + ")}`;
   return null;

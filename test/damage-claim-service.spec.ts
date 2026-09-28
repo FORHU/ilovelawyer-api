@@ -82,6 +82,60 @@ describe("DamageClaimSvc", () => {
     patch(OrganizationRepo, "writeAudit", async (entry: { action: string }) => {
       audits.push(entry.action);
     });
+    patch(DamageClaimRepo, "setProposal", async (id: string, _caseId: string, proposal: unknown) => {
+      rows.find((r) => r.id === id)!.aiProposedBasis = proposal;
+    });
+  });
+
+  const proposal = (extra: Row = {}) => ({
+    basis: { kind: "RATE_X_PERIOD", monthlyRate: 30000, months: 18 },
+    amount: null,
+    sourceDocumentId: "doc-cert",
+    documentName: "Payroll Certification.pdf",
+    sourceQuote: "monthly rate of P30,000.00",
+    satisfiesPending: true,
+    proposedAt: "2026-09-28T00:00:00.000Z",
+    ...extra,
+  });
+
+  it("applies a proposal that is the awaited evidence: new figures, certified, no longer waiting", async () => {
+    Object.assign(rows[0]!, { pendingEvidence: "payroll certification", aiProposedBasis: proposal() });
+    const updated = await DamageClaimSvc.applyProposal("case-1", "actual", "user-1");
+    expect(updated!.basis).to.deep.equal({ kind: "RATE_X_PERIOD", monthlyRate: 30000, months: 18 });
+    expect(updated!).to.include({ status: "CERTIFIED", pendingEvidence: null, aiProposedBasis: null, amount: 540000 });
+    expect(rows.find((r) => r.id === "fees")!.amount).to.equal(74000);
+    expect(audits).to.deep.equal(["damage.proposal.apply", "damage.certify"]);
+  });
+
+  it("applies new figures without certifying when the document isn't the awaited evidence", async () => {
+    Object.assign(rows[0]!, { pendingEvidence: "payroll certification", aiProposedBasis: proposal({ satisfiesPending: null }) });
+    const updated = await DamageClaimSvc.applyProposal("case-1", "actual", "user-1");
+    expect(updated!).to.include({ status: "PROVISIONAL", pendingEvidence: "payroll certification", amount: 540000 });
+    expect(audits).to.deep.equal(["damage.proposal.apply"]);
+  });
+
+  it("applies a FIXED proposal's amount", async () => {
+    rows[1]!.aiProposedBasis = proposal({ basis: { kind: "FIXED" }, amount: 250000, satisfiesPending: null });
+    const updated = await DamageClaimSvc.applyProposal("case-1", "moral", "user-1");
+    expect(updated!.amount).to.equal(250000);
+  });
+
+  it("refuses to apply when there is no proposal, and dismisses without touching the figures", async () => {
+    const err = await DamageClaimSvc.applyProposal("case-1", "moral", "user-1").catch((e) => e);
+    expect(err.statusCode).to.equal(409);
+
+    rows[0]!.aiProposedBasis = proposal();
+    const after = await DamageClaimSvc.dismissProposal("case-1", "actual", "user-1");
+    expect(after!).to.include({ aiProposedBasis: null, amount: 486000, status: "PROVISIONAL" });
+    expect(audits).to.deep.equal(["damage.proposal.dismiss"]);
+  });
+
+  it("builds the chat context from the computed figures, or nothing for a case without heads", async () => {
+    const ctx = await DamageClaimSvc.chatContext("case-1", "PH");
+    expect(ctx).to.include({ currency: "PHP", total: 486000 + 200000 + 68600, provisional: true, asOf: null });
+    expect(ctx!.heads.find((h) => h.category === "ACTUAL")).to.include({ basis: "27000 × 18 months", status: "PROVISIONAL" });
+    rows = [];
+    expect(await DamageClaimSvc.chatContext("case-1", "PH")).to.equal(undefined);
   });
 
   afterEach(() => restore.reverse().forEach((fn) => fn()));

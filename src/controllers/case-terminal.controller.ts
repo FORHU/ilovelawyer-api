@@ -471,6 +471,16 @@ export default class CaseTerminalCtrl {
     return res.status(202).json(status);
   }
 
+  static async applyDamageProposal(req: Request, res: Response) {
+    const result = await DamageClaimSvc.applyProposal(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async dismissDamageProposal(req: Request, res: Response) {
+    const result = await DamageClaimSvc.dismissProposal(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
   static async deleteDamage(req: Request, res: Response) {
     await DamageClaimSvc.delete(req.params.caseId, req.params.id, req.user.userId);
     return res.status(204).send();

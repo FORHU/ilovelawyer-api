@@ -29,6 +29,7 @@ import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getProxyFileUrl } from "../utils/s3";
 import CaseMindMapSvc from "./case-mind-map.service";
+import DamageClaimSvc, { type CaseDamagesChatContext } from "./damage-claim.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
@@ -913,6 +914,18 @@ export default class ChatSvc {
                 return undefined;
               })
             : undefined;
+        // The case's damages model, so "how much can we claim?" quotes the panel's figures.
+        // Best-effort, like the map context: a failure just sends the turn without it.
+        const caseDamages = effectiveCaseId
+          ? await DamageClaimSvc.chatContext(effectiveCaseId, tenantCode).catch((err) => {
+              logger.warn("Chat: damages model unavailable, sending the turn without it", {
+                err,
+                consultationId,
+                caseId: effectiveCaseId,
+              });
+              return undefined;
+            })
+          : undefined;
         const runStream = () =>
           ChatSvc.streamWithSessionRetry(
             consultationId,
@@ -934,7 +947,7 @@ export default class ChatSvc {
             },
             replyLanguage,
             // Any turn that asks for a map, case or not: chat-wonder builds one only on this flag.
-            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined },
+            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined, caseDamages },
           );
         const result =
           generationKind && effectiveCaseId
@@ -1427,9 +1440,16 @@ export default class ChatSvc {
     signal?: AbortSignal,
     onAnswerComplete?: () => void,
     replyLanguage?: string,
-    mindMap?: { mindMapRequested: boolean; mindMapContext?: string },
+    extras?: { mindMapRequested: boolean; mindMapContext?: string; caseDamages?: CaseDamagesChatContext },
   ) {
-    const opts = mindMap?.mindMapRequested ? mindMap : undefined;
+    // Map fields only on a turn that asked for a map; the damages model on any case turn.
+    const opts =
+      extras?.mindMapRequested || extras?.caseDamages
+        ? {
+            ...(extras.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
+            ...(extras.caseDamages ? { caseDamages: extras.caseDamages } : {}),
+          }
+        : undefined;
     try {
       return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
     } catch (err) {

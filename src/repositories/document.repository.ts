@@ -108,7 +108,7 @@ export default class DocumentRepo {
     return prisma.document.findMany({
       where: { caseId, ragStatus: "READY", damagesExtractedAt: null },
       orderBy: { createdAt: "asc" },
-      select: { id: true, name: true },
+      select: { id: true, name: true, category: true },
     });
   }
 

@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 import { DamageCategory, DamageJevSupport, DamageStatus, Prisma } from "@prisma/client";
 import type { DamageBasis } from "../utils/damages-compute";
+import type { DamageProposal } from "../utils/damages-proposal";
 
 export interface DamageClaimInput {
   category: DamageCategory;
@@ -65,6 +66,14 @@ export default class DamageClaimRepo {
     const { basis, ...rest } = data;
     return prisma.damageClaim.create({
       data: { caseId, source: "AI", status: "PROVISIONAL", ...rest, basis: basis as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  /** Stores (or, with null, clears) a suggested update — see DamageProposal in damages-proposal.ts. */
+  static async setProposal(id: string, caseId: string, proposal: DamageProposal | null) {
+    await prisma.damageClaim.updateMany({
+      where: { id, caseId },
+      data: { aiProposedBasis: proposal === null ? Prisma.DbNull : (proposal as unknown as Prisma.InputJsonValue) },
     });
   }
 

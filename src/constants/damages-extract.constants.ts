@@ -4,7 +4,8 @@ export interface DamagesExtractPromptData {
   jurisdiction?: string | null;
   /** UK tenant only — see RedTeamPromptData.ukJurisdiction. */
   ukJurisdiction?: string | null;
-  /** Heads already on the case ("ACTUAL — Backwages"), so the model doesn't propose them again. */
+  /** Heads already on the case with their current figures ("ACTUAL — Backwages: 27000 × 18 months"),
+   * so the model neither duplicates them nor misses a document that updates one. */
   existingHeads: string[];
   documents: { id: string; name: string; text: string }[];
 }
@@ -18,7 +19,7 @@ export function renderDamagesExtractBody(data: DamagesExtractPromptData): string
     .map((d) => `--- DOCUMENT id: ${d.id} | name: ${d.name} ---\n${d.text || "(no indexed text)"}`)
     .join("\n\n");
   const existing = data.existingHeads.length ? data.existingHeads.map((h) => `- ${h}`).join("\n") : "(none)";
-  return `ALREADY IN THE DAMAGES MODEL (do not repeat):
+  return `ALREADY IN THE DAMAGES MODEL:
 ${existing}
 
 DOCUMENTS:
@@ -40,7 +41,8 @@ For each head give its inputs, never a total:
 - "label" is a short name for the head (e.g. "Backwages", "13th month pay", "Moral damages").
 - "legalBasis" is the statute or rule the document itself cites for the head, or null. Do not add one the document does not cite.
 - "pendingEvidence" names the document that would prove the figure if the one quoted does not (e.g. "payroll certification" when the rate comes from a single payslip), or null.
-One entry per head. If no document states a figure for any head, return an empty array.
+One entry per head. For a head already in the model, include it only when one of these documents states a figure for it — a different figure, or the same one from a better source such as a payroll certification — using the same category and label; it is offered to the lawyer as an update and never applied on its own. Otherwise do not repeat heads already in the model.
+If no document states a figure for any head, return an empty array.
 
 Respond with the machine-readable block below and nothing else, exactly in this format:
 [DAMAGES]

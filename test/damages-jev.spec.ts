@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { afterEach, beforeEach, describe, it } from "mocha";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
-import { buildDamageJevState, verifyDamageHeadsWithJev, DamageJevHead, DamageJevContext } from "../src/utils/damages-jev";
+import { buildDamageJevState, quotedFigureOf, verifyDamageHeadsWithJev, DamageJevHead, DamageJevContext } from "../src/utils/damages-jev";
 
 const context: DamageJevContext = {
   legalIssues: ["Was the dismissal for just cause?"],
@@ -24,10 +24,21 @@ describe("buildDamageJevState", () => {
     const withQuote = buildDamageJevState(head("a"), context);
     expect(withQuote.head.basis).to.equal("27000 × 18 months");
     expect(withQuote).to.have.property("quote", "Basic monthly salary: P27,000.00");
+    // The support check compares the quote with the rate it gave, never the accrued amount.
+    expect(withQuote).to.have.property("quotedFigure", "27000 per month");
 
     const manual = buildDamageJevState(head("m", { category: "MORAL", basis: null, sourceQuote: null, label: null }), context);
     expect(manual).to.not.have.property("quote");
     expect(manual.head).to.include({ label: "MORAL", basis: "a fixed amount" });
+  });
+});
+
+describe("quotedFigureOf", () => {
+  it("is the figure the quote supplied: a rate, a stated amount or a percentage", () => {
+    expect(quotedFigureOf({ kind: "RATE_X_PERIOD", monthlyRate: 2900, fromDate: "2026-09-27", untilDate: "asOf" }, 87)).to.equal("2900 per month");
+    expect(quotedFigureOf(null, 200000)).to.equal("200000");
+    expect(quotedFigureOf({ kind: "PERCENT_OF", percent: 10, categories: ["ACTUAL"] }, 4860)).to.equal("10%");
+    expect(quotedFigureOf(null, null)).to.equal(null);
   });
 });
 

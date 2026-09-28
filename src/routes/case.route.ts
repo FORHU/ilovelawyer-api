@@ -107,6 +107,8 @@ router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
 router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
 router.post("/:caseId/damages/propose", asyncHandler(CaseTerminalCtrl.proposeDamages));
 router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage));
+router.post("/:caseId/damages/:id/proposal/apply", asyncHandler(CaseTerminalCtrl.applyDamageProposal));
+router.post("/:caseId/damages/:id/proposal/dismiss", asyncHandler(CaseTerminalCtrl.dismissDamageProposal));
 router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
 
 router.get("/:caseId/claims", asyncHandler(CaseTerminalCtrl.listClaims));

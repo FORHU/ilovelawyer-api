@@ -40,6 +40,7 @@ describe("DamagesExtractSvc", () => {
   let audits: any[];
   let recomputed: number;
   let scheduled: number;
+  let proposals: { id: string; proposal: any }[];
 
   function patch(target: object, key: string, value: unknown) {
     const original = (target as any)[key];
@@ -68,6 +69,14 @@ describe("DamagesExtractSvc", () => {
   });
 
   beforeEach(() => {
+    // A local .env may turn USE_JEV_DAMAGES on; these tests are about the extraction itself and
+    // must never call Jev, so the flag is pinned off (checkPendingEvidence then matches names).
+    const jevFlag = process.env.USE_JEV_DAMAGES;
+    delete process.env.USE_JEV_DAMAGES;
+    restore.push(() => {
+      if (jevFlag === undefined) delete process.env.USE_JEV_DAMAGES;
+      else process.env.USE_JEV_DAMAGES = jevFlag;
+    });
     payloads = [];
     pending = [
       { id: "doc-pay", name: "Payslip.pdf" },
@@ -79,6 +88,7 @@ describe("DamagesExtractSvc", () => {
     audits = [];
     recomputed = 0;
     scheduled = 0;
+    proposals = [];
     reply = `[DAMAGES]${JSON.stringify([
       { category: "ACTUAL", label: "Backwages", basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000 }, pendingEvidence: "payroll certification", documentId: "doc-pay", quote: "Basic monthly salary: P27,000.00" },
       { category: "MORAL", label: "Moral damages", basis: { kind: "FIXED", amount: 200000 }, documentId: "doc-cmp", quote: "P200,000.00 as moral damages" },
@@ -100,6 +110,7 @@ describe("DamagesExtractSvc", () => {
       return row;
     });
     patch(CaseGraphSvc, "ensureNode", async () => ({}));
+    patch(DamageClaimRepo, "setProposal", async (id: string, _caseId: string, proposal: any) => void proposals.push({ id, proposal }));
     patch(DamageClaimSvc, "recompute", async () => void recomputed++);
     patch(CaseFindingRepo, "list", async () => []);
     patch(OrganizationRepo, "writeAudit", async (a: any) => void audits.push(a));
@@ -133,11 +144,74 @@ describe("DamagesExtractSvc", () => {
     expect(audits[0].payload.ids).to.deep.equal(["new-0", "new-1"]);
   });
 
-  it("skips heads the case already has", async () => {
-    existing = [{ id: "mine", category: "MORAL", label: null }];
+  it("never duplicates a head the case already has, and leaves one with the same figure alone", async () => {
+    existing = [{ id: "mine", category: "MORAL", label: null, amount: 200000, basis: null, status: "SUPPORTED", pendingEvidence: null }];
     await DamagesExtractSvc.runQueued("case-1", "user-1");
     expect(created.map((h) => h.category)).to.deep.equal(["ACTUAL"]);
-    expect(payloads[0].user_input).to.include("- MORAL");
+    expect(proposals).to.deep.equal([]);
+    expect(payloads[0].user_input).to.include("- MORAL: 200000");
+  });
+
+  it("offers a new figure for an existing head as an update, and certifies when it is the awaited evidence", async () => {
+    const CERT = "PAYROLL CERTIFICATION. This certifies that Juan Dela Cruz received a monthly rate of P28,500.00.";
+    pending = [{ id: "doc-cert", name: "Payroll Certification.pdf" }];
+    patch(DocumentChunkRepo, "findFullTextsByDocuments", async () => new Map([["doc-cert", CERT]]));
+    existing = [
+      {
+        id: "backwages",
+        category: "ACTUAL",
+        label: "Backwages",
+        amount: 486000,
+        basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000, fromDate: "2025-03-28", untilDate: "asOf" },
+        status: "PROVISIONAL",
+        pendingEvidence: "payroll certification",
+      },
+    ];
+    reply = `[DAMAGES]${JSON.stringify([
+      { category: "ACTUAL", label: "Backwages", basis: { kind: "RATE_X_PERIOD", monthlyRate: 28500 }, documentId: "doc-cert", quote: "a monthly rate of P28,500.00" },
+    ])}[/DAMAGES]`;
+
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+
+    expect(created).to.deep.equal([]);
+    expect(proposals).to.have.length(1);
+    expect(proposals[0]!.id).to.equal("backwages");
+    expect(proposals[0]!.proposal).to.include({ satisfiesPending: true, sourceDocumentId: "doc-cert", documentName: "Payroll Certification.pdf" });
+    // The lawyer's accruing period is kept; only the rate changes.
+    expect(proposals[0]!.proposal.basis).to.deep.equal({ kind: "RATE_X_PERIOD", monthlyRate: 28500, fromDate: "2025-03-28", untilDate: "asOf" });
+    expect(audits.map((a) => a.action)).to.deep.equal(["damage.propose-update"]);
+    expect(payloads[0].user_input).to.include("- ACTUAL — Backwages: 27000 × ");
+  });
+
+  it("offers the awaited evidence even when it confirms the same figure, but not an unrelated document", async () => {
+    existing = [
+      { id: "backwages", category: "ACTUAL", label: "Backwages", amount: null, basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000 }, status: "PROVISIONAL", pendingEvidence: "payroll certification" },
+    ];
+    reply = `[DAMAGES]${JSON.stringify([
+      { category: "ACTUAL", label: "Backwages", basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000 }, documentId: "doc-pay", quote: "Basic monthly salary: P27,000.00" },
+    ])}[/DAMAGES]`;
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    // doc-pay is "Payslip.pdf": same figure, not the payroll certification — nothing to offer.
+    expect(proposals).to.deep.equal([]);
+
+    pending = [{ id: "doc-pay", name: "Payroll certification - Aug.pdf" }];
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(proposals).to.have.length(1);
+    expect(proposals[0]!.proposal.satisfiesPending).to.equal(true);
+  });
+
+  it("sends the case's damages model as case_damages on a chat turn that carries it", async () => {
+    const caseDamages = { currency: "PHP", total: 1, heads: [{ category: "MORAL", amount: 1 }] };
+    await chatWonder.streamChatWonderMessage("sess-1", "How much can we claim?", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, {
+      resolveOnAnswerEnd: true,
+      caseDamages,
+    });
+    await chatWonder.streamChatWonderMessage("sess-1", "Hello", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, {
+      resolveOnAnswerEnd: true,
+    });
+    expect(payloads[0].case_damages).to.deep.equal(caseDamages);
+    expect(payloads[0].user_input.startsWith("[legal ai]")).to.equal(true);
+    expect(payloads[1]).to.not.have.property("case_damages");
   });
 
   it("leaves documents unread, and fails the job, when the reply has no [DAMAGES] block", async () => {
