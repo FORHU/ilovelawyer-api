@@ -57,6 +57,9 @@ Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. 
 [WEAKNESSES] objects also carry two more fields:
 - "detail": the concrete work that would close this weakness, in one line (max 160 characters) — e.g. "Obtain the signed timesheets for the week in dispute". null if nothing in the documents suggests a fix.
 - "status": "MATERIAL" if the other side could use it to defeat a claim or an element of one, otherwise "MINOR".
+[STRENGTHS] objects also carry two more fields:
+- "detail": the document reference (Bates number, exhibit or page) and what it shows, in one line (max 160 characters) — e.g. "Exhibit C3, p. 4 — rota shows the claimant on shift that week". null if it isn't tied to one document.
+- "status": "STRONG" if on its own it could establish a claim or defeat the other side's main defence, otherwise "MODERATE".
 If none: leave the array empty.
 `;
 }

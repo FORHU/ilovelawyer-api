@@ -10,6 +10,9 @@ import CaseClaimRepo from "../src/repositories/case-claim.repository";
 import CaseTimelineRepo from "../src/repositories/case-timeline.repository";
 import EvidenceRepo from "../src/repositories/evidence.repository";
 import WitnessRepo from "../src/repositories/witness.repository";
+import DocumentRepo from "../src/repositories/document.repository";
+import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
+import * as embedding from "../src/utils/embedding";
 import FindingJevSvc from "../src/services/finding-jev.service";
 import type { ParsedCaseFinding } from "../src/utils/case-finding-parse";
 
@@ -30,12 +33,20 @@ const weaknessAnswers = (severity: number, surfacing: number, support = "SUPPORT
   },
 });
 
+const strengthAnswers = (weight: number, support = "SUPPORTED") => ({
+  answers: {
+    support: { choice: support, confidence: 0.9 },
+    weight: { score: weight, confidence: 0.9 },
+    rebuttal: { choice: "UNREBUTTED", confidence: 0.9 },
+  },
+});
+
 const parsed = (label: string, category: ParsedCaseFinding["category"] = "LEGAL_ISSUE"): ParsedCaseFinding => ({
   category,
   label,
   sourceLabel: null,
   detail: null,
-  tag: category === "LEGAL_ISSUE" ? "OPEN" : category === "WEAKNESS" ? "MINOR" : null,
+  tag: category === "LEGAL_ISSUE" ? "OPEN" : category === "WEAKNESS" ? "MINOR" : category === "STRENGTH" ? "MODERATE" : null,
   burden: category === "LEGAL_ISSUE" ? "RESPONDENT" : null,
 });
 
@@ -48,8 +59,13 @@ describe("FindingJevSvc.verifyParsed", () => {
     timelineList: CaseTimelineRepo.list,
     contradictions: EvidenceRepo.listContradictions,
     witnessList: WitnessRepo.list,
+    documentList: DocumentRepo.listAllByCase,
+    relevantChunks: DocumentChunkRepo.findRelevantByDocument,
+    chunkTexts: DocumentChunkRepo.findTextsByIds,
+    embedText: embedding.embedText,
     issuesFlag: process.env.USE_JEV_LEGAL_ISSUES,
     weaknessesFlag: process.env.USE_JEV_WEAKNESSES,
+    strengthsFlag: process.env.USE_JEV_STRENGTHS,
   };
   let replies: Record<string, unknown>;
   let sent: Record<string, any>;
@@ -58,10 +74,11 @@ describe("FindingJevSvc.verifyParsed", () => {
     process.env.TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || "test-key";
     process.env.USE_JEV_LEGAL_ISSUES = "false";
     process.env.USE_JEV_WEAKNESSES = "false";
+    process.env.USE_JEV_STRENGTHS = "false";
     replies = {};
     sent = {};
     (TypeSafeClient.prototype as any).systemOne = async (req: { state: any }) => {
-      const label = req.state.issue?.question ?? req.state.weakness?.point;
+      const label = req.state.issue?.question ?? req.state.weakness?.point ?? req.state.strength?.point;
       sent[label] = req.state;
       const reply = replies[label];
       if (reply instanceof Error) throw reply;
@@ -73,6 +90,14 @@ describe("FindingJevSvc.verifyParsed", () => {
     (CaseTimelineRepo as any).list = async () => [];
     (EvidenceRepo as any).listContradictions = async () => [];
     (WitnessRepo as any).list = async () => [];
+    (DocumentRepo as any).listAllByCase = async () => [
+      { id: "doc-payroll", name: "Payroll register", ragStatus: "READY" },
+      { id: "doc-draft", name: "Unindexed draft", ragStatus: "PENDING" },
+    ];
+    (DocumentChunkRepo as any).findRelevantByDocument = async (documentId: string) => (documentId === "doc-payroll" ? ["c1"] : []);
+    (DocumentChunkRepo as any).findTextsByIds = async (ids: string[]) =>
+      ids.map((id) => ({ id, caseDocumentId: "doc-payroll", chunkText: "Present 4–8 August", chunkIndex: 0, pageNumber: 2 }));
+    (embedding as any).embedText = async () => [0.1, 0.2];
   });
   afterEach(() => {
     TypeSafeClient.prototype.systemOne = originals.systemOne;
@@ -82,9 +107,14 @@ describe("FindingJevSvc.verifyParsed", () => {
     (CaseTimelineRepo as any).list = originals.timelineList;
     (EvidenceRepo as any).listContradictions = originals.contradictions;
     (WitnessRepo as any).list = originals.witnessList;
+    (DocumentRepo as any).listAllByCase = originals.documentList;
+    (DocumentChunkRepo as any).findRelevantByDocument = originals.relevantChunks;
+    (DocumentChunkRepo as any).findTextsByIds = originals.chunkTexts;
+    (embedding as any).embedText = originals.embedText;
     for (const [name, value] of [
       ["USE_JEV_LEGAL_ISSUES", originals.issuesFlag],
       ["USE_JEV_WEAKNESSES", originals.weaknessesFlag],
+      ["USE_JEV_STRENGTHS", originals.strengthsFlag],
     ] as const) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
@@ -147,5 +177,24 @@ describe("FindingJevSvc.verifyParsed", () => {
     expect(byLabel.unborne).to.include({ tag: "MINOR", impact: 0 });
     expect(byLabel.failed).to.include({ tag: "MINOR" });
     expect(byLabel.failed.impact).to.equal(undefined);
+  });
+
+  it("reads the cited document's passages for strengths and orders them by the work they do", async () => {
+    process.env.USE_JEV_STRENGTHS = "true";
+    replies.light = strengthAnswers(1);
+    replies.heavy = strengthAnswers(3);
+    replies.unindexed = strengthAnswers(3);
+    const rows = await FindingJevSvc.verifyParsed("case-1", [
+      { ...parsed("light", "STRENGTH"), sourceLabel: "Payroll register" },
+      { ...parsed("heavy", "STRENGTH"), sourceLabel: "Payroll register" },
+      { ...parsed("unindexed", "STRENGTH"), sourceLabel: "Unindexed draft" },
+    ]);
+    expect(sent.heavy.sourcePassages).to.deep.equal(["[p. 2] Present 4–8 August"]);
+    expect(sent.unindexed.sourcePassages).to.deep.equal([]);
+    const byLabel = Object.fromEntries(rows.map((r) => [r.label, r]));
+    expect(byLabel.heavy).to.include({ tag: "STRONG", impact: 10, modelTag: "MODERATE" });
+    expect((byLabel.heavy.jev as any).sourceRead).to.equal(true);
+    expect((byLabel.unindexed.jev as any).sourceRead).to.equal(false);
+    expect(rows.sort((a, b) => a.position! - b.position!).map((r) => r.label)).to.deep.equal(["heavy", "unindexed", "light"]);
   });
 });
