@@ -96,7 +96,6 @@ export default class DocumentExtractionQueue {
     // PENDING/FAILED document found is unambiguously stuck from a prior process's lifetime.
     await this.reloadStuckDocuments();
 
-    logger.info("Document extraction queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     void this.sweepLoop();
     this.pump();
@@ -116,7 +115,6 @@ export default class DocumentExtractionQueue {
     const toQueue = pending.filter((doc) => !this.activeDocumentIds.has(doc.id) && !alreadyQueued.has(doc.id));
     if (toQueue.length === 0) return;
 
-    logger.info("Document extraction queue: re-queuing documents for extraction", { count: toQueue.length });
     this.memoryWait.push(...toQueue.map((doc) => ({ documentId: doc.id, receiptHandle: null })));
     this.pump();
   }
@@ -131,13 +129,9 @@ export default class DocumentExtractionQueue {
   }
 
   private static async evictStaleEmptyDocuments(): Promise<void> {
-    const { count } = await DocumentRepo.deleteStaleEmpty(EMPTY_DOCUMENT_EVICTION_MS).catch((err) => {
+    await DocumentRepo.deleteStaleEmpty(EMPTY_DOCUMENT_EVICTION_MS).catch((err) => {
       logger.error("Document extraction queue: failed to evict stale empty documents", { err });
-      return { count: 0 };
     });
-    if (count > 0) {
-      logger.info("Document extraction queue: evicted stale empty documents", { count });
-    }
   }
 
   private static async fetchLoop(): Promise<void> {

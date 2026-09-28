@@ -11,6 +11,8 @@ import {
   buildCaseStrategyPrompt,
   PH_SOURCE_ANALYSIS_PROMPT,
   buildPHChatTitlePrompt,
+  buildMindMapExpandPrompt,
+  buildMindMapDocumentsPrompt,
 } from "./ph/prompts";
 import {
   buildUKRedTeamPrompt,
@@ -23,6 +25,8 @@ import {
   buildUKCaseStrategyPrompt,
   UK_SOURCE_ANALYSIS_PROMPT,
   buildUKChatTitlePrompt,
+  buildUKMindMapExpandPrompt,
+  buildUKMindMapDocumentsPrompt,
 } from "./uk/prompts";
 
 /** Every getter below selects strictly by tenantCode — never by client input — and throws
@@ -135,5 +139,27 @@ export function getChatTitlePromptBuilder(tenantCode: TenantCode) {
       return buildUKChatTitlePrompt;
     default:
       throw new HttpError(`No chat-title prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getMindMapExpandPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildMindMapExpandPrompt;
+    case "UK":
+      return buildUKMindMapExpandPrompt;
+    default:
+      throw new HttpError(`No mind-map-expand prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getMindMapDocumentsPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildMindMapDocumentsPrompt;
+    case "UK":
+      return buildUKMindMapDocumentsPrompt;
+    default:
+      throw new HttpError(`No mind-map-documents prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
