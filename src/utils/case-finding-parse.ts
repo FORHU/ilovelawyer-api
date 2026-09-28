@@ -1,7 +1,7 @@
 import { FindingCategory, FindingTag } from "@prisma/client";
 import { parseAiJson } from "./response-parser";
 import { stripChatWonderNoise } from "./chat-wonder-noise";
-import { isTagAllowed } from "../constants";
+import { isTagAllowed, WORKFLOW_TAGS } from "../constants";
 import { BURDEN_PARTIES, BurdenParty } from "./legal-issue-jev";
 
 const TAGS: Record<FindingCategory, string> = {
@@ -23,7 +23,8 @@ export interface ParsedCaseFinding {
   sourceLabel: string | null;
   /** The row's sub-line (Legal Issues: who bears the burden and why). */
   detail: string | null;
-  /** The drafting model's own pill, kept only when it's one the category may use. */
+  /** The drafting model's own pill, kept only when it's one the category may use and not one of
+   * the lawyer's workflow states (WORKFLOW_TAGS). */
   tag: FindingTag | null;
   /** Legal Issues only: the model's own burden call, which Jev's is compared against. */
   burden: BurdenParty | null;
@@ -41,7 +42,8 @@ export function extractCaseFindings(text: string): ParsedCaseFinding[] | undefin
     if (items === undefined) continue;
     anyTagFound = true;
     for (const item of items.slice(0, MAX_ITEMS)) {
-      const tag = item.status && isTagAllowed(category, item.status as FindingTag) ? (item.status as FindingTag) : null;
+      const status = item.status as FindingTag | null;
+      const tag = status && isTagAllowed(category, status) && !WORKFLOW_TAGS.includes(status) ? status : null;
       const burden = category === "LEGAL_ISSUE" ? item.burden : null;
       results.push({ category, label: item.label, sourceLabel: item.sourceLabel, detail: item.detail, tag, burden });
     }

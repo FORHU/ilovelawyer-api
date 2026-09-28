@@ -28,16 +28,18 @@ describe("extractCaseFindings", () => {
     });
   });
 
-  it("drops a status the category can't use, and an UNCLEAR or unknown burden", () => {
+  it("drops a status the category can't use or only the lawyer sets, and an UNCLEAR or unknown burden", () => {
     const found = extractCaseFindings(
       reply([
         { label: "One", status: "MATERIAL", burden: "UNCLEAR" },
         { label: "Two", status: "RESOLVED", burden: "the employer" },
+        { label: "Three", status: "open", burden: "shared" },
       ]),
     )!;
     expect(found.map((f) => [f.tag, f.burden])).to.deep.equal([
       [null, null],
-      ["RESOLVED", null],
+      [null, null],
+      ["OPEN", "SHARED"],
     ]);
   });
 
