@@ -18,12 +18,14 @@ import CaseFindingRepo from "../src/repositories/case-finding.repository";
 import WitnessRepo from "../src/repositories/witness.repository";
 import DamageClaimRepo from "../src/repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../src/repositories/case-reconstruction.repository";
+import CaseReconstructionEventsRepo from "../src/repositories/case-reconstruction-events.repository";
 import RedTeamRepo from "../src/repositories/red-team.repository";
 import DecisionRecordRepo from "../src/repositories/decision-record.repository";
 import CaseTheoryRepo from "../src/repositories/case-theory.repository";
 import AnnotationRepo from "../src/repositories/annotation.repository";
 import CaseGraphRepo from "../src/repositories/case-graph.repository";
 import ChatRepo from "../src/repositories/chat.repository";
+import MindMapRepo from "../src/repositories/mind-map.repository";
 import LawRepo from "../src/repositories/law.repository";
 import CaseOutlookRepo from "../src/repositories/case-outlook.repository";
 import prisma from "../src/lib/prisma";
@@ -88,12 +90,14 @@ describe("CaseSnapshotSvc.get — Evidence & Timeline contract", () => {
       [WitnessRepo, "list", empty],
       [DamageClaimRepo, "list", empty],
       [CaseReconstructionRepo, "get", none],
+      [CaseReconstructionEventsRepo, "get", none],
       [RedTeamRepo, "get", none],
       [DecisionRecordRepo, "list", empty],
       [CaseTheoryRepo, "list", empty],
       [AnnotationRepo, "list", empty],
       [CaseGraphRepo, "listStaleForCase", empty],
       [ChatRepo, "findLatestMindMapCreatedAtForCase", none],
+      [MindMapRepo, "findCaseMapMeta", none],
       [ChatRepo, "findManyByIds", empty],
       [LawRepo, "findManyByIds", empty],
       [CaseOutlookRepo, "latest", none],
