@@ -1731,6 +1731,14 @@ model Witness {
   aiRationale         Json?
   aiSuggestedStatus   WitnessStatus?
   credibilityOverride Int?
+  // Rubric audit trail (see src/utils/witness-rubric.ts). aiFactors: per factor A-G {answer, confidence,
+  // quote, quoteVerified, documentName, by}. factorOverrides: lawyer changes {answer, note, by, at}, which
+  // win over aiFactors when the score is recomputed. aiCredibility/aiSuggestedStatus stay the computed result.
+  aiFactors           Json?
+  aiRubricVersion     Int?
+  factorOverrides     Json?
+  // Keys of "what's needed" items the lawyer has ticked off (see witness-needs.ts); survives a rescore.
+  needsDone           Json?
   scoredAt            DateTime?
   statementDueOn      DateTime?
   statementReceived   Boolean  @default(false)
