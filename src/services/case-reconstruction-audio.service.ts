@@ -10,6 +10,11 @@ import { getPollyClient } from "../utils/polly";
 import { keyFromOutputUri } from "../utils/case-reconstruction-audio.utils";
 import { CASE_RECONSTRUCTION_AUDIO_VOICE_ID, CASE_RECONSTRUCTION_AUDIO_OUTPUT_PREFIX } from "../constants";
 
+/** Polly's "no such task" error — a permanent condition, unlike a network/throttling failure. */
+export function isSynthesisTaskGone(err: unknown): boolean {
+  return err instanceof Error && err.name === "SynthesisTaskNotFoundException";
+}
+
 export default class CaseReconstructionAudioSvc {
   /** Audio narrates the General/narrative register only — see the plan's scope decision:
    * extending Polly synthesis to the Court/Opposing registers too would triple per-case
@@ -61,10 +66,23 @@ export default class CaseReconstructionAudioSvc {
       const result = await client.send(new GetSpeechSynthesisTaskCommand({ TaskId: row.audioJobName }));
       task = result.SynthesisTask;
     } catch (err) {
+      // Polly only keeps a synthesis task for a limited time, and a row can outlive it (a task
+      // from another AWS account/endpoint, or one older than Polly's retention). Without this the
+      // row stays IN_PROGRESS forever and CaseReconstructionAudioQueue re-queues it — and logs the
+      // same error — on every server start. The task is gone for good, so the audio is FAILED; a
+      // lawyer can regenerate it.
+      if (isSynthesisTaskGone(err)) {
+        logger.warn("Polly synthesis task no longer exists, marking the audio FAILED", { caseId, jobName: row.audioJobName });
+        await CaseReconstructionRepo.updateAudio(caseId, { audioStatus: "FAILED" });
+        return { status: "FAILED", failureReason: "The audio task expired. Generate the audio again." };
+      }
       logger.error("Failed to poll Polly synthesis task", { err, caseId, jobName: row.audioJobName });
       throw new HttpError(`Failed to check audio status${err instanceof Error ? `: ${err.message}` : ""}`, 502);
     }
-    if (!task) throw new HttpError("Task not found in Polly", 404);
+    if (!task) {
+      await CaseReconstructionRepo.updateAudio(caseId, { audioStatus: "FAILED" });
+      return { status: "FAILED", failureReason: "The audio task expired. Generate the audio again." };
+    }
 
     const status = task.TaskStatus ?? "unknown";
 
