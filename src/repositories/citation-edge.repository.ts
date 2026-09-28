@@ -23,6 +23,17 @@ export default class CitationEdgeRepo {
     });
   }
 
+  /** Edges from later decisions that treated any of `toLawIds` negatively — what the Citation
+   * Map's adverse sweep looks for. Only edges already extracted into the corpus exist here. */
+  static async listNegativeTreatmentsOf(toLawIds: string[]) {
+    if (toLawIds.length === 0) return [];
+    return prisma.citationEdge.findMany({
+      where: { toLawId: { in: toLawIds }, treatment: { in: ["OVERRULED", "ABANDONED", "DISTINGUISHED"] } },
+      include: { fromLaw: { select: { title: true, caseNumber: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+  }
+
   static async createMany(edges: CitationEdgeCreateInput[]): Promise<void> {
     if (edges.length === 0) return;
     await prisma.citationEdge.createMany({ data: edges as Prisma.CitationEdgeCreateManyInput[] });

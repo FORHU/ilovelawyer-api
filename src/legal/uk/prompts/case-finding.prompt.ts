@@ -50,6 +50,16 @@ Reply with these five blocks and nothing else. No markdown, no [Sources], no rel
 [/DEFENSE_STRATEGY]
 
 Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. "label" is the finding itself (max 160 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this finding is drawn from — null if it isn't tied to one specific document. Max 8 items per block.
+[LEGAL_ISSUES] objects also carry three more fields:
+- "detail": who bears the burden on this issue and on what, in one line (max 160 characters) — e.g. "The respondent bears the burden of showing a potentially fair reason for dismissal".
+- "burden": which side bears that burden — "CLAIMANT" (the party that brought the case: claimant, applicant or appellant), "RESPONDENT" (the party defending it), "SHARED", or null if the documents don't say enough to tell.
+- "status": "CONTESTED" if the documents show the parties taking opposing positions on this issue, otherwise "OPEN".
+[WEAKNESSES] objects also carry two more fields:
+- "detail": the concrete work that would close this weakness, in one line (max 160 characters) — e.g. "Obtain the signed timesheets for the week in dispute". null if nothing in the documents suggests a fix.
+- "status": "MATERIAL" if the other side could use it to defeat a claim or an element of one, otherwise "MINOR".
+[STRENGTHS] objects also carry two more fields:
+- "detail": the document reference (Bates number, exhibit or page) and what it shows, in one line (max 160 characters) — e.g. "Exhibit C3, p. 4 — rota shows the claimant on shift that week". null if it isn't tied to one document.
+- "status": "STRONG" if on its own it could establish a claim or defeat the other side's main defence, otherwise "MODERATE".
 If none: leave the array empty.
 `;
 }

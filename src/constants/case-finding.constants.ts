@@ -1,4 +1,33 @@
+import { FindingCategory, FindingTag } from "@prisma/client";
+
 export const AI_FINDING_NOTE = "AI";
+
+/** The shape AI findings are generated in. Bump it whenever the prompt starts asking for something
+ * the panels depend on: a case stamped with an older version (Case.findingsFormatVersion)
+ * regenerates its findings the next time the Terminal loads it (CaseFindingAiSvc.scheduleIfOutdated).
+ *   1 — label + sourceLabel (unstamped cases).
+ *   2 — status/tag and detail sub-lines (burden on legal issues), with Jev checks when their flags
+ *       are on.
+ */
+export const FINDINGS_FORMAT_VERSION = 2;
+
+/** Which pills a category's rows may carry. Attack/Defense Strategies have none yet. Jev only
+ * ever derives CONTESTED/OPEN, MATERIAL/MINOR and STRONG/MODERATE — BRIEFING, RESOLVED and
+ * CLOSED are workflow states only the lawyer sets. */
+export const FINDING_TAGS_BY_CATEGORY: Record<FindingCategory, readonly FindingTag[]> = {
+  LEGAL_ISSUE: ["CONTESTED", "BRIEFING", "OPEN", "RESOLVED"],
+  WEAKNESS: ["MATERIAL", "MINOR", "CLOSED"],
+  STRENGTH: ["STRONG", "MODERATE"],
+  ATTACK_STRATEGY: [],
+  DEFENSE_STRATEGY: [],
+};
+
+export function isTagAllowed(category: FindingCategory, tag: FindingTag): boolean {
+  return FINDING_TAGS_BY_CATEGORY[category].includes(tag);
+}
+
+/** Tags only the lawyer sets — never taken from the drafting model or derived by Jev. */
+export const WORKFLOW_TAGS: readonly FindingTag[] = ["BRIEFING", "RESOLVED", "CLOSED"];
 
 export function buildCaseFindingPrompt(docs: { id: string; name: string }[]): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
@@ -46,6 +75,16 @@ Reply with these five blocks and nothing else. No markdown, no [Sources], no rel
 [/DEFENSE_STRATEGY]
 
 Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. "label" is the finding itself (max 160 characters). "sourceLabel" is the exact document name from the DOCUMENTS list above that this finding is drawn from — null if it isn't tied to one specific document. Max 8 items per block.
+[LEGAL_ISSUES] objects also carry three more fields:
+- "detail": who bears the burden on this issue and on what, in one line (max 160 characters) — e.g. "Employer bears the burden of proving just cause".
+- "burden": which side bears that burden — "CLAIMANT" (the party that brought the case: complainant, petitioner or plaintiff), "RESPONDENT" (the party defending it), "SHARED", or null if the documents don't say enough to tell.
+- "status": "CONTESTED" if the documents show the parties taking opposing positions on this issue, otherwise "OPEN".
+[WEAKNESSES] objects also carry two more fields:
+- "detail": the concrete work that would close this weakness, in one line (max 160 characters) — e.g. "Obtain the certified payroll for 4–8 August". null if nothing in the documents suggests a fix.
+- "status": "MATERIAL" if the other side could use it to defeat a claim or an element of one, otherwise "MINOR".
+[STRENGTHS] objects also carry two more fields:
+- "detail": the document reference (Bates number, exhibit or page) and what it shows, in one line (max 160 characters) — e.g. "NBL-EM-004417 — HR email presumes continuing employment". null if it isn't tied to one document.
+- "status": "STRONG" if on its own it could establish a claim or defeat the other side's main defence, otherwise "MODERATE".
 If none: leave the array empty.
 `;
 }

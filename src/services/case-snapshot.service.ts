@@ -8,6 +8,7 @@ import ProceduralDeadlineRepo from "../repositories/procedural-deadline.reposito
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentRepo from "../repositories/document.repository";
 import CaseFindingRepo from "../repositories/case-finding.repository";
+import CaseFindingAiSvc from "./case-finding-ai.service";
 import WitnessRepo from "../repositories/witness.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
@@ -23,6 +24,7 @@ import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
+import { strategyStaleness } from "../utils/strategy-staleness";
 import { diffDocumentIds, fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import MindMapRepo from "../repositories/mind-map.repository";
 import { buildCaseTrends } from "../utils/case-trends";
@@ -33,6 +35,8 @@ import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../
 export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
     const caseRecord = await CaseAccess.loadAccessibleCase(caseId, userId);
+    // Findings generated in an older format regenerate in the background (no-op when current).
+    void CaseFindingAiSvc.scheduleIfOutdated(caseRecord);
 
     const [
       documents,
@@ -185,6 +189,10 @@ export default class CaseSnapshotSvc {
       theories,
       annotations,
       staleness,
+      // The Case Strategy panel's own freshness: when its plan/to-dos/dates were last generated,
+      // and whether the case changed underneath it since (documents, findings, evidence…).
+      // "Refresh" is POST /strategy/refresh; stale deadlines are `staleness` + recompute-stale.
+      strategyPanel: strategyStaleness(audit),
       mindMap: {
         lastGeneratedAt: latestMindMap?.createdAt ?? null,
         // Expanding/undoing on the map itself writes mindMap.* audit rows — those are the map

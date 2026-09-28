@@ -5,6 +5,7 @@ const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
 const CONFIDENCE_LEVELS = ["LOW", "MEDIUM", "HIGH"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
 const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
+const FINDING_TAGS = ["CONTESTED", "BRIEFING", "OPEN", "RESOLVED", "MATERIAL", "MINOR", "CLOSED", "STRONG", "MODERATE"];
 const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
 const PRIVILEGE_STATUSES = ["NONE", "ATTORNEY_CLIENT", "WORK_PRODUCT"];
 const HEARSAY_CATEGORIES = [
@@ -163,6 +164,9 @@ export const createProcedureItemSchema = Joi.object({
   kind: Joi.string().required(),
   label: Joi.string().required(),
   notes: Joi.string().optional(),
+  // Where a to-do sent over from another panel ("To checklist") came from, e.g. the finding or
+  // document it was raised on — shown as the item's source, same as an AI item's.
+  sourceLabel: Joi.string().max(200).optional().allow(null, ""),
 });
 
 export const updateProcedureItemSchema = Joi.object({
@@ -184,11 +188,23 @@ export const createFindingSchema = Joi.object({
     .required(),
   label: Joi.string().required(),
   notes: Joi.string().allow("").optional(),
+  detail: Joi.string().allow("", null).max(500).optional(),
+  // Whether the tag fits the category is checked in CaseFindingSvc (FINDING_TAGS_BY_CATEGORY).
+  tag: Joi.string()
+    .valid(...FINDING_TAGS)
+    .allow(null)
+    .optional(),
 });
 
 export const updateFindingSchema = Joi.object({
   label: Joi.string().optional(),
   notes: Joi.string().allow("").optional(),
+  detail: Joi.string().allow("", null).max(500).optional(),
+  tag: Joi.string()
+    .valid(...FINDING_TAGS)
+    .allow(null)
+    .optional(),
+  position: Joi.number().integer().min(0).allow(null).optional(),
 }).min(1);
 
 export const createWitnessSchema = Joi.object({
@@ -266,6 +282,12 @@ export const updateClaimSchema = Joi.object({
   causeOfAction: Joi.string().allow("").optional(),
   description: Joi.string().allow("").optional(),
 }).min(1);
+
+export const createCitationGroundSchema = Joi.object({
+  citationCheckId: Joi.string().required(),
+  claimId: Joi.string().required(),
+  role: Joi.string().valid("SUBSTANTIVE", "PROCEDURAL").required(),
+});
 
 export const updateReconstructionSchema = Joi.object({
   narrative: Joi.string().optional(),
