@@ -8,6 +8,7 @@ import ProceduralDeadlineRepo from "../repositories/procedural-deadline.reposito
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentRepo from "../repositories/document.repository";
 import CaseFindingRepo from "../repositories/case-finding.repository";
+import CaseFindingAiSvc from "./case-finding-ai.service";
 import WitnessRepo from "../repositories/witness.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
@@ -34,6 +35,8 @@ import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../
 export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
     const caseRecord = await CaseAccess.loadAccessibleCase(caseId, userId);
+    // Findings generated in an older format regenerate in the background (no-op when current).
+    void CaseFindingAiSvc.scheduleIfOutdated(caseRecord);
 
     const [
       documents,

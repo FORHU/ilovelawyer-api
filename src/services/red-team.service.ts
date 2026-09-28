@@ -7,6 +7,7 @@ import { extractRedTeamClaims } from "../utils/red-team-claims-parse";
 import { extractRedTeamArguments, RedTeamSourceItem } from "../utils/red-team-arguments-parse";
 import { RedTeamPromptData } from "../constants/red-team.constants";
 import { isRedTeamJevEnabled, verifyRedTeamArgumentsWithJev, RedTeamJevContext } from "../utils/red-team-jev";
+import { formatContradiction, formatParty, formatTimelineEntry, formatWitness } from "../utils/case-jev-context";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -51,13 +52,10 @@ export function jevContext(data: RedTeamPromptData, opponent: string | null): Re
     opponent,
     legalIssues: data.legalIssues,
     weaknesses: data.weaknesses,
-    contradictions: data.contradictions.map((c) => `"${c.leftExcerpt}" vs "${c.rightExcerpt}"`),
-    timeline: data.timeline.map((t) => {
-      const d = t.occurredOn ? new Date(t.occurredOn) : null;
-      return `${d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : "undated"} — ${t.title}`;
-    }),
-    witnesses: data.witnesses.map((w) => (w.role ? `${w.name} (${w.role})` : w.name)),
-    parties: data.parties.map((p) => `${p.name} (${p.designation})`),
+    contradictions: data.contradictions.map(formatContradiction),
+    timeline: data.timeline.map(formatTimelineEntry),
+    witnesses: data.witnesses.map(formatWitness),
+    parties: data.parties.map(formatParty),
   };
 }
 

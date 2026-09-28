@@ -21,16 +21,38 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
   const originals = {
     transaction: prisma.$transaction,
     deleteMany: prisma.caseFinding.deleteMany,
-    createMany: prisma.caseFinding.createMany,
+    createManyAndReturn: prisma.caseFinding.createManyAndReturn,
     findMany: prisma.caseFinding.findMany,
+    nodeDeleteMany: prisma.caseGraphNode.deleteMany,
+    nodeCreateMany: prisma.caseGraphNode.createMany,
   };
 
   afterEach(() => {
     (prisma as any).$transaction = originals.transaction;
     (prisma.caseFinding as any).deleteMany = originals.deleteMany;
-    (prisma.caseFinding as any).createMany = originals.createMany;
+    (prisma.caseFinding as any).createManyAndReturn = originals.createManyAndReturn;
     (prisma.caseFinding as any).findMany = originals.findMany;
+    (prisma.caseGraphNode as any).deleteMany = originals.nodeDeleteMany;
+    (prisma.caseGraphNode as any).createMany = originals.nodeCreateMany;
   });
+
+  // The stale-AI-row lookup selects only ids; list() (called at the end) reads whole rows.
+  const stubFindMany = (staleIds: string[], listed: any[]) => {
+    (prisma.caseFinding as any).findMany = async (args: any) =>
+      args?.select?.id ? staleIds.map((id) => ({ id })) : listed;
+  };
+  const stubNodes = () => {
+    const calls: { deleted?: any; created: any[] } = { created: [] };
+    (prisma.caseGraphNode as any).deleteMany = async (args: any) => {
+      calls.deleted = args.where;
+      return { count: 0 };
+    };
+    (prisma.caseGraphNode as any).createMany = async (args: any) => {
+      calls.created = args.data;
+      return { count: args.data.length };
+    };
+    return calls;
+  };
 
   it("only deletes AI-authored rows (notes === AI_FINDING_NOTE) — a manual finding's WHERE never matches", async () => {
     let deleteWhere: any;
@@ -40,14 +62,15 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
       deleteWhere = args.where;
       return { count: 1 };
     };
-    (prisma.caseFinding as any).createMany = async (args: any) => {
+    (prisma.caseFinding as any).createManyAndReturn = async (args: any) => {
       created = args.data;
-      return { count: args.data.length };
+      return args.data.map((_: any, i: number) => ({ id: `new-${i}` }));
     };
-    (prisma.caseFinding as any).findMany = async () => [
+    stubFindMany(["ai-old"], [
       { id: "manual-1", notes: "Confirmed with the client directly." },
       { id: "ai-2", notes: AI_FINDING_NOTE },
-    ];
+    ]);
+    stubNodes();
 
     const result = await CaseFindingRepo.replaceAiFindings("case-1", [
       { category: "WEAKNESS", label: "New AI-found weakness", sourceLabel: "D01" },
@@ -62,6 +85,27 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
     expect(result.map((r: any) => r.id)).to.have.members(["manual-1", "ai-2"]);
   });
 
+  it("swaps the graph nodes too — the Legal Issues panel's graph view skips findings with no node", async () => {
+    (prisma as any).$transaction = async (fn: any) => fn(prisma);
+    (prisma.caseFinding as any).deleteMany = async () => ({ count: 2 });
+    (prisma.caseFinding as any).createManyAndReturn = async (args: any) =>
+      args.data.map((_: any, i: number) => ({ id: `new-${i}` }));
+    stubFindMany(["ai-old-1", "ai-old-2"], []);
+    const nodes = stubNodes();
+
+    await CaseFindingRepo.replaceAiFindings("case-1", [
+      { category: "LEGAL_ISSUE", label: "Whether the dismissal was for redundancy", sourceLabel: null },
+      { category: "WEAKNESS", label: "No consultation record", sourceLabel: null },
+    ]);
+
+    // Only the replaced AI rows' nodes go — never a manual finding's.
+    expect(nodes.deleted).to.deep.equal({ nodeType: "FINDING", refId: { in: ["ai-old-1", "ai-old-2"] } });
+    expect(nodes.created).to.deep.equal([
+      { caseId: "case-1", nodeType: "FINDING", refId: "new-0" },
+      { caseId: "case-1", nodeType: "FINDING", refId: "new-1" },
+    ]);
+  });
+
   it("still deletes stale AI rows even when the new batch is empty (nothing left to regenerate)", async () => {
     let deleteWhere: any;
     let createCalled = false;
@@ -70,16 +114,19 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
       deleteWhere = args.where;
       return { count: 1 };
     };
-    (prisma.caseFinding as any).createMany = async () => {
+    (prisma.caseFinding as any).createManyAndReturn = async () => {
       createCalled = true;
-      return { count: 0 };
+      return [];
     };
-    (prisma.caseFinding as any).findMany = async () => [];
+    stubFindMany(["ai-old"], []);
+    const nodes = stubNodes();
 
     await CaseFindingRepo.replaceAiFindings("case-1", []);
 
     expect(deleteWhere).to.deep.equal({ caseId: "case-1", notes: AI_FINDING_NOTE });
     expect(createCalled).to.equal(false);
+    expect(nodes.deleted).to.deep.equal({ nodeType: "FINDING", refId: { in: ["ai-old"] } });
+    expect(nodes.created).to.deep.equal([]);
   });
 });
 

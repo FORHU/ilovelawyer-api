@@ -70,6 +70,12 @@ router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
 router.patch("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.updateCitation));
 router.delete("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.deleteCitation));
 router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
+router.post("/:caseId/citation-grounds/map", asyncHandler(CaseTerminalCtrl.mapCitationGrounds));
+router.post("/:caseId/citation-map/sweep", asyncHandler(CaseTerminalCtrl.sweepAdverseCitations));
+router.post("/:caseId/citation-map/adverse/:id/accept", asyncHandler(CaseTerminalCtrl.acceptAdverseHit));
+router.post("/:caseId/citation-map/adverse/:id/dismiss", asyncHandler(CaseTerminalCtrl.dismissAdverseHit));
+router.post("/:caseId/citation-grounds", asyncHandler(CaseTerminalCtrl.createCitationGround));
+router.delete("/:caseId/citation-grounds/:id", asyncHandler(CaseTerminalCtrl.deleteCitationGround));
 
 router.post("/:caseId/authorities", asyncHandler(CaseTerminalCtrl.createAuthority));
 router.patch("/:caseId/authorities/:id", asyncHandler(CaseTerminalCtrl.updateAuthority));
@@ -97,6 +103,7 @@ router.get("/:caseId/findings", asyncHandler(CaseTerminalCtrl.listFindings));
 router.post("/:caseId/findings", asyncHandler(CaseTerminalCtrl.createFinding));
 router.patch("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.updateFinding));
 router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFinding));
+router.post("/:caseId/findings/:id/jev-check", asyncHandler(CaseTerminalCtrl.jevCheckFinding));
 
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
@@ -111,6 +118,7 @@ router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage)
 router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
 
 router.get("/:caseId/claims", asyncHandler(CaseTerminalCtrl.listClaims));
+router.post("/:caseId/claims/extract", asyncHandler(CaseTerminalCtrl.extractClaims));
 router.post("/:caseId/claims", asyncHandler(CaseTerminalCtrl.createClaim));
 router.patch("/:caseId/claims/:id", asyncHandler(CaseTerminalCtrl.updateClaim));
 router.delete("/:caseId/claims/:id", asyncHandler(CaseTerminalCtrl.deleteClaim));

@@ -2,6 +2,10 @@ import CaseRefreshSvc from "../services/case-refresh.service";
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
 import WitnessExtractSvc from "../services/witness-extract.service";
+import ClaimExtractSvc from "../services/claim-extract.service";
+import CitationGroundSvc from "../services/citation-ground.service";
+import AdverseSweepSvc from "../services/adverse-sweep.service";
+import CaseFindingAiSvc from "../services/case-finding-ai.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -27,6 +31,10 @@ export type QueuedAiGenerationKind =
   | "caseStrategyRefresh"
   | "witnessScoring"
   | "witnessExtract"
+  | "claimExtract"
+  | "citationGrounds"
+  | "adverseSweep"
+  | "caseFinding"
   | "contradictions"
   | "caseMindMapGenerate"
   | "caseMindMapResync";
@@ -75,6 +83,10 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // No controller in front of this one — it's enqueued by runCasePostExtraction and claims its
   // own lock (see WitnessExtractSvc.runQueued), same as casePostExtraction.
   witnessExtract: (job) => WitnessExtractSvc.runQueued(job.caseId, job.userId),
+  claimExtract: (job) => ClaimExtractSvc.runQueued(job.caseId, job.userId),
+  citationGrounds: (job) => CitationGroundSvc.runQueuedMap(job.caseId, job.userId),
+  adverseSweep: (job) => AdverseSweepSvc.runQueued(job.caseId, job.userId),
+  caseFinding: (job) => CaseFindingAiSvc.runQueued(job.caseId),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
   caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
   // No controller either: the one coalesced retry after a document change found a map build
