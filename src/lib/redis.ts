@@ -67,6 +67,29 @@ export const redis = {
     } catch {}
   },
 
+  /** Like set(), but says whether it worked — for callers that must not carry on after a silent
+   * failure (a login handoff code that was never stored would just fail later, confusingly). */
+  async setOrFail(key: string, value: unknown, ttlSeconds: number): Promise<boolean> {
+    if (!client.isReady) return false;
+    try {
+      return (await client.set(key, JSON.stringify(value), { EX: ttlSeconds })) === "OK";
+    } catch {
+      return false;
+    }
+  },
+
+  /** Reads and deletes `key` in one atomic step (GETDEL), so it can only ever be read once —
+   * for one-time codes. null when missing, expired, already taken, or Redis is unreachable. */
+  async take<T>(key: string): Promise<T | null> {
+    if (!client.isReady) return null;
+    try {
+      const raw = await client.getDel(key);
+      return raw ? (JSON.parse(raw) as T) : null;
+    } catch {
+      return null;
+    }
+  },
+
   /** Presence check that tells "not there" (false) apart from "cannot tell" (null: Redis is not
    * reachable). Callers that gate access must decide what null means; get() cannot express it. */
   async exists(key: string): Promise<boolean | null> {

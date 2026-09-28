@@ -18,8 +18,11 @@ import {
   EMAIL_VERIFICATION_EXPIRY_MS,
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
+  HANDOFF_TTL_SECONDS,
 } from "../constants";
 import { generateOtpCode, duplicateEmailMessage } from "../utils/auth.utils";
+import { newHandoffCode, handoffKey } from "../utils/handoff";
+import { redis } from "../lib/redis";
 
 export default class AuthSvc {
   static async signup(username: string, email: string, password: string, name: string, requestTenantCode: TenantCode | null = null) {
@@ -437,5 +440,56 @@ export default class AuthSvc {
       accessToken,
       refreshToken,
     };
+  }
+
+  /** Step 1 of a desktop ↔ browser login handoff (see utils/handoff.ts): a one-time code the
+   * logged-in caller passes to its other client. 503 if it can't be stored — better a clear
+   * failure now than a code that silently doesn't work on the other side. */
+  static async issueHandoff(userId: string) {
+    const code = newHandoffCode();
+    const stored = await redis.setOrFail(handoffKey(code), userId, HANDOFF_TTL_SECONDS);
+    if (!stored) {
+      throw new HttpError("Could not start the handoff — try again in a moment", 503);
+    }
+    return { code, expiresInSeconds: HANDOFF_TTL_SECONDS };
+  }
+
+  /** Step 1½: who a handoff code would sign the caller in as — WITHOUT using it up. The receiving
+   * side shows "Sign in as …?" before consuming, so a crafted link carrying someone else's code
+   * can't silently switch the user's app or browser to that account. Only name/email, and only
+   * to whoever holds the code (which the issuer handed over deliberately). */
+  static async previewHandoff(code: string) {
+    const userId = await redis.get<string>(handoffKey(code));
+    const user = userId ? await AuthRepo.findById(userId) : null;
+    if (!user) {
+      throw new HttpError("This sign-in link has expired or was already used", 400);
+    }
+    return { id: user.id, email: user.email, name: user.name, username: user.username };
+  }
+
+  /** Step 2: trades a handoff code for a login of the caller's own. Same outcome as a password
+   * login — new session, same UK/PH site check — except no password: the code is the proof, and
+   * it's single-use (atomic take). Other sessions are left alone, so handing off to the browser
+   * never logs the desktop app out, and vice versa. */
+  static async consumeHandoff(code: string, requestTenantCode: TenantCode | null = null) {
+    const userId = await redis.take<string>(handoffKey(code));
+    if (!userId) {
+      throw new HttpError("This sign-in link has expired or was already used", 400);
+    }
+    const user = await AuthRepo.findById(userId);
+    if (!user) {
+      throw new HttpError("This sign-in link has expired or was already used", 400);
+    }
+
+    await AuthSvc.assertTenantAccess(userId, requestTenantCode);
+
+    // `remember`: yes — both clients are on the user's own PC, and the one handing off is
+    // already signed in there.
+    const { accessToken, refreshToken } = loginToken(userId, true);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    await AuthRepo.createSession(userId, refreshToken, expiresAt);
+    await AuthRepo.updateLastLogin(userId);
+
+    return { user, accessToken, refreshToken };
   }
 }

@@ -11,3 +11,7 @@ export const EMAIL_VERIFICATION_MAX_ATTEMPTS = 5;
 // Login-link token sent in the admin-approval email — longer-lived than the password-reset
 // token since approval isn't something the user is actively waiting on the way a reset is.
 export const LOGIN_LINK_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Desktop ↔ browser login handoff: a one-time code one logged-in client hands the other on the
+// same PC (see utils/handoff.ts). Short on purpose — it only has to survive one hop.
+export const HANDOFF_TTL_SECONDS = 60;

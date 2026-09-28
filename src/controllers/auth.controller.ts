@@ -15,6 +15,7 @@ import {
   verifyOtpSchema,
   cancelSignupSchema,
   consumeLoginLinkSchema,
+  consumeHandoffSchema,
 } from "../validation/auth.validation";
 
 export default class AuthCtrl {
@@ -208,6 +209,42 @@ export default class AuthCtrl {
     }
 
     const { user, accessToken, refreshToken } = await AuthSvc.consumeLoginLink(token);
+    setRefreshTokenCookie(res, refreshToken, true);
+
+    return res.status(200).json({ user, accessToken });
+  }
+
+  /** Desktop ↔ browser handoff, step 1 — the signed-in caller gets a one-time code. */
+  static async issueHandoff(req: Request, res: Response) {
+    const userId = (req.user as { userId?: string } | undefined)?.userId;
+    if (!userId) {
+      throw new HttpError("Unauthorized", 401);
+    }
+    return res.status(200).json(await AuthSvc.issueHandoff(userId));
+  }
+
+  /** Desktop ↔ browser handoff — whose code this is, for the "Sign in as …?" prompt. Doesn't use it up. */
+  static async previewHandoff(req: Request, res: Response) {
+    const { code } = req.body;
+
+    const { error } = consumeHandoffSchema.validate({ code });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    return res.status(200).json(await AuthSvc.previewHandoff(code));
+  }
+
+  /** Desktop ↔ browser handoff, step 2 — the other client trades the code for its own login. */
+  static async consumeHandoff(req: Request, res: Response) {
+    const { code } = req.body;
+
+    const { error } = consumeHandoffSchema.validate({ code });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const { user, accessToken, refreshToken } = await AuthSvc.consumeHandoff(code, resolveTenantCodeFromRequest(req));
     setRefreshTokenCookie(res, refreshToken, true);
 
     return res.status(200).json({ user, accessToken });

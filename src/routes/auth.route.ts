@@ -19,5 +19,9 @@ router.post("/forgot-password", asyncHandler(AuthCtrl.forgotPassword));
 router.get("/reset-password/validate", asyncHandler(AuthCtrl.validateResetToken));
 router.post("/reset-password", asyncHandler(AuthCtrl.resetPassword));
 router.post("/login-link/consume", asyncHandler(AuthCtrl.consumeLoginLink));
+// Desktop ↔ browser login handoff (see utils/handoff.ts).
+router.post("/handoff", validSession, asyncHandler(AuthCtrl.issueHandoff));
+router.post("/handoff/preview", asyncHandler(AuthCtrl.previewHandoff));
+router.post("/handoff/consume", asyncHandler(AuthCtrl.consumeHandoff));
 
 export default router;

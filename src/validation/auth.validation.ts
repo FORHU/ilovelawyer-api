@@ -63,3 +63,8 @@ export const verifyOtpSchema = Joi.object({
 export const consumeLoginLinkSchema = Joi.object({
   token: Joi.string().required(),
 });
+
+// 32 random bytes, base64url — exactly 43 characters (see utils/handoff.ts).
+export const consumeHandoffSchema = Joi.object({
+  code: Joi.string().pattern(/^[A-Za-z0-9_-]{43}$/).required(),
+});
