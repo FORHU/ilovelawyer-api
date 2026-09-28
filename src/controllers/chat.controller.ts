@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import ChatSvc from "../services/chat.service";
+import MindMapSvc from "../services/mind-map.service";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import { getChatWonderSessionId } from "../utils/chatWonder";
 import HttpError from "../utils/http-error";
@@ -9,6 +10,9 @@ import {
   renameConsultationSchema,
   relevantChunksSchema,
   sendMessageSchema,
+  expandMindMapNodeSchema,
+  revertMindMapSchema,
+  editMindMapNodeSchema,
 } from "../validation/chat.validation";
 
 export default class ChatCtrl {
@@ -146,6 +150,49 @@ export default class ChatCtrl {
       consultationId,
       messageId,
     );
+    return res.status(200).json(result);
+  }
+
+  static async expandMindMapNode(req: Request, res: Response) {
+    const { error, value } = expandMindMapNodeSchema.validate(req.body, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await MindMapSvc.expandNode({
+      organizationId: req.organization!.id,
+      userId: req.user.userId,
+      consultationId: req.params.consultationId,
+      messageId: value.messageId,
+      nodeId: value.nodeId,
+      count: value.count,
+    });
+    return res.status(200).json(result);
+  }
+
+  static async editMindMapNode(req: Request, res: Response) {
+    const { error, value } = editMindMapNodeSchema.validate(req.body, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+    const { messageId, ...edit } = value;
+    const result = await MindMapSvc.editNode({
+      organizationId: req.organization!.id,
+      userId: req.user.userId,
+      consultationId: req.params.consultationId,
+      messageId,
+      edit,
+    });
+    return res.status(200).json(result);
+  }
+
+  static async revertMindMap(req: Request, res: Response) {
+    const { error, value } = revertMindMapSchema.validate(req.body, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await MindMapSvc.revert({
+      organizationId: req.organization!.id,
+      userId: req.user.userId,
+      consultationId: req.params.consultationId,
+      messageId: value.messageId,
+      expectedVersion: value.version,
+    });
     return res.status(200).json(result);
   }
 }

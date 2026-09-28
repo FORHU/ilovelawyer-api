@@ -61,12 +61,10 @@ export default class AudioOverviewQueue {
       return [] as { messageId: string }[];
     });
     if (pending.length > 0) {
-      logger.info("Audio Overview queue: re-queuing interrupted renders", { count: pending.length });
       this.memoryWait.push(...pending.map((row) => ({ messageId: row.messageId, receiptHandle: null })));
       this.pump();
     }
 
-    logger.info("Audio Overview queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
   }

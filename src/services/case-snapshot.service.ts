@@ -3,6 +3,7 @@ import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import CaseRiskRepo from "../repositories/case-risk.repository";
 import EvidenceRepo from "../repositories/evidence.repository";
 import CitationCheckRepo from "../repositories/citation-check.repository";
+import CaseAuthorityRepo from "../repositories/case-authority.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -21,8 +22,11 @@ import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
+import { diffDocumentIds, fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
+import MindMapRepo from "../repositories/mind-map.repository";
 import { buildCaseTrends } from "../utils/case-trends";
 import { OutlookDriver } from "../utils/case-outlook-parse";
+import { summarizeAuthorities } from "../utils/authority-summary";
 import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../constants";
 
 export default class CaseSnapshotSvc {
@@ -37,6 +41,7 @@ export default class CaseSnapshotSvc {
       evidenceMatrix,
       contradictions,
       citations,
+      authorities,
       deadlines,
       procedureItems,
       accesses,
@@ -54,6 +59,7 @@ export default class CaseSnapshotSvc {
       latestMindMap,
       outlook,
       outlookHistory,
+      caseMindMap,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -62,6 +68,7 @@ export default class CaseSnapshotSvc {
       EvidenceRepo.listMatrix(caseId),
       EvidenceRepo.listContradictions(caseId),
       CitationCheckRepo.list(caseId),
+      CaseAuthorityRepo.list(caseId),
       ProceduralDeadlineRepo.list(caseId),
       ProceduralDeadlineRepo.listProcedureItems(caseId),
       OrganizationRepo.listCaseAccess(caseId),
@@ -79,6 +86,7 @@ export default class CaseSnapshotSvc {
       ChatRepo.findLatestMindMapCreatedAtForCase(caseId),
       CaseOutlookRepo.latest(caseId),
       CaseOutlookRepo.history(caseId, OUTLOOK_HISTORY_LIMIT),
+      MindMapRepo.findCaseMapMeta(caseId),
     ]);
 
     // listAllByCase is unscoped by status (its other callers need archived documents for id
@@ -117,16 +125,15 @@ export default class CaseSnapshotSvc {
       };
     });
 
-    const resolvedLawIds = citations.map((c) => c.resolvedLawId).filter((id): id is string => !!id);
+    const resolvedLawIds = [...citations, ...authorities].map((c) => c.resolvedLawId).filter((id): id is string => !!id);
     const resolvedLaws = await LawRepo.findManyByIds(resolvedLawIds);
     const lawById = new Map(resolvedLaws.map((law) => [law.id, law]));
-    const citationsWithAuthority = citations.map((citation) => {
-      const law = citation.resolvedLawId ? lawById.get(citation.resolvedLawId) : undefined;
-      return {
-        ...citation,
-        resolvedAuthority: law ? { lawId: law.id, title: law.title, jurisUrl: law.jurisUrl } : null,
-      };
-    });
+    const withResolvedAuthority = <T extends { resolvedLawId: string | null }>(row: T) => {
+      const law = row.resolvedLawId ? lawById.get(row.resolvedLawId) : undefined;
+      return { ...row, resolvedAuthority: law ? { lawId: law.id, title: law.title, jurisUrl: law.jurisUrl } : null };
+    };
+    const citationsWithAuthority = citations.map(withResolvedAuthority);
+    const authoritiesWithLaw = authorities.map(withResolvedAuthority);
 
     return {
       case: caseRecord,
@@ -160,7 +167,7 @@ export default class CaseSnapshotSvc {
       nextDate,
       fatalRisks,
       evidence: { matrix: evidenceMatrix, contradictions },
-      law: { citations: citationsWithAuthority },
+      law: { citations: citationsWithAuthority, authorities: authoritiesWithLaw, summary: summarizeAuthorities(authorities) },
       procedure: { deadlines, items: procedureItems, requiredConfirmations },
       teamAudit: { accesses, audit },
       findings,
@@ -174,8 +181,37 @@ export default class CaseSnapshotSvc {
       staleness,
       mindMap: {
         lastGeneratedAt: latestMindMap?.createdAt ?? null,
-        isStale: isMindMapStale(latestMindMap?.createdAt ?? null, audit[0]?.createdAt ?? null),
+        // Expanding/undoing on the map itself writes mindMap.* audit rows — those are the map
+        // changing, not the case moving on without it, so they mustn't flag it stale.
+        isStale: isMindMapStale(
+          latestMindMap?.createdAt ?? null,
+          audit.find((a) => !a.action.startsWith("mindMap."))?.createdAt ?? null,
+        ),
       },
+      // The document-built case map (CaseMindMapSvc) — null until the case's first build. Stale
+      // means its documents (indexed, not archived) changed since it was built: a rebuild was
+      // skipped (someone had expanded it) or hasn't run yet; documentsAdded/Removed say how.
+      // Expanding it never makes it stale. `retired` = every document it was built from is gone,
+      // and the app hides it.
+      caseMindMap: caseMindMap
+        ? (() => {
+            const current = mindMapDocumentIds(documents);
+            // Maps built before documentIds was recorded only have the fingerprint: they can say
+            // whether they're stale, not what changed.
+            const known = caseMindMap.documentIds.length > 0;
+            const { added, removed } = known ? diffDocumentIds(caseMindMap.documentIds, current) : { added: [], removed: [] };
+            const changed = known ? added.length + removed.length > 0 : caseMindMap.readySetFingerprint !== fingerprintMindMapDocuments(documents);
+            return {
+              version: caseMindMap.version,
+              generatedAt: caseMindMap.generatedAt,
+              documentCount: caseMindMap.documentCount,
+              retired: Boolean(caseMindMap.retiredAt),
+              isStale: !caseMindMap.retiredAt && changed,
+              documentsAdded: added.length,
+              documentsRemoved: removed.length,
+            };
+          })()
+        : null,
       // Band + confidence only — the outlook never carries a numeric probability. Null until the
       // case's first refresh after the outlook shipped (no backfill).
       outlook: outlook
