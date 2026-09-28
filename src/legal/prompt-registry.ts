@@ -5,6 +5,7 @@ import {
   buildWitnessScoringPrompt,
   buildWitnessExtractPrompt,
   buildDamagesExtractPrompt,
+  buildClaimExtractPrompt,
   buildCaseFindingPrompt,
   buildCaseOutlookPrompt,
   buildCaseReconstructionPrompt,
@@ -19,6 +20,7 @@ import {
   buildUKWitnessScoringPrompt,
   buildUKWitnessExtractPrompt,
   buildUKDamagesExtractPrompt,
+  buildUKClaimExtractPrompt,
   buildUKCaseFindingPrompt,
   buildUKCaseOutlookPrompt,
   buildUKCaseReconstructionPrompt,
@@ -73,6 +75,17 @@ export function getDamagesExtractPromptBuilder(tenantCode: TenantCode) {
       return buildUKDamagesExtractPrompt;
     default:
       throw new HttpError(`No damages-extract prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getClaimExtractPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildClaimExtractPrompt;
+    case "UK":
+      return buildUKClaimExtractPrompt;
+    default:
+      throw new HttpError(`No claim-extract prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 

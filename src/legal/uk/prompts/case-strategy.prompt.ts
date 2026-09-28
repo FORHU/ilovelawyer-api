@@ -14,8 +14,8 @@ LEGAL_REVIEW_REQUIRED: You propose a short case plan and extract key dates from 
 
 ## TASK
 From the documents only:
-1. Recommended approach — 3 to 6 concrete litigation or investigation moves.
-2. Critical to-dos — 4 to 10 specific next actions the lawyer can tick off.
+1. Recommended approach — the concrete litigation or investigation moves the documents support, most important first.
+2. To-dos — every specific next action the lawyer can tick off, most urgent first. A case has as many as its documents call for; do not stop at a round number and do not pad.
 3. Key dates — hearings, filings, letters before claim, contract dates, and other dated events written in the files.
 
 A single PDF may contain many exhibits. Use them.
@@ -46,7 +46,7 @@ DATES is JSON objects with exactly:
 - date: YYYY-MM-DD as written or clearly implied in the text
 - documentId: the exact \`id\` (from the DOCUMENTS list or an EXTRACTED TEXT excerpt's leading [id p.N] tag) of the document this date came from — null if it can't be tied to one specific document
 - pageNumber: the page number from that excerpt's [id p.N] tag, as an integer — null if unknown
-Skip a row if the date cannot be determined. Max 20 dates.
+Skip a row if the date cannot be determined. List every dated event; there is no limit.
 If none: leave the arrays empty.
 `;
 }

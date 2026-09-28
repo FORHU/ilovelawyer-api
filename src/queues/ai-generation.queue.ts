@@ -3,12 +3,17 @@ import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
 import WitnessExtractSvc from "../services/witness-extract.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
+import ClaimExtractSvc from "../services/claim-extract.service";
+import CitationGroundSvc from "../services/citation-ground.service";
+import AdverseSweepSvc from "../services/adverse-sweep.service";
+import CaseFindingAiSvc from "../services/case-finding-ai.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
 import TheoryDiffSvc from "../services/theory-diff.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseMindMapSvc from "../services/case-mind-map.service";
+import CaseStrategySvc from "../services/case-strategy.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
@@ -24,9 +29,14 @@ export type QueuedAiGenerationKind =
   | "caseReconstructionTableRead"
   | "casePostExtraction"
   | "timelineGenerate"
+  | "caseStrategyRefresh"
   | "witnessScoring"
   | "witnessExtract"
   | "damagesExtract"
+  | "claimExtract"
+  | "citationGrounds"
+  | "adverseSweep"
+  | "caseFinding"
   | "contradictions"
   | "caseMindMapGenerate"
   | "caseMindMapResync";
@@ -70,6 +80,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
     return runCasePostExtraction(job.caseId, job.userId);
   },
   timelineGenerate: (job) => CaseTimelineSvc.runQueuedGenerate(job.caseId, job.userId),
+  caseStrategyRefresh: (job) => CaseStrategySvc.runQueued(job.caseId, job.userId),
   witnessScoring: (job) => WitnessScoringSvc.runQueued(job.caseId, job.userId),
   // No controller in front of this one — it's enqueued by runCasePostExtraction and claims its
   // own lock (see WitnessExtractSvc.runQueued), same as casePostExtraction.
@@ -77,6 +88,10 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // Same shape as witnessExtract: enqueued by runCasePostExtraction or the damages panel's
   // "Propose from documents" (DamagesExtractSvc.propose), and claims its own lock.
   damagesExtract: (job) => DamagesExtractSvc.runQueued(job.caseId, job.userId),
+  claimExtract: (job) => ClaimExtractSvc.runQueued(job.caseId, job.userId),
+  citationGrounds: (job) => CitationGroundSvc.runQueuedMap(job.caseId, job.userId),
+  adverseSweep: (job) => AdverseSweepSvc.runQueued(job.caseId, job.userId),
+  caseFinding: (job) => CaseFindingAiSvc.runQueued(job.caseId),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
   caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
   // No controller either: the one coalesced retry after a document change found a map build

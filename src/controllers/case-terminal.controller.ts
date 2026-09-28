@@ -10,8 +10,13 @@ import GroundingVerifierSvc from "../services/grounding-verifier.service";
 import CitationMapSvc from "../services/citation-map.service";
 import UkCitationMapSvc from "../services/uk-citation-map.service";
 import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
+import CaseStrategySvc from "../services/case-strategy.service";
 import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
+import FindingJevSvc from "../services/finding-jev.service";
+import ClaimExtractSvc from "../services/claim-extract.service";
+import CitationGroundSvc from "../services/citation-ground.service";
+import AdverseSweepSvc from "../services/adverse-sweep.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
@@ -21,6 +26,7 @@ import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.se
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
+import AudioOverviewHistorySvc from "../services/audio-overview-history.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -60,11 +66,13 @@ import {
   createDamageSchema,
   updateDamageSchema,
   createClaimSchema,
+  createCitationGroundSchema,
   updateClaimSchema,
   updateReconstructionSchema,
   graphViewSchema,
   exportBriefSchema,
   exportBriefHistorySchema,
+  audioOverviewHistorySchema,
   listDecisionsSchema,
   disputeDecisionSchema,
   createTheorySchema,
@@ -162,6 +170,23 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "timelineGenerate", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "timelineGenerate");
     return res.status(202).json(status);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — refreshes only the Case Strategy panel's pass (plan,
+   * to-dos, key dates), so a lawyer whose panel is flagged stale doesn't pay for a full Refresh
+   * analysis. Ticked to-dos survive (see planAiProcedureItems). */
+  static async refreshStrategy(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseStrategySvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseStrategyRefresh", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseStrategyRefresh");
+    return res.status(202).json(status);
+  }
+
+  static async recomputeStaleDeadlines(req: Request, res: Response) {
+    const result = await ProceduralDeadlineSvc.recomputeStale(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
   }
 
   static async listRisks(req: Request, res: Response) {
@@ -263,11 +288,69 @@ export default class CaseTerminalCtrl {
     if (tenantCode !== "PH" && tenantCode !== "UK") {
       throw new HttpError("Citation Map is not available for this jurisdiction — coming soon", 501);
     }
-    const result =
+    const seed =
       tenantCode === "UK"
         ? await UkCitationMapSvc.getSeed(req.params.caseId, req.user.userId)
         : await CitationMapSvc.getSeed(req.params.caseId, req.user.userId);
+    // getSeed has already checked case access. Claims, their authority links and the adverse sweep
+    // feed the list view.
+    const [grounds, sweep] = await Promise.all([
+      CitationGroundSvc.forSeed(req.params.caseId),
+      AdverseSweepSvc.forSeed(req.params.caseId),
+    ]);
+    return res.status(200).json({ ...seed, ...grounds, ...sweep });
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async extractClaims(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await ClaimExtractSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "claimExtract", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "claimExtract");
+    return res.status(202).json(status);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async mapCitationGrounds(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CitationGroundSvc.beginQueuedMap(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "citationGrounds", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "citationGrounds");
+    return res.status(202).json(status);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
+  static async sweepAdverseCitations(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await AdverseSweepSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "adverseSweep", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "adverseSweep");
+    return res.status(202).json(status);
+  }
+
+  static async acceptAdverseHit(req: Request, res: Response) {
+    const result = await AdverseSweepSvc.accept(req.params.caseId, req.params.id, req.user.userId);
     return res.status(200).json(result);
+  }
+
+  static async dismissAdverseHit(req: Request, res: Response) {
+    const result = await AdverseSweepSvc.dismiss(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async createCitationGround(req: Request, res: Response) {
+    const { error, value } = createCitationGroundSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CitationGroundSvc.createManual(req.params.caseId, req.user.userId, value);
+    return res.status(201).json(result);
+  }
+
+  static async deleteCitationGround(req: Request, res: Response) {
+    await CitationGroundSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
   }
 
   static async checkCitation(req: Request, res: Response) {
@@ -387,6 +470,11 @@ export default class CaseTerminalCtrl {
     const { error, value } = updateFindingSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseFindingSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async jevCheckFinding(req: Request, res: Response) {
+    const result = await FindingJevSvc.checkOne(req.params.caseId, req.params.id, req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -616,6 +704,16 @@ export default class CaseTerminalCtrl {
     const { error, value } = exportBriefHistorySchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseBriefExportSvc.listHistory(req.params.caseId, req.user.userId, {
+      limit: value.limit,
+      cursor: value.cursor,
+    });
+    return res.status(200).json(result);
+  }
+
+  static async audioOverviewHistory(req: Request, res: Response) {
+    const { error, value } = audioOverviewHistorySchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await AudioOverviewHistorySvc.list(req.params.caseId, req.user.userId, {
       limit: value.limit,
       cursor: value.cursor,
     });

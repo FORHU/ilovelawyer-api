@@ -20,6 +20,7 @@ router.use(validSession, asyncHandler(resolveOrganization));
 router.get("/search", asyncHandler(LawCtrl.search));
 router.get("/browse", asyncHandler(LawCtrl.browse));
 router.get("/document", asyncHandler(LawCtrl.getDocument));
+router.get("/preview", asyncHandler(LawCtrl.getPreview));
 
 router.post("/:lawId/citations/expand", asyncHandler(LawCtrl.expandCitations));
 router.get("/:lawId/citations", asyncHandler(LawCtrl.getCitations));
