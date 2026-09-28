@@ -98,10 +98,21 @@ describe("ProceduralDeadlineRepo.replaceAiProcedureItems", () => {
     (prisma.procedureItem as any).findMany = originals.findMany;
   });
 
-  it("only deletes AI-authored rows (notes === AI_PROCEDURE_NOTE) — a manual procedure item's WHERE never matches", async () => {
+  it("only ever looks at AI-authored rows (notes === AI_PROCEDURE_NOTE), and keeps a ticked one the run drops", async () => {
+    let findWhere: any;
     let deleteWhere: any;
     let created: any[] = [];
     (prisma as any).$transaction = async (fn: any) => fn(prisma);
+    (prisma.procedureItem as any).findMany = async (args: any) => {
+      if (args?.where?.notes === AI_PROCEDURE_NOTE) {
+        findWhere = args.where;
+        return [
+          { id: "ai-open", kind: "TODO", label: "Stale open idea", done: false, sourceLabel: null },
+          { id: "ai-done", kind: "TODO", label: "Ticked earlier", done: true, sourceLabel: null },
+        ];
+      }
+      return [];
+    };
     (prisma.procedureItem as any).deleteMany = async (args: any) => {
       deleteWhere = args.where;
       return { count: 1 };
@@ -110,17 +121,15 @@ describe("ProceduralDeadlineRepo.replaceAiProcedureItems", () => {
       created = args.data;
       return { count: args.data.length };
     };
-    (prisma.procedureItem as any).findMany = async () => [
-      { id: "manual-1", notes: null },
-      { id: "ai-2", notes: AI_PROCEDURE_NOTE },
-    ];
 
     await ProceduralDeadlineRepo.replaceAiProcedureItems("case-1", [
       { kind: "FILING", label: "New AI-found deadline task", sourceLabel: "D02" },
     ]);
 
-    expect(deleteWhere).to.deep.equal({ caseId: "case-1", notes: AI_PROCEDURE_NOTE });
+    expect(findWhere).to.deep.equal({ caseId: "case-1", notes: AI_PROCEDURE_NOTE });
+    expect(deleteWhere).to.deep.equal({ caseId: "case-1", id: { in: ["ai-open"] } });
     expect(created).to.have.length(1);
     expect(created[0]).to.deep.include({ caseId: "case-1", notes: AI_PROCEDURE_NOTE, label: "New AI-found deadline task" });
   });
 });
+

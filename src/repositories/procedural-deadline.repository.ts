@@ -1,5 +1,6 @@
 import prisma from "../lib/prisma";
 import { AI_PROCEDURE_NOTE } from "../constants";
+import { planAiProcedureItems } from "../utils/procedure-item-reconcile";
 
 export default class ProceduralDeadlineRepo {
   static async list(caseId: string) {
@@ -55,22 +56,32 @@ export default class ProceduralDeadlineRepo {
     return prisma.procedureItem.create({ data: { caseId, ...data } });
   }
 
+  /** Reconciles rather than replaces — see planAiProcedureItems: ticked items survive a refresh. */
   static async replaceAiProcedureItems(
     caseId: string,
     items: { kind: string; label: string; sourceLabel: string | null }[],
   ) {
     await prisma.$transaction(async (tx) => {
-      await tx.procedureItem.deleteMany({ where: { caseId, notes: AI_PROCEDURE_NOTE } });
-      if (items.length === 0) return;
-      await tx.procedureItem.createMany({
-        data: items.map((item) => ({
-          caseId,
-          kind: item.kind,
-          label: item.label,
-          sourceLabel: item.sourceLabel,
-          notes: AI_PROCEDURE_NOTE,
-        })),
+      const existing = await tx.procedureItem.findMany({
+        where: { caseId, notes: AI_PROCEDURE_NOTE },
+        select: { id: true, kind: true, label: true, done: true, sourceLabel: true },
       });
+      const plan = planAiProcedureItems(existing, items);
+      if (plan.remove.length) await tx.procedureItem.deleteMany({ where: { caseId, id: { in: plan.remove } } });
+      for (const row of plan.update) {
+        await tx.procedureItem.update({ where: { id: row.id }, data: { sourceLabel: row.sourceLabel } });
+      }
+      if (plan.create.length) {
+        await tx.procedureItem.createMany({
+          data: plan.create.map((item) => ({
+            caseId,
+            kind: item.kind,
+            label: item.label,
+            sourceLabel: item.sourceLabel,
+            notes: AI_PROCEDURE_NOTE,
+          })),
+        });
+      }
     });
     return this.listProcedureItems(caseId);
   }
