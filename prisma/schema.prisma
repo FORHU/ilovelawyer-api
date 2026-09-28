@@ -677,6 +677,10 @@ model Case {
   // a delete immediately followed by a re-add that nets out to the same set). Null until the
   // first refresh runs.
   readySetFingerprint String?
+  // Which FINDINGS_FORMAT_VERSION (case-finding.constants.ts) the case's AI findings were last
+  // generated with. Null for cases whose findings predate the stamp. Opening the Terminal on an
+  // older one queues a findings-only regeneration (CaseFindingAiSvc.scheduleIfOutdated).
+  findingsFormatVersion Int?
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
