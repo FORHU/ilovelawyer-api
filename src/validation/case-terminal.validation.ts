@@ -119,6 +119,35 @@ export const checkCitationSchema = Joi.object({
   pinpoint: Joi.string().optional(),
 });
 
+const authorityStance = Joi.string().valid("STATUTE", "ON_POINT", "ADVERSE");
+
+export const createAuthoritySchema = Joi.object({
+  kind: Joi.string().valid("STATUTE", "CASE").required(),
+  stance: authorityStance.required(),
+  title: Joi.string().trim().required(),
+  subtitle: Joi.string().trim().allow(null, "").optional(),
+  citation: Joi.string().trim().allow(null, "").optional(),
+  rationale: Joi.string().trim().allow(null, "").optional(),
+  findingId: Joi.string().allow(null).optional(),
+});
+
+export const updateAuthoritySchema = Joi.object({
+  stance: authorityStance.optional(),
+  rationale: Joi.string().trim().allow(null, "").optional(),
+  findingId: Joi.string().allow(null).optional(),
+}).min(1);
+
+// A field left out is kept as-is; "" or null clears it (the edit form sends every field, so a
+// lawyer emptying the pinpoint or reference box actually removes it). The quote itself can't be
+// emptied — a citation with no quoted text isn't a citation.
+export const updateCitationSchema = Joi.object({
+  quotedText: Joi.string().trim().min(1).optional(),
+  citedReference: Joi.string().allow("", null).optional(),
+  sourceUrl: Joi.string().allow("", null).optional(),
+  officialText: Joi.string().allow("", null).optional(),
+  pinpoint: Joi.string().allow("", null).optional(),
+}).min(1);
+
 export const createDeadlineSchema = Joi.object({
   ruleCode: Joi.string().required(),
   triggerDate: Joi.string().required(),
@@ -202,9 +231,26 @@ export const updateWitnessSchema = Joi.object({
   credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
   statementDueOn: Joi.date().iso().allow(null).optional(),
   statementReceived: Joi.boolean().optional(),
+  // Each tick needs a proof document from this case's Documents; by/at are set server-side.
+  needsDone: Joi.array()
+    .items(
+      Joi.object({
+        key: Joi.string().max(60).required(),
+        documentId: Joi.string().max(60).required(),
+        note: Joi.string().max(500).allow("").optional(),
+      }),
+    )
+    .max(30)
+    .optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 }).min(1);
+
+export const witnessFactorSchema = Joi.object({
+  // null clears the lawyer's answer, which restores what the app itself found.
+  answer: Joi.string().max(40).allow(null).required(),
+  note: Joi.string().max(500).allow("").default(""),
+});
 
 export const createDamageSchema = Joi.object({
   category: Joi.string()

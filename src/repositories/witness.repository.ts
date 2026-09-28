@@ -13,6 +13,8 @@ export interface WitnessInput {
   credibilityOverride?: number | null;
   statementDueOn?: Date | null;
   statementReceived?: boolean;
+  /** Ticked-off "what's needed" items, each with its proof document. Built by WitnessSvc. */
+  needsDone?: unknown[];
   contact?: string | null;
   notes?: string | null;
 }
@@ -29,6 +31,9 @@ export interface WitnessAiScoreInput {
   aiCredibility: number | null;
   aiRationale: { text: string; source: string | null }[];
   aiSuggestedStatus: WitnessStatusInput | null;
+  /** Rubric audit: per-factor answers plus the computed band, flags and coverage. */
+  aiFactors: unknown;
+  aiRubricVersion: number;
   scoredAt: Date;
 }
 
@@ -43,7 +48,10 @@ export default class WitnessRepo {
   }
 
   static async create(caseId: string, data: WitnessInput) {
-    return prisma.witness.create({ data: { caseId, ...data } });
+    const { needsDone, ...rest } = data;
+    return prisma.witness.create({
+      data: { caseId, ...rest, ...(needsDone ? { needsDone: needsDone as Prisma.InputJsonValue } : {}) },
+    });
   }
 
   static async createFromAi(caseId: string, data: WitnessAiExtractInput) {
@@ -53,14 +61,44 @@ export default class WitnessRepo {
   static async update(id: string, caseId: string, data: Partial<WitnessInput>) {
     const existing = await prisma.witness.findFirst({ where: { id, caseId } });
     if (!existing) return null;
-    return prisma.witness.update({ where: { id }, data });
+    const { needsDone, ...rest } = data;
+    return prisma.witness.update({
+      where: { id },
+      data: { ...rest, ...(needsDone ? { needsDone: needsDone as Prisma.InputJsonValue } : {}) },
+    });
   }
 
   /** Writes only the ai* columns — never status/credibility/credibilityOverride. */
   static async saveAiScore(id: string, caseId: string, data: WitnessAiScoreInput) {
     return prisma.witness.updateMany({
       where: { id, caseId },
-      data: { ...data, aiRationale: data.aiRationale as unknown as Prisma.InputJsonValue },
+      data: {
+        ...data,
+        aiRationale: data.aiRationale as unknown as Prisma.InputJsonValue,
+        aiFactors: data.aiFactors as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  /** Writes a recompute after a lawyer's factor override: the derived score fields and the overrides. */
+  static async saveRecompute(
+    id: string,
+    caseId: string,
+    data: {
+      aiCredibility: number | null;
+      aiSuggestedStatus: WitnessStatusInput;
+      aiFactors: unknown;
+      factorOverrides: unknown;
+    },
+  ) {
+    return prisma.witness.updateMany({
+      where: { id, caseId },
+      data: {
+        aiCredibility: data.aiCredibility,
+        aiSuggestedStatus: data.aiSuggestedStatus,
+        aiFactors: data.aiFactors as Prisma.InputJsonValue,
+        factorOverrides: (data.factorOverrides ?? Prisma.DbNull) as Prisma.InputJsonValue,
+      },
     });
   }
 

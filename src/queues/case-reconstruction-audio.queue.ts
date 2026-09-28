@@ -61,12 +61,10 @@ export default class CaseReconstructionAudioQueue {
       return [] as { caseId: string }[];
     });
     if (pending.length > 0) {
-      logger.info("Case Reconstruction audio queue: re-queuing interrupted polls", { count: pending.length });
       this.memoryWait.push(...pending.map((row) => ({ caseId: row.caseId, receiptHandle: null })));
       this.pump();
     }
 
-    logger.info("Case Reconstruction audio queue started", { concurrency: CONCURRENCY });
     void this.fetchLoop();
     this.pump();
   }
@@ -125,7 +123,6 @@ export default class CaseReconstructionAudioQueue {
         return;
       }
       if (result.status === "COMPLETED" || result.status === "FAILED") {
-        logger.info("Case Reconstruction audio queue: poll finished", { caseId, status: result.status });
         return;
       }
       await sleep(POLL_INTERVAL_MS);
