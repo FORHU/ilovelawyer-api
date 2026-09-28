@@ -319,6 +319,8 @@ export const exportBriefHistorySchema = Joi.object({
   cursor: Joi.string().optional(),
 });
 
+export const audioOverviewHistorySchema = exportBriefHistorySchema;
+
 export const listDecisionsSchema = Joi.object({
   status: Joi.string()
     .valid(...DECISION_STATUSES)

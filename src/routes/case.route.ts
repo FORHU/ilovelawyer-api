@@ -137,6 +137,7 @@ router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generate
 
 router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/export/history", asyncHandler(CaseTerminalCtrl.exportBriefHistory));
+router.get("/:caseId/audio-overview/history", asyncHandler(CaseTerminalCtrl.audioOverviewHistory));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
 router.post("/:caseId/decisions/:id/dispute", asyncHandler(CaseTerminalCtrl.disputeDecision));
 router.post("/:caseId/decisions/:id/reactivate", asyncHandler(CaseTerminalCtrl.reactivateDecision));
