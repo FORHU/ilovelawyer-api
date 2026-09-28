@@ -16,7 +16,7 @@ export default class CaseAccess {
           { organization: { members: { some: { userId, status: "ACCEPTED" } } } },
         ],
       },
-      include: { parties: true },
+      include: { parties: true, user: { select: { id: true, email: true, name: true, username: true } } },
     });
     if (!record) throw new HttpError("Case not found", 404);
     return record;

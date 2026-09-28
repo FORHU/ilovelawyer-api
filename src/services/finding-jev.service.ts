@@ -230,7 +230,7 @@ export default class FindingJevSvc {
       throw new HttpError("Jev couldn't check this finding. Try again.", 502);
     }
     const updated = await CaseFindingRepo.setJevCheck(id, asJson(result.check), result.impact);
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.jevCheck", payload: { id } });
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.jevCheck", payload: { id, label: row.label, tag: result.tag } });
     return updated;
   }
 }

@@ -45,7 +45,7 @@ export default class CaseTheorySvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const theory = await CaseTheoryRepo.create(caseId, { authorUserId: userId, title: data.title, thesis: data.thesis });
     await CaseGraphSvc.ensureNode(caseId, "THEORY", theory.id);
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.create", payload: { id: theory.id } });
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.create", payload: { id: theory.id, title: theory.title } });
     return theory;
   }
 

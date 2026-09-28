@@ -1,4 +1,7 @@
 import prisma from "../lib/prisma";
+import { emitToCase } from "../lib/socket";
+import { toAuditEntry } from "../utils/case-team";
+import logger from "../utils/logger";
 import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
 
 export default class OrganizationRepo {
@@ -88,10 +91,24 @@ export default class OrganizationRepo {
       where: { caseId },
       orderBy: { createdAt: "desc" },
       take: 200,
+      include: { actor: { select: { id: true, email: true, name: true, username: true } } },
     });
   }
 
   static async writeAudit(data: { caseId?: string; actorId?: string; action: string; payload?: object }) {
-    return prisma.auditEvent.create({ data });
+    const row = await prisma.auditEvent.create({
+      data,
+      include: { actor: { select: { id: true, email: true, name: true, username: true } } },
+    });
+    // Live push to everyone viewing the case's Terminal (Team & Audit's "Live"). Best-effort —
+    // the row is already saved and a client that misses this reconciles from the snapshot.
+    if (row.caseId) {
+      try {
+        emitToCase(row.caseId, "audit:new", toAuditEntry(row));
+      } catch (err) {
+        logger.warn("writeAudit: audit:new push failed", { err, caseId: row.caseId });
+      }
+    }
+    return row;
   }
 }

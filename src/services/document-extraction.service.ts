@@ -67,6 +67,14 @@ export default class DocumentExtractionSvc {
   private static async setStatus(documentId: string, ragStatus: RagStatus, event: DocumentSocketEvent): Promise<void> {
     const doc = await DocumentRepo.updateRagStatus(documentId, ragStatus);
     DocumentExtractionSvc.emit(doc, event, ragStatus);
+    // Background-job outcomes with no actor — the Team & Audit log's "System" rows. READY is
+    // audited separately after the category write (see the caller).
+    const action = event === "document:failed" ? "document.failed" : event === "document:retrying" ? "document.retrying" : null;
+    if (action && doc.caseId) {
+      await OrganizationRepo.writeAudit({ caseId: doc.caseId, action, payload: { id: documentId, name: doc.name } }).catch((auditErr) => {
+        logger.warn("Failed to write document audit event", { auditErr, documentId, action });
+      });
+    }
   }
 
   /**

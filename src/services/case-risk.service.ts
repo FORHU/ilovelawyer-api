@@ -13,7 +13,7 @@ export default class CaseRiskSvc {
   static async create(caseId: string, userId: string, data: RiskInput) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await CaseRiskRepo.create(caseId, data);
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "risk.create", payload: { id: row.id, severity: row.severity } });
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "risk.create", payload: { id: row.id, title: row.title, severity: row.severity } });
     return row;
   }
 
@@ -21,7 +21,7 @@ export default class CaseRiskSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await CaseRiskRepo.update(id, caseId, data);
     if (!row) throw new HttpError("Risk not found", 404);
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "risk.update", payload: { id, status: row.status } });
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "risk.update", payload: { id, title: row.title, status: row.status } });
     return row;
   }
 

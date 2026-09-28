@@ -1,4 +1,5 @@
 import CaseAccess from "../utils/case-access";
+import { buildCaseTeam, toAuditEntries } from "../utils/case-team";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import CaseRiskRepo from "../repositories/case-risk.repository";
 import EvidenceRepo from "../repositories/evidence.repository";
@@ -34,7 +35,7 @@ import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../
 
 export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
-    const caseRecord = await CaseAccess.loadAccessibleCase(caseId, userId);
+    const { user: caseOwner, ...caseRecord } = await CaseAccess.loadAccessibleCase(caseId, userId);
     // Findings generated in an older format regenerate in the background (no-op when current).
     void CaseFindingAiSvc.scheduleIfOutdated(caseRecord);
 
@@ -176,7 +177,7 @@ export default class CaseSnapshotSvc {
       evidence: { matrix: evidenceMatrix, contradictions },
       law: { citations: citationsWithAuthority, authorities: authoritiesWithLaw, summary: summarizeAuthorities(authorities) },
       procedure: { deadlines, items: procedureItems, requiredConfirmations },
-      teamAudit: { accesses, audit },
+      teamAudit: { team: buildCaseTeam(caseOwner, accesses), accesses, audit: toAuditEntries(audit) },
       findings,
       witnesses,
       damages,

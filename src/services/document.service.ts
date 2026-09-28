@@ -182,7 +182,7 @@ export default class DocumentSvc {
   static async archive(id: string, organizationId: string, actorId: string) {
     const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED");
     if (!updated) throw new HttpError("Document not found", 404);
-    await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.archive", payload: { documentId: id } });
+    await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.archive", payload: { documentId: id, name: updated.name } });
     // Without this, chat-wonder's listByDocument/listByCaseOrConsultation callbacks would keep
     // serving this document out of Redis for up to CACHE_TTL_S after it's archived.
     await DocumentChunkSvc.invalidateCacheForDocument(updated);
@@ -200,7 +200,7 @@ export default class DocumentSvc {
   static async unarchive(id: string, organizationId: string, actorId: string) {
     const updated = await DocumentRepo.setStatus(id, organizationId, "ACTIVE");
     if (!updated) throw new HttpError("Document not found", 404);
-    await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.unarchive", payload: { documentId: id } });
+    await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.unarchive", payload: { documentId: id, name: updated.name } });
     // Same reasoning as archive() above, in reverse — listByCaseOrConsultation's cached array
     // from while this document was excluded shouldn't linger past the moment it's restored.
     await DocumentChunkSvc.invalidateCacheForDocument(updated);

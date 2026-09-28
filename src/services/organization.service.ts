@@ -4,6 +4,7 @@ import OrganizationMemberRepo from "../repositories/organization-member.reposito
 import AuthRepo from "../repositories/auth.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import CaseAccess from "../utils/case-access";
+import { buildCaseTeam, toAuditEntries } from "../utils/case-team";
 import HttpError from "../utils/http-error";
 import { hasOrgRole } from "../utils/org-role";
 import { sendEmail } from "../utils/mailer";
@@ -240,11 +241,11 @@ export default class OrganizationSvc {
   }
 
   static async teamAudit(caseId: string, userId: string) {
-    await CaseAccess.loadAccessibleCase(caseId, userId);
+    const caseRecord = await CaseAccess.loadAccessibleCase(caseId, userId);
     const [accesses, audit] = await Promise.all([
       OrganizationRepo.listCaseAccess(caseId),
       OrganizationRepo.listAudit(caseId),
     ]);
-    return { accesses, audit };
+    return { team: buildCaseTeam(caseRecord.user, accesses), accesses, audit: toAuditEntries(audit) };
   }
 }
