@@ -27,6 +27,14 @@ describe("resolveTenantCodeFromHost", () => {
     expect(resolveTenantCodeFromHost("uk.ilovelawyer")).to.equal("UK");
   });
 
+  // Same list as the frontend's resolve-host.ts, which already had these: without them, a local
+  // frontend on uk.localhost:3002 couldn't create an organization ("Unable to determine tenant").
+  it("also resolves the *.localhost dev convention, like the frontend does", () => {
+    expect(resolveTenantCodeFromHost("ph.localhost:3002")).to.equal("PH");
+    expect(resolveTenantCodeFromHost("uk.localhost:3002")).to.equal("UK");
+    expect(resolveTenantCodeFromRequest(requestWithOrigin("http://uk.localhost:3002"))).to.equal("UK");
+  });
+
   it("returns null for an unrecognized host, never guessing", () => {
     expect(resolveTenantCodeFromHost("ilovelawyer.com")).to.equal(null);
     expect(resolveTenantCodeFromHost("localhost:3002")).to.equal(null);

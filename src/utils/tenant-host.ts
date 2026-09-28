@@ -8,10 +8,12 @@ import { CLIENT_URL } from "../config";
  * ilovelawyer-app/apps/web/lib/jurisdiction/resolve-host.ts (two separate deployables, no
  * shared package between them).
  *
- * Three host conventions are recognized for local dev, all mapping to the same Tenant code:
- * `ph.ilovelawyer.local` (the spec's required form), and the bare `ph.ilovelawyer` this repo's
+ * Four host conventions are recognized for local dev, all mapping to the same Tenant code:
+ * `ph.ilovelawyer.local` (the spec's required form), the bare `ph.ilovelawyer` this repo's
  * own frontend `next.config.ts` `allowedDevOrigins` already anticipated before this feature was
- * built (what this environment's hosts file actually points at) — plus the `.com` production
+ * built (what this environment's hosts file actually points at), and `ph.localhost` (browsers
+ * resolve any `*.localhost` subdomain to 127.0.0.1 without a hosts file entry, so this needs no
+ * local setup — and the frontend's copy already had it) — plus the `.com` production
  * form, the `-dev.ilovelawyer.com` hosted dev environment, and its `-dev.ilovelawyer.local`
  * local-dev counterpart (`ph-dev.ilovelawyer.com` / `uk-dev.ilovelawyer.com` /
  * `ph-dev.ilovelawyer.local` / `uk-dev.ilovelawyer.local`).
@@ -22,11 +24,13 @@ const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "ph.ilovelawyer.local": "PH",
   "ph-dev.ilovelawyer.local": "PH",
   "ph.ilovelawyer": "PH",
+  "ph.localhost": "PH",
   "uk.ilovelawyer.com": "UK",
   "uk-dev.ilovelawyer.com": "UK",
   "uk.ilovelawyer.local": "UK",
   "uk-dev.ilovelawyer.local": "UK",
   "uk.ilovelawyer": "UK",
+  "uk.localhost": "UK",
 };
 
 /** Strips a trailing `:port` (present on `Host`/`Origin` headers in local dev, e.g.
