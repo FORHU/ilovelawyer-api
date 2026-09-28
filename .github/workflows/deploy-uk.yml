@@ -236,7 +236,7 @@ jobs:
             "docker pull --platform linux/arm64 ${IMAGE}"
           )
 
-          if [ "${MIGRATE}" = "true" ]; then
+          if [ "${MIGRATE}" != "false" ]; then
             COMMANDS+=("docker run --rm --platform linux/arm64 --network host --entrypoint npx -v ${ENVFILE}:/app/.env:ro ${IMAGE} prisma migrate deploy")
           fi
 
