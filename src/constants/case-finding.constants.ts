@@ -2,6 +2,15 @@ import { FindingCategory, FindingTag } from "@prisma/client";
 
 export const AI_FINDING_NOTE = "AI";
 
+/** The shape AI findings are generated in. Bump it whenever the prompt starts asking for something
+ * the panels depend on: a case stamped with an older version (Case.findingsFormatVersion)
+ * regenerates its findings the next time the Terminal loads it (CaseFindingAiSvc.scheduleIfOutdated).
+ *   1 — label + sourceLabel (unstamped cases).
+ *   2 — status/tag and detail sub-lines (burden on legal issues), with Jev checks when their flags
+ *       are on.
+ */
+export const FINDINGS_FORMAT_VERSION = 2;
+
 /** Which pills a category's rows may carry. Attack/Defense Strategies have none yet. Jev only
  * ever derives CONTESTED/OPEN, MATERIAL/MINOR and STRONG/MODERATE — BRIEFING, RESOLVED and
  * CLOSED are workflow states only the lawyer sets. */
