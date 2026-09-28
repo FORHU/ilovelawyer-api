@@ -47,7 +47,6 @@ export default class EventReminderQueue {
   static start(): void {
     if (this.running) return;
     this.running = true;
-    logger.info("Event reminder queue started", { pollIntervalMs: POLL_INTERVAL_MS });
     void this.tick();
     setInterval(() => void this.tick(), POLL_INTERVAL_MS);
   }

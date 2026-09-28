@@ -8,7 +8,8 @@ import TranscriptionRepo from "../repositories/transcription.repository";
 import TranscriptionExtractionSvc from "./transcription-extraction.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_S3_BUCKET } from "../config";
+import { AWS_S3_BUCKET } from "../config";
+import { awsClientConfig } from "../lib/aws-client-config";
 
 const SUPPORTED_FORMATS = ["mp3", "wav", "flac", "ogg", "webm", "weba", "m4a", "mp4", "amr"];
 
@@ -18,13 +19,7 @@ function getMediaFormat(s3Key: string): string | undefined {
 }
 
 function getTranscribeClient() {
-  return new TranscribeClient({
-    region: AWS_REGION,
-    credentials: {
-      accessKeyId: AWS_ACCESS_KEY,
-      secretAccessKey: AWS_SECRET_ACCESS_KEY,
-    },
-  });
+  return new TranscribeClient({ ...awsClientConfig });
 }
 
 /** Starts an AWS Transcribe batch job for audio/video already sitting in S3. Shared by

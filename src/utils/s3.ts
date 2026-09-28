@@ -2,21 +2,12 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
-import {
-  AWS_ACCESS_KEY,
-  AWS_SECRET_ACCESS_KEY,
-  AWS_S3_BUCKET,
-  AWS_REGION,
-  CLOUDFRONT_URL,
-  FILE_TOKEN_SECRET,
-} from "../config";
+import { AWS_S3_BUCKET, AWS_S3_REGION, CLOUDFRONT_URL, FILE_TOKEN_SECRET } from "../config";
+import { awsCredentials } from "../lib/aws-client-config";
 
 const client = new S3Client({
-  region: AWS_REGION,
-  credentials: {
-    accessKeyId: AWS_ACCESS_KEY,
-    secretAccessKey: AWS_SECRET_ACCESS_KEY,
-  },
+  region: AWS_S3_REGION,
+  ...awsCredentials,
   // SDK v3 defaults checksums into PutObject signatures; browsers don't send those
   // headers on fetch PUT, so S3 returns 403 which Chrome surfaces as a CORS error.
   requestChecksumCalculation: "WHEN_REQUIRED",
@@ -29,7 +20,7 @@ export function s3UrlForKey(key: string): string {
   if (CLOUDFRONT_URL) {
     return `${CLOUDFRONT_URL.replace(/\/+$/, "")}/${key}`;
   }
-  return `https://${AWS_S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${key}`;
+  return `https://${AWS_S3_BUCKET}.s3.${AWS_S3_REGION}.amazonaws.com/${key}`;
 }
 
 export async function uploadToS3(key: string, body: Buffer, contentType: string): Promise<string> {

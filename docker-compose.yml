@@ -42,6 +42,8 @@ services:
       - DEFAULT_REGION=ap-southeast-1
     ports:
       - "4566:4566"
+    volumes:
+      - ./docker/localstack-init/ready-create-queues.sh:/etc/localstack/init/ready.d/create-queues.sh:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 5s
