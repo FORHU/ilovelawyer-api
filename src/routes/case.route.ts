@@ -88,7 +88,9 @@ router.post("/:caseId/edges", asyncHandler(CaseEdgeCtrl.create));
 router.delete("/:caseId/edges/:id", asyncHandler(CaseEdgeCtrl.delete));
 
 router.get("/:caseId/procedure", asyncHandler(CaseTerminalCtrl.procedure));
+router.post("/:caseId/strategy/refresh", asyncHandler(CaseTerminalCtrl.refreshStrategy));
 router.post("/:caseId/procedure/deadlines", asyncHandler(CaseTerminalCtrl.createDeadline));
+router.post("/:caseId/procedure/deadlines/recompute-stale", asyncHandler(CaseTerminalCtrl.recomputeStaleDeadlines));
 router.post("/:caseId/procedure/deadlines/:deadlineId/confirm", asyncHandler(CaseTerminalCtrl.confirmDeadline));
 router.post("/:caseId/procedure/deadlines/:deadlineId/recompute", asyncHandler(CaseTerminalCtrl.recomputeDeadline));
 router.post("/:caseId/procedure/items", asyncHandler(CaseTerminalCtrl.createProcedureItem));
@@ -135,6 +137,7 @@ router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generate
 
 router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/export/history", asyncHandler(CaseTerminalCtrl.exportBriefHistory));
+router.get("/:caseId/audio-overview/history", asyncHandler(CaseTerminalCtrl.audioOverviewHistory));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
 router.post("/:caseId/decisions/:id/dispute", asyncHandler(CaseTerminalCtrl.disputeDecision));
 router.post("/:caseId/decisions/:id/reactivate", asyncHandler(CaseTerminalCtrl.reactivateDecision));

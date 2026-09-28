@@ -6,6 +6,7 @@ export const AI_GENERATION_KINDS = [
   "caseRefresh",
   "contradictions",
   "caseStrategy",
+  "caseStrategyRefresh",
   "caseFinding",
   "caseOutlook",
   "mindMap",

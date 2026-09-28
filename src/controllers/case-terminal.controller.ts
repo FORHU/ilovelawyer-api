@@ -10,6 +10,7 @@ import GroundingVerifierSvc from "../services/grounding-verifier.service";
 import CitationMapSvc from "../services/citation-map.service";
 import UkCitationMapSvc from "../services/uk-citation-map.service";
 import ProceduralDeadlineSvc from "../services/procedural-deadline.service";
+import CaseStrategySvc from "../services/case-strategy.service";
 import OrganizationSvc from "../services/organization.service";
 import CaseFindingSvc from "../services/case-finding.service";
 import FindingJevSvc from "../services/finding-jev.service";
@@ -24,6 +25,7 @@ import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.se
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
+import AudioOverviewHistorySvc from "../services/audio-overview-history.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -69,6 +71,7 @@ import {
   graphViewSchema,
   exportBriefSchema,
   exportBriefHistorySchema,
+  audioOverviewHistorySchema,
   listDecisionsSchema,
   disputeDecisionSchema,
   createTheorySchema,
@@ -166,6 +169,23 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "timelineGenerate", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "timelineGenerate");
     return res.status(202).json(status);
+  }
+
+  /** Queued via AiGenerationQueue (SQS) — refreshes only the Case Strategy panel's pass (plan,
+   * to-dos, key dates), so a lawyer whose panel is flagged stale doesn't pay for a full Refresh
+   * analysis. Ticked to-dos survive (see planAiProcedureItems). */
+  static async refreshStrategy(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseStrategySvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseStrategyRefresh", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "caseStrategyRefresh");
+    return res.status(202).json(status);
+  }
+
+  static async recomputeStaleDeadlines(req: Request, res: Response) {
+    const result = await ProceduralDeadlineSvc.recomputeStale(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
   }
 
   static async listRisks(req: Request, res: Response) {
@@ -664,6 +684,16 @@ export default class CaseTerminalCtrl {
     const { error, value } = exportBriefHistorySchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseBriefExportSvc.listHistory(req.params.caseId, req.user.userId, {
+      limit: value.limit,
+      cursor: value.cursor,
+    });
+    return res.status(200).json(result);
+  }
+
+  static async audioOverviewHistory(req: Request, res: Response) {
+    const { error, value } = audioOverviewHistorySchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await AudioOverviewHistorySvc.list(req.params.caseId, req.user.userId, {
       limit: value.limit,
       cursor: value.cursor,
     });

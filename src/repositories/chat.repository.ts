@@ -336,6 +336,25 @@ export default class ChatRepo {
     });
   }
 
+  static async saveAudioOverviewChecks(messageId: string, checks: unknown[]) {
+    return prisma.messageAudioOverview.update({
+      where: { messageId },
+      data: { checks: checks as Prisma.InputJsonValue },
+    });
+  }
+
+  /** A case's Audio Overviews across all its consultations, newest first — the history list.
+   * Same cursor convention (and `id` tiebreaker) as CaseBriefExportRepo.listByCase. */
+  static async listAudioOverviewsByCase(caseId: string, filters: { limit?: number; cursor?: string } = {}) {
+    return prisma.messageAudioOverview.findMany({
+      where: { message: { consultation: { caseId } } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      include: { audioFile: true, message: { select: { id: true, consultationId: true } } },
+      take: filters.limit ?? 20,
+      ...(filters.cursor && { cursor: { id: filters.cursor }, skip: 1 }),
+    });
+  }
+
   static async updateAudioOverviewAudio(
     messageId: string,
     data: { audioFileId?: string; audioStatus?: AudioOverviewStatus },

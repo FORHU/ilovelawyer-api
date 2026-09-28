@@ -24,6 +24,7 @@ import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
+import { strategyStaleness } from "../utils/strategy-staleness";
 import { diffDocumentIds, fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import MindMapRepo from "../repositories/mind-map.repository";
 import { buildCaseTrends } from "../utils/case-trends";
@@ -188,6 +189,10 @@ export default class CaseSnapshotSvc {
       theories,
       annotations,
       staleness,
+      // The Case Strategy panel's own freshness: when its plan/to-dos/dates were last generated,
+      // and whether the case changed underneath it since (documents, findings, evidence…).
+      // "Refresh" is POST /strategy/refresh; stale deadlines are `staleness` + recompute-stale.
+      strategyPanel: strategyStaleness(audit),
       mindMap: {
         lastGeneratedAt: latestMindMap?.createdAt ?? null,
         // Expanding/undoing on the map itself writes mindMap.* audit rows — those are the map

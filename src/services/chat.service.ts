@@ -21,6 +21,8 @@ import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
+import { audioOverviewFilename } from "../utils/audio-overview-filename";
+import { checkAudioOverviewTurns, isAudioOverviewJevEnabled } from "../utils/audio-overview-jev";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
 import GroundingVerifierSvc from "./grounding-verifier.service";
 import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
@@ -1303,9 +1305,11 @@ export default class ChatSvc {
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
     if (audioOverview) {
       const { hostA, hostB } = voicePairForCase(p.effectiveCaseId ?? p.consultationId);
-      await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB).catch((err) => {
-        logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
-      });
+      await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB)
+        .then(() => ChatSvc.checkAudioOverviewInBackground(assistantMessage.id, audioOverview, p.effectiveCaseId, p.userId))
+        .catch((err) => {
+          logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
+        });
     }
     if (reasoning) {
       await ChatRepo.saveReasoning(assistantMessage.id, reasoning).catch((err) => {
@@ -1514,6 +1518,24 @@ export default class ChatSvc {
     return { status: "IN_PROGRESS" as const };
   }
 
+  /** Fire-and-forget Jev check of a just-saved script — logs rather than throws, since nothing
+   * is waiting on it. Needs a case to read the case data from; a case-less consultation has none. */
+  private static checkAudioOverviewInBackground(
+    messageId: string,
+    turns: AudioOverviewTurn[],
+    caseId: string | null,
+    userId: string,
+  ): void {
+    if (!isAudioOverviewJevEnabled() || !caseId) return;
+    void (async () => {
+      const context = await CaseMindMapSvc.jevContext(caseId, userId);
+      const checks = await checkAudioOverviewTurns(turns, context);
+      if (checks.length) await ChatRepo.saveAudioOverviewChecks(messageId, checks);
+    })().catch((err) => {
+      logger.warn("Audio Overview: Jev check failed", { err, messageId });
+    });
+  }
+
   static async pollAudioOverviewAudio(organizationId: string, consultationId: string, messageId: string) {
     await ChatSvc.assertConsultationOwned(organizationId, consultationId);
     const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
@@ -1522,7 +1544,10 @@ export default class ChatSvc {
     if (row.audioStatus === "COMPLETED" && row.audioFile?.s3Key) {
       return {
         status: "COMPLETED" as const,
-        audioFile: { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key) },
+        audioFile: {
+          id: row.audioFile.id,
+          fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }),
+        },
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };

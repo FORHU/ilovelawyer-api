@@ -304,15 +304,15 @@ describe("Legal Terminal — Chat Wonder case strategy parse", () => {
     });
   });
 
-  it("dedupes labels and caps list length", () => {
-    const todos = Array.from({ length: 15 }, (_, i) => `"Todo ${i + 1}"`);
+  it("dedupes labels and does not cap list length at a round number", () => {
+    const todos = Array.from({ length: 15 }, (_, i) => `{"label":"Todo ${i + 1}"}`);
     const text = `[STRATEGY]["Same","same"][/STRATEGY]
 [TODOS][${todos.join(",")}][/TODOS]`;
     const parsed = extractCaseStrategy(text);
-    expect(parsed?.strategy).to.deep.equal(["Same"]);
-    expect(parsed?.todos).to.have.length(12);
-    expect(parsed?.todos[0]).to.equal("Todo 1");
-    expect(parsed?.todos[11]).to.equal("Todo 12");
+    expect(parsed?.strategy).to.deep.equal([{ label: "Same", sourceLabel: null }]);
+    expect(parsed?.todos).to.have.length(15);
+    expect(parsed?.todos[0].label).to.equal("Todo 1");
+    expect(parsed?.todos[14].label).to.equal("Todo 15");
   });
 
   it("includes ready document ids in the Chat Wonder prompt without sample plan text", () => {

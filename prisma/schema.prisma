@@ -368,6 +368,9 @@ model MessageAudioOverview {
   voiceHostB  String
   audioFileId String?
   audioStatus AudioOverviewStatus?
+  // Jev's verdict per script turn (see audio-overview-jev.ts / USE_JEV_AUDIO_OVERVIEW) — null
+  // when the check never ran or found nothing checkable; a turn Jev couldn't check has no entry.
+  checks      Json?
   createdAt   DateTime             @default(now())
 
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -1624,6 +1627,10 @@ model ProcedureItem {
   // CaseStrategySvc, case-strategy-parse.ts). Null for lawyer-entered items and for AI items
   // the model didn't attribute to a specific document.
   sourceLabel String?
+  // Jev's verdict on a STRATEGY item against the case data (case-strategy-jev.ts):
+  // { verdict, confidence, checkedAt }. Null for to-dos, lawyer-entered items, and when
+  // USE_JEV_CASE_STRATEGY is off.
+  check       Json?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
