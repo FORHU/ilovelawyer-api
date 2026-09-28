@@ -1646,8 +1646,9 @@ enum FindingCategory {
   DEFENSE_STRATEGY
 }
 
-// The pill on a Legal Issues / Weaknesses / Strengths row. One enum for all three categories;
-// which values a category may use is FINDING_TAGS_BY_CATEGORY (case-finding.constants.ts).
+// The pill on a Legal Issues / Weaknesses / Strengths / Attack Strategy / Defense Strategy row.
+// One enum for all five categories; which values a category may use is
+// FINDING_TAGS_BY_CATEGORY (case-finding.constants.ts).
 enum FindingTag {
   CONTESTED
   BRIEFING
@@ -1658,6 +1659,12 @@ enum FindingTag {
   CLOSED
   STRONG
   MODERATE
+  READY
+  DRAFTING
+  BLOCKED
+  ANSWERED
+  PARTIAL
+  UNANSWERED
 }
 
 // A short strategic-assessment entry, categorized by FindingCategory. Backs five Terminal
