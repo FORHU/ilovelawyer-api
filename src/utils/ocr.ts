@@ -1,4 +1,5 @@
-import { AWS_ACCESS_KEY, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET } from "../config";
+import { AWS_REGION, AWS_S3_BUCKET } from "../config";
+import { awsCredentials } from "../lib/aws-client-config";
 import logger from "./logger";
 
 const TEXTRACT_SYNC_MAX_BYTES = 5 * 1024 * 1024;
@@ -10,10 +11,8 @@ type TextractBlock = { BlockType?: string; Text?: string; Page?: number };
  * fine here since a single image has no page concept; scanned PDFs use ocrPdfFromS3 below
  * instead, since a PDF may have multiple pages or exceed this API's 5MB/10MB limits. */
 export async function ocrDocument(buffer: Buffer): Promise<string> {
-  if (!AWS_ACCESS_KEY || !AWS_SECRET_ACCESS_KEY) {
-    logger.warn("OCR skipped: AWS credentials not configured");
-    return "";
-  }
+  // No credential guard: with an instance role there are no keys to check, and a genuine
+  // credential failure surfaces in the catch below rather than silently returning "".
   if (buffer.length > TEXTRACT_SYNC_MAX_BYTES) {
     logger.warn("OCR skipped: document exceeds Textract sync limit", { bytes: buffer.length });
     return "";
@@ -28,10 +27,7 @@ export async function ocrDocument(buffer: Buffer): Promise<string> {
     };
     const client = new textract.TextractClient({
       region: AWS_REGION || "us-east-1",
-      credentials: {
-        accessKeyId: AWS_ACCESS_KEY,
-        secretAccessKey: AWS_SECRET_ACCESS_KEY,
-      },
+      ...awsCredentials,
     });
     const result = await client.send(
       new textract.DetectDocumentTextCommand({
@@ -70,10 +66,7 @@ export interface OcrPage {
  * past sync's 5MB/10MB byte limits (async supports up to 500MB / 3000 pages). Reads the object
  * straight from S3 instead of the buffer already in memory, since that's what this API expects. */
 export async function ocrPdfFromS3(s3Key: string): Promise<OcrPage[]> {
-  if (!AWS_ACCESS_KEY || !AWS_SECRET_ACCESS_KEY) {
-    logger.warn("OCR skipped: AWS credentials not configured");
-    return [];
-  }
+  // No credential guard — see ocrDocument above.
   if (!AWS_S3_BUCKET) {
     logger.warn("OCR skipped: AWS_S3_BUCKET not configured");
     return [];
@@ -88,10 +81,7 @@ export async function ocrPdfFromS3(s3Key: string): Promise<OcrPage[]> {
     };
     const client = new textract.TextractClient({
       region: AWS_REGION || "us-east-1",
-      credentials: {
-        accessKeyId: AWS_ACCESS_KEY,
-        secretAccessKey: AWS_SECRET_ACCESS_KEY,
-      },
+      ...awsCredentials,
     });
 
     const startResult = (await client.send(

@@ -6,5 +6,7 @@ export * from "./chat-title.prompt";
 export * from "./citation-extraction.prompt";
 export * from "./legal-source-cache.prompt";
 export * from "./red-team.prompt";
+export * from "./mind-map-expand.prompt";
 export * from "./witness-scoring.prompt";
 export * from "./witness-extract.prompt";
+export * from "./mind-map-documents.prompt";

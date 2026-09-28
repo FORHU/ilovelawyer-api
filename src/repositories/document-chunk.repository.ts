@@ -101,6 +101,23 @@ export default class DocumentChunkRepo {
     return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
   }
 
+  /** Chunk text on one page of a document, in reading order — the passage a mind map node cites
+   * as `{ documentId, page }` (mind-map-jev.ts). Empty when the document has no chunks on that
+   * page (or wasn't extracted page-by-page). */
+  static async findTextsByPage(
+    caseDocumentId: string,
+    pageNumber: number,
+    client: DbClient = prisma,
+  ): Promise<string[]> {
+    const rows = await client.$queryRaw<{ chunkText: string }[]>`
+      SELECT "chunkText"
+      FROM "CaseDocumentChunk"
+      WHERE "caseDocumentId" = ${caseDocumentId} AND "pageNumber" = ${pageNumber}
+      ORDER BY "chunkIndex" ASC
+    `;
+    return rows.map((row) => row.chunkText);
+  }
+
   /** Chunk ids ranked by embedding similarity (pgvector cosine distance, `<=>`) against a
    * query embedding, scoped to one document. This is what actually uses the `embedding`
    * column stored per chunk — `findIdsByDocument` above returns every chunk unfiltered and
