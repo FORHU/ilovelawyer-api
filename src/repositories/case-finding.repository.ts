@@ -64,16 +64,25 @@ export default class CaseFindingRepo {
 
   /** Replaces every AI-authored row (notes === AI_FINDING_NOTE) with a fresh AI-generated
    * batch, in one category at a time — mirrors ProceduralDeadlineRepo.replaceAiProcedureItems.
-   * Manually-created findings are untouched. */
+   * Manually-created findings are untouched. Each row's FINDING graph node is swapped in the same
+   * transaction (CaseFindingSvc.create does this for manual rows via CaseGraphSvc.ensureNode) —
+   * the Legal Issues panel reads the graph-view projection, which skips findings with no node. */
   static async replaceAiFindings(
     caseId: string,
     items: AiFindingRow[],
   ) {
     await prisma.$transaction(async (tx) => {
+      const stale = await tx.caseFinding.findMany({ where: { caseId, notes: AI_FINDING_NOTE }, select: { id: true } });
+      await tx.caseGraphNode.deleteMany({ where: { nodeType: "FINDING", refId: { in: stale.map((f) => f.id) } } });
       await tx.caseFinding.deleteMany({ where: { caseId, notes: AI_FINDING_NOTE } });
       if (items.length === 0) return;
-      await tx.caseFinding.createMany({
+      const created = await tx.caseFinding.createManyAndReturn({
         data: items.map((item) => ({ ...item, caseId, notes: AI_FINDING_NOTE })),
+        select: { id: true },
+      });
+      await tx.caseGraphNode.createMany({
+        data: created.map((f) => ({ caseId, nodeType: "FINDING" as const, refId: f.id })),
+        skipDuplicates: true,
       });
     });
     return this.list(caseId);
