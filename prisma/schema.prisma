@@ -374,6 +374,11 @@ model MessageAudioOverview {
   // Jev's verdict per script turn (see audio-overview-jev.ts / USE_JEV_AUDIO_OVERVIEW) — null
   // when the check never ran or found nothing checkable; a turn Jev couldn't check has no entry.
   checks      Json?
+  // Cumulative start second of each turn within the rendered audio (see turnStartTimes in
+  // audio-overview-render.ts) — number[], one entry per `turns` element, index-aligned. Null
+  // until audioStatus reaches COMPLETED (set alongside audioFileId); the frontend's line-by-line
+  // highlight/auto-scroll has nothing to sync to before then.
+  turnTimings Json?
   createdAt   DateTime             @default(now())
 
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)

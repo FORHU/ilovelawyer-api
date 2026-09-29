@@ -116,6 +116,9 @@ export const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD as string;
  * yet (a Windows/winget quirk, not something restarting nodemon alone fixes) — point this at
  * the binary directly instead. */
 export const FFMPEG_PATH = process.env.FFMPEG_PATH || "ffmpeg";
+/** Same reasoning and fallback shape as FFMPEG_PATH — used to measure each Audio Overview turn's
+ * synthesized clip duration (audio-overview-render.ts) before ffmpeg concatenates them. */
+export const FFPROBE_PATH = process.env.FFPROBE_PATH || "ffprobe";
 
 /** Build the case mind map from uploaded documents as part of the post-upload refresh
  * (CaseMindMapSvc, called from CaseRefreshSvc). On unless set to "false" — the kill switch for
