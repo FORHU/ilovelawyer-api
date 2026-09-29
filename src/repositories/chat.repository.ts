@@ -383,9 +383,13 @@ export default class ChatRepo {
 
   static async updateAudioOverviewAudio(
     messageId: string,
-    data: { audioFileId?: string; audioStatus?: AudioOverviewStatus },
+    data: { audioFileId?: string; audioStatus?: AudioOverviewStatus; turnTimings?: number[] },
   ) {
-    return prisma.messageAudioOverview.update({ where: { messageId }, data });
+    const { turnTimings, ...rest } = data;
+    return prisma.messageAudioOverview.update({
+      where: { messageId },
+      data: { ...rest, ...(turnTimings && { turnTimings: turnTimings as unknown as Prisma.InputJsonValue }) },
+    });
   }
 
   /** Re-queued on server start by AudioOverviewQueue — rows a prior process left stuck
