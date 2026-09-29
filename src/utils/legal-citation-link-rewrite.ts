@@ -6,6 +6,7 @@ import { TenantCode } from "../types/tenant-code";
 import type { RelatedCase } from "./chatWonder";
 import { normalizeUkLegislationUrl, resolveUkCitationToLaw, resolveUkLegislationTitleToLaw } from "./uk-citation-resolution";
 import logger from "./logger";
+import { libraryHref as buildLibraryHref } from "./law-library-href";
 
 export interface CitationRewriteResult {
   content: string;
@@ -35,11 +36,6 @@ const HTML_LINK_RE = /<a\s+[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g
 // resolved by then falls back to today's external-link behavior for that citation only.
 const REWRITE_TIMEOUT_MS = 4_500;
 
-const WIRE_CATEGORY: Record<TenantCode, Record<LawCategory, string>> = {
-  UK: { JURISPRUDENCE: "uk-case-law", REPUBLIC_ACT: "uk-legislation" },
-  PH: { JURISPRUDENCE: "jurisprudence", REPUBLIC_ACT: "republic-acts" },
-};
-
 interface Resolution {
   /** The Library detail route's `[id]` segment — NOT uniformly `Law.id`. Per
    * law.controller.ts's own doc comment on GET /api/law/document, that endpoint's `id` is
@@ -55,7 +51,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function libraryHref(tenantCode: TenantCode, resolution: Resolution): string {
-  return `/homepage/library/laws/${resolution.routeId}?category=${WIRE_CATEGORY[tenantCode][resolution.category]}`;
+  return buildLibraryHref(tenantCode, resolution.routeId, resolution.category);
 }
 
 // The model is instructed to suffix a citation label with a literal " Law"/" Jurisprudence"

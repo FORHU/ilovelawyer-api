@@ -1913,6 +1913,10 @@ model CaseClaim {
   source        AuthoringSource @default(MANUAL)
   sourceLabel   String?
   sourceQuote   String?         @db.Text
+  // The Document sourceLabel names, so the Citation Map can open it. A plain id, not a relation:
+  // a deleted document just leaves the claim without a link. Null on claims found before this
+  // was saved (the seed falls back to matching sourceLabel against the case's document names).
+  sourceDocumentId String?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 

@@ -31,7 +31,7 @@ export async function mapDocumentToDto<
 /** Carries the original filename in the token so the browser saves the document under it (the
  * S3 key is a timestamp, and without a filename the save dialog falls back to the JWT itself).
  * Inline, not attachment: Studio's Documents tile previews this same URL in an <iframe>. */
-function documentFileUrl(s3Key: string, filename: string | null): string {
+export function documentFileUrl(s3Key: string, filename: string | null): string {
   return getProxyFileUrl(s3Key, { filename: filename ?? undefined, disposition: "inline" });
 }
 

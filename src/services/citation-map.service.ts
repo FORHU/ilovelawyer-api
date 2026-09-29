@@ -2,6 +2,7 @@ import CaseAccess from "../utils/case-access";
 import CitationCheckRepo from "../repositories/citation-check.repository";
 import LawRepo from "../repositories/law.repository";
 import { resolveCitationToLaw } from "../utils/citation-resolution";
+import { lawLibraryHref } from "../utils/law-library-href";
 
 // Loose guess at whether a free-text citedReference reads as a case number (vs. a case title) —
 // used only to decide which field to lead the resolution search with; resolveCitationToLaw
@@ -27,6 +28,8 @@ export interface CitationMapSeedItem {
     jurisUrl: string;
     pdfUrl: string | null;
     citationsExtractedAt: string | null;
+    /** The authority's page in the app's Library (/homepage/library/laws/...), for "View citation". */
+    libraryHref: string;
   } | null;
   confidence: number | null;
 }
@@ -75,6 +78,7 @@ export default class CitationMapSvc {
               jurisUrl: law.jurisUrl,
               pdfUrl: law.pdfUrl,
               citationsExtractedAt: law.citationsExtractedAt?.toISOString() ?? null,
+              libraryHref: lawLibraryHref("PH", law),
             }
           : null,
       };
