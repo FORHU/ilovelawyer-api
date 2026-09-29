@@ -1,5 +1,5 @@
 /**
- * DamagesExtractSvc end to end: pending documents → [extract] prompt → [DAMAGES] reply → verified,
+ * DamagesExtractSvc end to end: pending documents → prompt → [DAMAGES] reply → verified,
  * deduped AI heads → recompute → audit. Chat Wonder is a local `ws` server replying with a scripted
  * block (same idiom as mind-map-data-frame.spec.ts); repositories are monkeypatched, no DB.
  */
@@ -7,6 +7,7 @@ import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import { AddressInfo } from "net";
 import WebSocket, { WebSocketServer } from "ws";
+import { TypeSafeClient } from "@typesafe-ai/sdk";
 
 import * as config from "../src/config";
 import * as chatWonder from "../src/utils/chatWonder";
@@ -28,7 +29,8 @@ const COMPLAINT = "Complainant prays for P200,000.00 as moral damages and P100,0
 
 describe("DamagesExtractSvc", () => {
   let server: WebSocketServer;
-  let reply: string;
+  // One reply for every call, or a queue consumed call by call (first answer, then the correction).
+  let reply: string | string[];
   let payloads: any[];
   let originalWsUrl: string;
   const restore: (() => void)[] = [];
@@ -53,7 +55,7 @@ describe("DamagesExtractSvc", () => {
     server.on("connection", (socket: WebSocket) => {
       socket.on("message", (raw) => {
         payloads.push(JSON.parse(raw.toString()));
-        socket.send(reply);
+        socket.send(Array.isArray(reply) ? (reply.shift() ?? "[DAMAGES][][/DAMAGES]") : reply);
         socket.send("__END__");
         socket.send("[DONE]");
       });
@@ -124,11 +126,13 @@ describe("DamagesExtractSvc", () => {
     while (restore.length) restore.pop()!();
   });
 
-  it("sends the prompt under the [extract] persona, not the legal one", async () => {
+  it("asks on the legal persona like the other extraction jobs, without the verify pass", async () => {
     await DamagesExtractSvc.runQueued("case-1", "user-1");
     expect(payloads).to.have.length(1);
-    expect(payloads[0].user_input.startsWith("[extract] ")).to.equal(true);
-    expect(payloads[0].user_input).to.not.match(/\[legal ai/i);
+    expect(payloads[0].user_input.startsWith("[legal ai] ")).to.equal(true);
+    expect(payloads[0].skip_legal_verify).to.equal(true);
+    // Not a case chat turn: no mind-map rule appended.
+    expect(payloads[0].user_input).to.not.include("visual case strategy map");
     expect(payloads[0].user_input).to.include("--- DOCUMENT id: doc-pay | name: Payslip.pdf ---");
   });
 
@@ -198,6 +202,83 @@ describe("DamagesExtractSvc", () => {
     await DamagesExtractSvc.runQueued("case-1", "user-1");
     expect(proposals).to.have.length(1);
     expect(proposals[0]!.proposal.satisfiesPending).to.equal(true);
+  });
+
+  describe("with Jev reviewing proposals", () => {
+    const original = TypeSafeClient.prototype.systemOne;
+    // Jev's verdict per quoted figure: net pay is not the basic salary.
+    const verdicts: Record<string, [string, number]> = {
+      "27000 per month": ["SUPPORTED", 0.95],
+      "24310 per month": ["UNSUPPORTED", 0.9],
+      "200000": ["SUPPORTED", 0.9],
+    };
+    let asked: string[];
+
+    beforeEach(() => {
+      process.env.USE_JEV_DAMAGES = "true";
+      process.env.TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || "test-key";
+      asked = [];
+      (TypeSafeClient.prototype as any).systemOne = async (req: { state: { quotedFigure: string } }) => {
+        asked.push(req.state.quotedFigure);
+        const [choice, confidence] = verdicts[req.state.quotedFigure] ?? ["SUPPORTED", 0.9];
+        return { answers: { support: { choice, confidence } } };
+      };
+    });
+    afterEach(() => {
+      TypeSafeClient.prototype.systemOne = original;
+      delete process.env.USE_JEV_DAMAGES;
+    });
+
+    const netPay = { category: "ACTUAL", label: "Backwages", basis: { kind: "RATE_X_PERIOD", monthlyRate: 24310 }, documentId: "doc-pay", quote: "Net pay: P24,310.00" };
+    const basic = { category: "ACTUAL", label: "Backwages", basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000 }, documentId: "doc-pay", quote: "Basic monthly salary: P27,000.00" };
+    const moral = { category: "MORAL", label: "Moral damages", basis: { kind: "FIXED", amount: 200000 }, documentId: "doc-cmp", quote: "P200,000.00 as moral damages" };
+    const block = (rows: unknown[]) => `[DAMAGES]${JSON.stringify(rows)}[/DAMAGES]`;
+
+    it("asks Chat Wonder again for a figure Jev rejects, and saves the corrected one", async () => {
+      reply = [block([netPay, moral]), block([basic])];
+      await DamagesExtractSvc.runQueued("case-1", "user-1");
+
+      expect(payloads).to.have.length(2);
+      expect(payloads[1].user_input.startsWith("[legal ai] ")).to.equal(true);
+      expect(payloads[1].skip_legal_verify).to.equal(true);
+      expect(payloads[1].user_input).to.include('quoted as "Net pay: P24,310.00" — rejected because the quoted line does not state this figure');
+      // Only the cited document goes back, not the whole batch.
+      expect(payloads[1].user_input).to.include("--- DOCUMENT id: doc-pay");
+      expect(payloads[1].user_input).to.not.include("--- DOCUMENT id: doc-cmp");
+
+      // Accepted heads are saved first, then the corrected ones.
+      expect(created.map((h) => [h.category, h.basis.monthlyRate ?? h.amount, h.sourceQuote])).to.deep.equal([
+        ["MORAL", 200000, "P200,000.00 as moral damages"],
+        ["ACTUAL", 27000, "Basic monthly salary: P27,000.00"],
+      ]);
+      expect(asked).to.deep.equal(["24310 per month", "200000", "27000 per month"]);
+    });
+
+    it("drops a rejected figure when the correction is wrong again or leaves it out", async () => {
+      reply = [block([netPay, moral]), block([netPay])];
+      await DamagesExtractSvc.runQueued("case-1", "user-1");
+      expect(created.map((h) => h.category)).to.deep.equal(["MORAL"]);
+
+      created = [];
+      payloads = [];
+      reply = [block([netPay]), block([])];
+      await DamagesExtractSvc.runQueued("case-1", "user-1");
+      expect(created).to.deep.equal([]);
+      expect(payloads).to.have.length(2);
+    });
+
+    it("ignores heads the correction adds that weren't rejected", async () => {
+      reply = [block([netPay]), block([basic, moral])];
+      await DamagesExtractSvc.runQueued("case-1", "user-1");
+      expect(created.map((h) => h.category)).to.deep.equal(["ACTUAL"]);
+    });
+
+    it("asks nothing more when Jev accepts every proposal", async () => {
+      reply = [block([basic, moral])];
+      await DamagesExtractSvc.runQueued("case-1", "user-1");
+      expect(payloads).to.have.length(1);
+      expect(created).to.have.length(2);
+    });
   });
 
   it("sends the case's damages model as case_damages on a chat turn that carries it", async () => {

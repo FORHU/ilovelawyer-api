@@ -1872,9 +1872,9 @@ model DamageClaim {
   // A suggested replacement for `basis` (e.g. from a newly arrived payroll certification) —
   // never applied on its own; the lawyer accepts it.
   aiProposedBasis  Json?
-  // Jev's second opinion (USE_JEV_DAMAGES) — suggestions only, never applied to amount/status/range.
+  // No longer written: Jev now vets proposals during extraction instead of rating saved heads (see
+  // DamagesExtractSvc.vetWithJev). Kept so older rows and the migration stay as they are.
   jevSupport       DamageJevSupport?
-  // 0..3: how likely a court is to award this head given the case's findings.
   jevAwardability  Int?
   jevConfidence    Float?
   jevCheckedAt     DateTime?

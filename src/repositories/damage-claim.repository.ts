@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { DamageCategory, DamageJevSupport, DamageStatus, Prisma } from "@prisma/client";
+import { DamageCategory, DamageStatus, Prisma } from "@prisma/client";
 import type { DamageBasis } from "../utils/damages-compute";
 import type { DamageProposal } from "../utils/damages-proposal";
 
@@ -25,12 +25,6 @@ export interface DamageAiExtractInput {
   pendingEvidence: string | null;
   sourceDocumentId: string;
   sourceQuote: string;
-}
-
-export interface DamageJevInput {
-  jevSupport: DamageJevSupport | null;
-  jevAwardability: number | null;
-  jevConfidence: number | null;
 }
 
 // A Json? column can't take a bare null — Prisma needs DbNull to clear it.
@@ -75,11 +69,6 @@ export default class DamageClaimRepo {
       where: { id, caseId },
       data: { aiProposedBasis: proposal === null ? Prisma.DbNull : (proposal as unknown as Prisma.InputJsonValue) },
     });
-  }
-
-  /** Writes only the jev* columns — never amount, status or range (see damages-jev.ts). */
-  static async saveJev(id: string, caseId: string, data: DamageJevInput) {
-    await prisma.damageClaim.updateMany({ where: { id, caseId }, data: { ...data, jevCheckedAt: new Date() } });
   }
 
   /** Writes recomputed amounts back in one transaction (see DamageClaimSvc.recompute). */

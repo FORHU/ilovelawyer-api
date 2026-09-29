@@ -9,7 +9,6 @@ import {
   RETRY_DELAY_MS,
   LEGAL_TAG,
   LEGAL_TAG_UK,
-  EXTRACT_TAG,
   MINDMAP_RULE,
   STRUCTURED_DATA_WAIT_MS,
   CHAT_WONDER_SESSION_TIMEOUT_MS,
@@ -388,18 +387,12 @@ export function streamChatWonderMessage(
    * `skipLegalVerify`: sent as `skip_legal_verify`, turning off chat-wonder's verify→refine
    * self-check for this turn. For one-shot calls whose reply is structured output rather than an
    * answer (CaseMindMapSvc's document-built map), where a quotation/contradiction audit only adds a
-   * rewrite round.
-   *
-   * `extract`: send the prompt under chat-wonder's tool-free `[extract]` persona instead of the
-   * legal one — for structured extraction from text already in the prompt (DamagesExtractSvc), where
-   * juris.ph tools, the verify pass and the post-answer extras are all wasted work. Needs a
-   * chat-wonder with that persona; an older one treats the tag as plain text under its default persona. */
+   * rewrite round. */
   opts?: {
     resolveOnAnswerEnd?: boolean;
     mindMapRequested?: boolean;
     mindMapContext?: string;
     skipLegalVerify?: boolean;
-    extract?: boolean;
     /** Sent as `case_damages`: the case's Damages & Remedies model (DamageClaimSvc.chatContext),
      * which chat-wonder's legal personas inject so answers quote the lawyer's own figures. A
      * chat-wonder build that doesn't know the field drops it. */
@@ -546,9 +539,7 @@ export function streamChatWonderMessage(
             case_damages?: unknown;
           } = {
             type: "chat",
-            user_input: opts?.extract
-              ? `${EXTRACT_TAG} ${stripLegalTag(userInput)}`
-              : withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
+            user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
             session_id: sessionId,
             use_full_legal_chain: false,
           };

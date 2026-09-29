@@ -3,7 +3,6 @@ import CaseRepo from "../repositories/case.repository";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
-import CaseFindingRepo from "../repositories/case-finding.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseGraphSvc from "./case-graph.service";
@@ -11,7 +10,9 @@ import DamageClaimSvc from "./damage-claim.service";
 import { getDamagesExtractPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { damageHeadKey, extractDamageHeads } from "../utils/damages-extract-parse";
-import { checkPendingEvidence, DamageJevContext, DamageJevHead, verifyDamageHeadsWithJev } from "../utils/damages-jev";
+import { checkPendingEvidence, quotedFigureOf, vetDamageHeads } from "../utils/damages-jev";
+import { buildDamagesCorrectionPrompt } from "../constants/damages-extract.constants";
+import type { TenantCode } from "../types/tenant-code";
 import { describeDamageBasis } from "../utils/damages-compute";
 import { figuresDiffer, mergeProposedBasis, parseDamageProposal, type DamageProposal } from "../utils/damages-proposal";
 import type { ExtractedDamageHead } from "../utils/damages-extract-parse";
@@ -118,24 +119,19 @@ export default class DamagesExtractSvc {
       documents: batch.map((d) => ({ id: d.id, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) })),
     });
 
-    // Streaming WS path (not the blocking REST call — same reason as RedTeamSvc, Cloudflare 524),
-    // under chat-wonder's tool-free [extract] persona, settling as soon as the answer ends.
-    const call = (sessionId: string) =>
-      streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, {
-        resolveOnAnswerEnd: true,
-        extract: true,
-      });
-    let result: { content: string };
-    try {
-      result = await call(await getChatWonderSessionId());
-    } catch {
-      result = await call(await getChatWonderSessionId());
-    }
+    const result = await DamagesExtractSvc.ask(prompt, tenantCode);
 
     // Quotes are checked against the full text, not the clipped prompt copy — same as witnesses.
-    const found = extractDamageHeads(result.content, fullTexts);
+    const proposed = extractDamageHeads(result.content, fullTexts);
     // Documents stay unmarked on an unparseable reply, so the next run reads them again.
-    if (found === undefined) throw new HttpError("Chat Wonder returned no [DAMAGES] block", 502);
+    if (proposed === undefined) throw new HttpError("Chat Wonder returned no [DAMAGES] block", 502);
+    // Jev reviews every proposal before anything is saved; a rejected figure goes back to Chat
+    // Wonder once for the right one (or is dropped), so nothing questionable reaches the panel.
+    const found = await DamagesExtractSvc.vetWithJev(caseId, proposed, {
+      tenantCode,
+      fullTexts,
+      documents: batch.map((d) => ({ id: d.id, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) })),
+    });
 
     const byKey = new Map(existing.map((h) => [damageHeadKey(h.category, h.label), h]));
     const fresh = found.filter((h) => !byKey.has(damageHeadKey(h.category, h.label)));
@@ -174,7 +170,6 @@ export default class DamagesExtractSvc {
       // Computed heads (a rate × period, a percentage) get their amount, and existing attorney's
       // fees move if a new base head arrived.
       await DamageClaimSvc.recompute(caseId);
-      await DamagesExtractSvc.rateWithJev(caseId, created.map((r) => r.id));
       await OrganizationRepo.writeAudit({
         caseId,
         actorId: userId,
@@ -195,7 +190,8 @@ export default class DamagesExtractSvc {
     logger.info("Damages extract: batch done", {
       caseId,
       docCount: batch.length,
-      proposed: found.length,
+      proposed: proposed.length,
+      kept: found.length,
       created: created.length,
       updatesProposed: proposedIds.length,
       remaining: pending.length - batch.length,
@@ -242,41 +238,83 @@ export default class DamagesExtractSvc {
     return true;
   }
 
-  /**
-   * The "damages" step of the case refresh (CaseRefreshSvc.refreshInner), run after findings and
-   * outlook: recompute every head, then re-rate all of them with Jev, since awardability reads
-   * the findings that refresh just rewrote. New documents are handled by the extraction pass
-   * itself, which runCasePostExtraction schedules separately.
-   */
-  static async refreshStep(caseId: string): Promise<{ heads: number; rated: number }> {
-    await DamageClaimSvc.recompute(caseId);
-    const heads = await DamageClaimRepo.list(caseId);
-    const rated = await DamagesExtractSvc.rateWithJev(caseId, heads.map((h) => h.id));
-    return { heads: heads.length, rated };
+  /** One question to Chat Wonder over the streaming WS path (not the blocking REST call — same
+   * reason as RedTeamSvc, Cloudflare 524), on the legal persona like every other extraction job.
+   * Same options as CaseMindMapSvc's document-built map, whose reply is also machine-readable:
+   * resolveOnAnswerEnd skips the post-answer extras (timeline, map, reasoning) this call never uses,
+   * and skipLegalVerify skips the quotation/contradiction audit, which would only add a rewrite
+   * round to a [DAMAGES] block. Retried once on a fresh session. */
+  private static async ask(prompt: string, tenantCode: TenantCode): Promise<{ content: string }> {
+    const call = (sessionId: string) =>
+      streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, {
+        resolveOnAnswerEnd: true,
+        skipLegalVerify: true,
+      });
+    try {
+      return await call(await getChatWonderSessionId());
+    } catch {
+      return call(await getChatWonderSessionId());
+    }
   }
 
-  /** Jev's second opinion on the given heads, saved to their jev* columns. No-op when
-   * USE_JEV_DAMAGES is off. Returns how many heads were rated. */
-  private static async rateWithJev(caseId: string, ids: string[]): Promise<number> {
-    if (ids.length === 0) return 0;
-    const [rows, findings] = await Promise.all([DamageClaimRepo.list(caseId), CaseFindingRepo.list(caseId)]);
-    const heads: DamageJevHead[] = rows
-      .filter((r) => ids.includes(r.id))
-      .map((r) => ({ id: r.id, category: r.category, label: r.label, amount: r.amount, basis: r.basis, sourceQuote: r.sourceQuote }));
-    const byCategory = (c: string) => findings.filter((f) => f.category === c).map((f) => f.label);
-    const context: DamageJevContext = {
-      legalIssues: byCategory("LEGAL_ISSUE"),
-      strengths: byCategory("STRENGTH"),
-      weaknesses: byCategory("WEAKNESS"),
-    };
-    const ratings = await verifyDamageHeadsWithJev(heads, context);
-    for (const [id, r] of ratings) {
-      await DamageClaimRepo.saveJev(id, caseId, {
-        jevSupport: r.support,
-        jevAwardability: r.awardability,
-        jevConfidence: r.confidence,
+  /**
+   * Jev reads each proposed head's quote and says whether it states the figure taken from it
+   * (vetDamageHeads). Heads it rejects are sent back to Chat Wonder once, with the reason, asking
+   * for the right figure and the line that states it — or to leave the head out. The answer goes
+   * through the same parser checks and Jev again; only heads Jev accepts (or can't judge) are kept.
+   * A failed follow-up drops the rejected heads rather than failing the batch. With
+   * USE_JEV_DAMAGES off, every proposal is kept as the parser left it.
+   */
+  static async vetWithJev(
+    caseId: string,
+    proposed: ExtractedDamageHead[],
+    ctx: { tenantCode: TenantCode; fullTexts: Map<string, string>; documents: { id: string; name: string; text: string }[] },
+  ): Promise<ExtractedDamageHead[]> {
+    const first = await vetDamageHeads(proposed);
+    if (first.rejected.length === 0) return first.accepted;
+
+    const rejectedKeys = new Set(first.rejected.map((r) => damageHeadKey(r.head.category, r.head.label)));
+    const citedDocs = new Set(first.rejected.map((r) => r.head.documentId));
+    let corrected: ExtractedDamageHead[] = [];
+    try {
+      const prompt = buildDamagesCorrectionPrompt({
+        rejected: first.rejected.map(({ head, check }) => ({
+          category: head.category,
+          label: head.label,
+          figure: quotedFigureOf(head.basis, head.amount) ?? "",
+          quote: head.quote,
+          documentId: head.documentId,
+          reason: check.verdict === "CONTRADICTED" ? "CONTRADICTED" : "UNSUPPORTED",
+        })),
+        documents: ctx.documents.filter((d) => citedDocs.has(d.id)),
       });
+      const reply = await DamagesExtractSvc.ask(prompt, ctx.tenantCode);
+      corrected = (extractDamageHeads(reply.content, ctx.fullTexts) ?? []).filter((h) =>
+        rejectedKeys.has(damageHeadKey(h.category, h.label)),
+      );
+    } catch (err) {
+      logger.warn("Damages extract: correction request failed, dropping rejected heads", { err, caseId });
     }
-    return ratings.size;
+    const second = await vetDamageHeads(corrected);
+
+    logger.info("Damages extract: Jev review", {
+      caseId,
+      proposed: proposed.length,
+      rejected: first.rejected.length,
+      corrected: second.accepted.length,
+      dropped: first.rejected.length - second.accepted.length,
+    });
+    return [...first.accepted, ...second.accepted];
+  }
+
+  /**
+   * The "damages" step of the case refresh (CaseRefreshSvc.refreshInner): recompute every head, so
+   * figures that accrue to today and derived heads (attorney's fees) are current. New documents are
+   * handled by the extraction pass itself, which runCasePostExtraction schedules separately.
+   */
+  static async refreshStep(caseId: string): Promise<{ heads: number }> {
+    await DamageClaimSvc.recompute(caseId);
+    const heads = await DamageClaimRepo.list(caseId);
+    return { heads: heads.length };
   }
 }

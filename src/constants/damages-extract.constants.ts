@@ -58,3 +58,55 @@ Categories: ACTUAL (actual or compensatory damages, including backwages and unpa
 
 ${renderDamagesExtractBody(data)}`;
 }
+
+export interface DamagesCorrectionPromptData {
+  /** Heads the reviewer (Jev) rejected: what was proposed and why it was turned down. */
+  rejected: {
+    category: string;
+    label: string | null;
+    figure: string;
+    quote: string;
+    documentId: string;
+    reason: "UNSUPPORTED" | "CONTRADICTED";
+  }[];
+  /** The documents those heads cite, with their text. */
+  documents: { id: string; name: string; text: string }[];
+}
+
+const CORRECTION_REASONS: Record<DamagesCorrectionPromptData["rejected"][number]["reason"], string> = {
+  UNSUPPORTED: "the quoted line does not state this figure for this head",
+  CONTRADICTED: "the quoted line states a different figure for this head",
+};
+
+/**
+ * The one follow-up question DamagesExtractSvc asks when Jev rejects proposed heads: re-read the
+ * cited document and give the right figure with the line that states it, or leave the head out.
+ * Same [DAMAGES] contract as the first prompt, so the same parser and checks apply to the answer.
+ */
+export function buildDamagesCorrectionPrompt(data: DamagesCorrectionPromptData): string {
+  const docsText = data.documents
+    .map((d) => `--- DOCUMENT id: ${d.id} | name: ${d.name} ---\n${d.text || "(no indexed text)"}`)
+    .join("\n\n");
+  const rejected = data.rejected
+    .map(
+      (r) =>
+        `- ${r.category}${r.label ? ` (${r.label})` : ""}: figure ${r.figure}, from document ${r.documentId}, quoted as "${r.quote}" — rejected because ${CORRECTION_REASONS[r.reason]}.`,
+    )
+    .join("\n");
+  return `A reviewer checked these proposed damages heads against the lines they were quoted from and rejected them:
+${rejected}
+
+DOCUMENTS:
+${docsText}
+
+INSTRUCTIONS:
+Use ONLY the document text above. For each rejected head, re-read its document and either:
+- return the head again with the correct figure and a "quote" copied character-for-character from the document (10-300 characters) that states that figure for that head — for a salary, the basic monthly salary, not gross or net pay; or
+- leave it out if no line in the documents states a figure for it.
+Return only heads from the list above, with the same category and label. Every number in "basis" must appear in "quote". Write numbers without currency signs or thousands separators. Give inputs, never a total.
+
+Respond with the machine-readable block below and nothing else, exactly in this format:
+[DAMAGES]
+[{"category":"ACTUAL","label":"...","basis":{"kind":"RATE_X_PERIOD","monthlyRate":0},"legalBasis":null,"pendingEvidence":null,"documentId":"<id from above>","quote":"..."}]
+[/DAMAGES]`;
+}
