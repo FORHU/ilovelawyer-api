@@ -6,7 +6,7 @@ import { RelatedCase } from "../utils/chatWonder";
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
   static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
-    return prisma.consultation.create({ data: { organizationId, userId, title, caseId } });
+    return prisma.consultation.create({ data: { organizationId, userId, title, caseId, titleSource: title ? "USER" : null } });
   }
 
   /** With a caseId: that case's consultations. Without: only standalone (non-case) consultations,
@@ -36,8 +36,34 @@ export default class ChatRepo {
     });
   }
 
+  static async findConsultationTitleState(consultationId: string) {
+    return prisma.consultation.findUnique({ where: { id: consultationId }, select: { title: true, titleSource: true } });
+  }
+
+  /** A user rename — locks the title against any later AI re-titling. */
   static async updateConsultation(consultationId: string, title: string) {
-    return prisma.consultation.update({ where: { id: consultationId }, data: { title } });
+    return prisma.consultation.update({ where: { id: consultationId }, data: { title, titleSource: "USER" } });
+  }
+
+  /** An AI-generated (or provisional) title. Conditional, so it can never overwrite a title the
+   * user set — including one renamed while this title was still being generated. True if saved. */
+  static async saveGeneratedTitle(consultationId: string, title: string, source: "AUTO" | "PROVISIONAL"): Promise<boolean> {
+    const result = await prisma.consultation.updateMany({
+      where: { id: consultationId, OR: [{ titleSource: null }, { titleSource: { in: ["AUTO", "PROVISIONAL"] } }] },
+      data: { title, titleSource: source },
+    });
+    return result.count > 0;
+  }
+
+  /** The consultation's most recent user messages, oldest first (blank file-only sends skipped). */
+  static async listRecentUserMessageContents(consultationId: string, limit: number): Promise<string[]> {
+    const rows = await prisma.message.findMany({
+      where: { consultationId, role: "user", NOT: { content: "" } },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      select: { content: true },
+    });
+    return rows.map((row) => row.content).reverse();
   }
 
   static async deleteConsultation(consultationId: string) {

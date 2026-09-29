@@ -148,12 +148,19 @@ router.post("/:caseId/theories/propose", asyncHandler(CaseTerminalCtrl.proposeTh
 router.get("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.getTheoryDiff));
 router.post("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.generateTheoryDiff));
 router.patch("/:caseId/theories/:id", asyncHandler(CaseTerminalCtrl.updateTheory));
+router.delete("/:caseId/theories/:id", asyncHandler(CaseTerminalCtrl.deleteTheory));
 router.post("/:caseId/theories/:id/publish", asyncHandler(CaseTerminalCtrl.publishTheory));
 router.post("/:caseId/theories/:id/retire", asyncHandler(CaseTerminalCtrl.retireTheory));
 router.post("/:caseId/theories/:id/fork", asyncHandler(CaseTerminalCtrl.forkTheory));
 router.post("/:caseId/theories/:id/claims", asyncHandler(CaseTerminalCtrl.addTheoryClaim));
 router.post("/:caseId/theories/:id/assumptions", asyncHandler(CaseTerminalCtrl.addTheoryAssumption));
 router.post("/:caseId/theories/:id/open-questions", asyncHandler(CaseTerminalCtrl.addTheoryOpenQuestion));
+router.patch("/:caseId/theories/:id/claims/:itemId", asyncHandler(CaseTerminalCtrl.updateTheoryClaim));
+router.delete("/:caseId/theories/:id/claims/:itemId", asyncHandler(CaseTerminalCtrl.deleteTheoryClaim));
+router.patch("/:caseId/theories/:id/assumptions/:itemId", asyncHandler(CaseTerminalCtrl.updateTheoryAssumption));
+router.delete("/:caseId/theories/:id/assumptions/:itemId", asyncHandler(CaseTerminalCtrl.deleteTheoryAssumption));
+router.patch("/:caseId/theories/:id/open-questions/:itemId", asyncHandler(CaseTerminalCtrl.updateTheoryOpenQuestion));
+router.delete("/:caseId/theories/:id/open-questions/:itemId", asyncHandler(CaseTerminalCtrl.deleteTheoryOpenQuestion));
 
 router.get("/:caseId/annotations", asyncHandler(CaseTerminalCtrl.listAnnotations));
 router.post("/:caseId/annotations", asyncHandler(CaseTerminalCtrl.createAnnotation));

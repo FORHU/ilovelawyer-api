@@ -77,6 +77,7 @@ import {
   createTheorySchema,
   updateTheorySchema,
   addTheoryClaimSchema,
+  updateTheoryClaimSchema,
   addTheoryAssumptionSchema,
   addTheoryOpenQuestionSchema,
   diffTheoriesSchema,
@@ -754,6 +755,11 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  static async deleteTheory(req: Request, res: Response) {
+    await CaseTheorySvc.remove(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
   static async forkTheory(req: Request, res: Response) {
     const result = await CaseTheorySvc.fork(req.params.caseId, req.params.id, req.user.userId);
     return res.status(201).json(result);
@@ -778,6 +784,48 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseTheorySvc.addOpenQuestion(req.params.caseId, req.params.id, req.user.userId, value.question);
     return res.status(201).json(result);
+  }
+
+  static async updateTheoryClaim(req: Request, res: Response) {
+    const { error, value } = updateTheoryClaimSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId, id, itemId } = req.params;
+    const result = await CaseTheorySvc.updateClaim(caseId, id, itemId, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteTheoryClaim(req: Request, res: Response) {
+    const { caseId, id, itemId } = req.params;
+    await CaseTheorySvc.deleteClaim(caseId, id, itemId, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async updateTheoryAssumption(req: Request, res: Response) {
+    const { error, value } = addTheoryAssumptionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId, id, itemId } = req.params;
+    const result = await CaseTheorySvc.updateAssumption(caseId, id, itemId, req.user.userId, value.statement);
+    return res.status(200).json(result);
+  }
+
+  static async deleteTheoryAssumption(req: Request, res: Response) {
+    const { caseId, id, itemId } = req.params;
+    await CaseTheorySvc.deleteAssumption(caseId, id, itemId, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async updateTheoryOpenQuestion(req: Request, res: Response) {
+    const { error, value } = addTheoryOpenQuestionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId, id, itemId } = req.params;
+    const result = await CaseTheorySvc.updateOpenQuestion(caseId, id, itemId, req.user.userId, value.question);
+    return res.status(200).json(result);
+  }
+
+  static async deleteTheoryOpenQuestion(req: Request, res: Response) {
+    const { caseId, id, itemId } = req.params;
+    await CaseTheorySvc.deleteOpenQuestion(caseId, id, itemId, req.user.userId);
+    return res.status(204).send();
   }
 
   /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */

@@ -113,6 +113,21 @@ export default class CaseTheorySvc {
     return CaseTheoryRepo.findById(forked.id, caseId);
   }
 
+  /** Only a fork can be deleted — it's a working copy of someone else's (or the AI's) theory, so
+   * throwing it away loses nothing that isn't still in the source. An original theory is
+   * retired instead, which keeps its history visible to the other lawyers on the case. */
+  static async remove(caseId: string, theoryId: string, userId: string) {
+    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    if (!theory.forkedFromId) {
+      throw new HttpError("Only a forked theory can be deleted — retire this one instead", 400);
+    }
+    const deleted = await CaseTheoryRepo.deleteWithDependents(theoryId, caseId);
+    if (!deleted) throw new HttpError("Theory not found", 404);
+    // Its THEORY graph node, and with it (FK cascade) the edges its graph-linked claims made.
+    await CaseGraphSvc.removeNode("THEORY", theoryId);
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.delete", payload: { id: theoryId, forkedFromId: theory.forkedFromId } });
+  }
+
   /** `graphNodeId` optionally links this claim to an existing CaseGraphNode (a CLAIM, FINDING
    * or DOCUMENT, typically) — when given, mirrors it as a CaseEdge from the theory's own
    * THEORY node so the claim shows up in the Mind Map/citation-map with no dedicated UI. */
@@ -141,6 +156,73 @@ export default class CaseTheorySvc {
       }).catch(() => {});
     }
     return claim;
+  }
+
+  /** Edits a claim's text and/or stance. A graph-linked claim's mirrored CaseEdge (see addClaim)
+   * is rebuilt so the Mind Map shows the new stance/statement rather than the old one. */
+  static async updateClaim(
+    caseId: string,
+    theoryId: string,
+    claimId: string,
+    userId: string,
+    data: { statement?: string; stance?: TheoryStance },
+  ) {
+    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const claim = await CaseTheoryRepo.updateClaim(claimId, theoryId, data);
+    if (!claim) throw new HttpError("Claim not found", 404);
+    if (claim.graphNodeId) {
+      await CaseEdgeRepo.deleteByTheoryClaim(caseId, claim.id);
+      const theoryNode = await CaseGraphSvc.ensureNode(caseId, "THEORY", theoryId);
+      await CaseEdgeRepo.create(caseId, {
+        sourceEntityId: theoryNode.id,
+        targetEntityId: claim.graphNodeId,
+        relationType: STANCE_RELATION[claim.stance],
+        metadata: { theoryClaimId: claim.id, statement: claim.statement },
+      }).catch(() => {});
+    }
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.claim.update", payload: { id: theoryId, claimId } });
+    return claim;
+  }
+
+  static async deleteClaim(caseId: string, theoryId: string, claimId: string, userId: string) {
+    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const deleted = await CaseTheoryRepo.deleteClaim(claimId, theoryId);
+    if (!deleted) throw new HttpError("Claim not found", 404);
+    await CaseEdgeRepo.deleteByTheoryClaim(caseId, claimId);
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.claim.delete", payload: { id: theoryId, claimId } });
+  }
+
+  static async updateAssumption(caseId: string, theoryId: string, assumptionId: string, userId: string, statement: string) {
+    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const row = await CaseTheoryRepo.updateAssumption(assumptionId, theoryId, statement);
+    if (!row) throw new HttpError("Assumption not found", 404);
+    return row;
+  }
+
+  static async deleteAssumption(caseId: string, theoryId: string, assumptionId: string, userId: string) {
+    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    if (!(await CaseTheoryRepo.deleteAssumption(assumptionId, theoryId))) throw new HttpError("Assumption not found", 404);
+  }
+
+  static async updateOpenQuestion(caseId: string, theoryId: string, questionId: string, userId: string, question: string) {
+    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const row = await CaseTheoryRepo.updateOpenQuestion(questionId, theoryId, question);
+    if (!row) throw new HttpError("Open question not found", 404);
+    return row;
+  }
+
+  static async deleteOpenQuestion(caseId: string, theoryId: string, questionId: string, userId: string) {
+    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    if (!(await CaseTheoryRepo.deleteOpenQuestion(questionId, theoryId))) throw new HttpError("Open question not found", 404);
+  }
+
+  /** Same gate every theory edit goes through: can edit the case, theory exists, caller wrote it. */
+  private static async loadOwnTheory(caseId: string, theoryId: string, userId: string) {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const theory = await CaseTheoryRepo.findById(theoryId, caseId);
+    if (!theory) throw new HttpError("Theory not found", 404);
+    assertAuthor(theory, userId);
+    return theory;
   }
 
   static async addAssumption(caseId: string, theoryId: string, userId: string, statement: string) {

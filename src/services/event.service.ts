@@ -107,8 +107,9 @@ export default class EventSvc {
     // UI-only; without this check a stale open edit form (or a direct API call) could still
     // silently rewrite a cancelled appointment's details.
     const nonStatusFieldsPresent = Object.keys(body).some((key) => key !== "status");
+    let existing: Awaited<ReturnType<typeof EventRepo.findById>> = null;
     if (nonStatusFieldsPresent) {
-      const existing = await EventRepo.findById(id, organizationId, userId, userEmail);
+      existing = await EventRepo.findById(id, organizationId, userId, userEmail);
       if (!existing) throw new HttpError("Event not found", 404);
       if (existing.status === "cancelled") {
         throw new HttpError("Cannot edit a cancelled appointment. Restore it first.", 400);
@@ -138,8 +139,27 @@ export default class EventSvc {
     if (body.caseId !== undefined || body.case_id !== undefined) data.caseId = body.caseId || body.case_id || null;
     if (body.dateSource !== undefined || body.date_source !== undefined) data.dateSource = body.dateSource || body.date_source;
 
+    // Rescheduled: a reminder already sent was for the old time, and the reminder queue only
+    // picks up events with no lastReminderSentAt — without clearing it, the new time would
+    // never get a reminder and the bell would keep showing only the old time.
+    const rescheduled =
+      existing && data.dateTime instanceof Date && data.dateTime.getTime() !== existing.dateTime.getTime();
+    if (rescheduled) data.lastReminderSentAt = null;
+
     const result = await EventRepo.updateById(id, organizationId, userId, userEmail, data);
     if (result.count === 0) throw new HttpError("Event not found", 404);
+
+    if (rescheduled) {
+      const title = data.title ?? existing!.title;
+      NotificationSvc.create({
+        userId,
+        organizationId,
+        type: "EVENT_REMINDER",
+        title: "Appointment rescheduled",
+        message: `${title} — ${formatEventDateTime(data.dateTime)}`,
+        link: `/homepage/calendar?date=${encodeURIComponent(data.dateTime.toISOString())}`,
+      }).catch((err) => logger.error("EventSvc.updateById: failed to create notification", { err, eventId: id }));
+    }
     return { success: true };
   }
 

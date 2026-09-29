@@ -160,6 +160,11 @@ export default class DocumentRepo {
   }
 
   /** Count of a message's attachments still being extracted/indexed (see ChatSvc's attachment wait). */
+  static async listNamesByMessage(messageId: string): Promise<string[]> {
+    const rows = await prisma.document.findMany({ where: { messageId }, select: { name: true }, orderBy: { createdAt: "asc" } });
+    return rows.map((row) => row.name);
+  }
+
   static async countPendingByMessage(messageId: string): Promise<number> {
     return prisma.document.count({ where: { messageId, ragStatus: "PENDING" } });
   }

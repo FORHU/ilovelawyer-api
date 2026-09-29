@@ -10,7 +10,7 @@ export const BULK_ACTION_MAX = 50;
  * filters to these before ever calling presign/create, but that's advisory only — anyone can
  * call the API directly, so this is the authoritative check (enforced via filename extension in
  * document.validation.ts / case.validation.ts). */
-export const ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "xlsx", "xlsm", "xlam", "jpg", "jpeg", "png", "mp3", "mp4"];
+export const ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "xlsx", "xlsm", "xlam", "txt", "jpg", "jpeg", "png", "mp3", "mp4"];
 
 /** Audio/video evidence — no text layer to extract, so the extraction pipeline transcribes these
  * with AWS Transcribe (see DocumentExtractionSvc) and indexes the transcript instead. */
