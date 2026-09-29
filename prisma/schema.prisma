@@ -109,6 +109,7 @@ model User {
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
   caseBriefExports        CaseBriefExport[]
   caseViews               CaseView[]
+  updatedTenantSettings   TenantSetting[]
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -2255,6 +2256,25 @@ model Tenant {
   organizations             Organization[]
   legalSourceAnalysisCaches LegalSourceAnalysisCache[]
   laws                      Law[]
+  settings                  TenantSetting[]
+}
+
+// Admin-editable settings scoped to one Tenant (PH / UK) — one row per (tenant, key).
+// Read through TenantSettingSvc (Redis-cached); a missing row means the setting's default.
+// Today only "signup.autoApprove" (see TENANT_SETTING_KEYS); an email-domain allow-list
+// could live here later.
+model TenantSetting {
+  tenantId    String
+  key         String
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updatedBy User?  @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@id([tenantId, key])
+  @@index([updatedById])
 }
 
 // userId is globally unique — a user belongs to at most one Organization (see
