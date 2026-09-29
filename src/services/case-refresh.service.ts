@@ -8,6 +8,7 @@ import CaseFindingAiSvc from "./case-finding-ai.service";
 import CaseOutlookAiSvc from "./case-outlook-ai.service";
 import CaseMindMapSvc, { isCaseMindMapBusy } from "./case-mind-map.service";
 import CaseTimelineSvc from "./case-timeline.service";
+import DamagesExtractSvc from "./damages-extract.service";
 import ChatRepo from "../repositories/chat.repository";
 import { TimelineItem } from "../utils/response-parser";
 import OrganizationRepo from "../repositories/organization.repository";
@@ -136,6 +137,21 @@ export default class CaseRefreshSvc {
                     return;
                 }
                 logger.warn("Chat Wonder case mind map build failed", {
+                    err,
+                    caseId,
+                    durationMs: Date.now() - stepStartedAt,
+                });
+            });
+
+        // After findings and outlook, since Jev's awardability reads the findings just rewritten.
+        // Recomputes every head and re-rates them; a failure never fails the refresh.
+        stepStartedAt = Date.now();
+        await DamagesExtractSvc.refreshStep(caseId)
+            .then((result) => {
+                logger.info("Refresh analysis: damages done", { caseId, ...result, durationMs: Date.now() - stepStartedAt });
+            })
+            .catch((err) => {
+                logger.warn("Damages refresh step failed", {
                     err,
                     caseId,
                     durationMs: Date.now() - stepStartedAt,

@@ -11,3 +11,4 @@ export * from "./witness-scoring.prompt";
 export * from "./witness-extract.prompt";
 export * from "./claim-extract.prompt";
 export * from "./mind-map-documents.prompt";
+export * from "./damages-extract.prompt";

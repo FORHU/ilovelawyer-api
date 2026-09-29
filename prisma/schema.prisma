@@ -794,6 +794,8 @@ model Document {
   // pass only ever sends new documents to the model — a witness the lawyer deleted is never
   // re-created from a document that was already read.
   witnessesExtractedAt DateTime?
+  // Same idea for the damages pass (DamagesExtractSvc): set once it has read this document.
+  damagesExtractedAt   DateTime?
   // Archiving is a pure visibility flag, same as Case.status — an ARCHIVED document stays fully
   // intact (chunks, RAG grounding, metadata, relationships) and is only hidden from the active
   // document view by default. See DocumentRepo.list's status param and DocumentRepo.setStatus.
@@ -809,6 +811,7 @@ model Document {
   file         File?               @relation(fields: [fileId], references: [id])
   chunks       CaseDocumentChunk[]
   extractedWitnesses Witness[]
+  extractedDamages   DamageClaim[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1836,16 +1839,67 @@ enum DamageCategory {
   OTHER
 }
 
+// How firm a head's figure is. PROVISIONAL until the evidence behind its inputs is in; CERTIFIED
+// is a lawyer's call (audited as damage.certify), never set by AI on its own.
+enum DamageStatus {
+  PROVISIONAL
+  SUPPORTED
+  CERTIFIED
+}
+
+enum DamageSource {
+  MANUAL
+  AI
+}
+
+// Jev's read of whether a head's sourceQuote bears out its basis inputs (damages-jev.ts).
+enum DamageJevSupport {
+  SUPPORTED
+  UNSUPPORTED
+  CONTRADICTED
+}
+
+// One head of the Damages & Remedies model. `basis` holds the inputs (see DamageBasis in
+// src/utils/damages-compute.ts); `amount` is stored but, for any basis other than FIXED, it is
+// the computed value — DamageClaimSvc recomputes every head of the case on each write, so a
+// derived head (attorney's fees as a percent of other heads) never goes stale. basis = null
+// reads as FIXED, which is how rows created before this field existed behave.
 model DamageClaim {
   id          String         @id @default(uuid())
   caseId      String
   category    DamageCategory
+  // Display name ("Actual (backwages)"); null falls back to the category's name.
+  label       String?
   description String?        @db.Text
   amount      Float?
+  basis       Json?
+  // Realistic range for this head; null reads as `amount` (see computeDamagesSummary).
+  amountLow   Float?
+  amountHigh  Float?
+  status      DamageStatus   @default(PROVISIONAL)
+  // What evidence would firm the figure up, e.g. "payroll certification".
+  pendingEvidence String?
+  // Free-text statute/rule label. Not verified — the Labor Code (PD 442) is outside juris.ph.
+  legalBasis  String?
+  // AI = proposed by DamagesExtractSvc from `sourceDocumentId`; `sourceQuote` is the verbatim
+  // line it relied on, checked against that document's text before the row is written.
+  source           DamageSource @default(MANUAL)
+  sourceDocumentId String?
+  sourceQuote      String?      @db.Text
+  // A suggested replacement for `basis` (e.g. from a newly arrived payroll certification) —
+  // never applied on its own; the lawyer accepts it.
+  aiProposedBasis  Json?
+  // No longer written: Jev now vets proposals during extraction instead of rating saved heads (see
+  // DamagesExtractSvc.vetWithJev). Kept so older rows and the migration stay as they are.
+  jevSupport       DamageJevSupport?
+  jevAwardability  Int?
+  jevConfidence    Float?
+  jevCheckedAt     DateTime?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
 
   @@index([caseId])
 }
@@ -1864,6 +1918,10 @@ model CaseClaim {
   source        AuthoringSource @default(MANUAL)
   sourceLabel   String?
   sourceQuote   String?         @db.Text
+  // The Document sourceLabel names, so the Citation Map can open it. A plain id, not a relation:
+  // a deleted document just leaves the claim without a link. Null on claims found before this
+  // was saved (the seed falls back to matching sourceLabel against the case's document names).
+  sourceDocumentId String?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 

@@ -19,6 +19,7 @@ import CitationGroundSvc from "../services/citation-ground.service";
 import AdverseSweepSvc from "../services/adverse-sweep.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
+import DamagesExtractSvc from "../services/damages-extract.service";
 import CaseClaimSvc from "../services/case-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
@@ -547,6 +548,25 @@ export default class CaseTerminalCtrl {
     const { error, value } = updateDamageSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await DamageClaimSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  /** Queues a damages pass over every document of the case (DamagesExtractSvc.propose); the panel
+   * follows ai-jobs/damagesExtract for completion. */
+  static async proposeDamages(req: Request, res: Response) {
+    const { caseId } = req.params;
+    await DamagesExtractSvc.propose(caseId, req.user.userId);
+    const status = await AiGenerationLockSvc.getStatus(caseId, "damagesExtract");
+    return res.status(202).json(status);
+  }
+
+  static async applyDamageProposal(req: Request, res: Response) {
+    const result = await DamageClaimSvc.applyProposal(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async dismissDamageProposal(req: Request, res: Response) {
+    const result = await DamageClaimSvc.dismissProposal(req.params.caseId, req.params.id, req.user.userId);
     return res.status(200).json(result);
   }
 

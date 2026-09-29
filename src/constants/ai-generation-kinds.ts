@@ -22,6 +22,7 @@ export const AI_GENERATION_KINDS = [
   "timelineGenerate",
   "witnessScoring",
   "witnessExtract",
+  "damagesExtract",
   "claimExtract",
   "citationGrounds",
   "adverseSweep",

@@ -5,7 +5,7 @@
 // identical to the PH version (see ../../ph/prompts/red-team.prompt.ts) since both feed the same
 // downstream markdown renderer.
 import type { RedTeamPromptData } from "../../ph/prompts";
-import { RED_TEAM_ARGUMENTS_INSTRUCTIONS } from "../../../constants/red-team.constants";
+import { RED_TEAM_ARGUMENTS_INSTRUCTIONS, damagesSection } from "../../../constants/red-team.constants";
 
 interface UKJurisdictionFraming {
   roleLabel: string;
@@ -84,9 +84,7 @@ export function buildUKRedTeamPrompt(data: RedTeamPromptData): string {
   );
   const weaknessesText = bulletList(data.weaknesses);
   const witnessesText = bulletList(data.witnesses.map((w) => (w.role ? `${w.name} — ${w.role}` : w.name)));
-  const damagesText = bulletList(
-    data.damages.map((d) => `${d.category}${d.amount != null ? `: ${d.amount}` : ""}${d.description ? ` — ${d.description}` : ""}`),
-  );
+  const damagesText = damagesSection(data);
 
   const { framing, isAssumed } = resolveFraming(data.ukJurisdiction);
   const assumedNote = isAssumed

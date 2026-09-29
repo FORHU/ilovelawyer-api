@@ -16,7 +16,10 @@ export default class CaseClaimRepo {
   }
 
   /** A claim ClaimExtractSvc found in the pleadings, with where it was found. */
-  static async createFromAi(caseId: string, data: { title: string; causeOfAction: string | null; sourceLabel: string; sourceQuote: string }) {
+  static async createFromAi(
+    caseId: string,
+    data: { title: string; causeOfAction: string | null; sourceLabel: string; sourceQuote: string; sourceDocumentId: string | null },
+  ) {
     return prisma.caseClaim.create({ data: { caseId, source: "AI", ...data } });
   }
 
