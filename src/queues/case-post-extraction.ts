@@ -5,6 +5,7 @@ import CaseReconstructionAudioQueue from "./case-reconstruction-audio.queue";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import WitnessExtractSvc from "../services/witness-extract.service";
+import DamagesExtractSvc from "../services/damages-extract.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
@@ -69,6 +70,8 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     // read yet (Document.witnessesExtractedAt), so an unchanged corpus is a quick no-op, and a
     // case whose documents predate this job gets backfilled on its next trigger.
     WitnessExtractSvc.schedule(caseId, userId);
+    // Same reasoning for the damages pass: it only reads documents with no damagesExtractedAt.
+    DamagesExtractSvc.schedule(caseId, userId);
 
     const docs = await DocumentRepo.listAllByCase(caseId);
     const fingerprint = computeReadySetFingerprint(docs);

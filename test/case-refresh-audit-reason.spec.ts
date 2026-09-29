@@ -20,6 +20,7 @@ import OrganizationRepo from "../src/repositories/organization.repository";
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import CaseSnapshotSvc from "../src/services/case-snapshot.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
+import DamagesExtractSvc from "../src/services/damages-extract.service";
 import HttpError from "../src/utils/http-error";
 
 describe("CaseRefreshSvc.runQueued — audit reason", () => {
@@ -36,7 +37,10 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     lockFinishWith: AiGenerationLockSvc.finishWith,
     snapshotGet: CaseSnapshotSvc.get,
     mapGenerate: CaseMindMapSvc.generateFromDocuments,
+    damagesRefresh: DamagesExtractSvc.refreshStep,
+    outlookGenerate: CaseOutlookAiSvc.generateFromDocuments,
   };
+  let steps: string[];
   let mapReasons: (string | undefined)[];
 
   let audits: any[];
@@ -48,7 +52,15 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (EvidenceIntelligenceSvc as any).scanContradictions = async () => [];
     (CaseStrategySvc as any).generateFromDocuments = async () => ({});
     (CaseFindingAiSvc as any).generateFromDocuments = async () => ({});
-    (CaseOutlookAiSvc as any).generateFromDocuments = async () => null;
+    steps = [];
+    (CaseOutlookAiSvc as any).generateFromDocuments = async () => {
+      steps.push("outlook");
+      return null;
+    };
+    (DamagesExtractSvc as any).refreshStep = async () => {
+      steps.push("damages");
+      return { heads: 0, rated: 0 };
+    };
     (ChatRepo as any).listConsultationIdsByCase = async () => [];
     (CaseRepo as any).markRefreshed = async () => ({ count: 1 });
     (OrganizationRepo as any).writeAudit = async (data: any) => {
@@ -76,6 +88,21 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (AiGenerationLockSvc as any).finishWith = originals.lockFinishWith;
     (CaseSnapshotSvc as any).get = originals.snapshotGet;
     (CaseMindMapSvc as any).generateFromDocuments = originals.mapGenerate;
+    (DamagesExtractSvc as any).refreshStep = originals.damagesRefresh;
+  });
+
+  it("runs the damages step after the outlook, since Jev's awardability reads the fresh findings", async () => {
+    await CaseRefreshSvc.runQueued("case-1", "user-1");
+    expect(steps).to.deep.equal(["outlook", "damages"]);
+  });
+
+  it("still completes the refresh when the damages step throws", async () => {
+    (DamagesExtractSvc as any).refreshStep = async () => {
+      throw new Error("jev down");
+    };
+    await CaseRefreshSvc.runQueued("case-1", "user-1");
+    expect(audits).to.have.length(1);
+    expect(audits[0]).to.include({ action: "case.refresh" });
   });
 
   it('"Refresh analysis" rebuilds the case mind map ("refresh"); the automatic run only when documents changed ("auto")', async () => {

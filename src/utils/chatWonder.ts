@@ -388,7 +388,16 @@ export function streamChatWonderMessage(
    * self-check for this turn. For one-shot calls whose reply is structured output rather than an
    * answer (CaseMindMapSvc's document-built map), where a quotation/contradiction audit only adds a
    * rewrite round. */
-  opts?: { resolveOnAnswerEnd?: boolean; mindMapRequested?: boolean; mindMapContext?: string; skipLegalVerify?: boolean },
+  opts?: {
+    resolveOnAnswerEnd?: boolean;
+    mindMapRequested?: boolean;
+    mindMapContext?: string;
+    skipLegalVerify?: boolean;
+    /** Sent as `case_damages`: the case's Damages & Remedies model (DamageClaimSvc.chatContext),
+     * which chat-wonder's legal personas inject so answers quote the lawyer's own figures. A
+     * chat-wonder build that doesn't know the field drops it. */
+    caseDamages?: unknown;
+  },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -527,6 +536,7 @@ export function streamChatWonderMessage(
             mind_map_requested?: boolean;
             case_mind_map_context?: string;
             skip_legal_verify?: boolean;
+            case_damages?: unknown;
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -544,6 +554,9 @@ export function streamChatWonderMessage(
           }
           if (opts?.skipLegalVerify) {
             payload.skip_legal_verify = true;
+          }
+          if (opts?.caseDamages) {
+            payload.case_damages = opts.caseDamages;
           }
           if (opts?.mindMapContext) {
             payload.case_mind_map_context = opts.mindMapContext;

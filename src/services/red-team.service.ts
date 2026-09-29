@@ -6,6 +6,7 @@ import { getRedTeamPromptBuilder } from "../legal/prompt-registry";
 import { extractRedTeamClaims } from "../utils/red-team-claims-parse";
 import { extractRedTeamArguments, RedTeamSourceItem } from "../utils/red-team-arguments-parse";
 import { RedTeamPromptData } from "../constants/red-team.constants";
+import { describeDamageBasis } from "../utils/damages-compute";
 import { isRedTeamJevEnabled, verifyRedTeamArgumentsWithJev, RedTeamJevContext } from "../utils/red-team-jev";
 import { formatContradiction, formatParty, formatTimelineEntry, formatWitness } from "../utils/case-jev-context";
 import HttpError from "../utils/http-error";
@@ -126,7 +127,29 @@ export default class RedTeamSvc {
         rightExcerpt: c.rightExcerpt,
       })),
       witnesses: snapshot.witnesses.map((w) => ({ name: w.name, role: w.role })),
-      damages: snapshot.damages.map((d) => ({ category: d.category, description: d.description, amount: d.amount })),
+      damages: snapshot.damages.map((d) => {
+        const computed = snapshot.damagesSummary.heads.find((h) => h.id === d.id);
+        return {
+          category: d.category,
+          label: d.label,
+          description: d.description,
+          amount: computed?.amount ?? d.amount,
+          status: computed?.effectiveStatus ?? d.status,
+          low: computed?.low,
+          high: computed?.high,
+          basisText: describeDamageBasis(d.basis),
+          pendingEvidence: d.pendingEvidence,
+        };
+      }),
+      damagesTotals: snapshot.damages.length
+        ? {
+            currency: snapshot.damagesSummary.currency,
+            total: snapshot.damagesSummary.total,
+            low: snapshot.damagesSummary.low,
+            high: snapshot.damagesSummary.high,
+            provisional: snapshot.damagesSummary.provisional,
+          }
+        : null,
     };
   }
 

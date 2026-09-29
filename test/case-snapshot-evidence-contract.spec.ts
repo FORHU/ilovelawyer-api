@@ -75,6 +75,7 @@ describe("CaseSnapshotSvc.get — Evidence & Timeline contract", () => {
     patch([
       [CaseAccess, "loadAccessibleCase", async () => ({ id: "case-1", lastRefreshedAt: null, parties: [] })],
       [CaseAccess, "requiredConfirmations", empty],
+      [CaseAccess, "resolveTenantCode", async () => "PH"],
       [DocumentRepo, "listAllByCase", async () => documents],
       [CaseTimelineRepo, "list", async () => timeline],
       [CaseRiskRepo, "list", empty],
@@ -164,5 +165,44 @@ describe("CaseSnapshotSvc.get — Evidence & Timeline contract", () => {
       const snapshot = await CaseSnapshotSvc.get("case-1", "user-1");
       expect(snapshot.trends.evidence[CASE_TREND_WEEKS - 1].total).to.equal(1);
     });
+  });
+
+  // Damages & Remedies panel: the summary is computed server-side so the ring, the exposure bar,
+  // Red Team and chat all read the same figures.
+  it("serves damagesSummary computed from the case's heads, in the tenant's currency", async () => {
+    const row = (id: string, category: string, extra: Record<string, unknown>) => ({
+      id,
+      caseId: "case-1",
+      category,
+      amount: null,
+      basis: null,
+      amountLow: null,
+      amountHigh: null,
+      status: "PROVISIONAL",
+      pendingEvidence: null,
+      ...extra,
+    });
+    patch([
+      [CaseAccess, "resolveTenantCode", async () => "UK"],
+      [
+        DamageClaimRepo,
+        "list",
+        async () => [
+          row("a", "ACTUAL", { amount: 1000, pendingEvidence: "payroll certification" }),
+          row("f", "ATTORNEYS_FEES", { basis: { kind: "PERCENT_OF", percent: 10, categories: ["ACTUAL"] } }),
+        ],
+      ],
+    ]);
+
+    const snapshot = await CaseSnapshotSvc.get("case-1", "user-1");
+
+    expect(snapshot.damagesSummary).to.include({ currency: "GBP", total: 1100, headCount: 2, provisional: true });
+    expect(snapshot.damagesSummary.pendingEvidence).to.deep.equal(["payroll certification"]);
+  });
+
+  it("falls back to PHP when the case has no tenant", async () => {
+    patch([[CaseAccess, "resolveTenantCode", async () => { throw new Error("no organization"); }]]);
+    const snapshot = await CaseSnapshotSvc.get("case-1", "user-1");
+    expect(snapshot.damagesSummary).to.include({ currency: "PHP", total: 0, headCount: 0 });
   });
 });

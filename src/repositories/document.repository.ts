@@ -103,6 +103,25 @@ export default class DocumentRepo {
     await prisma.document.updateMany({ where: { id: { in: ids } }, data: { witnessesExtractedAt: new Date() } });
   }
 
+  /** Same shape as the witness pair above, for DamagesExtractSvc (Document.damagesExtractedAt). */
+  static async listPendingDamagesExtraction(caseId: string) {
+    return prisma.document.findMany({
+      where: { caseId, ragStatus: "READY", damagesExtractedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, category: true },
+    });
+  }
+
+  static async markDamagesExtracted(ids: string[]) {
+    if (!ids.length) return;
+    await prisma.document.updateMany({ where: { id: { in: ids } }, data: { damagesExtractedAt: new Date() } });
+  }
+
+  /** "Propose from documents": lets the next damages pass read every document of the case again. */
+  static async clearDamagesExtracted(caseId: string) {
+    await prisma.document.updateMany({ where: { caseId }, data: { damagesExtractedAt: null } });
+  }
+
   static async listAllByCase(caseId: string) {
     return prisma.document.findMany({
       where: { caseId },
