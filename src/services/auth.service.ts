@@ -10,6 +10,7 @@ import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import logger from "../utils/logger";
 import type { TenantCode } from "../types/tenant-code";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
 import { originForTenantCode } from "../utils/tenant-host";
@@ -19,11 +20,21 @@ import {
   EMAIL_VERIFICATION_EXPIRY_MS,
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
+  TERMS_VERSION,
 } from "../constants";
-import { generateOtpCode, duplicateEmailMessage } from "../utils/auth.utils";
+import { generateOtpCode, duplicateEmailMessage, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 
 export default class AuthSvc {
-  static async signup(username: string, email: string, password: string, name: string, requestTenantCode: TenantCode | null = null) {
+  static async signup(
+    username: string,
+    email: string,
+    password: string,
+    name: string,
+    requestTenantCode: TenantCode | null = null,
+    acceptedTerms = false,
+  ) {
+    email = normalizeEmail(email);
+
     const existingUser = await AuthRepo.findByEmail(email);
     if (existingUser) {
       throw new HttpError(duplicateEmailMessage(existingUser, "Email already in use", requestTenantCode), 409);
@@ -43,7 +54,17 @@ export default class AuthSvc {
 
     let user;
     try {
-      user = await AuthRepo.createUser({ username, email, password: hashedPassword, name, tenantId });
+      // acceptedTerms is optional on the wire for now (signupSchema) so an app build that
+      // predates it can still sign up — the frontend already gates signup on the Terms dialog.
+      // Recorded whenever it's sent; make it required once every client sends it.
+      user = await AuthRepo.createUser({
+        username,
+        email,
+        password: hashedPassword,
+        name,
+        tenantId,
+        termsVersion: acceptedTerms ? TERMS_VERSION : null,
+      });
     } catch (err) {
       // The findByEmail/findByUsername checks above aren't atomic with this insert — a
       // concurrent signup for the same email (a double-submit, or a retry racing the request
@@ -59,10 +80,21 @@ export default class AuthSvc {
 
     // Sent immediately, before email verification — the user should know to expect the
     // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
-    const html = await renderTemplate("signup-pending", { name: user.name || "there" });
-    await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
+    await AuthSvc.sendSignupPendingEmail(user);
 
     return user;
+  }
+
+  /** Non-fatal by design: the account row already exists by the time this runs, so letting a
+   * mail failure turn into a 500 would leave the client with no session (Google) or a retry
+   * that 409s "Email already in use" (password) for an account that was actually created. */
+  private static async sendSignupPendingEmail(user: { id: string; email: string; name: string | null }) {
+    try {
+      const html = await renderTemplate("signup-pending", { name: user.name || "there" });
+      await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
+    } catch (err) {
+      logger.error("Failed to send signup-pending email", { err, userId: user.id });
+    }
   }
 
   /** "Use a different email" on the sign-up OTP screen — lets an abandoned signup attempt be
@@ -300,8 +332,39 @@ export default class AuthSvc {
     await AuthRepo.deleteByRefreshToken(refreshToken);
   }
 
-  static async loginWithGoogle(idToken: string, remember = true, requestTenantCode: TenantCode | null = null) {
-    const { googleId, email, name, isEmailVerified } = await verifyGoogleToken(idToken);
+  /** The 409 for a Google sign-in whose email already belongs to an account that isn't bound
+   * to this Google identity. `code` tells the client what it can do next:
+   * GOOGLE_LINK_REQUIRED → offer the password-confirmed link step (linkGoogle below);
+   * GOOGLE_ACCOUNT_MISMATCH → the account is already bound to a *different* Google identity;
+   * no code → nothing to offer here (the account lives on another Tenant's site, or is an
+   * operator ADMIN account, which is never linked). */
+  private static googleEmailConflict(
+    existing: { email: string; role: string; googleId: string | null; tenant: { code: string; name: string } | null },
+    requestTenantCode: TenantCode | null,
+  ): HttpError {
+    const message = duplicateEmailMessage(existing, "Email already registered with a different sign-in method", requestTenantCode);
+    if (existing.googleId) {
+      return new HttpError("This email is already connected to a different Google account", 409, "GOOGLE_ACCOUNT_MISMATCH");
+    }
+    if (existing.role === "ADMIN" || (existing.tenant && existing.tenant.code !== requestTenantCode)) {
+      return new HttpError(message, 409);
+    }
+    // `email` lets the link step show which account it's about to connect to. Only ever sent
+    // to a caller holding a valid Google token for this exact, Google-verified address, so it
+    // reveals nothing they don't already know.
+    return new HttpError(message, 409, "GOOGLE_LINK_REQUIRED", { email: existing.email });
+  }
+
+  /** `acceptedTerms` only matters when this call would create the account — a returning
+   * Google user is never re-asked. Without it, nothing is created and the client gets 428
+   * TERMS_ACCEPTANCE_REQUIRED so it can show the Terms and retry with the same token. */
+  static async loginWithGoogle(
+    idToken: string,
+    remember = true,
+    requestTenantCode: TenantCode | null = null,
+    acceptedTerms = false,
+  ) {
+    const { googleId, email: googleEmail, name, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
       throw new HttpError("Invalid Google token", 401);
@@ -311,22 +374,49 @@ export default class AuthSvc {
       throw new HttpError("Google account email is not verified", 401);
     }
 
+    const email = normalizeEmail(googleEmail);
     let user = await AuthRepo.findByGoogleId(googleId);
+    let created = false;
 
     if (!user) {
       const existingByEmail = await AuthRepo.findByEmail(email);
-      if (existingByEmail) {
-        throw new HttpError(duplicateEmailMessage(existingByEmail, "Email already registered with a different sign-in method", requestTenantCode), 409);
+      // A password signup that never verified its email (and was never admin-reviewed) is the
+      // same limbo row cancelSignup already lets anyone clear — it never proved ownership of
+      // this inbox, while Google just did. Replaced below rather than blocking the real owner
+      // (and so a squatted, unverified signup can't be used to pre-hijack their account).
+      const replacesAbandonedSignup =
+        !!existingByEmail && !existingByEmail.isEmailVerified && existingByEmail.approvalStatus === "PENDING";
+      if (existingByEmail && !replacesAbandonedSignup) {
+        throw AuthSvc.googleEmailConflict(existingByEmail, requestTenantCode);
+      }
+
+      if (!acceptedTerms) {
+        // 428 matches login()'s "one more step before a session" meaning, but clients must
+        // branch on `code` — on /login, a bare 428 means the forced password update instead.
+        throw new HttpError("Terms acceptance required", 428, "TERMS_ACCEPTANCE_REQUIRED");
+      }
+
+      if (replacesAbandonedSignup) {
+        await AuthRepo.deleteUnverifiedPendingUser(email);
       }
 
       // Same lenient handling as password signup — see the comment there.
       const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
-      user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined, tenantId);
+      try {
+        user = await AuthRepo.createGoogleUser({ email, googleId, name: name ?? undefined, tenantId, termsVersion: TERMS_VERSION });
+        created = true;
+      } catch (err) {
+        // The findByGoogleId/findByEmail checks above aren't atomic with the insert — a
+        // double click, two tabs or a retry can race another request for the same identity
+        // past them. Resolve to whatever the winner created instead of a 500.
+        user = await AuthSvc.resolveGoogleCreateRace(err, googleId, email, requestTenantCode);
+      }
+    }
 
-      // Same as password signup — sent once, right at account creation. Returning
-      // Google users (the `else` branch) never hit this again.
-      const html = await renderTemplate("signup-pending", { name: user.name || "there" });
-      await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
+    if (created) {
+      // Same as password signup — sent once, only by the request that actually created the
+      // account. Returning users and the loser of a creation race never hit this.
+      await AuthSvc.sendSignupPendingEmail(user);
     } else {
       await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);
@@ -335,6 +425,102 @@ export default class AuthSvc {
     const { accessToken, refreshToken } = loginToken(user.id, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
+
+    return {
+      user: await AuthRepo.findById(user.id),
+      accessToken,
+      refreshToken,
+    };
+  }
+
+  /** Maps a failed createGoogleUser to the account a concurrent request created first. A
+   * P2002 on `googleId` means this exact identity won the race — log into it. A P2002 on
+   * `email` means some account took the address: the same identity (log in), or a different
+   * one (the usual email conflict). Anything else is a real error and is rethrown. */
+  private static async resolveGoogleCreateRace(
+    err: unknown,
+    googleId: string,
+    email: string,
+    requestTenantCode: TenantCode | null,
+  ) {
+    if (isUniqueViolation(err, "googleId")) {
+      const winner = await AuthRepo.findByGoogleId(googleId);
+      if (winner) return winner;
+    }
+    if (isUniqueViolation(err, "email")) {
+      const winner = await AuthRepo.findByEmail(email);
+      if (winner?.googleId === googleId) return winner;
+      if (winner) throw AuthSvc.googleEmailConflict(winner, requestTenantCode);
+    }
+    throw err;
+  }
+
+  /** The GOOGLE_LINK_REQUIRED follow-up: attaches a verified Google identity to the existing
+   * password account with the same email, but only once the caller proves they own that
+   * account by its password. A verified email match alone isn't enough — a Google Workspace
+   * domain can reassign an ex-employee's address to someone else, and linking must not skip
+   * the gates login() enforces (verification, forced password update, Tenant). On success
+   * behaves like a completed login(). */
+  static async linkGoogle(idToken: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
+    const { googleId, email, isEmailVerified } = await verifyGoogleToken(idToken);
+
+    if (!googleId) {
+      throw new HttpError("Invalid Google token", 401);
+    }
+
+    if (!isEmailVerified) {
+      throw new HttpError("Google account email is not verified", 401);
+    }
+
+    const user = await AuthRepo.findByEmail(email);
+    if (!user || !user.password) {
+      throw new HttpError("Invalid email or password", 401);
+    }
+
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      throw new HttpError("Invalid email or password", 401);
+    }
+
+    if (user.role === "ADMIN") {
+      throw new HttpError("Google sign-in can't be connected to this account", 409);
+    }
+
+    if (user.googleId && user.googleId !== googleId) {
+      throw new HttpError("This email is already connected to a different Google account", 409, "GOOGLE_ACCOUNT_MISMATCH");
+    }
+
+    if (!user.isEmailVerified) {
+      throw new HttpError("Email not verified", 403);
+    }
+
+    // Same gate and status as login() — the client routes to its "set a new password" step.
+    if (user.mustChangePassword) {
+      throw new HttpError("Password update required", 428);
+    }
+
+    await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
+
+    // Idempotent for a retry of a link that already went through.
+    if (user.googleId !== googleId) {
+      const linked = await AuthRepo.linkGoogleId(user.id, googleId);
+      if (!linked) {
+        throw new HttpError("This Google account could not be connected to this account", 409, "GOOGLE_ACCOUNT_MISMATCH");
+      }
+
+      try {
+        const html = await renderTemplate("google-connected", { name: user.name || "there" });
+        await sendEmail({ to: user.email, subject: "Google sign-in was connected to your ilovelawyer account", html });
+      } catch (err) {
+        logger.error("Failed to send google-connected email", { err, userId: user.id });
+      }
+    }
+
+    const { accessToken, refreshToken } = loginToken(user.id, remember);
+
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    await AuthRepo.createSession(user.id, refreshToken, expiresAt);
+    await AuthRepo.updateLastLogin(user.id);
 
     return {
       user: await AuthRepo.findById(user.id),
