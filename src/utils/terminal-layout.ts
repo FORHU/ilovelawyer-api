@@ -11,11 +11,11 @@ import {
   WorkspaceLayout,
 } from "../constants";
 
-function isPanelId(value: unknown): value is PanelId {
+export function isPanelId(value: unknown): value is PanelId {
   return typeof value === "string" && (PANEL_IDS as readonly string[]).includes(value);
 }
 
-function isArrangementValue(value: unknown): value is ArrangementValue {
+export function isArrangementValue(value: unknown): value is ArrangementValue {
   return typeof value === "string" && (ARRANGEMENT_VALUES as readonly string[]).includes(value);
 }
 
