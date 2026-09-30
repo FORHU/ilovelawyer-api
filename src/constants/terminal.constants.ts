@@ -29,7 +29,12 @@ export type PanelId = (typeof PANEL_IDS)[number];
 export const PRESET_VALUES = ["PANE_1", "PANE_2", "PANE_4", "PANE_6"] as const;
 export type PresetValue = (typeof PRESET_VALUES)[number];
 
-export const ARRANGEMENT_VALUES = ["columns", "tabs", "focus", "split"] as const;
+// "split" was a legacy value never actually referenced anywhere else in this codebase — replaced
+// with "free" to match the app's real arrangement values (apps/web/lib/terminal/types.ts). This
+// list gates normalizeLayout's isArrangementValue check, so before this fix any workspace saved
+// with "free" (every multi-screen Free-canvas layout) was silently coerced to "columns" on every
+// save — the arrangement mode itself never survived a reload.
+export const ARRANGEMENT_VALUES = ["free", "columns", "tabs", "focus"] as const;
 export type ArrangementValue = (typeof ARRANGEMENT_VALUES)[number];
 
 export interface PanelLayout {
@@ -48,6 +53,10 @@ export interface PanelLayout {
   tabGroup?: number;
   /** Protects this pane's own slot from move/resize/reassignment. */
   pinned?: boolean;
+  /** Which physical screen this pane renders on. 0 or absent = primary; 1-5 = a secondary canvas
+   * window, numbered left-to-right and recomputed fresh each session — mirrors
+   * apps/web/lib/terminal/types.ts's PanelLayout.screen exactly. */
+  screen?: number;
 }
 
 export interface WorkspaceLayout {
@@ -62,6 +71,20 @@ export interface WorkspaceLayout {
   tabsSplit?: number;
   tabsActiveA?: PanelId;
   tabsActiveB?: PanelId;
+  /** Per-secondary-screen arrangement state, keyed by screen index (1-5) — mirrors
+   * apps/web/lib/terminal/types.ts's WorkspaceLayout.screenLayouts exactly. The top-level
+   * arrangement/columnCount/columnWidths/tabsSplit/tabsActiveA/B fields above are screen 0's own. */
+  screenLayouts?: Record<
+    number,
+    {
+      arrangement?: ArrangementValue;
+      columnCount?: number;
+      columnWidths?: number[];
+      tabsSplit?: number;
+      tabsActiveA?: PanelId;
+      tabsActiveB?: PanelId;
+    }
+  >;
 }
 
 export interface PanelCatalogEntry {

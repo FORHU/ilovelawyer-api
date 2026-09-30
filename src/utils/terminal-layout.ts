@@ -11,11 +11,11 @@ import {
   WorkspaceLayout,
 } from "../constants";
 
-function isPanelId(value: unknown): value is PanelId {
+export function isPanelId(value: unknown): value is PanelId {
   return typeof value === "string" && (PANEL_IDS as readonly string[]).includes(value);
 }
 
-function isArrangementValue(value: unknown): value is ArrangementValue {
+export function isArrangementValue(value: unknown): value is ArrangementValue {
   return typeof value === "string" && (ARRANGEMENT_VALUES as readonly string[]).includes(value);
 }
 
@@ -79,6 +79,12 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
       columnIndex: clampInt(row.columnIndex, 0, MAX_COLUMNS - 1),
       tabGroup: clampInt(row.tabGroup, 0, 1),
       pinned: row.pinned === true ? true : undefined,
+      // 0 means "primary", same as absent — clampInt would instead clamp a 0 UP into [1,5], so
+      // that case is treated as "omit" here rather than reusing clampInt directly.
+      screen:
+        typeof row.screen === "number" && Number.isFinite(row.screen) && row.screen >= 1
+          ? clampInt(row.screen, 1, MAX_SECONDARY_SCREENS)
+          : undefined,
     });
   }
 
@@ -120,10 +126,38 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     tabsSplit,
     tabsActiveA: isPanelId(raw.tabsActiveA) ? raw.tabsActiveA : undefined,
     tabsActiveB: isPanelId(raw.tabsActiveB) ? raw.tabsActiveB : undefined,
+    screenLayouts: normalizeScreenLayouts(raw.screenLayouts),
   };
 }
 
 const MAX_COLUMNS = 8;
+const MAX_SECONDARY_SCREENS = 5;
+
+type ScreenLayoutEntry = NonNullable<WorkspaceLayout["screenLayouts"]>[number];
+
+/** Same per-screen arrangement fields as the top-level WorkspaceLayout, but one set per secondary
+ * screen index (1-5) instead of one shared set — see WorkspaceLayout.screenLayouts's doc comment. */
+function normalizeScreenLayouts(raw: unknown): WorkspaceLayout["screenLayouts"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: NonNullable<WorkspaceLayout["screenLayouts"]> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const screenIndex = Number(key);
+    if (!Number.isInteger(screenIndex) || screenIndex < 1 || screenIndex > MAX_SECONDARY_SCREENS) continue;
+    if (!value || typeof value !== "object") continue;
+    const entry = value as Partial<ScreenLayoutEntry>;
+    out[screenIndex] = {
+      arrangement: isArrangementValue(entry.arrangement) ? entry.arrangement : undefined,
+      columnCount: clampInt(entry.columnCount, 1, MAX_COLUMNS),
+      columnWidths: Array.isArray(entry.columnWidths)
+        ? entry.columnWidths.slice(0, MAX_COLUMNS).map((w: unknown) => clampRatio(w))
+        : undefined,
+      tabsSplit: typeof entry.tabsSplit === "number" && Number.isFinite(entry.tabsSplit) ? clampRatio(entry.tabsSplit) : undefined,
+      tabsActiveA: isPanelId(entry.tabsActiveA) ? entry.tabsActiveA : undefined,
+      tabsActiveB: isPanelId(entry.tabsActiveB) ? entry.tabsActiveB : undefined,
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 /** Integer within [min, max], or undefined when absent/invalid so the key is omitted on save. */
 function clampInt(value: unknown, min: number, max: number): number | undefined {
