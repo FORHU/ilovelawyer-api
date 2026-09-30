@@ -399,6 +399,42 @@ export default class AuthRepo {
     return { data, total };
   }
 
+  /** Accounts "Approve all pending" would take for a Tenant: regular users still PENDING whose
+   * email is verified. Unverified ones are deliberately left alone so cancelSignup's
+   * deleteUnverifiedPendingUser can still clean them up — they're auto-approved at verifyOtp
+   * instead if the Tenant's switch is on. */
+  private static approvablePendingWhere(tenantId: string): Prisma.UserWhereInput {
+    return { tenantId, role: "USER", approvalStatus: "PENDING", isEmailVerified: true };
+  }
+
+  static async countApprovablePending(tenantId: string) {
+    return prisma.user.count({ where: AuthRepo.approvablePendingWhere(tenantId) });
+  }
+
+  static async findApprovablePendingIds(tenantId: string) {
+    const rows = await prisma.user.findMany({
+      where: AuthRepo.approvablePendingWhere(tenantId),
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    return rows.map((r) => r.id);
+  }
+
+  static async findTenantById(userId: string) {
+    return prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, tenantId: true, tenant: { select: { code: true } } },
+    });
+  }
+
+  static async setTenant(userId: string, tenantId: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { tenantId },
+      select: { id: true, tenant: { select: { code: true, name: true } } },
+    });
+  }
+
   static async setApprovalStatus(userId: string, status: ApprovalStatus, reason: string | null) {
     return prisma.user.update({
       where: { id: userId },

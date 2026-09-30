@@ -1,8 +1,26 @@
 import { Request, Response } from "express";
 import AdminSvc from "../services/admin.service";
 import LawSvc, { parseLawCategory } from "../services/law.service";
+import TenantSettingSvc from "../services/tenant-setting.service";
+import BulkApprovalRunner from "../queues/bulk-approval.runner";
 import HttpError from "../utils/http-error";
-import { listUsersSchema, denyUserSchema, lawSearchSchema, listLawsSchema } from "../validation/admin.validation";
+import { asTenantCode, type TenantCode } from "../types/tenant-code";
+import {
+  listUsersSchema,
+  denyUserSchema,
+  lawSearchSchema,
+  listLawsSchema,
+  updateTenantSettingsSchema,
+  updateUserTenantSchema,
+} from "../validation/admin.validation";
+
+function parseTenantCode(raw: string): TenantCode {
+  try {
+    return asTenantCode(raw);
+  } catch {
+    throw new HttpError(`Unknown tenant ${raw}`, 404);
+  }
+}
 
 export default class AdminCtrl {
   static async listUsers(req: Request, res: Response) {
@@ -47,6 +65,43 @@ export default class AdminCtrl {
   static async unblockUser(req: Request, res: Response) {
     const user = await AdminSvc.unblock(req.params.id);
     return res.status(200).json(user);
+  }
+
+  /** POST /api/admin/users/:id/verify-email — marks the email verified, bypassing the signup OTP. */
+  static async verifyUserEmail(req: Request, res: Response) {
+    const user = await AdminSvc.verifyEmail(req.params.id, req.user.userId);
+    return res.status(200).json(user);
+  }
+
+  /** PATCH /api/admin/users/:id/tenant — body { tenantCode: "PH" | "UK" }. */
+  static async changeUserTenant(req: Request, res: Response) {
+    const { error, value } = updateUserTenantSchema.validate(req.body ?? {});
+    if (error) throw new HttpError(error.message, 400);
+
+    const user = await AdminSvc.changeTenant(req.params.id, value.tenantCode, req.user.userId);
+    return res.status(200).json(user);
+  }
+
+  /** GET /api/admin/settings — per-Tenant signup settings, pending backlog and bulk-run progress. */
+  static async getSettings(_req: Request, res: Response) {
+    const tenants = await TenantSettingSvc.listForAdmin();
+    return res.status(200).json({ tenants });
+  }
+
+  static async updateTenantSettings(req: Request, res: Response) {
+    const code = parseTenantCode(req.params.code);
+    const { error, value } = updateTenantSettingsSchema.validate(req.body ?? {});
+    if (error) throw new HttpError(error.message, 400);
+
+    const tenant = await TenantSettingSvc.setAutoApprove(code, value.autoApproveSignups, req.user.userId);
+    return res.status(200).json(tenant);
+  }
+
+  /** POST /api/admin/tenants/:code/approve-pending — starts a background run; poll GET /settings. */
+  static async approvePending(req: Request, res: Response) {
+    const code = parseTenantCode(req.params.code);
+    const result = await BulkApprovalRunner.start(code, req.user.userId);
+    return res.status(202).json(result);
   }
 
   /** GET /api/admin/law/search — proxy juris.ph, store any new hits, return them annotated. */

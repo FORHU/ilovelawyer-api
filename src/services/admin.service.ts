@@ -1,6 +1,10 @@
 import crypto from "crypto";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
+import OrganizationRepo from "../repositories/organization.repository";
+import TenantRepo from "../repositories/tenant.repository";
+import AuthSvc from "./auth.service";
+import type { TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
@@ -86,5 +90,61 @@ export default class AdminSvc {
 
   static async unblock(userId: string) {
     return AdminSvc.transition("unblock", userId);
+  }
+
+  /** Marks a user's email verified on an admin's say-so, in place of the signup OTP — for someone
+   * whose code never arrives, say. Does what AuthSvc.verifyOtp does at that moment (clears the
+   * pending code, auto-approves a PENDING user when their Tenant has auto-approve on) minus the
+   * login itself. No session wipe — an unverified user can't have logged in — and no email: they
+   * can simply sign in now. One-way on purpose: un-verifying would lock a user out mid-session. */
+  static async verifyEmail(userId: string, adminId: string) {
+    const user = await AuthRepo.findById(userId);
+    if (!user) throw new HttpError("User not found", 404);
+    if (user.isEmailVerified) throw new HttpError("Email is already verified", 409);
+
+    const verified = await AuthRepo.markEmailVerified(userId);
+    const autoApproved = await AuthSvc.autoApproveIfEnabled(verified);
+
+    await AdminSvc.bustUsersListCache();
+    await OrganizationRepo.writeAudit({
+      actorId: adminId,
+      action: "users.email_verified",
+      payload: { userId, autoApproved },
+    });
+    return AuthRepo.findById(userId);
+  }
+
+  /** Moves a user to another Tenant — e.g. an account created from an unresolved origin
+   * (tenantId null), or one that signed up on the wrong regional site. User.tenantId decides
+   * which Tenant's auto-approve switch and "Approve all pending" run apply to them; sign-in
+   * access is decided by their Organization's Tenant instead (AuthSvc.assertTenantAccess), so
+   * a user who already belongs to an Organization can only be set to that Organization's
+   * Tenant — anything else would leave the two disagreeing. No-op if already there. */
+  static async changeTenant(userId: string, code: TenantCode, adminId: string) {
+    const user = await AuthRepo.findTenantById(userId);
+    if (!user) throw new HttpError("User not found", 404);
+
+    const tenantId = await TenantRepo.findIdByCode(code);
+    if (!tenantId) throw new HttpError(`Unknown tenant ${code}`, 404);
+
+    const membership = await OrganizationMemberRepo.findAnyForUser(userId);
+    const orgTenant = membership?.organization.tenant.code;
+    if (orgTenant && orgTenant !== code) {
+      throw new HttpError(
+        `This user belongs to an organization in the ${orgTenant} tenant, so their tenant can't be changed to ${code}.`,
+        409,
+      );
+    }
+
+    const updated = await AuthRepo.setTenant(userId, tenantId);
+    if (user.tenantId !== tenantId) {
+      await AdminSvc.bustUsersListCache();
+      await OrganizationRepo.writeAudit({
+        actorId: adminId,
+        action: "users.tenant_changed",
+        payload: { userId, from: user.tenant?.code ?? null, to: code },
+      });
+    }
+    return updated;
   }
 }

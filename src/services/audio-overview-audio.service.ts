@@ -25,13 +25,13 @@ export default class AudioOverviewAudioSvc {
       }
 
       logger.info("Audio Overview: rendering started", { messageId, turns: turns.length });
-      const merged = await mergeTurnsToMp3(turns, row.voiceHostA, row.voiceHostB);
+      const { buffer, turnTimings } = await mergeTurnsToMp3(turns, row.voiceHostA, row.voiceHostB);
 
       const key = `${AUDIO_OVERVIEW_OUTPUT_PREFIX}${messageId}-${randomUUID()}.mp3`;
-      const fileUrl = await uploadToS3(key, merged, "audio/mpeg");
+      const fileUrl = await uploadToS3(key, buffer, "audio/mpeg");
       const file = await FilesRepo.create(`audio-overview-${messageId}.mp3`, fileUrl, key);
 
-      await ChatRepo.updateAudioOverviewAudio(messageId, { audioFileId: file.id, audioStatus: "COMPLETED" });
+      await ChatRepo.updateAudioOverviewAudio(messageId, { audioFileId: file.id, audioStatus: "COMPLETED", turnTimings });
       logger.info("Audio Overview: rendering completed", { messageId, fileId: file.id });
     } catch (err) {
       logger.error("Audio Overview: rendering failed", { err, messageId });

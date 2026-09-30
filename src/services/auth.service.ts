@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import TenantRepo from "../repositories/tenant.repository";
+import TenantSettingSvc from "./tenant-setting.service";
 import loginToken from "../utils/loginToken";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
@@ -80,7 +81,11 @@ export default class AuthSvc {
 
     // Sent immediately, before email verification — the user should know to expect the
     // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
-    await AuthSvc.sendSignupPendingEmail(user);
+    // Skipped when the Tenant auto-approves signups: there's no wait, and verifyOtp flips
+    // the account to ACTIVE (see autoApproveIfEnabled).
+    if (!(await TenantSettingSvc.isAutoApproveOn(tenantId))) {
+      await AuthSvc.sendSignupPendingEmail(user);
+    }
 
     return user;
   }
@@ -95,6 +100,21 @@ export default class AuthSvc {
     } catch (err) {
       logger.error("Failed to send signup-pending email", { err, userId: user.id });
     }
+  }
+
+  /** Flips a freshly verified PENDING account straight to ACTIVE when its Tenant has
+   * auto-approve on (admin Settings page). Called at the moment the email becomes verified —
+   * verifyOtp for password signups, account creation for Google ones — never at row creation
+   * for password signups: AuthRepo.deleteUnverifiedPendingUser (cancelSignup) only matches
+   * unverified PENDING rows, so an unverified ACTIVE row could never be cleaned up.
+   * No session wipe or email, unlike AdminSvc.transition — the user is signing in right now
+   * and the session about to be issued already sees ACTIVE. Also called by AdminSvc.verifyEmail,
+   * where an admin marks the email verified in place of the OTP. Returns whether it approved. */
+  static async autoApproveIfEnabled(user: { id: string; tenantId: string | null; approvalStatus: string }) {
+    if (user.approvalStatus !== "PENDING") return false;
+    if (!(await TenantSettingSvc.isAutoApproveOn(user.tenantId))) return false;
+    await AuthRepo.setApprovalStatus(user.id, "ACTIVE", null);
+    return true;
   }
 
   /** "Use a different email" on the sign-up OTP screen — lets an abandoned signup attempt be
@@ -271,6 +291,7 @@ export default class AuthSvc {
     }
 
     await AuthRepo.markEmailVerified(user.id);
+    await AuthSvc.autoApproveIfEnabled(user);
     await AuthRepo.updateLastLogin(user.id);
 
     // No "remember" preference exists at signup time — default true, matching
@@ -414,9 +435,16 @@ export default class AuthSvc {
     }
 
     if (created) {
+      // Google has already verified the email, so this is the verification moment — the
+      // counterpart of verifyOtp's call for password signups.
+      const autoApproved = await AuthSvc.autoApproveIfEnabled(user);
+
       // Same as password signup — sent once, only by the request that actually created the
-      // account. Returning users and the loser of a creation race never hit this.
-      await AuthSvc.sendSignupPendingEmail(user);
+      // account. Returning users and the loser of a creation race never hit this (the winner
+      // already auto-approved and emailed).
+      if (!autoApproved) {
+        await AuthSvc.sendSignupPendingEmail(user);
+      }
     } else {
       await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);

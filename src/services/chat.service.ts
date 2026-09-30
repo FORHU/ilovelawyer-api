@@ -1603,6 +1603,7 @@ export default class ChatSvc {
           id: row.audioFile.id,
           fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }),
         },
+        turnTimings: (row.turnTimings as unknown as number[] | null) ?? null,
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };
