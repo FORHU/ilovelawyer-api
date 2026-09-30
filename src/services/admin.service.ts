@@ -14,6 +14,8 @@ import { ListUsersParams } from "../types/admin.types";
 import { USERS_LIST_CACHE_TTL_S, USERS_LIST_VERSION_KEY, TRANSITIONS, LOGIN_LINK_EXPIRY_MS } from "../constants";
 
 export default class AdminSvc {
+  /** Cached per page under a version number that AuthRepo bumps on every user write that changes
+   * what this list shows (see bustUsersList there) — so no caller has to remember to. */
   static async listUsers(params: ListUsersParams) {
     const version = (await redis.get<number>(USERS_LIST_VERSION_KEY)) ?? 0;
     const cacheKey = `admin:users:v${version}:${JSON.stringify(params)}`;
@@ -24,11 +26,6 @@ export default class AdminSvc {
     const result = await AuthRepo.listUsers(params);
     await redis.set(cacheKey, result, USERS_LIST_CACHE_TTL_S);
     return result;
-  }
-
-  /** Orphans every cached users-list page in one write, instead of scanning/deleting each cache key. */
-  private static bustUsersListCache() {
-    return redis.incr(USERS_LIST_VERSION_KEY);
   }
 
   private static async transition(action: keyof typeof TRANSITIONS, userId: string, reason?: string) {
@@ -51,7 +48,6 @@ export default class AdminSvc {
     // straight into the app once approvalStatus flips to ACTIVE). Applies uniformly to every
     // transition, not just approve.
     await AuthRepo.deleteSessionsByUserId(userId);
-    await AdminSvc.bustUsersListCache();
 
     let loginLink = "";
     if (spec.includeLoginLink) {
@@ -105,7 +101,6 @@ export default class AdminSvc {
     const verified = await AuthRepo.markEmailVerified(userId);
     const autoApproved = await AuthSvc.autoApproveIfEnabled(verified);
 
-    await AdminSvc.bustUsersListCache();
     await OrganizationRepo.writeAudit({
       actorId: adminId,
       action: "users.email_verified",
@@ -138,7 +133,6 @@ export default class AdminSvc {
 
     const updated = await AuthRepo.setTenant(userId, tenantId);
     if (user.tenantId !== tenantId) {
-      await AdminSvc.bustUsersListCache();
       await OrganizationRepo.writeAudit({
         actorId: adminId,
         action: "users.tenant_changed",

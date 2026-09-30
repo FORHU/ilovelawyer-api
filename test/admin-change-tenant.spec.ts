@@ -2,7 +2,7 @@
  * (which decides whose auto-approve switch / bulk approval applies to them), but never away
  * from their Organization's Tenant, which is what sign-in access actually checks.
  *
- * No live Postgres/Redis: repos and redis are monkeypatched on their CommonJS module objects,
+ * No live Postgres/Redis: repos are monkeypatched on their CommonJS module objects,
  * same idiom as test/admin-session-revocation.spec.ts.
  */
 import { expect } from "chai";
@@ -12,7 +12,6 @@ import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
-import { redis } from "../src/lib/redis";
 import { updateUserTenantSchema } from "../src/validation/admin.validation";
 
 function stash<T extends object>(target: T, keys: (keyof T)[]) {
@@ -28,21 +27,18 @@ describe("AdminSvc.changeTenant", () => {
   let orgTenant: string | null;
   let writes: { userId: string; tenantId: string }[];
   let audits: { actorId?: string; action: string; payload?: object }[];
-  let cacheBusts: number;
 
   beforeEach(() => {
     current = { id: "user-1", tenantId: null, tenant: null };
     orgTenant = null;
     writes = [];
     audits = [];
-    cacheBusts = 0;
 
     restore = [
       stash(AuthRepo, ["findTenantById", "setTenant"]),
       stash(TenantRepo, ["findIdByCode"]),
       stash(OrganizationMemberRepo, ["findAnyForUser"]),
       stash(OrganizationRepo, ["writeAudit"]),
-      stash(redis, ["incr"]),
     ];
 
     (AuthRepo as any).findTenantById = async (id: string) => (current && id === current.id ? current : null);
@@ -55,17 +51,15 @@ describe("AdminSvc.changeTenant", () => {
     (OrganizationMemberRepo as any).findAnyForUser = async () =>
       orgTenant ? { organization: { tenant: { code: orgTenant } } } : null;
     (OrganizationRepo as any).writeAudit = async (data: any) => void audits.push(data);
-    (redis as any).incr = async () => ++cacheBusts;
   });
 
   afterEach(() => restore.forEach((r) => r()));
 
-  it("sets a tenant-less user's tenant, clears the users-list cache and audits the change", async () => {
+  it("sets a tenant-less user's tenant and audits the change", async () => {
     const result = await AdminSvc.changeTenant("user-1", "UK", "admin-1");
 
     expect(result).to.deep.equal({ id: "user-1", tenant: { code: "UK", name: "UK" } });
     expect(writes).to.deep.equal([{ userId: "user-1", tenantId: "tenant-uk" }]);
-    expect(cacheBusts).to.equal(1);
     expect(audits).to.deep.equal([
       { actorId: "admin-1", action: "users.tenant_changed", payload: { userId: "user-1", from: null, to: "UK" } },
     ]);
@@ -100,7 +94,6 @@ describe("AdminSvc.changeTenant", () => {
     current = { id: "user-1", tenantId: "tenant-uk", tenant: { code: "UK" } };
     await AdminSvc.changeTenant("user-1", "UK", "admin-1");
     expect(audits).to.have.length(0);
-    expect(cacheBusts).to.equal(0);
   });
 
   it("404s for an unknown user", async () => {
