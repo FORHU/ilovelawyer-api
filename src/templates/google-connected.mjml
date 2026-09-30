@@ -1,0 +1,11 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Google sign-in was just connected to your ilovelawyer account. From now on you can sign in with either your password or "Continue with Google".</mj-text>
+        <mj-text>If you didn't do this, reset your password right away and contact support.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

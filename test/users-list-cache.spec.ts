@@ -51,7 +51,7 @@ describe("AuthRepo — admin users-list cache busting", () => {
 
   const busting: [string, () => Promise<unknown>][] = [
     ["createUser", () => AuthRepo.createUser({ username: "u", email: "e@x.com", password: "h", name: "n" })],
-    ["createGoogleUser", () => AuthRepo.createGoogleUser("e@x.com", "g-1", "n", null)],
+    ["createGoogleUser", () => AuthRepo.createGoogleUser({ email: "e@x.com", googleId: "g-1", name: "n", tenantId: null, termsVersion: "v" })],
     ["updateLastLogin", () => AuthRepo.updateLastLogin("user-1")],
     ["updatePasswordAndClearMustChange", () => AuthRepo.updatePasswordAndClearMustChange("user-1", "h")],
     ["updateProfile", () => AuthRepo.updateProfile("user-1", { name: "n" })],
@@ -89,6 +89,7 @@ describe("AuthRepo — admin users-list cache busting", () => {
     await AuthRepo.setEmailVerificationCode("user-1", "123456", new Date());
     await AuthRepo.incrementEmailVerificationAttempts("user-1");
     await AuthRepo.setLoginLinkToken("user-1", "token", new Date());
+    await AuthRepo.linkGoogleId("user-1", "g-1");
     expect(busts).to.have.length(0);
   });
 });

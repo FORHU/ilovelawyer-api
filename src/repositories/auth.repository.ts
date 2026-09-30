@@ -1,7 +1,8 @@
 import prisma from "../lib/prisma";
 import { ApprovalStatus, Prisma } from "@prisma/client";
 import { redis } from "../lib/redis";
-import { USERS_LIST_VERSION_KEY } from "../constants";
+import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
+import { isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -43,19 +44,40 @@ async function bustUsersList<T>(result: T): Promise<T> {
 }
 
 export default class AuthRepo {
-  static async createUser(data: { username: string; email: string; password: string; name: string; tenantId?: string | null }) {
+  /** `termsVersion` is set only when the caller actually received a Terms acceptance with the
+   * request — it's stamped together with `termsAcceptedAt`, never one without the other. */
+  static async createUser(data: {
+    username: string;
+    email: string;
+    password: string;
+    name: string;
+    tenantId?: string | null;
+    termsVersion?: string | null;
+  }) {
     return bustUsersList(
       await prisma.user.create({
-        data: { username: data.username, email: data.email, password: data.password, name: data.name, tenantId: data.tenantId },
+        data: {
+          username: data.username,
+          email: normalizeEmail(data.email),
+          password: data.password,
+          name: data.name,
+          tenantId: data.tenantId,
+          ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
+        },
       })
     );
   }
 
   /** Includes the user's Tenant code/name — used to tell a duplicate-signup attempt whether
    * (and where) the existing account actually belongs (see AuthSvc.signup / loginWithGoogle).
-   * Harmless extra field for every other caller (login, forgotPassword). */
+   * Harmless extra field for every other caller (login, forgotPassword). Normalizes `email`
+   * itself as well as every service doing so, so no future caller can reintroduce a
+   * case-sensitive lookup by forgetting to. */
   static async findByEmail(email: string) {
-    return prisma.user.findUnique({ where: { email }, include: { tenant: { select: { code: true, name: true } } } });
+    return prisma.user.findUnique({
+      where: { email: normalizeEmail(email) },
+      include: { tenant: { select: { code: true, name: true } } },
+    });
   }
 
   /** The locale this user asked to be addressed in (User.preferredLanguage). Read per chat turn
@@ -132,7 +154,9 @@ export default class AuthRepo {
    * is left untouched. `deleteMany` (not `delete`) so a no-match is a silent no-op rather than
    * a thrown "record not found". */
   static async deleteUnverifiedPendingUser(email: string) {
-    const result = await prisma.user.deleteMany({ where: { email, isEmailVerified: false, approvalStatus: "PENDING" } });
+    const result = await prisma.user.deleteMany({
+      where: { email: normalizeEmail(email), isEmailVerified: false, approvalStatus: "PENDING" },
+    });
     return result.count > 0 ? bustUsersList(result) : result;
   }
 
@@ -156,27 +180,60 @@ export default class AuthRepo {
     return prisma.user.findUnique({ where: { googleId } });
   }
 
-  static async createGoogleUser(email: string, googleId: string, name?: string, tenantId?: string | null) {
+  /** Creates a first-time Google user. The username is claimed by trying the insert and
+   * retrying on a `username` collision (P2002) with a fresh numeric suffix — a findUnique
+   * pre-check isn't atomic with the insert, so two concurrent signups deriving the same base
+   * (john@a.com / john@b.com) could both pass it. Any other P2002 (`googleId`, `email`) is a
+   * race on the identity itself and is rethrown for AuthSvc.loginWithGoogle to resolve. */
+  static async createGoogleUser(data: {
+    email: string;
+    googleId: string;
+    name?: string;
+    tenantId?: string | null;
+    termsVersion: string;
+  }) {
+    const email = normalizeEmail(data.email);
     const base = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
-    let username = base;
-    while (await prisma.user.findUnique({ where: { username } })) {
-      username = `${base}${Math.floor(Math.random() * 9000) + 1000}`;
-    }
 
-    return bustUsersList(
-      await prisma.user.create({
-        data: {
-          username,
-          email,
-          googleId,
-          name,
-          provider: "google",
-          isEmailVerified: true,
-          lastLoginAt: new Date(),
-          tenantId,
-        },
-      })
-    );
+    for (let attempt = 0; ; attempt++) {
+      const username = attempt === 0 ? base : `${base}${Math.floor(Math.random() * 9000) + 1000}`;
+      try {
+        return bustUsersList(
+          await prisma.user.create({
+            data: {
+              username,
+              email,
+              googleId: data.googleId,
+              name: data.name,
+              provider: "google",
+              isEmailVerified: true,
+              lastLoginAt: new Date(),
+              tenantId: data.tenantId,
+              termsAcceptedAt: new Date(),
+              termsVersion: data.termsVersion,
+            },
+          })
+        );
+      } catch (err) {
+        if (isUniqueViolation(err, "username") && attempt + 1 < GOOGLE_USERNAME_MAX_ATTEMPTS) continue;
+        throw err;
+      }
+    }
+  }
+
+  /** Attaches a Google identity to an existing account (AuthSvc.linkGoogle). Conditional on
+   * `googleId` still being null, re-evaluated atomically by Postgres at update time — so a
+   * concurrent link can't overwrite one that just landed. Returns false when nothing was
+   * linked: the row already has a Google identity, or this `googleId` belongs to another
+   * account (P2002). No bustUsersList: googleId isn't a column AdminSvc.listUsers shows. */
+  static async linkGoogleId(userId: string, googleId: string): Promise<boolean> {
+    try {
+      const result = await prisma.user.updateMany({ where: { id: userId, googleId: null }, data: { googleId } });
+      return result.count > 0;
+    } catch (err) {
+      if (isUniqueViolation(err, "googleId")) return false;
+      throw err;
+    }
   }
 
   static async findGoogleRefreshToken(userId: string): Promise<string | null> {
@@ -201,7 +258,7 @@ export default class AuthRepo {
 
   static async consumeEmailVerificationOtp(email: string, code: string) {
     const user = await prisma.user.findFirst({
-      where: { email, emailVerificationOtp: code, emailVerificationOtpExpiry: { gt: new Date() } },
+      where: { email: normalizeEmail(email), emailVerificationOtp: code, emailVerificationOtpExpiry: { gt: new Date() } },
     });
     if (!user) return null;
 

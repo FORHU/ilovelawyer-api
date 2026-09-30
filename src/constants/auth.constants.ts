@@ -11,3 +11,13 @@ export const EMAIL_VERIFICATION_MAX_ATTEMPTS = 5;
 // Login-link token sent in the admin-approval email — longer-lived than the password-reset
 // token since approval isn't something the user is actively waiting on the way a reset is.
 export const LOGIN_LINK_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Stamped on User.termsVersion when a signup (password or first-time Google) accepts the
+// Terms of Service. Bump this whenever the Terms text in ilovelawyer-app's
+// locales/*/term.json materially changes, so a later re-acceptance prompt can tell which
+// version each account agreed to.
+export const TERMS_VERSION = "2026-09";
+
+// How many times createGoogleUser retries a username collision (Prisma P2002 on `username`)
+// with a fresh numeric suffix before giving up.
+export const GOOGLE_USERNAME_MAX_ATTEMPTS = 5;

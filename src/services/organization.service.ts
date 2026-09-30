@@ -117,7 +117,9 @@ export default class OrganizationSvc {
       role,
       loginLink: `${CLIENT_URL[0]}/login`,
     });
-    await sendEmail({ to: email, subject: `You've been invited to join ${organization?.name}`, html });
+    // user.email, not the typed `email`: AuthRepo.findByEmail matched it case-insensitively,
+    // so the stored address is the canonical one to send to.
+    await sendEmail({ to: user.email, subject: `You've been invited to join ${organization?.name}`, html });
 
     return member;
   }

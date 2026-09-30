@@ -14,18 +14,22 @@ import { CLIENT_URL } from "../config";
  * built (what this environment's hosts file actually points at) — plus the `.com` production
  * form, the `-dev.ilovelawyer.com` hosted dev environment, and its `-dev.ilovelawyer.local`
  * local-dev counterpart (`ph-dev.ilovelawyer.com` / `uk-dev.ilovelawyer.com` /
- * `ph-dev.ilovelawyer.local` / `uk-dev.ilovelawyer.local`).
+ * `ph-dev.ilovelawyer.local` / `uk-dev.ilovelawyer.local`). `ph-local.ilovelawyer.com` /
+ * `uk-local.ilovelawyer.com` are local dev too (hosts file → 127.0.0.1, served over https) —
+ * the only local form Google sign-in accepts as a JavaScript origin.
  */
 const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "ph.ilovelawyer.com": "PH",
   "ph-dev.ilovelawyer.com": "PH",
   "ph.ilovelawyer.local": "PH",
   "ph-dev.ilovelawyer.local": "PH",
+  "ph-local.ilovelawyer.com": "PH",
   "ph.ilovelawyer": "PH",
   "uk.ilovelawyer.com": "UK",
   "uk-dev.ilovelawyer.com": "UK",
   "uk.ilovelawyer.local": "UK",
   "uk-dev.ilovelawyer.local": "UK",
+  "uk-local.ilovelawyer.com": "UK",
   "uk.ilovelawyer": "UK",
 };
 

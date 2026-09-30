@@ -25,6 +25,8 @@ enum ApprovalStatus {
 
 model User {
   id                 String    @id @default(uuid())
+  // Always stored trimmed + lowercased (see normalizeEmail in src/utils/auth.utils.ts and the
+  // normalize_user_emails migration) — @unique is therefore effectively case-insensitive.
   email              String    @unique
   password           String?
   name               String?
@@ -47,6 +49,14 @@ model User {
   // blocks the session and routes the client to AuthSvc.updateRequiredPassword instead.
   // Cleared the moment that succeeds — a one-time gate, never re-asked after that.
   mustChangePassword Boolean @default(false)
+
+  // Terms of Service acceptance, recorded at account creation for both password signup and
+  // first-time Google signup (AuthSvc.loginWithGoogle refuses to create a Google account
+  // without it — see TERMS_ACCEPTANCE_REQUIRED). termsVersion is TERMS_VERSION at that time.
+  // Null for accounts created before acceptance was recorded server-side; those aren't
+  // re-prompted.
+  termsAcceptedAt DateTime?
+  termsVersion    String?
 
   // Independent of Email Verification and of login itself — a new User starts PENDING
   // regardless of signup method. Login still succeeds for a PENDING/DENIED user (they

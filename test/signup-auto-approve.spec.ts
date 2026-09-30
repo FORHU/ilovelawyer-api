@@ -218,21 +218,23 @@ describe("AuthSvc — auto-approve at email verification", () => {
         name: "Gee",
         isEmailVerified: true,
       });
-      (AuthRepo as any).createGoogleUser = async (email: string, _googleId: string, name: string, tenantId: string | null) => {
+      (AuthRepo as any).createGoogleUser = async ({ email, name, tenantId }: { email: string; name: string; tenantId: string | null }) => {
         current = pendingUser({ email, name, tenantId, isEmailVerified: true });
         return current;
       };
     });
 
+    // acceptedTerms: true — a brand-new Google account can't be created without it (see
+    // test/auth-google.spec.ts for the TERMS_ACCEPTANCE_REQUIRED path).
     it("creates the account PENDING and sends the pending email when the switch is off", async () => {
-      const result = await AuthSvc.loginWithGoogle("token", true, "PH");
+      const result = await AuthSvc.loginWithGoogle("token", true, "PH", true);
       expect(result.user).to.include({ approvalStatus: "PENDING" });
       expect(sentTemplates).to.deep.equal(["signup-pending"]);
     });
 
     it("returns the account ACTIVE with no pending email when the switch is on", async () => {
       onTenants.add(PH);
-      const result = await AuthSvc.loginWithGoogle("token", true, "PH");
+      const result = await AuthSvc.loginWithGoogle("token", true, "PH", true);
       expect(result.user).to.include({ approvalStatus: "ACTIVE" });
       expect(sentTemplates).to.have.length(0);
     });
