@@ -1,11 +1,40 @@
 import prisma from "../../src/lib/prisma";
 import { Prisma } from "@prisma/client";
 
-// Ported 1:1 from apps/web/lib/terminal/screen-presets.ts's TWO_SCREEN_PRESETS/THREE_SCREEN_PRESETS
-// — the frontend now fetches these from the DB instead of holding them as hardcoded arrays.
+// screenCount: 1 presets replace the old New Layout dialog's hardcoded PresetValue picker
+// (PANE_1/2/4/6, formerly applyPreset/PresetLayoutPreview in legal-terminal.tsx) — same panel
+// sets, workflow-named instead of "N panes".
 // Idempotent (upserts on id, the same stable slug the frontend used to hardcode), safe to re-run.
 // userId is left absent (null): these are system presets, global to every user.
 const SYSTEM_PRESETS = [
+  {
+    id: "pane-1",
+    labelKey: "presetQuickReview",
+    descriptionKey: "presetQuickReviewDesc",
+    name: "Quick Review",
+    screens: [{ arrangement: "free", panelIds: ["command"] }],
+  },
+  {
+    id: "pane-2",
+    labelKey: "presetEvidenceCheck",
+    descriptionKey: "presetEvidenceCheckDesc",
+    name: "Evidence Check",
+    screens: [{ arrangement: "free", panelIds: ["command", "evidence"] }],
+  },
+  {
+    id: "pane-4",
+    labelKey: "presetCaseWorkspace",
+    descriptionKey: "presetCaseWorkspaceDesc",
+    name: "Case Workspace",
+    screens: [{ arrangement: "free", panelIds: ["command", "evidence", "chat", "procedure"] }],
+  },
+  {
+    id: "pane-6",
+    labelKey: "presetFullResearch",
+    descriptionKey: "presetFullResearchDesc",
+    name: "Full Research",
+    screens: [{ arrangement: "free", panelIds: ["command", "evidence", "law", "mindMap", "procedure", "chat"] }],
+  },
   {
     id: "trial-prep",
     labelKey: "presetTrialPrep",
@@ -133,6 +162,42 @@ const SYSTEM_PRESETS = [
       { arrangement: "free", panelIds: ["command", "chat"] },
       { arrangement: "columns", panelIds: ["witnesses", "contradictions"] },
       { arrangement: "tabs", panelIds: ["attackStrategy", "defenseStrategy", "redTeam"] },
+    ],
+  },
+  {
+    id: "war-room",
+    labelKey: "presetWarRoom",
+    descriptionKey: "presetWarRoomDesc",
+    name: "War Room",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat"] },
+      { arrangement: "columns", panelIds: ["evidence", "witnesses", "contradictions"] },
+      { arrangement: "tabs", panelIds: ["law", "redTeam", "attackStrategy", "defenseStrategy"] },
+      { arrangement: "tabs", panelIds: ["damages", "theories", "decisions", "procedure"] },
+    ],
+  },
+  {
+    id: "complex-litigation",
+    labelKey: "presetComplexLitigation",
+    descriptionKey: "presetComplexLitigationDesc",
+    name: "Complex Litigation",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat"] },
+      { arrangement: "free", panelIds: ["evidence", "procedure"] },
+      { arrangement: "columns", panelIds: ["law", "citationMap", "legalIssues"] },
+      { arrangement: "tabs", panelIds: ["strengths", "weaknesses", "theories", "decisions"] },
+    ],
+  },
+  {
+    id: "full-team-audit",
+    labelKey: "presetFullTeamAudit",
+    descriptionKey: "presetFullTeamAuditDesc",
+    name: "Full Team Audit",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat"] },
+      { arrangement: "columns", panelIds: ["witnesses", "contradictions", "teamAudit"] },
+      { arrangement: "tabs", panelIds: ["law", "redTeam", "legalIssues", "weaknesses", "strengths"] },
+      { arrangement: "tabs", panelIds: ["damages", "caseReconstruction", "decisions", "theories", "audioOverview"] },
     ],
   },
 ] as const;
