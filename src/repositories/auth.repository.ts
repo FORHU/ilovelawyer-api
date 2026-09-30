@@ -1,5 +1,7 @@
 import prisma from "../lib/prisma";
 import { ApprovalStatus, Prisma } from "@prisma/client";
+import { redis } from "../lib/redis";
+import { USERS_LIST_VERSION_KEY } from "../constants";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -29,11 +31,24 @@ function toPublicUser<T extends { password: string | null }>(user: T): Omit<T, "
   return { ...rest, hasPassword: password !== null };
 }
 
+/** AdminSvc.listUsers caches each page under the current USERS_LIST_VERSION_KEY; bumping it
+ * orphans every cached page at once. Every write below that adds/removes a user row, or changes
+ * a column listUsers selects, passes its result through here, so the admin list reflects a
+ * signup, login, verification or approval immediately rather than after USERS_LIST_CACHE_TTL_S.
+ * Writes to columns the list doesn't show (tokens, OTP codes, sessions) deliberately skip it.
+ * Best-effort: redis.incr never throws, so Redis being down can't fail the write itself. */
+async function bustUsersList<T>(result: T): Promise<T> {
+  await redis.incr(USERS_LIST_VERSION_KEY);
+  return result;
+}
+
 export default class AuthRepo {
   static async createUser(data: { username: string; email: string; password: string; name: string; tenantId?: string | null }) {
-    return prisma.user.create({
-      data: { username: data.username, email: data.email, password: data.password, name: data.name, tenantId: data.tenantId },
-    });
+    return bustUsersList(
+      await prisma.user.create({
+        data: { username: data.username, email: data.email, password: data.password, name: data.name, tenantId: data.tenantId },
+      })
+    );
   }
 
   /** Includes the user's Tenant code/name — used to tell a duplicate-signup attempt whether
@@ -66,11 +81,13 @@ export default class AuthRepo {
    * strongPassword validation now, so every caller of this satisfies the forced-update
    * gate as a side effect, whether or not that's what motivated the call. */
   static async updatePasswordAndClearMustChange(userId: string, hashedPassword: string) {
-    return prisma.user.update({ where: { id: userId }, data: { password: hashedPassword, mustChangePassword: false } });
+    return bustUsersList(
+      await prisma.user.update({ where: { id: userId }, data: { password: hashedPassword, mustChangePassword: false } })
+    );
   }
 
   static async updateLastLogin(userId: string) {
-    return prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
+    return bustUsersList(await prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } }));
   }
 
   static async findByUsername(username: string) {
@@ -79,11 +96,11 @@ export default class AuthRepo {
 
   static async updateProfile(userId: string, data: { name?: string; username?: string }) {
     const user = await prisma.user.update({ where: { id: userId }, data, select: PUBLIC_USER_SELECT });
-    return toPublicUser(user);
+    return bustUsersList(toPublicUser(user));
   }
 
   static async deleteUser(userId: string) {
-    return prisma.user.delete({ where: { id: userId } });
+    return bustUsersList(await prisma.user.delete({ where: { id: userId } }));
   }
 
   /** Marks (or, given `null`, unmarks) a user for self-service deletion — see
@@ -115,7 +132,8 @@ export default class AuthRepo {
    * is left untouched. `deleteMany` (not `delete`) so a no-match is a silent no-op rather than
    * a thrown "record not found". */
   static async deleteUnverifiedPendingUser(email: string) {
-    return prisma.user.deleteMany({ where: { email, isEmailVerified: false, approvalStatus: "PENDING" } });
+    const result = await prisma.user.deleteMany({ where: { email, isEmailVerified: false, approvalStatus: "PENDING" } });
+    return result.count > 0 ? bustUsersList(result) : result;
   }
 
   static async findByRefreshToken(refreshToken: string) {
@@ -145,18 +163,20 @@ export default class AuthRepo {
       username = `${base}${Math.floor(Math.random() * 9000) + 1000}`;
     }
 
-    return prisma.user.create({
-      data: {
-        username,
-        email,
-        googleId,
-        name,
-        provider: "google",
-        isEmailVerified: true,
-        lastLoginAt: new Date(),
-        tenantId,
-      },
-    });
+    return bustUsersList(
+      await prisma.user.create({
+        data: {
+          username,
+          email,
+          googleId,
+          name,
+          provider: "google",
+          isEmailVerified: true,
+          lastLoginAt: new Date(),
+          tenantId,
+        },
+      })
+    );
   }
 
   static async findGoogleRefreshToken(userId: string): Promise<string | null> {
@@ -191,7 +211,7 @@ export default class AuthRepo {
       data: { isEmailVerified: true, emailVerificationOtp: null, emailVerificationOtpExpiry: null },
     });
 
-    return result.count > 0 ? user : null;
+    return result.count > 0 ? bustUsersList(user) : null;
   }
 
   static async isResetTokenValid(token: string): Promise<boolean> {
@@ -224,7 +244,7 @@ export default class AuthRepo {
       data: { password: hashedPassword, otpCode: null, otpExpiry: null, isEmailVerified: true, mustChangePassword: false },
     });
 
-    return result.count > 0 ? user.id : null;
+    return result.count > 0 ? bustUsersList(user.id) : null;
   }
 
   static async setLoginLinkToken(userId: string, token: string, expiresAt: Date) {
@@ -280,15 +300,17 @@ export default class AuthRepo {
   }
 
   static async markEmailVerified(userId: string) {
-    return prisma.user.update({
-      where: { id: userId },
-      data: {
-        isEmailVerified: true,
-        emailVerificationCode: null,
-        emailVerificationExpiry: null,
-        emailVerificationAttempts: 0,
-      },
-    });
+    return bustUsersList(
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          isEmailVerified: true,
+          emailVerificationCode: null,
+          emailVerificationExpiry: null,
+          emailVerificationAttempts: 0,
+        },
+      })
+    );
   }
 
   static async listUsers(params: {
@@ -372,15 +394,17 @@ export default class AuthRepo {
   }
 
   static async setTenant(userId: string, tenantId: string) {
-    return prisma.user.update({
-      where: { id: userId },
-      data: { tenantId },
-      select: { id: true, tenant: { select: { code: true, name: true } } },
-    });
+    return bustUsersList(
+      await prisma.user.update({
+        where: { id: userId },
+        data: { tenantId },
+        select: { id: true, tenant: { select: { code: true, name: true } } },
+      })
+    );
   }
 
   static async setApprovalStatus(userId: string, status: ApprovalStatus, reason: string | null) {
-    return prisma.user.update({
+    const user = await prisma.user.update({
       where: { id: userId },
       data: { approvalStatus: status, denialReason: status === "DENIED" ? reason : null },
       select: {
@@ -397,5 +421,6 @@ export default class AuthRepo {
         lastLoginAt: true,
       },
     });
+    return bustUsersList(user);
   }
 }
