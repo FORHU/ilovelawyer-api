@@ -28,6 +28,8 @@ _Status: assigned from the request's Origin host at both signup (`User.tenantId`
 **Email Verification**:
 A blocking gate on password-based Signup: a User's `isEmailVerified` flag starts `false` and Login is refused until it's flipped `true` by successfully completing OTP verification. Not required for Google signups — Google has already verified the email, so `isEmailVerified` is set `true` at account creation. An admin can also mark a User verified in place of the OTP (`POST /api/admin/users/:id/verify-email`, `AdminSvc.verifyEmail`) — one-way, audited as `users.email_verified`, and it auto-approves a PENDING User on an auto-approve Tenant exactly as OTP verification does.
 _Avoid_: "OTP" alone as the name of the gate (OTP is the mechanism — the one-time code — not the gate itself; the gate is Email Verification)
+
+_Emails are canonical_: every `User.email` is stored and matched trimmed + lowercased (`normalizeEmail`), so a password account and a Google sign-in for the same address are the same account. A Google sign-in whose email belongs to an existing, verified password account is never linked silently: the API answers `GOOGLE_LINK_REQUIRED` and the link happens only through `/auth/google/link`, which requires that account's password. An unverified, still-PENDING password signup for the address is treated as abandoned and replaced by the Google account._
 _Status: designed, not yet implemented — see Pending._
 
 **Case Claim**:

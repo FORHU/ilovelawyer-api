@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import prisma from "../../src/lib/prisma";
 import { SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD } from "../../src/config";
 import { BCRYPT_SALT_ROUNDS } from "../../src/constants/auth.constants";
+import { normalizeEmail } from "../../src/utils/auth.utils";
 
 // Bootstraps the first admin account. Necessary because Admin Approval has no bootstrap
 // path otherwise: a brand-new User starts PENDING, and PENDING users can't approve
@@ -12,7 +13,7 @@ export async function seedAdmin() {
     throw new Error("SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD must be set in .env to seed the admin account");
   }
 
-  const email = SEED_ADMIN_EMAIL;
+  const email = normalizeEmail(SEED_ADMIN_EMAIL);
   const password = SEED_ADMIN_PASSWORD;
   const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
