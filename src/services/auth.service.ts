@@ -76,8 +76,9 @@ export default class AuthSvc {
    * for password signups: AuthRepo.deleteUnverifiedPendingUser (cancelSignup) only matches
    * unverified PENDING rows, so an unverified ACTIVE row could never be cleaned up.
    * No session wipe or email, unlike AdminSvc.transition — the user is signing in right now
-   * and the session about to be issued already sees ACTIVE. Returns whether it approved. */
-  private static async autoApproveIfEnabled(user: { id: string; tenantId: string | null; approvalStatus: string }) {
+   * and the session about to be issued already sees ACTIVE. Also called by AdminSvc.verifyEmail,
+   * where an admin marks the email verified in place of the OTP. Returns whether it approved. */
+  static async autoApproveIfEnabled(user: { id: string; tenantId: string | null; approvalStatus: string }) {
     if (user.approvalStatus !== "PENDING") return false;
     if (!(await TenantSettingSvc.isAutoApproveOn(user.tenantId))) return false;
     await AuthRepo.setApprovalStatus(user.id, "ACTIVE", null);

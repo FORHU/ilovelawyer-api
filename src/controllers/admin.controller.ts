@@ -67,6 +67,12 @@ export default class AdminCtrl {
     return res.status(200).json(user);
   }
 
+  /** POST /api/admin/users/:id/verify-email — marks the email verified, bypassing the signup OTP. */
+  static async verifyUserEmail(req: Request, res: Response) {
+    const user = await AdminSvc.verifyEmail(req.params.id, req.user.userId);
+    return res.status(200).json(user);
+  }
+
   /** PATCH /api/admin/users/:id/tenant — body { tenantCode: "PH" | "UK" }. */
   static async changeUserTenant(req: Request, res: Response) {
     const { error, value } = updateUserTenantSchema.validate(req.body ?? {});
