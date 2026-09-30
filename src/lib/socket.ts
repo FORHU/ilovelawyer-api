@@ -103,6 +103,10 @@ export function initSocket(server: HTTPServer): IOServer {
     const userId = socket.data.userId as string;
     logger.info("Socket.IO: connected", { socketId: socket.id, userId });
     socket.join(roomForUser(userId));
+    // Case rooms this socket's client currently wants — set on case:subscribe, cleared on
+    // case:unsubscribe — so a subscribe whose async access check is overtaken by an unsubscribe
+    // doesn't join after the fact (see the case:subscribe handler).
+    const wantedCaseIds = new Set<string>();
 
     socket.on("disconnect", (reason) => {
       logger.info("Socket.IO: disconnected", { socketId: socket.id, userId, reason });
@@ -121,11 +125,21 @@ export function initSocket(server: HTTPServer): IOServer {
         return ack?.({ ok: false, error: "Invalid caseId" });
       }
 
+      wantedCaseIds.add(caseId);
       try {
         await CaseAccess.loadAccessibleCase(caseId, userId);
       } catch (err) {
         logger.warn("case:subscribe: access denied", { err, userId, caseId });
+        wantedCaseIds.delete(caseId);
         return ack?.({ ok: false, error: "Not authorized for this case" });
+      }
+
+      // The access check above is async but case:unsubscribe's leave is not, so an unsubscribe
+      // sent right after this subscribe can run first — joining now would leave the socket in the
+      // room after the client already left it.
+      if (!wantedCaseIds.has(caseId)) {
+        logger.info("Socket.IO: case:subscribe skipped, unsubscribed during access check", { socketId: socket.id, userId, caseId });
+        return ack?.({ ok: false, error: "Unsubscribed" });
       }
 
       socket.join(roomForCase(caseId));
@@ -136,6 +150,7 @@ export function initSocket(server: HTTPServer): IOServer {
     socket.on("case:unsubscribe", (payload: unknown) => {
       const caseId = (payload as { caseId?: unknown })?.caseId;
       if (typeof caseId === "string" && caseId) {
+        wantedCaseIds.delete(caseId);
         socket.leave(roomForCase(caseId));
         logger.info("Socket.IO: case:unsubscribe left", { socketId: socket.id, userId, caseId });
       }

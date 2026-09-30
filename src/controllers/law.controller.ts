@@ -96,7 +96,9 @@ export default class LawCtrl {
       category: provider.parseCategory(value.category),
       id: value.id,
     });
-    res.setHeader("Cache-Control", "private, max-age=3600");
+    // No snippet yet can mean a first-time detail fill is still finishing in the background (see
+    // UkLawSourceProvider.getPreview) — don't let the browser pin that empty answer for an hour.
+    res.setHeader("Cache-Control", result.snippet ? "private, max-age=3600" : "no-store");
     return res.status(200).json(result);
   }
 

@@ -62,6 +62,28 @@ describe("toLawPreview", () => {
     expect(toLawPreview(row({ fullText: "full" })).snippet).to.equal("full");
   });
 
+  it("falls back to a UK judgment's first paragraph preview", () => {
+    const sections = [{ title: "para_1", summary: "  " }, { title: "para_2", summary: "The appellant was convicted." }];
+    expect(toLawPreview(row({ category: "JURISPRUDENCE", sections })).snippet).to.equal("The appellant was convicted.");
+  });
+
+  it("does not treat a legislation TOC's section ids as a snippet", () => {
+    expect(toLawPreview(row({ category: "REPUBLIC_ACT", sections: [{ title: "Short title", summary: "s. 1" }] })).snippet).to.equal(null);
+  });
+
+  it("skips repealed UK sections (dot leaders only) and cleans the first real provision", () => {
+    const repealed = ". . . . . . . . . . . . . . . .: . . . . . . . . . . . . . . . .  1";
+    const real =
+      "Conspiring or soliciting to commit murder.: Conspiring or soliciting to commit murder. 4 . . . Whosoever shall solicit any person to murder any other person";
+    expect(toLawPreview(row({ keyProvisions: [repealed, repealed, real] })).snippet).to.equal(
+      "Whosoever shall solicit any person to murder any other person",
+    );
+  });
+
+  it("returns a null snippet when every stored provision is repealed", () => {
+    expect(toLawPreview(row({ keyProvisions: [". . . . . . . .: . . . . . . . .  1"] })).snippet).to.equal(null);
+  });
+
   it("returns a null snippet when nothing is stored", () => {
     expect(toLawPreview(row()).snippet).to.equal(null);
   });
