@@ -4,10 +4,18 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import logger from "./logger";
-import { FFMPEG_PATH, FFPROBE_PATH } from "../config";
+import { FFMPEG_PATH } from "../config";
 import { AudioOverviewTurn } from "./response-parser";
 import { getPollyClient } from "./polly";
 import { MAX_TURN_CHARS, TURN_SYNTHESIS_CONCURRENCY } from "../constants";
+
+// Reads MPEG frame headers directly out of the buffer — pure computation, no external binary,
+// so it behaves identically on every OS/architecture. The first attempt at this (ffprobe, with
+// ffprobe-static as a local-dev fallback) broke turnTimings in production outright: ffprobe-static
+// ships no linux/arm64 binary at all, which is exactly what UK production deploys as. Never
+// depend on a platform-specific binary for something that has to work everywhere the app runs.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- no @types package for this
+const mp3Duration = require("mp3-duration") as (input: Buffer) => Promise<number>;
 
 async function synthesizeTurn(text: string, voiceId: string): Promise<Buffer> {
   const client = getPollyClient();
@@ -69,45 +77,6 @@ async function runFfmpegConcat(listPath: string, outputPath: string): Promise<vo
   }
 }
 
-function runFfprobeDuration(binary: string, filePath: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(binary, ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath]);
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    proc.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      const seconds = Number(stdout.trim());
-      if (code === 0 && Number.isFinite(seconds)) resolve(seconds);
-      else reject(new Error(`ffprobe exited with code ${code}: ${stderr.slice(-2000)}`));
-    });
-  });
-}
-
-/** Same system-binary-first, ffprobe-static-fallback shape as runFfmpegConcat, for the same
- * reason: measuring each turn's synthesized clip duration (to build turnTimings below) needs
- * ffprobe, which isn't guaranteed on a dev machine any more than ffmpeg is. */
-async function probeDurationSeconds(filePath: string): Promise<number> {
-  try {
-    return await runFfprobeDuration(FFPROBE_PATH, filePath);
-  } catch (err) {
-    const isMissingBinary = err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT";
-    if (!isMissingBinary) throw err;
-
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- optional fallback dep
-    const ffprobeStatic = require("ffprobe-static") as { path: string } | null;
-    if (!ffprobeStatic?.path) throw err;
-
-    logger.warn("Audio Overview: system ffprobe not found, falling back to ffprobe-static", { FFPROBE_PATH });
-    return await runFfprobeDuration(ffprobeStatic.path, filePath);
-  }
-}
-
 /** Cumulative start second of each turn (turnTimings[0] is always 0) from that turn's clip
  * duration — the offset each turn begins at once every prior clip is concatenated ahead of it.
  * Exported for its own unit test; doesn't touch the filesystem or ffprobe itself. */
@@ -162,22 +131,24 @@ export async function mergeTurnsToMp3(
 ): Promise<MergedAudioOverview> {
   const workDir = await mkdtemp(path.join(tmpdir(), "audio-overview-"));
   try {
-    const turnPaths = await Promise.all(
+    // Duration is measured on each turn's buffer right here, in memory, the moment it's
+    // synthesized — not a separate pass over the written files afterward. mp3Duration is pure
+    // computation (see the import comment above): it cannot fail because of what OS/architecture
+    // this is running on, so there's no fallback path to reason about, and no way for it to leave
+    // turnTimings out of step with what actually got concatenated below.
+    const turnResults = await Promise.all(
       turns.map(async (turn, index) => {
         const buffer = await pool.run(() =>
           synthesizeTurn(turn.text, turn.speaker === "HOST_A" ? voiceHostA : voiceHostB),
         );
         const turnPath = path.join(workDir, `turn-${String(index).padStart(3, "0")}.mp3`);
         await writeFile(turnPath, buffer);
-        return turnPath;
+        const duration = await mp3Duration(buffer);
+        return { turnPath, duration };
       }),
     );
-
-    // Probed after every clip is on disk (not folded into the map above) — durations are only
-    // needed once all of them exist, and keeping this a separate pass makes the concat step's
-    // own file list construction (below) unaffected by probe failures ordering differently.
-    const durations = await Promise.all(turnPaths.map((p) => pool.run(() => probeDurationSeconds(p))));
-    const turnTimings = turnStartTimes(durations);
+    const turnPaths = turnResults.map((r) => r.turnPath);
+    const turnTimings = turnStartTimes(turnResults.map((r) => r.duration));
 
     const listPath = path.join(workDir, "list.txt");
     const listContent = turnPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
