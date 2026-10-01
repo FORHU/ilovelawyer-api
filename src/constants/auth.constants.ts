@@ -34,3 +34,9 @@ export const GOOGLE_PHOTO_SIGNUP_WAIT_MS = 3_000;
 
 // Length of the Google Calendar copy of an appointment that has no end time.
 export const GOOGLE_CALENDAR_DEFAULT_EVENT_MINUTES = 60;
+
+// Two-way Google Calendar sync (GoogleCalendarSyncQueue / GoogleCalendarPullSvc): how often each
+// connected user's calendar is checked for changes, and the most pages (250 events each) one
+// check reads before continuing on the next poll.
+export const GOOGLE_CALENDAR_POLL_INTERVAL_MS = 2 * 60 * 1000;
+export const GOOGLE_CALENDAR_PULL_MAX_PAGES = 20;

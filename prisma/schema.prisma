@@ -39,6 +39,9 @@ model User {
   googleId           String?   @unique
   googleAccessToken  String?
   googleRefreshToken String?
+  // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
+  // poll takes a fresh baseline. Reset on connect and disconnect.
+  googleCalendarSyncToken String?
   avatarId           String?
   tenantId           String?
   isEmailVerified    Boolean   @default(false)
@@ -1169,6 +1172,15 @@ model Event {
   status               String    @default("pending")
   googleLink           String?   @map("google_link")
   googleEventId        String?   @map("google_event_id")
+  // Google's `updated` time for its copy of this event, as last written or applied by the sync
+  // (GoogleCalendarSyncSvc / GoogleCalendarPullSvc). A Google change newer than this is new;
+  // anything else is the sync's own write echoing back.
+  googleUpdatedAt      DateTime? @map("google_updated_at")
+  // When the app last changed something the Google copy shows (title, time, notes, status, ...)
+  // that hasn't reached Google yet; cleared by a successful push. The pull compares it with a
+  // Google edit's time so the newer edit wins — `updatedAt` can't, since bookkeeping writes
+  // (reminder sent, acknowledged) bump it too.
+  googleDirtyAt        DateTime? @map("google_dirty_at")
   reminderLeadMinutes  Int?      @map("reminder_lead_minutes")
   lastReminderSentAt   DateTime? @map("last_reminder_sent_at")
   lawyerAcknowledgedAt DateTime? @map("lawyer_acknowledged_at")
