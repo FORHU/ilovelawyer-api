@@ -3,6 +3,8 @@ import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import CaseGraphSvc from "./case-graph.service";
+import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
+import { damageCloseReason } from "../utils/procedure-link";
 import { computeDamagesSummary, describeDamageBasis, hasBasisInputs, parseDamageBasis } from "../utils/damages-compute";
 import { parseDamageProposal } from "../utils/damages-proposal";
 import type { TenantCode } from "../types/tenant-code";
@@ -85,6 +87,8 @@ export default class DamageClaimSvc {
     if (row.status === "CERTIFIED" && existing.status !== "CERTIFIED") {
       await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.certify", payload: { id, category: row.category } });
     }
+    const closeReason = damageCloseReason(existing, row);
+    if (closeReason) await ProceduralDeadlineRepo.closeLinked(caseId, "DAMAGE", id, closeReason);
     await DamageClaimSvc.recompute(caseId, id);
     return (await DamageClaimRepo.findById(id, caseId)) ?? row;
   }
@@ -133,6 +137,7 @@ export default class DamageClaimSvc {
     });
     if (certify) {
       await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.certify", payload: { id, category: existing.category } });
+      await ProceduralDeadlineRepo.closeLinked(caseId, "DAMAGE", id, "DAMAGE_CERTIFIED");
     }
     await DamageClaimSvc.recompute(caseId, id);
     return DamageClaimRepo.findById(id, caseId);

@@ -1,4 +1,5 @@
 import Joi from "joi";
+import { PROCEDURE_SOURCE_KINDS } from "../utils/procedure-link";
 
 const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
 const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
@@ -184,6 +185,13 @@ export const createProcedureItemSchema = Joi.object({
   // Where a to-do sent over from another panel ("To checklist") came from, e.g. the finding or
   // document it was raised on — shown as the item's source, same as an AI item's.
   sourceLabel: Joi.string().max(200).optional().allow(null, ""),
+  // The item it was sent from, so the to-do can tick itself once that item is fixed
+  // (utils/procedure-link.ts). sourceKey is a witness need's key and only applies to WITNESS_NEED.
+  sourceKind: Joi.string().valid(...PROCEDURE_SOURCE_KINDS).optional(),
+  sourceId: Joi.string().max(64).when("sourceKind", { is: Joi.exist(), then: Joi.required(), otherwise: Joi.forbidden() }),
+  sourceKey: Joi.string()
+    .max(64)
+    .when("sourceKind", { is: "WITNESS_NEED", then: Joi.required(), otherwise: Joi.forbidden() }),
 });
 
 export const updateProcedureItemSchema = Joi.object({

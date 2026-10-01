@@ -6,6 +6,10 @@ import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import { TenantCode } from "../types/tenant-code";
 import CaseGraphSvc from "./case-graph.service";
+import CaseFindingRepo from "../repositories/case-finding.repository";
+import DamageClaimRepo from "../repositories/damage-claim.repository";
+import WitnessRepo from "../repositories/witness.repository";
+import type { ProcedureSourceKind } from "../utils/procedure-link";
 
 // The UK deadline engine only implements England & Wales CPR rules and bank-holiday calendar
 // today — applying them to a Scotland or Northern Ireland case would silently compute the wrong
@@ -177,9 +181,49 @@ export default class ProceduralDeadlineSvc {
     };
   }
 
-  static async createItem(caseId: string, userId: string, body: { kind: string; label: string; notes?: string; sourceLabel?: string | null }) {
+  static async createItem(
+    caseId: string,
+    userId: string,
+    body: {
+      kind: string;
+      label: string;
+      notes?: string;
+      sourceLabel?: string | null;
+      sourceKind?: ProcedureSourceKind;
+      sourceId?: string;
+      sourceKey?: string;
+    },
+  ) {
     await CaseAccess.assertCanEdit(caseId, userId);
-    return ProceduralDeadlineRepo.createProcedureItem(caseId, { ...body, sourceLabel: body.sourceLabel || null });
+    const sourceKey = body.sourceKey ?? null;
+    if (body.sourceKind && body.sourceId) {
+      await ProceduralDeadlineSvc.assertSourceInCase(caseId, body.sourceKind, body.sourceId, sourceKey);
+      // Sending the same item twice returns the to-do it already has, rather than a duplicate.
+      const existing = await ProceduralDeadlineRepo.findOpenLinked(caseId, body.sourceKind, body.sourceId, sourceKey);
+      if (existing) return existing;
+    }
+    return ProceduralDeadlineRepo.createProcedureItem(caseId, {
+      ...body,
+      sourceLabel: body.sourceLabel || null,
+      sourceKind: body.sourceKind ?? null,
+      sourceId: body.sourceId ?? null,
+      sourceKey,
+    });
+  }
+
+  /** A to-do may only link to an item on its own case (and, for a witness need, a need that
+   * witness actually has). */
+  private static async assertSourceInCase(caseId: string, kind: ProcedureSourceKind, id: string, key: string | null) {
+    if (kind === "FINDING") {
+      if (await CaseFindingRepo.find(id, caseId)) return;
+    } else if (kind === "DAMAGE") {
+      if (await DamageClaimRepo.findById(id, caseId)) return;
+    } else {
+      const witness = (await WitnessRepo.list(caseId)).find((w) => w.id === id);
+      const needs = (witness?.aiFactors as { needs?: { key: string }[] } | null)?.needs ?? [];
+      if (witness && needs.some((n) => n.key === key)) return;
+    }
+    throw new HttpError("The item this to-do was sent from isn't on this case", 404);
   }
 
   static async updateItem(caseId: string, id: string, userId: string, body: { done?: boolean; notes?: string; label?: string }) {

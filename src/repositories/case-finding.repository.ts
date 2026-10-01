@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 import { FindingCategory, FindingTag, Prisma } from "@prisma/client";
 import { AI_FINDING_NOTE } from "../constants";
+import { matchRegeneratedFindings } from "../utils/procedure-link";
 
 export interface FindingInput {
   category: FindingCategory;
@@ -76,18 +77,25 @@ export default class CaseFindingRepo {
     items: AiFindingRow[],
   ) {
     await prisma.$transaction(async (tx) => {
-      const stale = await tx.caseFinding.findMany({ where: { caseId, notes: AI_FINDING_NOTE }, select: { id: true } });
+      const stale = await tx.caseFinding.findMany({
+        where: { caseId, notes: AI_FINDING_NOTE },
+        select: { id: true, category: true, label: true },
+      });
       await tx.caseGraphNode.deleteMany({ where: { nodeType: "FINDING", refId: { in: stale.map((f) => f.id) } } });
       await tx.caseFinding.deleteMany({ where: { caseId, notes: AI_FINDING_NOTE } });
       if (items.length === 0) return;
       const created = await tx.caseFinding.createManyAndReturn({
         data: items.map((item) => ({ ...item, caseId, notes: AI_FINDING_NOTE })),
-        select: { id: true },
+        select: { id: true, category: true, label: true },
       });
       await tx.caseGraphNode.createMany({
         data: created.map((f) => ({ caseId, nodeType: "FINDING" as const, refId: f.id })),
         skipDuplicates: true,
       });
+      // Case Strategy to-dos raised on a finding that came back follow it to its new id.
+      for (const [from, to] of matchRegeneratedFindings(stale, created)) {
+        await tx.procedureItem.updateMany({ where: { caseId, sourceKind: "FINDING", sourceId: from }, data: { sourceId: to } });
+      }
     });
     return this.list(caseId);
   }

@@ -1696,12 +1696,24 @@ model ProcedureItem {
   // { verdict, confidence, checkedAt }. Null for to-dos, lawyer-entered items, and when
   // USE_JEV_CASE_STRATEGY is off.
   check       Json?
+  // A to-do sent over from another panel ("To checklist") remembers the item it was raised on, so
+  // the item reaching its fixed state can tick it (utils/procedure-link.ts): FINDING, DAMAGE or
+  // WITNESS_NEED, that row's id, and for a witness need the need's key. Not a foreign key — the
+  // sources live in different tables, and the to-do outlives a deleted source.
+  sourceKind  String?
+  sourceId    String?
+  sourceKey   String?
+  // Set when the source ticked this to-do, with why (a ProcedureAutoCloseReason). Cleared when a
+  // lawyer reopens it.
+  autoClosedAt     DateTime?
+  autoClosedReason String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+  @@index([caseId, sourceKind, sourceId])
 }
 
 // ── Case Findings, Witnesses, Damages, Reconstruction ──────────────────────────

@@ -7,6 +7,7 @@ import DamageClaimSvc from "../src/services/damage-claim.service";
 import DamageClaimRepo from "../src/repositories/damage-claim.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import CaseGraphSvc from "../src/services/case-graph.service";
+import ProceduralDeadlineRepo from "../src/repositories/procedural-deadline.repository";
 import CaseAccess from "../src/utils/case-access";
 import HttpError from "../src/utils/http-error";
 
@@ -35,6 +36,7 @@ describe("DamageClaimSvc", () => {
   let setAmountsCalls: { id: string; amount: number | null }[][];
   let staleIds: string[];
   let audits: string[];
+  let closedTodos: { id: string; reason: string }[];
 
   function patch(target: object, key: string, value: unknown) {
     const original = (target as any)[key];
@@ -47,6 +49,7 @@ describe("DamageClaimSvc", () => {
     setAmountsCalls = [];
     staleIds = [];
     audits = [];
+    closedTodos = [];
     rows = [
       row("actual", "ACTUAL", { amount: 486000, basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000, months: 18 } }),
       row("moral", "MORAL", { amount: 200000 }),
@@ -82,6 +85,10 @@ describe("DamageClaimSvc", () => {
     patch(OrganizationRepo, "writeAudit", async (entry: { action: string }) => {
       audits.push(entry.action);
     });
+    patch(ProceduralDeadlineRepo, "closeLinked", async (_caseId: string, _kind: string, id: string, reason: string) => {
+      closedTodos.push({ id, reason });
+      return 1;
+    });
     patch(DamageClaimRepo, "setProposal", async (id: string, _caseId: string, proposal: unknown) => {
       rows.find((r) => r.id === id)!.aiProposedBasis = proposal;
     });
@@ -105,6 +112,7 @@ describe("DamageClaimSvc", () => {
     expect(updated!).to.include({ status: "CERTIFIED", pendingEvidence: null, aiProposedBasis: null, amount: 540000 });
     expect(rows.find((r) => r.id === "fees")!.amount).to.equal(74000);
     expect(audits).to.deep.equal(["damage.proposal.apply", "damage.certify"]);
+    expect(closedTodos).to.deep.equal([{ id: "actual", reason: "DAMAGE_CERTIFIED" }]);
   });
 
   it("applies new figures without certifying when the document isn't the awaited evidence", async () => {
@@ -112,6 +120,7 @@ describe("DamageClaimSvc", () => {
     const updated = await DamageClaimSvc.applyProposal("case-1", "actual", "user-1");
     expect(updated!).to.include({ status: "PROVISIONAL", pendingEvidence: "payroll certification", amount: 540000 });
     expect(audits).to.deep.equal(["damage.proposal.apply"]);
+    expect(closedTodos).to.deep.equal([]);
   });
 
   it("applies a FIXED proposal's amount", async () => {
@@ -165,6 +174,15 @@ describe("DamageClaimSvc", () => {
   it("audits the move to CERTIFIED", async () => {
     await DamageClaimSvc.update("case-1", "moral", "user-1", { status: "CERTIFIED" });
     expect(audits).to.deep.equal(["damage.update", "damage.certify"]);
+    expect(closedTodos).to.deep.equal([{ id: "moral", reason: "DAMAGE_CERTIFIED" }]);
+  });
+
+  it("closes the head's Case Strategy to-dos once it stops waiting on evidence", async () => {
+    rows[1]!.pendingEvidence = "receipts for medical costs";
+    await DamageClaimSvc.update("case-1", "moral", "user-1", { amount: 210000 });
+    expect(closedTodos).to.deep.equal([]);
+    await DamageClaimSvc.update("case-1", "moral", "user-1", { pendingEvidence: "" });
+    expect(closedTodos).to.deep.equal([{ id: "moral", reason: "DAMAGE_EVIDENCE_IN" }]);
   });
 
   it("refuses CERTIFIED on a head with no amount or period", async () => {

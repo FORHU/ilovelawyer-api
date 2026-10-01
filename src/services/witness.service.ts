@@ -7,6 +7,8 @@ import DocumentRepo from "../repositories/document.repository";
 import { mergeNeedsDone, parseNeedsDone, type NeedDone, type NeedDoneInput } from "../utils/witness-needs";
 import { checkProofWithJev, toStoredMatch } from "../utils/witness-need-proof-jev";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
+import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
+import { newlyDoneNeedKeys } from "../utils/procedure-link";
 
 export default class WitnessSvc {
   static async list(caseId: string, userId: string) {
@@ -31,6 +33,7 @@ export default class WitnessSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const { needsDone, ...rest } = data;
     let stored: unknown[] | undefined;
+    let priorDone: NeedDone[] = [];
     if (needsDone) {
       // A tick needs proof: a document or photo that is in this case's Documents. Who and when are
       // stamped here, so a client can't claim someone else attached it.
@@ -38,7 +41,8 @@ export default class WitnessSvc {
       if (!current) throw new HttpError("Witness not found", 404);
       const docs = await DocumentRepo.listAllByCase(caseId);
       const docById = new Map(docs.map((d) => [d.id, d]));
-      const storedByKey = new Map(parseNeedsDone(current.needsDone).map((d) => [d.key, d]));
+      priorDone = parseNeedsDone(current.needsDone);
+      const storedByKey = new Map(priorDone.map((d) => [d.key, d]));
       const requirements = new Map(
         ((current.aiFactors as { needs?: { key: string; text: string }[] } | null)?.needs ?? []).map((n) => [n.key, n.text]),
       );
@@ -83,6 +87,10 @@ export default class WitnessSvc {
     if (!row) throw new HttpError("Witness not found", 404);
     await CaseGraphSvc.markStale(caseId, "WITNESS", id, "Witness updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "witness.update", payload: { id } });
+    const ticked = stored ? newlyDoneNeedKeys(priorDone, stored as NeedDone[]) : [];
+    // Marking the statement received settles the STATEMENT need without a tick of its own.
+    if (rest.statementReceived === true) ticked.push("STATEMENT");
+    if (ticked.length) await ProceduralDeadlineRepo.closeLinked(caseId, "WITNESS_NEED", id, "WITNESS_NEED_DONE", ticked);
     return row;
   }
 
