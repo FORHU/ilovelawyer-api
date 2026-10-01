@@ -3,37 +3,65 @@ import { Prisma } from "@prisma/client";
 
 // screenCount: 1 presets replace the old New Layout dialog's hardcoded PresetValue picker
 // (PANE_1/2/4/6, formerly applyPreset/PresetLayoutPreview in legal-terminal.tsx) — same panel
-// sets, workflow-named instead of "N panes".
-// Idempotent (upserts on id, the same stable slug the frontend used to hardcode), safe to re-run.
+// sets, workflow-named (id included — see OLD_IDS below) instead of "pane-N"/"N panes".
+// Idempotent (upserts on id), safe to re-run.
 // userId is left absent (null): these are system presets, global to every user.
 const SYSTEM_PRESETS = [
   {
-    id: "pane-1",
+    id: "quick-review",
     labelKey: "presetQuickReview",
     descriptionKey: "presetQuickReviewDesc",
     name: "Quick Review",
     screens: [{ arrangement: "free", panelIds: ["command"] }],
   },
   {
-    id: "pane-2",
+    id: "evidence-check",
     labelKey: "presetEvidenceCheck",
     descriptionKey: "presetEvidenceCheckDesc",
     name: "Evidence Check",
     screens: [{ arrangement: "free", panelIds: ["command", "evidence"] }],
   },
   {
-    id: "pane-4",
+    id: "case-workspace",
     labelKey: "presetCaseWorkspace",
     descriptionKey: "presetCaseWorkspaceDesc",
     name: "Case Workspace",
     screens: [{ arrangement: "free", panelIds: ["command", "evidence", "chat", "procedure"] }],
   },
   {
-    id: "pane-6",
+    id: "full-research",
     labelKey: "presetFullResearch",
     descriptionKey: "presetFullResearchDesc",
     name: "Full Research",
     screens: [{ arrangement: "free", panelIds: ["command", "evidence", "law", "mindMap", "procedure", "chat"] }],
+  },
+  {
+    id: "client-call",
+    labelKey: "presetClientCall",
+    descriptionKey: "presetClientCallDesc",
+    name: "Client Call",
+    screens: [{ arrangement: "free", panelIds: ["command", "chat"] }],
+  },
+  {
+    id: "deposition-prep",
+    labelKey: "presetDepositionPrep",
+    descriptionKey: "presetDepositionPrepDesc",
+    name: "Deposition Prep",
+    screens: [{ arrangement: "free", panelIds: ["witnesses", "contradictions", "redTeam"] }],
+  },
+  {
+    id: "deadline-tracker",
+    labelKey: "presetDeadlineTracker",
+    descriptionKey: "presetDeadlineTrackerDesc",
+    name: "Deadline Tracker",
+    screens: [{ arrangement: "free", panelIds: ["procedure", "decisions"] }],
+  },
+  {
+    id: "appeal-review",
+    labelKey: "presetAppealReview",
+    descriptionKey: "presetAppealReviewDesc",
+    name: "Appeal Review",
+    screens: [{ arrangement: "free", panelIds: ["legalIssues", "strengths", "weaknesses"] }],
   },
   {
     id: "trial-prep",
@@ -96,6 +124,46 @@ const SYSTEM_PRESETS = [
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
       { arrangement: "free", panelIds: ["decisions", "mindMap"] },
+    ],
+  },
+  {
+    id: "deposition-day",
+    labelKey: "presetDepositionDay",
+    descriptionKey: "presetDepositionDayDesc",
+    name: "Deposition Day",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat", "witnesses"] },
+      { arrangement: "tabs", panelIds: ["contradictions", "redTeam", "attackStrategy"] },
+    ],
+  },
+  {
+    id: "discovery-review",
+    labelKey: "presetDiscoveryReview",
+    descriptionKey: "presetDiscoveryReviewDesc",
+    name: "Discovery Review",
+    screens: [
+      { arrangement: "free", panelIds: ["evidence", "contradictions"] },
+      { arrangement: "tabs", panelIds: ["procedure", "teamAudit", "decisions"] },
+    ],
+  },
+  {
+    id: "appeal-prep",
+    labelKey: "presetAppealPrep",
+    descriptionKey: "presetAppealPrepDesc",
+    name: "Appeal Prep",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat", "legalIssues"] },
+      { arrangement: "tabs", panelIds: ["citationMap", "theories", "strengths", "weaknesses"] },
+    ],
+  },
+  {
+    id: "mediation-session",
+    labelKey: "presetMediationSession",
+    descriptionKey: "presetMediationSessionDesc",
+    name: "Mediation Session",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat", "damages"] },
+      { arrangement: "free", panelIds: ["theories", "decisions"] },
     ],
   },
   {
@@ -165,6 +233,50 @@ const SYSTEM_PRESETS = [
     ],
   },
   {
+    id: "deposition-prep-suite",
+    labelKey: "presetDepositionPrepSuite",
+    descriptionKey: "presetDepositionPrepSuiteDesc",
+    name: "Deposition Prep Suite",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat"] },
+      { arrangement: "columns", panelIds: ["witnesses", "contradictions", "redTeam"] },
+      { arrangement: "tabs", panelIds: ["attackStrategy", "defenseStrategy", "legalIssues"] },
+    ],
+  },
+  {
+    id: "appeal-strategy",
+    labelKey: "presetAppealStrategy",
+    descriptionKey: "presetAppealStrategyDesc",
+    name: "Appeal Strategy",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat", "procedure"] },
+      { arrangement: "columns", panelIds: ["law", "citationMap", "legalIssues"] },
+      { arrangement: "tabs", panelIds: ["strengths", "weaknesses", "theories", "decisions"] },
+    ],
+  },
+  {
+    id: "discovery-command",
+    labelKey: "presetDiscoveryCommand",
+    descriptionKey: "presetDiscoveryCommandDesc",
+    name: "Discovery Command",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat"] },
+      { arrangement: "columns", panelIds: ["evidence", "contradictions", "witnesses"] },
+      { arrangement: "tabs", panelIds: ["procedure", "teamAudit", "decisions", "caseReconstruction"] },
+    ],
+  },
+  {
+    id: "fact-verification",
+    labelKey: "presetFactVerification",
+    descriptionKey: "presetFactVerificationDesc",
+    name: "Fact Verification",
+    screens: [
+      { arrangement: "free", panelIds: ["command", "chat"] },
+      { arrangement: "columns", panelIds: ["evidence", "contradictions", "verification"] },
+      { arrangement: "tabs", panelIds: ["witnesses", "caseReconstruction", "decisions"] },
+    ],
+  },
+  {
     id: "war-room",
     labelKey: "presetWarRoom",
     descriptionKey: "presetWarRoomDesc",
@@ -202,7 +314,14 @@ const SYSTEM_PRESETS = [
   },
 ] as const;
 
+// Ids these presets used to be seeded under before their rename to workflow-style slugs —
+// deleted on every run so re-seeding doesn't leave orphaned duplicates behind (upsert can't
+// rename an id, only create-or-update one).
+const OLD_IDS = ["pane-1", "pane-2", "pane-4", "pane-6"];
+
 export async function seedScreenPresets() {
+  await prisma.screenPreset.deleteMany({ where: { id: { in: OLD_IDS } } });
+
   for (const preset of SYSTEM_PRESETS) {
     const data = {
       labelKey: preset.labelKey,
