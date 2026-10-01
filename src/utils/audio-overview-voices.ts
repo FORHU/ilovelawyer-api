@@ -1,14 +1,23 @@
 import { createHash } from "crypto";
 import type { VoiceId } from "@aws-sdk/client-polly";
 
-// AWS Polly Generative-engine English voices only (see audio-overview-audio.service.ts's
-// synthesizeTurn, which requests Engine: "generative") — same "no Filipino/Tagalog voice,
-// deferred work" constraint case-reconstruction-audio.service.ts already documented. Every
-// entry here is confirmed via Polly's DescribeVoices (Engine: "generative", en-US) to be both
-// Generative-capable and an adult voice — the previous Neural-only pool included Justin/Ivy/
-// Kevin, which AWS designates as child voices, an odd fit for two hosts discussing a legal
-// analysis. A mix of voices so a randomly-picked pair reads as two distinct people.
-const VOICE_POOL: VoiceId[] = ["Joanna", "Matthew", "Danielle", "Ruth", "Salli", "Stephen", "Tiffany"];
+// AWS Polly Neural-engine English voices only (AUDIO_OVERVIEW_ENGINE — Neural, for its speech
+// marks) — same "no Filipino/Tagalog voice, deferred work" constraint
+// case-reconstruction-audio.service.ts already documented. Adult voices only: Justin/Ivy/Kevin
+// are Neural too, but AWS designates them child voices, an odd fit for two hosts discussing a
+// legal analysis. Kendra holds the slot Tiffany had while this pool was Generative (Tiffany has
+// no Neural variant) — replaced in place rather than removed, so the pool's length and every
+// other index stay the same and no other case's voicePairForCase result changes. Every voice
+// here is Neural in both ap-southeast-1 and eu-west-2.
+const VOICE_POOL: VoiceId[] = ["Joanna", "Matthew", "Danielle", "Ruth", "Salli", "Stephen", "Kendra"];
+
+// Voices a row saved while the pool was Generative can still carry, mapped to their Neural
+// replacement — a re-render of that older script would otherwise fail on every turn.
+const RETIRED_VOICES: Record<string, VoiceId> = { Tiffany: "Kendra" };
+
+export function neuralVoiceFor(voiceId: string): string {
+  return RETIRED_VOICES[voiceId] ?? voiceId;
+}
 
 export interface AudioOverviewVoicePair {
   hostA: VoiceId;
