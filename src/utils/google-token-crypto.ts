@@ -41,3 +41,12 @@ export function decryptGoogleToken(stored: string, rawKey?: string): string | nu
     return null;
   }
 }
+
+/** The secret Google echoes back on every push notification for a watch channel
+ * (X-Goog-Channel-Token), derived from GOOGLE_TOKEN_ENC_KEY so nothing extra is stored. The
+ * webhook rejects any notification that doesn't carry it. Null when no key is configured. */
+export function calendarChannelToken(channelId: string, rawKey?: string): string | null {
+  const k = key(rawKey);
+  if (!k) return null;
+  return crypto.createHmac("sha256", k).update(`calendar-channel:${channelId}`).digest("base64url");
+}
