@@ -44,6 +44,8 @@ const BROWSE_PAGE_SIZE = 20;
 const BROWSE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 /** Top-level TOC entries to pull full section text for on a legislation detail fetch. */
 const LEGISLATION_DETAIL_SECTIONS = 4;
+/** How long a citation hover card waits on a first-time detail fill (see getPreview). */
+const PREVIEW_FILL_BUDGET_MS = 6_000;
 
 /**
  * UK Library source: search + faceted (court) browse + lazy-detail, proxying the UK Legal MCP
@@ -309,11 +311,25 @@ export class UkLawSourceProvider implements LawSourceProvider {
     }
   }
 
-  /** DB-only, unlike getDocument above — no MCP detail fill on a hover. */
+  /** DB-first. UK rows are stored from search hits with no text at all (a legislation hit is just
+   * title + number), so a row nobody has opened in the Library yet has nothing to preview — in
+   * that one case this runs the same one-time detail fill getDocument does, capped at
+   * PREVIEW_FILL_BUDGET_MS so a hover never hangs. A fill that overruns keeps going in the
+   * background and writes through, so the next preview of that document has its snippet. */
   async getPreview(params: { category: LawCategory; id: string }): Promise<LawPreview> {
     const row = await LawRepo.findById(params.id);
     if (!row || row.category !== params.category) throw new HttpError("No such law document", 404);
-    return toLawPreview(row);
+    const preview = toLawPreview(row);
+    if (preview.snippet || row.detailFetchedAt) return preview;
+
+    const fill = (params.category === "JURISPRUDENCE" ? this.fillCaseLawDetail(row) : this.fillLegislationDetail(row)).catch(
+      () => null,
+    );
+    const filled = await Promise.race([
+      fill,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), PREVIEW_FILL_BUDGET_MS)),
+    ]);
+    return filled ? toLawPreview(filled) : preview;
   }
 
   private async fillCaseLawDetail(row: Law): Promise<Law> {
