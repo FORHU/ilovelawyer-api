@@ -5,7 +5,20 @@
  */
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { parseSpeechMarks, sentenceTimingsForTurn, turnStartTimes } from "../src/utils/audio-overview-render";
+import { headerFrameSeconds, parseSpeechMarks, sentenceTimingsForTurn, turnStartTimes } from "../src/utils/audio-overview-render";
+
+/** An MP3 frame header followed by zeroed side info and, optionally, a tag where Xing/Info goes. */
+function frame(header: number[], sideInfoBytes: number, tag?: string): Buffer {
+  const bytes = Buffer.alloc(64);
+  Buffer.from(header).copy(bytes, 0);
+  if (tag) bytes.write(tag, 4 + sideInfoBytes, "latin1");
+  return bytes;
+}
+
+// MPEG-2 Layer III, 48kbps, 24kHz, mono — the shape of Polly's MP3 output.
+const MPEG2_MONO_24K = [0xff, 0xf3, 0x64, 0xc0];
+// MPEG-1 Layer III, 128kbps, 44.1kHz, stereo.
+const MPEG1_STEREO_44K = [0xff, 0xfb, 0x90, 0x00];
 
 describe("turnStartTimes", () => {
   it("returns a cumulative offset per turn, starting at 0", () => {
@@ -66,5 +79,34 @@ describe("sentenceTimingsForTurn", () => {
   it("ignores non-sentence marks", () => {
     const marks = [{ time: 0, type: "word", start: 0, end: 4, value: "Mary" }];
     expect(sentenceTimingsForTurn("Mary", marks, 0)).to.deep.equal([]);
+  });
+});
+
+describe("headerFrameSeconds", () => {
+  it("returns one frame's length for an Info header on a 24kHz mono clip", () => {
+    expect(headerFrameSeconds(frame(MPEG2_MONO_24K, 9, "Info"))).to.equal(576 / 24000);
+  });
+
+  it("detects a Xing header on an MPEG-1 stereo clip", () => {
+    expect(headerFrameSeconds(frame(MPEG1_STEREO_44K, 32, "Xing"))).to.equal(1152 / 44100);
+  });
+
+  it("detects a VBRI header", () => {
+    const bytes = frame(MPEG2_MONO_24K, 9);
+    bytes.write("VBRI", 36, "latin1");
+    expect(headerFrameSeconds(bytes)).to.equal(576 / 24000);
+  });
+
+  it("returns 0 when the first frame is plain audio", () => {
+    expect(headerFrameSeconds(frame(MPEG2_MONO_24K, 9))).to.equal(0);
+  });
+
+  it("finds the first frame after an ID3v2 tag", () => {
+    const id3 = Buffer.from([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0, 0, 0, 0, 0]);
+    expect(headerFrameSeconds(Buffer.concat([id3, frame(MPEG2_MONO_24K, 9, "Info")]))).to.equal(576 / 24000);
+  });
+
+  it("returns 0 for a buffer with no frame", () => {
+    expect(headerFrameSeconds(Buffer.alloc(32))).to.equal(0);
   });
 });
