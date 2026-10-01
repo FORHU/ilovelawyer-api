@@ -257,6 +257,7 @@ model Message {
   timeline          MessageTimeline?
   mindMap           MessageMindMap?
   relatedCases      MessageRelatedCases?
+  citationRanking   MessageCitationRanking?
   audioOverview     MessageAudioOverview?
   reasoning         MessageReasoning?
   decisionRecords   MessageDecisionRecord?
@@ -368,6 +369,19 @@ model CaseMindMap {
 }
 
 model MessageRelatedCases {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  items     Json
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+// Citation ranking for one assistant reply (src/utils/citation-rank.ts): per Library href, how
+// relevant the cited authority is to the USER's message. A side table, never written into
+// Message.content, so the saved answer stays immutable and a re-rank rewrites nothing. The
+// ranking runs after chat:done, so a message briefly has none and its links show neutral.
+model MessageCitationRanking {
   id        String   @id @default(uuid())
   messageId String   @unique
   items     Json
