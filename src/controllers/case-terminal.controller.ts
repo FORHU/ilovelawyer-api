@@ -560,13 +560,9 @@ export default class CaseTerminalCtrl {
     return res.status(202).json(status);
   }
 
-  static async applyDamageProposal(req: Request, res: Response) {
-    const result = await DamageClaimSvc.applyProposal(req.params.caseId, req.params.id, req.user.userId);
-    return res.status(200).json(result);
-  }
-
-  static async dismissDamageProposal(req: Request, res: Response) {
-    const result = await DamageClaimSvc.dismissProposal(req.params.caseId, req.params.id, req.user.userId);
+  /** Accepts an AI-proposed entry, so it counts in the total. */
+  static async acceptDamage(req: Request, res: Response) {
+    const result = await DamageClaimSvc.accept(req.params.caseId, req.params.id, req.user.userId);
     return res.status(200).json(result);
   }
 

@@ -27,25 +27,11 @@ describe("findingCloseReason", () => {
 });
 
 describe("damageCloseReason", () => {
-  it("closes when the head is certified", () => {
-    expect(
-      damageCloseReason({ status: "SUPPORTED", pendingEvidence: "payroll certification" }, { status: "CERTIFIED", pendingEvidence: null }),
-    ).to.equal("DAMAGE_CERTIFIED");
-  });
-
-  it("closes when the head stops waiting on evidence", () => {
-    expect(
-      damageCloseReason({ status: "PROVISIONAL", pendingEvidence: "payroll certification" }, { status: "SUPPORTED", pendingEvidence: null }),
-    ).to.equal("DAMAGE_EVIDENCE_IN");
-  });
-
-  it("stays open while the head still waits, even once supported", () => {
-    expect(
-      damageCloseReason(
-        { status: "PROVISIONAL", pendingEvidence: "payroll certification" },
-        { status: "SUPPORTED", pendingEvidence: "payroll certification" },
-      ),
-    ).to.equal(null);
+  it("closes once the entry is awarded or received, and only then", () => {
+    expect(damageCloseReason({ done: false }, { done: true })).to.equal("DAMAGE_DONE");
+    expect(damageCloseReason({ done: true }, { done: true })).to.equal(null);
+    expect(damageCloseReason({ done: false }, { done: false })).to.equal(null);
+    expect(damageCloseReason({ done: true }, { done: false })).to.equal(null);
   });
 });
 

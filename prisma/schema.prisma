@@ -1707,6 +1707,8 @@ model ProcedureItem {
   // lawyer reopens it.
   autoClosedAt     DateTime?
   autoClosedReason String?
+  // A to-do sent from a Damages & Remedies entry carries that entry's due date, and follows it.
+  dueDate          DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1888,20 +1890,11 @@ model Witness {
   @@index([caseId])
 }
 
-enum DamageCategory {
-  ACTUAL
-  MORAL
-  EXEMPLARY
-  ATTORNEYS_FEES
-  OTHER
-}
-
-// How firm a head's figure is. PROVISIONAL until the evidence behind its inputs is in; CERTIFIED
-// is a lawyer's call (audited as damage.certify), never set by AI on its own.
-enum DamageStatus {
-  PROVISIONAL
-  SUPPORTED
-  CERTIFIED
+// Whether an entry is money the client is owed (DAMAGE) or another order the case asks for, such
+// as reinstatement (REMEDY).
+enum DamageKind {
+  DAMAGE
+  REMEDY
 }
 
 enum DamageSource {
@@ -1909,51 +1902,29 @@ enum DamageSource {
   AI
 }
 
-// Jev's read of whether a head's sourceQuote bears out its basis inputs (damages-jev.ts).
-enum DamageJevSupport {
-  SUPPORTED
-  UNSUPPORTED
-  CONTRADICTED
-}
-
-// One head of the Damages & Remedies model. `basis` holds the inputs (see DamageBasis in
-// src/utils/damages-compute.ts); `amount` is stored but, for any basis other than FIXED, it is
-// the computed value — DamageClaimSvc recomputes every head of the case on each write, so a
-// derived head (attorney's fees as a percent of other heads) never goes stale. basis = null
-// reads as FIXED, which is how rows created before this field existed behave.
+// One entry of the Damages & Remedies panel: a title, what it is, an amount (none for most
+// remedies), whether it has been awarded or received, and the date it is due. The case total is
+// the sum of accepted amounts (utils/damages-compute.ts).
 model DamageClaim {
-  id               String            @id @default(uuid())
+  id               String       @id @default(uuid())
   caseId           String
-  category         DamageCategory
-  // Display name ("Actual (backwages)"); null falls back to the category's name.
-  label            String?
-  description      String?           @db.Text
+  kind             DamageKind   @default(DAMAGE)
+  title            String
+  description      String?      @db.Text
   amount           Float?
-  basis            Json?
-  // Realistic range for this head; null reads as `amount` (see computeDamagesSummary).
-  amountLow        Float?
-  amountHigh       Float?
-  status           DamageStatus      @default(PROVISIONAL)
-  // What evidence would firm the figure up, e.g. "payroll certification".
-  pendingEvidence  String?
-  // Free-text statute/rule label. Not verified — the Labor Code (PD 442) is outside juris.ph.
-  legalBasis       String?
+  // Awarded by the tribunal or received by the client.
+  done             Boolean      @default(false)
+  dueDate          DateTime?
   // AI = proposed by DamagesExtractSvc from `sourceDocumentId`; `sourceQuote` is the verbatim
   // line it relied on, checked against that document's text before the row is written.
-  source           DamageSource      @default(MANUAL)
+  source           DamageSource @default(MANUAL)
   sourceDocumentId String?
-  sourceQuote      String?           @db.Text
-  // A suggested replacement for `basis` (e.g. from a newly arrived payroll certification) —
-  // never applied on its own; the lawyer accepts it.
-  aiProposedBasis  Json?
-  // No longer written: Jev now vets proposals during extraction instead of rating saved heads (see
-  // DamagesExtractSvc.vetWithJev). Kept so older rows and the migration stay as they are.
-  jevSupport       DamageJevSupport?
-  jevAwardability  Int?
-  jevConfidence    Float?
-  jevCheckedAt     DateTime?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  sourceQuote      String?      @db.Text
+  // An AI proposal is a suggestion until a lawyer accepts it, and isn't counted in the total
+  // until then. Lawyer-entered rows start accepted.
+  accepted         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
   sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)

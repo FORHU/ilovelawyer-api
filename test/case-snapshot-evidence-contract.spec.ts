@@ -167,19 +167,17 @@ describe("CaseSnapshotSvc.get — Evidence & Timeline contract", () => {
     });
   });
 
-  // Damages & Remedies panel: the summary is computed server-side so the ring, the exposure bar,
-  // Red Team and chat all read the same figures.
-  it("serves damagesSummary computed from the case's heads, in the tenant's currency", async () => {
-    const row = (id: string, category: string, extra: Record<string, unknown>) => ({
+  // Damages & Remedies panel: the summary is computed server-side so the panel, Red Team and
+  // chat all read the same figures.
+  it("serves damagesSummary computed from the case's accepted entries, in the tenant's currency", async () => {
+    const row = (id: string, extra: Record<string, unknown>) => ({
       id,
       caseId: "case-1",
-      category,
+      kind: "DAMAGE",
+      title: id,
       amount: null,
-      basis: null,
-      amountLow: null,
-      amountHigh: null,
-      status: "PROVISIONAL",
-      pendingEvidence: null,
+      done: false,
+      accepted: true,
       ...extra,
     });
     patch([
@@ -188,16 +186,17 @@ describe("CaseSnapshotSvc.get — Evidence & Timeline contract", () => {
         DamageClaimRepo,
         "list",
         async () => [
-          row("a", "ACTUAL", { amount: 1000, pendingEvidence: "payroll certification" }),
-          row("f", "ATTORNEYS_FEES", { basis: { kind: "PERCENT_OF", percent: 10, categories: ["ACTUAL"] } }),
+          row("a", { amount: 1000, done: true }),
+          row("b", { amount: 100 }),
+          row("r", { kind: "REMEDY" }),
+          row("ai", { amount: 5000, accepted: false }),
         ],
       ],
     ]);
 
     const snapshot = await CaseSnapshotSvc.get("case-1", "user-1");
 
-    expect(snapshot.damagesSummary).to.include({ currency: "GBP", total: 1100, headCount: 2, provisional: true });
-    expect(snapshot.damagesSummary.pendingEvidence).to.deep.equal(["payroll certification"]);
+    expect(snapshot.damagesSummary).to.include({ currency: "GBP", total: 1100, awarded: 1000, headCount: 3, remedyCount: 1 });
   });
 
   it("falls back to PHP when the case has no tenant", async () => {

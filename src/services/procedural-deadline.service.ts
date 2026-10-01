@@ -9,7 +9,10 @@ import CaseGraphSvc from "./case-graph.service";
 import CaseFindingRepo from "../repositories/case-finding.repository";
 import DamageClaimRepo from "../repositories/damage-claim.repository";
 import WitnessRepo from "../repositories/witness.repository";
-import type { ProcedureSourceKind } from "../utils/procedure-link";
+import { findingFixedTag, type ProcedureSourceKind } from "../utils/procedure-link";
+import CaseFindingSvc from "./case-finding.service";
+import DamageClaimSvc from "./damage-claim.service";
+import WitnessSvc from "./witness.service";
 
 // The UK deadline engine only implements England & Wales CPR rules and bank-holiday calendar
 // today — applying them to a Scotland or Northern Ireland case would silently compute the wrong
@@ -196,8 +199,9 @@ export default class ProceduralDeadlineSvc {
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
     const sourceKey = body.sourceKey ?? null;
+    let dueDate: Date | null = null;
     if (body.sourceKind && body.sourceId) {
-      await ProceduralDeadlineSvc.assertSourceInCase(caseId, body.sourceKind, body.sourceId, sourceKey);
+      ({ dueDate } = await ProceduralDeadlineSvc.loadSource(caseId, body.sourceKind, body.sourceId, sourceKey));
       // Sending the same item twice returns the to-do it already has, rather than a duplicate.
       const existing = await ProceduralDeadlineRepo.findOpenLinked(caseId, body.sourceKind, body.sourceId, sourceKey);
       if (existing) return existing;
@@ -208,20 +212,28 @@ export default class ProceduralDeadlineSvc {
       sourceKind: body.sourceKind ?? null,
       sourceId: body.sourceId ?? null,
       sourceKey,
+      dueDate,
     });
   }
 
   /** A to-do may only link to an item on its own case (and, for a witness need, a need that
-   * witness actually has). */
-  private static async assertSourceInCase(caseId: string, kind: ProcedureSourceKind, id: string, key: string | null) {
+   * witness actually has). Returns the due date the to-do takes from it — a Damages & Remedies
+   * entry's own; the other sources have none. */
+  private static async loadSource(
+    caseId: string,
+    kind: ProcedureSourceKind,
+    id: string,
+    key: string | null,
+  ): Promise<{ dueDate: Date | null }> {
     if (kind === "FINDING") {
-      if (await CaseFindingRepo.find(id, caseId)) return;
+      if (await CaseFindingRepo.find(id, caseId)) return { dueDate: null };
     } else if (kind === "DAMAGE") {
-      if (await DamageClaimRepo.findById(id, caseId)) return;
+      const entry = await DamageClaimRepo.findById(id, caseId);
+      if (entry) return { dueDate: entry.dueDate };
     } else {
       const witness = (await WitnessRepo.list(caseId)).find((w) => w.id === id);
       const needs = (witness?.aiFactors as { needs?: { key: string }[] } | null)?.needs ?? [];
-      if (witness && needs.some((n) => n.key === key)) return;
+      if (witness && needs.some((n) => n.key === key)) return { dueDate: null };
     }
     throw new HttpError("The item this to-do was sent from isn't on this case", 404);
   }
@@ -230,6 +242,37 @@ export default class ProceduralDeadlineSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const row = await ProceduralDeadlineRepo.updateProcedureItem(id, caseId, body);
     if (!row) throw new HttpError("Procedure item not found", 404);
+    if (body.done === true && row.sourceKind && row.sourceId) {
+      await ProceduralDeadlineSvc.settleSource(caseId, userId, row.sourceKind as ProcedureSourceKind, row.sourceId, row.sourceKey);
+    }
     return row;
+  }
+
+  /**
+   * Ticking a linked to-do settles the item it came from, the other half of the item ticking its
+   * to-do: a finding moves to its category's fixed tag (Answered, Closed, Ready, Resolved), a
+   * Damages & Remedies entry is marked awarded or received, and a witness's statement item marks
+   * the statement received. Goes through each item's own service, so the change is audited and the
+   * item's other open to-dos tick with it. Left alone: a strength (no fixed state) and any other
+   * witness item, since ticking one needs a proof document a to-do doesn't carry. Reopening a
+   * to-do never unsettles its item.
+   */
+  private static async settleSource(caseId: string, userId: string, kind: ProcedureSourceKind, id: string, key: string | null) {
+    try {
+      if (kind === "FINDING") {
+        const finding = await CaseFindingRepo.find(id, caseId);
+        const fixed = finding ? findingFixedTag(finding.category) : null;
+        if (finding && fixed && finding.tag !== fixed) await CaseFindingSvc.update(caseId, id, userId, { tag: fixed });
+      } else if (kind === "DAMAGE") {
+        const entry = await DamageClaimRepo.findById(id, caseId);
+        if (entry && !entry.done) await DamageClaimSvc.update(caseId, id, userId, { done: true });
+      } else if (key === "STATEMENT") {
+        const witness = (await WitnessRepo.list(caseId)).find((w) => w.id === id);
+        if (witness && !witness.statementReceived) await WitnessSvc.update(caseId, id, userId, { statementReceived: true });
+      }
+    } catch (err) {
+      // The item was deleted after the to-do was sent: the tick still stands.
+      if (!(err instanceof HttpError && err.statusCode === 404)) throw err;
+    }
   }
 }

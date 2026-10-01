@@ -67,9 +67,15 @@ export default class ProceduralDeadlineRepo {
       sourceKind?: ProcedureSourceKind | null;
       sourceId?: string | null;
       sourceKey?: string | null;
+      dueDate?: Date | null;
     },
   ) {
     return prisma.procedureItem.create({ data: { caseId, ...data } });
+  }
+
+  /** Moves the due date of every open to-do raised on this item. */
+  static async setLinkedDueDate(caseId: string, sourceKind: ProcedureSourceKind, sourceId: string, dueDate: Date | null) {
+    await prisma.procedureItem.updateMany({ where: { caseId, sourceKind, sourceId, done: false }, data: { dueDate } });
   }
 
   /** The open to-do already raised on this item, if any — "To checklist" is idempotent. */

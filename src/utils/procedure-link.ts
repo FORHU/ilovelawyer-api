@@ -1,4 +1,4 @@
-import type { DamageStatus, FindingCategory, FindingTag } from "@prisma/client";
+import type { FindingCategory, FindingTag } from "@prisma/client";
 
 /**
  * A Case Strategy to-do sent over from another panel keeps a link to the item it was raised on
@@ -14,9 +14,11 @@ export type ProcedureAutoCloseReason =
   | "WEAKNESS_CLOSED"
   | "ATTACK_READY"
   | "DEFENSE_ANSWERED"
+  | "DAMAGE_DONE"
+  | "WITNESS_NEED_DONE"
+  // Written before Damages & Remedies lost its certification status; still on older to-dos.
   | "DAMAGE_CERTIFIED"
-  | "DAMAGE_EVIDENCE_IN"
-  | "WITNESS_NEED_DONE";
+  | "DAMAGE_EVIDENCE_IN";
 
 // Strengths have no fixed state — a strength is never "done", so its to-dos only close by hand.
 const FINDING_FIXED_TAG: Partial<Record<FindingCategory, { tag: FindingTag; reason: ProcedureAutoCloseReason }>> = {
@@ -25,6 +27,12 @@ const FINDING_FIXED_TAG: Partial<Record<FindingCategory, { tag: FindingTag; reas
   ATTACK_STRATEGY: { tag: "READY", reason: "ATTACK_READY" },
   DEFENSE_STRATEGY: { tag: "ANSWERED", reason: "DEFENSE_ANSWERED" },
 };
+
+/** The tag that settles a finding of this category — what ticking its to-do sets. Null for a
+ * category with no fixed state (Strengths). */
+export function findingFixedTag(category: FindingCategory): FindingTag | null {
+  return FINDING_FIXED_TAG[category]?.tag ?? null;
+}
 
 /** Why a finding's tag change closes its to-dos, or null when it doesn't (no change, or not into
  * the category's fixed tag). */
@@ -38,14 +46,9 @@ export function findingCloseReason(
   return after === fixed.tag ? fixed.reason : null;
 }
 
-type DamageState = { status: DamageStatus; pendingEvidence: string | null };
-
-/** A damage head's to-do asks for the evidence it is waiting on, so it closes when the head is
- * certified or stops waiting. */
-export function damageCloseReason(before: DamageState, after: DamageState): ProcedureAutoCloseReason | null {
-  if (after.status === "CERTIFIED" && before.status !== "CERTIFIED") return "DAMAGE_CERTIFIED";
-  if (before.pendingEvidence && !after.pendingEvidence) return "DAMAGE_EVIDENCE_IN";
-  return null;
+/** A Damages & Remedies entry's to-dos close once it is awarded or received. */
+export function damageCloseReason(before: { done: boolean }, after: { done: boolean }): ProcedureAutoCloseReason | null {
+  return after.done && !before.done ? "DAMAGE_DONE" : null;
 }
 
 /** Witness need keys ticked by this write — each closes the to-do raised on that need. */
