@@ -28,6 +28,7 @@ import { audioOverviewFilename } from "../utils/audio-overview-filename";
 import { checkAudioOverviewTurns, isAudioOverviewJevEnabled } from "../utils/audio-overview-jev";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
 import GroundingVerifierSvc from "./grounding-verifier.service";
+import CitationRankSvc from "./citation-rank.service";
 import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
 import NotificationSvc from "./notification.service";
 import ParticipantRepo from "../repositories/participant.repository";
@@ -1162,6 +1163,20 @@ export default class ChatSvc {
           if (counts.checked) emitEvent("chat:grounding", { assistantMessageId: verifiedMessageId, ...counts });
         })
         .catch((err) => logger.warn("Grounding verifier: unexpected rejection", { err, consultationId, messageId: parentMessageId }));
+    }
+
+    // Citation ranking (src/utils/citation-rank.ts). Also after chat:done and also fire-and-forget:
+    // the answer is already saved, and this only attaches a relevance tier per cited authority, read
+    // from the user's message and never from the answer. Unlike the grounding verifier it is not
+    // gated on a case id, and it runs on the cache path too because it reads the saved reply.
+    // CitationRankSvc.rankReply never throws; a failure leaves every link neutral.
+    if (assistantMessage && CitationRankSvc.enabled) {
+      const rankedMessageId = assistantMessage.id;
+      void CitationRankSvc.rankReply({ parentMessageId, tenantCode })
+        .then((r) => {
+          if (r.ranked) emitEvent("chat:citation-ranking", { assistantMessageId: rankedMessageId, ranked: r.ranked });
+        })
+        .catch((err) => logger.warn("Citation ranking: unexpected rejection", { err, consultationId, messageId: parentMessageId }));
     }
 
     // Only now enqueue the secondary/background work — case-graph enrichment (promoting the
