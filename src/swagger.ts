@@ -828,7 +828,7 @@ const swaggerSpec: OAS3Definition = {
         tags: ["Users"],
         summary: "Connect Google Calendar",
         description:
-          "Exchanges the one-time code from the app's Google auth-code popup (scope calendar.events) and stores the refresh token encrypted. Separate from sign-in; any Google account may be connected; never changes provider.",
+          "Exchanges the one-time code from the app's Google auth-code popup (scope calendar.events) and stores the refresh token encrypted. Separate from sign-in; any Google account may be connected; never changes provider. Once connected, the user's appointments are copied one-way to their primary Google Calendar on create, edit, cancel and delete (GoogleCalendarSyncSvc).",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
