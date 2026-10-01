@@ -86,3 +86,29 @@ export function originForTenantCode(tenantCode: string | null | undefined): stri
   }
   return CLIENT_URL[0];
 }
+
+/** The frontend origin a browser request came from (Origin, falling back to Referer's origin),
+ * but only when it's one of the configured CLIENT_URL origins — never an arbitrary
+ * client-supplied host, so an emailed link can't be pointed somewhere else. */
+export function requestFrontendOrigin(req: Request): string | null {
+  const header = req.headers.origin || req.headers.referer;
+  if (!header || typeof header !== "string") return null;
+  try {
+    const origin = new URL(header).origin;
+    return CLIENT_URL.includes(origin) ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where a link emailed in response to the user's own request should point: the frontend they
+ * made the request from (same scheme, host and port they're actually using — e.g. the https
+ * uk-local dev host rather than the first UK entry in CLIENT_URL), as long as that frontend
+ * belongs to the account's Tenant. Otherwise the Tenant's configured origin, as before. */
+export function emailLinkOrigin(tenantCode: string | null | undefined, requestOrigin: string | null | undefined): string {
+  if (requestOrigin) {
+    const requestTenant = resolveTenantCodeFromHost(new URL(requestOrigin).hostname);
+    if (!tenantCode || requestTenant === tenantCode) return requestOrigin;
+  }
+  return originForTenantCode(tenantCode);
+}

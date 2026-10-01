@@ -21,3 +21,9 @@ export const TERMS_VERSION = "2026-09";
 // How many times createGoogleUser retries a username collision (Prisma P2002 on `username`)
 // with a fresh numeric suffix before giving up.
 export const GOOGLE_USERNAME_MAX_ATTEMPTS = 5;
+
+// Avatar images (upload, and the Google profile photo copied at Google signup): JPEG, PNG or
+// WebP up to this size. The Google copy is requested at GOOGLE_PHOTO_SIZE_PX square.
+export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+export const GOOGLE_PHOTO_SIZE_PX = 256;
+export const GOOGLE_PHOTO_FETCH_TIMEOUT_MS = 5_000;

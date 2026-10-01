@@ -37,6 +37,10 @@ export const SERVICE_ACCOUNT = process.env.SERVICE_ACCOUNT as string;
 export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
+/** Encrypts User.googleRefreshToken at rest (src/utils/google-token-crypto.ts): 32 bytes, as
+ * base64 or 64 hex chars. Optional at boot so environments without Google Calendar still start;
+ * connecting Google Calendar is refused while it's unset. */
+export const GOOGLE_TOKEN_ENC_KEY = process.env.GOOGLE_TOKEN_ENC_KEY as string | undefined;
 export const CHAT_WONDER_API_URL = (process.env.CHAT_WONDER_API_URL || "").replace(/\/+$/, "");
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
 /** juris.ph public API root (no version/segment). juris-ph.ts appends `/v1/...` for the

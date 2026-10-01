@@ -2,12 +2,14 @@ import prisma from "../lib/prisma";
 import { ApprovalStatus, Prisma } from "@prisma/client";
 import { redis } from "../lib/redis";
 import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
-import { isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
+import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
+import { getStableProxyFileUrl } from "../utils/s3";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
-// same shape (see setDeletionRequested's note). `password` is selected only to derive
-// `hasPassword` in toPublicUser and is never included in what's returned.
+// same shape (see setDeletionRequested's note). `password`, `avatar` and `googleRefreshToken` are
+// selected only to derive `hasPassword`, `avatarUrl` and `googleCalendarConnected` in
+// toPublicUser and are never included in what's returned.
 const PUBLIC_USER_SELECT = {
   id: true,
   username: true,
@@ -25,12 +27,43 @@ const PUBLIC_USER_SELECT = {
   updatedAt: true,
   deletionRequestedAt: true,
   password: true,
+  avatar: { select: { s3Key: true } },
+  googleRefreshToken: true,
 } as const;
 
-function toPublicUser<T extends { password: string | null }>(user: T): Omit<T, "password"> & { hasPassword: boolean } {
-  const { password, ...rest } = user;
-  return { ...rest, hasPassword: password !== null };
+/** `hasPassword` means "can sign in with a password" — always false for a Google SSO account,
+ * even one holding a password an older build let it set through the reset flow. */
+/** `avatarUrl` is a same-origin /files/<token> URL (stable for an hour — see
+ * getStableProxyFileUrl), or null when there's no avatar and the app shows initials.
+ * `googleCalendarConnected` only reports that a refresh token is stored; the token never leaves. */
+function toPublicUser<
+  T extends {
+    password: string | null;
+    provider: string | null;
+    avatar?: { s3Key: string | null } | null;
+    googleRefreshToken?: string | null;
+  },
+>(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken"> & {
+  hasPassword: boolean;
+  avatarUrl: string | null;
+  googleCalendarConnected: boolean;
+} {
+  const { password, avatar, googleRefreshToken, ...rest } = user;
+  return {
+    ...rest,
+    hasPassword: password !== null && !isGoogleSsoAccount(user),
+    avatarUrl: avatar?.s3Key ? getStableProxyFileUrl(avatar.s3Key) : null,
+    googleCalendarConnected: !!googleRefreshToken,
+  };
 }
+
+/** Reset tokens only ever apply to accounts that sign in with a password — a token emailed to a
+ * Google SSO account before forgotPassword stopped issuing them must not set a password now.
+ * Spelled as an OR: `provider: { not: "google" }` alone compiles to `provider <> 'google'`,
+ * which is NULL (so no match) for password signups, whose provider is null. */
+const PASSWORD_ACCOUNT_WHERE: Prisma.UserWhereInput = {
+  OR: [{ provider: null }, { provider: { not: "google" } }],
+};
 
 /** AdminSvc.listUsers caches each page under the current USERS_LIST_VERSION_KEY; bumping it
  * orphans every cached page at once. Every write below that adds/removes a user row, or changes
@@ -96,7 +129,7 @@ export default class AuthRepo {
   /** Unlike findById, includes the actual password hash — used only for verifying the current
    * password in UsersSvc.changePassword. Never expose this result directly to a client. */
   static async findByIdWithPasswordHash(id: string) {
-    return prisma.user.findUnique({ where: { id }, select: { id: true, password: true } });
+    return prisma.user.findUnique({ where: { id }, select: { id: true, password: true, provider: true } });
   }
 
   /** Clears mustChangePassword in the same write — every password update goes through
@@ -236,13 +269,55 @@ export default class AuthRepo {
     }
   }
 
-  static async findGoogleRefreshToken(userId: string): Promise<string | null> {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { googleRefreshToken: true } });
-    return user?.googleRefreshToken ?? null;
+  /** The stored (encrypted) Google Calendar refresh token and last access token — see
+   * GoogleCalendarSvc, the only caller that decrypts them. */
+  static async findGoogleCalendarTokens(userId: string) {
+    return prisma.user.findUnique({
+      where: { id: userId },
+      select: { googleAccessToken: true, googleRefreshToken: true },
+    });
+  }
+
+  /** `encryptedRefreshToken` is omitted when Google didn't return a new one (a reconnect without
+   * fresh consent) — the stored one is kept rather than overwritten with null. */
+  static async setGoogleCalendarTokens(userId: string, data: { accessToken: string; encryptedRefreshToken?: string }) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        googleAccessToken: data.accessToken,
+        ...(data.encryptedRefreshToken ? { googleRefreshToken: data.encryptedRefreshToken } : {}),
+      },
+    });
   }
 
   static async updateGoogleAccessToken(userId: string, accessToken: string) {
     return prisma.user.update({ where: { id: userId }, data: { googleAccessToken: accessToken } });
+  }
+
+  static async clearGoogleCalendarTokens(userId: string) {
+    return prisma.user.update({ where: { id: userId }, data: { googleAccessToken: null, googleRefreshToken: null } });
+  }
+
+  static async findAvatarFile(userId: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { avatar: { select: { id: true, s3Key: true } } },
+    });
+    return user?.avatar ?? null;
+  }
+
+  /** Sets the avatar only while none is set — re-evaluated atomically by Postgres, so the
+   * background Google-photo import can never overwrite a photo the user uploaded meanwhile.
+   * No bustUsersList: the admin list doesn't show avatars. */
+  static async setAvatarIfEmpty(userId: string, fileId: string): Promise<boolean> {
+    const result = await prisma.user.updateMany({ where: { id: userId, avatarId: null }, data: { avatarId: fileId } });
+    return result.count > 0;
+  }
+
+  /** Points the user at `fileId` (or null for initials) and returns the public user shape. */
+  static async setAvatar(userId: string, fileId: string | null) {
+    const user = await prisma.user.update({ where: { id: userId }, data: { avatarId: fileId }, select: PUBLIC_USER_SELECT });
+    return toPublicUser(user);
   }
 
   static async setResetToken(userId: string, token: string, expiresAt: Date) {
@@ -273,7 +348,7 @@ export default class AuthRepo {
 
   static async isResetTokenValid(token: string): Promise<boolean> {
     const user = await prisma.user.findFirst({
-      where: { otpCode: token, otpExpiry: { gt: new Date() } },
+      where: { otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
       select: { id: true },
     });
     return !!user;
@@ -281,7 +356,7 @@ export default class AuthRepo {
 
   static async consumeResetToken(token: string, hashedPassword: string): Promise<string | null> {
     const user = await prisma.user.findFirst({
-      where: { otpCode: token, otpExpiry: { gt: new Date() } },
+      where: { otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
       select: { id: true },
     });
     if (!user) return null;
@@ -290,7 +365,7 @@ export default class AuthRepo {
     // not at the time of the findFirst above — so concurrent requests racing on the
     // same token still only let one of them actually match and consume it.
     const result = await prisma.user.updateMany({
-      where: { id: user.id, otpCode: token, otpExpiry: { gt: new Date() } },
+      where: { id: user.id, otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
       // Completing a reset via the emailed link is proof of ownership of that inbox,
       // so it also satisfies email verification — otherwise an unverified account that
       // resets its password would still be locked out of login by the isEmailVerified

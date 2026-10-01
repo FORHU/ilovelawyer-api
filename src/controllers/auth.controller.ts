@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import AuthSvc from "../services/auth.service";
 import HttpError from "../utils/http-error";
 import { REFRESH_TOKEN_COOKIE, setRefreshTokenCookie, clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
-import { resolveTenantCodeFromRequest } from "../utils/tenant-host";
+import { requestFrontendOrigin, resolveTenantCodeFromRequest } from "../utils/tenant-host";
 import {
   signupSchema,
   loginSchema,
@@ -152,7 +152,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const result = await AuthSvc.forgotPassword(email);
+    const result = await AuthSvc.forgotPassword(email, requestFrontendOrigin(req));
 
     return res.status(200).json(result);
   }

@@ -21,3 +21,8 @@ export const changePasswordSchema = Joi.object({
     "string.pattern.base": PASSWORD_MESSAGE,
   }),
 });
+
+// The one-time code from the app's Google auth-code popup (Connect Google Calendar).
+export const connectGoogleCalendarSchema = Joi.object({
+  code: Joi.string().trim().max(2048).required(),
+});
