@@ -336,6 +336,14 @@ jobs:
             "aws ssm get-parameter --name ${{ env.ENV_PARAM }} --with-decryption --region ${{ env.AWS_REGION }} --query Parameter.Value --output text > ${ENVFILE}"
             "chmod 600 ${ENVFILE}"
             "aws ecr get-login-password --region ${{ env.ECR_REGION }} | docker login --username AWS --password-stdin ${REGISTRY}"
+            # Reclaim space BEFORE pulling. The old `docker image prune -f` ran after the
+            # pull and omitted -a, so it only removed DANGLING images -- but every image here
+            # is tagged :<sha>. It freed nothing, 123 images accumulated, and the Singapore
+            # box hit "no space left on device" mid-pull on 2026-10-01.
+            # -a drops every image not backing a running container; they are all re-pullable
+            # from ECR, so this is safe and a rollback simply pulls again.
+            "docker container prune -f || true"
+            "docker image prune -af || true"
             "docker pull --platform linux/arm64 ${IMAGE}"
           )
 
@@ -346,7 +354,6 @@ jobs:
           COMMANDS+=(
             "docker rm -f ilovelawyer-api 2>/dev/null || true"
             "docker run -d --name ilovelawyer-api --restart unless-stopped --platform linux/arm64 --env-file ${ENVFILE} -p 127.0.0.1:${{ env.PORT }}:${{ env.PORT }} ${IMAGE}"
-            "docker image prune -f"
           )
 
           # jq builds the JSON, so a quote inside any command cannot break it.
