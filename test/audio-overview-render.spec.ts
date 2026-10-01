@@ -5,7 +5,7 @@
  */
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { headerFrameSeconds, parseSpeechMarks, sentenceTimingsForTurn, turnStartTimes } from "../src/utils/audio-overview-render";
+import { headerFrameSeconds, markTimingsForTurn, parseSpeechMarks, turnStartTimes } from "../src/utils/audio-overview-render";
 
 /** An MP3 frame header followed by zeroed side info and, optionally, a tag where Xing/Info goes. */
 function frame(header: number[], sideInfoBytes: number, tag?: string): Buffer {
@@ -50,14 +50,14 @@ describe("parseSpeechMarks", () => {
   });
 });
 
-describe("sentenceTimingsForTurn", () => {
+describe("markTimingsForTurn", () => {
   it("offsets each sentence by the turn's start and converts ms to seconds", () => {
     const text = "Mary had a little lamb. It was very old.";
     const marks = [
       { time: 6, type: "sentence", start: 0, end: 23, value: "Mary had a little lamb." },
       { time: 1500, type: "sentence", start: 24, end: 40, value: "It was very old." },
     ];
-    expect(sentenceTimingsForTurn(text, marks, 10)).to.deep.equal([
+    expect(markTimingsForTurn(text, marks, "sentence", 10)).to.deep.equal([
       { time: 10.006, start: 0, end: 23 },
       { time: 11.5, start: 24, end: 40 },
     ]);
@@ -71,14 +71,22 @@ describe("sentenceTimingsForTurn", () => {
       { time: 0, type: "sentence", start: 0, end: firstEnd, value: "It’s late — go home." },
       { time: 900, type: "sentence", start: firstEnd + 1, end: firstEnd + 6, value: "Fine." },
     ];
-    const [first, second] = sentenceTimingsForTurn(text, marks, 0);
+    const [first, second] = markTimingsForTurn(text, marks, "sentence", 0);
     expect(text.slice(first!.start, first!.end)).to.equal("It’s late — go home.");
     expect(text.slice(second!.start, second!.end)).to.equal("Fine.");
   });
 
-  it("ignores non-sentence marks", () => {
-    const marks = [{ time: 0, type: "word", start: 0, end: 4, value: "Mary" }];
-    expect(sentenceTimingsForTurn("Mary", marks, 0)).to.deep.equal([]);
+  it("keeps only marks of the requested type", () => {
+    const marks = [
+      { time: 0, type: "sentence", start: 0, end: 9, value: "Mary had." },
+      { time: 0, type: "word", start: 0, end: 4, value: "Mary" },
+      { time: 380, type: "word", start: 5, end: 8, value: "had" },
+    ];
+    expect(markTimingsForTurn("Mary had.", marks, "word", 2)).to.deep.equal([
+      { time: 2, start: 0, end: 4 },
+      { time: 2.38, start: 5, end: 8 },
+    ]);
+    expect(markTimingsForTurn("Mary had.", marks, "sentence", 2)).to.deep.equal([{ time: 2, start: 0, end: 9 }]);
   });
 });
 

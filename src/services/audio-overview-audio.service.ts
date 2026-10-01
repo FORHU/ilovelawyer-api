@@ -26,7 +26,7 @@ export default class AudioOverviewAudioSvc {
       }
 
       logger.info("Audio Overview: rendering started", { messageId, turns: turns.length });
-      const { buffer, turnTimings, sentenceTimings } = await mergeTurnsToMp3(
+      const { buffer, turnTimings, sentenceTimings, wordTimings } = await mergeTurnsToMp3(
         turns,
         neuralVoiceFor(row.voiceHostA),
         neuralVoiceFor(row.voiceHostB),
@@ -41,6 +41,7 @@ export default class AudioOverviewAudioSvc {
         audioStatus: "COMPLETED",
         turnTimings,
         sentenceTimings,
+        wordTimings,
       });
       logger.info("Audio Overview: rendering completed", { messageId, fileId: file.id });
     } catch (err) {
