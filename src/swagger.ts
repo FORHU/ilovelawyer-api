@@ -52,6 +52,12 @@ const swaggerSpec: OAS3Definition = {
           onboardingCompleted: { type: "boolean" },
           provider: { type: "string", nullable: true },
           avatarId: { type: "string", nullable: true },
+          avatarUrl: {
+            type: "string",
+            nullable: true,
+            description: "Same-origin /files/<token> image URL; null means no avatar (the app shows initials). Google signups start with their Google photo",
+          },
+          googleCalendarConnected: { type: "boolean", description: "True when a Google Calendar refresh token is stored (see /users/me/google-calendar)" },
           lastLoginAt: { type: "string", format: "date-time", nullable: true },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
@@ -586,14 +592,18 @@ const swaggerSpec: OAS3Definition = {
     "/auth/google/refresh": {
       post: {
         tags: ["Auth"],
-        summary: "Refresh the current user's stored Google OAuth access token using their stored refresh token",
+        summary: "Mint a fresh Google Calendar access token from the user's stored (encrypted) refresh token",
         security: [{ bearerAuth: [] }],
         responses: {
           200: {
             description: "New Google access token",
             content: { "application/json": { schema: { type: "object", properties: { access_token: { type: "string" } } } } },
           },
-          400: { description: "No Google refresh token on file, or refresh failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: {
+            description: "GOOGLE_CALENDAR_NOT_CONNECTED, or GOOGLE_CALENDAR_RECONNECT_REQUIRED when Google revoked the grant (the stored tokens are cleared)",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+          502: { description: "Google unreachable", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -778,6 +788,69 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         responses: {
           204: { description: "Account deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/avatar": {
+      put: {
+        tags: ["Users"],
+        summary: "Upload or replace the current user's avatar",
+        description: "JPEG, PNG or WebP (checked by content, not extension), up to 2 MB. The previous avatar File is soft-deleted.",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: { type: "object", required: ["avatar"], properties: { avatar: { type: "string", format: "binary" } } },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Updated profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          400: { description: "Missing file or not a JPEG/PNG/WebP image", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          413: { description: "Larger than 2 MB", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Users"],
+        summary: "Remove the current user's avatar (back to initials)",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Updated profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/google-calendar": {
+      post: {
+        tags: ["Users"],
+        summary: "Connect Google Calendar",
+        description:
+          "Exchanges the one-time code from the app's Google auth-code popup (scope calendar.events) and stores the refresh token encrypted. Separate from sign-in; any Google account may be connected; never changes provider.",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object", required: ["code"], properties: { code: { type: "string" } } } } },
+        },
+        responses: {
+          200: { description: "Updated profile (googleCalendarConnected: true)", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          400: {
+            description: "Code rejected by Google, calendar access not granted (GOOGLE_CALENDAR_SCOPE_MISSING), or no offline access",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+          503: { description: "GOOGLE_TOKEN_ENC_KEY not configured on this server", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Users"],
+        summary: "Disconnect Google Calendar",
+        description: "Stops the watch channel, revokes the grant at Google and clears the stored tokens. Google-side failures don't block the local disconnect.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Updated profile (googleCalendarConnected: false)", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -2261,7 +2334,6 @@ const swaggerSpec: OAS3Definition = {
                 required: ["webhookUrl"],
                 properties: {
                   webhookUrl: { type: "string", format: "uri", description: "Public URL Google will push notifications to" },
-                  providerToken: { type: "string", description: "Google access token (falls back to stored token if omitted)" },
                 },
               },
             },
@@ -2269,6 +2341,7 @@ const swaggerSpec: OAS3Definition = {
         },
         responses: {
           200: { description: "Watch channel registered", content: { "application/json": { schema: { type: "object" } } } },
+          409: { description: "Google Calendar not connected, or needs reconnecting", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },

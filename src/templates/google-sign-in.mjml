@@ -1,0 +1,13 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Someone asked to reset the password for your ilovelawyer account. Your account uses Google sign-in, so it has no password to reset.</mj-text>
+        <mj-text>To sign in, choose "Continue with Google" and pick the Google account for this email address.</mj-text>
+        <mj-button href="{{loginLink}}">Go to sign in</mj-button>
+        <mj-text>If you didn't request this, you can ignore this email.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

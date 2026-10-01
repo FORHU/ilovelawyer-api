@@ -1,26 +1,13 @@
 import { Request, Response } from "express";
 import CalendarWatchChannelSvc from "../services/calendar-watch-channel.service";
 import EventSvc from "../services/event.service";
-import { refreshGoogleAccessToken } from "../utils/googleRefreshToken";
-import prisma from "../lib/prisma";
+import GoogleCalendarSvc from "../services/google-calendar.service";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 
 export default class CalendarWatchChannelCtrl {
   static async registerWatch(req: Request, res: Response) {
-    const { webhookUrl, providerToken } = req.body;
-
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.userId },
-      select: { googleAccessToken: true, googleRefreshToken: true },
-    });
-
-    const googleAccessToken = user?.googleAccessToken || providerToken;
-    const result = await CalendarWatchChannelSvc.registerWatch(
-      req.user.userId,
-      webhookUrl,
-      googleAccessToken,
-      user?.googleRefreshToken,
-    );
+    const { webhookUrl } = req.body;
+    const result = await CalendarWatchChannelSvc.registerWatch(req.user.userId, webhookUrl);
 
     return res.status(200).json(result);
   }
@@ -35,15 +22,14 @@ export default class CalendarWatchChannelCtrl {
     const channel = await CalendarWatchChannelSvc.findByChannelId(channelId);
     if (!channel) return res.status(200).send("Unknown channel");
 
-    const user = await prisma.user.findUnique({
-      where: { id: channel.userId },
-      select: { googleRefreshToken: true },
-    });
-
-    if (!user?.googleRefreshToken) return res.status(200).send("No refresh token");
-
-    const accessToken = await refreshGoogleAccessToken(user.googleRefreshToken);
-    if (!accessToken) return res.status(200).send("Token refresh failed");
+    // Always 200 to Google — a disconnected or revoked Calendar (GoogleCalendarSvc clears it on
+    // invalid_grant) just means there's nothing to sync.
+    let accessToken: string;
+    try {
+      accessToken = await GoogleCalendarSvc.getAccessToken(channel.userId);
+    } catch {
+      return res.status(200).send("Google Calendar not connected");
+    }
 
     const monthStart = new Date();
     monthStart.setDate(1);

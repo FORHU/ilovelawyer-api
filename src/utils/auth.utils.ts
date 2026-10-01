@@ -18,6 +18,14 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+/** An account created through Google SSO (provider "google") signs in with Google only — no
+ * password sign-in, forgot/reset password or password change, even if an older build let it
+ * set a password through the reset flow. A password account that later linked Google
+ * (AuthSvc.linkGoogle) keeps its original provider and both sign-in methods. */
+export function isGoogleSsoAccount(user: { provider: string | null }): boolean {
+  return user.provider === "google";
+}
+
 /** True when `err` is Prisma's unique-constraint violation (P2002) on `field`. Prisma 5 on
  * Postgres reports `meta.target` as an array of column names, but some drivers/versions give
  * the constraint name as a string (e.g. "User_email_key") — both are matched. */

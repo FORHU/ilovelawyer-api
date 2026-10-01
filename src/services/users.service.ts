@@ -4,6 +4,7 @@ import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
+import { isGoogleSsoAccount } from "../utils/auth.utils";
 import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS } from "../constants/account-deletion.constants";
 import { BCRYPT_SALT_ROUNDS } from "../constants";
 
@@ -35,11 +36,11 @@ export default class UsersSvc {
 
   /** Requires the current password (unlike the emailed forgot-password/reset-password flow)
    * since the user is already authenticated here — this is a self-service change, not a
-   * recovery from being locked out. Google-only accounts have no password to change. */
+   * recovery from being locked out. Google SSO accounts have no password to change. */
   static async changePassword(userId: string, currentPassword: string, newPassword: string) {
     const user = await AuthRepo.findByIdWithPasswordHash(userId);
     if (!user) throw new HttpError("User not found", 404);
-    if (!user.password) throw new HttpError("This account signed in with Google and has no password to change", 400);
+    if (!user.password || isGoogleSsoAccount(user)) throw new HttpError("This account signed in with Google and has no password to change", 400);
 
     const isValid = await bcrypt.compare(currentPassword, user.password);
     if (!isValid) throw new HttpError("Current password is incorrect", 400);

@@ -7,14 +7,16 @@ import OrganizationMemberRepo from "../repositories/organization-member.reposito
 import TenantRepo from "../repositories/tenant.repository";
 import TenantSettingSvc from "./tenant-setting.service";
 import loginToken from "../utils/loginToken";
+import AvatarSvc from "./avatar.service";
+import GoogleCalendarSvc from "./google-calendar.service";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
 import type { TenantCode } from "../types/tenant-code";
-import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
-import { originForTenantCode } from "../utils/tenant-host";
+import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS } from "../config";
+import { emailLinkOrigin } from "../utils/tenant-host";
 import {
   BCRYPT_SALT_ROUNDS,
   OTP_EXPIRY_MS,
@@ -23,7 +25,7 @@ import {
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
   TERMS_VERSION,
 } from "../constants";
-import { generateOtpCode, duplicateEmailMessage, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
+import { generateOtpCode, duplicateEmailMessage, isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 
 export default class AuthSvc {
   static async signup(
@@ -150,7 +152,10 @@ export default class AuthSvc {
 
   static async login(email: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
     const user = await AuthRepo.findByEmail(email);
-    if (!user || !user.password) {
+    // A Google SSO account gets the same generic 401 as a wrong password, so this endpoint
+    // can't be used to learn which emails are Google accounts. forgotPassword emails the
+    // owner a "use Continue with Google" note instead of a reset link.
+    if (!user || !user.password || isGoogleSsoAccount(user)) {
       throw new HttpError("Invalid email or password", 401);
     }
 
@@ -204,7 +209,7 @@ export default class AuthSvc {
     requestTenantCode: TenantCode | null = null,
   ) {
     const user = await AuthRepo.findByEmail(email);
-    if (!user || !user.password) {
+    if (!user || !user.password || isGoogleSsoAccount(user)) {
       throw new HttpError("Invalid email or password", 401);
     }
 
@@ -385,7 +390,7 @@ export default class AuthSvc {
     requestTenantCode: TenantCode | null = null,
     acceptedTerms = false,
   ) {
-    const { googleId, email: googleEmail, name, isEmailVerified } = await verifyGoogleToken(idToken);
+    const { googleId, email: googleEmail, name, picture, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
       throw new HttpError("Invalid Google token", 401);
@@ -445,6 +450,10 @@ export default class AuthSvc {
       if (!autoApproved) {
         await AuthSvc.sendSignupPendingEmail(user);
       }
+
+      // The Google profile photo becomes the default avatar — copied once, here, and never on a
+      // returning login or a link. Not awaited: sign-in must not wait on (or fail with) it.
+      void AvatarSvc.importGooglePhoto(user.id, picture);
     } else {
       await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);
@@ -501,7 +510,7 @@ export default class AuthSvc {
     }
 
     const user = await AuthRepo.findByEmail(email);
-    if (!user || !user.password) {
+    if (!user || !user.password || isGoogleSsoAccount(user)) {
       throw new HttpError("Invalid email or password", 401);
     }
 
@@ -557,46 +566,35 @@ export default class AuthSvc {
     };
   }
 
+  /** Fresh Google Calendar access token for the signed-in user (see GoogleCalendarSvc). */
   static async refreshGoogleToken(userId: string) {
-    const googleRefreshToken = await AuthRepo.findGoogleRefreshToken(userId);
-    if (!googleRefreshToken) {
-      throw new HttpError("No refresh token — user must reconnect Google", 400);
-    }
-
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        refresh_token: googleRefreshToken,
-        grant_type: "refresh_token",
-      }),
-    });
-
-    const data = await tokenRes.json();
-    if (!tokenRes.ok || !data.access_token) {
-      throw new HttpError(data.error ?? "Refresh failed", 400);
-    }
-
-    await AuthRepo.updateGoogleAccessToken(userId, data.access_token);
-
-    return { access_token: data.access_token };
+    return { access_token: await GoogleCalendarSvc.getAccessToken(userId) };
   }
 
-  static async forgotPassword(email: string) {
+  /** `requestOrigin`: the allow-listed frontend the request came from (requestFrontendOrigin), so
+   * the emailed link opens on the same site the user is using. */
+  static async forgotPassword(email: string, requestOrigin: string | null = null) {
     const user = await AuthRepo.findByEmail(email);
     const result = { message: "If the email exists, a reset link will be sent" };
+
+    // The site the user asked from, if it belongs to their Tenant; otherwise their Tenant's own
+    // subdomain (uk./ph.), not the bare CLIENT_URL[0] — see emailLinkOrigin. user.tenant is
+    // already on hand from findByEmail's include, so no extra lookup needed.
+    const origin = emailLinkOrigin(user?.tenant?.code, requestOrigin);
+
+    // Google SSO accounts never get a password (see isGoogleSsoAccount). Same response as
+    // every other case, so it reveals nothing — only the inbox owner learns to use Google.
+    if (user && isGoogleSsoAccount(user)) {
+      const html = await renderTemplate("google-sign-in", { name: user.name || "there", loginLink: `${origin}/login` });
+      await sendEmail({ to: user.email, subject: "Sign in to ilovelawyer with Google", html });
+      return result;
+    }
 
     if (user) {
       const token = crypto.randomUUID();
       const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
       await AuthRepo.setResetToken(user.id, token, expiresAt);
 
-      // A tenant-scoped account's reset link should land on its own subdomain (uk./ph.), not
-      // always the bare CLIENT_URL[0] — same reasoning as admin.service.ts's login link.
-      // user.tenant is already on hand from findByEmail's include, so no extra lookup needed.
-      const origin = originForTenantCode(user.tenant?.code);
       const resetLink = `${origin}/reset-password?token=${token}`;
       const html = await renderTemplate("reset-password", {
         name: user.name || "User",

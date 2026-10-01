@@ -5,6 +5,14 @@ export default class CalendarWatchChannelRepo {
     return prisma.calendarWatchChannel.findUnique({ where: { channelId } });
   }
 
+  static async findForUser(userId: string) {
+    return prisma.calendarWatchChannel.findFirst({ where: { userId } });
+  }
+
+  static async deleteForUser(userId: string) {
+    return prisma.calendarWatchChannel.deleteMany({ where: { userId } });
+  }
+
   static async replaceForUser(userId: string, data: {
     channelId: string;
     resourceId: string;
