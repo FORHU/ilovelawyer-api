@@ -8,30 +8,6 @@ function formatEventDateTime(dateTime: Date): string {
   return dateTime.toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
 }
 
-function inferEventType(title?: string, description?: string): string {
-  const typeMatch = description?.match(/\[type:(meeting|appointment|hearing|deposition)\]/);
-  if (typeMatch) return typeMatch[1];
-  const text = `${title ?? ""} ${description ?? ""}`.toLowerCase();
-  if (text.includes("hearing")) return "hearing";
-  if (text.includes("deposition")) return "deposition";
-  if (text.includes("appointment")) return "appointment";
-  return "meeting";
-}
-
-function getEventStatus(e: any): string {
-  if (e.status === "cancelled") return "cancelled";
-  if (e.attendees && Array.isArray(e.attendees)) {
-    const guests = e.attendees.filter((a: any) => !a.organizer);
-    if (guests.length > 0) {
-      if (guests.every((a: any) => a.responseStatus === "declined")) return "denied";
-      if (guests.some((a: any) => a.responseStatus === "accepted")) return "confirmed";
-      if (guests.some((a: any) => a.responseStatus === "tentative")) return "tentative";
-      return "pending";
-    }
-  }
-  return "confirmed";
-}
-
 export default class EventSvc {
   static async list(organizationId: string, userId: string, userEmail: string, filters: {
     startRange?: string;
@@ -84,11 +60,12 @@ export default class EventSvc {
       caseId: body.caseId || body.case_id || undefined,
       dateSource: body.dateSource || body.date_source || "calendar",
       reminderLeadMinutes: body.reminderLeadMinutes ?? body.reminder_lead_minutes ?? undefined,
+      // Not on Google yet (if the owner has connected it) — see Event.googleDirtyAt.
+      googleDirtyAt: new Date(),
     });
 
-    // Only the direct create-appointment flow reaches here — Google webhook sync
-    // (syncFromGoogleWebhook below) writes through EventRepo directly, so this never fires
-    // for the dozens of events a calendar sync can import at once.
+    // Only the direct create-appointment flow reaches here — the Google Calendar pull
+    // (GoogleCalendarPullSvc) writes through EventRepo directly and never creates events.
     NotificationSvc.create({
       userId,
       organizationId,
@@ -150,14 +127,17 @@ export default class EventSvc {
       existing && data.dateTime instanceof Date && data.dateTime.getTime() !== existing.dateTime.getTime();
     if (rescheduled) data.lastReminderSentAt = null;
 
+    // Edits, cancels and restores reach the owner's Google Calendar copy; bookkeeping-only
+    // updates (reminder sent, acknowledged) don't. Marked pending in the same write, so the
+    // two-way pull knows this edit is newer than an older Google change (Event.googleDirtyAt).
+    const syncsToGoogle = GOOGLE_SYNCED_EVENT_FIELDS.some((field) => field in data);
+    if (syncsToGoogle) data.googleDirtyAt = new Date();
+
     const result = await EventRepo.updateById(id, organizationId, userId, userEmail, data);
     if (result.count === 0) throw new HttpError("Event not found", 404);
 
-    // Edits, cancels and restores reach the owner's Google Calendar copy; bookkeeping-only
-    // updates (reminder sent, acknowledged) don't. Not awaited; never fails this.
-    if (GOOGLE_SYNCED_EVENT_FIELDS.some((field) => field in data)) {
-      void GoogleCalendarSyncSvc.syncEvent(id);
-    }
+    // Not awaited; never fails this.
+    if (syncsToGoogle) void GoogleCalendarSyncSvc.syncEvent(id);
 
     if (rescheduled) {
       const title = data.title ?? existing!.title;
@@ -196,53 +176,5 @@ export default class EventSvc {
 
   static async deleteByGoogleEventId(googleEventId: string, organizationId: string, userId: string) {
     await EventRepo.deleteByGoogleEventId(googleEventId, organizationId, userId);
-  }
-
-  static async syncFromGoogleWebhook(organizationId: string, userId: string, googleEvents: any[]) {
-    for (const ge of googleEvents) {
-      if (ge.status === "cancelled") continue;
-
-      const geTitle = ge.summary ?? "Untitled";
-      const geTime = ge.start?.dateTime ?? ge.start?.date;
-      if (!geTime) continue;
-
-      const localMatch = await EventRepo.findFirstLocal(organizationId, userId, geTitle, new Date(geTime));
-
-      if (localMatch) {
-        await EventRepo.updateById(localMatch.id, organizationId, userId, "", {
-          googleEventId: ge.id,
-          googleLink: ge.htmlLink ?? localMatch.googleLink,
-          status: getEventStatus(ge),
-        });
-      } else {
-        await EventRepo.upsertByGoogleEventId(
-          organizationId,
-          userId,
-          ge.id,
-          {
-            title: geTitle,
-            type: inferEventType(geTitle, ge.description),
-            dateTime: new Date(geTime),
-            notes: ge.description?.replace(/\[type:[^\]]+\]\n?/, "").trim() || null,
-            googleLink: ge.htmlLink ?? null,
-            status: getEventStatus(ge),
-          },
-          {
-            title: geTitle,
-            type: inferEventType(geTitle, ge.description),
-            status: getEventStatus(ge),
-            googleLink: ge.htmlLink ?? null,
-          }
-        );
-      }
-    }
-
-    const cancelledIds = googleEvents
-      .filter((e: any) => e.status === "cancelled" && e.id)
-      .map((e: any) => e.id);
-
-    if (cancelledIds.length > 0) {
-      await EventRepo.deleteManyByGoogleEventIds(organizationId, userId, cancelledIds);
-    }
   }
 }

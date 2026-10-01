@@ -1,6 +1,7 @@
 import CalendarWatchChannelRepo from "../repositories/calendar-watch-channel.repository";
 import GoogleCalendarSvc from "./google-calendar.service";
 import HttpError from "../utils/http-error";
+import { calendarChannelToken } from "../utils/google-token-crypto";
 
 export default class CalendarWatchChannelSvc {
   /** Needs a connected Google Calendar (GoogleCalendarSvc) — the access token is minted from the
@@ -14,11 +15,14 @@ export default class CalendarWatchChannelSvc {
 
     const accessToken = await GoogleCalendarSvc.getAccessToken(userId);
     const channelId = crypto.randomUUID();
+    // Google sends this back on every notification; the webhook ignores anything without it.
+    const token = calendarChannelToken(channelId);
+    if (!token) throw new HttpError("Google Calendar isn't available on this server", 503);
 
     const response = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events/watch", {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ id: channelId, type: "web_hook", address: webhookUrl }),
+      body: JSON.stringify({ id: channelId, type: "web_hook", address: webhookUrl, token }),
     });
 
     if (!response.ok) {

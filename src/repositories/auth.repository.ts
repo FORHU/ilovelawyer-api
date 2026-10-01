@@ -274,8 +274,19 @@ export default class AuthRepo {
   static async findGoogleCalendarTokens(userId: string) {
     return prisma.user.findUnique({
       where: { id: userId },
-      select: { googleAccessToken: true, googleRefreshToken: true },
+      select: { googleAccessToken: true, googleRefreshToken: true, googleCalendarSyncToken: true },
     });
+  }
+
+  /** Everyone with Google Calendar connected — GoogleCalendarSyncQueue polls each of them. */
+  static async findGoogleCalendarUserIds(): Promise<string[]> {
+    const rows = await prisma.user.findMany({ where: { googleRefreshToken: { not: null } }, select: { id: true } });
+    return rows.map((r) => r.id);
+  }
+
+  /** Where the two-way sync left off; null makes the next poll take a fresh baseline. */
+  static async setGoogleCalendarSyncToken(userId: string, syncToken: string | null) {
+    return prisma.user.update({ where: { id: userId }, data: { googleCalendarSyncToken: syncToken } });
   }
 
   /** `encryptedRefreshToken` is omitted when Google didn't return a new one (a reconnect without
@@ -286,6 +297,8 @@ export default class AuthRepo {
       data: {
         googleAccessToken: data.accessToken,
         ...(data.encryptedRefreshToken ? { googleRefreshToken: data.encryptedRefreshToken } : {}),
+        // Possibly a different Google account than before — start the pull from a fresh baseline.
+        googleCalendarSyncToken: null,
       },
     });
   }
@@ -295,7 +308,10 @@ export default class AuthRepo {
   }
 
   static async clearGoogleCalendarTokens(userId: string) {
-    return prisma.user.update({ where: { id: userId }, data: { googleAccessToken: null, googleRefreshToken: null } });
+    return prisma.user.update({
+      where: { id: userId },
+      data: { googleAccessToken: null, googleRefreshToken: null, googleCalendarSyncToken: null },
+    });
   }
 
   static async findAvatarFile(userId: string) {
