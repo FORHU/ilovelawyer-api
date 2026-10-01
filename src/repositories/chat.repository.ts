@@ -2,6 +2,7 @@ import prisma from "../lib/prisma";
 import { MessageRole, Prisma, AudioOverviewStatus, MessageReplyStatus } from "@prisma/client";
 import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
+import type { SentenceTiming } from "../utils/audio-overview-render";
 
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
@@ -383,12 +384,21 @@ export default class ChatRepo {
 
   static async updateAudioOverviewAudio(
     messageId: string,
-    data: { audioFileId?: string; audioStatus?: AudioOverviewStatus; turnTimings?: number[] },
+    data: {
+      audioFileId?: string;
+      audioStatus?: AudioOverviewStatus;
+      turnTimings?: number[];
+      sentenceTimings?: SentenceTiming[][];
+    },
   ) {
-    const { turnTimings, ...rest } = data;
+    const { turnTimings, sentenceTimings, ...rest } = data;
     return prisma.messageAudioOverview.update({
       where: { messageId },
-      data: { ...rest, ...(turnTimings && { turnTimings: turnTimings as unknown as Prisma.InputJsonValue }) },
+      data: {
+        ...rest,
+        ...(turnTimings && { turnTimings: turnTimings as unknown as Prisma.InputJsonValue }),
+        ...(sentenceTimings && { sentenceTimings: sentenceTimings as unknown as Prisma.InputJsonValue }),
+      },
     });
   }
 

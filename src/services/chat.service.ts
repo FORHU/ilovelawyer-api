@@ -22,6 +22,7 @@ import type { ChatTitleContext } from "../legal/shared/chat-title-context";
 import { buildChatRetitlePrompt } from "../legal/shared/chat-retitle.prompt";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
+import type { SentenceTiming } from "../utils/audio-overview-render";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import { audioOverviewFilename } from "../utils/audio-overview-filename";
 import { checkAudioOverviewTurns, isAudioOverviewJevEnabled } from "../utils/audio-overview-jev";
@@ -1604,6 +1605,7 @@ export default class ChatSvc {
           fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }),
         },
         turnTimings: (row.turnTimings as unknown as number[] | null) ?? null,
+        sentenceTimings: (row.sentenceTimings as unknown as SentenceTiming[][] | null) ?? null,
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };

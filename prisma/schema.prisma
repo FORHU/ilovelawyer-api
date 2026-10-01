@@ -391,6 +391,11 @@ model MessageAudioOverview {
   // until audioStatus reaches COMPLETED (set alongside audioFileId); the frontend's line-by-line
   // highlight/auto-scroll has nothing to sync to before then.
   turnTimings Json?
+  // Per turn, where each of its sentences starts in the rendered audio (see
+  // sentenceTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
+  // { time, start, end }[][], index-aligned with `turns`; start/end are string indices into
+  // that turn's text. Set alongside turnTimings; null on overviews rendered before it existed.
+  sentenceTimings Json?
   createdAt   DateTime             @default(now())
 
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)

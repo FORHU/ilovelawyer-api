@@ -7,7 +7,7 @@ import logger from "./logger";
 import { FFMPEG_PATH } from "../config";
 import { AudioOverviewTurn } from "./response-parser";
 import { getPollyClient } from "./polly";
-import { MAX_TURN_CHARS, TURN_SYNTHESIS_CONCURRENCY } from "../constants";
+import { AUDIO_OVERVIEW_ENGINE, MAX_TURN_CHARS, TURN_SYNTHESIS_CONCURRENCY } from "../constants";
 
 // Reads MPEG frame headers directly out of the buffer — pure computation, no external binary,
 // so it behaves identically on every OS/architecture. The first attempt at this (ffprobe, with
@@ -17,18 +17,23 @@ import { MAX_TURN_CHARS, TURN_SYNTHESIS_CONCURRENCY } from "../constants";
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- no @types package for this
 const mp3Duration = require("mp3-duration") as (input: Buffer) => Promise<number>;
 
-async function synthesizeTurn(text: string, voiceId: string): Promise<Buffer> {
+type PollyEngine = "generative" | "neural";
+
+async function synthesize(
+  text: string,
+  voiceId: string,
+  engine: PollyEngine,
+  output: { OutputFormat: "mp3" } | { OutputFormat: "json"; SpeechMarkTypes: ["sentence"] },
+): Promise<Buffer> {
   const client = getPollyClient();
   const result = await client.send(
     new SynthesizeSpeechCommand({
       Text: text.slice(0, MAX_TURN_CHARS),
-      OutputFormat: "mp3",
+      ...output,
       // The DB column is a plain string (Prisma has no enum matching Polly's VoiceId union),
-      // but it only ever holds a value this service itself wrote from VOICE_POOL — safe cast.
+      // but it only ever holds a value this service itself wrote from a voice pool — safe cast.
       VoiceId: voiceId as VoiceId,
-      // Generative, not Neural — noticeably less robotic-sounding, and every voice in
-      // VOICE_POOL is confirmed Generative-capable (see that file's comment).
-      Engine: "generative",
+      Engine: engine,
     }),
   );
   const stream = result.AudioStream;
@@ -39,6 +44,64 @@ async function synthesizeTurn(text: string, voiceId: string): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+/** Case Reconstruction's table read — Generative (less robotic-sounding; every voice in
+ * table-read-voices.ts is Generative-capable), and no speech marks needed. */
+function synthesizeTurn(text: string, voiceId: string): Promise<Buffer> {
+  return synthesize(text, voiceId, "generative", { OutputFormat: "mp3" });
+}
+
+/** One line of Polly's speech-marks output (newline-delimited JSON, one object per mark).
+ * `time` is milliseconds from the start of that request's audio; `start`/`end` are UTF-8 BYTE
+ * offsets into the input text, not string indices. */
+export interface PollySpeechMark {
+  time: number;
+  type: string;
+  start: number;
+  end: number;
+  value: string;
+}
+
+export function parseSpeechMarks(raw: string): PollySpeechMark[] {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as PollySpeechMark);
+}
+
+/** Where one sentence of a turn starts in the merged audio, and which part of that turn's text
+ * it is. `start`/`end` are string indices into the turn's `text` (`text.slice(start, end)`). */
+export interface SentenceTiming {
+  time: number;
+  start: number;
+  end: number;
+}
+
+/** Turns one turn's sentence marks into SentenceTimings: Polly's per-request milliseconds become
+ * seconds into the merged audio (offset by the turn's own start), and its UTF-8 byte offsets
+ * become string indices — they differ as soon as the script has a curly quote or an em dash. */
+export function sentenceTimingsForTurn(text: string, marks: PollySpeechMark[], turnStart: number): SentenceTiming[] {
+  const bytes = Buffer.from(text, "utf8");
+  const toIndex = (byteOffset: number) => bytes.subarray(0, byteOffset).toString("utf8").length;
+  return marks
+    .filter((mark) => mark.type === "sentence")
+    .map((mark) => ({ time: turnStart + mark.time / 1000, start: toIndex(mark.start), end: toIndex(mark.end) }));
+}
+
+/** Audio Overview turn — the audio, plus Polly's sentence speech marks for that same text and
+ * voice. Speech marks are a separate request that returns only the marks, no audio. */
+async function synthesizeTurnWithMarks(
+  text: string,
+  voiceId: string,
+): Promise<{ audio: Buffer; marks: PollySpeechMark[] }> {
+  const audio = await synthesize(text, voiceId, AUDIO_OVERVIEW_ENGINE, { OutputFormat: "mp3" });
+  const raw = await synthesize(text, voiceId, AUDIO_OVERVIEW_ENGINE, {
+    OutputFormat: "json",
+    SpeechMarkTypes: ["sentence"],
+  });
+  return { audio, marks: parseSpeechMarks(raw.toString("utf8")) };
 }
 
 function spawnFfmpeg(binary: string, listPath: string, outputPath: string): Promise<void> {
@@ -116,6 +179,10 @@ export interface MergedAudioOverview {
    * probed clip duration) — lets the player highlight/auto-scroll to whichever turn is
    * currently playing (see AudioOverviewTurns on the frontend). */
   turnTimings: number[];
+  /** Per turn (index-aligned with `turns`), where each of its sentences starts in `buffer` —
+   * sentenceTimingsForTurn of that turn's speech marks, offset by its turnTimings entry. Lets
+   * the player highlight the sentence being spoken, not just the turn. */
+  sentenceTimings: SentenceTiming[][];
 }
 
 /** Synthesizes every turn (bounded concurrency, but written to disk in turn order regardless
@@ -138,17 +205,18 @@ export async function mergeTurnsToMp3(
     // turnTimings out of step with what actually got concatenated below.
     const turnResults = await Promise.all(
       turns.map(async (turn, index) => {
-        const buffer = await pool.run(() =>
-          synthesizeTurn(turn.text, turn.speaker === "HOST_A" ? voiceHostA : voiceHostB),
+        const { audio, marks } = await pool.run(() =>
+          synthesizeTurnWithMarks(turn.text, turn.speaker === "HOST_A" ? voiceHostA : voiceHostB),
         );
         const turnPath = path.join(workDir, `turn-${String(index).padStart(3, "0")}.mp3`);
-        await writeFile(turnPath, buffer);
-        const duration = await mp3Duration(buffer);
-        return { turnPath, duration };
+        await writeFile(turnPath, audio);
+        const duration = await mp3Duration(audio);
+        return { turnPath, duration, marks };
       }),
     );
     const turnPaths = turnResults.map((r) => r.turnPath);
     const turnTimings = turnStartTimes(turnResults.map((r) => r.duration));
+    const sentenceTimings = turnResults.map((r, i) => sentenceTimingsForTurn(turns[i]!.text, r.marks, turnTimings[i]!));
 
     const listPath = path.join(workDir, "list.txt");
     const listContent = turnPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
@@ -157,7 +225,7 @@ export async function mergeTurnsToMp3(
     const outputPath = path.join(workDir, "merged.mp3");
     await runFfmpegConcat(listPath, outputPath);
     const buffer = await readFile(outputPath);
-    return { buffer, turnTimings };
+    return { buffer, turnTimings, sentenceTimings };
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch((err) => {
       logger.warn("Audio Overview: failed to clean up temp dir", { err, workDir });
