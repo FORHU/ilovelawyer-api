@@ -7,7 +7,7 @@ import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
-import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
+import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding, ChatWonderStage } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -950,6 +950,14 @@ export default class ChatSvc {
               return undefined;
             })
           : undefined;
+        // A locked generation (audio overview script, mind map) records its stage on the lock row,
+        // which is what turns the panel's spinner into real steps. Fire-and-forget: setStage
+        // never throws, and a late report for a finished job is dropped there.
+        const lockedCaseId = generationKind ? effectiveCaseId : undefined;
+        const onStage =
+          generationKind && lockedCaseId
+            ? (stage: ChatWonderStage) => void AiGenerationLockSvc.setStage(lockedCaseId, generationKind, stage)
+            : undefined;
         const runStream = () =>
           ChatSvc.streamWithSessionRetry(
             consultationId,
@@ -971,7 +979,7 @@ export default class ChatSvc {
             },
             replyLanguage,
             // Any turn that asks for a map, case or not: chat-wonder builds one only on this flag.
-            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined, caseDamages },
+            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined, caseDamages, onStage },
           );
         const result =
           generationKind && effectiveCaseId
@@ -1479,14 +1487,20 @@ export default class ChatSvc {
     signal?: AbortSignal,
     onAnswerComplete?: () => void,
     replyLanguage?: string,
-    extras?: { mindMapRequested: boolean; mindMapContext?: string; caseDamages?: CaseDamagesChatContext },
+    extras?: {
+      mindMapRequested: boolean;
+      mindMapContext?: string;
+      caseDamages?: CaseDamagesChatContext;
+      onStage?: (stage: ChatWonderStage) => void;
+    },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
     const opts =
-      extras?.mindMapRequested || extras?.caseDamages
+      extras?.mindMapRequested || extras?.caseDamages || extras?.onStage
         ? {
             ...(extras.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
             ...(extras.caseDamages ? { caseDamages: extras.caseDamages } : {}),
+            ...(extras.onStage ? { onStage: extras.onStage } : {}),
           }
         : undefined;
     try {

@@ -26,7 +26,7 @@ export interface DocumentSocketPayload {
  * whoever triggered the job (unlike DocumentSocketEvent/emitToUser): the lock itself is keyed
  * on caseId+kind, not userId, since the result (Legal Issues, a narrative, a red-team scan) is
  * shared case analysis every lawyer on it reads from the same Terminal. */
-export type AiJobSocketEvent = "ai-job:started" | "ai-job:done" | "ai-job:failed";
+export type AiJobSocketEvent = "ai-job:started" | "ai-job:progress" | "ai-job:done" | "ai-job:failed";
 
 export interface AiJobSocketPayload {
   caseId: string;
@@ -38,6 +38,8 @@ export interface AiJobSocketPayload {
   startedAt: string;
   finishedAt: string | null;
   error: string | null;
+  /** AiGenerationJob.stage — null until the job reports one; ai-job:progress carries each change. */
+  stage: string | null;
 }
 
 function roomForUser(userId: string): string {
