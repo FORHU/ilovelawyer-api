@@ -2,36 +2,34 @@ name: Deploy UK
 
 # FORHU/ilovelawyer-api → the London stack (eu-west-2).
 #
-# Two jobs, on purpose. `build` runs on every merge and only produces an
-# image; `promote` is what touches the live box, and it declares
-# `environment: production`, so with Required reviewers set on that
-# environment it parks until someone clicks Approve. A merge can no longer
-# reach users on its own.
+# Same build as deploy-production.yml. Two differences:
+#   * the host has no SSH port and no key pair, so the deploy runs through SSM
+#     Run Command instead of scp + ssh-action;
+#   * the env file travels through Parameter Store (encrypted) rather than being
+#     copied to the box, and carries UK endpoints.
 #
-# The host has no SSH port and no key pair, so the deploy runs through SSM
-# Run Command; the env file travels through Parameter Store (encrypted)
-# rather than being copied to the box.
-#
-# Images are tagged uk-<sha> in the same ap-southeast-1 registry, so
-# Singapore's :latest and :<sha> tags are never touched.
+# Images are tagged uk-<sha> in the same ap-southeast-1 registry, so Singapore's
+# :latest and :<sha> tags are never touched.
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch, tag, or SHA to build"
+        description: "Branch, tag, or SHA to deploy"
         required: true
         default: main
       image_tag:
-        description: "Existing image tag to promote. Leave blank to build from ref."
+        description: "Existing image tag to deploy. Leave blank to build from ref."
         required: false
         default: ""
       run_migrations:
         description: "Run prisma migrate deploy before swapping the container"
         type: boolean
         default: true
+
+concurrency:
+  group: ilovelawyer-uk-deploy        # shared with ilovelawyer-app: one deploy at a time
+  cancel-in-progress: false
 
 env:
   ECR_REPOSITORY: ilovelawyer-api
@@ -45,30 +43,22 @@ env:
   PORT: "3001"
 
 jobs:
-  # ---------------------------------------------------------------- build ---
-  # No `environment:` here: a build must not consume a production approval.
-  # If AWS_UK_DEPLOY_ROLE_ARN is defined only on the production environment,
-  # add it at repository level too or OIDC below resolves to an empty role.
-  build:
-    name: Build & Push (UK)
+  deploy:
+    name: Build, Push & Deploy (UK)
     # Native arm64 — matches Graviton EC2. Do not build linux/arm64 via QEMU on
     # ubuntu-latest; npm/prisma under emulation looks stuck and can take hours.
     runs-on: ubuntu-24.04-arm
+    environment: production
 
     permissions:
       id-token: write
       contents: read
 
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      registry: ${{ steps.tag.outputs.registry }}
-
     steps:
-      # On push there is no `ref` input, so fall back to the pushed commit.
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.ref || github.sha }}
+          ref: ${{ github.event.inputs.ref }}
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -80,10 +70,10 @@ jobs:
         id: tag
         run: |
           TAG="${{ github.event.inputs.image_tag }}"
-          [ -z "$TAG" ] && TAG="uk-${{ github.sha }}"
+          [ -z "$TAG" ] && TAG="uk-$(git rev-parse HEAD)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "registry=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.ECR_REGION }}.amazonaws.com" >> "$GITHUB_OUTPUT"
-          echo "Image: ${{ env.ECR_REPOSITORY }}:$TAG"
+          echo "Deploying ${{ env.ECR_REPOSITORY }}:$TAG"
 
       # The registry is in ap-southeast-1, so log in against that region.
       - name: Login to Amazon ECR
@@ -106,69 +96,8 @@ jobs:
           provenance: false
           tags: ${{ steps.tag.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
 
-      - name: Summary
-        run: |
-          {
-            echo "### UK image ready"
-            echo
-            echo '```'
-            echo "${{ steps.tag.outputs.tag }}"
-            echo '```'
-            echo
-            echo "Awaiting approval on the **Promote to production (UK)** job."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # -------------------------------------------------------------- promote ---
-  # `environment: production` is the gate. Nothing in this job runs until a
-  # reviewer approves it in the Actions run.
-  promote:
-    name: Promote to production (UK)
-    needs: build
-    # No build here, so no need for an arm64 runner.
-    runs-on: ubuntu-latest
-    environment: production
-
-    concurrency:
-      group: ilovelawyer-uk-deploy      # shared with ilovelawyer-app: one deploy at a time
-      cancel-in-progress: false
-
-    permissions:
-      id-token: write
-      contents: read
-
-    # Deliberately no checkout: this job must be incapable of building. It
-    # deploys the exact bytes `build` pushed, nothing else.
-    steps:
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_UK_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Resolve image tag
-        id: tag
-        run: |
-          echo "tag=${{ needs.build.outputs.tag }}" >> "$GITHUB_OUTPUT"
-          echo "registry=${{ needs.build.outputs.registry }}" >> "$GITHUB_OUTPUT"
-          echo "Promoting ${{ env.ECR_REPOSITORY }}:${{ needs.build.outputs.tag }}"
-
-      # Fail here rather than halfway through an SSM deploy: a missing tag would
-      # otherwise be found only after the running container had been removed.
-      - name: Verify the image exists
-        run: |
-          set -euo pipefail
-          aws ecr describe-images \
-            --region "${{ env.ECR_REGION }}" \
-            --repository-name "${{ env.ECR_REPOSITORY }}" \
-            --image-ids imageTag="${{ steps.tag.outputs.tag }}" \
-            --query 'imageDetails[0].[imageTags[0],imagePushedAt]' --output text \
-            || { echo "::error::no such tag in ECR: ${{ steps.tag.outputs.tag }}"; exit 1; }
-
-      - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region "${{ env.ECR_REGION }}" \
-            | docker login --username AWS --password-stdin "${{ steps.tag.outputs.registry }}"
-
+      # Written here, stored encrypted, read by the instance at deploy time.
+      # Nothing sensitive is ever copied onto the box over the network.
       - name: Store env file in Parameter Store
         env:
           DATABASE_URL: ${{ secrets.UK_DATABASE_URL }}
