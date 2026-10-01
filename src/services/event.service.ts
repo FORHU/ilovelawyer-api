@@ -1,5 +1,6 @@
 import EventRepo from "../repositories/event.repository";
 import NotificationSvc from "./notification.service";
+import GoogleCalendarSyncSvc, { GOOGLE_SYNCED_EVENT_FIELDS } from "./google-calendar-sync.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
@@ -97,6 +98,9 @@ export default class EventSvc {
       link: `/homepage/calendar?date=${encodeURIComponent(event.dateTime.toISOString())}`,
     }).catch((err) => logger.error("EventSvc.create: failed to create notification", { err, eventId: event.id }));
 
+    // Copy to the owner's Google Calendar if they've connected it. Not awaited; never fails this.
+    void GoogleCalendarSyncSvc.syncEvent(event.id);
+
     return event;
   }
 
@@ -149,6 +153,12 @@ export default class EventSvc {
     const result = await EventRepo.updateById(id, organizationId, userId, userEmail, data);
     if (result.count === 0) throw new HttpError("Event not found", 404);
 
+    // Edits, cancels and restores reach the owner's Google Calendar copy; bookkeeping-only
+    // updates (reminder sent, acknowledged) don't. Not awaited; never fails this.
+    if (GOOGLE_SYNCED_EVENT_FIELDS.some((field) => field in data)) {
+      void GoogleCalendarSyncSvc.syncEvent(id);
+    }
+
     if (rescheduled) {
       const title = data.title ?? existing!.title;
       NotificationSvc.create({
@@ -178,7 +188,10 @@ export default class EventSvc {
   }
 
   static async deleteById(id: string, organizationId: string, userId: string) {
-    await EventRepo.deleteById(id, organizationId, userId);
+    // Read first: the Google copy's id is only on the row being deleted.
+    const existing = await EventRepo.findRawById(id);
+    const result = await EventRepo.deleteById(id, organizationId, userId);
+    if (existing && result.count > 0) void GoogleCalendarSyncSvc.removeDeletedEvent(existing);
   }
 
   static async deleteByGoogleEventId(googleEventId: string, organizationId: string, userId: string) {

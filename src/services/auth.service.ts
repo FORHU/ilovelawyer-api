@@ -24,6 +24,7 @@ import {
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
   TERMS_VERSION,
+  GOOGLE_PHOTO_SIGNUP_WAIT_MS,
 } from "../constants";
 import { generateOtpCode, duplicateEmailMessage, isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 
@@ -452,8 +453,10 @@ export default class AuthSvc {
       }
 
       // The Google profile photo becomes the default avatar — copied once, here, and never on a
-      // returning login or a link. Not awaited: sign-in must not wait on (or fail with) it.
-      void AvatarSvc.importGooglePhoto(user.id, picture);
+      // returning login or a link. Waited on briefly so the response (and the new user's first
+      // screen) already carries it; a slow copy finishes in the background. Never fails sign-in.
+      const photoImport = AvatarSvc.importGooglePhoto(user.id, picture);
+      await Promise.race([photoImport, new Promise((resolve) => setTimeout(resolve, GOOGLE_PHOTO_SIGNUP_WAIT_MS).unref())]);
     } else {
       await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);
