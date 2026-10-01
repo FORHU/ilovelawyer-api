@@ -4,7 +4,7 @@ import { getProxyFileUrl } from "../utils/s3";
 import { audioOverviewFilename } from "../utils/audio-overview-filename";
 import type { AudioOverviewTurn } from "../utils/response-parser";
 import type { AudioOverviewTurnCheck } from "../utils/audio-overview-jev";
-import type { SentenceTiming } from "../utils/audio-overview-render";
+import type { MarkTiming } from "../utils/audio-overview-render";
 
 export default class AudioOverviewHistorySvc {
   /** Every Audio Overview generated for the case, newest first — the counterpart of
@@ -24,7 +24,8 @@ export default class AudioOverviewHistorySvc {
       turns: row.turns as unknown as AudioOverviewTurn[],
       checks: (row.checks as unknown as AudioOverviewTurnCheck[] | null) ?? [],
       turnTimings: (row.turnTimings as unknown as number[] | null) ?? null,
-      sentenceTimings: (row.sentenceTimings as unknown as SentenceTiming[][] | null) ?? null,
+      sentenceTimings: (row.sentenceTimings as unknown as MarkTiming[][] | null) ?? null,
+      wordTimings: (row.wordTimings as unknown as MarkTiming[][] | null) ?? null,
       audio: row.audioFile?.s3Key ? { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }) } : null,
     }));
     const nextCursor = filters.limit && items.length === filters.limit ? items[items.length - 1]!.id : null;

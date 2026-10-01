@@ -406,10 +406,13 @@ model MessageAudioOverview {
   // highlight/auto-scroll has nothing to sync to before then.
   turnTimings Json?
   // Per turn, where each of its sentences starts in the rendered audio (see
-  // sentenceTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
+  // markTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
   // { time, start, end }[][], index-aligned with `turns`; start/end are string indices into
   // that turn's text. Set alongside turnTimings; null on overviews rendered before it existed.
   sentenceTimings Json?
+  // Same shape as sentenceTimings, per word (Polly's word speech marks) — the player fills the
+  // active turn in word by word. Null on overviews rendered before it existed.
+  wordTimings Json?
   createdAt   DateTime             @default(now())
 
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -2434,6 +2437,10 @@ model AiGenerationJob {
   startedAt  DateTime           @default(now())
   finishedAt DateTime?
   error      String?
+  /// Where an IN_PROGRESS job has got to, for a progress indicator — null until the job reports
+  /// one (AiGenerationLockSvc.setStage). Only Chat-Wonder-backed chat turns report stages today
+  /// ("answering", then "extras"); every other kind leaves it null throughout.
+  stage      String?
 
   @@unique([subjectId, kind])
   @@index([subjectId])

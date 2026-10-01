@@ -89,6 +89,7 @@ jobs:
           CLIENT_URL: ${{ vars.CLIENT_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_TOKEN_ENC_KEY: ${{ secrets.GOOGLE_TOKEN_ENC_KEY }}
           CHAT_WONDER_API_URL: ${{ vars.CHAT_WONDER_API_URL }}
           CHAT_WONDER_WS_URL: ${{ vars.CHAT_WONDER_WS_URL }}
           CHAT_WONDER_API_KEY: ${{ secrets.CHAT_WONDER_API_KEY }}
@@ -152,6 +153,7 @@ jobs:
           CLIENT_URL=${CLIENT_URL}
           GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
           GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+          GOOGLE_TOKEN_ENC_KEY=${GOOGLE_TOKEN_ENC_KEY}
           CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
           CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}
           CHAT_WONDER_API_KEY=${CHAT_WONDER_API_KEY}
@@ -224,6 +226,12 @@ jobs:
             set -e
             chmod 600 /home/ec2-user/ilovelawyer-api.env
             echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+            # Reclaim space BEFORE pulling. The prune at the end of this script ran AFTER
+            # the pull and omitted -a, so it only removed dangling images -- every image here
+            # is tagged :<sha>, so it freed nothing. 123 images reached 42GB and the pull
+            # died with "no space left on device" on 2026-10-01.
+            docker container prune -f || true
+            docker image prune -af || true
             docker pull --platform linux/arm64 "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG"
 
             docker run --rm \
@@ -241,4 +249,3 @@ jobs:
               --env-file /home/ec2-user/ilovelawyer-api.env \
               -p 127.0.0.1:3001:3001 \
               "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG"
-            docker image prune -f

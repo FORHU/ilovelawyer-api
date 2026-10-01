@@ -125,6 +125,17 @@ export default class EventRepo {
     });
   }
 
+  /** No access filter — for GoogleCalendarSyncSvc, which always acts as the event's owner
+   * (event.userId), whoever triggered the change. */
+  static async findRawById(id: string) {
+    return prisma.event.findUnique({ where: { id } });
+  }
+
+  /** Records (or, with nulls, forgets) the owner's Google Calendar copy of this event. */
+  static async setGoogleRef(id: string, googleEventId: string | null, googleLink: string | null) {
+    return prisma.event.updateMany({ where: { id }, data: { googleEventId, googleLink } });
+  }
+
   static async deleteById(id: string, organizationId: string, userId: string) {
     return prisma.event.deleteMany({ where: { id, organizationId, userId } });
   }

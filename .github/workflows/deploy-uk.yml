@@ -118,12 +118,28 @@ jobs:
             echo "Awaiting approval on the **Promote to production (UK)** job."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # ------------------------------------------------------------- gate ---
+  # Exists only to carry the approval click. `production-uk` holds no
+  # secrets and no variables — just Required reviewers.
+  #
+  # The gate deliberately does NOT live on `production`: deploy-production.yml
+  # (PH / Singapore) uses that same environment and must keep deploying
+  # automatically. Putting reviewers on `production` would gate PH too.
+  gate:
+    name: Awaiting approval (UK)
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production-uk
+    steps:
+      - name: Approved
+        run: echo "Promoting ${{ needs.build.outputs.tag }} to the UK stack."
+
   # -------------------------------------------------------------- promote ---
-  # `environment: production` is the gate. Nothing in this job runs until a
-  # reviewer approves it in the Actions run.
+  # Runs only after `gate` is approved. Keeps `environment: production` so it
+  # still reads every existing UK secret, unchanged.
   promote:
     name: Promote to production (UK)
-    needs: build
+    needs: [build, gate]
     # No build here, so no need for an arm64 runner.
     runs-on: ubuntu-latest
     environment: production
@@ -190,6 +206,7 @@ jobs:
           CLIENT_URL: ${{ vars.UK_CLIENT_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_TOKEN_ENC_KEY: ${{ secrets.UK_GOOGLE_TOKEN_ENC_KEY }}
           CHAT_WONDER_API_URL: ${{ vars.UK_CHAT_WONDER_API_URL }}
           CHAT_WONDER_WS_URL: ${{ vars.UK_CHAT_WONDER_WS_URL }}
           CHAT_WONDER_API_KEY: ${{ secrets.CHAT_WONDER_API_KEY }}
@@ -245,6 +262,7 @@ jobs:
           CLIENT_URL=${CLIENT_URL}
           GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
           GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+          GOOGLE_TOKEN_ENC_KEY=${GOOGLE_TOKEN_ENC_KEY}
           CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
           CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}
           CHAT_WONDER_API_KEY=${CHAT_WONDER_API_KEY}
@@ -320,6 +338,14 @@ jobs:
             "aws ssm get-parameter --name ${{ env.ENV_PARAM }} --with-decryption --region ${{ env.AWS_REGION }} --query Parameter.Value --output text > ${ENVFILE}"
             "chmod 600 ${ENVFILE}"
             "aws ecr get-login-password --region ${{ env.ECR_REGION }} | docker login --username AWS --password-stdin ${REGISTRY}"
+            # Reclaim space BEFORE pulling. The old `docker image prune -f` ran after the
+            # pull and omitted -a, so it only removed DANGLING images -- but every image here
+            # is tagged :<sha>. It freed nothing, 123 images accumulated, and the Singapore
+            # box hit "no space left on device" mid-pull on 2026-10-01.
+            # -a drops every image not backing a running container; they are all re-pullable
+            # from ECR, so this is safe and a rollback simply pulls again.
+            "docker container prune -f || true"
+            "docker image prune -af || true"
             "docker pull --platform linux/arm64 ${IMAGE}"
           )
 
@@ -330,7 +356,6 @@ jobs:
           COMMANDS+=(
             "docker rm -f ilovelawyer-api 2>/dev/null || true"
             "docker run -d --name ilovelawyer-api --restart unless-stopped --platform linux/arm64 --env-file ${ENVFILE} -p 127.0.0.1:${{ env.PORT }}:${{ env.PORT }} ${IMAGE}"
-            "docker image prune -f"
           )
 
           # jq builds the JSON, so a quote inside any command cannot break it.

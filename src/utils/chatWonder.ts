@@ -287,6 +287,9 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
   });
 }
 
+/** How far a streamed turn has got, for progress UI — see streamChatWonderMessage's opts.onStage. */
+export type ChatWonderStage = "answering" | "extras";
+
 export interface ChatWonderStreamResult {
   content: string;
   /** Related cases Chat Wonder itself resolved via its own juris.ph MCP tool calls
@@ -397,6 +400,11 @@ export function streamChatWonderMessage(
      * which chat-wonder's legal personas inject so answers quote the lawyer's own figures. A
      * chat-wonder build that doesn't know the field drops it. */
     caseDamages?: unknown;
+    /** Fired once per stage as the turn moves through them: "answering" at the first answer
+     * chunk (everything before it is Chat Wonder reading the case), then "extras" at `__END__`
+     * (the second model call that writes the timeline/mind map/audio overview script). For a
+     * progress indicator only — never throws into the stream. */
+    onStage?: (stage: ChatWonderStage) => void;
   },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
@@ -424,6 +432,16 @@ export function streamChatWonderMessage(
     let firstChunkAt: number | undefined;
     let endFrameAt: number | undefined;
     const resolved = normalizeGrounding(grounding);
+    let reportedStage: ChatWonderStage | undefined;
+    const reportStage = (stage: ChatWonderStage) => {
+      if (reportedStage === stage) return;
+      reportedStage = stage;
+      try {
+        opts?.onStage?.(stage);
+      } catch (err) {
+        logger.warn("Chat Wonder: onStage threw, continuing", { sessionId, stage, err });
+      }
+    };
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
     // the time onopen fires, instead of waiting on this serially after the socket is up.
     // When chunk ids are already supplied (case-scoped ranking), reuse them; otherwise
@@ -498,6 +516,7 @@ export function streamChatWonderMessage(
     const armPostEndWait = () => {
       if (postEndTimer) return;
       endFrameAt = Date.now();
+      reportStage("extras");
       try {
         onAnswerComplete?.();
       } catch (err) {
@@ -788,6 +807,7 @@ export function streamChatWonderMessage(
             sessionId,
             timeToFirstChunkMs: firstChunkAt - streamStartedAt,
           });
+          reportStage("answering");
         }
         accumulated += message;
         onChunk(message);
