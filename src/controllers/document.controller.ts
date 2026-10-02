@@ -6,7 +6,7 @@ import {
   createDocumentSchema,
   updateDocumentSchema,
   listDocumentsSchema,
-  bulkUnarchiveDocumentsSchema,
+  bulkDocumentIdsSchema,
 } from "../validation/document.validation";
 
 export default class DocumentCtrl {
@@ -106,13 +106,33 @@ export default class DocumentCtrl {
     return res.status(200).json(result);
   }
 
+  /** Bulk archive — POST /api/documents/archive, not /:id/archive, so it can't collide with the
+   * single-document route above (different segment count). */
+  static async archiveMany(req: Request, res: Response) {
+    const { error, value } = bulkDocumentIdsSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await DocumentSvc.archiveMany(value.ids, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
   /** Bulk "Select All" restore — POST /api/documents/unarchive, not /:id/unarchive, so it can't
    * collide with the single-document route above (different segment count). */
   static async unarchiveMany(req: Request, res: Response) {
-    const { error, value } = bulkUnarchiveDocumentsSchema.validate(req.body);
+    const { error, value } = bulkDocumentIdsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
     const result = await DocumentSvc.unarchiveMany(value.ids, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** Bulk delete — DELETE /api/documents with an {ids} body, not /:id, so it can't collide with
+   * the single-document route above (different segment count). */
+  static async deleteMany(req: Request, res: Response) {
+    const { error, value } = bulkDocumentIdsSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await DocumentSvc.deleteMany(value.ids, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 }

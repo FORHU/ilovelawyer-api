@@ -21,5 +21,7 @@ router.put("/me/avatar", avatarUpload.single("avatar"), asyncHandler(UsersCtrl.u
 router.delete("/me/avatar", asyncHandler(UsersCtrl.removeAvatar));
 router.post("/me/google-calendar", asyncHandler(UsersCtrl.connectGoogleCalendar));
 router.delete("/me/google-calendar", asyncHandler(UsersCtrl.disconnectGoogleCalendar));
+router.get("/me/tour/:track", asyncHandler(UsersCtrl.getTour));
+router.put("/me/tour/:track", asyncHandler(UsersCtrl.saveTour));
 
 export default router;

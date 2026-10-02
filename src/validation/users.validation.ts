@@ -1,4 +1,6 @@
 import Joi from "joi";
+import { ProductTourStatus } from "@prisma/client";
+import { PRODUCT_TOUR_ARCHETYPES, PRODUCT_TOUR_MAX_STEPS, PRODUCT_TOUR_STEP_ID_MAX } from "../constants";
 
 // Must stay in sync with apps/web/lib/auth/password-policy.ts in ilovelawyer-app
 const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z0-9]).{10,}$/;
@@ -25,4 +27,22 @@ export const changePasswordSchema = Joi.object({
 // The one-time code from the app's Google auth-code popup (Connect Google Calendar).
 export const connectGoogleCalendarSchema = Joi.object({
   code: Joi.string().trim().max(2048).required(),
+});
+
+// Step ids are the app's own slugs — kebab or camelCase, e.g. "nextdate", "legalIssues".
+const tourStepIdSchema = Joi.string()
+  .trim()
+  .max(PRODUCT_TOUR_STEP_ID_MAX)
+  .pattern(/^[A-Za-z0-9-]+$/);
+
+export const saveProductTourSchema = Joi.object({
+  status: Joi.string()
+    .valid(...Object.values(ProductTourStatus))
+    .required(),
+  archetype: Joi.string()
+    .valid(...PRODUCT_TOUR_ARCHETYPES)
+    .allow(null)
+    .default(null),
+  currentStep: tourStepIdSchema.allow(null).default(null),
+  doneSteps: Joi.array().items(tourStepIdSchema).max(PRODUCT_TOUR_MAX_STEPS).default([]),
 });

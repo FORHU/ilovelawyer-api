@@ -2,8 +2,10 @@ import { Request, Response } from "express";
 import UsersSvc from "../services/users.service";
 import AvatarSvc from "../services/avatar.service";
 import GoogleCalendarSvc from "../services/google-calendar.service";
+import ProductTourSvc from "../services/product-tour.service";
 import HttpError from "../utils/http-error";
-import { updateMeSchema, changePasswordSchema, connectGoogleCalendarSchema } from "../validation/users.validation";
+import { updateMeSchema, changePasswordSchema, connectGoogleCalendarSchema, saveProductTourSchema } from "../validation/users.validation";
+import { PRODUCT_TOUR_TRACKS } from "../constants";
 
 export default class UsersCtrl {
   static async me(req: Request, res: Response) {
@@ -64,4 +66,26 @@ export default class UsersCtrl {
     const user = await GoogleCalendarSvc.disconnect(req.user.userId);
     return res.status(200).json(user);
   }
+
+  /** GET /api/users/me/tour/:track — where the caller is in that onboarding tour. */
+  static async getTour(req: Request, res: Response) {
+    const track = tourTrack(req.params.track);
+    const result = await ProductTourSvc.get(req.user.userId, track);
+    return res.status(200).json(result);
+  }
+
+  /** PUT /api/users/me/tour/:track — saves the caller's whole tour state after a move. */
+  static async saveTour(req: Request, res: Response) {
+    const track = tourTrack(req.params.track);
+    const { error, value } = saveProductTourSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await ProductTourSvc.save(req.user.userId, track, value);
+    return res.status(200).json(result);
+  }
+}
+
+function tourTrack(track: string) {
+  if (!(PRODUCT_TOUR_TRACKS as readonly string[]).includes(track)) throw new HttpError(`Unknown tour: ${track}`, 404);
+  return track;
 }

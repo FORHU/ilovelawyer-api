@@ -74,7 +74,7 @@ export const createCaseWithDocumentSchema = Joi.object({
     .required(),
 });
 
-/** Shared by both bulk archive-state endpoints — same {ids} shape either direction. */
+/** Shared by the bulk archive, restore and delete endpoints — same {ids} shape for each. */
 export const bulkCaseIdsSchema = Joi.object({
   ids: Joi.array().items(Joi.string()).min(1).max(BULK_ACTION_MAX).required(),
 });

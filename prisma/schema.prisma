@@ -96,6 +96,7 @@ model User {
   loginLinkTokenExpiry DateTime?
 
   sessions                 Session[]
+  productTours             ProductTour[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
   consultations            Consultation[]
   messages                 Message[]
@@ -2374,6 +2375,33 @@ model OrganizationMember {
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+}
+
+enum ProductTourStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  DISMISSED
+}
+
+// A user's progress through an onboarding tour (the app's spotlight walkthrough). The step
+// scripts live in ilovelawyer-app (lib/tour) — this only remembers where the user is, so the
+// tour follows them across devices. One row per track — one per page tour, see
+// PRODUCT_TOUR_TRACKS.
+model ProductTour {
+  userId      String
+  track       String            @default("main")
+  status      ProductTourStatus @default(NOT_STARTED)
+  // The "How do you practice?" answer that picked the step script — see PRODUCT_TOUR_ARCHETYPES.
+  archetype   String?
+  currentStep String?
+  doneSteps   String[]          @default([])
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, track])
 }
 
 model CaseAccess {

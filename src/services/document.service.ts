@@ -217,6 +217,20 @@ export default class DocumentSvc {
     return mapDocumentToDto(updated);
   }
 
+  /** Bulk archive from the documents view — same per-document path as archive() (audit row +
+   * cache invalidation each), fanned out with allSettled so one missing/already-archived id
+   * doesn't fail the whole batch. Mirrors unarchiveMany below. */
+  static async archiveMany(ids: string[], organizationId: string, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.archive(id, organizationId, actorId)));
+    const succeeded: Awaited<ReturnType<typeof mapDocumentToDto>>[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(result.value);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to archive document" });
+    });
+    return { succeeded, failed };
+  }
+
   /** Bulk "Select All" restore from the Archived documents view — same per-document path as
    * unarchive() (audit row + cache invalidation each), fanned out with allSettled so one missing/
    * already-active id doesn't fail the whole batch the user selected. */
@@ -253,6 +267,20 @@ export default class DocumentSvc {
     for (const doc of docs) {
       if (doc.status === "ARCHIVED") await this.unarchive(doc.id, organizationId, actorId);
     }
+  }
+
+  /** Bulk delete from the documents view — loops delete() over every selected id with
+   * allSettled so one missing document doesn't fail the rest of the batch. `succeeded` is the
+   * deleted ids, since there's no row left to return. */
+  static async deleteMany(ids: string[], organizationId: string, userId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.delete(id, organizationId, userId)));
+    const succeeded: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(ids[i]);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to delete document" });
+    });
+    return { succeeded, failed };
   }
 
   /** userId is the authenticated deleter — needed only to attribute an auto-triggered
