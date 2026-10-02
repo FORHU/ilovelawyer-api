@@ -15,12 +15,12 @@ export interface RedTeamPromptData {
   timeline: { title: string; occurredOn?: string | Date | null }[];
   contradictions: { kind: string; leftValue: string; rightValue: string; leftExcerpt: string; rightExcerpt: string }[];
   witnesses: { name: string; role?: string | null }[];
-  /** Each head with how firm it is (status, range, basis, pending evidence) — see
-   * formatDamageForPrompt. `description` is still what [ARGUMENTS] cites as a DAMAGE source. */
+  /** Each accepted Damages & Remedies entry — see formatDamageForPrompt. `description` is still
+   * what [ARGUMENTS] cites as a DAMAGE source. */
   damages: DamagePromptHead[];
-  /** Case totals from damages-compute, so the model deflates the modeled claim rather than
-   * re-adding the heads itself. Absent when the case has no heads. */
-  damagesTotals?: { currency: string; total: number; low: number; high: number; provisional: boolean } | null;
+  /** Case totals from damages-compute, so the model deflates the claim rather than re-adding the
+   * entries itself. Absent when the case has none. */
+  damagesTotals?: { currency: string; total: number; awarded: number } | null;
 }
 
 /** Shared by the PH and UK red-team builders so the [ARGUMENTS] contract (parsed by
@@ -46,15 +46,15 @@ function bulletList(items: string[]): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "(none recorded)";
 }
 
-/** [Damages & Remedies] body, shared by the PH and UK builders: one line per head, then the
- * modeled total and exposure range. */
+/** [Damages & Remedies] body, shared by the PH and UK builders: one line per entry, then the
+ * total claimed and how much of it is already awarded or received. */
 export function damagesSection(data: Pick<RedTeamPromptData, "damages" | "damagesTotals">): string {
   const lines = bulletList(data.damages.map(formatDamageForPrompt));
   const t = data.damagesTotals;
   if (!t || data.damages.length === 0) return lines;
-  const range = t.low !== t.total || t.high !== t.total ? `; exposure range ${t.low}–${t.high}` : "";
+  const awarded = t.awarded > 0 ? `; ${t.awarded} already awarded or received` : "";
   return `${lines}
-- TOTAL (${t.currency}): ${t.total}${range}${t.provisional ? " — provisional, some inputs are not yet proven" : ""}`;
+- TOTAL (${t.currency}): ${t.total}${awarded}`;
 }
 
 function formatDate(value?: string | Date | null): string {

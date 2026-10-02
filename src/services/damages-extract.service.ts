@@ -6,15 +6,12 @@ import DamageClaimRepo from "../repositories/damage-claim.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseGraphSvc from "./case-graph.service";
-import DamageClaimSvc from "./damage-claim.service";
 import { getDamagesExtractPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { damageHeadKey, extractDamageHeads } from "../utils/damages-extract-parse";
-import { checkPendingEvidence, quotedFigureOf, vetDamageHeads } from "../utils/damages-jev";
+import { quotedFigureOf, vetDamageHeads } from "../utils/damages-jev";
 import { buildDamagesCorrectionPrompt } from "../constants/damages-extract.constants";
 import type { TenantCode } from "../types/tenant-code";
-import { describeDamageBasis } from "../utils/damages-compute";
-import { figuresDiffer, mergeProposedBasis, parseDamageProposal, type DamageProposal } from "../utils/damages-proposal";
 import type { ExtractedDamageHead } from "../utils/damages-extract-parse";
 import { isJobStale } from "../utils/ai-generation-lock.utils";
 import HttpError from "../utils/http-error";
@@ -29,19 +26,17 @@ const MAX_TOTAL_DOC_CHARS = 60000;
 const BUSY_RETRY_SECONDS = 30;
 
 /**
- * Proposes heads for the Damages & Remedies model from the case's documents: payslip rates,
- * amounts a pleading prays for, a percentage asked as attorney's fees. Runs after document
- * extraction settles (runCasePostExtraction schedules it next to the witness pass) and on the
- * panel's "Propose from documents" button. AiGenerationQueue kind "damagesExtract" is the only
- * way it runs; runQueued claims its own lock.
+ * Proposes Damages & Remedies entries from the case's documents: amounts a pleading prays for, a
+ * stated backwages figure, reinstatement asked for. Runs after document extraction settles
+ * (runCasePostExtraction schedules it next to the witness pass) and on the panel's "Propose from
+ * documents" button. AiGenerationQueue kind "damagesExtract" is the only way it runs; runQueued
+ * claims its own lock.
  *
- * Verifiable by construction, same as WitnessExtractSvc: every head carries the document it came
- * from and a verbatim quote that extractDamageHeads has found in that document's text, holding
- * every figure the head uses. The model proposes inputs only — DamageClaimSvc.recompute does the
- * arithmetic. It never edits or deletes a head: a figure for a head the case already has is stored
- * as a suggested update (proposeUpdate) for the lawyer to apply or dismiss. Each document is marked
- * read (Document.damagesExtractedAt) so a head the lawyer removed isn't re-created from the same
- * document. New heads are PROVISIONAL until a lawyer says otherwise.
+ * Verifiable by construction, same as WitnessExtractSvc: every entry carries the document it came
+ * from and a verbatim quote that extractDamageHeads has found in that document's text, holding its
+ * amount. It never edits or deletes an entry, and skips any the case already has (same kind and
+ * title). Each document is marked read (Document.damagesExtractedAt) so an entry the lawyer
+ * removed isn't re-created from the same document. New entries wait for a lawyer to accept them.
  */
 export default class DamagesExtractSvc {
   static schedule(caseId: string, userId: string, delaySeconds?: number): void {
@@ -58,8 +53,8 @@ export default class DamagesExtractSvc {
 
   /**
    * POST /:caseId/damages/propose — reads every document of the case again, for cases whose
-   * documents were read before this pass existed or whose heads the lawyer wants re-proposed.
-   * Heads already on the case are never duplicated (see proposeUpdate). 409 while a pass is running.
+   * documents were read before this pass existed or whose entries the lawyer wants re-proposed.
+   * Entries already on the case are never duplicated. 409 while a pass is running.
    */
   static async propose(caseId: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
@@ -111,11 +106,7 @@ export default class DamagesExtractSvc {
       actionType: header?.actionType,
       jurisdiction: header?.jurisdiction,
       ukJurisdiction: header?.ukJurisdiction,
-      existingHeads: existing.map((h) => {
-        const name = h.label ? `${h.category} — ${h.label}` : h.category;
-        const figures = describeDamageBasis(h.basis) ?? (h.amount != null ? String(h.amount) : null);
-        return figures ? `${name}: ${figures}` : name;
-      }),
+      existingHeads: existing.map((h) => `${h.kind} — ${h.title}${h.amount != null ? `: ${h.amount}` : ""}`),
       documents: batch.map((d) => ({ id: d.id, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) })),
     });
 
@@ -133,31 +124,15 @@ export default class DamagesExtractSvc {
       documents: batch.map((d) => ({ id: d.id, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) })),
     });
 
-    const byKey = new Map(existing.map((h) => [damageHeadKey(h.category, h.label), h]));
-    const fresh = found.filter((h) => !byKey.has(damageHeadKey(h.category, h.label)));
-    // A figure for a head the case already has becomes a suggested update, never an edit.
-    const docById = new Map(batch.map((d) => [d.id, d]));
-    const proposedIds: string[] = [];
-    for (const h of found) {
-      const row = byKey.get(damageHeadKey(h.category, h.label));
-      const doc = docById.get(h.documentId);
-      if (!row || !doc) continue;
-      const proposed = await DamagesExtractSvc.proposeUpdate(caseId, row, h, {
-        name: doc.name,
-        category: (doc as { category?: string | null }).category ?? null,
-        text: fullTexts.get(doc.id) ?? null,
-      });
-      if (proposed) proposedIds.push(row.id);
-    }
+    const known = new Set(existing.map((h) => damageHeadKey(h.kind, h.title)));
+    const fresh = found.filter((h) => !known.has(damageHeadKey(h.kind, h.title)));
     const created = [];
     for (const h of fresh) {
       const row = await DamageClaimRepo.createFromAi(caseId, {
-        category: h.category,
-        label: h.label,
-        basis: h.basis,
+        kind: h.kind,
+        title: h.title,
+        description: h.description,
         amount: h.amount,
-        legalBasis: h.legalBasis,
-        pendingEvidence: h.pendingEvidence,
         sourceDocumentId: h.documentId,
         sourceQuote: h.quote,
       });
@@ -167,23 +142,11 @@ export default class DamagesExtractSvc {
     await DocumentRepo.markDamagesExtracted(batch.map((d) => d.id));
 
     if (created.length > 0) {
-      // Computed heads (a rate × period, a percentage) get their amount, and existing attorney's
-      // fees move if a new base head arrived.
-      await DamageClaimSvc.recompute(caseId);
       await OrganizationRepo.writeAudit({
         caseId,
         actorId: userId,
         action: "damage.extract",
         payload: { ids: created.map((r) => r.id), documentIds: batch.map((d) => d.id) },
-      });
-    }
-
-    if (proposedIds.length > 0) {
-      await OrganizationRepo.writeAudit({
-        caseId,
-        actorId: userId,
-        action: "damage.propose-update",
-        payload: { ids: proposedIds, documentIds: batch.map((d) => d.id) },
       });
     }
 
@@ -193,49 +156,9 @@ export default class DamagesExtractSvc {
       proposed: proposed.length,
       kept: found.length,
       created: created.length,
-      updatesProposed: proposedIds.length,
       remaining: pending.length - batch.length,
     });
     return pending.length > batch.length;
-  }
-
-  /**
-   * Offers `found` as an update to the head `row` when the document says something new: different
-   * figures, or — for a head still waiting on evidence — the very evidence it was waiting on
-   * (checkPendingEvidence), in which case applying the update also certifies it. Stored in
-   * aiProposedBasis; the head itself is never touched. Returns whether a proposal was written.
-   */
-  static async proposeUpdate(
-    caseId: string,
-    row: { id: string; basis: unknown; amount: number | null; status: string; pendingEvidence: string | null; aiProposedBasis?: unknown },
-    found: ExtractedDamageHead,
-    doc: { name: string; category: string | null; text: string | null },
-  ): Promise<boolean> {
-    const differ = figuresDiffer(row, found);
-    const waitingOn = row.status !== "CERTIFIED" && row.pendingEvidence ? row.pendingEvidence : null;
-    const satisfiesPending = waitingOn ? await checkPendingEvidence(waitingOn, doc) : null;
-    if (!differ && satisfiesPending !== true) return false;
-
-    const proposal: DamageProposal = {
-      basis: mergeProposedBasis(row.basis, found.basis),
-      amount: found.basis.kind === "FIXED" ? found.amount : null,
-      sourceDocumentId: found.documentId,
-      documentName: doc.name,
-      sourceQuote: found.quote,
-      satisfiesPending,
-      proposedAt: new Date().toISOString(),
-    };
-    const current = parseDamageProposal(row.aiProposedBasis);
-    if (
-      current &&
-      current.sourceDocumentId === proposal.sourceDocumentId &&
-      JSON.stringify(current.basis) === JSON.stringify(proposal.basis) &&
-      current.amount === proposal.amount
-    ) {
-      return false;
-    }
-    await DamageClaimRepo.setProposal(row.id, caseId, proposal);
-    return true;
   }
 
   /** One question to Chat Wonder over the streaming WS path (not the blocking REST call — same
@@ -273,15 +196,15 @@ export default class DamagesExtractSvc {
     const first = await vetDamageHeads(proposed);
     if (first.rejected.length === 0) return first.accepted;
 
-    const rejectedKeys = new Set(first.rejected.map((r) => damageHeadKey(r.head.category, r.head.label)));
+    const rejectedKeys = new Set(first.rejected.map((r) => damageHeadKey(r.head.kind, r.head.title)));
     const citedDocs = new Set(first.rejected.map((r) => r.head.documentId));
     let corrected: ExtractedDamageHead[] = [];
     try {
       const prompt = buildDamagesCorrectionPrompt({
         rejected: first.rejected.map(({ head, check }) => ({
-          category: head.category,
-          label: head.label,
-          figure: quotedFigureOf(head.basis, head.amount) ?? "",
+          kind: head.kind,
+          title: head.title,
+          figure: quotedFigureOf(head.amount) ?? "",
           quote: head.quote,
           documentId: head.documentId,
           reason: check.verdict === "CONTRADICTED" ? "CONTRADICTED" : "UNSUPPORTED",
@@ -290,7 +213,7 @@ export default class DamagesExtractSvc {
       });
       const reply = await DamagesExtractSvc.ask(prompt, ctx.tenantCode);
       corrected = (extractDamageHeads(reply.content, ctx.fullTexts) ?? []).filter((h) =>
-        rejectedKeys.has(damageHeadKey(h.category, h.label)),
+        rejectedKeys.has(damageHeadKey(h.kind, h.title)),
       );
     } catch (err) {
       logger.warn("Damages extract: correction request failed, dropping rejected heads", { err, caseId });
@@ -308,12 +231,11 @@ export default class DamagesExtractSvc {
   }
 
   /**
-   * The "damages" step of the case refresh (CaseRefreshSvc.refreshInner): recompute every head, so
-   * figures that accrue to today and derived heads (attorney's fees) are current. New documents are
-   * handled by the extraction pass itself, which runCasePostExtraction schedules separately.
+   * The "damages" step of the case refresh (CaseRefreshSvc.refreshInner). Nothing is computed per
+   * entry any more; it reports the entry count. New documents are handled by the extraction pass
+   * itself, which runCasePostExtraction schedules separately.
    */
   static async refreshStep(caseId: string): Promise<{ heads: number }> {
-    await DamageClaimSvc.recompute(caseId);
     const heads = await DamageClaimRepo.list(caseId);
     return { heads: heads.length };
   }

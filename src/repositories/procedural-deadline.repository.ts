@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 import { AI_PROCEDURE_NOTE } from "../constants";
 import { planAiProcedureItems } from "../utils/procedure-item-reconcile";
+import type { ProcedureAutoCloseReason, ProcedureSourceKind } from "../utils/procedure-link";
 
 export default class ProceduralDeadlineRepo {
   static async list(caseId: string) {
@@ -56,8 +57,45 @@ export default class ProceduralDeadlineRepo {
     return prisma.procedureItem.findMany({ where: { caseId }, orderBy: { createdAt: "asc" } });
   }
 
-  static async createProcedureItem(caseId: string, data: { kind: string; label: string; notes?: string | null; sourceLabel?: string | null }) {
+  static async createProcedureItem(
+    caseId: string,
+    data: {
+      kind: string;
+      label: string;
+      notes?: string | null;
+      sourceLabel?: string | null;
+      sourceKind?: ProcedureSourceKind | null;
+      sourceId?: string | null;
+      sourceKey?: string | null;
+      dueDate?: Date | null;
+    },
+  ) {
     return prisma.procedureItem.create({ data: { caseId, ...data } });
+  }
+
+  /** Moves the due date of every open to-do raised on this item. */
+  static async setLinkedDueDate(caseId: string, sourceKind: ProcedureSourceKind, sourceId: string, dueDate: Date | null) {
+    await prisma.procedureItem.updateMany({ where: { caseId, sourceKind, sourceId, done: false }, data: { dueDate } });
+  }
+
+  /** The open to-do already raised on this item, if any — "To checklist" is idempotent. */
+  static async findOpenLinked(caseId: string, sourceKind: ProcedureSourceKind, sourceId: string, sourceKey: string | null) {
+    return prisma.procedureItem.findFirst({ where: { caseId, sourceKind, sourceId, sourceKey, done: false } });
+  }
+
+  /** Ticks every open to-do raised on this item (or, with a key, on that witness need). */
+  static async closeLinked(
+    caseId: string,
+    sourceKind: ProcedureSourceKind,
+    sourceId: string,
+    reason: ProcedureAutoCloseReason,
+    sourceKeys?: string[],
+  ) {
+    const { count } = await prisma.procedureItem.updateMany({
+      where: { caseId, sourceKind, sourceId, done: false, ...(sourceKeys ? { sourceKey: { in: sourceKeys } } : {}) },
+      data: { done: true, autoClosedAt: new Date(), autoClosedReason: reason },
+    });
+    return count;
   }
 
   /** Reconciles rather than replaces — see planAiProcedureItems: ticked items survive a refresh. */
@@ -104,6 +142,8 @@ export default class ProceduralDeadlineRepo {
   static async updateProcedureItem(id: string, caseId: string, data: { done?: boolean; notes?: string | null; label?: string }) {
     const existing = await prisma.procedureItem.findFirst({ where: { id, caseId } });
     if (!existing) return null;
-    return prisma.procedureItem.update({ where: { id }, data });
+    // Reopening a to-do its source ticked drops the "closed itself" note with it.
+    const reopened = data.done === false ? { autoClosedAt: null, autoClosedReason: null } : {};
+    return prisma.procedureItem.update({ where: { id }, data: { ...data, ...reopened } });
   }
 }

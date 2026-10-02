@@ -64,7 +64,7 @@ describe("Prompt builder jurisdiction selection", () => {
     expect(uk).to.include("United Kingdom").and.to.include("injury to feelings");
     for (const prompt of [ph, uk]) {
       expect(prompt).to.include("[DAMAGES]").and.to.include("[/DAMAGES]");
-      expect(prompt).to.include("never a total");
+      expect(prompt).to.include("Never compute or add up an amount yourself");
     }
   });
 

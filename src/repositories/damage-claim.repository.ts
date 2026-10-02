@@ -1,38 +1,22 @@
 import prisma from "../lib/prisma";
-import { DamageCategory, DamageStatus, Prisma } from "@prisma/client";
-import type { DamageBasis } from "../utils/damages-compute";
-import type { DamageProposal } from "../utils/damages-proposal";
+import { DamageKind } from "@prisma/client";
 
 export interface DamageClaimInput {
-  category: DamageCategory;
-  label?: string | null;
+  kind: DamageKind;
+  title: string;
   description?: string | null;
   amount?: number | null;
-  basis?: DamageBasis | null;
-  amountLow?: number | null;
-  amountHigh?: number | null;
-  status?: DamageStatus;
-  pendingEvidence?: string | null;
-  legalBasis?: string | null;
+  done?: boolean;
+  dueDate?: Date | null;
 }
 
 export interface DamageAiExtractInput {
-  category: DamageCategory;
-  label: string | null;
-  basis: DamageBasis;
+  kind: DamageKind;
+  title: string;
+  description: string | null;
   amount: number | null;
-  legalBasis: string | null;
-  pendingEvidence: string | null;
   sourceDocumentId: string;
   sourceQuote: string;
-}
-
-// A Json? column can't take a bare null — Prisma needs DbNull to clear it.
-function toData<T extends Partial<DamageClaimInput>>(data: T) {
-  const { basis, ...rest } = data;
-  return basis === undefined
-    ? rest
-    : { ...rest, basis: basis === null ? Prisma.DbNull : (basis as unknown as Prisma.InputJsonValue) };
 }
 
 export default class DamageClaimRepo {
@@ -45,38 +29,19 @@ export default class DamageClaimRepo {
   }
 
   static async create(caseId: string, data: DamageClaimInput) {
-    return prisma.damageClaim.create({ data: { caseId, ...toData(data) } });
+    return prisma.damageClaim.create({ data: { caseId, ...data } });
   }
 
-  static async update(id: string, caseId: string, data: Partial<DamageClaimInput>) {
+  static async update(id: string, caseId: string, data: Partial<DamageClaimInput> & { accepted?: boolean }) {
     const existing = await prisma.damageClaim.findFirst({ where: { id, caseId } });
     if (!existing) return null;
-    return prisma.damageClaim.update({ where: { id }, data: toData(data) });
+    return prisma.damageClaim.update({ where: { id }, data });
   }
 
-  /** A head proposed by DamagesExtractSvc — always source AI and PROVISIONAL, with the document and
-   * verbatim quote it came from. */
+  /** An entry proposed by DamagesExtractSvc — source AI, not accepted until a lawyer says so, with
+   * the document and verbatim quote it came from. */
   static async createFromAi(caseId: string, data: DamageAiExtractInput) {
-    const { basis, ...rest } = data;
-    return prisma.damageClaim.create({
-      data: { caseId, source: "AI", status: "PROVISIONAL", ...rest, basis: basis as unknown as Prisma.InputJsonValue },
-    });
-  }
-
-  /** Stores (or, with null, clears) a suggested update — see DamageProposal in damages-proposal.ts. */
-  static async setProposal(id: string, caseId: string, proposal: DamageProposal | null) {
-    await prisma.damageClaim.updateMany({
-      where: { id, caseId },
-      data: { aiProposedBasis: proposal === null ? Prisma.DbNull : (proposal as unknown as Prisma.InputJsonValue) },
-    });
-  }
-
-  /** Writes recomputed amounts back in one transaction (see DamageClaimSvc.recompute). */
-  static async setAmounts(changes: { id: string; amount: number | null }[]) {
-    if (changes.length === 0) return;
-    await prisma.$transaction(
-      changes.map((c) => prisma.damageClaim.update({ where: { id: c.id }, data: { amount: c.amount } })),
-    );
+    return prisma.damageClaim.create({ data: { caseId, source: "AI", accepted: false, ...data } });
   }
 
   static async delete(id: string, caseId: string) {

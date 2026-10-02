@@ -5,11 +5,8 @@ export const PANEL_IDS = [
   "dates",
   "chat",
   "mindMap",
-  "citationMap",
   "redTeam",
   "procedure",
-  "teamAudit",
-  "contradictions",
   "legalIssues",
   "weaknesses",
   "strengths",
@@ -21,7 +18,6 @@ export const PANEL_IDS = [
   "audioOverview",
   "decisions",
   "theories",
-  "verification",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -114,14 +110,6 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     description: "Documents, source links, case timeline",
   },
   {
-    id: "contradictions",
-    label: "Contradictions",
-    phase: "P1",
-    defaultHidden: false,
-    minSku: "SOLO",
-    description: "Cross-document contradictions found by the evidence scan, split out of Evidence & Timeline",
-  },
-  {
     id: "law",
     label: "Law & Precedent",
     phase: "P1",
@@ -154,14 +142,6 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     description: "Case strategy mind map generated from the consultation",
   },
   {
-    id: "citationMap",
-    label: "Citation Map",
-    phase: "P3",
-    defaultHidden: true,
-    minSku: "SOLO",
-    description: "Network graph of the case's cited jurisprudence, expandable into what those decisions cite — Philippine jurisdiction only",
-  },
-  {
     id: "redTeam",
     label: "Red Team",
     phase: "P3",
@@ -176,14 +156,6 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: false,
     minSku: "SOLO",
     description: "Deadlines and filing checklist",
-  },
-  {
-    id: "teamAudit",
-    label: "Team & Audit",
-    phase: "P5",
-    defaultHidden: false,
-    minSku: "PROFESSIONAL",
-    description: "Assignments, approvals, audit trail",
   },
   {
     id: "legalIssues",
@@ -264,15 +236,6 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: true,
     minSku: "SOLO",
     description: "The 'Why?' behind a legal answer's conclusions — rule, evidence for and against, the alternative considered and rejected, and what fact would change it. Populated automatically from legal chat turns, not generated on demand.",
-  },
-  {
-    id: "verification",
-    label: "Verification",
-    phase: "P3",
-    defaultHidden: true,
-    minSku: "SOLO",
-    description:
-      "What was checked and what failed — citations the bundle does not support or contradicts, and documents an answer said were missing when they were not. Populated automatically from legal chat turns by the grounding verifier; shows nothing until USE_GROUNDING_VERIFIER is on.",
   },
   {
     id: "theories",

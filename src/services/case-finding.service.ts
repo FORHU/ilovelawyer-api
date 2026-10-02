@@ -5,6 +5,8 @@ import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import CaseGraphSvc from "./case-graph.service";
+import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
+import { findingCloseReason } from "../utils/procedure-link";
 
 function assertTagFits(category: FindingCategory, tag: FindingTag | null | undefined) {
   if (tag && !isTagAllowed(category, tag)) throw new HttpError(`${tag} is not a valid tag for ${category}`, 400);
@@ -39,6 +41,8 @@ export default class CaseFindingSvc {
     if (!row) throw new HttpError("Finding not found", 404);
     await CaseGraphSvc.markStale(caseId, "FINDING", id, "Finding updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.update", payload: { id } });
+    const closeReason = findingCloseReason(existing.category, existing.tag, data.tag);
+    if (closeReason) await ProceduralDeadlineRepo.closeLinked(caseId, "FINDING", id, closeReason);
     return row;
   }
 

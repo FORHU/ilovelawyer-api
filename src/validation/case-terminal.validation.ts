@@ -1,4 +1,5 @@
 import Joi from "joi";
+import { PROCEDURE_SOURCE_KINDS } from "../utils/procedure-link";
 
 const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
 const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
@@ -22,8 +23,7 @@ const FINDING_TAGS = [
   "PARTIAL",
   "UNANSWERED",
 ];
-const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
-const DAMAGE_STATUSES = ["PROVISIONAL", "SUPPORTED", "CERTIFIED"];
+const DAMAGE_KINDS = ["DAMAGE", "REMEDY"];
 const PRIVILEGE_STATUSES = ["NONE", "ATTORNEY_CLIENT", "WORK_PRODUCT"];
 const HEARSAY_CATEGORIES = [
   "DIRECT_EVIDENCE",
@@ -184,6 +184,13 @@ export const createProcedureItemSchema = Joi.object({
   // Where a to-do sent over from another panel ("To checklist") came from, e.g. the finding or
   // document it was raised on — shown as the item's source, same as an AI item's.
   sourceLabel: Joi.string().max(200).optional().allow(null, ""),
+  // The item it was sent from, so the to-do can tick itself once that item is fixed
+  // (utils/procedure-link.ts). sourceKey is a witness need's key and only applies to WITNESS_NEED.
+  sourceKind: Joi.string().valid(...PROCEDURE_SOURCE_KINDS).optional(),
+  sourceId: Joi.string().max(64).when("sourceKind", { is: Joi.exist(), then: Joi.required(), otherwise: Joi.forbidden() }),
+  sourceKey: Joi.string()
+    .max(64)
+    .when("sourceKind", { is: "WITNESS_NEED", then: Joi.required(), otherwise: Joi.forbidden() }),
 });
 
 export const updateProcedureItemSchema = Joi.object({
@@ -272,58 +279,30 @@ export const witnessFactorSchema = Joi.object({
   note: Joi.string().max(500).allow("").default(""),
 });
 
-// See DamageBasis in utils/damages-compute.ts. A RATE_X_PERIOD period is either `months` or both
-// dates — never neither, never both, so the stored inputs say unambiguously what was computed.
-const damageBasisSchema = Joi.alternatives().try(
-  Joi.object({ kind: Joi.string().valid("FIXED").required() }),
-  Joi.object({
-    kind: Joi.string().valid("RATE_X_PERIOD").required(),
-    monthlyRate: Joi.number().min(0).required(),
-    months: Joi.number().min(0).max(1200),
-    fromDate: Joi.date().iso(),
-    // "asOf" = keep accruing to today (backwages run until the decision is final).
-    untilDate: Joi.alternatives().try(Joi.string().valid("asOf"), Joi.date().iso().min(Joi.ref("fromDate"))),
-    // Projected finality date — sets the head's high end when no amountHigh is given.
-    highUntilDate: Joi.date().iso().min(Joi.ref("fromDate")),
-  })
-    .xor("months", "fromDate")
-    .and("fromDate", "untilDate")
-    .with("highUntilDate", "fromDate"),
-  Joi.object({
-    kind: Joi.string().valid("PERCENT_OF").required(),
-    percent: Joi.number().min(0).max(100).required(),
-    categories: Joi.array()
-      .items(Joi.string().valid(...DAMAGE_CATEGORIES))
-      .min(1)
-      .unique()
-      .required(),
-  }),
-);
-
 const damageFields = {
-  label: Joi.string().allow("", null).max(200).optional(),
-  description: Joi.string().allow("").optional(),
+  title: Joi.string().trim().min(1).max(200),
+  description: Joi.string().allow("", null).optional(),
+  // Most remedies (reinstatement, an apology) have no amount.
   amount: Joi.number().min(0).optional().allow(null),
-  basis: damageBasisSchema.allow(null).optional(),
-  amountLow: Joi.number().min(0).optional().allow(null),
-  amountHigh: Joi.number().min(0).optional().allow(null),
-  status: Joi.string().valid(...DAMAGE_STATUSES).optional(),
-  pendingEvidence: Joi.string().allow("", null).max(300).optional(),
-  legalBasis: Joi.string().allow("", null).max(500).optional(),
+  // Awarded by the tribunal or received by the client.
+  done: Joi.boolean().optional(),
+  dueDate: Joi.date().iso().optional().allow(null),
 };
 
 export const createDamageSchema = Joi.object({
-  category: Joi.string()
-    .valid(...DAMAGE_CATEGORIES)
+  kind: Joi.string()
+    .valid(...DAMAGE_KINDS)
     .required(),
   ...damageFields,
+  title: damageFields.title.required(),
 });
 
 export const updateDamageSchema = Joi.object({
-  category: Joi.string()
-    .valid(...DAMAGE_CATEGORIES)
+  kind: Joi.string()
+    .valid(...DAMAGE_KINDS)
     .optional(),
   ...damageFields,
+  title: damageFields.title.optional(),
 }).min(1);
 
 export const createClaimSchema = Joi.object({

@@ -25,6 +25,7 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
     findMany: prisma.caseFinding.findMany,
     nodeDeleteMany: prisma.caseGraphNode.deleteMany,
     nodeCreateMany: prisma.caseGraphNode.createMany,
+    procedureUpdateMany: prisma.procedureItem.updateMany,
   };
 
   afterEach(() => {
@@ -34,12 +35,21 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
     (prisma.caseFinding as any).findMany = originals.findMany;
     (prisma.caseGraphNode as any).deleteMany = originals.nodeDeleteMany;
     (prisma.caseGraphNode as any).createMany = originals.nodeCreateMany;
+    (prisma.procedureItem as any).updateMany = originals.procedureUpdateMany;
   });
 
-  // The stale-AI-row lookup selects only ids; list() (called at the end) reads whole rows.
-  const stubFindMany = (staleIds: string[], listed: any[]) => {
-    (prisma.caseFinding as any).findMany = async (args: any) =>
-      args?.select?.id ? staleIds.map((id) => ({ id })) : listed;
+  // The stale-AI-row lookup selects id/category/label; list() (called at the end) reads whole rows.
+  const stubFindMany = (staleIds: string[], listed: any[], stale: any[] = staleIds.map((id) => ({ id, category: "WEAKNESS", label: `stale ${id}` }))) => {
+    (prisma.caseFinding as any).findMany = async (args: any) => (args?.select?.id ? stale : listed);
+  };
+  // Records the to-do re-pointing a refresh does (Case Strategy links follow a regenerated finding).
+  const stubProcedureItems = () => {
+    const moved: any[] = [];
+    (prisma.procedureItem as any).updateMany = async (args: any) => {
+      moved.push(args);
+      return { count: 1 };
+    };
+    return moved;
   };
   const stubNodes = () => {
     const calls: { deleted?: any; created: any[] } = { created: [] };
@@ -64,8 +74,9 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
     };
     (prisma.caseFinding as any).createManyAndReturn = async (args: any) => {
       created = args.data;
-      return args.data.map((_: any, i: number) => ({ id: `new-${i}` }));
+      return args.data.map((d: any, i: number) => ({ id: `new-${i}`, category: d.category, label: d.label }));
     };
+    stubProcedureItems();
     stubFindMany(["ai-old"], [
       { id: "manual-1", notes: "Confirmed with the client directly." },
       { id: "ai-2", notes: AI_FINDING_NOTE },
@@ -89,7 +100,8 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
     (prisma as any).$transaction = async (fn: any) => fn(prisma);
     (prisma.caseFinding as any).deleteMany = async () => ({ count: 2 });
     (prisma.caseFinding as any).createManyAndReturn = async (args: any) =>
-      args.data.map((_: any, i: number) => ({ id: `new-${i}` }));
+      args.data.map((d: any, i: number) => ({ id: `new-${i}`, category: d.category, label: d.label }));
+    stubProcedureItems();
     stubFindMany(["ai-old-1", "ai-old-2"], []);
     const nodes = stubNodes();
 
@@ -127,6 +139,27 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
     expect(createCalled).to.equal(false);
     expect(nodes.deleted).to.deep.equal({ nodeType: "FINDING", refId: { in: ["ai-old"] } });
     expect(nodes.created).to.deep.equal([]);
+  });
+
+  it("moves a Case Strategy to-do onto the regenerated copy of its finding, and leaves the rest", async () => {
+    (prisma as any).$transaction = async (fn: any) => fn(prisma);
+    (prisma.caseFinding as any).deleteMany = async () => ({ count: 2 });
+    (prisma.caseFinding as any).createManyAndReturn = async (args: any) =>
+      args.data.map((d: any, i: number) => ({ id: `new-${i}`, category: d.category, label: d.label }));
+    stubFindMany(["ai-old-1", "ai-old-2"], [], [
+      { id: "ai-old-1", category: "WEAKNESS", label: "No written protest from client" },
+      { id: "ai-old-2", category: "WEAKNESS", label: "Dropped in this refresh" },
+    ]);
+    stubNodes();
+    const moved = stubProcedureItems();
+
+    await CaseFindingRepo.replaceAiFindings("case-1", [
+      { category: "WEAKNESS", label: "No written protest from client ", sourceLabel: null },
+    ]);
+
+    expect(moved).to.deep.equal([
+      { where: { caseId: "case-1", sourceKind: "FINDING", sourceId: "ai-old-1" }, data: { sourceId: "new-0" } },
+    ]);
   });
 });
 

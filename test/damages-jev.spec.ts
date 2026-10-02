@@ -3,21 +3,18 @@ import { afterEach, beforeEach, describe, it } from "mocha";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import { checkQuotedFigure, isRejected, quotedFigureOf, vetDamageHeads, QuotedHead } from "../src/utils/damages-jev";
 
-const head = (label: string, extra: Partial<QuotedHead> = {}): QuotedHead => ({
-  category: "ACTUAL",
-  label,
-  basis: { kind: "RATE_X_PERIOD", monthlyRate: 27000 },
-  amount: null,
-  quote: "Basic monthly salary: P27,000.00",
+const head = (title: string, extra: Partial<QuotedHead> = {}): QuotedHead => ({
+  kind: "DAMAGE",
+  title,
+  amount: 486000,
+  quote: "backwages of P486,000.00",
   ...extra,
 });
 
 describe("quotedFigureOf", () => {
-  it("is the figure the quote supplied: a rate, a stated amount or a percentage", () => {
-    expect(quotedFigureOf({ kind: "RATE_X_PERIOD", monthlyRate: 2900, fromDate: "2026-09-27", untilDate: "asOf" }, 87)).to.equal("2900 per month");
-    expect(quotedFigureOf(null, 200000)).to.equal("200000");
-    expect(quotedFigureOf({ kind: "PERCENT_OF", percent: 10, categories: ["ACTUAL"] }, 4860)).to.equal("10%");
-    expect(quotedFigureOf(null, null)).to.equal(null);
+  it("is the entry's amount, or null for one without", () => {
+    expect(quotedFigureOf(200000)).to.equal("200000");
+    expect(quotedFigureOf(null)).to.equal(null);
   });
 });
 
@@ -41,9 +38,9 @@ describe("Jev quote check", () => {
     process.env.USE_JEV_DAMAGES = "true";
     replies = {};
     states = [];
-    (TypeSafeClient.prototype as any).systemOne = async (req: { state: { head: { label: string } } }) => {
+    (TypeSafeClient.prototype as any).systemOne = async (req: { state: { head: { title: string } } }) => {
       states.push(req.state);
-      const reply = replies[req.state.head.label];
+      const reply = replies[req.state.head.title];
       if (reply instanceof Error) throw reply;
       return reply;
     };
@@ -55,14 +52,19 @@ describe("Jev quote check", () => {
 
   const support = (choice: string, confidence: number) => ({ answers: { support: { choice, confidence } } });
 
-  it("asks about the quoted figure only, never an accrued amount", async () => {
+  it("asks whether the quote states the entry's amount", async () => {
     replies = { Backwages: support("SUPPORTED", 0.9) };
-    await checkQuotedFigure(head("Backwages", { amount: 87 }));
+    await checkQuotedFigure(head("Backwages"));
     expect(states[0]).to.deep.equal({
-      head: { category: "ACTUAL", label: "Backwages" },
-      quote: "Basic monthly salary: P27,000.00",
-      quotedFigure: "27000 per month",
+      head: { kind: "DAMAGE", title: "Backwages" },
+      quote: "backwages of P486,000.00",
+      quotedFigure: "486000",
     });
+  });
+
+  it("doesn't ask about an entry with no amount", async () => {
+    expect(await checkQuotedFigure(head("Reinstatement", { kind: "REMEDY", amount: null }))).to.equal(null);
+    expect(states).to.deep.equal([]);
   });
 
   it("downgrades a low-confidence CONTRADICTED, and reports a failed call as null", async () => {
@@ -79,8 +81,8 @@ describe("Jev quote check", () => {
       Failed: new Error("boom"),
     };
     const out = await vetDamageHeads([head("Good"), head("Wrong"), head("Unsure"), head("Failed")]);
-    expect(out.accepted.map((h) => h.label)).to.deep.equal(["Good", "Unsure", "Failed"]);
-    expect(out.rejected.map((r) => [r.head.label, r.check.verdict])).to.deep.equal([["Wrong", "UNSUPPORTED"]]);
+    expect(out.accepted.map((h) => h.title)).to.deep.equal(["Good", "Unsure", "Failed"]);
+    expect(out.rejected.map((r) => [r.head.title, r.check.verdict])).to.deep.equal([["Wrong", "UNSUPPORTED"]]);
   });
 
   it("keeps everything unchecked when the flag is off", async () => {
