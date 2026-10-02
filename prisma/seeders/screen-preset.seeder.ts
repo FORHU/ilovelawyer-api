@@ -47,7 +47,7 @@ const SYSTEM_PRESETS = [
     labelKey: "presetDepositionPrep",
     descriptionKey: "presetDepositionPrepDesc",
     name: "Deposition Prep",
-    screens: [{ arrangement: "free", panelIds: ["witnesses", "contradictions", "redTeam"] }],
+    screens: [{ arrangement: "free", panelIds: ["witnesses", "evidence", "redTeam"] }],
   },
   {
     id: "deadline-tracker",
@@ -70,7 +70,7 @@ const SYSTEM_PRESETS = [
     name: "Trial Prep",
     screens: [
       { arrangement: "columns", panelIds: ["command", "chat", "evidence", "procedure"] },
-      { arrangement: "free", panelIds: ["law", "mindMap", "redTeam", "citationMap"] },
+      { arrangement: "free", panelIds: ["law", "mindMap", "redTeam"] },
     ],
   },
   {
@@ -79,8 +79,8 @@ const SYSTEM_PRESETS = [
     descriptionKey: "presetDocumentReviewDesc",
     name: "Document Review",
     screens: [
-      { arrangement: "free", panelIds: ["evidence", "contradictions", "command"] },
-      { arrangement: "tabs", panelIds: ["witnesses", "damages", "procedure", "teamAudit"] },
+      { arrangement: "free", panelIds: ["evidence", "command"] },
+      { arrangement: "tabs", panelIds: ["witnesses", "damages", "procedure"] },
     ],
   },
   {
@@ -92,7 +92,7 @@ const SYSTEM_PRESETS = [
       { arrangement: "free", panelIds: ["command", "chat", "law"] },
       {
         arrangement: "tabs",
-        panelIds: ["citationMap", "redTeam", "legalIssues", "weaknesses", "strengths", "attackStrategy", "defenseStrategy", "theories"],
+        panelIds: ["redTeam", "legalIssues", "weaknesses", "strengths", "attackStrategy", "defenseStrategy", "theories"],
       },
     ],
   },
@@ -113,7 +113,7 @@ const SYSTEM_PRESETS = [
     name: "Witness Prep",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat", "witnesses"] },
-      { arrangement: "tabs", panelIds: ["contradictions", "redTeam", "teamAudit"] },
+      { arrangement: "tabs", panelIds: ["evidence", "redTeam"] },
     ],
   },
   {
@@ -133,7 +133,7 @@ const SYSTEM_PRESETS = [
     name: "Deposition Day",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat", "witnesses"] },
-      { arrangement: "tabs", panelIds: ["contradictions", "redTeam", "attackStrategy"] },
+      { arrangement: "tabs", panelIds: ["evidence", "redTeam", "attackStrategy"] },
     ],
   },
   {
@@ -142,8 +142,8 @@ const SYSTEM_PRESETS = [
     descriptionKey: "presetDiscoveryReviewDesc",
     name: "Discovery Review",
     screens: [
-      { arrangement: "free", panelIds: ["evidence", "contradictions"] },
-      { arrangement: "tabs", panelIds: ["procedure", "teamAudit", "decisions"] },
+      { arrangement: "free", panelIds: ["evidence"] },
+      { arrangement: "tabs", panelIds: ["procedure", "decisions"] },
     ],
   },
   {
@@ -153,7 +153,7 @@ const SYSTEM_PRESETS = [
     name: "Appeal Prep",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat", "legalIssues"] },
-      { arrangement: "tabs", panelIds: ["citationMap", "theories", "strengths", "weaknesses"] },
+      { arrangement: "tabs", panelIds: ["law", "theories", "strengths", "weaknesses"] },
     ],
   },
   {
@@ -173,7 +173,7 @@ const SYSTEM_PRESETS = [
     name: "Full Workspace",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["evidence", "contradictions", "witnesses"] },
+      { arrangement: "columns", panelIds: ["evidence", "witnesses"] },
       { arrangement: "tabs", panelIds: ["law", "procedure", "mindMap", "damages", "caseReconstruction", "theories", "decisions"] },
     ],
   },
@@ -184,7 +184,7 @@ const SYSTEM_PRESETS = [
     name: "Trial Day",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["evidence", "witnesses", "contradictions"] },
+      { arrangement: "columns", panelIds: ["evidence", "witnesses"] },
       { arrangement: "tabs", panelIds: ["law", "redTeam", "attackStrategy", "defenseStrategy", "legalIssues", "weaknesses", "strengths"] },
     ],
   },
@@ -196,7 +196,7 @@ const SYSTEM_PRESETS = [
     screens: [
       { arrangement: "free", panelIds: ["command", "chat", "procedure"] },
       { arrangement: "columns", panelIds: ["mindMap", "redTeam", "theories", "decisions"] },
-      { arrangement: "tabs", panelIds: ["law", "citationMap", "damages", "witnesses", "caseReconstruction", "audioOverview", "teamAudit"] },
+      { arrangement: "tabs", panelIds: ["law", "damages", "witnesses", "caseReconstruction", "audioOverview"] },
     ],
   },
   {
@@ -206,7 +206,7 @@ const SYSTEM_PRESETS = [
     name: "Motion Drafting",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat", "procedure"] },
-      { arrangement: "free", panelIds: ["law", "citationMap"] },
+      { arrangement: "free", panelIds: ["law"] },
       { arrangement: "tabs", panelIds: ["decisions", "legalIssues", "theories"] },
     ],
   },
@@ -218,7 +218,7 @@ const SYSTEM_PRESETS = [
     screens: [
       { arrangement: "free", panelIds: ["command", "chat", "damages"] },
       { arrangement: "free", panelIds: ["witnesses", "theories"] },
-      { arrangement: "tabs", panelIds: ["decisions", "procedure", "teamAudit"] },
+      { arrangement: "tabs", panelIds: ["decisions", "procedure"] },
     ],
   },
   {
@@ -228,7 +228,7 @@ const SYSTEM_PRESETS = [
     name: "Cross-Exam Prep",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["witnesses", "contradictions"] },
+      { arrangement: "columns", panelIds: ["witnesses", "evidence"] },
       { arrangement: "tabs", panelIds: ["attackStrategy", "defenseStrategy", "redTeam"] },
     ],
   },
@@ -239,7 +239,7 @@ const SYSTEM_PRESETS = [
     name: "Deposition Prep Suite",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["witnesses", "contradictions", "redTeam"] },
+      { arrangement: "columns", panelIds: ["witnesses", "evidence", "redTeam"] },
       { arrangement: "tabs", panelIds: ["attackStrategy", "defenseStrategy", "legalIssues"] },
     ],
   },
@@ -250,7 +250,7 @@ const SYSTEM_PRESETS = [
     name: "Appeal Strategy",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat", "procedure"] },
-      { arrangement: "columns", panelIds: ["law", "citationMap", "legalIssues"] },
+      { arrangement: "columns", panelIds: ["law", "legalIssues"] },
       { arrangement: "tabs", panelIds: ["strengths", "weaknesses", "theories", "decisions"] },
     ],
   },
@@ -261,8 +261,8 @@ const SYSTEM_PRESETS = [
     name: "Discovery Command",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["evidence", "contradictions", "witnesses"] },
-      { arrangement: "tabs", panelIds: ["procedure", "teamAudit", "decisions", "caseReconstruction"] },
+      { arrangement: "columns", panelIds: ["evidence", "witnesses"] },
+      { arrangement: "tabs", panelIds: ["procedure", "decisions", "caseReconstruction"] },
     ],
   },
   {
@@ -272,7 +272,7 @@ const SYSTEM_PRESETS = [
     name: "Fact Verification",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["evidence", "contradictions", "verification"] },
+      { arrangement: "columns", panelIds: ["evidence"] },
       { arrangement: "tabs", panelIds: ["witnesses", "caseReconstruction", "decisions"] },
     ],
   },
@@ -283,7 +283,7 @@ const SYSTEM_PRESETS = [
     name: "War Room",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["evidence", "witnesses", "contradictions"] },
+      { arrangement: "columns", panelIds: ["evidence", "witnesses"] },
       { arrangement: "tabs", panelIds: ["law", "redTeam", "attackStrategy", "defenseStrategy"] },
       { arrangement: "tabs", panelIds: ["damages", "theories", "decisions", "procedure"] },
     ],
@@ -296,7 +296,7 @@ const SYSTEM_PRESETS = [
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
       { arrangement: "free", panelIds: ["evidence", "procedure"] },
-      { arrangement: "columns", panelIds: ["law", "citationMap", "legalIssues"] },
+      { arrangement: "columns", panelIds: ["law", "legalIssues"] },
       { arrangement: "tabs", panelIds: ["strengths", "weaknesses", "theories", "decisions"] },
     ],
   },
@@ -307,7 +307,7 @@ const SYSTEM_PRESETS = [
     name: "Full Team Audit",
     screens: [
       { arrangement: "free", panelIds: ["command", "chat"] },
-      { arrangement: "columns", panelIds: ["witnesses", "contradictions", "teamAudit"] },
+      { arrangement: "columns", panelIds: ["witnesses", "evidence"] },
       { arrangement: "tabs", panelIds: ["law", "redTeam", "legalIssues", "weaknesses", "strengths"] },
       { arrangement: "tabs", panelIds: ["damages", "caseReconstruction", "decisions", "theories", "audioOverview"] },
     ],

@@ -32,3 +32,16 @@ export function normalizeScreenPresetScreens(input: unknown, sku: string): { scr
 
   return { screens, screenCount: screens.length };
 }
+
+/**
+ * A stored preset's screens with every pane id the Terminal no longer has taken out — presets
+ * saved before a pane was retired still list it, and the app can't draw a pane it doesn't know.
+ * Screens are kept even when emptied, so the preset's screen count doesn't change.
+ */
+export function dropUnknownPanelIds(screens: unknown): unknown {
+  if (!Array.isArray(screens)) return screens;
+  return screens.map((raw) => {
+    const row = raw as { panelIds?: unknown };
+    return Array.isArray(row?.panelIds) ? { ...row, panelIds: row.panelIds.filter((id: unknown) => isPanelId(id)) } : raw;
+  });
+}

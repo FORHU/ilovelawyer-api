@@ -1,7 +1,7 @@
 import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
 import HttpError from "../utils/http-error";
-import { normalizeScreenPresetScreens } from "../utils/screen-preset";
+import { dropUnknownPanelIds, normalizeScreenPresetScreens } from "../utils/screen-preset";
 import TerminalWorkspaceSvc from "./terminal-workspace.service";
 
 export default class ScreenPresetSvc {
@@ -9,13 +9,14 @@ export default class ScreenPresetSvc {
   // with this caller's own, optionally narrowed to one screen count. A user never sees another
   // user's presets.
   static async list(userId: string, screenCount?: number) {
-    return prisma.screenPreset.findMany({
+    const rows = await prisma.screenPreset.findMany({
       where: {
         OR: [{ userId: null }, { userId }],
         ...(screenCount !== undefined ? { screenCount } : {}),
       },
       orderBy: [{ userId: "asc" }, { createdAt: "asc" }],
     });
+    return rows.map((row) => ({ ...row, screens: dropUnknownPanelIds(row.screens) as typeof row.screens }));
   }
 
   // Always owned by the caller — a userId: null (system) row is only ever written by the seeder,
