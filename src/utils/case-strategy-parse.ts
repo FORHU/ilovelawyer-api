@@ -1,5 +1,6 @@
 import { parseAiJson } from "./response-parser";
 import { stripChatWonderNoise } from "./chat-wonder-noise";
+import { resolveDocumentRef, type CaseDoc } from "./case-document-handles";
 
 // Safety ceilings against a runaway reply, not a product limit: a real case has as many to-dos and
 // key dates as its documents support (a large bundle has hundreds), so these sit far above any
@@ -137,4 +138,11 @@ function normalizeIsoDate(value: unknown): string | null {
   const date = new Date(`${match[1]}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return null;
   return match[1];
+}
+
+/** Each key date's documentId — a handle (D1…), or an id or name the model wrote instead —
+ * resolved to one of `ready`; a date that matches no document keeps no source rather than a
+ * dangling reference. */
+export function attachKeyDateDocuments(dates: ParsedKeyDate[], ready: CaseDoc[]): ParsedKeyDate[] {
+  return dates.map((item) => ({ ...item, documentId: item.documentId ? resolveDocumentRef(item.documentId, ready) : null }));
 }

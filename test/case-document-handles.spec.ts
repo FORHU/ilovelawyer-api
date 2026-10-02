@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import { describe, it } from "mocha";
 import { normalizeMindMap, MindMapItem } from "../src/utils/response-parser";
-import { docsForPrompt, excerptBlock, excerptsWithHandles, resolveCaseSources, resolveDocumentRef, resolveRawSources } from "../src/utils/mind-map-citations";
+import { docsForPrompt, excerptBlock, excerptsWithHandles, resolveCaseSources, resolveDocumentRef, resolveRawSources } from "../src/utils/case-document-handles";
 
 const A = "5dce9e77-e29c-46d6-94df-51a37c3c8c48";
 const B = "9a1b2c3d-1111-2222-3333-444455556666";

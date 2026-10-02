@@ -18,7 +18,7 @@ import {
   parseExpandedChildren,
   renameMindMapNode,
 } from "../utils/mind-map-tree";
-import { docsForPrompt, excerptBlock, resolveRawSources } from "../utils/mind-map-citations";
+import { docsForPrompt, excerptBlock, resolveRawSources } from "../utils/case-document-handles";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseMindMapSvc from "./case-mind-map.service";
 import DocumentRepo from "../repositories/document.repository";

@@ -51,7 +51,16 @@ export default class AiGenerationLockSvc {
    * every case-scoped Generate/Refresh/Scan button's polling hook. */
   static async getStatusForCase(caseId: string, userId: string, kind: AiGenerationKind) {
     await CaseAccess.loadAccessibleCase(caseId, userId);
-    return this.getStatus(caseId, kind);
+    const row = await this.getStatus(caseId, kind);
+    // A run the server never finished (it crashed or restarted mid-run) stays IN_PROGRESS, and the
+    // panel polling it would show "updating" forever. Past STALE_AFTER_MS — the same age `begin`
+    // already treats as abandoned — close it out as failed so the panel offers a retry instead.
+    if (row?.status === "IN_PROGRESS" && isJobStale(row.startedAt)) {
+      logger.warn("AiGenerationLockSvc: closing a run that never finished", { caseId, kind, startedAt: row.startedAt });
+      await this.finish(caseId, kind, "FAILED", "Interrupted: the run stopped before it finished. Try again.");
+      return this.getStatus(caseId, kind);
+    }
+    return row;
   }
 
   /**

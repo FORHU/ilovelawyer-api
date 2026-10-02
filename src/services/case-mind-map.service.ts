@@ -12,7 +12,7 @@ import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import { fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import { extractMindMap, MindMapItem } from "../utils/response-parser";
 import { keepOnlyCaseSources, requireCaseSourcesBelowHeadings, syncRemovedSources } from "../utils/mind-map-tree";
-import { docsForPrompt, excerptsWithHandles, resolveCaseSources } from "../utils/mind-map-citations";
+import { docsForPrompt, excerptsWithHandles, resolveCaseSources } from "../utils/case-document-handles";
 import { formatLawyerChanges, formatMindMapOutline, lawyerChangesSince } from "../utils/mind-map-lawyer-changes";
 import { applyMindMapChecks, checkMindMapNodes, isMindMapJevEnabled, nodesToCheck, type MindMapJevContext } from "../utils/mind-map-jev";
 import { CASE_MIND_MAP_AUTO } from "../config";

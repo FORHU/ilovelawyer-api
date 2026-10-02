@@ -14,7 +14,7 @@ import { DocumentRef, decisionRecordsNeedSanitizing, sanitizeDecisionRecords } f
  * Case-level Decision Records (differentiation program, Phase 1) — see
  * docs/plans/differentiation-program.md Workstream A and prisma/schema.prisma's
  * DecisionRecord doc comment. `promote` is called from ChatSvc.persistAssistantTurn, not from
- * an HTTP request, so — like CaseTimelineSvc.promoteFromAi — it does no CaseAccess check and
+ * an HTTP request, so it does no CaseAccess check and
  * writes no audit event: the turn that produced these records already ran on behalf of this
  * case. Every other method here is a normal user-initiated action and goes through CaseAccess.
  */

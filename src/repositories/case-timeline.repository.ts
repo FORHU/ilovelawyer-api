@@ -22,6 +22,18 @@ export default class CaseTimelineRepo {
     });
   }
 
+  /** Deletes the events copied in from AI chat answers — AI rows that aren't key dates (the only
+   * other AI writer used the chat's own statuses: pending, active, completed). Chat dates never
+   * carried a document, so they no longer go on the case timeline. Returns the deleted ids. */
+  static async deleteChatCopiedEvents(caseId: string): Promise<string[]> {
+    const rows = await prisma.caseTimelineEvent.findMany({
+      where: { caseId, source: "AI", status: { not: AI_KEY_DATE_STATUS } },
+      select: { id: true },
+    });
+    if (rows.length) await prisma.caseTimelineEvent.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+    return rows.map((r) => r.id);
+  }
+
   static async create(caseId: string, data: TimelineInput) {
     return prisma.caseTimelineEvent.create({ data: { caseId, ...data } });
   }

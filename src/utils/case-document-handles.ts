@@ -1,10 +1,11 @@
 import type { MindMapItem } from "./response-parser";
 
 /**
- * Case map citations. The model is shown each case document under a short handle (D1, D2, …)
- * rather than its 36-character id: long ids come back garbled often enough that most citations
- * stopped matching a document (and, once every point must cite one, the map came back empty).
- * resolveCaseSources maps whatever the model wrote back to a real document id.
+ * Case document handles, used wherever the model cites a case document — the case map's points
+ * and the timeline's key dates (CaseStrategySvc). The model is shown each document under a short
+ * handle (D1, D2, …) rather than its 36-character id: long ids come back garbled often enough that
+ * most citations stopped matching a document. resolveDocumentRef / resolveCaseSources map whatever
+ * the model wrote back to a real document id.
  */
 
 export interface CaseDoc {
