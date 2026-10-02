@@ -56,9 +56,11 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     witnessSchedule: WitnessExtractSvc.schedule,
     damagesSchedule: DamagesExtractSvc.schedule,
     mapChanged: CaseMindMapSvc.documentsChangedSinceBuild,
+    mapNeedsFirst: CaseMindMapSvc.needsFirstMap,
     mapGenerate: CaseMindMapSvc.generateFromDocuments,
   };
   let mapChanged: boolean;
+  let mapMissing: boolean;
   let mapBuilds: { caseId: string; reason?: string }[];
   let mapBuildError: Error | null;
 
@@ -103,9 +105,11 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseReconstructionAudioSvc as any).startAudioJob = async () => {};
     (CaseReconstructionAudioQueue as any).enqueue = () => {};
     mapChanged = false;
+    mapMissing = false;
     mapBuilds = [];
     mapBuildError = null;
     (CaseMindMapSvc as any).documentsChangedSinceBuild = async () => mapChanged;
+    (CaseMindMapSvc as any).needsFirstMap = async () => mapMissing;
     (CaseMindMapSvc as any).generateFromDocuments = async (caseId: string, _userId: string, reason?: string) => {
       if (mapBuildError) throw mapBuildError;
       mapBuilds.push({ caseId, reason });
@@ -129,6 +133,7 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (WitnessExtractSvc as any).schedule = originals.witnessSchedule;
     (DamagesExtractSvc as any).schedule = originals.damagesSchedule;
     (CaseMindMapSvc as any).documentsChangedSinceBuild = originals.mapChanged;
+    (CaseMindMapSvc as any).needsFirstMap = originals.mapNeedsFirst;
     (CaseMindMapSvc as any).generateFromDocuments = originals.mapGenerate;
   });
 
@@ -146,6 +151,17 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
         refreshed = true;
       };
       mapChanged = true;
+      await runCasePostExtraction("case-1", "user-1");
+      expect(refreshed).to.equal(false);
+      expect(mapBuilds).to.deep.equal([{ caseId: "case-1", reason: undefined }]);
+    });
+
+    it("builds the case's first map when it never got one, without a full refresh", async () => {
+      let refreshed = false;
+      (CaseRefreshSvc as any).runQueued = async () => {
+        refreshed = true;
+      };
+      mapMissing = true;
       await runCasePostExtraction("case-1", "user-1");
       expect(refreshed).to.equal(false);
       expect(mapBuilds).to.deep.equal([{ caseId: "case-1", reason: undefined }]);

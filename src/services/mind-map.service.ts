@@ -12,14 +12,17 @@ import {
   appendMindMapChildren,
   countMindMapNodes,
   deleteMindMapNode,
+  citesCaseDocument,
   keepOnlyCaseSources,
   findMindMapNode,
   parseExpandedChildren,
   renameMindMapNode,
 } from "../utils/mind-map-tree";
+import { docsForPrompt, excerptBlock, resolveRawSources } from "../utils/mind-map-citations";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseMindMapSvc from "./case-mind-map.service";
 import DocumentRepo from "../repositories/document.repository";
+import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import DocumentChunkSvc from "./document-chunk.service";
 
 /** How many times a save retries after another expand/undo landed on the same map mid-flight.
@@ -184,6 +187,20 @@ export default class MindMapSvc {
         ref.kind === "case"
           ? (await DocumentRepo.listAllByCase(caseId)).filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }))
           : [];
+      // The case documents most relevant to this branch — chat-wonder reads these chunks as
+      // context, the same grounding a chat turn about this topic would get.
+      const grounding = await DocumentChunkSvc.relevantChunksForCase(
+        caseId,
+        [...found.path.slice(1).map((n) => n.label), found.node.description ?? ""].join(" — "),
+      );
+      // On the case map every new point must cite a document, so the prompt carries the same
+      // passages headed by each document's handle — the only way the model can name the document
+      // a passage came from (chat-wonder's own attachment labels aren't the DOCUMENTS handles).
+      const excerpts =
+        ref.kind === "case" && grounding.caseDocumentChunkIds.length
+          ? excerptBlock(await DocumentChunkRepo.findTextsByIds(grounding.caseDocumentChunkIds), documents)
+          : undefined;
+
       const prompt = getMindMapExpandPromptBuilder(tenantCode)({
         caseName: caseRecord.caseName,
         actionType: caseRecord.actionType,
@@ -193,15 +210,10 @@ export default class MindMapSvc {
         existingChildren,
         count,
         ukJurisdiction,
-        documents,
+        // Listed by handle (D1, D2, …); citations are resolved back to ids below.
+        documents: docsForPrompt(documents),
+        excerpts,
       });
-
-      // The case documents most relevant to this branch — chat-wonder reads these chunks as
-      // context, the same grounding a chat turn about this topic would get.
-      const grounding = await DocumentChunkSvc.relevantChunksForCase(
-        caseId,
-        [...found.path.slice(1).map((n) => n.label), found.node.description ?? ""].join(" — "),
-      );
 
       const call = (sessionId: string) =>
         streamChatWonderMessage(
@@ -224,16 +236,30 @@ export default class MindMapSvc {
         result = await call(await getChatWonderSessionId());
       }
 
-      const children = parseExpandedChildren(result.content, [...siblings, ...existingChildren, found.node.label], count);
+      const parsed = parseExpandedChildren(result.content, [...siblings, ...existingChildren, found.node.label], count);
+      // The case map's rule (requireCaseSourcesBelowHeadings): every point below the headings cites
+      // one of the case's documents, so an uncited new point isn't added.
+      const caseDocumentIds = new Set(documents.map((d) => d.id));
+      const children =
+        ref.kind === "case"
+          ? parsed
+              .map((c) => ({ ...c, sources: resolveRawSources(c.sources, documents) }))
+              .filter((c) => citesCaseDocument(c, caseDocumentIds))
+          : parsed;
       logger.info("Mind map expand: model reply", {
         caseId,
         kind: ref.kind,
         nodeId,
         requested: count,
-        parsed: children.length,
+        parsed: parsed.length,
+        uncited: parsed.length - children.length,
         durationMs: Date.now() - startedAt,
       });
-      if (!children.length) throw new HttpError("The AI didn't return any new points for this node", 502);
+      if (!parsed.length) {
+        logger.warn("Mind map expand: no points in the reply", { caseId, nodeId, replyStart: result.content.slice(0, 600) });
+        throw new HttpError("The AI didn't return any new points for this node", 502);
+      }
+      if (!children.length) throw new HttpError("The AI didn't return any new points backed by the case documents", 502);
 
       const saved = await MindMapSvc.saveWithRetry(ref, (latestTree) => {
         const target = findMindMapNode(latestTree, nodeId);

@@ -111,9 +111,9 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       // Archiving/unarchiving a document leaves the case's READY set — and so the rest of the
       // analysis — alone, but the case mind map leaves archived documents out (it follows chat
       // grounding; see mindMapDocumentIds). Bring just the map back in step when its document set
-      // moved without the READY set moving.
+      // moved without the READY set moving — or build it when the case never got a first map.
       const { default: CaseMindMapSvc, isCaseMindMapBusy } = await import("../services/case-mind-map.service");
-      if (await CaseMindMapSvc.documentsChangedSinceBuild(caseId)) {
+      if ((await CaseMindMapSvc.documentsChangedSinceBuild(caseId)) || (await CaseMindMapSvc.needsFirstMap(caseId))) {
         try {
           await CaseMindMapSvc.generateFromDocuments(caseId, userId);
         } catch (err) {

@@ -141,6 +141,35 @@ export function keepOnlyCaseSources(tree: MindMapItem, allowed: Set<string>): nu
   return dropped;
 }
 
+/** An expanded point that cites at least one of the case's documents — what the case map keeps
+ * (see requireCaseSourcesBelowHeadings, the same rule for a whole build). */
+export function citesCaseDocument(child: ExpandedChild, allowed: Set<string>): boolean {
+  return (child.sources ?? []).some(
+    (s) => !!s && typeof s === "object" && allowed.has(String((s as { documentId?: unknown }).documentId)),
+  );
+}
+
+/**
+ * The case map's grounding rule: below the root and its five headings, every point cites a case
+ * document. Run after keepOnlyCaseSources, so a point whose only citations were invalid counts as
+ * uncited. A point with no citation is removed; its children, which are judged the same way, move
+ * up into its place, so a cited point is never lost because the heading-like point above it cited
+ * nothing. Returns a fresh, re-normalized tree (path ids follow the new shape) and how many points
+ * were removed. A heading the documents say nothing about is left with no children.
+ */
+export function requireCaseSourcesBelowHeadings(tree: MindMapItem): { tree: MindMapItem; removed: number } {
+  let removed = 0;
+  const keepCited = (nodes: MindMapItem[]): MindMapItem[] =>
+    nodes.flatMap((node) => {
+      const children = keepCited(node.children);
+      if (node.sources?.length) return [{ ...node, children }];
+      removed += 1;
+      return children;
+    });
+  const copy: MindMapItem = { ...tree, children: tree.children.map((heading) => ({ ...heading, children: keepCited(heading.children) })) };
+  return { tree: removed ? (normalizeMindMap(copy) ?? copy) : copy, removed };
+}
+
 /**
  * For a map that isn't being rebuilt (someone expanded it): drops citations to documents no
  * longer in `current`, marks those points `sourceRemoved`, and clears a Jev check made against a

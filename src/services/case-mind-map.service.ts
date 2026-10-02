@@ -11,7 +11,8 @@ import { getMindMapDocumentsPromptBuilder } from "../legal/prompt-registry";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import { fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import { extractMindMap, MindMapItem } from "../utils/response-parser";
-import { keepOnlyCaseSources, syncRemovedSources } from "../utils/mind-map-tree";
+import { keepOnlyCaseSources, requireCaseSourcesBelowHeadings, syncRemovedSources } from "../utils/mind-map-tree";
+import { docsForPrompt, excerptsWithHandles, resolveCaseSources } from "../utils/mind-map-citations";
 import { formatLawyerChanges, formatMindMapOutline, lawyerChangesSince } from "../utils/mind-map-lawyer-changes";
 import { applyMindMapChecks, checkMindMapNodes, isMindMapJevEnabled, nodesToCheck, type MindMapJevContext } from "../utils/mind-map-jev";
 import { CASE_MIND_MAP_AUTO } from "../config";
@@ -59,6 +60,8 @@ export type CaseMindMapSkip =
   | "unchanged"
   | "userChanges"
   | "unusableReply"
+  /** No point below the headings cited a case document, so the current map was kept. */
+  | "noCitedPoints"
   | "changedWhileBuilding";
 
 /**
@@ -307,6 +310,18 @@ export default class CaseMindMapSvc {
     return map.readySetFingerprint !== fingerprintMindMapDocuments(docs);
   }
 
+  /**
+   * Whether the case has documents a map can be built from but no map yet — a case whose last
+   * successful refresh ran before the case map existed, or whose refresh's map build failed (a
+   * failed build never fails the refresh). The post-upload job's skip-check sees no READY-set
+   * change for such a case, so without this its first map would never be built.
+   */
+  static async needsFirstMap(caseId: string): Promise<boolean> {
+    if (await MindMapRepo.findCaseMapMeta(caseId)) return false;
+    const docs = await DocumentRepo.listAllByCase(caseId);
+    return mindMapDocumentIds(docs).length > 0;
+  }
+
   /** Step 31: drops citations to removed documents on a map the refresh isn't rebuilding, saved
    * as a "sync" version (not a user change). Returns how many points changed; 0 when none, or
    * when the map moved on meanwhile (the next refresh tries again). */
@@ -374,8 +389,10 @@ export default class CaseMindMapSvc {
     const language = caseRecord?.language ?? "en";
 
     const pack = await buildFactExcerptPack(ready);
+    // Documents are listed, and their excerpts headed, by a short handle (D1, D2, …) the model can
+    // copy reliably; resolveCaseSources maps the citations back to real ids.
     const prompt = `${getMindMapDocumentsPromptBuilder(tenantCode)({
-      docs: ready,
+      docs: docsForPrompt(ready),
       findings: findings.map((f) => ({ category: f.category, label: f.label })),
       keyDates: timeline.slice(0, MAX_KEY_DATES).map((t) => ({ title: t.title, occurredOn: t.occurredOn })),
       strategy: procedureItems
@@ -386,9 +403,9 @@ export default class CaseMindMapSvc {
     })}
 
 ## EXTRACTED TEXT
-Use only these excerpts and the attached case documents. Each excerpt starts with [documentId p.page].
+Use only these excerpts and the attached case documents. Each excerpt starts with [document handle p.page], using the handles in DOCUMENTS above.
 
-${pack.text || "(no indexed text)"}
+${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
 `;
 
     // One-shot over the WS path (not callChatWonderRest): a full map is a long reply, and the
@@ -409,12 +426,23 @@ ${pack.text || "(no indexed text)"}
     }
 
     // extractMindMap → normalizeMindMap: path ids, depth, MIND_MAP_LIMITS trimming.
-    const tree = extractMindMap(result.content);
-    const branchCount = tree?.children.length ?? 0;
-    if (!tree || branchCount === 0) {
+    const extracted = extractMindMap(result.content);
+    const branchCount = extracted?.children.length ?? 0;
+    if (!extracted || branchCount === 0) {
       return skip("unusableReply", { replyChars: result.content.length });
     }
-    const dropped = keepOnlyCaseSources(tree, new Set(ready.map((d) => d.id)));
+    const { dropped, unmatched } = resolveCaseSources(extracted, ready);
+    // Every point below the five headings must cite a case document; uncited ones are removed.
+    const { tree, removed: uncitedPoints } = requireCaseSourcesBelowHeadings(extracted);
+    // Nothing the model wrote matched a case document: saving would replace the map with five
+    // empty headings, so keep the current one and report the build as unusable instead.
+    if (countNodes(tree) <= 1 + tree.children.length) {
+      logger.warn("Case mind map: no point cited a case document", { caseId, reason, droppedSources: dropped, uncitedPoints, unmatched });
+      // A lawyer's Build/Regenerate fails visibly ("Couldn't build the mind map. Try again.");
+      // an automatic build just leaves the map as it was.
+      if (reason === "manual") throw new HttpError("The AI's map didn't cite the case documents. Try again.", 502);
+      return skip("noCitedPoints", { droppedSources: dropped, uncitedPoints });
+    }
 
     const save = (expectedVersion: number | null) =>
       MindMapRepo.saveCaseBuild({ caseId, expectedVersion, data: tree, readySetFingerprint: fingerprint, documentIds: currentIds, userId });
@@ -437,6 +465,8 @@ ${pack.text || "(no indexed text)"}
         chunks: pack.chunkIds.length,
         nodes: countNodes(tree),
         droppedSources: dropped,
+        unmatchedSources: unmatched,
+        uncitedPoints,
         durationMs: Date.now() - startedAt,
       });
       await OrganizationRepo.writeAudit({
