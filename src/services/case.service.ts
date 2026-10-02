@@ -58,6 +58,20 @@ export default class CaseSvc {
     await CaseRepo.delete(id, organizationId);
   }
 
+  /** Bulk delete from the case list — loops delete() (document cleanup included) over every
+   * selected id with allSettled so one missing case doesn't fail the rest of the batch. Mirrors
+   * archiveMany below; `succeeded` is the deleted ids, since there's no row left to return. */
+  static async deleteMany(ids: string[], organizationId: string, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.delete(id, organizationId, actorId)));
+    const succeeded: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(ids[i]);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to delete case" });
+    });
+    return { succeeded, failed };
+  }
+
   /** Archiving/unarchiving are independent of delete — an archived case can still be deleted,
    * and archiving never blocks anything else on the case (documents, chat, auto-refresh all
    * keep working identically). No CaseAccess check here, matching update/delete above — this

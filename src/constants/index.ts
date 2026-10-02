@@ -17,6 +17,7 @@ export * from "./legalSourceCache.constants";
 export * from "./library-sections.constants";
 export * from "./mind-map-limits.constants";
 export * from "./ph-holidays.constants";
+export * from "./product-tour.constants";
 export * from "./red-team.constants";
 export * from "./tenant-settings.constants";
 export * from "./terminal.constants";

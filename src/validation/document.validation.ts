@@ -71,6 +71,7 @@ export const listDocumentsSchema = Joi.object({
   status: Joi.string().valid("ACTIVE", "ARCHIVED").default("ACTIVE"),
 });
 
-export const bulkUnarchiveDocumentsSchema = Joi.object({
+/** Shared by the bulk archive, restore and delete endpoints — same {ids} shape for each. */
+export const bulkDocumentIdsSchema = Joi.object({
   ids: Joi.array().items(Joi.string()).min(1).max(BULK_ACTION_MAX).required(),
 });
