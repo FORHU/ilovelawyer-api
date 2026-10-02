@@ -94,6 +94,16 @@ export default class CaseCtrl {
     return res.status(200).json(result);
   }
 
+  /** Bulk delete from the case list — DELETE /api/my-cases with an {ids} body, not /:id, so it
+   * can't collide with the single-case route above (different segment count). */
+  static async deleteMany(req: Request, res: Response) {
+    const { error, value } = bulkCaseIdsSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await CaseSvc.deleteMany(value.ids, req.organization!.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
   static async handleCreateCaseWithDocument(req: Request, res: Response) {
     const input = {
       ...req.body,
