@@ -1,5 +1,7 @@
 import { UK_LEGAL_MCP_URL } from "../config";
 import HttpError from "./http-error";
+import logger from "./logger";
+import { getLegislationSectionDirect, searchLegislationDirect } from "./uk-legislation-direct";
 
 // ── UK Legal MCP (uk-legal-mcp.fly.dev) ──────────────────────────────────────
 // Stateless JSON-RPC 2.0 over HTTP — `tools/call` works without a session handshake, no auth
@@ -98,6 +100,25 @@ function mcpToolError(name: string, rawText: string): Error {
   if (category === "validation") return new HttpError(`UK Legal MCP ${name}: ${message}`, 400);
   if (category === "not_found") return new HttpError(`UK Legal MCP ${name}: ${message}`, 404);
   return new UkLegalMcpUnavailableError(`UK Legal MCP ${name} error: ${message}`);
+}
+
+function directFallbackEnabled(): boolean {
+  return !["false", "0", "no"].includes((process.env.UK_LEGISLATION_DIRECT_FALLBACK ?? "true").trim().toLowerCase());
+}
+
+/** The MCP could not answer, so ask legislation.gov.uk itself. Only an upstream failure falls back: a caller's
+ * bad input (400) or a genuine not_found (404) is rethrown exactly as before. If the direct lookup fails too, the
+ * error names both reasons and is still a UkLegalMcpUnavailableError, so callers treat it as "unresolved" as they
+ * always have. UK_LEGISLATION_DIRECT_FALLBACK=false turns the fallback off. */
+async function withDirectFallback<T>(tool: string, err: unknown, direct: () => Promise<T>): Promise<T> {
+  if (!(err instanceof UkLegalMcpUnavailableError) || !directFallbackEnabled()) throw err;
+  logger.warn(`UK Legal MCP ${tool} failed (${err.message}); trying legislation.gov.uk directly`);
+  try {
+    return await direct();
+  } catch (directErr) {
+    const reason = directErr instanceof Error ? directErr.message : String(directErr);
+    throw new UkLegalMcpUnavailableError(`${err.message}; direct legislation.gov.uk lookup also failed: ${reason}`);
+  }
 }
 
 export interface UkCitationsNetworkResult {
@@ -222,12 +243,36 @@ export async function legislationSearch(args: {
   year?: number;
   limit?: number;
 }): Promise<UkLegislationSearchResult> {
-  return callTool<UkLegislationSearchResult>("legislation_search", {
-    query: args.query,
-    ...(args.type ? { type: args.type } : {}),
-    ...(typeof args.year === "number" ? { year: args.year } : {}),
-    ...(args.limit ? { limit: args.limit } : {}),
-  });
+  try {
+    return await callTool<UkLegislationSearchResult>("legislation_search", {
+      query: args.query,
+      ...(args.type ? { type: args.type } : {}),
+      ...(typeof args.year === "number" ? { year: args.year } : {}),
+      ...(args.limit ? { limit: args.limit } : {}),
+    });
+  } catch (err) {
+    return withDirectFallback("legislation_search", err, () => searchLegislationDirect(args));
+  }
+}
+
+/** The same title search, direct first and the MCP second. For callers on a short clock: a blocked MCP takes ~8s to
+ * fail, longer than the citation rewrite's whole 4.5s budget, so "MCP first, then fall back" would never get its
+ * turn there. legislation.gov.uk answers in well under a second. */
+export async function legislationTitleLookup(args: {
+  query: string;
+  type?: string;
+  year?: number;
+  limit?: number;
+}): Promise<UkLegislationSearchResult> {
+  if (directFallbackEnabled()) {
+    try {
+      const direct = await searchLegislationDirect(args);
+      if (direct.results.length) return direct;
+    } catch (err) {
+      logger.warn(`direct legislation.gov.uk title lookup failed (${err instanceof Error ? err.message : err}); trying the UK Legal MCP`);
+    }
+  }
+  return legislationSearch(args);
 }
 
 export interface UkJudgmentIndexResult {
@@ -288,11 +333,15 @@ export async function legislationGetSection(args: {
   section: string;
   maxChars?: number;
 }): Promise<UkLegislationSectionResult> {
-  return callTool<UkLegislationSectionResult>("legislation_get_section", {
-    type: args.type,
-    year: args.year,
-    number: args.number,
-    section: args.section,
-    ...(typeof args.maxChars === "number" ? { max_chars: args.maxChars } : {}),
-  });
+  try {
+    return await callTool<UkLegislationSectionResult>("legislation_get_section", {
+      type: args.type,
+      year: args.year,
+      number: args.number,
+      section: args.section,
+      ...(typeof args.maxChars === "number" ? { max_chars: args.maxChars } : {}),
+    });
+  } catch (err) {
+    return withDirectFallback("legislation_get_section", err, () => getLegislationSectionDirect(args));
+  }
 }
