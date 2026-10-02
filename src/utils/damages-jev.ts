@@ -33,6 +33,9 @@ export interface QuotedHead {
   title: string;
   amount: number | null;
   quote: string;
+  /** The figure to check, when it isn't simply the amount — a calculated entry gives its inputs
+   * ("12 weeks × 450 a week"), since the product is written nowhere. */
+  figure?: string | null;
 }
 
 export interface QuotedFigureCheck {
@@ -48,7 +51,7 @@ export function quotedFigureOf(amount: number | null): string | null {
 /** Does the head's quote state the figure taken from it? Null when there is no figure to check or
  * the Jev call fails — the caller then keeps the parser's verdict. */
 export async function checkQuotedFigure(head: QuotedHead): Promise<QuotedFigureCheck | null> {
-  const quotedFigure = quotedFigureOf(head.amount);
+  const quotedFigure = head.figure !== undefined ? head.figure : quotedFigureOf(head.amount);
   if (!quotedFigure) return null;
   try {
     logger.info("Jev request", { feature: "damages-quote", kind: head.kind, quotedFigure });
@@ -56,7 +59,7 @@ export async function checkQuotedFigure(head: QuotedHead): Promise<QuotedFigureC
       state: { head: { kind: head.kind, title: head.title }, quote: head.quote, quotedFigure },
       questions: {
         support: choice(
-          "`head` is a damages or remedy entry proposed from a case document. `quote` is the line it was taken from, and `quotedFigure` is the amount taken from that line. Classify the relationship between `quote` and `quotedFigure` for what `head` is: SUPPORTED if `quote` states that amount for that purpose; UNSUPPORTED if `quote` does not state it, or states it for something else (for example a monthly salary taken as the whole claim); CONTRADICTED if `quote` states a different amount for the same thing.",
+          "`head` is a damages or remedy entry proposed from a case document. `quote` is the line it was taken from, and `quotedFigure` is the amount taken from it — or, written as 'N weeks × R a week', the count and rate the amount is worked out from (`quote` may join several lines with ' … '). Classify the relationship between `quote` and `quotedFigure` for what `head` is: SUPPORTED if `quote` states that amount (or that count and rate) for that purpose; UNSUPPORTED if `quote` does not state it, or states it for something else (for example a monthly salary taken as the whole claim); CONTRADICTED if `quote` states a different amount for the same thing.",
           { SUPPORTED: null, UNSUPPORTED: null, CONTRADICTED: null },
         ),
       },

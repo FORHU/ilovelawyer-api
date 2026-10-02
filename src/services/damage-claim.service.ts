@@ -46,7 +46,12 @@ export default class DamageClaimSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const existing = await DamageClaimRepo.findById(id, caseId);
     if (!existing) throw new HttpError("Damage claim not found", 404);
-    const row = await DamageClaimRepo.update(id, caseId, blankToNull(input));
+    // A lawyer's new amount is theirs: it no longer carries the AI's basis or working.
+    const amountChanged = input.amount !== undefined && input.amount !== existing.amount;
+    const row = await DamageClaimRepo.update(id, caseId, {
+      ...blankToNull(input),
+      ...(amountChanged ? { amountBasis: null, amountNote: null } : {}),
+    });
     if (!row) throw new HttpError("Damage claim not found", 404);
     await CaseGraphSvc.markStale(caseId, "DAMAGE_CLAIM", id, "Damage claim updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.update", payload: { id } });

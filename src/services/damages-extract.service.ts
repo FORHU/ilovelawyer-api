@@ -8,11 +8,12 @@ import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseGraphSvc from "./case-graph.service";
 import { getDamagesExtractPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
-import { damageHeadKey, extractDamageHeads } from "../utils/damages-extract-parse";
+import { damageHeadKey, extractDamageHeads, parseDamageEstimates } from "../utils/damages-extract-parse";
 import { quotedFigureOf, vetDamageHeads } from "../utils/damages-jev";
-import { buildDamagesCorrectionPrompt } from "../constants/damages-extract.constants";
+import { buildDamagesCorrectionPrompt, buildDamagesEstimatePrompt } from "../constants/damages-extract.constants";
 import type { TenantCode } from "../types/tenant-code";
 import type { ExtractedDamageHead } from "../utils/damages-extract-parse";
+import type { CaseDoc } from "../utils/case-document-handles";
 import { isJobStale } from "../utils/ai-generation-lock.utils";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -34,8 +35,9 @@ const BUSY_RETRY_SECONDS = 30;
  *
  * Verifiable by construction, same as WitnessExtractSvc: every entry carries the document it came
  * from and a verbatim quote that extractDamageHeads has found in that document's text, holding its
- * amount. It never edits or deletes an entry, and skips any the case already has (same kind and
- * title). Each document is marked read (Document.damagesExtractedAt) so an entry the lawyer
+ * amount (or the rate and count it is worked out from). It never deletes an entry and skips any the
+ * case already has (same kind and title), except to fill in the amount of an AI suggestion still
+ * waiting for the lawyer. Each document is marked read (Document.damagesExtractedAt) so an entry the lawyer
  * removed isn't re-created from the same document. New entries wait for a lawyer to accept them.
  */
 export default class DamagesExtractSvc {
@@ -100,6 +102,10 @@ export default class DamagesExtractSvc {
     const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(batch.map((d) => d.id));
     const perDocChars = Math.max(1000, Math.min(MAX_DOC_CHARS, Math.floor(MAX_TOTAL_DOC_CHARS / batch.length)));
     const existing = await DamageClaimRepo.list(caseId);
+    // The model sees each document under a short handle (D1, D2, …) — long ids come back garbled
+    // often enough to drop entries; the parser resolves the handle back to the real id.
+    const docs: CaseDoc[] = batch.map((d) => ({ id: d.id, name: d.name }));
+    const promptDocs = batch.map((d, i) => ({ id: `D${i + 1}`, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) }));
 
     const prompt = getDamagesExtractPromptBuilder(tenantCode)({
       caseName: header?.caseName ?? "Untitled case",
@@ -107,25 +113,78 @@ export default class DamagesExtractSvc {
       jurisdiction: header?.jurisdiction,
       ukJurisdiction: header?.ukJurisdiction,
       existingHeads: existing.map((h) => `${h.kind} — ${h.title}${h.amount != null ? `: ${h.amount}` : ""}`),
-      documents: batch.map((d) => ({ id: d.id, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) })),
+      documents: promptDocs,
     });
 
     const result = await DamagesExtractSvc.ask(prompt, tenantCode);
 
     // Quotes are checked against the full text, not the clipped prompt copy — same as witnesses.
-    const proposed = extractDamageHeads(result.content, fullTexts);
+    const proposed = extractDamageHeads(result.content, fullTexts, docs);
     // Documents stay unmarked on an unparseable reply, so the next run reads them again.
     if (proposed === undefined) throw new HttpError("Chat Wonder returned no [DAMAGES] block", 502);
     // Jev reviews every proposal before anything is saved; a rejected figure goes back to Chat
     // Wonder once for the right one (or is dropped), so nothing questionable reaches the panel.
-    const found = await DamagesExtractSvc.vetWithJev(caseId, proposed, {
-      tenantCode,
-      fullTexts,
-      documents: batch.map((d) => ({ id: d.id, name: d.name, text: (fullTexts.get(d.id) ?? "").slice(0, perDocChars) })),
-    });
+    const found = await DamagesExtractSvc.vetWithJev(caseId, proposed, { tenantCode, fullTexts, docs, promptDocs });
 
-    const known = new Set(existing.map((h) => damageHeadKey(h.kind, h.title)));
+    const known = new Map(existing.map((h) => [damageHeadKey(h.kind, h.title), h]));
+    // Every AI damage carries a figure: one still without an amount — new from this read, or a
+    // waiting suggestion from an earlier one — gets the AI's estimate, asked for in one more call.
+    const foundKeys = new Set(found.map((h) => damageHeadKey(h.kind, h.title)));
+    const unpricedFound = found.filter((h) => h.kind === "DAMAGE" && h.amount == null);
+    const unpricedWaiting = existing.filter(
+      (e) => e.kind === "DAMAGE" && e.source === "AI" && !e.accepted && e.amount == null && !foundKeys.has(damageHeadKey(e.kind, e.title)),
+    );
+    const estimates = await DamagesExtractSvc.estimateMissing(
+      caseId,
+      [
+        ...unpricedFound.map((h) => ({ title: h.title, description: h.description, quote: h.quote })),
+        ...unpricedWaiting.map((e) => ({ title: e.title, description: e.description, quote: e.sourceQuote })),
+      ],
+      { tenantCode, caseName: header?.caseName ?? "Untitled case", venue: tenantCode === "UK" ? header?.ukJurisdiction || "England and Wales" : "the Philippines", promptDocs },
+    );
+    for (const h of unpricedFound) {
+      const estimate = estimates.get(damageHeadKey(h.kind, h.title));
+      if (!estimate) continue;
+      h.amount = estimate.amount;
+      h.amountBasis = "ESTIMATE";
+      h.amountNote = estimate.basis;
+    }
+
     const fresh = found.filter((h) => !known.has(damageHeadKey(h.kind, h.title)));
+    // A suggestion still waiting for the lawyer takes a better amount a later read found for it: a
+    // figure where it had none, or one from the documents in place of an estimate. Accepted
+    // entries and the lawyer's own are never touched.
+    const filled = [];
+    for (const h of found) {
+      const prior = known.get(damageHeadKey(h.kind, h.title));
+      if (!prior || prior.source !== "AI" || prior.accepted || h.amount == null) continue;
+      const better = prior.amount == null || (prior.amountBasis === "ESTIMATE" && h.amountBasis !== "ESTIMATE");
+      if (!better) continue;
+      filled.push(
+        await DamageClaimRepo.fillAiAmount(prior.id, caseId, {
+          amount: h.amount,
+          amountBasis: h.amountBasis,
+          amountNote: h.amountNote,
+          description: h.description,
+          sourceDocumentId: h.documentId,
+          sourceQuote: h.quote,
+        }),
+      );
+    }
+    for (const e of unpricedWaiting) {
+      const estimate = estimates.get(damageHeadKey(e.kind, e.title));
+      if (!estimate || !e.sourceDocumentId || !e.sourceQuote) continue;
+      filled.push(
+        await DamageClaimRepo.fillAiAmount(e.id, caseId, {
+          amount: estimate.amount,
+          amountBasis: "ESTIMATE",
+          amountNote: estimate.basis,
+          description: null,
+          sourceDocumentId: e.sourceDocumentId,
+          sourceQuote: e.sourceQuote,
+        }),
+      );
+    }
     const created = [];
     for (const h of fresh) {
       const row = await DamageClaimRepo.createFromAi(caseId, {
@@ -133,6 +192,8 @@ export default class DamagesExtractSvc {
         title: h.title,
         description: h.description,
         amount: h.amount,
+        amountBasis: h.amountBasis,
+        amountNote: h.amountNote,
         sourceDocumentId: h.documentId,
         sourceQuote: h.quote,
       });
@@ -141,12 +202,12 @@ export default class DamagesExtractSvc {
     }
     await DocumentRepo.markDamagesExtracted(batch.map((d) => d.id));
 
-    if (created.length > 0) {
+    if (created.length > 0 || filled.length > 0) {
       await OrganizationRepo.writeAudit({
         caseId,
         actorId: userId,
         action: "damage.extract",
-        payload: { ids: created.map((r) => r.id), documentIds: batch.map((d) => d.id) },
+        payload: { ids: created.map((r) => r.id), filledIds: filled.map((r) => r.id), documentIds: batch.map((d) => d.id) },
       });
     }
 
@@ -156,9 +217,33 @@ export default class DamagesExtractSvc {
       proposed: proposed.length,
       kept: found.length,
       created: created.length,
+      filled: filled.length,
+      stated: found.filter((h) => h.amountBasis === "STATED" || h.amountBasis === "CALCULATED").length,
+      estimated: found.filter((h) => h.amountBasis === "ESTIMATE").length,
+      unpriced: found.filter((h) => h.kind === "DAMAGE" && h.amount == null).length,
       remaining: pending.length - batch.length,
     });
     return pending.length > batch.length;
+  }
+
+  /** One call for the estimates of every damage in `heads` (see buildDamagesEstimatePrompt), by
+   * damageHeadKey. Empty when there is nothing to ask; a failed call is logged and leaves them
+   * without an amount rather than failing the batch, and the next read asks again. */
+  private static async estimateMissing(
+    caseId: string,
+    heads: { title: string; description: string | null; quote: string | null }[],
+    ctx: { tenantCode: TenantCode; caseName: string; venue: string; promptDocs: { id: string; name: string; text: string }[] },
+  ): Promise<Map<string, { amount: number; basis: string }>> {
+    if (heads.length === 0) return new Map();
+    try {
+      const prompt = buildDamagesEstimatePrompt({ caseName: ctx.caseName, venue: ctx.venue, heads, documents: ctx.promptDocs });
+      const estimates = parseDamageEstimates((await DamagesExtractSvc.ask(prompt, ctx.tenantCode)).content);
+      logger.info("Damages extract: estimates", { caseId, asked: heads.length, got: estimates.size });
+      return estimates;
+    } catch (err) {
+      logger.warn("Damages extract: estimate request failed, leaving those damages without an amount", { err, caseId });
+      return new Map();
+    }
   }
 
   /** One question to Chat Wonder over the streaming WS path (not the blocking REST call — same
@@ -191,28 +276,36 @@ export default class DamagesExtractSvc {
   static async vetWithJev(
     caseId: string,
     proposed: ExtractedDamageHead[],
-    ctx: { tenantCode: TenantCode; fullTexts: Map<string, string>; documents: { id: string; name: string; text: string }[] },
+    ctx: {
+      tenantCode: TenantCode;
+      fullTexts: Map<string, string>;
+      /** The batch's documents by real id, in handle order. */
+      docs: CaseDoc[];
+      /** The same documents as the prompt shows them: handle, name, clipped text. */
+      promptDocs: { id: string; name: string; text: string }[];
+    },
   ): Promise<ExtractedDamageHead[]> {
     const first = await vetDamageHeads(proposed);
     if (first.rejected.length === 0) return first.accepted;
 
     const rejectedKeys = new Set(first.rejected.map((r) => damageHeadKey(r.head.kind, r.head.title)));
-    const citedDocs = new Set(first.rejected.map((r) => r.head.documentId));
+    const handleOf = new Map(ctx.docs.map((d, i) => [d.id, `D${i + 1}`]));
+    const citedHandles = new Set(first.rejected.flatMap((r) => r.head.quotes.map((q) => handleOf.get(q.documentId))));
     let corrected: ExtractedDamageHead[] = [];
     try {
       const prompt = buildDamagesCorrectionPrompt({
         rejected: first.rejected.map(({ head, check }) => ({
           kind: head.kind,
           title: head.title,
-          figure: quotedFigureOf(head.amount) ?? "",
+          figure: head.figure ?? quotedFigureOf(head.amount) ?? "",
           quote: head.quote,
-          documentId: head.documentId,
+          documentId: handleOf.get(head.documentId) ?? head.documentId,
           reason: check.verdict === "CONTRADICTED" ? "CONTRADICTED" : "UNSUPPORTED",
         })),
-        documents: ctx.documents.filter((d) => citedDocs.has(d.id)),
+        documents: ctx.promptDocs.filter((d) => citedHandles.has(d.id)),
       });
       const reply = await DamagesExtractSvc.ask(prompt, ctx.tenantCode);
-      corrected = (extractDamageHeads(reply.content, ctx.fullTexts) ?? []).filter((h) =>
+      corrected = (extractDamageHeads(reply.content, ctx.fullTexts, ctx.docs) ?? []).filter((h) =>
         rejectedKeys.has(damageHeadKey(h.kind, h.title)),
       );
     } catch (err) {

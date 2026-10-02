@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import { buildDamagesEstimatePrompt } from "../src/constants/damages-extract.constants";
 import { describe, it } from "mocha";
 import {
   getRedTeamPromptBuilder,
@@ -64,8 +65,23 @@ describe("Prompt builder jurisdiction selection", () => {
     expect(uk).to.include("United Kingdom").and.to.include("injury to feelings");
     for (const prompt of [ph, uk]) {
       expect(prompt).to.include("[DAMAGES]").and.to.include("[/DAMAGES]");
-      expect(prompt).to.include("Never compute or add up an amount yourself");
+      expect(prompt).to.include("Never multiply or add up a figure yourself");
+      expect(prompt).to.include('"calculation"').and.to.include("even when no figure is given");
+      expect(prompt).to.include('"estimate" is required for every DAMAGE').and.to.include("shown to the lawyer as an AI estimate");
     }
+    expect(uk).to.include("a basic award and a compensatory award");
+    expect(ph).to.include("illegal dismissal — backwages");
+  });
+
+  it("damages estimate prompt asks for every listed damage in an [ESTIMATES] block", () => {
+    const prompt = buildDamagesEstimatePrompt({
+      caseName: "Bennett v. Meridian",
+      venue: "England and Wales",
+      heads: [{ title: "Notice pay", description: null, quote: "You will receive 12 weeks' notice." }],
+      documents: [{ id: "D1", name: "Letter.pdf", text: "..." }],
+    });
+    expect(prompt).to.include("- Notice pay (claimed in: \"You will receive 12 weeks' notice.\")");
+    expect(prompt).to.include("none may be left out").and.to.include("[ESTIMATES]").and.to.include("--- DOCUMENT D1 | name: Letter.pdf ---");
   });
 
   it("source-analysis prompt template diverges by jurisdiction", () => {
