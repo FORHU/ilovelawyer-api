@@ -15,6 +15,9 @@ export interface MindMapExpandPromptData {
   /** The case's documents — given on the case map only, whose points cite a document and page
    * (and are then checked against it by Jev). Chat maps don't cite. */
   documents?: { id: string; name: string }[];
+  /** The passages most relevant to this node, each headed `[<handle> p.N]` so a point can cite
+   * the document it read — case map only. */
+  excerpts?: string;
 }
 
 /** Output tag MindMapSvc parses the new children from (see parseExpandedChildren). */
@@ -44,7 +47,11 @@ ${list(d.siblings)}
 ## ALREADY UNDER IT (do not repeat — add different points)
 ${list(d.existingChildren)}
 
-${d.documents?.length ? `## DOCUMENTS\n${d.documents.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n")}\n\n` : ""}## RULES
+${d.documents?.length ? `## DOCUMENTS\n${d.documents.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n")}\n\n` : ""}${
+    d.excerpts
+      ? `## EXTRACTED TEXT\nPassages from those documents, each headed [handle p.page]. Cite the handle of the passage a point comes from.\n\n${d.excerpts}\n\n`
+      : ""
+  }## RULES
 - Exactly ${d.count} children, or fewer if the documents and the node genuinely support fewer. Never pad.
 - "label": at most 8 words, specific (names, dates, sums, sections), not a generic category.
 - "description": 1-3 sentences of the actual reasoning or evidence, citing the document or authority
@@ -53,7 +60,7 @@ ${d.documents?.length ? `## DOCUMENTS\n${d.documents.map((doc) => `- \`${doc.id}
 - Write in the same language as the node labels above.
 - Leaves only: no nested "children".${
     d.documents?.length
-      ? `\n- "sources": the documents each point comes from, as [{"documentId": "<id from DOCUMENTS>", "page": <number or null>}].\n  Use only ids from the DOCUMENTS list; omit "sources" when a point isn't from a document.`
+      ? `\n- "sources": the documents each point comes from, as [{"documentId": "<handle from DOCUMENTS, e.g. D1>", "page": <number or null>}].\n  REQUIRED: use only the handles in the DOCUMENTS list, copied exactly. A point no document supports is not added, so leave it out instead.`
       : ""
   }
 

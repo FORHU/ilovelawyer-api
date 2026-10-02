@@ -161,9 +161,12 @@ function mindMapSources(raw: unknown): MindMapSource[] {
   if (!Array.isArray(raw)) return [];
   const out: MindMapSource[] = [];
   for (const item of raw) {
-    const documentId = typeof item?.documentId === "string" ? item.documentId.trim() : "";
+    // Models drift on the shape: a bare "D3", or the id under another key. What it refers to is
+    // settled later against the case's documents (resolveCaseSources / keepOnlyCaseSources).
+    const ref = typeof item === "string" ? item : (item?.documentId ?? item?.id ?? item?.doc ?? item?.document);
+    const documentId = typeof ref === "string" ? ref.trim() : "";
     if (!documentId) continue;
-    const page = Number(item.page);
+    const page = Number(typeof item === "object" ? item?.page : undefined);
     out.push(Number.isInteger(page) && page > 0 ? { documentId, page } : { documentId });
   }
   return out;

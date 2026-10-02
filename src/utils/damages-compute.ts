@@ -28,6 +28,10 @@ export interface DamagesSummary {
   remedyCount: number;
   /** Accepted entries marked awarded or received. */
   doneCount: number;
+  /** AI suggestions waiting for a lawyer, and the sum of their amounts — shown beside the total,
+   * never in it. */
+  suggestedCount: number;
+  suggestedTotal: number;
 }
 
 export function currencyForTenant(tenantCode: TenantCode | null | undefined): "PHP" | "GBP" {
@@ -49,6 +53,8 @@ export function computeDamagesSummary(entries: DamageEntryInput[], tenantCode?: 
     damageCount: accepted.filter((e) => e.kind === "DAMAGE").length,
     remedyCount: accepted.filter((e) => e.kind === "REMEDY").length,
     doneCount: accepted.filter((e) => e.done).length,
+    suggestedCount: entries.length - accepted.length,
+    suggestedTotal: sum(entries.filter((e) => !e.accepted)),
   };
 }
 

@@ -211,7 +211,7 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     phase: "P3",
     defaultHidden: true,
     minSku: "SOLO",
-    description: "Claimed damages by category: actual, moral, exemplary, attorney's fees, other",
+    description: "Money claimed and other orders sought, each with the document line it comes from, the total, and what is awarded so far",
   },
   {
     id: "caseReconstruction",

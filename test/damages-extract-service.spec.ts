@@ -127,7 +127,9 @@ describe("DamagesExtractSvc", () => {
     expect(payloads[0].skip_legal_verify).to.equal(true);
     // Not a case chat turn: no mind-map rule appended.
     expect(payloads[0].user_input).to.not.include("visual case strategy map");
-    expect(payloads[0].user_input).to.include("--- DOCUMENT id: doc-pay | name: Payslip.pdf ---");
+    // Documents are shown under handles, not their ids.
+    expect(payloads[0].user_input).to.include("--- DOCUMENT D1 | name: Payslip.pdf ---");
+    expect(payloads[0].user_input).to.not.include("doc-pay");
   });
 
   it("creates only verified entries, as AI suggestions with their source, and marks the batch read", async () => {
@@ -147,6 +149,133 @@ describe("DamagesExtractSvc", () => {
     expect(marked).to.deep.equal([["doc-pay", "doc-cmp"]]);
     expect(audits[0]).to.include({ action: "damage.extract" });
     expect(audits[0].payload.ids).to.deep.equal(["new-0", "new-1"]);
+  });
+
+  it("resolves a handle citation to the real document, and works out rate × count", async () => {
+    patch(DocumentChunkRepo, "findFullTextsByDocuments", async () =>
+      new Map([["doc-pay", "Weekly pay: 450.00. Notice period: 12 weeks."], ["doc-cmp", COMPLAINT]]),
+    );
+    reply = `[DAMAGES]${JSON.stringify([
+      {
+        kind: "DAMAGE",
+        title: "Notice pay",
+        calculation: { rate: 450, count: 12, unit: "week" },
+        quotes: [{ documentId: "D1", quote: "Weekly pay: 450.00. Notice period: 12 weeks." }],
+      },
+    ])}[/DAMAGES]`;
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(created).to.have.length(1);
+    expect(created[0]).to.include({ amount: 5400, amountBasis: "CALCULATED", amountNote: "12 weeks × 450 a week", sourceDocumentId: "doc-pay" });
+  });
+
+  it("fills in the amount of a waiting AI suggestion that had none, and leaves accepted or lawyer entries alone", async () => {
+    const filled: any[] = [];
+    patch(DamageClaimRepo, "fillAiAmount", async (id: string, _caseId: string, data: any) => {
+      filled.push({ id, ...data });
+      return { id };
+    });
+    existing = [
+      { id: "ai-moral", kind: "DAMAGE", title: "Moral damages", amount: null, source: "AI", accepted: false },
+      { id: "mine-reinst", kind: "REMEDY", title: "Reinstatement", amount: null, source: "MANUAL", accepted: true },
+    ];
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(filled.map((f) => [f.id, f.amount, f.amountBasis, f.sourceQuote])).to.deep.equal([
+      ["ai-moral", 200000, "STATED", "P200,000.00 as moral damages"],
+    ]);
+    expect(created).to.deep.equal([]);
+    expect(audits[0].payload.filledIds).to.deep.equal(["ai-moral"]);
+  });
+
+  it("replaces a waiting AI estimate with a figure the documents state, but not with another estimate", async () => {
+    const filled: any[] = [];
+    patch(DamageClaimRepo, "fillAiAmount", async (id: string, _caseId: string, data: any) => {
+      filled.push({ id, ...data });
+      return { id };
+    });
+    existing = [
+      { id: "est-moral", kind: "DAMAGE", title: "Moral damages", amount: 50000, amountBasis: "ESTIMATE", source: "AI", accepted: false },
+      { id: "est-feel", kind: "DAMAGE", title: "Injury to feelings", amount: 9000, amountBasis: "ESTIMATE", source: "AI", accepted: false },
+    ];
+    reply = `[DAMAGES]${JSON.stringify([
+      { kind: "DAMAGE", title: "Moral damages", amount: 200000, documentId: "doc-cmp", quote: "P200,000.00 as moral damages" },
+      {
+        kind: "DAMAGE",
+        title: "Injury to feelings",
+        estimate: { amount: 20000, basis: "Usual range." },
+        documentId: "doc-cmp",
+        quote: "reinstatement without loss of seniority",
+      },
+    ])}[/DAMAGES]`;
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(filled.map((f) => [f.id, f.amount, f.amountBasis])).to.deep.equal([["est-moral", 200000, "STATED"]]);
+  });
+
+  it("saves an estimate with its basis, marked ESTIMATE", async () => {
+    reply = `[DAMAGES]${JSON.stringify([
+      {
+        kind: "DAMAGE",
+        title: "Exemplary damages",
+        estimate: { amount: 50000, basis: "Usual award where the dismissal was done in bad faith." },
+        documentId: "doc-cmp",
+        quote: "P100,000.00 as exemplary damages",
+      },
+    ])}[/DAMAGES]`;
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(created[0]).to.include({
+      amount: 50000,
+      amountBasis: "ESTIMATE",
+      amountNote: "Usual award where the dismissal was done in bad faith.",
+    });
+  });
+
+  it("asks once more for an estimate for every damage still without an amount, new or waiting", async () => {
+    const filled: any[] = [];
+    patch(DamageClaimRepo, "fillAiAmount", async (id: string, _caseId: string, data: any) => {
+      filled.push({ id, ...data });
+      return { id };
+    });
+    existing = [
+      { id: "old-notice", kind: "DAMAGE", title: "Notice pay", amount: null, source: "AI", accepted: false, sourceDocumentId: "doc-pay", sourceQuote: "Basic monthly salary: P27,000.00" },
+      { id: "mine", kind: "DAMAGE", title: "Holiday pay", amount: null, source: "MANUAL", accepted: true },
+    ];
+    reply = [
+      `[DAMAGES]${JSON.stringify([
+        { kind: "DAMAGE", title: "Exemplary damages", amount: null, documentId: "doc-cmp", quote: "P100,000.00 as exemplary damages" },
+        { kind: "REMEDY", title: "Reinstatement", amount: null, documentId: "doc-cmp", quote: "reinstatement without loss of seniority" },
+      ])}[/DAMAGES]`,
+      `[ESTIMATES]${JSON.stringify([
+        { title: "Exemplary damages", amount: 75000, basis: "Usual award for a dismissal in bad faith." },
+        { title: "Notice pay", amount: 27000, basis: "One month's basic salary." },
+      ])}[/ESTIMATES]`,
+    ];
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+
+    expect(payloads).to.have.length(2);
+    expect(payloads[1].user_input).to.include("- Exemplary damages").and.to.include("- Notice pay");
+    // Neither a remedy nor the lawyer's own entry is sent for an estimate.
+    expect(payloads[1].user_input).to.not.include("- Reinstatement").and.to.not.include("- Holiday pay");
+    expect(created.map((h) => [h.title, h.amount, h.amountBasis])).to.deep.equal([
+      ["Exemplary damages", 75000, "ESTIMATE"],
+      ["Reinstatement", null, null],
+    ]);
+    expect(filled.map((f) => [f.id, f.amount, f.amountBasis, f.amountNote])).to.deep.equal([
+      ["old-notice", 27000, "ESTIMATE", "One month's basic salary."],
+    ]);
+  });
+
+  it("keeps a damage without an amount when the estimate call fails, and asks nothing when all are priced", async () => {
+    reply = [
+      `[DAMAGES]${JSON.stringify([{ kind: "DAMAGE", title: "Exemplary damages", documentId: "doc-cmp", quote: "P100,000.00 as exemplary damages" }])}[/DAMAGES]`,
+      "no block",
+    ];
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(created.map((h) => [h.title, h.amount])).to.deep.equal([["Exemplary damages", null]]);
+
+    payloads = [];
+    created = [];
+    reply = `[DAMAGES]${JSON.stringify([{ kind: "DAMAGE", title: "Moral damages", amount: 200000, documentId: "doc-cmp", quote: "P200,000.00 as moral damages" }])}[/DAMAGES]`;
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(payloads).to.have.length(1);
   });
 
   it("never duplicates an entry the case already has", async () => {
@@ -193,10 +322,12 @@ describe("DamagesExtractSvc", () => {
       expect(payloads).to.have.length(2);
       expect(payloads[1].user_input.startsWith("[legal ai] ")).to.equal(true);
       expect(payloads[1].skip_legal_verify).to.equal(true);
-      expect(payloads[1].user_input).to.include('quoted as "Net pay: P24,310.00" — rejected because the quoted line does not state this amount');
+      expect(payloads[1].user_input).to.include(
+        'from document D1, quoted as "Net pay: P24,310.00" — rejected because the quoted lines do not state this figure',
+      );
       // Only the cited document goes back, not the whole batch.
-      expect(payloads[1].user_input).to.include("--- DOCUMENT id: doc-pay");
-      expect(payloads[1].user_input).to.not.include("--- DOCUMENT id: doc-cmp");
+      expect(payloads[1].user_input).to.include("--- DOCUMENT D1 | name: Payslip.pdf");
+      expect(payloads[1].user_input).to.not.include("--- DOCUMENT D2");
 
       // Accepted heads are saved first, then the corrected ones.
       expect(created.map((h) => [h.title, h.amount, h.sourceQuote])).to.deep.equal([

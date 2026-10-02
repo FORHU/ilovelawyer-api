@@ -60,8 +60,8 @@ function sleep(ms: number) {
 
 /**
  * SQS queue for the case-graph enrichment that follows an already-persisted chat turn — promoting
- * the AI's timeline/decision-record extras into the case's own graph (CaseTimelineSvc.promoteFromAi,
- * DecisionRecordSvc.promote). This is deliberately NOT where the chat message itself gets created:
+ * the AI's decision records into the case's own graph (DecisionRecordSvc.promote). The answer's
+ * timeline is no longer copied into the case timeline (it carries no document). This is deliberately NOT where the chat message itself gets created:
  * ChatSvc.processChatGenerationJob (run by ChatGenerationQueue's worker) persists the canonical
  * assistant Message via ChatSvc.persistAssistantTurn before this is ever enqueued. A failure here
  * can never make an already-delivered, already-persisted reply disappear; it only delays

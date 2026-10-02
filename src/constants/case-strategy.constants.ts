@@ -41,8 +41,8 @@ STRATEGY and TODOS are JSON arrays of objects: {"label": "...", "sourceLabel": "
 DATES is JSON objects with exactly:
 - title: short event name copied from the documents
 - date: YYYY-MM-DD as written or clearly implied in the text
-- documentId: the exact \`id\` (from the DOCUMENTS list or an EXTRACTED TEXT excerpt's leading [id p.N] tag) of the document this date came from — null if it can't be tied to one specific document
-- pageNumber: the page number from that excerpt's [id p.N] tag, as an integer — null if unknown
+- documentId: the document's handle (D1, D2, … from the DOCUMENTS list, or an EXTRACTED TEXT excerpt's leading [D1 p.N] tag), copied exactly, of the document this date came from — null if it can't be tied to one specific document
+- pageNumber: the page number from that excerpt's [D1 p.N] tag, as an integer — null if unknown
 Skip a row if the date cannot be determined. List every dated event; there is no limit.
 If none: leave the arrays empty.
 `

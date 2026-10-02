@@ -28,12 +28,22 @@ describe("computeDamagesSummary", () => {
       damageCount: 2,
       remedyCount: 1,
       doneCount: 1,
+      suggestedCount: 0,
+      suggestedTotal: 0,
     });
   });
 
   it("leaves AI proposals no lawyer has accepted out of everything", () => {
     const summary = computeDamagesSummary([entry({ amount: 1000 }), entry({ amount: 999999, accepted: false })], "UK");
     expect(summary).to.include({ currency: "GBP", total: 1000, headCount: 1 });
+  });
+
+  it("counts the AI suggestions waiting, and what they would add, beside the total", () => {
+    const summary = computeDamagesSummary(
+      [entry({ amount: 1000 }), entry({ amount: 5400, accepted: false }), entry({ kind: "REMEDY", accepted: false })],
+      "UK",
+    );
+    expect(summary).to.include({ total: 1000, headCount: 1, suggestedCount: 2, suggestedTotal: 5400 });
   });
 
   it("is all zeroes for a case with no entries", () => {

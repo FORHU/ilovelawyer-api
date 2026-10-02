@@ -1440,15 +1440,13 @@ export default class ChatSvc {
   }
 
   /**
-   * Case-graph enrichment for an already-persisted chat turn: promotes the AI's timeline into
-   * the case's own Timeline table (CaseTimelineSvc.promoteFromAi) and its decision records into
+   * Case-graph enrichment for an already-persisted chat turn: promotes its decision records into
    * the case's DecisionRecord table + CaseGraph nodes/edges (DecisionRecordSvc.promote). Called
    * from CaseGraphPromotionQueue, after ChatSvc.persistAssistantTurn has already durably created
    * the assistant Message this enriches — this step is a nice-to-have on top of an already-
    * complete, already-visible reply, never a prerequisite for it.
    *
-   * Idempotent: CaseTimelineSvc.promoteFromAi already dedupes by title+date against existing
-   * rows. DecisionRecordSvc.promote does not dedupe on its own (each call is meant to add new
+   * Idempotent: DecisionRecordSvc.promote does not dedupe on its own (each call is meant to add new
    * records), so a guard here checks for records already promoted from this assistantMessageId
    * before calling it — needed now that SQS redelivery of this job is the only thing that would
    * otherwise call promote() twice for the same turn.
@@ -1456,15 +1454,8 @@ export default class ChatSvc {
   static async promoteAssistantTurnToCaseGraph(p: CaseGraphPromotionPayload): Promise<void> {
     if (!p.effectiveCaseId) return;
 
-    if (p.timeline?.length) {
-      await CaseTimelineSvc.promoteFromAi(p.effectiveCaseId, p.timeline, p.userId).catch((err) => {
-        logger.error("Case graph promotion: failed to promote timeline", {
-          err,
-          caseId: p.effectiveCaseId,
-          assistantMessageId: p.assistantMessageId,
-        });
-      });
-    }
+    // The answer's timeline is no longer copied into the case's Timeline: chat dates carry no
+    // document, and the case timeline holds only dates found in the documents (CaseStrategySvc).
 
     if (p.decisions?.records.length) {
       const alreadyPromoted = await DecisionRecordRepo.existsForSourceMessage(p.assistantMessageId);

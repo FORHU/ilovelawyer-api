@@ -1932,6 +1932,12 @@ enum DamageSource {
   AI
 }
 
+enum DamageAmountBasis {
+  STATED
+  CALCULATED
+  ESTIMATE
+}
+
 // One entry of the Damages & Remedies panel: a title, what it is, an amount (none for most
 // remedies), whether it has been awarded or received, and the date it is due. The case total is
 // the sum of accepted amounts (utils/damages-compute.ts).
@@ -1942,6 +1948,10 @@ model DamageClaim {
   title            String
   description      String?      @db.Text
   amount           Float?
+  // Where an AI entry's amount came from (a quoted figure, rate × period from quoted lines, or an
+  // AI estimate to review) and its working. Cleared when a lawyer changes the amount.
+  amountBasis      DamageAmountBasis?
+  amountNote       String?      @db.Text
   // Awarded by the tribunal or received by the client.
   done             Boolean      @default(false)
   dueDate          DateTime?

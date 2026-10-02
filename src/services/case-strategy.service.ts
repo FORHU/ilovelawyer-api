@@ -1,9 +1,10 @@
 import CaseAccess from "../utils/case-access";
+import { docsForPrompt, excerptsWithHandles } from "../utils/case-document-handles";
 import DocumentRepo from "../repositories/document.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getCaseStrategyPromptBuilder } from "../legal/prompt-registry";
-import { extractCaseStrategy } from "../utils/case-strategy-parse";
+import { extractCaseStrategy, attachKeyDateDocuments } from "../utils/case-strategy-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import CaseTimelineSvc from "./case-timeline.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -64,12 +65,15 @@ export default class CaseStrategySvc {
     const tPackStart = Date.now();
     const pack = await buildFactExcerptPack(ready);
     const packMs = Date.now() - tPackStart;
-    const prompt = `${buildCaseStrategyPrompt(ready, ukJurisdiction)}
+    // Documents are listed, and excerpts headed, by a short handle (D1, D2, …): a key date's
+    // documentId is copied back far more reliably than a 36-character id, which the model garbles
+    // often enough that most dates lost their source. resolveDocumentRef maps it back below.
+    const prompt = `${buildCaseStrategyPrompt(docsForPrompt(ready), ukJurisdiction)}
 
 ## EXTRACTED TEXT
 Use only these excerpts and the attached case documents.
 
-${pack.text || "(no indexed text)"}
+${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
 `;
 
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
@@ -146,13 +150,16 @@ ${pack.text || "(no indexed text)"}
       if (parsed.dates.length === 0 && ready.length > 0) {
         logger.warn("Chat Wonder case strategy: DATES block parsed but empty", { caseId, readyCount: ready.length });
       }
-      const readyIds = new Set(ready.map((doc) => doc.id));
-      const dates = parsed.dates.map((item) => ({
-        ...item,
-        // Drop a hallucinated documentId rather than store a dangling reference — the excerpt
-        // pack only ever hands the model ids from `ready`.
-        documentId: item.documentId && readyIds.has(item.documentId) ? item.documentId : null,
-      }));
+      const dates = attachKeyDateDocuments(parsed.dates, ready);
+      const unsourced = dates.filter((d) => !d.documentId).length;
+      if (unsourced) {
+        logger.info("Chat Wonder case strategy: key dates with no matching document", {
+          caseId,
+          unsourced,
+          total: dates.length,
+          sample: parsed.dates.filter((d, i) => !dates[i]!.documentId).slice(0, 5).map((d) => d.documentId),
+        });
+      }
       const tWriteStart = Date.now();
       await CaseTimelineSvc.replaceDocumentDates(caseId, ready.map((doc) => doc.id), dates, userId);
       logger.info("Chat Wonder case strategy: timeline write done", { caseId, durationMs: Date.now() - tWriteStart });

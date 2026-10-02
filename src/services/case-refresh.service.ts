@@ -9,8 +9,6 @@ import CaseOutlookAiSvc from "./case-outlook-ai.service";
 import CaseMindMapSvc, { isCaseMindMapBusy } from "./case-mind-map.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import DamagesExtractSvc from "./damages-extract.service";
-import ChatRepo from "../repositories/chat.repository";
-import { TimelineItem } from "../utils/response-parser";
 import OrganizationRepo from "../repositories/organization.repository";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -158,26 +156,13 @@ export default class CaseRefreshSvc {
                 });
             });
 
-        const consultations = await ChatRepo.listConsultationIdsByCase(caseId);
-        for (const consultation of consultations) {
-            const messages = await ChatRepo.listMessagesByConsultation(
-                consultation.id,
-            ).catch(() => []);
-            const withTimeline = messages.filter((m) => {
-                const items = m.timeline?.items;
-                return Array.isArray(items) && items.length > 0;
-            });
-            const latest = withTimeline[withTimeline.length - 1];
-            const items = latest?.timeline?.items;
-            if (Array.isArray(items) && items.length) {
-                await CaseTimelineSvc.promoteFromAi(
-                    caseId,
-                    items as unknown as TimelineItem[],
-                    userId,
-                );
-                logger.info("Refresh analysis: promoted AI timeline", { caseId, consultationId: consultation.id });
-            }
-        }
+        // Chat dates no longer go on the case timeline (they carry no document); clear the ones
+        // earlier versions copied in. A failure never fails the refresh.
+        await CaseTimelineSvc.removeChatCopiedEvents(caseId)
+            .then((removed) => {
+                if (removed) logger.info("Refresh analysis: removed chat-copied timeline events", { caseId, removed });
+            })
+            .catch((err) => logger.warn("Refresh analysis: chat-copied timeline cleanup failed", { err, caseId }));
 
         await CaseRepo.markRefreshed(caseId);
         // Persisted here (not only in the automatic post-extraction path) so a manual "Refresh
