@@ -14,7 +14,7 @@ export default class AiGenerationJobRepo {
   static async markInProgress(subjectId: string, kind: AiGenerationKind) {
     return prisma.aiGenerationJob.update({
       where: { subjectId_kind: { subjectId, kind } },
-      data: { status: "IN_PROGRESS", startedAt: new Date(), finishedAt: null, error: null },
+      data: { status: "IN_PROGRESS", startedAt: new Date(), finishedAt: null, error: null, stage: null },
     });
   }
 
@@ -23,5 +23,16 @@ export default class AiGenerationJobRepo {
       where: { subjectId_kind: { subjectId, kind } },
       data: { status, finishedAt: new Date(), error: error ?? null },
     });
+  }
+
+  /** Records an IN_PROGRESS job's stage. Filtered on IN_PROGRESS so a stage report that lands
+   * after the job finished (they're fire-and-forget) can't touch the finished row; returns
+   * whether it did anything. */
+  static async updateStage(subjectId: string, kind: AiGenerationKind, stage: string): Promise<boolean> {
+    const { count } = await prisma.aiGenerationJob.updateMany({
+      where: { subjectId, kind, status: "IN_PROGRESS" },
+      data: { stage },
+    });
+    return count > 0;
   }
 }

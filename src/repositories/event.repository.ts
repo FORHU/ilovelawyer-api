@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import CaseRepo from "./case.repository";
 
@@ -83,6 +84,7 @@ export default class EventRepo {
     caseId?: string;
     dateSource?: string;
     reminderLeadMinutes?: number;
+    googleDirtyAt?: Date;
   }) {
     const created = await prisma.event.create({ data: { organizationId, userId, ...data } });
     CaseRepo.touchSafe(data.caseId);
@@ -117,12 +119,42 @@ export default class EventRepo {
     });
   }
 
-  static async upsertByGoogleEventId(organizationId: string, userId: string, googleEventId: string, createData: any, updateData: any) {
-    return prisma.event.upsert({
-      where: { googleEventId_userId: { googleEventId, userId } },
-      create: { organizationId, userId, googleEventId, ...createData },
-      update: updateData,
+  /** No access filter — for GoogleCalendarSyncSvc, which always acts as the event's owner
+   * (event.userId), whoever triggered the change. */
+  static async findRawById(id: string) {
+    return prisma.event.findUnique({ where: { id } });
+  }
+
+  /** Records (or, with nulls, forgets) the owner's Google Calendar copy of this event, and
+   * Google's `updated` time for it — see Event.googleUpdatedAt. */
+  static async setGoogleRef(
+    id: string,
+    googleEventId: string | null,
+    googleLink: string | null,
+    googleUpdatedAt?: string | Date | null,
+  ) {
+    return prisma.event.updateMany({
+      where: { id },
+      data: {
+        googleEventId,
+        googleLink,
+        // Written by a push (or a forget): Google now matches the app, so nothing is pending.
+        ...(googleUpdatedAt !== undefined
+          ? { googleUpdatedAt: googleUpdatedAt ? new Date(googleUpdatedAt) : null, googleDirtyAt: null }
+          : {}),
+      },
     });
+  }
+
+  /** The owner's appointment whose Google copy is `googleEventId` (GoogleCalendarPullSvc). */
+  static async findByOwnerGoogleEventId(userId: string, googleEventId: string) {
+    return prisma.event.findFirst({ where: { userId, googleEventId } });
+  }
+
+  /** Writes a change that came from Google. Deliberately not through EventSvc, so it isn't
+   * pushed straight back to Google. */
+  static async applyGoogleChanges(id: string, data: Prisma.EventUpdateManyMutationInput) {
+    return prisma.event.updateMany({ where: { id }, data });
   }
 
   static async deleteById(id: string, organizationId: string, userId: string) {
@@ -131,18 +163,6 @@ export default class EventRepo {
 
   static async deleteByGoogleEventId(googleEventId: string, organizationId: string, userId: string) {
     return prisma.event.deleteMany({ where: { googleEventId, organizationId, userId } });
-  }
-
-  static async deleteManyByGoogleEventIds(organizationId: string, userId: string, googleEventIds: string[]) {
-    return prisma.event.deleteMany({
-      where: { organizationId, userId, googleEventId: { in: googleEventIds } },
-    });
-  }
-
-  static async findFirstLocal(organizationId: string, userId: string, title: string, dateTime: Date) {
-    return prisma.event.findFirst({
-      where: { organizationId, userId, googleEventId: null, title, dateTime },
-    });
   }
 
   /**

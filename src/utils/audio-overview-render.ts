@@ -65,7 +65,7 @@ async function synthesize(
   text: string,
   voiceId: string,
   engine: PollyEngine,
-  output: { OutputFormat: "mp3" } | { OutputFormat: "json"; SpeechMarkTypes: ["sentence"] },
+  output: { OutputFormat: "mp3" } | { OutputFormat: "json"; SpeechMarkTypes: ["sentence", "word"] },
 ): Promise<Buffer> {
   const client = getPollyClient();
   const result = await client.send(
@@ -113,27 +113,33 @@ export function parseSpeechMarks(raw: string): PollySpeechMark[] {
     .map((line) => JSON.parse(line) as PollySpeechMark);
 }
 
-/** Where one sentence of a turn starts in the merged audio, and which part of that turn's text
- * it is. `start`/`end` are string indices into the turn's `text` (`text.slice(start, end)`). */
-export interface SentenceTiming {
+/** Where one sentence or word of a turn starts in the merged audio, and which part of that turn's
+ * text it is. `start`/`end` are string indices into the turn's `text` (`text.slice(start, end)`). */
+export interface MarkTiming {
   time: number;
   start: number;
   end: number;
 }
 
-/** Turns one turn's sentence marks into SentenceTimings: Polly's per-request milliseconds become
+/** Turns one turn's marks of `type` into MarkTimings: Polly's per-request milliseconds become
  * seconds into the merged audio (offset by the turn's own start), and its UTF-8 byte offsets
  * become string indices — they differ as soon as the script has a curly quote or an em dash. */
-export function sentenceTimingsForTurn(text: string, marks: PollySpeechMark[], turnStart: number): SentenceTiming[] {
+export function markTimingsForTurn(
+  text: string,
+  marks: PollySpeechMark[],
+  type: "sentence" | "word",
+  turnStart: number,
+): MarkTiming[] {
   const bytes = Buffer.from(text, "utf8");
   const toIndex = (byteOffset: number) => bytes.subarray(0, byteOffset).toString("utf8").length;
   return marks
-    .filter((mark) => mark.type === "sentence")
+    .filter((mark) => mark.type === type)
     .map((mark) => ({ time: turnStart + mark.time / 1000, start: toIndex(mark.start), end: toIndex(mark.end) }));
 }
 
-/** Audio Overview turn — the audio, plus Polly's sentence speech marks for that same text and
- * voice. Speech marks are a separate request that returns only the marks, no audio. */
+/** Audio Overview turn — the audio, plus Polly's sentence and word speech marks for that same
+ * text and voice. Speech marks are a separate request that returns only the marks, no audio;
+ * both mark types come back from the one request, billed by the same characters. */
 async function synthesizeTurnWithMarks(
   text: string,
   voiceId: string,
@@ -141,7 +147,7 @@ async function synthesizeTurnWithMarks(
   const audio = await synthesize(text, voiceId, AUDIO_OVERVIEW_ENGINE, { OutputFormat: "mp3" });
   const raw = await synthesize(text, voiceId, AUDIO_OVERVIEW_ENGINE, {
     OutputFormat: "json",
-    SpeechMarkTypes: ["sentence"],
+    SpeechMarkTypes: ["sentence", "word"],
   });
   return { audio, marks: parseSpeechMarks(raw.toString("utf8")) };
 }
@@ -222,9 +228,12 @@ export interface MergedAudioOverview {
    * currently playing (see AudioOverviewTurns on the frontend). */
   turnTimings: number[];
   /** Per turn (index-aligned with `turns`), where each of its sentences starts in `buffer` —
-   * sentenceTimingsForTurn of that turn's speech marks, offset by its turnTimings entry. Lets
+   * markTimingsForTurn of that turn's sentence marks, offset by its turnTimings entry. Lets
    * the player highlight the sentence being spoken, not just the turn. */
-  sentenceTimings: SentenceTiming[][];
+  sentenceTimings: MarkTiming[][];
+  /** Same as sentenceTimings, per word — lets the player fill in the active turn word by word
+   * as it's spoken. */
+  wordTimings: MarkTiming[][];
 }
 
 /** Synthesizes every turn (bounded concurrency, but written to disk in turn order regardless
@@ -259,7 +268,10 @@ export async function mergeTurnsToMp3(
     );
     const turnPaths = turnResults.map((r) => r.turnPath);
     const turnTimings = turnStartTimes(turnResults.map((r) => r.duration));
-    const sentenceTimings = turnResults.map((r, i) => sentenceTimingsForTurn(turns[i]!.text, r.marks, turnTimings[i]!));
+    const sentenceTimings = turnResults.map((r, i) =>
+      markTimingsForTurn(turns[i]!.text, r.marks, "sentence", turnTimings[i]!),
+    );
+    const wordTimings = turnResults.map((r, i) => markTimingsForTurn(turns[i]!.text, r.marks, "word", turnTimings[i]!));
 
     const listPath = path.join(workDir, "list.txt");
     const listContent = turnPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
@@ -268,7 +280,7 @@ export async function mergeTurnsToMp3(
     const outputPath = path.join(workDir, "merged.mp3");
     await runFfmpegConcat(listPath, outputPath);
     const buffer = await readFile(outputPath);
-    return { buffer, turnTimings, sentenceTimings };
+    return { buffer, turnTimings, sentenceTimings, wordTimings };
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch((err) => {
       logger.warn("Audio Overview: failed to clean up temp dir", { err, workDir });

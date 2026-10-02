@@ -27,3 +27,16 @@ export const GOOGLE_USERNAME_MAX_ATTEMPTS = 5;
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 export const GOOGLE_PHOTO_SIZE_PX = 256;
 export const GOOGLE_PHOTO_FETCH_TIMEOUT_MS = 5_000;
+
+// How long a Google signup waits for the profile-photo copy before responding, so the new
+// user's first screen already shows it. Longer than this, it finishes in the background.
+export const GOOGLE_PHOTO_SIGNUP_WAIT_MS = 3_000;
+
+// Length of the Google Calendar copy of an appointment that has no end time.
+export const GOOGLE_CALENDAR_DEFAULT_EVENT_MINUTES = 60;
+
+// Two-way Google Calendar sync (GoogleCalendarSyncQueue / GoogleCalendarPullSvc): how often each
+// connected user's calendar is checked for changes, and the most pages (250 events each) one
+// check reads before continuing on the next poll.
+export const GOOGLE_CALENDAR_POLL_INTERVAL_MS = 2 * 60 * 1000;
+export const GOOGLE_CALENDAR_PULL_MAX_PAGES = 20;

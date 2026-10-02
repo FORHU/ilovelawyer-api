@@ -2,7 +2,7 @@ import prisma from "../lib/prisma";
 import { MessageRole, Prisma, AudioOverviewStatus, MessageReplyStatus } from "@prisma/client";
 import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
-import type { SentenceTiming } from "../utils/audio-overview-render";
+import type { MarkTiming } from "../utils/audio-overview-render";
 
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
@@ -79,6 +79,9 @@ export default class ChatRepo {
         timeline: true,
         mindMap: true,
         relatedCases: true,
+        // Present only once the background ranking has run (see CitationRankSvc); links with no
+        // entry render neutral.
+        citationRanking: true,
         audioOverview: true,
         reasoning: true,
         decisionRecords: true,
@@ -252,6 +255,32 @@ export default class ChatRepo {
     });
   }
 
+  /** Every assistant message of one turn: a single row for an ordinary reply, several siblings
+   * under one MessageGroup for a split multi-topic answer. */
+  static async findAssistantRepliesByParent(parentMessageId: string) {
+    return prisma.message.findMany({
+      where: { parentMessageId, role: "assistant" },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, content: true },
+    });
+  }
+
+  /** The user's own text for a turn, for ranking citations against what they asked. */
+  static async findUserMessageContent(messageId: string) {
+    const row = await prisma.message.findUnique({ where: { id: messageId }, select: { content: true } });
+    return row?.content ?? null;
+  }
+
+  /** Upsert, not create: a re-rank (calibration, a retried job) replaces the old result. */
+  static async saveCitationRanking(messageId: string, items: unknown[]) {
+    const data = items as unknown as Prisma.InputJsonValue;
+    return prisma.messageCitationRanking.upsert({
+      where: { messageId },
+      create: { messageId, items: data },
+      update: { items: data },
+    });
+  }
+
   static async findMessageById(messageId: string) {
     return prisma.message.findUnique({
       where: { id: messageId },
@@ -388,16 +417,18 @@ export default class ChatRepo {
       audioFileId?: string;
       audioStatus?: AudioOverviewStatus;
       turnTimings?: number[];
-      sentenceTimings?: SentenceTiming[][];
+      sentenceTimings?: MarkTiming[][];
+      wordTimings?: MarkTiming[][];
     },
   ) {
-    const { turnTimings, sentenceTimings, ...rest } = data;
+    const { turnTimings, sentenceTimings, wordTimings, ...rest } = data;
     return prisma.messageAudioOverview.update({
       where: { messageId },
       data: {
         ...rest,
         ...(turnTimings && { turnTimings: turnTimings as unknown as Prisma.InputJsonValue }),
         ...(sentenceTimings && { sentenceTimings: sentenceTimings as unknown as Prisma.InputJsonValue }),
+        ...(wordTimings && { wordTimings: wordTimings as unknown as Prisma.InputJsonValue }),
       },
     });
   }

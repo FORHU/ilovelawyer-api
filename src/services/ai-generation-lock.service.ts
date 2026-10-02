@@ -24,9 +24,9 @@ export default class AiGenerationLockSvc {
    */
   private static emit(
     subjectId: string,
-    event: "ai-job:started" | "ai-job:done" | "ai-job:failed",
+    event: "ai-job:started" | "ai-job:progress" | "ai-job:done" | "ai-job:failed",
     kind: AiGenerationKind,
-    row: { status: string; startedAt: Date; finishedAt: Date | null; error: string | null },
+    row: { status: string; startedAt: Date; finishedAt: Date | null; error: string | null; stage?: string | null },
   ): void {
     try {
       emitToCase(subjectId, event, {
@@ -36,6 +36,7 @@ export default class AiGenerationLockSvc {
         startedAt: row.startedAt.toISOString(),
         finishedAt: row.finishedAt ? row.finishedAt.toISOString() : null,
         error: row.error,
+        stage: row.stage ?? null,
       });
     } catch (err) {
       logger.warn("AiGenerationLockSvc: emitToCase failed, continuing without it", { err, event, subjectId, kind });
@@ -76,6 +77,24 @@ export default class AiGenerationLockSvc {
     }
     const row = await AiGenerationJobRepo.markInProgress(subjectId, kind);
     this.emit(subjectId, "ai-job:started", kind, row);
+  }
+
+  /**
+   * Records how far a running job has got (AiGenerationJob.stage) and pushes ai-job:progress, so
+   * the UI can show real steps instead of a bare spinner — persisted, not just pushed, because a
+   * page loaded mid-job reads the row and a stage can last a long time with nothing else
+   * happening. Best-effort: callers fire this without awaiting the outcome, and a failure is
+   * logged, never thrown, since a missed progress tick must not fail the generation itself. A
+   * report for a job that has already finished is dropped (see updateStage).
+   */
+  static async setStage(subjectId: string, kind: AiGenerationKind, stage: string): Promise<void> {
+    try {
+      if (!(await AiGenerationJobRepo.updateStage(subjectId, kind, stage))) return;
+      const row = await this.getStatus(subjectId, kind);
+      if (row?.status === "IN_PROGRESS") this.emit(subjectId, "ai-job:progress", kind, row);
+    } catch (err) {
+      logger.warn("AiGenerationLockSvc: setStage failed, continuing without it", { err, subjectId, kind, stage });
+    }
   }
 
   static async finish(

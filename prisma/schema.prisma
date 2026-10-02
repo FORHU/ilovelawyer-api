@@ -39,6 +39,9 @@ model User {
   googleId           String?   @unique
   googleAccessToken  String?
   googleRefreshToken String?
+  // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
+  // poll takes a fresh baseline. Reset on connect and disconnect.
+  googleCalendarSyncToken String?
   avatarId           String?
   tenantId           String?
   isEmailVerified    Boolean   @default(false)
@@ -254,6 +257,7 @@ model Message {
   timeline          MessageTimeline?
   mindMap           MessageMindMap?
   relatedCases      MessageRelatedCases?
+  citationRanking   MessageCitationRanking?
   audioOverview     MessageAudioOverview?
   reasoning         MessageReasoning?
   decisionRecords   MessageDecisionRecord?
@@ -373,6 +377,19 @@ model MessageRelatedCases {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }
 
+// Citation ranking for one assistant reply (src/utils/citation-rank.ts): per Library href, how
+// relevant the cited authority is to the USER's message. A side table, never written into
+// Message.content, so the saved answer stays immutable and a re-rank rewrites nothing. The
+// ranking runs after chat:done, so a message briefly has none and its links show neutral.
+model MessageCitationRanking {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  items     Json
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
 // Restored after the tenant-implementation merge dropped the model declaration while its
 // migration (20260825153126_) stayed applied — see ChatRepo's audio-overview methods.
 model MessageAudioOverview {
@@ -392,10 +409,13 @@ model MessageAudioOverview {
   // highlight/auto-scroll has nothing to sync to before then.
   turnTimings Json?
   // Per turn, where each of its sentences starts in the rendered audio (see
-  // sentenceTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
+  // markTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
   // { time, start, end }[][], index-aligned with `turns`; start/end are string indices into
   // that turn's text. Set alongside turnTimings; null on overviews rendered before it existed.
   sentenceTimings Json?
+  // Same shape as sentenceTimings, per word (Polly's word speech marks) — the player fills the
+  // active turn in word by word. Null on overviews rendered before it existed.
+  wordTimings Json?
   createdAt   DateTime             @default(now())
 
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -1152,6 +1172,15 @@ model Event {
   status               String    @default("pending")
   googleLink           String?   @map("google_link")
   googleEventId        String?   @map("google_event_id")
+  // Google's `updated` time for its copy of this event, as last written or applied by the sync
+  // (GoogleCalendarSyncSvc / GoogleCalendarPullSvc). A Google change newer than this is new;
+  // anything else is the sync's own write echoing back.
+  googleUpdatedAt      DateTime? @map("google_updated_at")
+  // When the app last changed something the Google copy shows (title, time, notes, status, ...)
+  // that hasn't reached Google yet; cleared by a successful push. The pull compares it with a
+  // Google edit's time so the newer edit wins — `updatedAt` can't, since bookkeeping writes
+  // (reminder sent, acknowledged) bump it too.
+  googleDirtyAt        DateTime? @map("google_dirty_at")
   reminderLeadMinutes  Int?      @map("reminder_lead_minutes")
   lastReminderSentAt   DateTime? @map("last_reminder_sent_at")
   lawyerAcknowledgedAt DateTime? @map("lawyer_acknowledged_at")
@@ -2403,6 +2432,10 @@ model AiGenerationJob {
   startedAt  DateTime           @default(now())
   finishedAt DateTime?
   error      String?
+  /// Where an IN_PROGRESS job has got to, for a progress indicator — null until the job reports
+  /// one (AiGenerationLockSvc.setStage). Only Chat-Wonder-backed chat turns report stages today
+  /// ("answering", then "extras"); every other kind leaves it null throughout.
+  stage      String?
 
   @@unique([subjectId, kind])
   @@index([subjectId])

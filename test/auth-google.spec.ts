@@ -20,7 +20,8 @@ import * as templateModule from "../src/utils/template";
 import HttpError from "../src/utils/http-error";
 import { isUniqueViolation, normalizeEmail } from "../src/utils/auth.utils";
 import { REFRESH_TOKEN_SECRET } from "../src/config";
-import { TERMS_VERSION } from "../src/constants";
+import { GOOGLE_PHOTO_SIGNUP_WAIT_MS, TERMS_VERSION } from "../src/constants";
+import AvatarSvc from "../src/services/avatar.service";
 import prisma from "../src/lib/prisma";
 
 // Captured before any test monkeypatches AuthRepo.createGoogleUser.
@@ -96,7 +97,7 @@ describe("AuthSvc Google sign-in", () => {
     renderTemplate: (templateModule as any).renderTemplate,
   };
 
-  let google: { googleId: string; email: string; name?: string; isEmailVerified: boolean };
+  let google: { googleId: string; email: string; name?: string; picture?: string; isEmailVerified: boolean };
   let createdGoogleUsers: any[];
   let deletedPending: string[];
   let sessions: { userId: string; refreshToken: string }[];
@@ -151,6 +152,41 @@ describe("AuthSvc Google sign-in", () => {
       expect(sentEmails).to.deep.equal(["signup-pending"]);
       expect(sessions).to.have.length(1);
       expect(result.user).to.deep.equal({ id: "new-user" });
+    });
+
+    it("waits for a quick Google photo copy so the response already carries the avatar", async () => {
+      const realImport = (AvatarSvc as any).importGooglePhoto;
+      const order: string[] = [];
+      (AvatarSvc as any).importGooglePhoto = async (_userId: string, picture: string) => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push(`imported ${picture}`);
+      };
+      (AuthRepo as any).findById = async (id: string) => {
+        order.push("read user");
+        return { id };
+      };
+      try {
+        google.picture = "https://lh3.googleusercontent.com/a/x";
+        await AuthSvc.loginWithGoogle("token", true, null, true);
+        expect(order).to.deep.equal(["imported https://lh3.googleusercontent.com/a/x", "read user"]);
+      } finally {
+        (AvatarSvc as any).importGooglePhoto = realImport;
+      }
+    });
+
+    it("doesn't let a slow Google photo copy hold sign-in past the wait limit", async function () {
+      this.timeout(GOOGLE_PHOTO_SIGNUP_WAIT_MS + 2000);
+      const realImport = (AvatarSvc as any).importGooglePhoto;
+      (AvatarSvc as any).importGooglePhoto = () => new Promise(() => {});
+      try {
+        const started = Date.now();
+        const result = await AuthSvc.loginWithGoogle("token", true, null, true);
+        expect(Date.now() - started).to.be.lessThan(GOOGLE_PHOTO_SIGNUP_WAIT_MS + 1000);
+        expect(sessions).to.have.length(1);
+        expect(result.user).to.deep.equal({ id: "new-user" });
+      } finally {
+        (AvatarSvc as any).importGooglePhoto = realImport;
+      }
     });
 
     it("refuses to create an account without Terms acceptance (428) and creates nothing", async () => {

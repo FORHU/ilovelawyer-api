@@ -33,14 +33,24 @@ describe("AiGenerationLockSvc socket events", () => {
     create: AiGenerationJobRepo.create,
     markInProgress: AiGenerationJobRepo.markInProgress,
     updateStatus: AiGenerationJobRepo.updateStatus,
+    updateStage: AiGenerationJobRepo.updateStage,
   };
 
   let emitted: Emitted[];
-  let existingJob: { status: string; startedAt: Date } | null;
+  let existingJob: { status: string; startedAt: Date; finishedAt?: Date | null; error?: string | null; stage?: string | null } | null;
+  let stageWrites: string[];
+  let stageMatches: boolean;
 
   beforeEach(() => {
     emitted = [];
     existingJob = null;
+    stageWrites = [];
+    stageMatches = true;
+    AiGenerationJobRepo.updateStage = (async (_subjectId: string, _kind: string, stage: string) => {
+      stageWrites.push(stage);
+      if (stageMatches && existingJob) existingJob = { ...existingJob, stage };
+      return stageMatches;
+    }) as any;
 
     (socketLib as any).emitToCase = (caseId: string, event: string, payload: any) => {
       emitted.push({ caseId, event, payload });
@@ -78,6 +88,7 @@ describe("AiGenerationLockSvc socket events", () => {
     AiGenerationJobRepo.create = originals.create;
     AiGenerationJobRepo.markInProgress = originals.markInProgress;
     AiGenerationJobRepo.updateStatus = originals.updateStatus;
+    AiGenerationJobRepo.updateStage = originals.updateStage;
   });
 
   it("emits ai-job:started to the case room on a fresh claim (create succeeds)", async () => {
@@ -197,5 +208,46 @@ describe("AiGenerationLockSvc socket events", () => {
       expect(emitted.map((e) => e.event)).to.deep.equal(["ai-job:started", "ai-job:done"]);
       expect(emitted.every((e) => e.payload.kind === kind)).to.equal(true);
     }
+  });
+
+  describe("setStage", () => {
+    const running = () => ({ status: "IN_PROGRESS", startedAt: new Date("2026-01-01T00:00:00.000Z"), finishedAt: null, error: null, stage: null });
+
+    it("persists the stage and emits ai-job:progress carrying it", async () => {
+      existingJob = running();
+
+      await AiGenerationLockSvc.setStage(CASE_ID, "audioOverviewScript", "extras");
+
+      expect(stageWrites).to.deep.equal(["extras"]);
+      expect(emitted).to.have.length(1);
+      expect(emitted[0].event).to.equal("ai-job:progress");
+      expect(emitted[0].payload).to.include({ caseId: CASE_ID, kind: "audioOverviewScript", status: "IN_PROGRESS", stage: "extras" });
+    });
+
+    it("emits nothing when the job has already finished (the write matched no IN_PROGRESS row)", async () => {
+      existingJob = { ...running(), status: "DONE" };
+      stageMatches = false;
+
+      await AiGenerationLockSvc.setStage(CASE_ID, "audioOverviewScript", "extras");
+
+      expect(emitted).to.have.length(0);
+    });
+
+    it("never throws, even when the database write fails", async () => {
+      AiGenerationJobRepo.updateStage = (async () => {
+        throw new Error("connection lost");
+      }) as any;
+
+      await AiGenerationLockSvc.setStage(CASE_ID, "audioOverviewScript", "answering");
+
+      expect(emitted).to.have.length(0);
+    });
+
+    it("includes stage: null on started/done events, so clients can clear a stale step", async () => {
+      await AiGenerationLockSvc.begin(CASE_ID, KIND);
+      await AiGenerationLockSvc.finish(CASE_ID, KIND, "DONE");
+
+      expect(emitted.map((e) => e.payload.stage)).to.deep.equal([null, null]);
+    });
   });
 });

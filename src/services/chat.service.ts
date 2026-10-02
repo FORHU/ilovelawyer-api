@@ -7,7 +7,7 @@ import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
-import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
+import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding, ChatWonderStage } from "../utils/chatWonder";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -22,12 +22,13 @@ import type { ChatTitleContext } from "../legal/shared/chat-title-context";
 import { buildChatRetitlePrompt } from "../legal/shared/chat-retitle.prompt";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
-import type { SentenceTiming } from "../utils/audio-overview-render";
+import type { MarkTiming } from "../utils/audio-overview-render";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
 import { audioOverviewFilename } from "../utils/audio-overview-filename";
 import { checkAudioOverviewTurns, isAudioOverviewJevEnabled } from "../utils/audio-overview-jev";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
 import GroundingVerifierSvc from "./grounding-verifier.service";
+import CitationRankSvc from "./citation-rank.service";
 import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
 import NotificationSvc from "./notification.service";
 import ParticipantRepo from "../repositories/participant.repository";
@@ -951,6 +952,14 @@ export default class ChatSvc {
               return undefined;
             })
           : undefined;
+        // A locked generation (audio overview script, mind map) records its stage on the lock row,
+        // which is what turns the panel's spinner into real steps. Fire-and-forget: setStage
+        // never throws, and a late report for a finished job is dropped there.
+        const lockedCaseId = generationKind ? effectiveCaseId : undefined;
+        const onStage =
+          generationKind && lockedCaseId
+            ? (stage: ChatWonderStage) => void AiGenerationLockSvc.setStage(lockedCaseId, generationKind, stage)
+            : undefined;
         const runStream = () =>
           ChatSvc.streamWithSessionRetry(
             consultationId,
@@ -972,7 +981,7 @@ export default class ChatSvc {
             },
             replyLanguage,
             // Any turn that asks for a map, case or not: chat-wonder builds one only on this flag.
-            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined, caseDamages },
+            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined, caseDamages, onStage },
           );
         const result =
           generationKind && effectiveCaseId
@@ -1162,6 +1171,20 @@ export default class ChatSvc {
           if (counts.checked) emitEvent("chat:grounding", { assistantMessageId: verifiedMessageId, ...counts });
         })
         .catch((err) => logger.warn("Grounding verifier: unexpected rejection", { err, consultationId, messageId: parentMessageId }));
+    }
+
+    // Citation ranking (src/utils/citation-rank.ts). Also after chat:done and also fire-and-forget:
+    // the answer is already saved, and this only attaches a relevance tier per cited authority, read
+    // from the user's message and never from the answer. Unlike the grounding verifier it is not
+    // gated on a case id, and it runs on the cache path too because it reads the saved reply.
+    // CitationRankSvc.rankReply never throws; a failure leaves every link neutral.
+    if (assistantMessage && CitationRankSvc.enabled) {
+      const rankedMessageId = assistantMessage.id;
+      void CitationRankSvc.rankReply({ parentMessageId, tenantCode })
+        .then((r) => {
+          if (r.ranked) emitEvent("chat:citation-ranking", { assistantMessageId: rankedMessageId, ranked: r.ranked });
+        })
+        .catch((err) => logger.warn("Citation ranking: unexpected rejection", { err, consultationId, messageId: parentMessageId }));
     }
 
     // Only now enqueue the secondary/background work — case-graph enrichment (promoting the
@@ -1480,14 +1503,20 @@ export default class ChatSvc {
     signal?: AbortSignal,
     onAnswerComplete?: () => void,
     replyLanguage?: string,
-    extras?: { mindMapRequested: boolean; mindMapContext?: string; caseDamages?: CaseDamagesChatContext },
+    extras?: {
+      mindMapRequested: boolean;
+      mindMapContext?: string;
+      caseDamages?: CaseDamagesChatContext;
+      onStage?: (stage: ChatWonderStage) => void;
+    },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
     const opts =
-      extras?.mindMapRequested || extras?.caseDamages
+      extras?.mindMapRequested || extras?.caseDamages || extras?.onStage
         ? {
             ...(extras.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
             ...(extras.caseDamages ? { caseDamages: extras.caseDamages } : {}),
+            ...(extras.onStage ? { onStage: extras.onStage } : {}),
           }
         : undefined;
     try {
@@ -1605,7 +1634,8 @@ export default class ChatSvc {
           fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }),
         },
         turnTimings: (row.turnTimings as unknown as number[] | null) ?? null,
-        sentenceTimings: (row.sentenceTimings as unknown as SentenceTiming[][] | null) ?? null,
+        sentenceTimings: (row.sentenceTimings as unknown as MarkTiming[][] | null) ?? null,
+        wordTimings: (row.wordTimings as unknown as MarkTiming[][] | null) ?? null,
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };
