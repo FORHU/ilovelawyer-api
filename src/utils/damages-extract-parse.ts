@@ -49,6 +49,17 @@ const QUOTE_JOINER = " … ";
 
 /** One entry per kind and title, so "Backwages" proposed twice — or already on the case — is one
  * entry. Used to dedupe a batch and to skip entries the case already has. */
+// Civil and employment heads a UK criminal court never orders. The prompt already says so; this is
+// the check on its answer (and on suggestions saved before the prompt did). Matched on the title
+// and description, so "Compensation order" stays and "Compensatory award" goes.
+const UK_CRIMINAL_EXCLUDED_HEAD_RE =
+  /\b(?:unfair(?:ly)?\s+dismiss\w*|wrongful\s+dismissal|basic\s+award|compensatory\s+award|reinstat\w*|re-?engage\w*|notice\s+pay|holiday\s+pay|injury\s+to\s+feelings|redundancy|backwages|unpaid\s+(?:wages|overtime)|overtime|deductions?\s+from\s+wages|breach\s+of\s+contract|general\s+damages|special\s+damages|aggravated\s+damages|exemplary\s+damages|loss\s+of\s+earnings|declarations?)\b/i;
+
+/** A head that has no place on a UK criminal case (see UK_CRIMINAL_EXCLUDED_HEAD_RE). */
+export function isExcludedOnUkCriminalCase(head: { title: string | null; description?: string | null }): boolean {
+  return UK_CRIMINAL_EXCLUDED_HEAD_RE.test(`${head.title ?? ""} ${head.description ?? ""}`);
+}
+
 export function damageHeadKey(kind: string, title: string | null | undefined): string {
   return `${kind}:${normalizeForMatch(title ?? "")}`;
 }

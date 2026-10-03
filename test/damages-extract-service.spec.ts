@@ -22,6 +22,8 @@ import CaseFindingRepo from "../src/repositories/case-finding.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import CaseAccess from "../src/utils/case-access";
 import HttpError from "../src/utils/http-error";
+import AiGenerationQueue from "../src/queues/ai-generation.queue";
+import { isCriminalCase } from "../src/utils/case-kind";
 
 const PAYSLIP = "PAYSLIP August 2025. Basic monthly salary: P27,000.00. Net pay: P24,310.00";
 const COMPLAINT =
@@ -407,15 +409,100 @@ describe("DamagesExtractSvc", () => {
     expect(scheduled).to.equal(1);
   });
 
-  it("propose() re-reads every document, and refuses while a pass is running", async () => {
+  it("propose() claims the job before queueing it, re-reads every document, and refuses while a pass is running", async () => {
     let cleared = 0;
+    const began: string[] = [];
+    const queued: any[] = [];
     patch(DocumentRepo, "clearDamagesExtracted", async () => void cleared++);
+    patch(AiGenerationLockSvc, "begin", async (_c: string, kind: string) => void began.push(kind));
+    patch(AiGenerationQueue, "enqueue", (job: any) => void queued.push(job));
     await DamagesExtractSvc.propose("case-1", "user-1");
-    expect([cleared, scheduled]).to.deep.equal([1, 1]);
+    // The lock is held when the 202 goes out, so the panel sees this run as IN_PROGRESS.
+    expect(began).to.deep.equal(["damagesExtract"]);
+    expect(queued.map((j) => j.kind)).to.deep.equal(["damagesExtractPropose"]);
+    expect(cleared).to.equal(1);
 
-    patch(AiGenerationLockSvc, "getStatus", async () => ({ status: "IN_PROGRESS", startedAt: new Date() }));
+    patch(AiGenerationLockSvc, "begin", async () => {
+      throw new HttpError("damagesExtract generation is already in progress", 409);
+    });
     const err = await DamagesExtractSvc.propose("case-1", "user-1").catch((e) => e);
     expect(err.statusCode).to.equal(409);
-    expect(cleared).to.equal(1);
+    expect([cleared, queued.length]).to.deep.equal([1, 1]);
+  });
+
+  it("runQueuedPropose() reads a batch under the claimed lock and queues the rest", async () => {
+    let begun = 0;
+    patch(AiGenerationLockSvc, "begin", async () => void begun++);
+    pending = Array.from({ length: 9 }, (_, i) => ({ id: i === 0 ? "doc-pay" : `d${i}`, name: `D${i}` }));
+    reply = "[DAMAGES][][/DAMAGES]";
+    await DamagesExtractSvc.runQueuedPropose("case-1", "user-1");
+    expect(begun).to.equal(0);
+    expect(marked[0]).to.have.length(8);
+    expect(scheduled).to.equal(1);
+  });
+
+  // R v Doyle QA: on a murder prosecution the pass proposed unfair-dismissal awards and
+  // reinstatement out of the defendant's own ACAS wage dispute, which sits in the evidence.
+  describe("on a UK criminal case", () => {
+    const ACAS = "ACAS early conciliation: Mr Doyle claims unpaid overtime and holiday pay of £4,180 from Kestrel Motors.";
+    const MG3 = "The Crown will seek a compensation order of £2,500 for the funeral expenses.";
+    let deleted: string[];
+
+    beforeEach(() => {
+      deleted = [];
+      patch(CaseAccess, "resolveTenantCode", async () => "UK");
+      patch(CaseRepo, "findPromptHeader", async () => ({ caseName: "R v Ryan James DOYLE", actionType: null, jurisdiction: "Reading Crown Court" }));
+      pending = [
+        { id: "doc-acas", name: "ACAS.pdf" },
+        { id: "doc-mg3", name: "MG3.pdf" },
+      ];
+      patch(DocumentChunkRepo, "findFullTextsByDocuments", async () => new Map([["doc-acas", ACAS], ["doc-mg3", MG3]]));
+      patch(DamageClaimRepo, "delete", async (id: string) => {
+        deleted.push(id);
+        existing = existing.filter((e) => e.id !== id);
+        return true;
+      });
+      reply = `[DAMAGES]${JSON.stringify([
+        { kind: "DAMAGE", title: "Basic award", amount: 4180, quotes: [{ documentId: "D1", quote: "unpaid overtime and holiday pay of £4,180" }] },
+        { kind: "REMEDY", title: "Reinstatement", amount: null, quotes: [{ documentId: "D1", quote: "claims unpaid overtime and holiday pay" }] },
+        { kind: "DAMAGE", title: "Compensation order", amount: 2500, quotes: [{ documentId: "D2", quote: "a compensation order of £2,500" }] },
+      ])}[/DAMAGES]`;
+    });
+
+    it("asks only for criminal-court orders and keeps only those", async () => {
+      await DamagesExtractSvc.runQueued("case-1", "user-1");
+      expect(payloads[0].user_input).to.contain("This is a criminal prosecution");
+      expect(payloads[0].user_input).to.not.contain("Usual heads by claim: breach of contract");
+      expect(created.map((c) => c.title)).to.deep.equal(["Compensation order"]);
+    });
+
+    it("withdraws waiting employment suggestions, but never an accepted entry or the lawyer's own", async () => {
+      existing = [
+        { id: "ai-waiting", kind: "DAMAGE", title: "Compensatory award", source: "AI", accepted: false, amount: 12000 },
+        { id: "ai-reinstate", kind: "REMEDY", title: "Reinstatement", source: "AI", accepted: false, amount: null },
+        { id: "ai-accepted", kind: "DAMAGE", title: "Unpaid overtime and holiday pay", source: "AI", accepted: true, amount: 4180 },
+        { id: "lawyer", kind: "DAMAGE", title: "Holiday pay", source: "USER", accepted: true, amount: 300 },
+      ];
+      reply = "[DAMAGES][][/DAMAGES]";
+      await DamagesExtractSvc.runQueued("case-1", "user-1");
+      expect(deleted).to.deep.equal(["ai-waiting", "ai-reinstate"]);
+      expect(audits[0].payload.withdrawnIds).to.deep.equal(["ai-waiting", "ai-reinstate"]);
+    });
+  });
+});
+
+describe("isCriminalCase", () => {
+  it("reads the action type, the prosecution's case name, or a criminal venue", () => {
+    expect(isCriminalCase({ caseName: "Doyle", actionType: "Criminal Proceeding" })).to.equal(true);
+    expect(isCriminalCase({ caseName: "R v Ryan James DOYLE" })).to.equal(true);
+    expect(isCriminalCase({ caseName: "Regina v. Smith" })).to.equal(true);
+    expect(isCriminalCase({ caseName: "People of the Philippines vs. Reyes" })).to.equal(true);
+    expect(isCriminalCase({ caseName: "Doyle", jurisdiction: "Reading Crown Court" })).to.equal(true);
+  });
+
+  it("leaves civil and employment cases alone", () => {
+    expect(isCriminalCase({ caseName: "Mullan v Brightwell Logistics Ltd", jurisdiction: "Employment Tribunal" })).to.equal(false);
+    expect(isCriminalCase({ caseName: "Cruz v. Acme", actionType: "Labor Dispute" })).to.equal(false);
+    expect(isCriminalCase({ caseName: "Rogers v Rex Builders", jurisdiction: "Sheriff Court" })).to.equal(false);
   });
 });
