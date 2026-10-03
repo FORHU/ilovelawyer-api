@@ -33,6 +33,7 @@ export type QueuedAiGenerationKind =
   | "witnessScoring"
   | "witnessExtract"
   | "damagesExtract"
+  | "damagesExtractPropose"
   | "claimExtract"
   | "citationGrounds"
   | "adverseSweep"
@@ -85,9 +86,11 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // No controller in front of this one — it's enqueued by runCasePostExtraction and claims its
   // own lock (see WitnessExtractSvc.runQueued), same as casePostExtraction.
   witnessExtract: (job) => WitnessExtractSvc.runQueued(job.caseId, job.userId),
-  // Same shape as witnessExtract: enqueued by runCasePostExtraction or the damages panel's
-  // "Propose from documents" (DamagesExtractSvc.propose), and claims its own lock.
+  // Same shape as witnessExtract: enqueued by runCasePostExtraction (and for a Propose's further
+  // batches), and claims its own lock.
   damagesExtract: (job) => DamagesExtractSvc.runQueued(job.caseId, job.userId),
+  // The damages panel's "Propose from documents": DamagesExtractSvc.propose already claimed the lock.
+  damagesExtractPropose: (job) => DamagesExtractSvc.runQueuedPropose(job.caseId, job.userId),
   claimExtract: (job) => ClaimExtractSvc.runQueued(job.caseId, job.userId),
   citationGrounds: (job) => CitationGroundSvc.runQueuedMap(job.caseId, job.userId),
   adverseSweep: (job) => AdverseSweepSvc.runQueued(job.caseId, job.userId),

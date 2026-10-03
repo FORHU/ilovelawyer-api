@@ -8,13 +8,13 @@ import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseGraphSvc from "./case-graph.service";
 import { getDamagesExtractPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
-import { damageHeadKey, extractDamageHeads, parseDamageEstimates } from "../utils/damages-extract-parse";
+import { damageHeadKey, extractDamageHeads, isExcludedOnUkCriminalCase, parseDamageEstimates } from "../utils/damages-extract-parse";
+import { isCriminalCase } from "../utils/case-kind";
 import { quotedFigureOf, vetDamageHeads } from "../utils/damages-jev";
 import { buildDamagesCorrectionPrompt, buildDamagesEstimatePrompt } from "../constants/damages-extract.constants";
 import type { TenantCode } from "../types/tenant-code";
 import type { ExtractedDamageHead } from "../utils/damages-extract-parse";
 import type { CaseDoc } from "../utils/case-document-handles";
-import { isJobStale } from "../utils/ai-generation-lock.utils";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
@@ -57,16 +57,30 @@ export default class DamagesExtractSvc {
    * POST /:caseId/damages/propose — reads every document of the case again, for cases whose
    * documents were read before this pass existed or whose entries the lawyer wants re-proposed.
    * Entries already on the case are never duplicated. 409 while a pass is running.
+   *
+   * Claims the job's lock here, before queueing — the same beginQueued/runQueued split as the case
+   * mind map's Regenerate — so the 202 carries the new IN_PROGRESS job. It used to return the
+   * previous, finished job, so the panel never saw this run start and the suggestions only
+   * appeared after a reload (R v Doyle QA).
    */
-  static async propose(caseId: string, userId: string) {
+  static async propose(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
-    const current = await AiGenerationLockSvc.getStatus(caseId, "damagesExtract");
-    if (current?.status === "IN_PROGRESS" && !isJobStale(current.startedAt)) {
-      throw new HttpError("damagesExtract generation is already in progress", 409);
+    await AiGenerationLockSvc.begin(caseId, "damagesExtract");
+    try {
+      await DocumentRepo.clearDamagesExtracted(caseId);
+      const AiGenerationQueue = (await import("../queues/ai-generation.queue")).default;
+      AiGenerationQueue.enqueue({ kind: "damagesExtractPropose", caseId, userId });
+    } catch (err) {
+      await AiGenerationLockSvc.finish(caseId, "damagesExtract", "FAILED", err instanceof Error ? err.message : String(err));
+      throw err;
     }
-    await DocumentRepo.clearDamagesExtracted(caseId);
-    DamagesExtractSvc.schedule(caseId, userId);
-    return current;
+  }
+
+  /** Run by AiGenerationQueue's worker after propose claimed the lock: the first batch under that
+   * lock, then any further batches as ordinary damagesExtract jobs. */
+  static async runQueuedPropose(caseId: string, userId: string): Promise<void> {
+    const hasMore = await AiGenerationLockSvc.finishWith(caseId, "damagesExtract", () => DamagesExtractSvc.extractBatch(caseId, userId));
+    if (hasMore) DamagesExtractSvc.schedule(caseId, userId);
   }
 
   /** Run by AiGenerationQueue's worker. */
@@ -101,6 +115,12 @@ export default class DamagesExtractSvc {
     const header = await CaseRepo.findPromptHeader(caseId);
     const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(batch.map((d) => d.id));
     const perDocChars = Math.max(1000, Math.min(MAX_DOC_CHARS, Math.floor(MAX_TOTAL_DOC_CHARS / batch.length)));
+    const criminal = isCriminalCase(header ?? {});
+    const ukCriminal = tenantCode === "UK" && criminal;
+    // Suggestions still waiting for the lawyer that a UK criminal case can't carry — proposed before
+    // the prompt knew the case type (R v Doyle's unfair-dismissal awards) — are the AI's own and are
+    // withdrawn. An accepted entry, or one the lawyer wrote, is never touched.
+    const withdrawn = ukCriminal ? await DamagesExtractSvc.withdrawExcludedSuggestions(caseId) : [];
     const existing = await DamageClaimRepo.list(caseId);
     // The model sees each document under a short handle (D1, D2, …) — long ids come back garbled
     // often enough to drop entries; the parser resolves the handle back to the real id.
@@ -112,6 +132,7 @@ export default class DamagesExtractSvc {
       actionType: header?.actionType,
       jurisdiction: header?.jurisdiction,
       ukJurisdiction: header?.ukJurisdiction,
+      criminal,
       existingHeads: existing.map((h) => `${h.kind} — ${h.title}${h.amount != null ? `: ${h.amount}` : ""}`),
       documents: promptDocs,
     });
@@ -124,7 +145,9 @@ export default class DamagesExtractSvc {
     if (proposed === undefined) throw new HttpError("Chat Wonder returned no [DAMAGES] block", 502);
     // Jev reviews every proposal before anything is saved; a rejected figure goes back to Chat
     // Wonder once for the right one (or is dropped), so nothing questionable reaches the panel.
-    const found = await DamagesExtractSvc.vetWithJev(caseId, proposed, { tenantCode, fullTexts, docs, promptDocs });
+    const vetted = await DamagesExtractSvc.vetWithJev(caseId, proposed, { tenantCode, fullTexts, docs, promptDocs });
+    // The prompt tells the model a criminal court awards no civil heads; this holds it to that.
+    const found = ukCriminal ? vetted.filter((h) => !isExcludedOnUkCriminalCase(h)) : vetted;
 
     const known = new Map(existing.map((h) => [damageHeadKey(h.kind, h.title), h]));
     // Every AI damage carries a figure: one still without an amount — new from this read, or a
@@ -202,19 +225,27 @@ export default class DamagesExtractSvc {
     }
     await DocumentRepo.markDamagesExtracted(batch.map((d) => d.id));
 
-    if (created.length > 0 || filled.length > 0) {
+    if (created.length > 0 || filled.length > 0 || withdrawn.length > 0) {
       await OrganizationRepo.writeAudit({
         caseId,
         actorId: userId,
         action: "damage.extract",
-        payload: { ids: created.map((r) => r.id), filledIds: filled.map((r) => r.id), documentIds: batch.map((d) => d.id) },
+        payload: {
+          ids: created.map((r) => r.id),
+          filledIds: filled.map((r) => r.id),
+          withdrawnIds: withdrawn,
+          documentIds: batch.map((d) => d.id),
+        },
       });
     }
 
     logger.info("Damages extract: batch done", {
       caseId,
       docCount: batch.length,
+      criminal,
       proposed: proposed.length,
+      outOfScope: vetted.length - found.length,
+      withdrawn: withdrawn.length,
       kept: found.length,
       created: created.length,
       filled: filled.length,
@@ -224,6 +255,15 @@ export default class DamagesExtractSvc {
       remaining: pending.length - batch.length,
     });
     return pending.length > batch.length;
+  }
+
+  /** Deletes the case's waiting AI suggestions (source AI, not accepted) that a UK criminal case
+   * can't carry (isExcludedOnUkCriminalCase). Returns their ids. */
+  private static async withdrawExcludedSuggestions(caseId: string): Promise<string[]> {
+    const waiting = (await DamageClaimRepo.list(caseId)).filter((h) => h.source === "AI" && !h.accepted && isExcludedOnUkCriminalCase(h));
+    for (const h of waiting) await DamageClaimRepo.delete(h.id, caseId);
+    if (waiting.length) logger.info("Damages extract: withdrew suggestions a criminal case can't carry", { caseId, count: waiting.length });
+    return waiting.map((h) => h.id);
   }
 
   /** One call for the estimates of every damage in `heads` (see buildDamagesEstimatePrompt), by

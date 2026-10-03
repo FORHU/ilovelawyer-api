@@ -4,6 +4,9 @@ export interface DamagesExtractPromptData {
   jurisdiction?: string | null;
   /** UK tenant only — see RedTeamPromptData.ukJurisdiction. */
   ukJurisdiction?: string | null;
+  /** A criminal prosecution (isCriminalCase): the tenant openings list the orders a criminal court
+   * makes instead of civil and employment heads. */
+  criminal?: boolean;
   /** Entries already on the case ("DAMAGE — Backwages: 486000", "REMEDY — Reinstatement"), so the
    * model doesn't propose them again. */
   existingHeads: string[];
@@ -44,6 +47,7 @@ List each damage or remedy this case asks for or could ask for:
 - a DAMAGE is money the client is owed (e.g. "P200,000.00 as moral damages", notice pay, an award for injury to feelings);
 - a REMEDY is any other order the case asks for (e.g. reinstatement, an apology, a declaration), usually with no amount.
 Include the heads each claim in the documents brings, even when no figure is given for them yet: quote the line that makes the claim, leave "amount" and "calculation" null, and give an "estimate". Use the list of usual heads above to know what a claim brings, but only for claims the documents actually make.
+Only claims made in THIS case's proceedings count. A document may describe another dispute — a party's own wage complaint against an employer, a separate civil claim, an earlier tribunal case — as background or evidence; that dispute's sums and remedies are not entries for this case.
 ${ENTRY_RULES}
 One entry per damage or remedy. Do not repeat entries already in the list.
 If the documents make no claim, return an empty array.
@@ -57,7 +61,12 @@ export function buildDamagesExtractPrompt(data: DamagesExtractPromptData): strin
     data.actionType ? ` (${data.actionType})` : ""
   }${data.jurisdiction ? `, venue: ${data.jurisdiction}` : ""}.
 Damages here include actual or compensatory damages (backwages, unpaid wages), moral and exemplary damages, attorney's fees, and statutory benefits such as 13th month pay, service incentive leave and separation pay. Remedies include reinstatement.
-Usual heads by claim: illegal dismissal — backwages, reinstatement (or separation pay in lieu of it), and attorney's fees; unpaid wages or benefits — the unpaid amounts (wage differentials, 13th month pay, service incentive leave pay); a dismissal done in bad faith — moral and exemplary damages.
+Usual heads by claim: illegal dismissal — backwages, reinstatement (or separation pay in lieu of it), and attorney's fees; unpaid wages or benefits — the unpaid amounts (wage differentials, 13th month pay, service incentive leave pay); a dismissal done in bad faith — moral and exemplary damages.${
+    // LEGAL_REVIEW_REQUIRED: working list of the civil liability a PH criminal judgment awards.
+    data.criminal
+      ? "\nThis is a criminal case: list only the civil liability arising from the offence that the judgment would award — civil indemnity, moral, exemplary and temperate damages, actual damages proven (e.g. funeral expenses), and restitution — not labor or other civil claims a document mentions."
+      : ""
+  }
 
 ${renderDamagesExtractBody(data)}`;
 }
