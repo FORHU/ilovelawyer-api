@@ -145,6 +145,11 @@ export default class AuthRepo {
     return bustUsersList(await prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } }));
   }
 
+  /** No bustUsersList: onboardingCompleted isn't a column AdminSvc.listUsers shows. */
+  static async setOnboardingCompleted(userId: string) {
+    return prisma.user.update({ where: { id: userId }, data: { onboardingCompleted: true } });
+  }
+
   static async findByUsername(username: string) {
     return prisma.user.findUnique({ where: { username } });
   }
