@@ -56,8 +56,19 @@ describe("extractCaseFindings", () => {
     ]);
   });
 
-  it("caps detail at 160 characters", () => {
-    const [issue] = extractCaseFindings(reply([{ label: "Issue", detail: "x".repeat(300) }]))!;
-    expect(issue.detail).to.have.length(160);
+  it("caps detail at 300 characters, marked with an ellipsis", () => {
+    const [issue] = extractCaseFindings(reply([{ label: "Issue", detail: "x".repeat(500) }]))!;
+    expect(issue.detail).to.have.length(300);
+    expect(issue.detail!.endsWith("…")).to.equal(true);
+  });
+
+  it("keeps a label up to 400 characters, and shortens a longer one at a word boundary", () => {
+    const long = "The seller supplied goods that were not of satisfactory quality and unsanded or unpainted ".repeat(6);
+    const [issue] = extractCaseFindings(reply([{ label: long }]))!;
+    expect(issue.label.length).to.be.at.most(400);
+    expect(issue.label.endsWith("…")).to.equal(true);
+    expect(issue.label).to.not.match(/\s…$/);
+    const [short] = extractCaseFindings(reply([{ label: "x".repeat(200) }]))!;
+    expect(short.label).to.have.length(200);
   });
 });

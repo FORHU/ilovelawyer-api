@@ -42,6 +42,12 @@ describe("extractLibraryLinks", () => {
       ["u2", "JURISPRUDENCE"],
     ]);
   });
+  it("still finds a link that pinpoints a section", () => {
+    const text = "[CRA 2015, s 49](/homepage/library/laws/u1?category=uk-legislation&section=49)";
+    expect(extractLibraryLinks(text, "UK").map((l) => [l.routeId, l.category, l.href])).to.deep.equal([
+      ["u1", "REPUBLIC_ACT", "/homepage/library/laws/u1?category=uk-legislation&section=49"],
+    ]);
+  });
   it("keeps a label that contains brackets, such as a neutral citation", () => {
     const [l] = extractLibraryLinks("[R v Misra [2004] EWCA Crim 2375 Jurisprudence](/homepage/library/laws/u2?category=uk-case-law)", "UK");
     expect(l.label).to.equal("R v Misra [2004] EWCA Crim 2375");

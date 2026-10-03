@@ -120,8 +120,12 @@ export default class LawCtrl {
     // this derived legislation.gov.uk path. Every other document (PH jurisprudence, PH
     // republic-acts, UK case law) already has its direct PDF url in pdfUrl.
     const ukLegislationParts = legislationUrlParts(law.jurisUrl);
+    // `?section=49` (UK legislation only) serves just that section — legislation.gov.uk publishes
+    // one at `/section/<n>/data.pdf` — so a chat citation to "s 49" opens on s 49, not the Act's
+    // first page. Strictly "<digits><letters>" so it can't steer the upstream path anywhere else.
+    const section = typeof req.query.section === "string" && /^[0-9]+[A-Z]*$/i.test(req.query.section) ? req.query.section : null;
     const upstream = ukLegislationParts
-      ? `${UK_LEGISLATION_BASE_URL}/${ukLegislationParts.type}/${ukLegislationParts.year}/${ukLegislationParts.number}/data.pdf`
+      ? `${UK_LEGISLATION_BASE_URL}/${ukLegislationParts.type}/${ukLegislationParts.year}/${ukLegislationParts.number}${section ? `/section/${section}` : ""}/data.pdf`
       : law.pdfUrl;
     if (!upstream) throw new HttpError("No PDF available for this document", 404);
 
