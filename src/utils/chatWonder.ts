@@ -400,6 +400,11 @@ export function streamChatWonderMessage(
      * which chat-wonder's legal personas inject so answers quote the lawyer's own figures. A
      * chat-wonder build that doesn't know the field drops it. */
     caseDamages?: unknown;
+    /** Sent as `trace_turn_id`: this turn's id (the user Message that asked), which chat-wonder
+     * stamps on every trace event it emits so TraceCollectorSvc can attribute them to the turn and
+     * its user. Only real chat turns set it — background generators don't, and a chat-wonder build
+     * that doesn't know the field drops it. */
+    traceTurnId?: string;
     /** Fired once per stage as the turn moves through them: "answering" at the first answer
      * chunk (everything before it is Chat Wonder reading the case), then "extras" at `__END__`
      * (the second model call that writes the timeline/mind map/audio overview script). For a
@@ -556,6 +561,7 @@ export function streamChatWonderMessage(
             case_mind_map_context?: string;
             skip_legal_verify?: boolean;
             case_damages?: unknown;
+            trace_turn_id?: string;
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -576,6 +582,9 @@ export function streamChatWonderMessage(
           }
           if (opts?.caseDamages) {
             payload.case_damages = opts.caseDamages;
+          }
+          if (opts?.traceTurnId) {
+            payload.trace_turn_id = opts.traceTurnId;
           }
           if (opts?.mindMapContext) {
             payload.case_mind_map_context = opts.mindMapContext;

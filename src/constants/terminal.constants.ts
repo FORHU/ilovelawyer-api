@@ -18,6 +18,7 @@ export const PANEL_IDS = [
   "audioOverview",
   "decisions",
   "theories",
+  "trace",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -244,6 +245,14 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: true,
     minSku: "SOLO",
     description: "Several lawyers' theories of the case, side by side — never merged. Diff any two to see what they share, what they disagree on, and the evidence that would decide it.",
+  },
+  {
+    id: "trace",
+    label: "AI Reasoning",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "How the AI reached each answer, turn by turn — the research it ran, what it found, and the checks it applied. Recorded as the answer is written, and kept with the consultation.",
   },
 ];
 
