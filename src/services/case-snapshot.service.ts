@@ -256,6 +256,7 @@ export default class CaseSnapshotSvc {
         citations,
         deadlines,
         matrix: evidenceMatrix,
+        findings,
       }),
       lastRefreshedAt: caseRecord.lastRefreshedAt,
     };

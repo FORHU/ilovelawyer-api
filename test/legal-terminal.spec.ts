@@ -393,6 +393,22 @@ describe("Legal Terminal — live risk analysis", () => {
     expect(result.overall.level).to.equal("HIGH");
   });
 
+  it("counts open legal issues and weaknesses, not closed or resolved ones", () => {
+    const result = scoreCaseRisks({
+      findings: [
+        ...Array.from({ length: 4 }, () => ({ category: "LEGAL_ISSUE", tag: "OPEN" })),
+        ...Array.from({ length: 8 }, () => ({ category: "WEAKNESS", tag: "MINOR" })),
+        { category: "WEAKNESS", tag: "CLOSED" },
+        { category: "LEGAL_ISSUE", tag: "RESOLVED" },
+        { category: "STRENGTH", tag: "STRONG" },
+      ],
+    });
+    expect(result.overall.score).to.equal(44);
+    expect(result.overall.level).to.equal("MEDIUM");
+    expect(result.overall.drivers.map((d) => d.code)).to.deep.equal(["openWeaknesses", "openLegalIssues"]);
+    expect(result.overall.drivers[0].count).to.equal(8);
+  });
+
   it("ignores accepted risks", () => {
     const result = scoreCaseRisks({
       risks: [{ severity: "FATAL", status: "ACCEPTED" }],

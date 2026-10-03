@@ -45,9 +45,10 @@ export interface LawLike {
   keyProvisions: string[];
 }
 
-// `[label](/homepage/library/laws/<id>?category=<wire>)` — the form rewriteLegalCitationLinks
-// leaves in Message.content. The label may hold brackets ("[2004] EWCA Crim 2375").
-const LIBRARY_LINK_RE = /\[((?:[^\[\]]|\[[^\]]*\])*)\]\((\/homepage\/library\/laws\/([^?)\s]+)\?category=([a-z-]+))\)/g;
+// `[label](/homepage/library/laws/<id>?category=<wire>[&section=<n>])` — the form
+// rewriteLegalCitationLinks leaves in Message.content. The label may hold brackets
+// ("[2004] EWCA Crim 2375").
+const LIBRARY_LINK_RE = /\[((?:[^\[\]]|\[[^\]]*\])*)\]\((\/homepage\/library\/laws\/([^?)\s]+)\?category=([a-z-]+)(?:&section=[^)\s]+)?)\)/g;
 
 /** Every distinct Library link in a reply's text, first label wins. Links whose category isn't one of
  * the tenant's wire categories are ignored. */
