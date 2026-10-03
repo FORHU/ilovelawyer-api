@@ -8,11 +8,19 @@ import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import ProductTourSvc from "../src/services/product-tour.service";
 import ProductTourRepo from "../src/repositories/product-tour.repository";
+import AuthRepo from "../src/repositories/auth.repository";
+import { PRODUCT_TOUR_TRACKS } from "../src/constants";
 import { saveProductTourSchema } from "../src/validation/users.validation";
 
 describe("ProductTourSvc", () => {
-  const originals = { find: ProductTourRepo.find, upsert: ProductTourRepo.upsert };
+  const originals = {
+    find: ProductTourRepo.find,
+    upsert: ProductTourRepo.upsert,
+    countFinished: ProductTourRepo.countFinished,
+    setOnboardingCompleted: AuthRepo.setOnboardingCompleted,
+  };
   let rows: Map<string, any>;
+  let onboarded: string[];
 
   beforeEach(() => {
     rows = new Map();
@@ -22,11 +30,17 @@ describe("ProductTourSvc", () => {
       rows.set(`${userId}:${track}`, row);
       return row;
     };
+    (ProductTourRepo as any).countFinished = async (userId: string, tracks: readonly string[]) =>
+      tracks.filter((t) => ["COMPLETED", "DISMISSED"].includes(rows.get(`${userId}:${t}`)?.status)).length;
+    onboarded = [];
+    (AuthRepo as any).setOnboardingCompleted = async (userId: string) => void onboarded.push(userId);
   });
 
   afterEach(() => {
     (ProductTourRepo as any).find = originals.find;
     (ProductTourRepo as any).upsert = originals.upsert;
+    (ProductTourRepo as any).countFinished = originals.countFinished;
+    (AuthRepo as any).setOnboardingCompleted = originals.setOnboardingCompleted;
   });
 
   it("reads as NOT_STARTED for a user who never opened the tour", async () => {
@@ -54,6 +68,21 @@ describe("ProductTourSvc", () => {
   it("keeps each user's progress separate", async () => {
     await ProductTourSvc.save("u1", "main", { status: "DISMISSED", archetype: null, currentStep: null, doneSteps: [] });
     expect((await ProductTourSvc.get("u2", "main")).status).to.equal("NOT_STARTED");
+  });
+
+  it("doesn't complete onboarding after just one page tour", async () => {
+    await ProductTourSvc.save("u1", "cases", { status: "COMPLETED", archetype: null, currentStep: null, doneSteps: [] });
+    expect(onboarded).to.deep.equal([]);
+  });
+
+  it("completes onboarding once every page tour is completed or dismissed", async () => {
+    const [last, ...rest] = PRODUCT_TOUR_TRACKS;
+    for (const track of rest) {
+      await ProductTourSvc.save("u1", track, { status: "COMPLETED", archetype: null, currentStep: null, doneSteps: [] });
+    }
+    expect(onboarded).to.deep.equal([]);
+    await ProductTourSvc.save("u1", last, { status: "DISMISSED", archetype: null, currentStep: null, doneSteps: [] });
+    expect(onboarded).to.deep.equal(["u1"]);
   });
 });
 

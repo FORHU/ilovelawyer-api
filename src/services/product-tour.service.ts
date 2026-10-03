@@ -1,5 +1,7 @@
 import { ProductTourStatus } from "@prisma/client";
 import ProductTourRepo from "../repositories/product-tour.repository";
+import AuthRepo from "../repositories/auth.repository";
+import { PRODUCT_TOUR_TRACKS } from "../constants";
 
 type TourState = {
   track: string;
@@ -29,8 +31,20 @@ export default class ProductTourSvc {
   ): Promise<TourState> {
     const currentStep = input.status === ProductTourStatus.IN_PROGRESS ? input.currentStep : null;
     const row = await ProductTourRepo.upsert(userId, track, { ...input, currentStep, doneSteps: [...new Set(input.doneSteps)] });
+    if (isFinished(input.status)) await completeOnboardingIfToursFinished(userId);
     return toState(row);
   }
+}
+
+function isFinished(status: ProductTourStatus) {
+  return status === ProductTourStatus.COMPLETED || status === ProductTourStatus.DISMISSED;
+}
+
+/** Onboarding is done once every page tour has been completed or dismissed. One-way: replaying
+ * a tour later doesn't put the user back into onboarding. */
+async function completeOnboardingIfToursFinished(userId: string) {
+  const finished = await ProductTourRepo.countFinished(userId, PRODUCT_TOUR_TRACKS);
+  if (finished === PRODUCT_TOUR_TRACKS.length) await AuthRepo.setOnboardingCompleted(userId);
 }
 
 function toState(row: {
