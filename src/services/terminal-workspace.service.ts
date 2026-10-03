@@ -3,11 +3,19 @@ import { PackageSku, WorkspacePreset } from "@prisma/client";
 import TerminalWorkspaceRepo from "../repositories/terminal-workspace.repository";
 import CaseRiskRepo from "../repositories/case-risk.repository";
 import { PANEL_CATALOG, skuAllowsPanel, defaultPresetForSku } from "../constants";
-import { buildDefaultLayout, normalizeLayout } from "../utils/terminal-layout";
+import { buildDefaultLayout, dropUnknownPanelsFromLayout, normalizeLayout } from "../utils/terminal-layout";
 import HttpError from "../utils/http-error";
 import prisma from "../lib/prisma";
 
 export default class TerminalWorkspaceSvc {
+  /** A stored row with its layout cleaned of panes the Terminal no longer has. The same row object comes back when there is
+   * nothing to drop. Every method that returns a STORED layout goes through this; create and resetToPreset return layouts that
+   * were just built, so they are already clean. */
+  private static clean<T extends { layoutJson: unknown }>(row: T): T {
+    const layoutJson = dropUnknownPanelsFromLayout(row.layoutJson);
+    return layoutJson === row.layoutJson ? row : { ...row, layoutJson };
+  }
+
   static catalog(sku: string = "SOLO") {
     return {
       panels: PANEL_CATALOG.map((panel) => ({
@@ -20,13 +28,13 @@ export default class TerminalWorkspaceSvc {
   }
 
   static async list(userId: string, caseId: string) {
-    return TerminalWorkspaceRepo.list(userId, caseId);
+    return (await TerminalWorkspaceRepo.list(userId, caseId)).map((row) => TerminalWorkspaceSvc.clean(row));
   }
 
   static async getById(id: string, userId: string) {
     const row = await TerminalWorkspaceRepo.findById(id, userId);
     if (!row) throw new HttpError("Workspace not found", 404);
-    return row;
+    return TerminalWorkspaceSvc.clean(row);
   }
 
   static async create(userId: string, sku: string, body: { caseId: string; name: string; preset?: WorkspacePreset; layoutJson?: unknown }) {
@@ -53,13 +61,13 @@ export default class TerminalWorkspaceSvc {
     if (body.isLastUsed !== undefined) data.isLastUsed = body.isLastUsed;
     const updated = await TerminalWorkspaceRepo.update(id, userId, data);
     if (!updated) throw new HttpError("Workspace not found", 404);
-    return updated;
+    return TerminalWorkspaceSvc.clean(updated);
   }
 
   static async apply(id: string, userId: string) {
     const updated = await TerminalWorkspaceRepo.markLastUsed(id, userId);
     if (!updated) throw new HttpError("Workspace not found", 404);
-    return updated;
+    return TerminalWorkspaceSvc.clean(updated);
   }
 
   static async resetToPreset(userId: string, sku: string, caseId: string, preset?: WorkspacePreset) {
