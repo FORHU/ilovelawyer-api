@@ -15,6 +15,45 @@ export function isPanelId(value: unknown): value is PanelId {
   return typeof value === "string" && (PANEL_IDS as readonly string[]).includes(value);
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+
+/** A stored layout, minus any pane the Terminal no longer has (ADR 0016 retired Contradictions, Citation Map, Team & Audit and
+ * Verification). normalizeLayout does this when a workspace is SAVED, but a workspace saved before then is returned as
+ * stored, and the web app crashes rendering a retired pane that is visible. Applied to every layout this service hands out.
+ *
+ * Deliberately narrower than normalizeLayout: it only drops unknown ids, clears a tab that pointed at one, and shows the
+ * Command pane if nothing visible is left. It does not re-clamp sizes, re-apply SKU gating or add missing panes, so reading a
+ * workspace never changes anything else about it. Returns the same object when there is nothing to drop, and anything that is
+ * not a layout untouched. */
+export function dropUnknownPanelsFromLayout(layoutJson: unknown): unknown {
+  if (!isRecord(layoutJson) || !Array.isArray(layoutJson.panels)) return layoutJson;
+
+  const panels = layoutJson.panels.filter((p) => isRecord(p) && isPanelId(p.id));
+  const badTab = (value: unknown) => value !== undefined && value !== null && !isPanelId(value);
+  const screens = isRecord(layoutJson.screenLayouts) ? layoutJson.screenLayouts : undefined;
+  const screenTabsBad = !!screens && Object.values(screens).some((s) => isRecord(s) && (badTab(s.tabsActiveA) || badTab(s.tabsActiveB)));
+  const dropped = panels.length < layoutJson.panels.length;
+  if (!dropped && !badTab(layoutJson.tabsActiveA) && !badTab(layoutJson.tabsActiveB) && !screenTabsBad) return layoutJson;
+
+  const withoutBadTabs = <T extends Record<string, unknown>>(obj: T): T => {
+    const copy = { ...obj };
+    if (badTab(copy.tabsActiveA)) delete copy.tabsActiveA;
+    if (badTab(copy.tabsActiveB)) delete copy.tabsActiveB;
+    return copy;
+  };
+
+  let kept = panels as Record<string, unknown>[];
+  if (dropped && !kept.some((p) => p.visible === true)) {
+    kept = kept.map((p) => (p.id === "command" ? { ...p, visible: true, order: 0, width: 1, height: 1 } : p));
+  }
+
+  const out: Record<string, unknown> = { ...withoutBadTabs(layoutJson), panels: kept };
+  if (screens) {
+    out.screenLayouts = Object.fromEntries(Object.entries(screens).map(([index, s]) => [index, isRecord(s) ? withoutBadTabs(s) : s]));
+  }
+  return out;
+}
+
 export function isArrangementValue(value: unknown): value is ArrangementValue {
   return typeof value === "string" && (ARRANGEMENT_VALUES as readonly string[]).includes(value);
 }
