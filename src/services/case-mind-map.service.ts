@@ -350,6 +350,14 @@ export default class CaseMindMapSvc {
       logger.info("Case mind map: build skipped", { caseId, reason, skipped, ...extra });
       return { skipped, map: await MindMapRepo.findCaseMap(caseId) };
     };
+    // A lawyer's Regenerate either saves a new map or fails visibly: runQueuedGenerate ignores
+    // the result, so a quiet skip here would finish the job DONE with the old map still up (the
+    // R v Doyle QA run). An automatic build just leaves the map as it was.
+    const skipOrFail = async (skipped: CaseMindMapSkip, message: string, statusCode: number, extra: object = {}) => {
+      if (reason !== "manual") return skip(skipped, extra);
+      logger.warn("Case mind map: Regenerate saved nothing", { caseId, skipped, ...extra });
+      throw new HttpError(message, statusCode);
+    };
 
     const docs = await DocumentRepo.listAllByCase(caseId);
     const currentIds = mindMapDocumentIds(docs);
@@ -364,7 +372,7 @@ export default class CaseMindMapSvc {
         await MindMapRepo.retireCaseMap(existing.id);
         return skip("retired");
       }
-      return skip("noDocuments");
+      return skipOrFail("noDocuments", "The case has no indexed documents to build the map from.", 422);
     }
 
     const fingerprint = fingerprintMindMapDocuments(docs);
@@ -429,7 +437,7 @@ ${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
     const extracted = extractMindMap(result.content);
     const branchCount = extracted?.children.length ?? 0;
     if (!extracted || branchCount === 0) {
-      return skip("unusableReply", { replyChars: result.content.length });
+      return skipOrFail("unusableReply", "The AI's reply had no usable map. Try again.", 502, { replyChars: result.content.length });
     }
     const { dropped, unmatched } = resolveCaseSources(extracted, ready);
     // Every point below the five headings must cite a case document; uncited ones are removed.
@@ -438,10 +446,7 @@ ${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
     // empty headings, so keep the current one and report the build as unusable instead.
     if (countNodes(tree) <= 1 + tree.children.length) {
       logger.warn("Case mind map: no point cited a case document", { caseId, reason, droppedSources: dropped, uncitedPoints, unmatched });
-      // A lawyer's Build/Regenerate fails visibly ("Couldn't build the mind map. Try again.");
-      // an automatic build just leaves the map as it was.
-      if (reason === "manual") throw new HttpError("The AI's map didn't cite the case documents. Try again.", 502);
-      return skip("noCitedPoints", { droppedSources: dropped, uncitedPoints });
+      return skipOrFail("noCitedPoints", "The AI's map didn't cite the case documents. Try again.", 502, { droppedSources: dropped, uncitedPoints });
     }
 
     const save = (expectedVersion: number | null) =>
@@ -481,8 +486,11 @@ ${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
       return { skipped: null, map: await MindMapRepo.findCaseMap(caseId) };
     } catch (err) {
       // Someone expanded the map while the model was running — their change wins; the map goes
-      // Stale and the next build (or a Regenerate) picks the new documents up.
-      if (err instanceof MindMapVersionConflictError) return skip("changedWhileBuilding");
+      // Stale and the next build (or a Regenerate) picks the new documents up. A Regenerate gets
+      // here only when the map moved again after its one save-over retry.
+      if (err instanceof MindMapVersionConflictError) {
+        return skipOrFail("changedWhileBuilding", "The map was changed while it was being rebuilt. Try again.", 409);
+      }
       throw err;
     }
   }
