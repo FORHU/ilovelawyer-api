@@ -4,6 +4,7 @@ import validSession from "../middleware/valid-session.middleware";
 import resolveOrganization from "../middleware/resolve-organization.middleware";
 import CaseCtrl from "../controllers/case.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
+import TraceCtrl from "../controllers/trace.controller";
 import CaseEdgeCtrl from "../controllers/case-edge.controller";
 import CaseMindMapCtrl from "../controllers/case-mind-map.controller";
 
@@ -142,6 +143,9 @@ router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/export/history", asyncHandler(CaseTerminalCtrl.exportBriefHistory));
 router.get("/:caseId/audio-overview/history", asyncHandler(CaseTerminalCtrl.audioOverviewHistory));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
+// Explanation (XAI) trace — what the AI did to answer each turn, for the Terminal trace pane
+router.get("/:caseId/trace/turns", asyncHandler(TraceCtrl.listTurns));
+router.get("/:caseId/trace/turns/:turnId", asyncHandler(TraceCtrl.listTurnEvents));
 router.post("/:caseId/decisions/:id/dispute", asyncHandler(CaseTerminalCtrl.disputeDecision));
 router.post("/:caseId/decisions/:id/reactivate", asyncHandler(CaseTerminalCtrl.reactivateDecision));
 

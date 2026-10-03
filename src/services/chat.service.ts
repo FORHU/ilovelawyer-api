@@ -8,6 +8,7 @@ import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding, ChatWonderStage } from "../utils/chatWonder";
+import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -981,7 +982,17 @@ export default class ChatSvc {
             },
             replyLanguage,
             // Any turn that asks for a map, case or not: chat-wonder builds one only on this flag.
-            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined, caseDamages, onStage },
+            {
+              mindMapRequested: wantsMindMap,
+              mindMapContext: mindMapContext || undefined,
+              caseDamages,
+              onStage,
+              // Only a question a person asked is explained to them: background generations (the
+              // mind map and audio overview triggers) are not turns anyone reads a trace for.
+              trace: generationKind
+                ? undefined
+                : { consultationId, caseId: effectiveCaseId ?? null, organizationId, turnId: parentMessageId, userId: userId ?? null },
+            },
           );
         const result =
           generationKind && effectiveCaseId
@@ -1499,27 +1510,39 @@ export default class ChatSvc {
       mindMapContext?: string;
       caseDamages?: CaseDamagesChatContext;
       onStage?: (stage: ChatWonderStage) => void;
+      /** Set on a real user turn: records its customer-facing trace for the Terminal's trace pane. */
+      trace?: TraceTurn;
     },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
     const opts =
-      extras?.mindMapRequested || extras?.caseDamages || extras?.onStage
+      extras?.mindMapRequested || extras?.caseDamages || extras?.onStage || extras?.trace
         ? {
             ...(extras.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
             ...(extras.caseDamages ? { caseDamages: extras.caseDamages } : {}),
             ...(extras.onStage ? { onStage: extras.onStage } : {}),
+            ...(extras.trace ? { traceTurnId: extras.trace.turnId } : {}),
           }
         : undefined;
+    // Subscribed before the turn is sent (chat-wonder fans events out live, with no replay), and
+    // never allowed to fail the turn — see TraceCollectorSvc.
+    const collector = extras?.trace ? await TraceCollectorSvc.start(extras.trace, sessionId) : undefined;
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
-    } catch (err) {
-      if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
-      const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
-      // Report the rotation before streaming starts, so the caller (ChatCtrl) can still
-      // set a response header — nothing has been written to the HTTP response yet at
-      // this point, since "Unknown session." always arrives before any real content.
-      onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+      try {
+        return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+      } catch (err) {
+        if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
+        const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
+        // Report the rotation before streaming starts, so the caller (ChatCtrl) can still
+        // set a response header — nothing has been written to the HTTP response yet at
+        // this point, since "Unknown session." always arrives before any real content.
+        onSessionRotated?.(freshSessionId);
+        // The trace follows the turn onto the new session, so the log stays one continuous record.
+        await collector?.rebind(freshSessionId);
+        return await streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+      }
+    } finally {
+      await collector?.stop();
     }
   }
 
