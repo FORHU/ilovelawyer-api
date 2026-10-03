@@ -266,6 +266,25 @@ describe("Case mind map (built from documents)", () => {
     expect(map).to.equal(null);
   });
 
+  // R v Doyle QA: Regenerate finished DONE but the map stayed at version 4. A manual build that
+  // saves nothing must throw, so AiGenerationLockSvc.finishWith marks the job FAILED.
+  it("fails a manual Regenerate that saves nothing, instead of finishing quietly", async () => {
+    await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+    replyFrames = ["I could not build a map from these files."];
+    await CaseMindMapSvc.generateFromDocuments("case1", "u1", "manual").then(
+      () => expect.fail("expected a 502"),
+      (err) => expect(err.statusCode).to.equal(502),
+    );
+    expect(map!.version).to.equal(1);
+
+    documents = [];
+    map = null;
+    await CaseMindMapSvc.generateFromDocuments("case1", "u1", "manual").then(
+      () => expect.fail("expected a 422"),
+      (err) => expect(err.statusCode).to.equal(422),
+    );
+  });
+
   it("does nothing without READY documents, or when CASE_MIND_MAP_AUTO is off", async () => {
     documents = [{ id: DOC_A, name: "Scan.pdf", ragStatus: "PENDING" }];
     expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1")).skipped).to.equal("noDocuments");
