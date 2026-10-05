@@ -77,14 +77,17 @@ export default class CaseFindingRepo {
   static async replaceAiFindings(
     caseId: string,
     items: AiFindingRow[],
+    /** Replace only this category's AI rows — one panel's Regenerate (CaseFindingAiSvc). */
+    category?: FindingCategory,
   ) {
+    const scope = category ? { category } : {};
     await prisma.$transaction(async (tx) => {
       const stale = await tx.caseFinding.findMany({
-        where: { caseId, notes: AI_FINDING_NOTE, lawyerEditedAt: null },
+        where: { caseId, ...scope, notes: AI_FINDING_NOTE, lawyerEditedAt: null },
         select: { id: true, category: true, label: true },
       });
       const kept = await tx.caseFinding.findMany({
-        where: { caseId, notes: AI_FINDING_NOTE, lawyerEditedAt: { not: null } },
+        where: { caseId, ...scope, notes: AI_FINDING_NOTE, lawyerEditedAt: { not: null } },
         select: { category: true, label: true },
       });
       const keptKeys = new Set(kept.map((f) => `${f.category}:${f.label.trim().toLowerCase()}`));

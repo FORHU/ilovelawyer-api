@@ -8,6 +8,10 @@ export const AI_GENERATION_KINDS = [
   "caseStrategy",
   "caseStrategyRefresh",
   "caseFinding",
+  // One findings panel's own "Regenerate" (CaseFindingAiSvc.regenerateCategory) — separate kinds
+  // so only that panel shows it running.
+  "weaknessRegenerate",
+  "strengthRegenerate",
   "caseOutlook",
   "mindMap",
   "mindMapExpand",
