@@ -46,9 +46,11 @@ export default class ConsultationDeletionQueue {
       // A page at a time, so a large backlog never loads every due row at once. The next page
       // starts after this page's last id: purged rows are gone by then, and a failed one is
       // stepped past rather than fetched again in a loop.
+      // A full page means there may be more after it; a short one means this was the last.
       let afterId: string | undefined;
-      for (;;) {
-        const page = await ChatRepo.findConsultationsDueForDeletion(cutoff, { afterId, take: PAGE_SIZE });
+      let page: { id: string }[];
+      do {
+        page = await ChatRepo.findConsultationsDueForDeletion(cutoff, { afterId, take: PAGE_SIZE });
         for (const { id } of page) {
           try {
             const { filesMarkedForDeletion } = await ChatRepo.deleteConsultationPermanently(id);
@@ -59,9 +61,8 @@ export default class ConsultationDeletionQueue {
             logger.error("Consultation deletion: failed to purge consultation", { err, consultationId: id });
           }
         }
-        if (page.length < PAGE_SIZE) break;
-        afterId = page.at(-1)!.id;
-      }
+        afterId = page.at(-1)?.id;
+      } while (page.length === PAGE_SIZE);
     } catch (err) {
       logger.error("Consultation deletion: run failed", { err });
     } finally {
