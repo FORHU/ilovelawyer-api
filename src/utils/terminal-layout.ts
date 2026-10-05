@@ -2,8 +2,10 @@ import {
   ARRANGEMENT_VALUES,
   ArrangementValue,
   defaultPanelIdsForPreset,
+  LAYOUT_VERSION,
   PANEL_CATALOG,
   PANEL_IDS,
+  panelGroupRank,
   PanelId,
   PanelLayout,
   PresetValue,
@@ -54,6 +56,61 @@ export function dropUnknownPanelsFromLayout(layoutJson: unknown): unknown {
   return out;
 }
 
+/** One-time regroup of a saved layout so related panes (PANEL_GROUPS) sit together. Runs when `layoutVersion` is below
+ * LAYOUT_VERSION, then stamps it, so a later manual drag is never undone. Columns and Tabs only: Free x/y and Focus are
+ * deliberate placements, and pinned panes keep their slot. Anything that is not a layout comes back untouched. */
+export function regroupLayoutOnce(layoutJson: unknown): unknown {
+  if (!isRecord(layoutJson) || !Array.isArray(layoutJson.panels)) return layoutJson;
+  if (typeof layoutJson.layoutVersion === "number" && layoutJson.layoutVersion >= LAYOUT_VERSION) return layoutJson;
+
+  const screens = isRecord(layoutJson.screenLayouts) ? layoutJson.screenLayouts : {};
+  let panels = layoutJson.panels as Record<string, unknown>[];
+  const screenIndexes = new Set<number>([0, ...panels.map((p) => (typeof p.screen === "number" ? p.screen : 0))]);
+
+  for (const screen of screenIndexes) {
+    const cfg = (screen === 0 ? layoutJson : screens[screen]) as Record<string, unknown> | undefined;
+    if (!isRecord(cfg)) continue;
+    const arrangement = cfg.arrangement ?? "columns";
+    if (arrangement !== "columns" && arrangement !== "tabs") continue;
+    const slots = arrangement === "tabs" ? 2 : Math.min(8, Math.max(1, Math.round(Number(cfg.columnCount) || 3)));
+
+    const movable = panels
+      .filter((p) => isRecord(p) && isPanelId(p.id) && p.visible === true && p.pinned !== true && p.id !== "dates" && ((p.screen as number) || 0) === screen)
+      .sort((a, b) => panelGroupRank(a.id as PanelId) - panelGroupRank(b.id as PanelId));
+    if (movable.length === 0) continue;
+
+    // Fill slots in group order: a whole group moves to the next slot rather than split, unless it is bigger than a slot.
+    const capacity = Math.ceil(movable.length / slots);
+    const groupSize = (id: unknown) => movable.filter((p) => Math.floor(panelGroupRank(p.id as PanelId) / 100) === Math.floor(panelGroupRank(id as PanelId) / 100)).length;
+    const slotIndex: number[] = [];
+    let cursor = 0;
+    let used = 0;
+    movable.forEach((p, i) => {
+      const startsGroup = i === 0 || Math.floor(panelGroupRank(p.id as PanelId) / 100) !== Math.floor(panelGroupRank(movable[i - 1]!.id as PanelId) / 100);
+      if (cursor < slots - 1 && used > 0 && ((startsGroup && used + groupSize(p.id) > capacity) || used >= capacity)) {
+        cursor++;
+        used = 0;
+      }
+      slotIndex[i] = cursor;
+      used++;
+    });
+    const slotOf = (i: number) => slotIndex[i]!;
+    const sizes = new Map<number, number>();
+    movable.forEach((_, i) => sizes.set(slotOf(i), (sizes.get(slotOf(i)) ?? 0) + 1));
+    const patch = new Map<unknown, Record<string, unknown>>();
+    movable.forEach((p, i) => {
+      const slot = slotOf(i);
+      patch.set(
+        p,
+        arrangement === "tabs" ? { tabGroup: slot, order: i } : { columnIndex: slot, order: i, height: 1 / sizes.get(slot)! },
+      );
+    });
+    panels = panels.map((p) => (patch.has(p) ? { ...p, ...patch.get(p) } : p));
+  }
+
+  return { ...layoutJson, panels, layoutVersion: LAYOUT_VERSION };
+}
+
 export function isArrangementValue(value: unknown): value is ArrangementValue {
   return typeof value === "string" && (ARRANGEMENT_VALUES as readonly string[]).includes(value);
 }
@@ -81,7 +138,7 @@ export function buildDefaultLayout(preset: PresetValue, sku = "SOLO"): Workspace
     },
   );
 
-  return { preset, arrangement: "columns", panels };
+  return { preset, arrangement: "columns", panels, layoutVersion: LAYOUT_VERSION };
 }
 
 export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
@@ -160,6 +217,8 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     preset,
     arrangement,
     panels,
+    // Kept as sent: an old client save must not skip the one-time regroup by being stamped current here.
+    layoutVersion: typeof raw.layoutVersion === "number" ? raw.layoutVersion : undefined,
     columnCount: clampInt(raw.columnCount, 1, MAX_COLUMNS),
     columnWidths,
     tabsSplit,

@@ -3,7 +3,7 @@ import { PackageSku, WorkspacePreset } from "@prisma/client";
 import TerminalWorkspaceRepo from "../repositories/terminal-workspace.repository";
 import CaseRiskRepo from "../repositories/case-risk.repository";
 import { PANEL_CATALOG, skuAllowsPanel, defaultPresetForSku } from "../constants";
-import { buildDefaultLayout, dropUnknownPanelsFromLayout, normalizeLayout } from "../utils/terminal-layout";
+import { buildDefaultLayout, dropUnknownPanelsFromLayout, normalizeLayout, regroupLayoutOnce } from "../utils/terminal-layout";
 import HttpError from "../utils/http-error";
 import prisma from "../lib/prisma";
 
@@ -12,7 +12,7 @@ export default class TerminalWorkspaceSvc {
    * nothing to drop. Every method that returns a STORED layout goes through this; create and resetToPreset return layouts that
    * were just built, so they are already clean. */
   private static clean<T extends { layoutJson: unknown }>(row: T): T {
-    const layoutJson = dropUnknownPanelsFromLayout(row.layoutJson);
+    const layoutJson = regroupLayoutOnce(dropUnknownPanelsFromLayout(row.layoutJson));
     return layoutJson === row.layoutJson ? row : { ...row, layoutJson };
   }
 
