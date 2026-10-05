@@ -4,6 +4,7 @@ import { buildUKCaseFindingPrompt } from "../src/legal/uk/prompts/case-finding.p
 import { buildCaseFindingPrompt } from "../src/constants/case-finding.constants";
 import { caseDataState } from "../src/utils/case-jev-context";
 import { RESPONDENT_SEVERITY_LEVELS, SEVERITY_LEVELS } from "../src/utils/weakness-jev";
+import { RESPONDENT_WEIGHT_LEVELS, WEIGHT_LEVELS } from "../src/utils/strength-jev";
 
 const docs = [{ id: "doc-1", name: "MG11 Sheila Brandon" }];
 
@@ -44,7 +45,14 @@ describe("Jev case data client side", () => {
     expect(caseDataState(base)).to.not.have.property("userSide");
   });
 
-  it("has a defence severity scale the same length as the claimant one", () => {
+  it("has defence severity and weight scales the same length as the claimant ones", () => {
     expect(RESPONDENT_SEVERITY_LEVELS).to.have.length(SEVERITY_LEVELS.length);
+    expect(RESPONDENT_WEIGHT_LEVELS).to.have.length(WEIGHT_LEVELS.length);
+  });
+
+  it("tells a defending client that missing evidence on the other side is a Strength", () => {
+    const docs = [{ id: "doc-1", name: "Forensic report" }];
+    expect(buildUKCaseFindingPrompt(docs, null, "RESPONDENT")).to.include("no forensic link to your client");
+    expect(buildUKCaseFindingPrompt(docs, null, "CLAIMANT")).to.not.include("no forensic link");
   });
 });

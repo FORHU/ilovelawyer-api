@@ -33,8 +33,11 @@ export type RebuttalVerdict = (typeof REBUTTAL_VERDICTS)[number];
  * UNSUPPORTED / REBUTTABLE. Provisional — re-set from the benchmark. */
 export const CONTRADICTION_MIN_CONFIDENCE = 0.7;
 export const REBUTTED_MIN_CONFIDENCE = 0.7;
-/** Weight at or above this (normalized) can be STRONG. */
-export const STRONG_MIN_WEIGHT = 2 / 3;
+/** Weight at or above this (normalized) can be STRONG: a Score that rounds to level 2 ("helps
+ * establish an element") or higher. Jev's Score is a continuous position, so the full 2/3 left
+ * strengths that sat on level 2 as MODERATE — same reasoning as MATERIAL_MIN_SEVERITY in
+ * weakness-jev.ts. Provisional — re-set from the benchmark once lawyer-labelled cases exist. */
+export const STRONG_MIN_WEIGHT = 0.5;
 
 // Ordered lowest → highest, as Score requires. Concrete situations, no numbers (see the Score docs).
 export const WEIGHT_LEVELS = [
@@ -42,6 +45,16 @@ export const WEIGHT_LEVELS = [
   "It supports the remedies or the amount the user can recover, but not whether the user wins.",
   "It helps establish one element of a claim, alongside other evidence the claim still needs.",
   "On its own it establishes a claim or defeats the other side's main defence.",
+] as const;
+
+/** The same scale for a user defending the case (Case.clientSide RESPONDENT) — the scale above is
+ * about the user's own claims and remedies, so a defence strength (a gap in the other side's
+ * evidence) never reached its top levels. */
+export const RESPONDENT_WEIGHT_LEVELS = [
+  "It touches a side point — a witness's credibility or a detail — without answering any part of the other side's claim or charge.",
+  "It reduces what the user may have to pay or the penalty or sentence the user faces, but not whether the user is found liable or guilty.",
+  "It undermines one element of the other side's claim or charge, alongside other points the defence still needs.",
+  "On its own it defeats the other side's claim or charge, or an element it cannot do without.",
 ] as const;
 
 export type StrengthFlag = "NOT_BORNE_OUT";
@@ -108,7 +121,7 @@ export async function checkStrengthWithJev(strength: StrengthJevInput, context: 
         { SUPPORTED: null, UNSUPPORTED: null, CONTRADICTED: null },
       ),
       weight: score("Taking `strength.point` as true, how much of the user's case does it carry, given the claims and issues in `caseData`?", [
-        ...WEIGHT_LEVELS,
+        ...(context.clientSide === "RESPONDENT" ? RESPONDENT_WEIGHT_LEVELS : WEIGHT_LEVELS),
       ]),
       rebuttal: choice(
         "Does `caseData` give the other side an answer to `strength.point`? UNREBUTTED if nothing in `caseData` answers it; REBUTTABLE if `caseData` gives the other side a plausible answer the user would have to meet; ALREADY_REBUTTED if `caseData` already defeats it — for example a contradiction or a later document that undoes it.",

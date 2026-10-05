@@ -212,6 +212,10 @@ export const grantAccessSchema = Joi.object({
   permission: Joi.string().valid("VIEW", "EDIT", "ADMIN").required(),
 });
 
+export const regenerateFindingsSchema = Joi.object({
+  category: Joi.string().valid("WEAKNESS", "STRENGTH").required(),
+});
+
 export const listFindingsSchema = Joi.object({ category: Joi.string().valid(...FINDING_CATEGORIES).optional() });
 
 export const createFindingSchema = Joi.object({

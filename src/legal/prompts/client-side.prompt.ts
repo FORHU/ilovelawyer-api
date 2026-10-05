@@ -11,7 +11,11 @@ export function clientSideSection(clientSide: ClientSide | null | undefined): st
       : "the RESPONDENT — the party defending the case (respondent, defendant or the accused)";
   return `
 ## CLIENT
-You act for ${side}. Wherever the task says "this case", it means your client's case: Weaknesses hurt your client, Strengths help your client, Attack strategies are moves your client makes, and Defense strategies are what the other side will raise against your client. A gap in the other side's evidence is a Strength or an Attack strategy for your client, never a Weakness.
+You act for ${side}. Wherever the task says "this case", it means your client's case: Weaknesses hurt your client, Strengths help your client, Attack strategies are moves your client makes, and Defense strategies are what the other side will raise against your client. A gap in the other side's evidence is a Strength or an Attack strategy for your client, never a Weakness.${
+    clientSide === "RESPONDENT"
+      ? " For a defending client, evidence the other side needs but doesn't have is a Strength in its own right — for example no forensic link to your client, timings that don't fit the other side's account, or an identification that is weak or was led."
+      : ""
+  }
 `;
 }
 

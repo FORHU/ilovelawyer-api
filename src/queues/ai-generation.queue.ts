@@ -38,6 +38,8 @@ export type QueuedAiGenerationKind =
   | "citationGrounds"
   | "adverseSweep"
   | "caseFinding"
+  | "weaknessRegenerate"
+  | "strengthRegenerate"
   | "contradictions"
   | "caseMindMapGenerate"
   | "caseMindMapResync";
@@ -95,6 +97,9 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   citationGrounds: (job) => CitationGroundSvc.runQueuedMap(job.caseId, job.userId),
   adverseSweep: (job) => AdverseSweepSvc.runQueued(job.caseId, job.userId),
   caseFinding: (job) => CaseFindingAiSvc.runQueued(job.caseId),
+  // A panel's Regenerate: the controller already claimed the lock (CaseFindingAiSvc.beginCategory).
+  weaknessRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "WEAKNESS"),
+  strengthRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "STRENGTH"),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
   caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
   // No controller either: the one coalesced retry after a document change found a map build
