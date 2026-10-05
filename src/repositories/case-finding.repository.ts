@@ -11,6 +11,7 @@ export interface FindingInput {
   detail?: string | null;
   tag?: FindingTag | null;
   position?: number | null;
+  lawyerEditedAt?: Date | null;
 }
 
 /** One AI-generated row as replaceAiFindings stores it. The Jev fields are only set when a Jev
@@ -69,7 +70,8 @@ export default class CaseFindingRepo {
 
   /** Replaces every AI-authored row (notes === AI_FINDING_NOTE) with a fresh AI-generated
    * batch, in one category at a time — mirrors ProceduralDeadlineRepo.replaceAiProcedureItems.
-   * Manually-created findings are untouched. Each row's FINDING graph node is swapped in the same
+   * Manually-created findings are untouched, and so are AI rows a lawyer has edited
+   * (lawyerEditedAt) — an incoming row repeating one of those is dropped rather than duplicated. Each row's FINDING graph node is swapped in the same
    * transaction (CaseFindingSvc.create does this for manual rows via CaseGraphSvc.ensureNode) —
    * the Legal Issues panel reads the graph-view projection, which skips findings with no node. */
   static async replaceAiFindings(
@@ -78,14 +80,20 @@ export default class CaseFindingRepo {
   ) {
     await prisma.$transaction(async (tx) => {
       const stale = await tx.caseFinding.findMany({
-        where: { caseId, notes: AI_FINDING_NOTE },
+        where: { caseId, notes: AI_FINDING_NOTE, lawyerEditedAt: null },
         select: { id: true, category: true, label: true },
       });
+      const kept = await tx.caseFinding.findMany({
+        where: { caseId, notes: AI_FINDING_NOTE, lawyerEditedAt: { not: null } },
+        select: { category: true, label: true },
+      });
+      const keptKeys = new Set(kept.map((f) => `${f.category}:${f.label.trim().toLowerCase()}`));
+      const fresh = items.filter((item) => !keptKeys.has(`${item.category}:${item.label.trim().toLowerCase()}`));
       await tx.caseGraphNode.deleteMany({ where: { nodeType: "FINDING", refId: { in: stale.map((f) => f.id) } } });
-      await tx.caseFinding.deleteMany({ where: { caseId, notes: AI_FINDING_NOTE } });
-      if (items.length === 0) return;
+      await tx.caseFinding.deleteMany({ where: { id: { in: stale.map((f) => f.id) } } });
+      if (fresh.length === 0) return;
       const created = await tx.caseFinding.createManyAndReturn({
-        data: items.map((item) => ({ ...item, caseId, notes: AI_FINDING_NOTE })),
+        data: fresh.map((item) => ({ ...item, caseId, notes: AI_FINDING_NOTE })),
         select: { id: true, category: true, label: true },
       });
       await tx.caseGraphNode.createMany({

@@ -1,4 +1,5 @@
-import { FindingCategory, FindingTag } from "@prisma/client";
+import { ClientSide, FindingCategory, FindingTag } from "@prisma/client";
+import { attackParty, clientSideSection } from "../legal/prompts/client-side.prompt";
 
 export const AI_FINDING_NOTE = "AI";
 
@@ -9,8 +10,10 @@ export const AI_FINDING_NOTE = "AI";
  *   2 — status/tag and detail sub-lines (burden on legal issues), with Jev checks when their flags
  *       are on.
  *   3 — Attack/Defense Strategy get status/tag and detail too (readiness / answer-completeness).
+ *   4 — regenerated from the full-text excerpt pack (findings saved before it only saw headers),
+ *       and from the client's side when Case.clientSide is set.
  */
-export const FINDINGS_FORMAT_VERSION = 3;
+export const FINDINGS_FORMAT_VERSION = 4;
 
 /** Which pills a category's rows may carry. Jev only ever derives CONTESTED/OPEN,
  * MATERIAL/MINOR, STRONG/MODERATE, READY/DRAFTING/BLOCKED and ANSWERED/PARTIAL/UNANSWERED —
@@ -30,20 +33,25 @@ export function isTagAllowed(category: FindingCategory, tag: FindingTag): boolea
 /** Tags only the lawyer sets — never taken from the drafting model or derived by Jev. */
 export const WORKFLOW_TAGS: readonly FindingTag[] = ["BRIEFING", "RESOLVED", "CLOSED"];
 
-export function buildCaseFindingPrompt(docs: { id: string; name: string }[]): string {
+// The middle parameter keeps the PH builder call-compatible with buildUKCaseFindingPrompt.
+export function buildCaseFindingPrompt(
+  docs: { id: string; name: string }[],
+  _ukJurisdiction?: string | null,
+  clientSide?: ClientSide | null,
+): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
 
   return `[legal ai]
 
 ## ROLE
 You are assessing a Philippine case's litigation posture from the attached documents only. You are not writing a memo or citing jurisprudence.
-
+${clientSideSection(clientSide)}
 ## TASK
 From the documents only, identify:
 1. Legal issues — the specific legal questions or causes of action actually raised by the facts.
 2. Weaknesses — points that hurt this case's persuasive strength (gaps, inconsistencies, unfavorable facts).
 3. Strengths — points that help this case's persuasive strength (favorable facts, strong evidence, clear legal support).
-4. Attack strategies — concrete affirmative moves to advance this case as the moving/complaining party.
+4. Attack strategies — concrete affirmative moves to advance this case as ${attackParty(clientSide, "the moving/complaining party")}.
 5. Defense strategies — the specific defenses the opposing party is likely to raise against this case, and this case's answer to each.
 
 Do not invent parties, amounts, or facts that are not in the text.

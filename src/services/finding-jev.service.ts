@@ -65,7 +65,8 @@ const CHECKERS: Partial<Record<FindingCategory, FindingChecker>> = {
   WEAKNESS: {
     enabled: WeaknessJev.isWeaknessJevEnabled,
     async run(target, context) {
-      const check = await WeaknessJev.checkWeaknessWithJev(target, context);
+      const passages = await FindingJevSvc.sourcePassages(target.caseId, target.label, target.sourceLabel);
+      const check = await WeaknessJev.checkWeaknessWithJev({ ...target, passages }, context);
       return { check, tag: WeaknessJev.tagFromCheck(check), impact: WeaknessJev.impactFromCheck(check) };
     },
     // "Ordered by how early it will surface."
@@ -140,7 +141,8 @@ export default class FindingJevSvc {
    * `findings` supplies the Legal Issues / Weaknesses lists, so a batch still being generated
    * can be judged against itself rather than the rows it's about to replace. */
   static async loadContext(caseId: string, findings: { category: FindingCategory; label: string }[]): Promise<CaseJevContext> {
-    const [parties, claims, timeline, contradictions, witnesses] = await Promise.all([
+    const [caseRow, parties, claims, timeline, contradictions, witnesses] = await Promise.all([
+      prisma.case.findUnique({ where: { id: caseId }, select: { clientSide: true } }),
       prisma.party.findMany({ where: { caseId } }),
       CaseClaimRepo.list(caseId),
       CaseTimelineRepo.list(caseId),
@@ -150,6 +152,7 @@ export default class FindingJevSvc {
     const labels = (category: FindingCategory) => findings.filter((f) => f.category === category).map((f) => f.label);
     return {
       opponent: null,
+      clientSide: caseRow?.clientSide ?? null,
       parties: parties.map(formatParty),
       claims: claims.map(formatClaim),
       legalIssues: labels("LEGAL_ISSUE"),

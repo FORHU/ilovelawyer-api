@@ -5,7 +5,9 @@ import type { FindingCategory, FindingTag } from "@prisma/client";
  * (ProcedureItem.sourceKind/sourceId/sourceKey). When that item reaches its fixed state the to-do
  * ticks itself, recording why — the rules for "fixed" live here, one per source.
  */
-export const PROCEDURE_SOURCE_KINDS = ["FINDING", "DAMAGE", "WITNESS_NEED"] as const;
+// SCENE: an unresolved gap in a reconstruction scene (CaseReconstructionSvc) — no fixed state,
+// so its to-dos only close by hand.
+export const PROCEDURE_SOURCE_KINDS = ["FINDING", "DAMAGE", "WITNESS_NEED", "SCENE"] as const;
 export type ProcedureSourceKind = (typeof PROCEDURE_SOURCE_KINDS)[number];
 
 /** Stored on ProcedureItem.autoClosedReason; the app translates it. */

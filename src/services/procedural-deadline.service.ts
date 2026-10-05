@@ -230,7 +230,7 @@ export default class ProceduralDeadlineSvc {
     } else if (kind === "DAMAGE") {
       const entry = await DamageClaimRepo.findById(id, caseId);
       if (entry) return { dueDate: entry.dueDate };
-    } else {
+    } else if (kind === "WITNESS_NEED") {
       const witness = (await WitnessRepo.list(caseId)).find((w) => w.id === id);
       const needs = (witness?.aiFactors as { needs?: { key: string }[] } | null)?.needs ?? [];
       if (witness && needs.some((n) => n.key === key)) return { dueDate: null };
