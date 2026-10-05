@@ -5,6 +5,7 @@ import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getMindMapExpandPromptBuilder } from "../legal/prompt-registry";
 import { MIND_MAP_LIMITS } from "../constants/mind-map-limits.constants";
 import { MindMapItem, normalizeMindMap } from "../utils/response-parser";
@@ -215,6 +216,8 @@ export default class MindMapSvc {
         excerpts,
       });
 
+      // One trace run for both attempts, so a retry on a fresh session adds to the same entry.
+      const trace = newTraceRun("mindMap", ref.caseId, userId);
       const call = (sessionId: string) =>
         streamChatWonderMessage(
           sessionId,
@@ -227,7 +230,7 @@ export default class MindMapSvc {
           undefined,
           undefined,
           undefined,
-          { resolveOnAnswerEnd: true },
+          { resolveOnAnswerEnd: true, trace },
         );
       let result;
       try {

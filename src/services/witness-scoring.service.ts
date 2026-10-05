@@ -6,6 +6,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import { getWitnessScoringPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { extractWitnessFactors, quoteAppearsIn, type WitnessFactorRow } from "../utils/witness-scoring-parse";
 import { FACTOR_KEYS, RUBRIC_VERSION, scoreWitness, type FactorKey } from "../utils/witness-rubric";
 import { classifyWitnessWithJev, type JevFactors } from "../utils/witness-rubric-jev";
@@ -149,13 +150,15 @@ export default class WitnessScoringSvc {
     });
 
     // Streaming WS path, not the blocking REST call — same reason as RedTeamSvc (Cloudflare 524).
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("witnessScoring", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const rows = extractWitnessFactors(result.content, new Set(witnesses.map((w) => w.id)));

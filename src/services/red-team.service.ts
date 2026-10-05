@@ -2,6 +2,7 @@ import CaseAccess from "../utils/case-access";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import RedTeamRepo from "../repositories/red-team.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getRedTeamPromptBuilder } from "../legal/prompt-registry";
 import { extractRedTeamClaims } from "../utils/red-team-claims-parse";
 import { extractRedTeamArguments, RedTeamSourceItem } from "../utils/red-team-arguments-parse";
@@ -159,13 +160,15 @@ export default class RedTeamSvc {
     // before it finishes, independent of any timeout set in this app's own HTTP client. The
     // streaming WS path avoids that: it's how the interactive Chat feature already handles
     // AI responses that might take a while.
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("redTeam", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     // Extracted from the raw reply before cleanContent strips the [CLAIMS] block out of it.

@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { CHAT_WONDER_API_URL, CHAT_WONDER_WS_URL } from "../config";
 import HttpError from "./http-error";
 import logger from "./logger";
+import TraceCollectorSvc, { TraceRun } from "../services/trace-collector.service";
 import { TenantCode } from "../types/tenant-code";
 import {
   SESSION_RETRIES,
@@ -346,7 +347,28 @@ export class GenerationCancelledError extends Error {
   }
 }
 
-export function streamChatWonderMessage(
+/**
+ * Streams one message to Chat Wonder over the websocket and resolves with its parsed reply. With
+ * `opts.trace` the call is also recorded for the AI Reasoning pane (see TraceCollectorSvc);
+ * tracing is best-effort and never changes the result or delays it beyond connecting.
+ */
+export async function streamChatWonderMessage(...args: Parameters<typeof streamChatWonderMessageOnce>): ReturnType<typeof streamChatWonderMessageOnce> {
+  const sessionId = args[0];
+  const opts = args[10];
+  const run = opts?.trace;
+  if (!run) return streamChatWonderMessageOnce(...args);
+
+  const collector = await TraceCollectorSvc.startRun(run, sessionId);
+  try {
+    const traced = [...args] as typeof args;
+    traced[10] = { ...opts, traceTurnId: run.turnId };
+    return await streamChatWonderMessageOnce(...traced);
+  } finally {
+    await collector.stop();
+  }
+}
+
+function streamChatWonderMessageOnce(
   sessionId: string,
   userInput: string,
   onChunk: (text: string) => void,
@@ -405,6 +427,11 @@ export function streamChatWonderMessage(
      * its user. Only real chat turns set it — background generators don't, and a chat-wonder build
      * that doesn't know the field drops it. */
     traceTurnId?: string;
+    /** Records this call's reasoning trace for the AI Reasoning pane, under the run's source and
+     * turn. Set by the panes' generations (witness scoring, case reconstruction, ...); chat turns
+     * are traced by ChatSvc and pass `traceTurnId` instead. Makes the wrapper below start a
+     * collector for this session before the payload goes out and stop it when the call ends. */
+    trace?: TraceRun;
     /** Fired once per stage as the turn moves through them: "answering" at the first answer
      * chunk (everything before it is Chat Wonder reading the case), then "extras" at `__END__`
      * (the second model call that writes the timeline/mind map/audio overview script). For a

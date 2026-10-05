@@ -8,6 +8,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import HttpError from "../utils/http-error";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { parseTheoryProposal } from "../utils/theory-parse";
 
 const STANCE_RELATION = { ASSERTS: "SUPPORTS", DENIES: "CONTRADICTS" } as const;
@@ -287,13 +288,15 @@ Respond with exactly this fenced block and nothing else:
 {"title": string, "thesis": string, "claims": [{"statement": string, "stance": "ASSERTS"|"DENIES"}], "assumptions": [string], "openQuestions": [string]}
 [/THEORY_PROPOSAL]`;
 
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseTheory", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const proposal = parseTheoryProposal(result.content);

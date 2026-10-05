@@ -8,6 +8,7 @@ import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseGraphSvc from "./case-graph.service";
 import { getWitnessExtractPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { extractWitnesses, witnessNameKey } from "../utils/witness-extract-parse";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -89,13 +90,15 @@ export default class WitnessExtractSvc {
     });
 
     // Streaming WS path, not the blocking REST call — same reason as RedTeamSvc (Cloudflare 524).
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("witnessExtract", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     // Quotes are checked against the full text, not the clipped prompt copy — a quote the model
