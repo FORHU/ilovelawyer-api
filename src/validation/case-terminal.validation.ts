@@ -186,7 +186,10 @@ export const createProcedureItemSchema = Joi.object({
   sourceLabel: Joi.string().max(200).optional().allow(null, ""),
   // The item it was sent from, so the to-do can tick itself once that item is fixed
   // (utils/procedure-link.ts). sourceKey is a witness need's key and only applies to WITNESS_NEED.
-  sourceKind: Joi.string().valid(...PROCEDURE_SOURCE_KINDS).optional(),
+  // SCENE to-dos are only raised by scene generation (CaseReconstructionSvc), never sent from a panel.
+  sourceKind: Joi.string()
+    .valid(...PROCEDURE_SOURCE_KINDS.filter((kind) => kind !== "SCENE"))
+    .optional(),
   sourceId: Joi.string().max(64).when("sourceKind", { is: Joi.exist(), then: Joi.required(), otherwise: Joi.forbidden() }),
   sourceKey: Joi.string()
     .max(64)

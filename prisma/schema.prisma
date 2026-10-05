@@ -745,6 +745,14 @@ enum CaseStatus {
   ARCHIVED
 }
 
+// Which side the lawyer acts for, in the findings prompt's burden terms: CLAIMANT brought the case
+// (claimant, applicant, appellant, the prosecution), RESPONDENT defends it (respondent, defendant,
+// the accused).
+enum ClientSide {
+  CLAIMANT
+  RESPONDENT
+}
+
 model Case {
   id                    String     @id @default(uuid())
   userId                String
@@ -778,6 +786,10 @@ model Case {
   // generated with. Null for cases whose findings predate the stamp. Opening the Terminal on an
   // older one queues a findings-only regeneration (CaseFindingAiSvc.scheduleIfOutdated).
   findingsFormatVersion Int?
+  // Which side the lawyer acts for — "this case" in the findings prompt means this side's case.
+  // Null when the lawyer hasn't said; the prompt then keeps its claimant framing. Changing it
+  // clears findingsFormatVersion so the findings regenerate from the new side (CaseSvc.update).
+  clientSide            ClientSide?
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
 
@@ -1846,6 +1858,9 @@ model CaseFinding {
   modelTag     FindingTag?
   modelImpact  Int?
   jevCheckedAt DateTime?
+  // When a lawyer last changed an AI row's label, detail or tag. A regeneration
+  // (replaceAiFindings) keeps such rows instead of replacing them. Null for untouched rows.
+  lawyerEditedAt DateTime?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 

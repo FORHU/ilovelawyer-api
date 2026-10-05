@@ -14,6 +14,10 @@ export interface CaseJevContext {
   /** The case's pleaded claims (CaseClaim). Optional so Red Team's request stays as it was; the
    * finding checks send it, since "is this issue raised?" is mostly a question about them. */
   claims?: string[];
+  /** Which side "the user" in a check's questions acts for (Case.clientSide); sent as
+   * `caseData.userSide` (formatUserSide). Absent or null when the lawyer hasn't said — the checks
+   * then read the case as before. */
+  clientSide?: "CLAIMANT" | "RESPONDENT" | null;
 }
 
 // Enough to judge against, without resending a long timeline for each of up to eight items.
@@ -36,6 +40,13 @@ export function formatParty(p: { name: string; designation: string }): string {
   return `${p.name} (${p.designation})`;
 }
 
+/** Case.clientSide as the sentence a finding check reads; null when not set. */
+export function formatUserSide(clientSide: "CLAIMANT" | "RESPONDENT" | null): string | null {
+  if (clientSide === "CLAIMANT") return "The user acts for the claimant — the party that brought the case (claimant, applicant, appellant or the prosecution).";
+  if (clientSide === "RESPONDENT") return "The user acts for the respondent — the party defending the case (respondent, defendant or the accused).";
+  return null;
+}
+
 export function formatClaim(c: { title: string; causeOfAction?: string | null }): string {
   return c.causeOfAction ? `${c.title} (${c.causeOfAction})` : c.title;
 }
@@ -44,6 +55,7 @@ export function formatClaim(c: { title: string; causeOfAction?: string | null })
 export function caseDataState(context: CaseJevContext) {
   const clip = (items: string[]) => items.slice(0, MAX_CONTEXT_ITEMS);
   return {
+    ...(context.clientSide ? { userSide: formatUserSide(context.clientSide) } : {}),
     parties: clip(context.parties),
     legalIssues: clip(context.legalIssues),
     weaknesses: clip(context.weaknesses),

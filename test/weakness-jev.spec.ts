@@ -17,8 +17,10 @@ const context = {
 };
 
 describe("tagFromCheck (weaknesses)", () => {
-  it("is MATERIAL only for a supported weakness at two-thirds severity or more", () => {
+  it("is MATERIAL only for a supported weakness whose severity rounds to level 2 or more", () => {
     expect(tagFromCheck({ support: "SUPPORTED", severity: 2 / 3 })).to.equal("MATERIAL");
+    expect(tagFromCheck({ support: "SUPPORTED", severity: 0.55 })).to.equal("MATERIAL");
+    expect(tagFromCheck({ support: "SUPPORTED", severity: 0.48 })).to.equal("MINOR");
     expect(tagFromCheck({ support: "SUPPORTED", severity: 1 / 3 })).to.equal("MINOR");
     expect(tagFromCheck({ support: "UNSUPPORTED", severity: 1 })).to.equal("MINOR");
   });

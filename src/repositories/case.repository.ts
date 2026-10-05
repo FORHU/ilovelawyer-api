@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { CaseStatus } from "@prisma/client";
+import { CaseStatus, ClientSide } from "@prisma/client";
 
 export interface PartyInput {
   name: string;
@@ -12,6 +12,7 @@ export interface CaseData {
   actionType?: string;
   jurisdiction?: string;
   ukJurisdiction?: string;
+  clientSide?: ClientSide | null;
   notes?: string;
   parties?: PartyInput[];
 }
@@ -191,6 +192,11 @@ export default class CaseRepo {
   /** updateMany, not update — same case-deleted-mid-flight tolerance as markRefreshed above. */
   static async setFindingsFormatVersion(id: string, version: number) {
     return prisma.case.updateMany({ where: { id }, data: { findingsFormatVersion: version } });
+  }
+
+  /** Marks the case's findings outdated, so the next Terminal load regenerates them. */
+  static async clearFindingsFormatVersion(id: string) {
+    return prisma.case.updateMany({ where: { id }, data: { findingsFormatVersion: null } });
   }
 
   /** updateMany, not update — same case-deleted-mid-flight tolerance as markRefreshed above. */
