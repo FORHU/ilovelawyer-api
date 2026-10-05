@@ -25,7 +25,7 @@ export default class ChatCtrl {
     const { error, value } = listConsultationsSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultations = await ChatSvc.listConsultations(req.organization!.id, value.caseId);
+    const consultations = await ChatSvc.listConsultations(req.organization!.id, req.user.userId, value.caseId);
     return res.status(200).json(consultations);
   }
 
@@ -41,18 +41,18 @@ export default class ChatCtrl {
     const { error, value } = renameConsultationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultation = await ChatSvc.renameConsultation(req.organization!.id, req.params.consultationId, value.title);
+    const consultation = await ChatSvc.renameConsultation(req.organization!.id, req.user.userId, req.params.consultationId, value.title);
     return res.status(200).json(consultation);
   }
 
   static async deleteConsultation(req: Request, res: Response) {
-    await ChatSvc.deleteConsultation(req.organization!.id, req.params.consultationId);
+    await ChatSvc.deleteConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
     return res.status(204).send();
   }
 
   static async listMessages(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const messages = await ChatSvc.listMessages(req.organization!.id, consultationId);
+    const messages = await ChatSvc.listMessages(req.organization!.id, req.user.userId, consultationId);
     return res.status(200).json(messages);
   }
 

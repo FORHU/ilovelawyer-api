@@ -11,12 +11,38 @@ export default class ChatRepo {
   }
 
   /** With a caseId: that case's consultations. Without: only standalone (non-case) consultations,
-   * so case chats don't leak into the general Consultation page's Recent list. */
+   * so case chats don't leak into the general Consultation page's Recent list.
+   *
+   * Most recently *active* first — `lastMessageAt` (newest message), falling back to `createdAt`
+   * for one with no messages yet — so a Case opens on the thread last worked in, not merely the
+   * newest one. Each row also carries who started it and how many messages it holds, for the
+   * Case Workspace's Consultation switcher. */
   static async listConsultations(organizationId: string, caseId?: string) {
-    return prisma.consultation.findMany({
+    const rows = await prisma.consultation.findMany({
       where: { organizationId, caseId: caseId ?? null },
       orderBy: { createdAt: "desc" },
+      include: {
+        user: { select: { id: true, name: true, username: true } },
+        _count: { select: { messages: true } },
+      },
     });
+    if (rows.length === 0) return [];
+
+    const latest = await prisma.message.groupBy({
+      by: ["consultationId"],
+      where: { consultationId: { in: rows.map((r) => r.id) } },
+      _max: { createdAt: true },
+    });
+    const lastMessageAt = new Map(latest.map((l) => [l.consultationId, l._max.createdAt]));
+
+    return rows
+      .map(({ user, _count, ...consultation }) => ({
+        ...consultation,
+        createdBy: user,
+        messageCount: _count.messages,
+        lastMessageAt: lastMessageAt.get(consultation.id) ?? null,
+      }))
+      .sort((a, b) => (b.lastMessageAt ?? b.createdAt).getTime() - (a.lastMessageAt ?? a.createdAt).getTime());
   }
 
   /** Lean id-only listing for CaseRefreshSvc, which only needs to walk each consultation's

@@ -3,6 +3,7 @@ import AuthRepo from "../repositories/auth.repository";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import CaseSvc from "./case.service";
+import CaseAccess from "../utils/case-access";
 import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
@@ -105,11 +106,16 @@ export default class ChatSvc {
     if (caseId) {
       // Throws 404 if the case doesn't exist or isn't in this organization
       await CaseSvc.getById(caseId, organizationId);
+      // ...or if this user can't open it — a Case's Consultations belong to the people on the Case.
+      await CaseAccess.loadAccessibleCase(caseId, userId);
     }
     return ChatRepo.createConsultation(organizationId, userId, title, caseId);
   }
 
-  static async listConsultations(organizationId: string, caseId?: string) {
+  /** With a caseId, every Consultation on that Case — shared with everyone who can open the Case,
+   * not just the ones this user started (see CONTEXT.md's Consultation entry). */
+  static async listConsultations(organizationId: string, userId: string, caseId?: string) {
+    if (caseId) await CaseAccess.loadAccessibleCase(caseId, userId);
     return ChatRepo.listConsultations(organizationId, caseId);
   }
 
@@ -162,8 +168,8 @@ export default class ChatSvc {
     });
   }
 
-  static async renameConsultation(organizationId: string, consultationId: string, title: string) {
-    await this.assertConsultationOwned(organizationId, consultationId);
+  static async renameConsultation(organizationId: string, userId: string, consultationId: string, title: string) {
+    await this.assertConsultationAccess(organizationId, userId, consultationId);
     return ChatRepo.updateConsultation(consultationId, title);
   }
 
@@ -175,19 +181,45 @@ export default class ChatSvc {
     return consultation;
   }
 
-  static async deleteConsultation(organizationId: string, consultationId: string) {
-    const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
+  /** assertConsultationOwned plus, for a case-linked Consultation, that this user may use it: its
+   * creator, an invited participant, or anyone who can open the Case. A standalone (case-less)
+   * Consultation keeps the organization-only check it always had. 404 either way, so a
+   * Consultation on a Case the user can't see is indistinguishable from one that doesn't exist. */
+  static async assertConsultationAccess(organizationId: string, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationOwned(organizationId, consultationId);
+    await this.assertCaseLinkedAccess(consultation, userId);
+    return consultation;
+  }
+
+  private static async assertCaseLinkedAccess(
+    consultation: { id: string; userId: string; caseId: string | null },
+    userId: string,
+  ) {
+    if (!consultation.caseId || consultation.userId === userId) return;
+    if (await ParticipantRepo.exists(consultation.id, userId)) return;
+    try {
+      await CaseAccess.loadAccessibleCase(consultation.caseId, userId);
+    } catch {
       throw new HttpError("Consultation not found", 404);
+    }
+  }
+
+  /** The creator, or — for a case-linked Consultation — anyone who can edit the Case. Everyone on
+   * the Case can see a colleague's Consultation, but only these people can delete it. */
+  static async deleteConsultation(organizationId: string, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationAccess(organizationId, userId, consultationId);
+    if (consultation.caseId && consultation.userId !== userId) {
+      try {
+        await CaseAccess.assertCanEdit(consultation.caseId, userId);
+      } catch {
+        throw new HttpError("Only its creator or a case editor can delete this consultation", 403);
+      }
     }
     return ChatRepo.deleteConsultation(consultationId);
   }
 
-  static async listMessages(organizationId: string, consultationId: string) {
-    const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
-      throw new HttpError("Consultation not found", 404);
-    }
+  static async listMessages(organizationId: string, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationAccess(organizationId, userId, consultationId);
 
     const messages = await ChatRepo.listMessagesByConsultation(consultationId);
 
@@ -338,6 +370,7 @@ export default class ChatSvc {
     if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
+    await ChatSvc.assertCaseLinkedAccess(consultation, userId);
 
     // Reject a second concurrent turn outright rather than silently enqueueing it onto the same
     // Chat Wonder session as the one already running (see hasPendingTurn's doc comment) — every

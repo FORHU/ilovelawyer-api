@@ -44,7 +44,7 @@ describe("ChatSvc.listMessages — generated document download link", () => {
 
   it("replaces the (#download) placeholder the model wrote with the proxy URL", async () => {
     messages = [message("Here is your [affidavit of loss](#download). Please review it.", GENERATED)];
-    const [m] = await ChatSvc.listMessages("org-1", "c1");
+    const [m] = await ChatSvc.listMessages("org-1", "u1", "c1");
     expect(m!.content).to.equal(
       "Here is your [affidavit of loss](/files/token-for-generated-documents/abc.pdf). Please review it.",
     );
@@ -52,13 +52,13 @@ describe("ChatSvc.listMessages — generated document download link", () => {
 
   it("asks for the download to be named after the document, not the UUID key", async () => {
     messages = [message("Here is your [affidavit](#download).", GENERATED)];
-    await ChatSvc.listMessages("org-1", "c1");
+    await ChatSvc.listMessages("org-1", "u1", "c1");
     expect(proxyCalls).to.deep.equal([{ key: "generated-documents/abc.pdf", filename: "Affidavit-of-Loss.pdf" }]);
   });
 
   it("appends a Download line when the model did not write a link", async () => {
     messages = [message("Your document is ready.", GENERATED)];
-    const [m] = await ChatSvc.listMessages("org-1", "c1");
+    const [m] = await ChatSvc.listMessages("org-1", "u1", "c1");
     expect(m!.content).to.equal(
       "Your document is ready.\n\n[Download Affidavit of Loss (pdf)](/files/token-for-generated-documents/abc.pdf)",
     );
@@ -66,14 +66,14 @@ describe("ChatSvc.listMessages — generated document download link", () => {
 
   it("leaves a message with no generated document untouched and never mints a proxy link", async () => {
     messages = [message("Plain answer, mentions (#download) in passing.", null)];
-    const [m] = await ChatSvc.listMessages("org-1", "c1");
+    const [m] = await ChatSvc.listMessages("org-1", "u1", "c1");
     expect(m!.content).to.equal("Plain answer, mentions (#download) in passing.");
     expect(proxyCalls).to.have.length(0);
   });
 
   it("does not leak the raw generatedDocument relation (S3 key) into the response", async () => {
     messages = [message("Here is your [document](#download).", GENERATED)];
-    const [m] = await ChatSvc.listMessages("org-1", "c1");
+    const [m] = await ChatSvc.listMessages("org-1", "u1", "c1");
     expect(m).to.not.have.property("generatedDocument");
     expect(JSON.stringify(m)).to.not.include("s3Key");
   });
