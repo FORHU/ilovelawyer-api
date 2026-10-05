@@ -195,6 +195,17 @@ model Consultation {
   // and sort chats that currently need attention without walking every message. Null when
   // triage is off or has never run for this consultation.
   urgentAt       DateTime?
+  // Archiving is the soft delete: an ARCHIVED consultation leaves the lists (it shows only in
+  // the Archived section, ?status=ARCHIVED), takes no new messages, and can be restored as it
+  // was. Deleting is only offered from there and moves it to FOR_DELETION — still listed under
+  // Archived and restorable until ConsultationDeletionQueue purges it. See ChatSvc.deleteConsultation.
+  status         ConsultationStatus        @default(ACTIVE)
+  // When it was last archived — the Archived list's sort key. Null while ACTIVE.
+  archivedAt     DateTime?
+  // When it moved to FOR_DELETION — the grace period counts from here. It stays restorable
+  // (which clears this) for CONSULTATION_DELETION_GRACE_PERIOD_DAYS, then
+  // ConsultationDeletionQueue purges it. Null unless FOR_DELETION.
+  deletionRequestedAt DateTime?
 
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -210,6 +221,14 @@ model Consultation {
   @@index([userId])
   @@index([organizationId])
   @@index([caseId])
+  @@index([organizationId, caseId, status])
+  @@index([deletionRequestedAt])
+}
+
+enum ConsultationStatus {
+  ACTIVE
+  ARCHIVED
+  FOR_DELETION
 }
 
 model Message {

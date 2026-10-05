@@ -25,7 +25,7 @@ export default class ChatCtrl {
     const { error, value } = listConsultationsSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultations = await ChatSvc.listConsultations(req.organization!.id, req.user.userId, value.caseId);
+    const consultations = await ChatSvc.listConsultations(req.organization!.id, req.user.userId, value.caseId, value.status);
     return res.status(200).json(consultations);
   }
 
@@ -45,9 +45,21 @@ export default class ChatCtrl {
     return res.status(200).json(consultation);
   }
 
+  static async archiveConsultation(req: Request, res: Response) {
+    const consultation = await ChatSvc.archiveConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
+    return res.status(200).json(consultation);
+  }
+
+  static async unarchiveConsultation(req: Request, res: Response) {
+    const consultation = await ChatSvc.unarchiveConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
+    return res.status(200).json(consultation);
+  }
+
+  /** Schedules permanent deletion after the grace period — the consultation must be archived
+   * first (409 otherwise). Answers with when it takes effect. */
   static async deleteConsultation(req: Request, res: Response) {
-    await ChatSvc.deleteConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
-    return res.status(204).send();
+    const result = await ChatSvc.deleteConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
+    return res.status(200).json(result);
   }
 
   static async listMessages(req: Request, res: Response) {

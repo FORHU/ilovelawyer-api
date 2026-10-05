@@ -1,4 +1,6 @@
+import type { ConsultationStatus } from "@prisma/client";
 import ChatRepo from "../repositories/chat.repository";
+import { consultationDeletionDueAt } from "../constants/consultation-deletion.constants";
 import AuthRepo from "../repositories/auth.repository";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
@@ -114,9 +116,9 @@ export default class ChatSvc {
 
   /** With a caseId, every Consultation on that Case — shared with everyone who can open the Case,
    * not just the ones this user started (see CONTEXT.md's Consultation entry). */
-  static async listConsultations(organizationId: string, userId: string, caseId?: string) {
+  static async listConsultations(organizationId: string, userId: string, caseId?: string, status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE") {
     if (caseId) await CaseAccess.loadAccessibleCase(caseId, userId);
-    return ChatRepo.listConsultations(organizationId, caseId);
+    return ChatRepo.listConsultations(organizationId, caseId, status);
   }
 
   /**
@@ -205,17 +207,58 @@ export default class ChatSvc {
   }
 
   /** The creator, or — for a case-linked Consultation — anyone who can edit the Case. Everyone on
-   * the Case can see a colleague's Consultation, but only these people can delete it. */
-  static async deleteConsultation(organizationId: string, userId: string, consultationId: string) {
+   * the Case can see a colleague's Consultation, but only these people can archive, restore or
+   * delete it. */
+  private static async assertCanRemove(organizationId: string, userId: string, consultationId: string) {
     const consultation = await this.assertConsultationAccess(organizationId, userId, consultationId);
     if (consultation.caseId && consultation.userId !== userId) {
       try {
         await CaseAccess.assertCanEdit(consultation.caseId, userId);
       } catch {
-        throw new HttpError("Only its creator or a case editor can delete this consultation", 403);
+        throw new HttpError("Only its creator or a case editor can archive or delete this consultation", 403);
       }
     }
-    return ChatRepo.deleteConsultation(consultationId);
+    return consultation;
+  }
+
+  /** The soft delete: hides the Consultation from its lists (see ConsultationStatus) with every
+   * message, file and Topic kept, so unarchive brings it back exactly as it was. Idempotent. */
+  static async archiveConsultation(organizationId: string, userId: string, consultationId: string) {
+    const consultation = await this.assertCanRemove(organizationId, userId, consultationId);
+    // Re-archiving would silently cancel the scheduled deletion; restoring is how that's done.
+    if (consultation.status === "FOR_DELETION") {
+      throw new HttpError("This consultation is scheduled for deletion — restore it instead", 409);
+    }
+    // A reply still generating would land in a consultation nobody can see or answer. The app
+    // disables Archive for the replies it knows about; this covers the rest (another tab, a
+    // colleague's turn).
+    if (await ChatRepo.hasPendingTurn(consultationId)) {
+      throw new HttpError("A reply is still generating — archive it once it finishes", 409, "REPLY_GENERATING");
+    }
+    return ChatRepo.setConsultationStatus(consultationId, "ARCHIVED");
+  }
+
+  static async unarchiveConsultation(organizationId: string, userId: string, consultationId: string) {
+    await this.assertCanRemove(organizationId, userId, consultationId);
+    return ChatRepo.setConsultationStatus(consultationId, "ACTIVE");
+  }
+
+  /** Schedules permanent deletion by moving ARCHIVED → FOR_DELETION — only from the archive, so a
+   * single click can never destroy a live thread. It stays restorable (restoring cancels this) for
+   * CONSULTATION_DELETION_GRACE_PERIOD_DAYS; then ConsultationDeletionQueue removes the messages
+   * and everything hanging off them, plus files uploaded into this chat alone, whose S3 objects
+   * are flagged FOR_DELETION (see ChatRepo.deleteConsultationPermanently). Files uploaded to the
+   * Case from inside this chat stay with the Case. */
+  static async deleteConsultation(organizationId: string, userId: string, consultationId: string) {
+    const consultation = await this.assertCanRemove(organizationId, userId, consultationId);
+    if (consultation.status === "FOR_DELETION") {
+      throw new HttpError("Deletion is already scheduled for this consultation", 409);
+    }
+    if (consultation.status !== "ARCHIVED") {
+      throw new HttpError("Archive this consultation before deleting it permanently", 409);
+    }
+    const updated = await ChatRepo.requestConsultationDeletion(consultationId, new Date());
+    return { deletionScheduledFor: consultationDeletionDueAt(updated.deletionRequestedAt!) };
   }
 
   static async listMessages(organizationId: string, userId: string, consultationId: string) {
@@ -371,6 +414,10 @@ export default class ChatSvc {
       throw new HttpError("Consultation not found", 404);
     }
     await ChatSvc.assertCaseLinkedAccess(consultation, userId);
+    // Archived (or on its way to deletion) means set aside: nothing new lands in it until it's restored.
+    if (consultation.status !== "ACTIVE") {
+      throw new HttpError("This consultation is archived — restore it to continue", 409);
+    }
 
     // Reject a second concurrent turn outright rather than silently enqueueing it onto the same
     // Chat Wonder session as the one already running (see hasPendingTurn's doc comment) — every

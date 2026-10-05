@@ -1,8 +1,9 @@
 import prisma from "../lib/prisma";
-import { MessageRole, Prisma, AudioOverviewStatus, MessageReplyStatus } from "@prisma/client";
+import { MessageRole, Prisma, AudioOverviewStatus, MessageReplyStatus, ConsultationStatus } from "@prisma/client";
 import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
 import type { MarkTiming } from "../utils/audio-overview-render";
+import { consultationDeletionDueAt } from "../constants/consultation-deletion.constants";
 
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
@@ -17,9 +18,16 @@ export default class ChatRepo {
    * for one with no messages yet — so a Case opens on the thread last worked in, not merely the
    * newest one. Each row also carries who started it and how many messages it holds, for the
    * Case Workspace's Consultation switcher. */
-  static async listConsultations(organizationId: string, caseId?: string) {
+  /** ACTIVE lists by latest activity. ARCHIVED is the archive as shown — those scheduled for
+   * deletion (FOR_DELETION) included, since they can still be restored — by when each was
+   * archived, newest first. */
+  static async listConsultations(organizationId: string, caseId?: string, status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE") {
     const rows = await prisma.consultation.findMany({
-      where: { organizationId, caseId: caseId ?? null },
+      where: {
+        organizationId,
+        caseId: caseId ?? null,
+        status: status === "ARCHIVED" ? { in: ["ARCHIVED", "FOR_DELETION"] } : status,
+      },
       orderBy: { createdAt: "desc" },
       include: {
         user: { select: { id: true, name: true, username: true } },
@@ -35,14 +43,18 @@ export default class ChatRepo {
     });
     const lastMessageAt = new Map(latest.map((l) => [l.consultationId, l._max.createdAt]));
 
+    const sortKey = (c: { archivedAt: Date | null; lastMessageAt: Date | null; createdAt: Date }) =>
+      (status === "ARCHIVED" ? c.archivedAt : c.lastMessageAt) ?? c.createdAt;
     return rows
       .map(({ user, _count, ...consultation }) => ({
         ...consultation,
         createdBy: user,
         messageCount: _count.messages,
         lastMessageAt: lastMessageAt.get(consultation.id) ?? null,
+        // When a requested deletion takes effect — the archive shows the countdown.
+        deletionScheduledFor: consultation.deletionRequestedAt ? consultationDeletionDueAt(consultation.deletionRequestedAt) : null,
       }))
-      .sort((a, b) => (b.lastMessageAt ?? b.createdAt).getTime() - (a.lastMessageAt ?? a.createdAt).getTime());
+      .sort((a, b) => sortKey(b).getTime() - sortKey(a).getTime());
   }
 
   /** Lean id-only listing for CaseRefreshSvc, which only needs to walk each consultation's
@@ -93,8 +105,77 @@ export default class ChatRepo {
     return rows.map((row) => row.content).reverse();
   }
 
-  static async deleteConsultation(consultationId: string) {
-    return prisma.consultation.delete({ where: { id: consultationId } });
+  /** Restoring (ACTIVE) also cancels any deletion scheduled for it. */
+  static async setConsultationStatus(consultationId: string, status: Exclude<ConsultationStatus, "FOR_DELETION">) {
+    return prisma.consultation.update({
+      where: { id: consultationId },
+      data:
+        status === "ARCHIVED"
+          ? { status, archivedAt: new Date() }
+          : { status, archivedAt: null, deletionRequestedAt: null },
+    });
+  }
+
+  /** ARCHIVED → FOR_DELETION, starting the grace period. */
+  static async requestConsultationDeletion(consultationId: string, requestedAt: Date) {
+    return prisma.consultation.update({
+      where: { id: consultationId },
+      data: { status: "FOR_DELETION", deletionRequestedAt: requestedAt },
+    });
+  }
+
+  /** FOR_DELETION consultations that entered it at or before `cutoff` — due for
+   * ConsultationDeletionQueue. The status check means a restore that raced the sweep wins. */
+  static async findConsultationsDueForDeletion(cutoff: Date) {
+    return prisma.consultation.findMany({
+      where: { status: "FOR_DELETION", deletionRequestedAt: { lte: cutoff } },
+      select: { id: true },
+    });
+  }
+
+  /**
+   * Deletes the Consultation for good — ConsultationDeletionQueue's job once the grace period
+   * has passed; nothing calls it straight from a request. Its messages and everything keyed to them (Topics, mind
+   * maps, audio overview and generated-document rows, ...) go by cascade. Two things wouldn't:
+   *  - Documents uploaded into this chat alone (no Case) only lose their consultationId
+   *    (onDelete: SetNull) and would linger, reachable from nowhere — deleted here explicitly.
+   *    A chat upload that went to the Case stays with the Case.
+   *  - S3 objects are never removed inline: their File rows are flagged FOR_DELETION (with
+   *    deletedAt) for the cleanup sweep, same as FilesRepo.markForDeletion — unless another
+   *    Document still points at the same File.
+   * Transcriptions linked to it keep living on the Transcription page (onDelete: SetNull).
+   */
+  static async deleteConsultationPermanently(consultationId: string) {
+    return prisma.$transaction(async (tx) => {
+      const [chatOnlyDocuments, audioOverviews, generatedDocuments] = await Promise.all([
+        tx.document.findMany({ where: { consultationId, caseId: null }, select: { id: true, fileId: true } }),
+        tx.messageAudioOverview.findMany({
+          where: { message: { consultationId }, audioFileId: { not: null } },
+          select: { audioFileId: true },
+        }),
+        tx.messageGeneratedDocument.findMany({ where: { message: { consultationId } }, select: { fileId: true } }),
+      ]);
+
+      await tx.document.deleteMany({ where: { id: { in: chatOnlyDocuments.map((d) => d.id) } } });
+      await tx.consultation.delete({ where: { id: consultationId } });
+
+      const fileIds = new Set<string>([
+        ...chatOnlyDocuments.flatMap((d) => (d.fileId ? [d.fileId] : [])),
+        ...audioOverviews.flatMap((a) => (a.audioFileId ? [a.audioFileId] : [])),
+        ...generatedDocuments.map((g) => g.fileId),
+      ]);
+      if (fileIds.size === 0) return { filesMarkedForDeletion: 0 };
+      const stillReferenced = await tx.document.findMany({
+        where: { fileId: { in: [...fileIds] } },
+        select: { fileId: true },
+      });
+      for (const { fileId } of stillReferenced) if (fileId) fileIds.delete(fileId);
+      const { count } = await tx.file.updateMany({
+        where: { id: { in: [...fileIds] } },
+        data: { fileStatus: "FOR_DELETION", deletedAt: new Date() },
+      });
+      return { filesMarkedForDeletion: count };
+    });
   }
 
   static async listMessagesByConsultation(consultationId: string) {

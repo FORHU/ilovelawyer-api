@@ -14,6 +14,8 @@ router.get("/session", asyncHandler(ChatCtrl.getSession));
 router.get("/consultations", asyncHandler(ChatCtrl.listConsultations));
 router.post("/consultations", asyncHandler(ChatCtrl.createConsultation));
 router.patch("/consultations/:consultationId", asyncHandler(ChatCtrl.renameConsultation));
+router.post("/consultations/:consultationId/archive", asyncHandler(ChatCtrl.archiveConsultation));
+router.post("/consultations/:consultationId/unarchive", asyncHandler(ChatCtrl.unarchiveConsultation));
 router.delete("/consultations/:consultationId", asyncHandler(ChatCtrl.deleteConsultation));
 router.get("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.listMessages));
 router.get("/consultations/:consultationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
