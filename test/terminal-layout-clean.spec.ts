@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { afterEach, describe, it } from "mocha";
-import { dropUnknownPanelsFromLayout } from "../src/utils/terminal-layout";
+import { dropUnknownPanelsFromLayout, regroupLayoutOnce } from "../src/utils/terminal-layout";
 import TerminalWorkspaceSvc from "../src/services/terminal-workspace.service";
 import TerminalWorkspaceRepo from "../src/repositories/terminal-workspace.repository";
 
@@ -118,8 +118,34 @@ describe("TerminalWorkspaceSvc returns cleaned layouts", () => {
   });
 
   it("a row with a clean layout comes back unchanged", async () => {
-    const clean = { id: "w2", layoutJson: { panels: [panel("command"), panel("evidence")] } };
+    const clean = { id: "w2", layoutJson: { layoutVersion: 1, panels: [panel("command"), panel("evidence")] } };
     stub("findById", clean);
     expect(await TerminalWorkspaceSvc.getById("w2", "u1")).to.equal(clean);
+  });
+});
+
+describe("regroupLayoutOnce", () => {
+  const cols = (layout: any) => Object.fromEntries(layout.panels.filter((p: any) => p.visible).map((p: any) => [p.id, p.columnIndex]));
+
+  it("puts related panes in the same column, once, and stamps the version", () => {
+    const layout = {
+      arrangement: "columns",
+      columnCount: 2,
+      panels: [panel("chat", true, 0), panel("weaknesses", true, 1), panel("command", true, 2), panel("strengths", true, 3)],
+    };
+    const out = regroupLayoutOnce(layout) as any;
+    const c = cols(out);
+    expect(c.strengths).to.equal(c.weaknesses);
+    expect(c.command).to.not.equal(c.strengths);
+    expect(out.layoutVersion).to.equal(1);
+    expect(regroupLayoutOnce(out)).to.equal(out);
+  });
+
+  it("leaves pinned panes, Free layouts and non-layouts alone", () => {
+    const pinned = { arrangement: "columns", columnCount: 2, panels: [panel("chat", true, 0, { pinned: true, columnIndex: 0 }), panel("command", true, 1)] };
+    expect((regroupLayoutOnce(pinned) as any).panels[0]).to.deep.equal(pinned.panels[0]);
+    const free = { arrangement: "free", panels: [panel("chat", true, 0, { x: 0.5, y: 0.5 }), panel("command", true, 1, { x: 0, y: 0 })] };
+    expect((regroupLayoutOnce(free) as any).panels).to.deep.equal(free.panels);
+    expect(regroupLayoutOnce(null)).to.equal(null);
   });
 });

@@ -5,7 +5,7 @@ import { dropUnknownPanelIds, normalizeScreenPresetScreens } from "../utils/scre
 import TerminalWorkspaceSvc from "./terminal-workspace.service";
 
 export default class ScreenPresetSvc {
-  // System presets (userId: null, seeded — see prisma/seeders/screen-preset.seeder.ts) unioned
+  // System presets (userId: null, seeded — see prisma/seeders/screen-preset-grouped.seeder.ts) unioned
   // with this caller's own, optionally narrowed to one screen count. A user never sees another
   // user's presets.
   static async list(userId: string, screenCount?: number) {

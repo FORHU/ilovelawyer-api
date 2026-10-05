@@ -1,7 +1,7 @@
 import prisma from "../src/lib/prisma";
 import { seedAdmin } from "./seeders/admin.seeder";
 import { seedTenants } from "./seeders/tenant.seeder";
-import { seedScreenPresets } from "./seeders/screen-preset.seeder";
+import { seedScreenPresets } from "./seeders/screen-preset-grouped.seeder";
 
 // Runs automatically after `prisma migrate reset` (see package.json's `prisma.seed`),
 // or on demand via `npm run prisma:seed`. Each seeder is independently idempotent —
