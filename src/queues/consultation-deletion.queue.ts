@@ -1,27 +1,41 @@
+import cron, { type ScheduledTask } from "node-cron";
 import ChatRepo from "../repositories/chat.repository";
 import { CONSULTATION_DELETION_GRACE_PERIOD_DAYS } from "../constants/consultation-deletion.constants";
 import logger from "../utils/logger";
 
-const POLL_INTERVAL_MS = 60 * 60 * 1000;
 const GRACE_PERIOD_MS = CONSULTATION_DELETION_GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000;
 
+/** Daily at 02:00 UTC. The grace period is counted in days ("Deletes in N days"), so a daily run
+ * is precise enough: a purge lands within a day of its 30 days ending, never before. Overridable
+ * with CONSULTATION_DELETION_CRON (standard 5-field cron, evaluated in UTC). */
+const DEFAULT_SCHEDULE = "0 2 * * *";
+
 /**
- * Polls for FOR_DELETION Consultations (see ChatSvc.deleteConsultation) that have waited out the
- * grace period, and purges them — the only process that turns a deletion
- * *request* into ChatRepo.deleteConsultationPermanently. Same shape as AccountDeletionQueue.
+ * A cron job that purges FOR_DELETION Consultations (see ChatSvc.deleteConsultation) once they
+ * have waited out the grace period — the only process that turns a deletion *request* into
+ * ChatRepo.deleteConsultationPermanently. Until then they stay FOR_DELETION, restorable.
  */
 export default class ConsultationDeletionQueue {
-  private static running = false;
+  private static task: ScheduledTask | null = null;
   private static ticking = false;
 
   static start(): void {
-    if (this.running) return;
-    this.running = true;
-    void this.tick();
-    setInterval(() => void this.tick(), POLL_INTERVAL_MS);
+    if (this.task) return;
+    const configured = process.env.CONSULTATION_DELETION_CRON;
+    let schedule = DEFAULT_SCHEDULE;
+    if (configured) {
+      if (cron.validate(configured)) schedule = configured;
+      else logger.error("Consultation deletion: invalid CONSULTATION_DELETION_CRON, using the default", { configured, schedule });
+    }
+    this.task = cron.schedule(schedule, () => this.tick(), {
+      name: "consultation-deletion",
+      timezone: "UTC",
+      noOverlap: true,
+    });
+    logger.info("Consultation deletion: cron job scheduled", { schedule, gracePeriodDays: CONSULTATION_DELETION_GRACE_PERIOD_DAYS });
   }
 
-  /** Exposed for tests; runs one sweep. */
+  /** One sweep. Called by the cron schedule; exposed for tests. */
   static async tick(now: Date = new Date()): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
@@ -31,14 +45,15 @@ export default class ConsultationDeletionQueue {
       for (const { id } of due) {
         try {
           const { filesMarkedForDeletion } = await ChatRepo.deleteConsultationPermanently(id);
-          logger.info("Consultation deletion queue: purged consultation", { consultationId: id, filesMarkedForDeletion });
+          logger.info("Consultation deletion: purged consultation", { consultationId: id, filesMarkedForDeletion });
         } catch (err) {
-          // One failure (e.g. it was deleted another way meanwhile) mustn't stop the rest.
-          logger.error("Consultation deletion queue: failed to purge consultation", { err, consultationId: id });
+          // One failure (e.g. it was deleted another way meanwhile) mustn't stop the rest; it's
+          // still FOR_DELETION, so the next run tries it again.
+          logger.error("Consultation deletion: failed to purge consultation", { err, consultationId: id });
         }
       }
     } catch (err) {
-      logger.error("Consultation deletion queue: tick failed", { err });
+      logger.error("Consultation deletion: run failed", { err });
     } finally {
       this.ticking = false;
     }
