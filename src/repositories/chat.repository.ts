@@ -124,11 +124,20 @@ export default class ChatRepo {
     });
   }
 
-  /** FOR_DELETION consultations that entered it at or before `cutoff` — due for
-   * ConsultationDeletionQueue. The status check means a restore that raced the sweep wins. */
-  static async findConsultationsDueForDeletion(cutoff: Date) {
+  /** One page of FOR_DELETION consultations that entered it at or before `cutoff` — due for
+   * ConsultationDeletionQueue. The status check means a restore that raced the sweep wins.
+   * Keyset-paged by id (`afterId` = the last id of the previous page), not skip/offset or Prisma's
+   * `cursor`: the caller deletes rows between pages, which would shift an offset past rows not yet
+   * seen, and a `cursor` must point at a row that still exists. */
+  static async findConsultationsDueForDeletion(cutoff: Date, { afterId, take = 100 }: { afterId?: string; take?: number } = {}) {
     return prisma.consultation.findMany({
-      where: { status: "FOR_DELETION", deletionRequestedAt: { lte: cutoff } },
+      where: {
+        status: "FOR_DELETION",
+        deletionRequestedAt: { lte: cutoff },
+        ...(afterId ? { id: { gt: afterId } } : {}),
+      },
+      orderBy: { id: "asc" },
+      take,
       select: { id: true },
     });
   }

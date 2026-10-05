@@ -15,18 +15,30 @@ describe("ConsultationDeletionQueue", () => {
     purge: ChatRepo.deleteConsultationPermanently,
   };
   let cutoffs: Date[];
+  let pages: { afterId?: string; take?: number }[];
+  let due: string[];
   let purged: string[];
 
   beforeEach(() => {
     cutoffs = [];
+    pages = [];
+    due = ["a", "b", "broken"];
     purged = [];
-    (ChatRepo as any).findConsultationsDueForDeletion = async (cutoff: Date) => {
+    // Pages the way the real query does: ids in order, after `afterId`, at most `take`. Purged ids
+    // drop out of `due`, as their rows would.
+    (ChatRepo as any).findConsultationsDueForDeletion = async (cutoff: Date, opts: { afterId?: string; take?: number } = {}) => {
       cutoffs.push(cutoff);
-      return [{ id: "a" }, { id: "broken" }, { id: "b" }];
+      pages.push(opts);
+      return [...due]
+        .sort()
+        .filter((id) => !opts.afterId || id > opts.afterId)
+        .slice(0, opts.take ?? Infinity)
+        .map((id) => ({ id }));
     };
     (ChatRepo as any).deleteConsultationPermanently = async (id: string) => {
-      if (id === "broken") throw new Error("gone already");
+      if (id.endsWith("broken")) throw new Error("gone already");
       purged.push(id);
+      due = due.filter((d) => d !== id);
       return { filesMarkedForDeletion: 0 };
     };
   });
@@ -46,6 +58,19 @@ describe("ConsultationDeletionQueue", () => {
   it("purges every due consultation, carrying on past one that fails", async () => {
     await ConsultationDeletionQueue.tick();
     expect(purged).to.deep.equal(["a", "b"]);
+  });
+
+  it("pages through a large backlog 100 at a time, stepping past a failure", async () => {
+    due = Array.from({ length: 250 }, (_, i) => `c${String(i).padStart(3, "0")}`);
+    due.push("c150-broken");
+    await ConsultationDeletionQueue.tick();
+    expect(pages.map((p) => p.take)).to.deep.equal([100, 100, 100]);
+    expect(pages[0]!.afterId).to.equal(undefined);
+    expect(pages[1]!.afterId).to.equal("c099");
+    // "c150-broken" sorts inside page 2, so that page ends one id earlier.
+    expect(pages[2]!.afterId).to.equal("c198");
+    expect(purged).to.have.length(250);
+    expect(due).to.deep.equal(["c150-broken"]);
   });
 
   describe("scheduling", () => {

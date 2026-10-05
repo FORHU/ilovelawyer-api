@@ -4,6 +4,8 @@ import { CONSULTATION_DELETION_GRACE_PERIOD_DAYS } from "../constants/consultati
 import logger from "../utils/logger";
 
 const GRACE_PERIOD_MS = CONSULTATION_DELETION_GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000;
+/** Due consultations fetched per query. */
+const PAGE_SIZE = 100;
 
 /** Daily at 02:00 UTC. The grace period is counted in days ("Deletes in N days"), so a daily run
  * is precise enough: a purge lands within a day of its 30 days ending, never before. Overridable
@@ -41,16 +43,24 @@ export default class ConsultationDeletionQueue {
     this.ticking = true;
     try {
       const cutoff = new Date(now.getTime() - GRACE_PERIOD_MS);
-      const due = await ChatRepo.findConsultationsDueForDeletion(cutoff);
-      for (const { id } of due) {
-        try {
-          const { filesMarkedForDeletion } = await ChatRepo.deleteConsultationPermanently(id);
-          logger.info("Consultation deletion: purged consultation", { consultationId: id, filesMarkedForDeletion });
-        } catch (err) {
-          // One failure (e.g. it was deleted another way meanwhile) mustn't stop the rest; it's
-          // still FOR_DELETION, so the next run tries it again.
-          logger.error("Consultation deletion: failed to purge consultation", { err, consultationId: id });
+      // A page at a time, so a large backlog never loads every due row at once. The next page
+      // starts after this page's last id: purged rows are gone by then, and a failed one is
+      // stepped past rather than fetched again in a loop.
+      let afterId: string | undefined;
+      for (;;) {
+        const page = await ChatRepo.findConsultationsDueForDeletion(cutoff, { afterId, take: PAGE_SIZE });
+        for (const { id } of page) {
+          try {
+            const { filesMarkedForDeletion } = await ChatRepo.deleteConsultationPermanently(id);
+            logger.info("Consultation deletion: purged consultation", { consultationId: id, filesMarkedForDeletion });
+          } catch (err) {
+            // One failure (e.g. it was deleted another way meanwhile) mustn't stop the rest; it's
+            // still FOR_DELETION, so the next run tries it again.
+            logger.error("Consultation deletion: failed to purge consultation", { err, consultationId: id });
+          }
         }
+        if (page.length < PAGE_SIZE) break;
+        afterId = page.at(-1)!.id;
       }
     } catch (err) {
       logger.error("Consultation deletion: run failed", { err });
