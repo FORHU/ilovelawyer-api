@@ -1,4 +1,4 @@
-import { CHAT_WONDER_API_KEY, CHAT_WONDER_API_URL } from "../config";
+import { CHAT_WONDER_API_URL, TRACE_STREAM_API_KEY } from "../config";
 import TraceRepo from "../repositories/trace.repository";
 import logger from "../utils/logger";
 import { SseParser, parseStreamPayload } from "../utils/trace-stream.utils";
@@ -40,7 +40,7 @@ const NOOP: TraceCollector = { rebind: async () => {}, stop: async () => {} };
  */
 export default class TraceCollectorSvc {
   static async start(turn: TraceTurn, sessionId: string): Promise<TraceCollector> {
-    if (!CHAT_WONDER_API_URL || !CHAT_WONDER_API_KEY) return NOOP;
+    if (!CHAT_WONDER_API_URL || !TRACE_STREAM_API_KEY) return NOOP;
     const collector = new ActiveCollector(turn);
     await collector.open(sessionId);
     return collector;
@@ -90,7 +90,7 @@ class ActiveCollector implements TraceCollector {
   private async read(sessionId: string, signal: AbortSignal, markConnected: () => void) {
     try {
       const res = await fetch(`${CHAT_WONDER_API_URL}/trace-stream/${encodeURIComponent(sessionId)}`, {
-        headers: { "x-api-key": CHAT_WONDER_API_KEY, Accept: "text/event-stream" },
+        headers: { "x-api-key": TRACE_STREAM_API_KEY, Accept: "text/event-stream" },
         signal,
       });
       if (!res.ok || !res.body) {

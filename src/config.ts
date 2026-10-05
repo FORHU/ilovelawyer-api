@@ -67,6 +67,10 @@ export const UK_LEGISLATION_BASE_URL = (
 ).replace(/\/+$/, "");
 /** Shared secret Chat Wonder sends back to us via `x-api-key` when it calls our API (e.g. to fetch case document chunks). */
 export const CHAT_WONDER_API_KEY = process.env.CHAT_WONDER_API_KEY as string;
+/** Key we send Chat Wonder as `x-api-key` to read its session-scoped trace stream (the AI Reasoning pane). The opposite
+ * direction to CHAT_WONDER_API_KEY, so it gets its own secret; falls back to that key while a deployment has not set one,
+ * so existing environments keep working. Must equal Chat Wonder's own TRACE_STREAM_API_KEY. */
+export const TRACE_STREAM_API_KEY = process.env.TRACE_STREAM_API_KEY || CHAT_WONDER_API_KEY;
 export const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY as string;
 export const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY as string;
 export const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET as string;
