@@ -9,33 +9,33 @@ import { panelGroupRank, type ArrangementValue, type PanelId } from "../../src/c
 // Idempotent (upserts on id). userId is left absent: system presets, global to every user.
 const [F, C, T]: ArrangementValue[] = ["free", "columns", "tabs"];
 
-const SOURCES: { id: string; name: string; arrangements: ArrangementValue[]; panes: PanelId[] }[] = [
+const SOURCES: { id: string; name: string; arrangements: ArrangementValue[]; panes?: PanelId[]; by?: PanelId[][] }[] = [
   { id: "trial-prep", name: "Trial Prep", arrangements: [C, F], panes: ["command", "chat", "evidence", "procedure", "law", "mindMap", "redTeam"] },
   { id: "document-review", name: "Document Review", arrangements: [F, T], panes: ["evidence", "command", "witnesses", "damages", "procedure"] },
-  { id: "research-deep-dive", name: "Research Deep-Dive", arrangements: [F, T], panes: ["command", "chat", "law", "redTeam", "legalIssues", "weaknesses", "strengths", "attackStrategy", "defenseStrategy", "theories"] },
+  { id: "research-deep-dive", name: "Research Deep-Dive", arrangements: [F, T], panes: ["command", "chat", "law", "redTeam", "legalIssues", "weaknesses", "strengths", "attackStrategy", "defenseStrategy", "theories", "trace"] },
   { id: "client-intake", name: "Client Intake", arrangements: [F, F], panes: ["command", "chat", "evidence", "procedure"] },
   { id: "witness-prep", name: "Witness Prep", arrangements: [F, T], panes: ["command", "chat", "witnesses", "evidence", "redTeam"] },
   { id: "client-reporting", name: "Client Reporting", arrangements: [F, F], panes: ["command", "chat", "decisions", "mindMap"] },
   { id: "deposition-day", name: "Deposition Day", arrangements: [F, T], panes: ["command", "chat", "witnesses", "evidence", "redTeam", "attackStrategy"] },
   { id: "discovery-review", name: "Discovery Review", arrangements: [F, T], panes: ["evidence", "procedure", "decisions"] },
-  { id: "appeal-prep", name: "Appeal Prep", arrangements: [F, T], panes: ["command", "chat", "legalIssues", "law", "theories", "strengths", "weaknesses"] },
+  { id: "appeal-prep", name: "Appeal Prep", arrangements: [F, T], panes: ["command", "chat", "legalIssues", "law", "theories", "strengths", "weaknesses", "trace"] },
   { id: "mediation-session", name: "Mediation Session", arrangements: [F, F], panes: ["command", "chat", "damages", "theories", "decisions"] },
-  { id: "full-workspace", name: "Full Workspace", arrangements: [F, C, T], panes: ["command", "chat", "evidence", "witnesses", "law", "procedure", "mindMap", "damages", "caseReconstruction", "theories", "decisions"] },
+  { id: "full-workspace", name: "Full Workspace", arrangements: [F, C, T], panes: ["command", "chat", "evidence", "witnesses", "law", "procedure", "mindMap", "damages", "caseReconstruction", "theories", "decisions", "trace"] },
   { id: "trial-day", name: "Trial Day", arrangements: [F, C, T], panes: ["command", "chat", "evidence", "witnesses", "law", "redTeam", "attackStrategy", "defenseStrategy", "legalIssues", "weaknesses", "strengths"] },
-  { id: "strategy-session", name: "Strategy Session", arrangements: [F, C, T], panes: ["command", "chat", "procedure", "mindMap", "redTeam", "theories", "decisions", "law", "damages", "witnesses", "caseReconstruction", "audioOverview"] },
-  { id: "motion-drafting", name: "Motion Drafting", arrangements: [F, F, T], panes: ["command", "chat", "procedure", "law", "decisions", "legalIssues", "theories"] },
+  { id: "strategy-session", name: "Strategy Session", arrangements: [F, C, T], panes: ["command", "chat", "procedure", "mindMap", "redTeam", "theories", "decisions", "law", "damages", "witnesses", "caseReconstruction", "audioOverview", "trace"] },
+  { id: "motion-drafting", name: "Motion Drafting", arrangements: [F, F, T], panes: ["command", "chat", "procedure", "law", "decisions", "legalIssues", "theories", "trace"] },
   { id: "settlement-prep", name: "Settlement Prep", arrangements: [F, F, T], panes: ["command", "chat", "damages", "witnesses", "theories", "decisions", "procedure"] },
   { id: "cross-exam-prep", name: "Cross-Exam Prep", arrangements: [F, C, T], panes: ["command", "chat", "witnesses", "evidence", "attackStrategy", "defenseStrategy", "redTeam"] },
   { id: "deposition-prep-suite", name: "Deposition Prep Suite", arrangements: [F, C, T], panes: ["command", "chat", "witnesses", "evidence", "redTeam", "attackStrategy", "defenseStrategy", "legalIssues"] },
-  { id: "appeal-strategy", name: "Appeal Strategy", arrangements: [F, C, T], panes: ["command", "chat", "procedure", "law", "legalIssues", "strengths", "weaknesses", "theories", "decisions"] },
+  { id: "appeal-strategy", name: "Appeal Strategy", arrangements: [F, C, T], panes: ["command", "chat", "procedure", "law", "legalIssues", "strengths", "weaknesses", "theories", "decisions", "trace"] },
   { id: "discovery-command", name: "Discovery Command", arrangements: [F, C, T], panes: ["command", "chat", "evidence", "witnesses", "procedure", "decisions", "caseReconstruction"] },
-  { id: "fact-verification", name: "Fact Verification", arrangements: [F, C, T], panes: ["command", "chat", "evidence", "witnesses", "caseReconstruction", "decisions"] },
+  { id: "fact-verification", name: "Fact Verification", arrangements: [F, C, T], panes: ["command", "chat", "evidence", "witnesses", "caseReconstruction", "decisions", "trace"] },
   { id: "war-room", name: "War Room", arrangements: [F, C, T, T], panes: ["command", "chat", "evidence", "witnesses", "law", "redTeam", "attackStrategy", "defenseStrategy", "damages", "theories", "decisions", "procedure"] },
   { id: "complex-litigation", name: "Complex Litigation", arrangements: [F, F, C, T], panes: ["command", "chat", "evidence", "procedure", "law", "legalIssues", "strengths", "weaknesses", "theories", "decisions"] },
-  { id: "full-team-audit", name: "Full Team Audit", arrangements: [F, C, T, T], panes: ["command", "chat", "witnesses", "evidence", "law", "redTeam", "legalIssues", "weaknesses", "strengths", "damages", "caseReconstruction", "decisions", "theories", "audioOverview"] },
-  // 5 and 6 screens: nothing existed above 4. Same shape, just more screens.
-  { id: "five-screen-suite", name: "Five-Screen Suite", arrangements: [F, C, C, T, T], panes: ["command", "evidence", "procedure", "witnesses", "damages", "law", "legalIssues", "decisions", "strengths", "weaknesses", "attackStrategy", "defenseStrategy", "redTeam", "chat", "mindMap"] },
-  { id: "six-screen-suite", name: "Six-Screen Suite", arrangements: [F, C, C, T, T, T], panes: ["command", "evidence", "procedure", "witnesses", "damages", "law", "legalIssues", "decisions", "strengths", "weaknesses", "attackStrategy", "defenseStrategy", "redTeam", "theories", "chat", "mindMap", "caseReconstruction", "audioOverview", "trace"] },
+  { id: "full-team-audit", name: "Full Team Audit", arrangements: [F, C, T, T], panes: ["command", "chat", "witnesses", "evidence", "law", "redTeam", "legalIssues", "weaknesses", "strengths", "damages", "caseReconstruction", "decisions", "theories", "audioOverview", "trace"] },
+  // 5 and 6 screens: nothing existed above 4. With only 4 groups a group has to split, so these list their screens by hand (`by`).
+  { id: "five-screen-suite", name: "Five-Screen Suite", arrangements: [F, C, C, T, T], by: [["command", "evidence", "procedure", "witnesses", "damages"], ["law", "legalIssues", "decisions"], ["strengths", "weaknesses", "attackStrategy", "defenseStrategy", "redTeam", "theories"], ["chat", "mindMap"], ["caseReconstruction", "audioOverview", "trace"]] },
+  { id: "six-screen-suite", name: "Six-Screen Suite", arrangements: [F, C, C, T, T, T], by: [["command", "evidence", "procedure"], ["witnesses", "damages"], ["law", "legalIssues", "decisions"], ["strengths", "weaknesses", "attackStrategy", "defenseStrategy", "redTeam", "theories"], ["chat", "mindMap"], ["caseReconstruction", "audioOverview", "trace"]] },
 ];
 
 const GROUP_LABELS = ["case file", "law", "strategy", "AI tools"];
@@ -82,7 +82,7 @@ export const GROUPED_PRESETS = SOURCES.map((s) => ({
   id: s.id,
   labelKey: `preset${s.name.replace(/[^A-Za-z0-9]+(.)?/g, (_, c: string | undefined) => (c ?? "").toUpperCase()).replace(/^./, (c) => c.toUpperCase())}`,
   name: s.name,
-  screens: splitByGroup(s.panes, s.arrangements.length).map((panelIds, i) => ({ arrangement: s.arrangements[i]!, panelIds })),
+  screens: (s.by ?? splitByGroup(s.panes!, s.arrangements.length)).map((panelIds, i) => ({ arrangement: s.arrangements[i]!, panelIds })),
 })).map((p) => ({ ...p, descriptionKey: `${p.labelKey}Desc` }));
 
 /** The locale text for a preset's description, derived from where the panes ended up. */
