@@ -27,7 +27,7 @@ export default class CaseAuthorityRepo {
   static async update(
     id: string,
     caseId: string,
-    data: Partial<Pick<CaseAuthorityInput, "stance" | "rationale" | "findingId">>,
+    data: Partial<Pick<CaseAuthorityInput, "stance" | "title" | "subtitle" | "citation" | "rationale" | "findingId" | "resolvedLawId">>,
   ) {
     const existing = await prisma.caseAuthority.findFirst({ where: { id, caseId } });
     if (!existing) return null;

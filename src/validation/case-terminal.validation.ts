@@ -148,8 +148,13 @@ export const createAuthoritySchema = Joi.object({
   findingId: Joi.string().allow(null).optional(),
 });
 
+// Same convention as updateCitationSchema below: a field left out is kept, "" or null clears it.
+// The title can't be emptied — it's what the row is.
 export const updateAuthoritySchema = Joi.object({
   stance: authorityStance.optional(),
+  title: Joi.string().trim().optional(),
+  subtitle: Joi.string().trim().allow(null, "").optional(),
+  citation: Joi.string().trim().allow(null, "").optional(),
   rationale: Joi.string().trim().allow(null, "").optional(),
   findingId: Joi.string().allow(null).optional(),
 }).min(1);

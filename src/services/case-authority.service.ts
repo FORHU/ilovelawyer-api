@@ -46,14 +46,32 @@ export default class CaseAuthoritySvc {
     caseId: string,
     id: string,
     userId: string,
-    data: { stance?: CaseAuthorityInput["stance"]; rationale?: string | null; findingId?: string | null },
+    data: Partial<Pick<CaseAuthorityInput, "stance" | "title" | "subtitle" | "citation" | "rationale" | "findingId">>,
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
     await CaseAuthoritySvc.assertGround(caseId, data.findingId);
-    const row = await CaseAuthorityRepo.update(id, caseId, data);
+
+    // An emptied optional box is stored as null, not "".
+    const patch: Parameters<typeof CaseAuthorityRepo.update>[2] = { ...data };
+    for (const key of ["subtitle", "citation", "rationale"] as const) {
+      if (patch[key] === "") patch[key] = null;
+    }
+
+    // A changed citation may now point at a different law (or none) — re-resolve it the same way
+    // create does, so the panel's source link follows the edit. Resolved only when the citation
+    // was sent, so a stance-only change never re-runs the lookup.
+    let resolvedAuthority: Awaited<ReturnType<typeof CitationCheckSvc.resolveAuthority>>["authority"] | undefined;
+    if (data.citation !== undefined) {
+      const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+      const resolved = await CitationCheckSvc.resolveAuthority(patch.citation ?? undefined, tenantCode);
+      patch.resolvedLawId = resolved.lawId;
+      resolvedAuthority = resolved.authority;
+    }
+
+    const row = await CaseAuthorityRepo.update(id, caseId, patch);
     if (!row) throw new HttpError("Authority not found", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "authority.update", payload: { id } });
-    return row;
+    return resolvedAuthority === undefined ? row : { ...row, resolvedAuthority };
   }
 
   static async delete(caseId: string, id: string, userId: string) {
