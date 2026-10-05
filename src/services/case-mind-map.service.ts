@@ -7,6 +7,7 @@ import ProceduralDeadlineRepo from "../repositories/procedural-deadline.reposito
 import MindMapRepo, { MindMapVersionConflictError } from "../repositories/mind-map.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getMindMapDocumentsPromptBuilder } from "../legal/prompt-registry";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import { fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
@@ -421,10 +422,13 @@ ${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
     // post-answer extras this call never uses. skipLegalVerify: the reply is the map's JSON, not
     // an answer, so chat-wonder's quotation/contradiction self-check would only add a rewrite round.
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
+    // One trace run for both attempts, so a retry on a fresh session adds to the same entry.
+    const trace = newTraceRun("caseMindMap", caseId, userId);
     const call = (sessionId: string) =>
       streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, {
         resolveOnAnswerEnd: true,
         skipLegalVerify: true,
+        trace,
       });
     let result;
     try {
