@@ -498,9 +498,13 @@ model ConsultationTraceEvent {
   // Insertion order, race-free across concurrent collectors, and the "everything after this" cursor
   // the pane polls with. Not the primary key, so ids stay uuids like every other model.
   seq            Int      @default(autoincrement())
-  consultationId String
+  // Null for a run that belongs to a pane (witness scoring, case reconstruction...) and not to a chat.
+  consultationId String?
   caseId         String?
-  organizationId String
+  organizationId String?
+  // What produced this run: "chat" for a question, otherwise the pane's generation (TRACE_SOURCES in
+  // trace.constants.ts). Runs are numbered per source ("Witness scoring 2"), and the pane filters by it.
+  source         String   @default("chat")
   turnId         String
   userId         String?
   // The chat-wonder session that emitted it. Informational — it changes within one consultation.
@@ -509,12 +513,14 @@ model ConsultationTraceEvent {
   summary        String   @db.Text
   createdAt      DateTime @default(now())
 
-  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  consultation Consultation? @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  case         Case?         @relation(fields: [caseId], references: [id], onDelete: Cascade)
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([consultationId, seq])
   @@index([caseId, turnId, seq])
   @@index([caseId, createdAt])
+  @@index([caseId, source])
   @@index([userId])
 }
 
@@ -747,6 +753,7 @@ enum CaseStatus {
 
 model Case {
   id                    String     @id @default(uuid())
+  traceEvents           ConsultationTraceEvent[]
   userId                String
   organizationId        String?
   caseName              String

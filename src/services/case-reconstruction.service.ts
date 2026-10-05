@@ -8,6 +8,7 @@ import FilesRepo from "../repositories/files.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import CaseReconstructionEventsRepo from "../repositories/case-reconstruction-events.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getCaseReconstructionPromptBuilder } from "../legal/prompt-registry";
 import { extractRegisterNarratives, extractReconstructionGaps } from "../utils/case-reconstruction-parse";
 import { extractReconstructionClaims } from "../utils/case-reconstruction-claims-parse";
@@ -87,13 +88,15 @@ ${pack.text || "(no indexed text)"}
     // out (524) before it finishes, independent of any timeout set in this app's own HTTP
     // client. The streaming WS path avoids that — same fix as RedTeamSvc.generate.
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseReconstruction", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const registers = extractRegisterNarratives(result.content);
@@ -219,13 +222,15 @@ Reply with exactly this block and nothing else:
 Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACTED TEXT — never paraphrase. Omit "quote" (or "dialogue") rather than inventing one you can't source. Order scenes chronologically starting at index 0.`;
 
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseScenes", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const raw = parseRawScenes(result.content);
@@ -321,13 +326,15 @@ Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACT
       excerpts: pack.text,
     });
 
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseEvents", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const raw = parseRawEvents(result.content);
