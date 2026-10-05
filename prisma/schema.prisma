@@ -490,10 +490,14 @@ model MessageResearchSteps {
 // shared case several users' turns share one. `turnId` is the user Message that asked (the same
 // id sent to chat-wonder as trace_turn_id); `userId` is who asked, nullable so removing a user
 // keeps the log. The name shown beside an event is joined from User at read time, never stored.
-// `seq` is the primary key on purpose: a global autoincrement is race-free across concurrent
-// collectors and doubles as the "everything after this" cursor for resuming a live stream.
+// `seq` is a separate autoincrement column: race-free ordering across concurrent collectors, and
+// the "everything after this" cursor for resuming a poll. Order by it, never by id or createdAt
+// (createdAt is the event's own timestamp, so two events can share one).
 model ConsultationTraceEvent {
-  seq            Int      @id @default(autoincrement())
+  id             String   @id @default(uuid())
+  // Insertion order, race-free across concurrent collectors, and the "everything after this" cursor
+  // the pane polls with. Not the primary key, so ids stay uuids like every other model.
+  seq            Int      @default(autoincrement())
   consultationId String
   caseId         String?
   organizationId String
