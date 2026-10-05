@@ -2,22 +2,28 @@
 // output block structure must stay identical, only the legal framing differs.
 // AI_FINDING_NOTE lives in ../../../constants/case-finding.constants — this file used to
 // redeclare its own (unused) copy; use the shared one instead.
+import type { ClientSide } from "@prisma/client";
 import { ukJurisdictionRoleLabel } from "./uk-jurisdiction-role-label";
+import { attackParty, clientSideSection } from "../../prompts/client-side.prompt";
 
-export function buildUKCaseFindingPrompt(docs: { id: string; name: string }[], ukJurisdiction?: string | null): string {
+export function buildUKCaseFindingPrompt(
+  docs: { id: string; name: string }[],
+  ukJurisdiction?: string | null,
+  clientSide?: ClientSide | null,
+): string {
   const list = docs.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n");
 
   return `[legal ai]
 
 ## ROLE
 LEGAL_REVIEW_REQUIRED: You are assessing ${ukJurisdictionRoleLabel(ukJurisdiction)} case's litigation posture from the attached documents only. You are not writing a memo or citing authority.
-
+${clientSideSection(clientSide)}
 ## TASK
 From the documents only, identify:
 1. Legal issues — the specific legal questions or causes of action actually raised by the facts.
 2. Weaknesses — points that hurt this case's persuasive strength (gaps, inconsistencies, unfavorable facts).
 3. Strengths — points that help this case's persuasive strength (favorable facts, strong evidence, clear legal support).
-4. Attack strategies — concrete affirmative moves to advance this case as the claimant/applicant party.
+4. Attack strategies — concrete affirmative moves to advance this case as ${attackParty(clientSide, "the claimant/applicant party")}.
 5. Defense strategies — the specific defenses the opposing party is likely to raise against this case, and this case's answer to each.
 
 Do not invent parties, amounts, or facts that are not in the text.

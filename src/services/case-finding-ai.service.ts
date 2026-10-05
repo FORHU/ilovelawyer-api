@@ -5,7 +5,7 @@ import CaseRepo from "../repositories/case.repository";
 import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
 import { FINDINGS_FORMAT_VERSION } from "../constants";
 import HttpError from "../utils/http-error";
-import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
+import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
@@ -68,13 +68,14 @@ export default class CaseFindingAiSvc {
   private static async generateFromDocumentsInner(caseId: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const ukJurisdiction = tenantCode === "UK" ? await CaseAccess.resolveUkJurisdiction(caseId) : null;
+    const clientSide = await CaseAccess.resolveClientSide(caseId);
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
     if (ready.length < 1) return CaseFindingRepo.list(caseId);
 
     const buildCaseFindingPrompt = getCaseFindingPromptBuilder(tenantCode);
     const pack = await buildFactExcerptPack(ready);
-    const prompt = `${buildCaseFindingPrompt(ready, ukJurisdiction)}
+    const prompt = `${buildCaseFindingPrompt(ready, ukJurisdiction, clientSide)}
 
 ## EXTRACTED TEXT
 Use only these excerpts and the attached case documents.
@@ -82,26 +83,21 @@ Use only these excerpts and the attached case documents.
 ${pack.text || "(no indexed text)"}
 `;
 
+    // Streamed, not one blocking REST call: on a large bundle (20+ documents) the reply takes longer
+    // than callChatWonderRest's 90s limit, which sits just under Cloudflare's ~100s edge timeout
+    // in front of Chat Wonder — the run failed and the case kept its old findings. Same fix as
+    // CaseReconstructionSvc's narrative and RedTeamSvc.generate.
+    const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
     let sessionId = await getChatWonderSessionId();
-    let payload: { response?: string; intermediate_response?: string };
+    let result: { content: string };
     try {
-      payload = await callChatWonderRest(
-        prompt,
-        sessionId,
-        { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds },
-        tenantCode,
-      );
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
     } catch {
       sessionId = await getChatWonderSessionId();
-      payload = await callChatWonderRest(
-        prompt,
-        sessionId,
-        { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds },
-        tenantCode,
-      );
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
     }
 
-    const text = String(payload.response || payload.intermediate_response || "");
+    const text = String(result.content || "");
     const parsed = extractCaseFindings(text);
     logger.info("Chat Wonder case finding reply", {
       caseId,

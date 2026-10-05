@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { ClientSide } from "@prisma/client";
 import CaseSvc from "../services/case.service";
 import DocumentChunkSvc from "../services/document-chunk.service";
 import HttpError from "../utils/http-error";
@@ -24,6 +25,7 @@ export default class CaseCtrl {
       actionType?: string;
       jurisdiction?: string;
       ukJurisdiction?: string;
+      clientSide?: ClientSide | null;
       notes?: string;
       parties?: PartyInput[];
     });
