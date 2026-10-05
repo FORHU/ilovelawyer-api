@@ -32,8 +32,12 @@ export type CurableVerdict = (typeof CURABLE_VERDICTS)[number];
  * pilots it needs this much confidence; below it the weakness is recorded as UNSUPPORTED.
  * Provisional — re-set from the benchmark. */
 export const CONTRADICTION_MIN_CONFIDENCE = 0.7;
-/** Severity at or above this (normalized) is MATERIAL. */
-export const MATERIAL_MIN_SEVERITY = 2 / 3;
+/** Severity at or above this (normalized) is MATERIAL: the midpoint between level 1 ("costs
+ * remedies / raises the penalty") and level 2 ("proves or defeats an element"), i.e. a Score
+ * that rounds to level 2 or higher. Jev's Score is a continuous position, so requiring the full
+ * 2/3 left weaknesses that clearly sat on level 2 (0.55–0.64 on a fatal-collapse prosecution)
+ * all MINOR. Provisional — re-set from the benchmark once lawyer-labelled cases exist. */
+export const MATERIAL_MIN_SEVERITY = 0.5;
 
 // Ordered lowest → highest, as Score requires. Concrete situations, no numbers (see the Score docs).
 export const SEVERITY_LEVELS = [
@@ -41,6 +45,16 @@ export const SEVERITY_LEVELS = [
   "If the other side uses it, it reduces the damages or remedies the user can recover, but leaves liability intact.",
   "If the other side uses it, it defeats one element of a claim, or one of several claims, but the user's case survives in part.",
   "If the other side uses it, it disposes of the whole case — for example dismissal on a procedural ground, or a complete defence to liability.",
+] as const;
+
+/** The same scale for a user defending the case (Case.clientSide RESPONDENT) — the claimant scale
+ * above is about the user's own claims and remedies, so a defence weakness never reached its top
+ * levels and every one came out MINOR. */
+export const RESPONDENT_SEVERITY_LEVELS = [
+  "Even if the other side uses it, it only dents a witness's credibility or a side point; the user's defence is unaffected.",
+  "If the other side uses it, it increases what the user must pay or the penalty or sentence the user faces, but leaves the defence to liability or guilt intact.",
+  "If the other side uses it, it proves one element of the other side's claim or charge, or defeats one of several defences, but the user's defence survives in part.",
+  "If the other side uses it, it establishes the user's liability or guilt outright — the defence fails as a whole.",
 ] as const;
 
 export const SURFACING_LEVELS = [
@@ -72,6 +86,9 @@ export interface WeaknessJevInput {
   label: string;
   detail: string | null;
   sourceLabel: string | null;
+  /** The cited document's passages that best match the weakness (FindingJevSvc.sourcePassages);
+   * empty or absent when none could be found — support is then judged from `caseData` alone. */
+  passages?: string[];
 }
 
 /** A weakness the case data doesn't bear out can't be MATERIAL, whatever its severity. */
@@ -96,21 +113,28 @@ export function compareBySurfacing(
 /** Throws on a Jev failure — the caller keeps the model's rating rather than a guess. */
 export async function checkWeaknessWithJev(weakness: WeaknessJevInput, context: CaseJevContext): Promise<WeaknessJevCheck> {
   const client = getTypeSafeClient();
-  logger.info("Jev request", { feature: "weakness", label: weakness.label });
+  const passages = weakness.passages ?? [];
+  const sourceRead = passages.length > 0;
+  logger.info("Jev request", { feature: "weakness", label: weakness.label, sourceRead });
 
+  // Without the cited document's text, a weakness drawn from a document's body read as
+  // UNSUPPORTED: `caseData` is only parties, claims, timeline, contradictions and witnesses.
   const response = await client.systemOne({
     state: {
       weakness: { point: weakness.label, whatWouldCloseIt: weakness.detail ?? "", source: weakness.sourceLabel ?? "" },
+      ...(sourceRead ? { sourcePassages: passages } : {}),
       caseData: caseDataState(context),
     },
     questions: {
       support: choice(
-        "`weakness.point` was listed as a weakness in the user's own case. Judging only from `caseData`, classify it: SUPPORTED if `caseData` bears it out, even if worded differently; UNSUPPORTED if `caseData` does not address or does not establish it; CONTRADICTED if `caseData` shows the opposite.",
+        sourceRead
+          ? "`weakness.point` was listed as a weakness in the user's own case, drawn from the document `weakness.source`. `sourcePassages` are the passages of that document that best match it. Classify: SUPPORTED if `sourcePassages` or `caseData` bear it out, even if worded differently; UNSUPPORTED if neither addresses or establishes it; CONTRADICTED if they show the opposite."
+          : "`weakness.point` was listed as a weakness in the user's own case. Judging only from `caseData`, classify it: SUPPORTED if `caseData` bears it out, even if worded differently; UNSUPPORTED if `caseData` does not address or does not establish it; CONTRADICTED if `caseData` shows the opposite.",
         { SUPPORTED: null, UNSUPPORTED: null, CONTRADICTED: null },
       ),
       severity: score(
         "Suppose the other side uses `weakness.point` against the user. How much of the user's case does it cost, given the claims and issues in `caseData`?",
-        [...SEVERITY_LEVELS],
+        [...(context.clientSide === "RESPONDENT" ? RESPONDENT_SEVERITY_LEVELS : SEVERITY_LEVELS)],
       ),
       surfacing: score(
         "How early in the proceedings can the other side use `weakness.point` against the user, given `caseData`?",

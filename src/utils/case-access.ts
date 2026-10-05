@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import HttpError from "./http-error";
-import { CasePermission } from "@prisma/client";
+import { CasePermission, ClientSide } from "@prisma/client";
 import { TenantCode, asTenantCode } from "../types/tenant-code";
 
 const EDIT_PERMS: CasePermission[] = ["EDIT", "ADMIN"];
@@ -67,6 +67,12 @@ export default class CaseAccess {
   static async resolveUkJurisdiction(caseId: string): Promise<string | null> {
     const record = await prisma.case.findUnique({ where: { id: caseId }, select: { ukJurisdiction: true } });
     return record?.ukJurisdiction ?? null;
+  }
+
+  /** Which side the lawyer acts for (Case.clientSide), or null when they haven't said. */
+  static async resolveClientSide(caseId: string): Promise<ClientSide | null> {
+    const record = await prisma.case.findUnique({ where: { id: caseId }, select: { clientSide: true } });
+    return record?.clientSide ?? null;
   }
 
   /**

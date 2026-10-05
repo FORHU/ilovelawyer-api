@@ -3,7 +3,7 @@ import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
-import CaseFindingRepo from "../repositories/case-finding.repository";
+import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import FilesRepo from "../repositories/files.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import CaseReconstructionEventsRepo from "../repositories/case-reconstruction-events.repository";
@@ -17,7 +17,7 @@ import { parseRawScenes, auditScenes, Scene } from "../utils/case-reconstruction
 import { castForCase } from "../utils/table-read-voices";
 import { mergeCastTurnsToMp3, CastTurn } from "../utils/audio-overview-render";
 import { uploadToS3 } from "../utils/s3";
-import { AI_FINDING_NOTE, CASE_RECONSTRUCTION_TABLE_READ_OUTPUT_PREFIX } from "../constants";
+import { CASE_RECONSTRUCTION_TABLE_READ_OUTPUT_PREFIX } from "../constants";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -245,21 +245,25 @@ Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACT
     }
     const scenes = auditScenes(raw, readyDocIds, corpusByDocId);
 
-    // Each unresolved item becomes investigation work (a Weakness), deduped against what's
-    // already there so regenerating scenes doesn't spam duplicates — same "AI" tag convention
-    // as CaseFindingAiSvc, but additive-only (never replaces/deletes) since these aren't the
-    // sole source of truth for Weaknesses the way a full Refresh's batch is.
-    const existingWeaknesses = new Set((await CaseFindingRepo.list(caseId, "WEAKNESS")).map((f) => f.label.trim().toLowerCase()));
+    // Each unresolved item is investigation work, so it becomes a Case Strategy to-do linked to
+    // its scene — not a Weakness: many are gaps in the other side's case. Deduped against every
+    // to-do already on the case (open or ticked) so regenerating scenes doesn't spam duplicates
+    // or reopen work. Not tagged AI: a Case Strategy refresh prunes AI to-dos it didn't write.
+    const existingTodos = new Set(
+      (await ProceduralDeadlineRepo.listProcedureItems(caseId)).map((item) => item.label.trim().toLowerCase()),
+    );
     for (const scene of scenes) {
       for (const item of scene.unresolved) {
         const key = item.trim().toLowerCase();
-        if (!key || existingWeaknesses.has(key)) continue;
-        existingWeaknesses.add(key);
-        await CaseFindingRepo.create(caseId, {
-          category: "WEAKNESS",
-          label: item,
-          notes: AI_FINDING_NOTE,
+        if (!key || existingTodos.has(key)) continue;
+        existingTodos.add(key);
+        await ProceduralDeadlineRepo.createProcedureItem(caseId, {
+          kind: "TODO",
+          label: item.trim(),
           sourceLabel: scene.time || scene.location || null,
+          sourceKind: "SCENE",
+          sourceId: existing.id,
+          sourceKey: String(scene.index),
         });
       }
     }
