@@ -65,7 +65,7 @@ const CHECKERS: Partial<Record<FindingCategory, FindingChecker>> = {
   WEAKNESS: {
     enabled: WeaknessJev.isWeaknessJevEnabled,
     async run(target, context) {
-      const passages = await FindingJevSvc.sourcePassages(target.caseId, target.label, target.sourceLabel);
+      const passages = await FindingJevSvc.sourcePassages(target.caseId, target.label, target.sourceLabel, target.detail);
       const check = await WeaknessJev.checkWeaknessWithJev({ ...target, passages }, context);
       return { check, tag: WeaknessJev.tagFromCheck(check), impact: WeaknessJev.impactFromCheck(check) };
     },
@@ -75,7 +75,7 @@ const CHECKERS: Partial<Record<FindingCategory, FindingChecker>> = {
   STRENGTH: {
     enabled: StrengthJev.isStrengthJevEnabled,
     async run(target, context) {
-      const passages = await FindingJevSvc.sourcePassages(target.caseId, target.label, target.sourceLabel);
+      const passages = await FindingJevSvc.sourcePassages(target.caseId, target.label, target.sourceLabel, target.detail);
       const check = await StrengthJev.checkStrengthWithJev({ ...target, passages }, context);
       return { check, tag: StrengthJev.tagFromCheck(check), impact: StrengthJev.impactFromCheck(check) };
     },
@@ -99,6 +99,9 @@ const CHECKERS: Partial<Record<FindingCategory, FindingChecker>> = {
 };
 
 const MAX_SOURCE_PASSAGES = 3;
+// Extra passages matched on the row's sub-line, which often names a different part of the document
+// (a revision, an exhibit page) than the label does.
+const MAX_DETAIL_PASSAGES = 2;
 const MAX_PASSAGE_CHARS = 1200;
 
 /** The context minus the row being judged — a finding can't be its own evidence. */
@@ -120,15 +123,21 @@ function withoutSelf(context: CaseJevContext, category: FindingCategory, label: 
 export default class FindingJevSvc {
   /** The passages of the finding's cited document (matched by name, as the model cites it) that
    * best match the finding — so Jev can check the document says what the panel shows beside it.
+   * Matched on the label, plus on the sub-line when there is one: matching the label alone missed
+   * the part of the document the sub-line rests on, and the row came back "Not found in its source".
    * [] when there's no cited document, it isn't indexed, or the lookup fails; the check then says
    * it judged against the case data alone. */
-  static async sourcePassages(caseId: string, label: string, sourceLabel: string | null): Promise<string[]> {
+  static async sourcePassages(caseId: string, label: string, sourceLabel: string | null, detail?: string | null): Promise<string[]> {
     if (!sourceLabel) return [];
     try {
       const docs = await DocumentRepo.listAllByCase(caseId);
       const doc = docs.find((d) => d.name === sourceLabel && d.ragStatus === "READY");
       if (!doc) return [];
-      const ids = await DocumentChunkRepo.findRelevantByDocument(doc.id, await embedText(label), MAX_SOURCE_PASSAGES);
+      const byLabel = await DocumentChunkRepo.findRelevantByDocument(doc.id, await embedText(label), MAX_SOURCE_PASSAGES);
+      const byDetail = detail?.trim()
+        ? await DocumentChunkRepo.findRelevantByDocument(doc.id, await embedText(detail), MAX_DETAIL_PASSAGES)
+        : [];
+      const ids = [...new Set([...byLabel, ...byDetail])];
       const chunks = await DocumentChunkRepo.findTextsByIds(ids);
       return chunks.map((c) => `${c.pageNumber ? `[p. ${c.pageNumber}] ` : ""}${c.chunkText.slice(0, MAX_PASSAGE_CHARS)}`);
     } catch (err) {
