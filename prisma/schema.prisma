@@ -1492,7 +1492,7 @@ model TerminalWorkspace {
 // A named multi-screen workspace template (which panel lives on which physical screen, and that
 // screen's arrangement mode) — see apps/web/lib/terminal/screen-presets.ts's ScreenPresetDef,
 // which this mirrors field-for-field via `screens`. `userId: null` marks a system preset, global
-// to every user and only ever written by the seeder (prisma/seeders/screen-preset.seeder.ts);
+// to every user and only ever written by the seeder (prisma/seeders/screen-preset-grouped.seeder.ts);
 // otherwise it's a lawyer's own saved preset, cascade-deleted with their account.
 model ScreenPreset {
   id             String   @id @default(uuid())
