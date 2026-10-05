@@ -20,10 +20,27 @@ describe("Legal Terminal — workspace catalog", () => {
     expect(layout.panels.find((p) => p.id === "redTeam")?.visible).to.equal(false);
   });
 
-  it("does not unlock teamAudit for Solo", () => {
+  it("does not unlock a Professional pane for Solo", () => {
     expect(skuAllowsPanel("SOLO", "PROFESSIONAL")).to.equal(false);
-    const layout = buildDefaultLayout("PANE_6", "SOLO");
-    expect(layout.panels.find((p) => p.id === "teamAudit")).to.equal(undefined);
+    expect(skuAllowsPanel("PROFESSIONAL", "PROFESSIONAL")).to.equal(true);
+  });
+
+  it("drops retired panes from a saved layout, and shows Case Summary when nothing else is left", () => {
+    const layout = normalizeLayout(
+      {
+        preset: "PANE_2",
+        panels: [
+          { id: "contradictions", visible: true, order: 0, width: 0.5, height: 1 },
+          { id: "teamAudit", visible: true, order: 1, width: 0.5, height: 1 },
+          { id: "citationMap", visible: false, order: 2, width: 0.5, height: 1 },
+          { id: "verification", visible: false, order: 3, width: 0.5, height: 1 },
+        ],
+      },
+      "ENTERPRISE",
+    );
+    const ids = layout.panels.map((p) => p.id as string);
+    for (const retired of ["contradictions", "teamAudit", "citationMap", "verification"]) expect(ids).to.not.include(retired);
+    expect(layout.panels.find((p) => p.id === "command")?.visible).to.equal(true);
   });
 
   it("lets redTeam be shown when the client requests it (unlike the permanently-folded dates panel)", () => {
@@ -374,6 +391,22 @@ describe("Legal Terminal — live risk analysis", () => {
       risks: [{ severity: "FATAL", status: "OPEN" }],
     });
     expect(result.overall.level).to.equal("HIGH");
+  });
+
+  it("counts open legal issues and weaknesses, not closed or resolved ones", () => {
+    const result = scoreCaseRisks({
+      findings: [
+        ...Array.from({ length: 4 }, () => ({ category: "LEGAL_ISSUE", tag: "OPEN" })),
+        ...Array.from({ length: 8 }, () => ({ category: "WEAKNESS", tag: "MINOR" })),
+        { category: "WEAKNESS", tag: "CLOSED" },
+        { category: "LEGAL_ISSUE", tag: "RESOLVED" },
+        { category: "STRENGTH", tag: "STRONG" },
+      ],
+    });
+    expect(result.overall.score).to.equal(44);
+    expect(result.overall.level).to.equal("MEDIUM");
+    expect(result.overall.drivers.map((d) => d.code)).to.deep.equal(["openWeaknesses", "openLegalIssues"]);
+    expect(result.overall.drivers[0].count).to.equal(8);
   });
 
   it("ignores accepted risks", () => {

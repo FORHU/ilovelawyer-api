@@ -72,7 +72,7 @@ async function main() {
         continue;
       }
 
-      await prisma.consultation.update({ where: { id }, data: { title } });
+      await prisma.consultation.update({ where: { id }, data: { title, titleSource: "AUTO" } });
       console.log(`  [ok]   ${id} — "${title}"`);
       success++;
     } catch (err) {

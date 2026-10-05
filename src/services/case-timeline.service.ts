@@ -1,14 +1,11 @@
-import { TimelineSource } from "@prisma/client";
 import CaseAccess from "../utils/case-access";
 import CaseTimelineRepo, { TimelineInput } from "../repositories/case-timeline.repository";
 import CaseRepo from "../repositories/case.repository";
 import HttpError from "../utils/http-error";
-import { TimelineItem } from "../utils/response-parser";
 import OrganizationRepo from "../repositories/organization.repository";
 import { ParsedKeyDate } from "../utils/case-strategy-parse";
 import CaseGraphSvc from "./case-graph.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
-import { parseOccurredOn } from "../utils/case-timeline.utils";
 import logger from "../utils/logger";
 
 export default class CaseTimelineSvc {
@@ -44,27 +41,15 @@ export default class CaseTimelineSvc {
     await CaseGraphSvc.removeNode("TIMELINE_EVENT", id);
   }
 
-  static async promoteFromAi(caseId: string, items: TimelineItem[], actorId?: string) {
-    if (!caseId || items.length === 0) return { count: 0 };
-    const existing = await CaseTimelineRepo.list(caseId);
-    const existingKeys = new Set(existing.map((row) => `${row.title}|${row.occurredOn?.toISOString() ?? ""}`));
-    const incoming: TimelineInput[] = items
-      .map((item) => ({
-        title: item.title,
-        occurredOn: parseOccurredOn(item.date),
-        description: item.description,
-        status: item.status,
-        source: "AI" as TimelineSource,
-        createdBy: actorId ?? null,
-      }))
-      .filter((item) => !existingKeys.has(`${item.title}|${item.occurredOn?.toISOString() ?? ""}`));
-    if (incoming.length === 0) return { count: 0 };
-    // Individual creates (not CaseTimelineRepo.createMany) so each row's id is in hand to ensure
-    // its CaseGraphNode — createMany can't return the rows it just inserted, and without a node
-    // these are invisible to CaseGraphViewSvc's "timeline" view (see replaceDocumentDates above).
-    const created = await Promise.all(incoming.map((item) => CaseTimelineRepo.create(caseId, item)));
-    await Promise.all(created.map((row) => CaseGraphSvc.ensureNode(caseId, "TIMELINE_EVENT", row.id)));
-    return { count: created.length };
+  /**
+   * Removes the events earlier versions copied in from AI chat answers (and their graph nodes).
+   * The case timeline now holds only dates found in the case's documents, plus the ones lawyers or
+   * the calendar add: a chat date carries no document, so it read as "No source document".
+   */
+  static async removeChatCopiedEvents(caseId: string): Promise<number> {
+    const ids = await CaseTimelineRepo.deleteChatCopiedEvents(caseId);
+    await Promise.all(ids.map((id) => CaseGraphSvc.removeNode("TIMELINE_EVENT", id)));
+    return ids.length;
   }
 
   /** `documentIds` is the full set of READY documents the run that produced `dates` actually

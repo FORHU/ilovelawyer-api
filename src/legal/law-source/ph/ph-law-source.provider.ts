@@ -46,4 +46,8 @@ export class PhLawSourceProvider implements LawSourceProvider {
   getDocument(params: { category: LawCategory; id: string }) {
     return LawSvc.getDocument(params);
   }
+
+  getPreview(params: { category: LawCategory; id: string }) {
+    return LawSvc.getPreview(params);
+  }
 }

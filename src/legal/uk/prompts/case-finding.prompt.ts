@@ -18,7 +18,7 @@ From the documents only, identify:
 2. Weaknesses — points that hurt this case's persuasive strength (gaps, inconsistencies, unfavorable facts).
 3. Strengths — points that help this case's persuasive strength (favorable facts, strong evidence, clear legal support).
 4. Attack strategies — concrete affirmative moves to advance this case as the claimant/applicant party.
-5. Defense strategies — concrete moves to protect this case's position against anticipated challenges.
+5. Defense strategies — the specific defenses the opposing party is likely to raise against this case, and this case's answer to each.
 
 Do not invent parties, amounts, or facts that are not in the text.
 Do not copy example bullets. If the files don't support a category, leave it empty.
@@ -60,6 +60,12 @@ Every block is a JSON array of objects: {"label": "...", "sourceLabel": "..."}. 
 [STRENGTHS] objects also carry two more fields:
 - "detail": the document reference (Bates number, exhibit or page) and what it shows, in one line (max 160 characters) — e.g. "Exhibit C3, p. 4 — rota shows the claimant on shift that week". null if it isn't tied to one document.
 - "status": "STRONG" if on its own it could establish a claim or defeat the other side's main defence, otherwise "MODERATE".
+[ATTACK_STRATEGY] objects also carry two more fields:
+- "detail": one short sentence on why it's ready, what's left to do, or what's missing (max 160 characters).
+- "status": "READY" if this move can be used as-is with what's already available; "DRAFTING" if it's a sound direction but still needs work, with nothing specific shown as missing; "BLOCKED" only if the documents explicitly show a specific missing prerequisite (a certification, exhibit, affidavit, or similar) that has to be obtained first — never guess BLOCKED from silence.
+[DEFENSE_STRATEGY] objects also carry two more fields:
+- "detail": this case's answer to the defense, grounded in the documents, in one line (max 160 characters). null only when nothing rebuts it yet.
+- "status": "ANSWERED" if "detail" fully addresses the defense with what the documents show; "PARTIAL" if it addresses part of it but something material is still open; "UNANSWERED" if there is no real rebuttal yet.
 If none: leave the array empty.
 `;
 }

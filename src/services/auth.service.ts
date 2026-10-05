@@ -5,14 +5,18 @@ import { Prisma } from "@prisma/client";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import TenantRepo from "../repositories/tenant.repository";
+import TenantSettingSvc from "./tenant-setting.service";
 import loginToken from "../utils/loginToken";
+import AvatarSvc from "./avatar.service";
+import GoogleCalendarSvc from "./google-calendar.service";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import logger from "../utils/logger";
 import type { TenantCode } from "../types/tenant-code";
-import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
-import { originForTenantCode } from "../utils/tenant-host";
+import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS } from "../config";
+import { emailLinkOrigin } from "../utils/tenant-host";
 import {
   BCRYPT_SALT_ROUNDS,
   OTP_EXPIRY_MS,
@@ -20,13 +24,24 @@ import {
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
   HANDOFF_TTL_SECONDS,
+  TERMS_VERSION,
+  GOOGLE_PHOTO_SIGNUP_WAIT_MS,
 } from "../constants";
-import { generateOtpCode, duplicateEmailMessage } from "../utils/auth.utils";
+import { generateOtpCode, duplicateEmailMessage, isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 import { newHandoffCode, handoffKey } from "../utils/handoff";
 import { redis } from "../lib/redis";
 
 export default class AuthSvc {
-  static async signup(username: string, email: string, password: string, name: string, requestTenantCode: TenantCode | null = null) {
+  static async signup(
+    username: string,
+    email: string,
+    password: string,
+    name: string,
+    requestTenantCode: TenantCode | null = null,
+    acceptedTerms = false,
+  ) {
+    email = normalizeEmail(email);
+
     const existingUser = await AuthRepo.findByEmail(email);
     if (existingUser) {
       throw new HttpError(duplicateEmailMessage(existingUser, "Email already in use", requestTenantCode), 409);
@@ -46,7 +61,17 @@ export default class AuthSvc {
 
     let user;
     try {
-      user = await AuthRepo.createUser({ username, email, password: hashedPassword, name, tenantId });
+      // acceptedTerms is optional on the wire for now (signupSchema) so an app build that
+      // predates it can still sign up — the frontend already gates signup on the Terms dialog.
+      // Recorded whenever it's sent; make it required once every client sends it.
+      user = await AuthRepo.createUser({
+        username,
+        email,
+        password: hashedPassword,
+        name,
+        tenantId,
+        termsVersion: acceptedTerms ? TERMS_VERSION : null,
+      });
     } catch (err) {
       // The findByEmail/findByUsername checks above aren't atomic with this insert — a
       // concurrent signup for the same email (a double-submit, or a retry racing the request
@@ -62,10 +87,40 @@ export default class AuthSvc {
 
     // Sent immediately, before email verification — the user should know to expect the
     // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
-    const html = await renderTemplate("signup-pending", { name: user.name || "there" });
-    await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
+    // Skipped when the Tenant auto-approves signups: there's no wait, and verifyOtp flips
+    // the account to ACTIVE (see autoApproveIfEnabled).
+    if (!(await TenantSettingSvc.isAutoApproveOn(tenantId))) {
+      await AuthSvc.sendSignupPendingEmail(user);
+    }
 
     return user;
+  }
+
+  /** Non-fatal by design: the account row already exists by the time this runs, so letting a
+   * mail failure turn into a 500 would leave the client with no session (Google) or a retry
+   * that 409s "Email already in use" (password) for an account that was actually created. */
+  private static async sendSignupPendingEmail(user: { id: string; email: string; name: string | null }) {
+    try {
+      const html = await renderTemplate("signup-pending", { name: user.name || "there" });
+      await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
+    } catch (err) {
+      logger.error("Failed to send signup-pending email", { err, userId: user.id });
+    }
+  }
+
+  /** Flips a freshly verified PENDING account straight to ACTIVE when its Tenant has
+   * auto-approve on (admin Settings page). Called at the moment the email becomes verified —
+   * verifyOtp for password signups, account creation for Google ones — never at row creation
+   * for password signups: AuthRepo.deleteUnverifiedPendingUser (cancelSignup) only matches
+   * unverified PENDING rows, so an unverified ACTIVE row could never be cleaned up.
+   * No session wipe or email, unlike AdminSvc.transition — the user is signing in right now
+   * and the session about to be issued already sees ACTIVE. Also called by AdminSvc.verifyEmail,
+   * where an admin marks the email verified in place of the OTP. Returns whether it approved. */
+  static async autoApproveIfEnabled(user: { id: string; tenantId: string | null; approvalStatus: string }) {
+    if (user.approvalStatus !== "PENDING") return false;
+    if (!(await TenantSettingSvc.isAutoApproveOn(user.tenantId))) return false;
+    await AuthRepo.setApprovalStatus(user.id, "ACTIVE", null);
+    return true;
   }
 
   /** "Use a different email" on the sign-up OTP screen — lets an abandoned signup attempt be
@@ -101,7 +156,10 @@ export default class AuthSvc {
 
   static async login(email: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
     const user = await AuthRepo.findByEmail(email);
-    if (!user || !user.password) {
+    // A Google SSO account gets the same generic 401 as a wrong password, so this endpoint
+    // can't be used to learn which emails are Google accounts. forgotPassword emails the
+    // owner a "use Continue with Google" note instead of a reset link.
+    if (!user || !user.password || isGoogleSsoAccount(user)) {
       throw new HttpError("Invalid email or password", 401);
     }
 
@@ -155,7 +213,7 @@ export default class AuthSvc {
     requestTenantCode: TenantCode | null = null,
   ) {
     const user = await AuthRepo.findByEmail(email);
-    if (!user || !user.password) {
+    if (!user || !user.password || isGoogleSsoAccount(user)) {
       throw new HttpError("Invalid email or password", 401);
     }
 
@@ -242,6 +300,7 @@ export default class AuthSvc {
     }
 
     await AuthRepo.markEmailVerified(user.id);
+    await AuthSvc.autoApproveIfEnabled(user);
     await AuthRepo.updateLastLogin(user.id);
 
     // No "remember" preference exists at signup time — default true, matching
@@ -303,8 +362,39 @@ export default class AuthSvc {
     await AuthRepo.deleteByRefreshToken(refreshToken);
   }
 
-  static async loginWithGoogle(idToken: string, remember = true, requestTenantCode: TenantCode | null = null) {
-    const { googleId, email, name, isEmailVerified } = await verifyGoogleToken(idToken);
+  /** The 409 for a Google sign-in whose email already belongs to an account that isn't bound
+   * to this Google identity. `code` tells the client what it can do next:
+   * GOOGLE_LINK_REQUIRED → offer the password-confirmed link step (linkGoogle below);
+   * GOOGLE_ACCOUNT_MISMATCH → the account is already bound to a *different* Google identity;
+   * no code → nothing to offer here (the account lives on another Tenant's site, or is an
+   * operator ADMIN account, which is never linked). */
+  private static googleEmailConflict(
+    existing: { email: string; role: string; googleId: string | null; tenant: { code: string; name: string } | null },
+    requestTenantCode: TenantCode | null,
+  ): HttpError {
+    const message = duplicateEmailMessage(existing, "Email already registered with a different sign-in method", requestTenantCode);
+    if (existing.googleId) {
+      return new HttpError("This email is already connected to a different Google account", 409, "GOOGLE_ACCOUNT_MISMATCH");
+    }
+    if (existing.role === "ADMIN" || (existing.tenant && existing.tenant.code !== requestTenantCode)) {
+      return new HttpError(message, 409);
+    }
+    // `email` lets the link step show which account it's about to connect to. Only ever sent
+    // to a caller holding a valid Google token for this exact, Google-verified address, so it
+    // reveals nothing they don't already know.
+    return new HttpError(message, 409, "GOOGLE_LINK_REQUIRED", { email: existing.email });
+  }
+
+  /** `acceptedTerms` only matters when this call would create the account — a returning
+   * Google user is never re-asked. Without it, nothing is created and the client gets 428
+   * TERMS_ACCEPTANCE_REQUIRED so it can show the Terms and retry with the same token. */
+  static async loginWithGoogle(
+    idToken: string,
+    remember = true,
+    requestTenantCode: TenantCode | null = null,
+    acceptedTerms = false,
+  ) {
+    const { googleId, email: googleEmail, name, picture, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
       throw new HttpError("Invalid Google token", 401);
@@ -314,22 +404,62 @@ export default class AuthSvc {
       throw new HttpError("Google account email is not verified", 401);
     }
 
+    const email = normalizeEmail(googleEmail);
     let user = await AuthRepo.findByGoogleId(googleId);
+    let created = false;
 
     if (!user) {
       const existingByEmail = await AuthRepo.findByEmail(email);
-      if (existingByEmail) {
-        throw new HttpError(duplicateEmailMessage(existingByEmail, "Email already registered with a different sign-in method", requestTenantCode), 409);
+      // A password signup that never verified its email (and was never admin-reviewed) is the
+      // same limbo row cancelSignup already lets anyone clear — it never proved ownership of
+      // this inbox, while Google just did. Replaced below rather than blocking the real owner
+      // (and so a squatted, unverified signup can't be used to pre-hijack their account).
+      const replacesAbandonedSignup =
+        !!existingByEmail && !existingByEmail.isEmailVerified && existingByEmail.approvalStatus === "PENDING";
+      if (existingByEmail && !replacesAbandonedSignup) {
+        throw AuthSvc.googleEmailConflict(existingByEmail, requestTenantCode);
+      }
+
+      if (!acceptedTerms) {
+        // 428 matches login()'s "one more step before a session" meaning, but clients must
+        // branch on `code` — on /login, a bare 428 means the forced password update instead.
+        throw new HttpError("Terms acceptance required", 428, "TERMS_ACCEPTANCE_REQUIRED");
+      }
+
+      if (replacesAbandonedSignup) {
+        await AuthRepo.deleteUnverifiedPendingUser(email);
       }
 
       // Same lenient handling as password signup — see the comment there.
       const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
-      user = await AuthRepo.createGoogleUser(email, googleId, name ?? undefined, tenantId);
+      try {
+        user = await AuthRepo.createGoogleUser({ email, googleId, name: name ?? undefined, tenantId, termsVersion: TERMS_VERSION });
+        created = true;
+      } catch (err) {
+        // The findByGoogleId/findByEmail checks above aren't atomic with the insert — a
+        // double click, two tabs or a retry can race another request for the same identity
+        // past them. Resolve to whatever the winner created instead of a 500.
+        user = await AuthSvc.resolveGoogleCreateRace(err, googleId, email, requestTenantCode);
+      }
+    }
 
-      // Same as password signup — sent once, right at account creation. Returning
-      // Google users (the `else` branch) never hit this again.
-      const html = await renderTemplate("signup-pending", { name: user.name || "there" });
-      await sendEmail({ to: user.email, subject: "Your ilovelawyer signup is pending approval", html });
+    if (created) {
+      // Google has already verified the email, so this is the verification moment — the
+      // counterpart of verifyOtp's call for password signups.
+      const autoApproved = await AuthSvc.autoApproveIfEnabled(user);
+
+      // Same as password signup — sent once, only by the request that actually created the
+      // account. Returning users and the loser of a creation race never hit this (the winner
+      // already auto-approved and emailed).
+      if (!autoApproved) {
+        await AuthSvc.sendSignupPendingEmail(user);
+      }
+
+      // The Google profile photo becomes the default avatar — copied once, here, and never on a
+      // returning login or a link. Waited on briefly so the response (and the new user's first
+      // screen) already carries it; a slow copy finishes in the background. Never fails sign-in.
+      const photoImport = AvatarSvc.importGooglePhoto(user.id, picture);
+      await Promise.race([photoImport, new Promise((resolve) => setTimeout(resolve, GOOGLE_PHOTO_SIGNUP_WAIT_MS).unref())]);
     } else {
       await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);
@@ -346,46 +476,131 @@ export default class AuthSvc {
     };
   }
 
-  static async refreshGoogleToken(userId: string) {
-    const googleRefreshToken = await AuthRepo.findGoogleRefreshToken(userId);
-    if (!googleRefreshToken) {
-      throw new HttpError("No refresh token — user must reconnect Google", 400);
+  /** Maps a failed createGoogleUser to the account a concurrent request created first. A
+   * P2002 on `googleId` means this exact identity won the race — log into it. A P2002 on
+   * `email` means some account took the address: the same identity (log in), or a different
+   * one (the usual email conflict). Anything else is a real error and is rethrown. */
+  private static async resolveGoogleCreateRace(
+    err: unknown,
+    googleId: string,
+    email: string,
+    requestTenantCode: TenantCode | null,
+  ) {
+    if (isUniqueViolation(err, "googleId")) {
+      const winner = await AuthRepo.findByGoogleId(googleId);
+      if (winner) return winner;
     }
-
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        refresh_token: googleRefreshToken,
-        grant_type: "refresh_token",
-      }),
-    });
-
-    const data = await tokenRes.json();
-    if (!tokenRes.ok || !data.access_token) {
-      throw new HttpError(data.error ?? "Refresh failed", 400);
+    if (isUniqueViolation(err, "email")) {
+      const winner = await AuthRepo.findByEmail(email);
+      if (winner?.googleId === googleId) return winner;
+      if (winner) throw AuthSvc.googleEmailConflict(winner, requestTenantCode);
     }
-
-    await AuthRepo.updateGoogleAccessToken(userId, data.access_token);
-
-    return { access_token: data.access_token };
+    throw err;
   }
 
-  static async forgotPassword(email: string) {
+  /** The GOOGLE_LINK_REQUIRED follow-up: attaches a verified Google identity to the existing
+   * password account with the same email, but only once the caller proves they own that
+   * account by its password. A verified email match alone isn't enough — a Google Workspace
+   * domain can reassign an ex-employee's address to someone else, and linking must not skip
+   * the gates login() enforces (verification, forced password update, Tenant). On success
+   * behaves like a completed login(). */
+  static async linkGoogle(idToken: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
+    const { googleId, email, isEmailVerified } = await verifyGoogleToken(idToken);
+
+    if (!googleId) {
+      throw new HttpError("Invalid Google token", 401);
+    }
+
+    if (!isEmailVerified) {
+      throw new HttpError("Google account email is not verified", 401);
+    }
+
+    const user = await AuthRepo.findByEmail(email);
+    if (!user || !user.password || isGoogleSsoAccount(user)) {
+      throw new HttpError("Invalid email or password", 401);
+    }
+
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      throw new HttpError("Invalid email or password", 401);
+    }
+
+    if (user.role === "ADMIN") {
+      throw new HttpError("Google sign-in can't be connected to this account", 409);
+    }
+
+    if (user.googleId && user.googleId !== googleId) {
+      throw new HttpError("This email is already connected to a different Google account", 409, "GOOGLE_ACCOUNT_MISMATCH");
+    }
+
+    if (!user.isEmailVerified) {
+      throw new HttpError("Email not verified", 403);
+    }
+
+    // Same gate and status as login() — the client routes to its "set a new password" step.
+    if (user.mustChangePassword) {
+      throw new HttpError("Password update required", 428);
+    }
+
+    await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
+
+    // Idempotent for a retry of a link that already went through.
+    if (user.googleId !== googleId) {
+      const linked = await AuthRepo.linkGoogleId(user.id, googleId);
+      if (!linked) {
+        throw new HttpError("This Google account could not be connected to this account", 409, "GOOGLE_ACCOUNT_MISMATCH");
+      }
+
+      try {
+        const html = await renderTemplate("google-connected", { name: user.name || "there" });
+        await sendEmail({ to: user.email, subject: "Google sign-in was connected to your ilovelawyer account", html });
+      } catch (err) {
+        logger.error("Failed to send google-connected email", { err, userId: user.id });
+      }
+    }
+
+    const { accessToken, refreshToken } = loginToken(user.id, remember);
+
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    await AuthRepo.createSession(user.id, refreshToken, expiresAt);
+    await AuthRepo.updateLastLogin(user.id);
+
+    return {
+      user: await AuthRepo.findById(user.id),
+      accessToken,
+      refreshToken,
+    };
+  }
+
+  /** Fresh Google Calendar access token for the signed-in user (see GoogleCalendarSvc). */
+  static async refreshGoogleToken(userId: string) {
+    return { access_token: await GoogleCalendarSvc.getAccessToken(userId) };
+  }
+
+  /** `requestOrigin`: the allow-listed frontend the request came from (requestFrontendOrigin), so
+   * the emailed link opens on the same site the user is using. */
+  static async forgotPassword(email: string, requestOrigin: string | null = null) {
     const user = await AuthRepo.findByEmail(email);
     const result = { message: "If the email exists, a reset link will be sent" };
+
+    // The site the user asked from, if it belongs to their Tenant; otherwise their Tenant's own
+    // subdomain (uk./ph.), not the bare CLIENT_URL[0] — see emailLinkOrigin. user.tenant is
+    // already on hand from findByEmail's include, so no extra lookup needed.
+    const origin = emailLinkOrigin(user?.tenant?.code, requestOrigin);
+
+    // Google SSO accounts never get a password (see isGoogleSsoAccount). Same response as
+    // every other case, so it reveals nothing — only the inbox owner learns to use Google.
+    if (user && isGoogleSsoAccount(user)) {
+      const html = await renderTemplate("google-sign-in", { name: user.name || "there", loginLink: `${origin}/login` });
+      await sendEmail({ to: user.email, subject: "Sign in to ilovelawyer with Google", html });
+      return result;
+    }
 
     if (user) {
       const token = crypto.randomUUID();
       const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
       await AuthRepo.setResetToken(user.id, token, expiresAt);
 
-      // A tenant-scoped account's reset link should land on its own subdomain (uk./ph.), not
-      // always the bare CLIENT_URL[0] — same reasoning as admin.service.ts's login link.
-      // user.tenant is already on hand from findByEmail's include, so no extra lookup needed.
-      const origin = originForTenantCode(user.tenant?.code);
       const resetLink = `${origin}/reset-password?token=${token}`;
       const html = await renderTemplate("reset-password", {
         name: user.name || "User",

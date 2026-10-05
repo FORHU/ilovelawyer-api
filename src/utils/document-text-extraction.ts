@@ -5,7 +5,7 @@ import WordExtractor from "word-extractor";
 import { ocrDocument, ocrPdfFromS3 } from "./ocr";
 import logger from "./logger";
 
-type DocType = "pdf" | "doc" | "docx" | "image" | "xlsx";
+type DocType = "pdf" | "doc" | "docx" | "image" | "xlsx" | "txt";
 
 // Textract's synchronous DetectDocumentText only accepts these two raster formats (plus
 // single-page PDF, handled separately above) — anything else (WEBP, GIF, HEIC, ...) still
@@ -36,8 +36,10 @@ function resolveType(mimeType?: string | null, filename?: string): DocType | nul
   if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
   if (mimeType && XLSX_MIME_TYPES.has(mimeType)) return "xlsx";
   if (mimeType && IMAGE_MIME_TYPES.has(mimeType)) return "image";
+  if (mimeType === "text/plain") return "txt";
 
   const ext = filename?.split(".").pop()?.toLowerCase();
+  if (ext === "txt") return "txt";
   if (ext === "pdf") return "pdf";
   if (ext === "doc") return "doc";
   if (ext === "docx") return "docx";
@@ -133,6 +135,13 @@ export async function extractPages(
 
   if (type === "xlsx") {
     return { pages: await extractXlsxPages(buffer), method: "text", ocrAttempted: false };
+  }
+
+  // Plain text is already the text layer. Decoded as UTF-8 (a leading BOM, as Windows Notepad
+  // writes, is dropped); form feeds still split pages via pagesFromText.
+  if (type === "txt") {
+    const text = buffer.toString("utf8").replace(/^﻿/, "");
+    return { pages: pagesFromText(text), method: "text", ocrAttempted: false };
   }
 
   // A photo/scan has no embedded text layer to try first — straight to Textract, same call

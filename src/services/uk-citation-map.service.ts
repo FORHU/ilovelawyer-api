@@ -2,6 +2,7 @@ import CaseAccess from "../utils/case-access";
 import CitationCheckRepo from "../repositories/citation-check.repository";
 import LawRepo from "../repositories/law.repository";
 import { resolveUkCitationToLaw } from "../utils/uk-citation-resolution";
+import { lawLibraryHref } from "../utils/law-library-href";
 import { CitationMapSeedItem } from "./citation-map.service";
 
 export default class UkCitationMapSvc {
@@ -47,6 +48,7 @@ export default class UkCitationMapSvc {
               jurisUrl: law.jurisUrl,
               pdfUrl: law.pdfUrl,
               citationsExtractedAt: law.citationsExtractedAt?.toISOString() ?? null,
+              libraryHref: lawLibraryHref("UK", law),
             }
           : null,
       };

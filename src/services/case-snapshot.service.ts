@@ -30,6 +30,7 @@ import MindMapRepo from "../repositories/mind-map.repository";
 import { buildCaseTrends } from "../utils/case-trends";
 import { OutlookDriver } from "../utils/case-outlook-parse";
 import { summarizeAuthorities } from "../utils/authority-summary";
+import { computeDamagesSummary } from "../utils/damages-compute";
 import { CASE_TREND_WEEKS, OUTLOOK_DISCLAIMER, OUTLOOK_HISTORY_LIMIT } from "../constants";
 
 export default class CaseSnapshotSvc {
@@ -66,6 +67,7 @@ export default class CaseSnapshotSvc {
       outlook,
       outlookHistory,
       caseMindMap,
+      tenantCode,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -94,6 +96,9 @@ export default class CaseSnapshotSvc {
       CaseOutlookRepo.latest(caseId),
       CaseOutlookRepo.history(caseId, OUTLOOK_HISTORY_LIMIT),
       MindMapRepo.findCaseMapMeta(caseId),
+      // Only picks the damages currency here; a case with no organization falls back to PHP
+      // rather than failing the whole snapshot.
+      CaseAccess.resolveTenantCode(caseId).catch(() => null),
     ]);
 
     // listAllByCase is unscoped by status (its other callers need archived documents for id
@@ -180,6 +185,9 @@ export default class CaseSnapshotSvc {
       findings,
       witnesses,
       damages,
+      // Computed from `damages` on every read (utils/damages-compute.ts) — amounts, shares, the
+      // exposure range and what is still provisional. The client never re-derives these.
+      damagesSummary: computeDamagesSummary(damages, tenantCode),
       reconstruction,
       // The dated event chain (Events tab) — separate from `reconstruction`, which only exists once a
       // narrative has been generated. Named apart from `events`, which is the calendar.
@@ -248,6 +256,7 @@ export default class CaseSnapshotSvc {
         citations,
         deadlines,
         matrix: evidenceMatrix,
+        findings,
       }),
       lastRefreshedAt: caseRecord.lastRefreshedAt,
     };

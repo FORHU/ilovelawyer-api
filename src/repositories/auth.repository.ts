@@ -1,10 +1,15 @@
 import prisma from "../lib/prisma";
 import { ApprovalStatus, Prisma } from "@prisma/client";
+import { redis } from "../lib/redis";
+import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
+import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
+import { getStableProxyFileUrl } from "../utils/s3";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
-// same shape (see setDeletionRequested's note). `password` is selected only to derive
-// `hasPassword` in toPublicUser and is never included in what's returned.
+// same shape (see setDeletionRequested's note). `password`, `avatar` and `googleRefreshToken` are
+// selected only to derive `hasPassword`, `avatarUrl` and `googleCalendarConnected` in
+// toPublicUser and are never included in what's returned.
 const PUBLIC_USER_SELECT = {
   id: true,
   username: true,
@@ -22,25 +27,90 @@ const PUBLIC_USER_SELECT = {
   updatedAt: true,
   deletionRequestedAt: true,
   password: true,
+  avatar: { select: { s3Key: true } },
+  googleRefreshToken: true,
 } as const;
 
-function toPublicUser<T extends { password: string | null }>(user: T): Omit<T, "password"> & { hasPassword: boolean } {
-  const { password, ...rest } = user;
-  return { ...rest, hasPassword: password !== null };
+/** `hasPassword` means "can sign in with a password" — always false for a Google SSO account,
+ * even one holding a password an older build let it set through the reset flow. */
+/** `avatarUrl` is a same-origin /files/<token> URL (stable for an hour — see
+ * getStableProxyFileUrl), or null when there's no avatar and the app shows initials.
+ * `googleCalendarConnected` only reports that a refresh token is stored; the token never leaves. */
+function toPublicUser<
+  T extends {
+    password: string | null;
+    provider: string | null;
+    avatar?: { s3Key: string | null } | null;
+    googleRefreshToken?: string | null;
+  },
+>(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken"> & {
+  hasPassword: boolean;
+  avatarUrl: string | null;
+  googleCalendarConnected: boolean;
+} {
+  const { password, avatar, googleRefreshToken, ...rest } = user;
+  return {
+    ...rest,
+    hasPassword: password !== null && !isGoogleSsoAccount(user),
+    avatarUrl: avatar?.s3Key ? getStableProxyFileUrl(avatar.s3Key) : null,
+    googleCalendarConnected: !!googleRefreshToken,
+  };
+}
+
+/** Reset tokens only ever apply to accounts that sign in with a password — a token emailed to a
+ * Google SSO account before forgotPassword stopped issuing them must not set a password now.
+ * Spelled as an OR: `provider: { not: "google" }` alone compiles to `provider <> 'google'`,
+ * which is NULL (so no match) for password signups, whose provider is null. */
+const PASSWORD_ACCOUNT_WHERE: Prisma.UserWhereInput = {
+  OR: [{ provider: null }, { provider: { not: "google" } }],
+};
+
+/** AdminSvc.listUsers caches each page under the current USERS_LIST_VERSION_KEY; bumping it
+ * orphans every cached page at once. Every write below that adds/removes a user row, or changes
+ * a column listUsers selects, passes its result through here, so the admin list reflects a
+ * signup, login, verification or approval immediately rather than after USERS_LIST_CACHE_TTL_S.
+ * Writes to columns the list doesn't show (tokens, OTP codes, sessions) deliberately skip it.
+ * Best-effort: redis.incr never throws, so Redis being down can't fail the write itself. */
+async function bustUsersList<T>(result: T): Promise<T> {
+  await redis.incr(USERS_LIST_VERSION_KEY);
+  return result;
 }
 
 export default class AuthRepo {
-  static async createUser(data: { username: string; email: string; password: string; name: string; tenantId?: string | null }) {
-    return prisma.user.create({
-      data: { username: data.username, email: data.email, password: data.password, name: data.name, tenantId: data.tenantId },
-    });
+  /** `termsVersion` is set only when the caller actually received a Terms acceptance with the
+   * request — it's stamped together with `termsAcceptedAt`, never one without the other. */
+  static async createUser(data: {
+    username: string;
+    email: string;
+    password: string;
+    name: string;
+    tenantId?: string | null;
+    termsVersion?: string | null;
+  }) {
+    return bustUsersList(
+      await prisma.user.create({
+        data: {
+          username: data.username,
+          email: normalizeEmail(data.email),
+          password: data.password,
+          name: data.name,
+          tenantId: data.tenantId,
+          ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
+        },
+      })
+    );
   }
 
   /** Includes the user's Tenant code/name — used to tell a duplicate-signup attempt whether
    * (and where) the existing account actually belongs (see AuthSvc.signup / loginWithGoogle).
-   * Harmless extra field for every other caller (login, forgotPassword). */
+   * Harmless extra field for every other caller (login, forgotPassword). Normalizes `email`
+   * itself as well as every service doing so, so no future caller can reintroduce a
+   * case-sensitive lookup by forgetting to. */
   static async findByEmail(email: string) {
-    return prisma.user.findUnique({ where: { email }, include: { tenant: { select: { code: true, name: true } } } });
+    return prisma.user.findUnique({
+      where: { email: normalizeEmail(email) },
+      include: { tenant: { select: { code: true, name: true } } },
+    });
   }
 
   /** The locale this user asked to be addressed in (User.preferredLanguage). Read per chat turn
@@ -59,18 +129,25 @@ export default class AuthRepo {
   /** Unlike findById, includes the actual password hash — used only for verifying the current
    * password in UsersSvc.changePassword. Never expose this result directly to a client. */
   static async findByIdWithPasswordHash(id: string) {
-    return prisma.user.findUnique({ where: { id }, select: { id: true, password: true } });
+    return prisma.user.findUnique({ where: { id }, select: { id: true, password: true, provider: true } });
   }
 
   /** Clears mustChangePassword in the same write — every password update goes through
    * strongPassword validation now, so every caller of this satisfies the forced-update
    * gate as a side effect, whether or not that's what motivated the call. */
   static async updatePasswordAndClearMustChange(userId: string, hashedPassword: string) {
-    return prisma.user.update({ where: { id: userId }, data: { password: hashedPassword, mustChangePassword: false } });
+    return bustUsersList(
+      await prisma.user.update({ where: { id: userId }, data: { password: hashedPassword, mustChangePassword: false } })
+    );
   }
 
   static async updateLastLogin(userId: string) {
-    return prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } });
+    return bustUsersList(await prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } }));
+  }
+
+  /** No bustUsersList: onboardingCompleted isn't a column AdminSvc.listUsers shows. */
+  static async setOnboardingCompleted(userId: string) {
+    return prisma.user.update({ where: { id: userId }, data: { onboardingCompleted: true } });
   }
 
   static async findByUsername(username: string) {
@@ -79,11 +156,11 @@ export default class AuthRepo {
 
   static async updateProfile(userId: string, data: { name?: string; username?: string }) {
     const user = await prisma.user.update({ where: { id: userId }, data, select: PUBLIC_USER_SELECT });
-    return toPublicUser(user);
+    return bustUsersList(toPublicUser(user));
   }
 
   static async deleteUser(userId: string) {
-    return prisma.user.delete({ where: { id: userId } });
+    return bustUsersList(await prisma.user.delete({ where: { id: userId } }));
   }
 
   /** Marks (or, given `null`, unmarks) a user for self-service deletion — see
@@ -115,7 +192,10 @@ export default class AuthRepo {
    * is left untouched. `deleteMany` (not `delete`) so a no-match is a silent no-op rather than
    * a thrown "record not found". */
   static async deleteUnverifiedPendingUser(email: string) {
-    return prisma.user.deleteMany({ where: { email, isEmailVerified: false, approvalStatus: "PENDING" } });
+    const result = await prisma.user.deleteMany({
+      where: { email: normalizeEmail(email), isEmailVerified: false, approvalStatus: "PENDING" },
+    });
+    return result.count > 0 ? bustUsersList(result) : result;
   }
 
   static async findByRefreshToken(refreshToken: string) {
@@ -138,34 +218,127 @@ export default class AuthRepo {
     return prisma.user.findUnique({ where: { googleId } });
   }
 
-  static async createGoogleUser(email: string, googleId: string, name?: string, tenantId?: string | null) {
+  /** Creates a first-time Google user. The username is claimed by trying the insert and
+   * retrying on a `username` collision (P2002) with a fresh numeric suffix — a findUnique
+   * pre-check isn't atomic with the insert, so two concurrent signups deriving the same base
+   * (john@a.com / john@b.com) could both pass it. Any other P2002 (`googleId`, `email`) is a
+   * race on the identity itself and is rethrown for AuthSvc.loginWithGoogle to resolve. */
+  static async createGoogleUser(data: {
+    email: string;
+    googleId: string;
+    name?: string;
+    tenantId?: string | null;
+    termsVersion: string;
+  }) {
+    const email = normalizeEmail(data.email);
     const base = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
-    let username = base;
-    while (await prisma.user.findUnique({ where: { username } })) {
-      username = `${base}${Math.floor(Math.random() * 9000) + 1000}`;
-    }
 
-    return prisma.user.create({
+    for (let attempt = 0; ; attempt++) {
+      const username = attempt === 0 ? base : `${base}${Math.floor(Math.random() * 9000) + 1000}`;
+      try {
+        return bustUsersList(
+          await prisma.user.create({
+            data: {
+              username,
+              email,
+              googleId: data.googleId,
+              name: data.name,
+              provider: "google",
+              isEmailVerified: true,
+              lastLoginAt: new Date(),
+              tenantId: data.tenantId,
+              termsAcceptedAt: new Date(),
+              termsVersion: data.termsVersion,
+            },
+          })
+        );
+      } catch (err) {
+        if (isUniqueViolation(err, "username") && attempt + 1 < GOOGLE_USERNAME_MAX_ATTEMPTS) continue;
+        throw err;
+      }
+    }
+  }
+
+  /** Attaches a Google identity to an existing account (AuthSvc.linkGoogle). Conditional on
+   * `googleId` still being null, re-evaluated atomically by Postgres at update time — so a
+   * concurrent link can't overwrite one that just landed. Returns false when nothing was
+   * linked: the row already has a Google identity, or this `googleId` belongs to another
+   * account (P2002). No bustUsersList: googleId isn't a column AdminSvc.listUsers shows. */
+  static async linkGoogleId(userId: string, googleId: string): Promise<boolean> {
+    try {
+      const result = await prisma.user.updateMany({ where: { id: userId, googleId: null }, data: { googleId } });
+      return result.count > 0;
+    } catch (err) {
+      if (isUniqueViolation(err, "googleId")) return false;
+      throw err;
+    }
+  }
+
+  /** The stored (encrypted) Google Calendar refresh token and last access token — see
+   * GoogleCalendarSvc, the only caller that decrypts them. */
+  static async findGoogleCalendarTokens(userId: string) {
+    return prisma.user.findUnique({
+      where: { id: userId },
+      select: { googleAccessToken: true, googleRefreshToken: true, googleCalendarSyncToken: true },
+    });
+  }
+
+  /** Everyone with Google Calendar connected — GoogleCalendarSyncQueue polls each of them. */
+  static async findGoogleCalendarUserIds(): Promise<string[]> {
+    const rows = await prisma.user.findMany({ where: { googleRefreshToken: { not: null } }, select: { id: true } });
+    return rows.map((r) => r.id);
+  }
+
+  /** Where the two-way sync left off; null makes the next poll take a fresh baseline. */
+  static async setGoogleCalendarSyncToken(userId: string, syncToken: string | null) {
+    return prisma.user.update({ where: { id: userId }, data: { googleCalendarSyncToken: syncToken } });
+  }
+
+  /** `encryptedRefreshToken` is omitted when Google didn't return a new one (a reconnect without
+   * fresh consent) — the stored one is kept rather than overwritten with null. */
+  static async setGoogleCalendarTokens(userId: string, data: { accessToken: string; encryptedRefreshToken?: string }) {
+    return prisma.user.update({
+      where: { id: userId },
       data: {
-        username,
-        email,
-        googleId,
-        name,
-        provider: "google",
-        isEmailVerified: true,
-        lastLoginAt: new Date(),
-        tenantId,
+        googleAccessToken: data.accessToken,
+        ...(data.encryptedRefreshToken ? { googleRefreshToken: data.encryptedRefreshToken } : {}),
+        // Possibly a different Google account than before — start the pull from a fresh baseline.
+        googleCalendarSyncToken: null,
       },
     });
   }
 
-  static async findGoogleRefreshToken(userId: string): Promise<string | null> {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { googleRefreshToken: true } });
-    return user?.googleRefreshToken ?? null;
-  }
-
   static async updateGoogleAccessToken(userId: string, accessToken: string) {
     return prisma.user.update({ where: { id: userId }, data: { googleAccessToken: accessToken } });
+  }
+
+  static async clearGoogleCalendarTokens(userId: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { googleAccessToken: null, googleRefreshToken: null, googleCalendarSyncToken: null },
+    });
+  }
+
+  static async findAvatarFile(userId: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { avatar: { select: { id: true, s3Key: true } } },
+    });
+    return user?.avatar ?? null;
+  }
+
+  /** Sets the avatar only while none is set — re-evaluated atomically by Postgres, so the
+   * background Google-photo import can never overwrite a photo the user uploaded meanwhile.
+   * No bustUsersList: the admin list doesn't show avatars. */
+  static async setAvatarIfEmpty(userId: string, fileId: string): Promise<boolean> {
+    const result = await prisma.user.updateMany({ where: { id: userId, avatarId: null }, data: { avatarId: fileId } });
+    return result.count > 0;
+  }
+
+  /** Points the user at `fileId` (or null for initials) and returns the public user shape. */
+  static async setAvatar(userId: string, fileId: string | null) {
+    const user = await prisma.user.update({ where: { id: userId }, data: { avatarId: fileId }, select: PUBLIC_USER_SELECT });
+    return toPublicUser(user);
   }
 
   static async setResetToken(userId: string, token: string, expiresAt: Date) {
@@ -181,7 +354,7 @@ export default class AuthRepo {
 
   static async consumeEmailVerificationOtp(email: string, code: string) {
     const user = await prisma.user.findFirst({
-      where: { email, emailVerificationOtp: code, emailVerificationOtpExpiry: { gt: new Date() } },
+      where: { email: normalizeEmail(email), emailVerificationOtp: code, emailVerificationOtpExpiry: { gt: new Date() } },
     });
     if (!user) return null;
 
@@ -191,12 +364,12 @@ export default class AuthRepo {
       data: { isEmailVerified: true, emailVerificationOtp: null, emailVerificationOtpExpiry: null },
     });
 
-    return result.count > 0 ? user : null;
+    return result.count > 0 ? bustUsersList(user) : null;
   }
 
   static async isResetTokenValid(token: string): Promise<boolean> {
     const user = await prisma.user.findFirst({
-      where: { otpCode: token, otpExpiry: { gt: new Date() } },
+      where: { otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
       select: { id: true },
     });
     return !!user;
@@ -204,7 +377,7 @@ export default class AuthRepo {
 
   static async consumeResetToken(token: string, hashedPassword: string): Promise<string | null> {
     const user = await prisma.user.findFirst({
-      where: { otpCode: token, otpExpiry: { gt: new Date() } },
+      where: { otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
       select: { id: true },
     });
     if (!user) return null;
@@ -213,7 +386,7 @@ export default class AuthRepo {
     // not at the time of the findFirst above — so concurrent requests racing on the
     // same token still only let one of them actually match and consume it.
     const result = await prisma.user.updateMany({
-      where: { id: user.id, otpCode: token, otpExpiry: { gt: new Date() } },
+      where: { id: user.id, otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
       // Completing a reset via the emailed link is proof of ownership of that inbox,
       // so it also satisfies email verification — otherwise an unverified account that
       // resets its password would still be locked out of login by the isEmailVerified
@@ -224,7 +397,7 @@ export default class AuthRepo {
       data: { password: hashedPassword, otpCode: null, otpExpiry: null, isEmailVerified: true, mustChangePassword: false },
     });
 
-    return result.count > 0 ? user.id : null;
+    return result.count > 0 ? bustUsersList(user.id) : null;
   }
 
   static async setLoginLinkToken(userId: string, token: string, expiresAt: Date) {
@@ -280,15 +453,17 @@ export default class AuthRepo {
   }
 
   static async markEmailVerified(userId: string) {
-    return prisma.user.update({
-      where: { id: userId },
-      data: {
-        isEmailVerified: true,
-        emailVerificationCode: null,
-        emailVerificationExpiry: null,
-        emailVerificationAttempts: 0,
-      },
-    });
+    return bustUsersList(
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          isEmailVerified: true,
+          emailVerificationCode: null,
+          emailVerificationExpiry: null,
+          emailVerificationAttempts: 0,
+        },
+      })
+    );
   }
 
   static async listUsers(params: {
@@ -343,8 +518,46 @@ export default class AuthRepo {
     return { data, total };
   }
 
+  /** Accounts "Approve all pending" would take for a Tenant: regular users still PENDING whose
+   * email is verified. Unverified ones are deliberately left alone so cancelSignup's
+   * deleteUnverifiedPendingUser can still clean them up — they're auto-approved at verifyOtp
+   * instead if the Tenant's switch is on. */
+  private static approvablePendingWhere(tenantId: string): Prisma.UserWhereInput {
+    return { tenantId, role: "USER", approvalStatus: "PENDING", isEmailVerified: true };
+  }
+
+  static async countApprovablePending(tenantId: string) {
+    return prisma.user.count({ where: AuthRepo.approvablePendingWhere(tenantId) });
+  }
+
+  static async findApprovablePendingIds(tenantId: string) {
+    const rows = await prisma.user.findMany({
+      where: AuthRepo.approvablePendingWhere(tenantId),
+      select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    return rows.map((r) => r.id);
+  }
+
+  static async findTenantById(userId: string) {
+    return prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, tenantId: true, tenant: { select: { code: true } } },
+    });
+  }
+
+  static async setTenant(userId: string, tenantId: string) {
+    return bustUsersList(
+      await prisma.user.update({
+        where: { id: userId },
+        data: { tenantId },
+        select: { id: true, tenant: { select: { code: true, name: true } } },
+      })
+    );
+  }
+
   static async setApprovalStatus(userId: string, status: ApprovalStatus, reason: string | null) {
-    return prisma.user.update({
+    const user = await prisma.user.update({
       where: { id: userId },
       data: { approvalStatus: status, denialReason: status === "DENIED" ? reason : null },
       select: {
@@ -361,5 +574,6 @@ export default class AuthRepo {
         lastLoginAt: true,
       },
     });
+    return bustUsersList(user);
   }
 }

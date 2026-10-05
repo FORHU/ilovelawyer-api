@@ -9,3 +9,8 @@ export const MAX_TURN_CHARS = 2900;
 export const TURN_SYNTHESIS_CONCURRENCY = 4;
 
 export const AUDIO_OVERVIEW_OUTPUT_PREFIX = "audio-overview/";
+
+// Neural, not Generative — Polly only returns speech marks (the per-sentence start times the
+// player highlights by) for the Neural engine; Generative has none. Case Reconstruction's table
+// read has no sentence highlighting and stays on Generative.
+export const AUDIO_OVERVIEW_ENGINE = "neural" as const;

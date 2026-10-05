@@ -10,6 +10,7 @@ interface GoogleUserInfo {
   sub: string;
   email?: string;
   name?: string;
+  picture?: string;
   email_verified?: boolean;
 }
 
@@ -40,6 +41,9 @@ export default async function verifyGoogleToken(accessToken: string) {
       googleId: payload.sub,
       email: payload.email,
       name: payload.name,
+      // Profile photo URL (default `profile` scope). Only AvatarSvc.importGooglePhoto uses it,
+      // once, when a Google signup creates the account.
+      picture: payload.picture,
       isEmailVerified: payload.email_verified ?? false,
     };
   } catch {

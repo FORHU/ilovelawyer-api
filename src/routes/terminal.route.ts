@@ -4,6 +4,7 @@ import validSession from "../middleware/valid-session.middleware";
 import resolveOrganization from "../middleware/resolve-organization.middleware";
 import TerminalWorkspaceCtrl from "../controllers/terminal-workspace.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
+import ScreenPresetCtrl from "../controllers/screen-preset.controller";
 
 const router = express.Router();
 
@@ -22,5 +23,10 @@ router.get("/workspaces/:id", asyncHandler(TerminalWorkspaceCtrl.getById));
 router.patch("/workspaces/:id", asyncHandler(TerminalWorkspaceCtrl.update));
 router.post("/workspaces/:id/apply", asyncHandler(TerminalWorkspaceCtrl.apply));
 router.delete("/workspaces/:id", asyncHandler(TerminalWorkspaceCtrl.delete));
+
+router.get("/screen-presets", asyncHandler(ScreenPresetCtrl.list));
+router.post("/screen-presets", asyncHandler(ScreenPresetCtrl.create));
+router.patch("/screen-presets/:id", asyncHandler(ScreenPresetCtrl.update));
+router.delete("/screen-presets/:id", asyncHandler(ScreenPresetCtrl.delete));
 
 export default router;

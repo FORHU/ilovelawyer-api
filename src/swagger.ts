@@ -52,6 +52,12 @@ const swaggerSpec: OAS3Definition = {
           onboardingCompleted: { type: "boolean" },
           provider: { type: "string", nullable: true },
           avatarId: { type: "string", nullable: true },
+          avatarUrl: {
+            type: "string",
+            nullable: true,
+            description: "Same-origin /files/<token> image URL; null means no avatar (the app shows initials). Google signups start with their Google photo",
+          },
+          googleCalendarConnected: { type: "boolean", description: "True when a Google Calendar refresh token is stored (see /users/me/google-calendar)" },
           lastLoginAt: { type: "string", format: "date-time", nullable: true },
           createdAt: { type: "string", format: "date-time" },
           updatedAt: { type: "string", format: "date-time" },
@@ -411,6 +417,7 @@ const swaggerSpec: OAS3Definition = {
                   username: { type: "string", example: "juandelacruz" },
                   email: { type: "string", format: "email", example: "juan@example.com" },
                   password: { type: "string", minLength: 10, example: "P@ssword123" },
+                  acceptedTerms: { type: "boolean", enum: [true], description: "Terms of Service accepted; recorded as termsAcceptedAt/termsVersion" },
                 },
               },
             },
@@ -521,8 +528,12 @@ const swaggerSpec: OAS3Definition = {
                 type: "object",
                 required: ["idToken"],
                 properties: {
-                  idToken: { type: "string", description: "Google OAuth ID token" },
+                  idToken: { type: "string", description: "Google OAuth access token (implicit flow)" },
                   remember: { type: "boolean", default: true, description: "Persist the refreshToken cookie across browser restarts" },
+                  acceptedTerms: {
+                    type: "boolean",
+                    description: "Terms of Service accepted. Required only when this call would create the account; ignored for returning users",
+                  },
                 },
               },
             },
@@ -530,22 +541,69 @@ const swaggerSpec: OAS3Definition = {
         },
         responses: {
           200: { description: "Login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
-          401: { description: "Invalid Google token", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          409: { description: "Email already registered with a different sign-in method", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Invalid Google token, or the Google email is not verified", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: {
+            description:
+              "Email already registered with a different sign-in method. code GOOGLE_LINK_REQUIRED (body also carries `email`) → call /auth/google/link with the account password; code GOOGLE_ACCOUNT_MISMATCH → the email is bound to a different Google account; no code → tenant mismatch or an account that can't be linked",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+          428: {
+            description: "code TERMS_ACCEPTANCE_REQUIRED — a new Google identity without acceptedTerms. Nothing was created; retry with acceptedTerms: true",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+        },
+      },
+    },
+    "/auth/google/link": {
+      post: {
+        tags: ["Auth"],
+        summary: "Connect a Google identity to the existing password account with the same email",
+        description:
+          "The follow-up to a GOOGLE_LINK_REQUIRED 409 from /auth/google. Requires the existing account's password; on success links the Google identity and logs the user in — same response shape and refreshToken cookie behavior as /auth/login.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["idToken", "password"],
+                properties: {
+                  idToken: { type: "string", description: "Google OAuth access token (implicit flow)" },
+                  password: { type: "string" },
+                  remember: { type: "boolean", default: false, description: "Persist the refreshToken cookie across browser restarts" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Linked, login successful", content: { "application/json": { schema: { $ref: "#/components/schemas/UserAuthResponse" } } } },
+          400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Invalid Google token, or invalid email or password", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          403: { description: "Email not verified", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: {
+            description: "Tenant mismatch, an account that can't be linked, or code GOOGLE_ACCOUNT_MISMATCH (already bound to another Google account)",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+          428: { description: "Password update required — same as /auth/login", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
     "/auth/google/refresh": {
       post: {
         tags: ["Auth"],
-        summary: "Refresh the current user's stored Google OAuth access token using their stored refresh token",
+        summary: "Mint a fresh Google Calendar access token from the user's stored (encrypted) refresh token",
         security: [{ bearerAuth: [] }],
         responses: {
           200: {
             description: "New Google access token",
             content: { "application/json": { schema: { type: "object", properties: { access_token: { type: "string" } } } } },
           },
-          400: { description: "No Google refresh token on file, or refresh failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: {
+            description: "GOOGLE_CALENDAR_NOT_CONNECTED, or GOOGLE_CALENDAR_RECONNECT_REQUIRED when Google revoked the grant (the stored tokens are cleared)",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+          502: { description: "Google unreachable", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -730,6 +788,69 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         responses: {
           204: { description: "Account deleted" },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/avatar": {
+      put: {
+        tags: ["Users"],
+        summary: "Upload or replace the current user's avatar",
+        description: "JPEG, PNG or WebP (checked by content, not extension), up to 2 MB. The previous avatar File is soft-deleted.",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: { type: "object", required: ["avatar"], properties: { avatar: { type: "string", format: "binary" } } },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Updated profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          400: { description: "Missing file or not a JPEG/PNG/WebP image", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          413: { description: "Larger than 2 MB", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Users"],
+        summary: "Remove the current user's avatar (back to initials)",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Updated profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/google-calendar": {
+      post: {
+        tags: ["Users"],
+        summary: "Connect Google Calendar",
+        description:
+          "Exchanges the one-time code from the app's Google auth-code popup (scope calendar.events) and stores the refresh token encrypted. Separate from sign-in; any Google account may be connected; never changes provider. Once connected, appointments sync both ways with the user's primary Google Calendar: app changes are pushed on create, edit, cancel (kept, marked 'Cancelled:') and delete (GoogleCalendarSyncSvc); title, time and note edits made in Google on app-created events are pulled about every 2 minutes, and deleting one in Google cancels the appointment (GoogleCalendarPullSvc).",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object", required: ["code"], properties: { code: { type: "string" } } } } },
+        },
+        responses: {
+          200: { description: "Updated profile (googleCalendarConnected: true)", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
+          400: {
+            description: "Code rejected by Google, calendar access not granted (GOOGLE_CALENDAR_SCOPE_MISSING), or no offline access",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
+          503: { description: "GOOGLE_TOKEN_ENC_KEY not configured on this server", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+      delete: {
+        tags: ["Users"],
+        summary: "Disconnect Google Calendar",
+        description: "Stops the watch channel, revokes the grant at Google and clears the stored tokens. Google-side failures don't block the local disconnect.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Updated profile (googleCalendarConnected: false)", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -2213,7 +2334,6 @@ const swaggerSpec: OAS3Definition = {
                 required: ["webhookUrl"],
                 properties: {
                   webhookUrl: { type: "string", format: "uri", description: "Public URL Google will push notifications to" },
-                  providerToken: { type: "string", description: "Google access token (falls back to stored token if omitted)" },
                 },
               },
             },
@@ -2221,6 +2341,7 @@ const swaggerSpec: OAS3Definition = {
         },
         responses: {
           200: { description: "Watch channel registered", content: { "application/json": { schema: { type: "object" } } } },
+          409: { description: "Google Calendar not connected, or needs reconnecting", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },

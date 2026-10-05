@@ -14,6 +14,7 @@ router.post("/update-required-password", asyncHandler(AuthCtrl.updateRequiredPas
 router.post("/refresh", asyncHandler(AuthCtrl.refresh));
 router.post("/logout", asyncHandler(AuthCtrl.logout));
 router.post("/google", asyncHandler(AuthCtrl.google));
+router.post("/google/link", asyncHandler(AuthCtrl.googleLink));
 router.post("/google/refresh", validSession, asyncHandler(AuthCtrl.refreshGoogleToken));
 router.post("/forgot-password", asyncHandler(AuthCtrl.forgotPassword));
 router.get("/reset-password/validate", asyncHandler(AuthCtrl.validateResetToken));

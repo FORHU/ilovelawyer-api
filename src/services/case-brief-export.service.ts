@@ -20,6 +20,14 @@ function sanitizeFilename(name: string): string {
   return name.trim().replace(/[^a-zA-Z0-9-_]+/g, "-").replace(/^-+|-+$/g, "") || "case";
 }
 
+/** The filename has to ride in the token: without it /files/<token> sends no Content-Disposition
+ * filename, and the browser saves the brief under the JWT itself, with no extension. Inline, not
+ * attachment, because the Preview tab renders this same URL in an <iframe>; the Download button's
+ * same-origin <a download> still forces a save. */
+function briefFileUrl(key: string, filename: string | null): string {
+  return getProxyFileUrl(key, { filename: filename ?? undefined, disposition: "inline" });
+}
+
 export default class CaseBriefExportSvc {
   /** Same case access as the snapshot — CaseSnapshotSvc.get() already calls
    * CaseAccess.loadAccessibleCase internally, so this needs no separate access check.
@@ -37,7 +45,7 @@ export default class CaseBriefExportSvc {
     const file = await FilesRepo.create(filename, outputUri, key);
     await CaseBriefExportRepo.create(caseId, userId, format, file.id);
 
-    return { file: { id: file.id, fileUrl: getProxyFileUrl(key) } };
+    return { file: { id: file.id, fileUrl: briefFileUrl(key, filename) } };
   }
 
   /** History listing needs its own access check — unlike export(), it never calls
@@ -54,7 +62,7 @@ export default class CaseBriefExportSvc {
         id: row.id,
         format: row.format as CaseBriefFormat,
         createdAt: row.createdAt,
-        file: { id: row.file.id, fileUrl: row.file.s3Key ? getProxyFileUrl(row.file.s3Key) : null },
+        file: { id: row.file.id, fileUrl: row.file.s3Key ? briefFileUrl(row.file.s3Key, row.file.filename) : null },
       })),
     );
     const nextCursor = filters.limit && items.length === filters.limit ? items[items.length - 1]!.id : null;

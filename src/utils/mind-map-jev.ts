@@ -38,6 +38,10 @@ export const MIND_MAP_JEV_MAX_NODES = 60;
 const CONCURRENCY = 5;
 /** Characters of the cited page(s) handed to Jev, same budget as the grounding check. */
 const PASSAGE_BUDGET = 3500;
+/** Chunks fetched for the unpaged fallback, then cut to PASSAGE_BUDGET. Enough for the budget even
+ * when a PDF was chunked one line per chunk (~80 characters); five such chunks were ~400
+ * characters, too little for Jev to support anything. */
+const FALLBACK_CHUNKS = 40;
 // Caps on each case-data list handed to Jev per point — same idea and size as red-team-jev.ts's.
 const MAX_CONTEXT_ITEMS = 25;
 /** Actions to take, not statements about the case: nothing in the case data can bear them out, so
@@ -75,7 +79,7 @@ export async function loadCitedPassage(node: MindMapItem): Promise<{ passage: st
     const text = onPage.join("\n").trim();
     if (text) return { passage: text.slice(0, PASSAGE_BUDGET), located: true };
   }
-  const { caseDocumentChunkIds } = await DocumentChunkSvc.relevantChunksForDocument(source.documentId, nodeAssertion(node), 5);
+  const { caseDocumentChunkIds } = await DocumentChunkSvc.relevantChunksForDocument(source.documentId, nodeAssertion(node), FALLBACK_CHUNKS);
   const chunks = await DocumentChunkRepo.findTextsByIds(caseDocumentChunkIds);
   const text = chunks.map((c) => c.chunkText).join("\n").trim();
   return text ? { passage: text.slice(0, PASSAGE_BUDGET), located: false } : null;

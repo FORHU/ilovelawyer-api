@@ -2,12 +2,13 @@ import { Request, Response } from "express";
 import AuthSvc from "../services/auth.service";
 import HttpError from "../utils/http-error";
 import { REFRESH_TOKEN_COOKIE, setRefreshTokenCookie, clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
-import { resolveTenantCodeFromRequest } from "../utils/tenant-host";
+import { requestFrontendOrigin, resolveTenantCodeFromRequest } from "../utils/tenant-host";
 import {
   signupSchema,
   loginSchema,
   updateRequiredPasswordSchema,
   googleLoginSchema,
+  googleLinkSchema,
   forgotPasswordSchema,
   validateResetTokenSchema,
   resetPasswordSchema,
@@ -20,14 +21,14 @@ import {
 
 export default class AuthCtrl {
   static async signup(req: Request, res: Response) {
-    const { username, email, password, name } = req.body;
+    const { username, email, password, name, acceptedTerms } = req.body;
 
-    const { error } = signupSchema.validate({ username, email, password, name });
+    const { error } = signupSchema.validate({ username, email, password, name, acceptedTerms });
     if (error) {
       throw new HttpError(error.message, 400);
     }
 
-    const user = await AuthSvc.signup(username, email, password, name, resolveTenantCodeFromRequest(req));
+    const user = await AuthSvc.signup(username, email, password, name, resolveTenantCodeFromRequest(req), acceptedTerms === true);
 
     return res.status(201).json({
       id: user.id,
@@ -98,19 +99,43 @@ export default class AuthCtrl {
   }
 
   static async google(req: Request, res: Response) {
-    const { idToken, remember } = req.body;
+    const { idToken, remember, acceptedTerms } = req.body;
 
-    const { error } = googleLoginSchema.validate({ idToken, remember });
+    const { error } = googleLoginSchema.validate({ idToken, remember, acceptedTerms });
     if (error) {
       throw new HttpError(error.message, 400);
     }
 
+    // The app always sends `remember` now (the sign-in tab's checkbox, or true from the
+    // sign-up tab); the `true` fallback only keeps older clients' behavior unchanged.
     const { user, accessToken, refreshToken } = await AuthSvc.loginWithGoogle(
       idToken,
       remember ?? true,
       resolveTenantCodeFromRequest(req),
+      acceptedTerms === true,
     );
     setRefreshTokenCookie(res, refreshToken, remember ?? true);
+
+    return res.status(200).json({ user, accessToken });
+  }
+
+  /** Completes the password-confirmed link a GOOGLE_LINK_REQUIRED 409 from google() sends the
+   * client to. */
+  static async googleLink(req: Request, res: Response) {
+    const { idToken, password, remember } = req.body;
+
+    const { error } = googleLinkSchema.validate({ idToken, password, remember });
+    if (error) {
+      throw new HttpError(error.message, 400);
+    }
+
+    const { user, accessToken, refreshToken } = await AuthSvc.linkGoogle(
+      idToken,
+      password,
+      !!remember,
+      resolveTenantCodeFromRequest(req),
+    );
+    setRefreshTokenCookie(res, refreshToken, !!remember);
 
     return res.status(200).json({ user, accessToken });
   }
@@ -128,7 +153,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const result = await AuthSvc.forgotPassword(email);
+    const result = await AuthSvc.forgotPassword(email, requestFrontendOrigin(req));
 
     return res.status(200).json(result);
   }

@@ -81,6 +81,28 @@ export default class LawCtrl {
   }
 
   /**
+   * GET /api/law/preview — the chat citation hover card: title, reference, year, court and a
+   * short snippet. Same query as /document (`id` is the juris source id for PH, `Law.id` for UK),
+   * but DB-only and small — see LawSourceProvider.getPreview. Law rows don't change after
+   * they're stored, so the browser may cache it for an hour.
+   */
+  static async getPreview(req: Request, res: Response) {
+    const provider = getLawSourceProvider(getTenantContext(req).tenantCode);
+
+    const { error, value } = lawDocumentSchema(provider).validate(req.query, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const result = await provider.getPreview({
+      category: provider.parseCategory(value.category),
+      id: value.id,
+    });
+    // No snippet yet can mean a first-time detail fill is still finishing in the background (see
+    // UkLawSourceProvider.getPreview) — don't let the browser pin that empty answer for an hour.
+    res.setHeader("Cache-Control", result.snippet ? "private, max-age=3600" : "no-store");
+    return res.status(200).json(result);
+  }
+
+  /**
    * GET /api/law/:lawId/pdf — same-origin proxy for a stored law's official PDF (see law.route.ts).
    * Several upstreams refuse framing outright (legislation.gov.uk, the TNA judgment site) and,
    * per user report, so does juris.ph's own PDF host for PH jurisprudence/republic-acts — a
@@ -98,8 +120,12 @@ export default class LawCtrl {
     // this derived legislation.gov.uk path. Every other document (PH jurisprudence, PH
     // republic-acts, UK case law) already has its direct PDF url in pdfUrl.
     const ukLegislationParts = legislationUrlParts(law.jurisUrl);
+    // `?section=49` (UK legislation only) serves just that section — legislation.gov.uk publishes
+    // one at `/section/<n>/data.pdf` — so a chat citation to "s 49" opens on s 49, not the Act's
+    // first page. Strictly "<digits><letters>" so it can't steer the upstream path anywhere else.
+    const section = typeof req.query.section === "string" && /^[0-9]+[A-Z]*$/i.test(req.query.section) ? req.query.section : null;
     const upstream = ukLegislationParts
-      ? `${UK_LEGISLATION_BASE_URL}/${ukLegislationParts.type}/${ukLegislationParts.year}/${ukLegislationParts.number}/data.pdf`
+      ? `${UK_LEGISLATION_BASE_URL}/${ukLegislationParts.type}/${ukLegislationParts.year}/${ukLegislationParts.number}${section ? `/section/${section}` : ""}/data.pdf`
       : law.pdfUrl;
     if (!upstream) throw new HttpError("No PDF available for this document", 404);
 

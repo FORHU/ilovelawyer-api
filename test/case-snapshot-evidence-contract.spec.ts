@@ -75,6 +75,7 @@ describe("CaseSnapshotSvc.get — Evidence & Timeline contract", () => {
     patch([
       [CaseAccess, "loadAccessibleCase", async () => ({ id: "case-1", lastRefreshedAt: null, parties: [] })],
       [CaseAccess, "requiredConfirmations", empty],
+      [CaseAccess, "resolveTenantCode", async () => "PH"],
       [DocumentRepo, "listAllByCase", async () => documents],
       [CaseTimelineRepo, "list", async () => timeline],
       [CaseRiskRepo, "list", empty],
@@ -164,5 +165,43 @@ describe("CaseSnapshotSvc.get — Evidence & Timeline contract", () => {
       const snapshot = await CaseSnapshotSvc.get("case-1", "user-1");
       expect(snapshot.trends.evidence[CASE_TREND_WEEKS - 1].total).to.equal(1);
     });
+  });
+
+  // Damages & Remedies panel: the summary is computed server-side so the panel, Red Team and
+  // chat all read the same figures.
+  it("serves damagesSummary computed from the case's accepted entries, in the tenant's currency", async () => {
+    const row = (id: string, extra: Record<string, unknown>) => ({
+      id,
+      caseId: "case-1",
+      kind: "DAMAGE",
+      title: id,
+      amount: null,
+      done: false,
+      accepted: true,
+      ...extra,
+    });
+    patch([
+      [CaseAccess, "resolveTenantCode", async () => "UK"],
+      [
+        DamageClaimRepo,
+        "list",
+        async () => [
+          row("a", { amount: 1000, done: true }),
+          row("b", { amount: 100 }),
+          row("r", { kind: "REMEDY" }),
+          row("ai", { amount: 5000, accepted: false }),
+        ],
+      ],
+    ]);
+
+    const snapshot = await CaseSnapshotSvc.get("case-1", "user-1");
+
+    expect(snapshot.damagesSummary).to.include({ currency: "GBP", total: 1100, awarded: 1000, headCount: 3, remedyCount: 1 });
+  });
+
+  it("falls back to PHP when the case has no tenant", async () => {
+    patch([[CaseAccess, "resolveTenantCode", async () => { throw new Error("no organization"); }]]);
+    const snapshot = await CaseSnapshotSvc.get("case-1", "user-1");
+    expect(snapshot.damagesSummary).to.include({ currency: "PHP", total: 0, headCount: 0 });
   });
 });

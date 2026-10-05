@@ -4,9 +4,11 @@ import CaseRepo from "../repositories/case.repository";
 import CaseClaimRepo from "../repositories/case-claim.repository";
 import CitationCheckRepo from "../repositories/citation-check.repository";
 import CitationGroundRepo, { AiCitationGroundRow } from "../repositories/citation-ground.repository";
+import DocumentRepo from "../repositories/document.repository";
 import LawRepo from "../repositories/law.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import { documentFileUrl } from "./document.service";
 import { buildCitationGroundsPrompt } from "../constants/citation-grounds.constants";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { extractCitationGrounds } from "../utils/citation-grounds-parse";
@@ -49,16 +51,29 @@ export async function resolvedTitles(checks: Check[]): Promise<Map<string, strin
 export default class CitationGroundSvc {
   /** Claims and links for the Citation Map seed response. */
   static async forSeed(caseId: string) {
-    const [claims, grounds] = await Promise.all([CaseClaimRepo.list(caseId), CitationGroundRepo.list(caseId)]);
+    const [claims, grounds, documents] = await Promise.all([
+      CaseClaimRepo.list(caseId),
+      CitationGroundRepo.list(caseId),
+      DocumentRepo.listAllByCase(caseId),
+    ]);
+    const docById = new Map(documents.map((d) => [d.id, d]));
+    const docByName = new Map(documents.map((d) => [d.name, d]));
     return {
-      claims: claims.map((c) => ({
-        id: c.id,
-        title: c.title,
-        causeOfAction: c.causeOfAction,
-        source: c.source,
-        sourceLabel: c.sourceLabel,
-        sourceQuote: c.sourceQuote,
-      })),
+      claims: claims.map((c) => {
+        // Claims found before sourceDocumentId was saved only have the document's name.
+        const doc = (c.sourceDocumentId && docById.get(c.sourceDocumentId)) || (c.sourceLabel ? docByName.get(c.sourceLabel) : undefined);
+        const fileUrl = doc?.file?.s3Key ? documentFileUrl(doc.file.s3Key, doc.file.filename) : null;
+        return {
+          id: c.id,
+          title: c.title,
+          causeOfAction: c.causeOfAction,
+          source: c.source,
+          sourceLabel: c.sourceLabel,
+          sourceQuote: c.sourceQuote,
+          // The pleading the claim was found in, for the Citation Map's "View source".
+          sourceDocument: doc && fileUrl ? { id: doc.id, name: doc.name, fileUrl } : null,
+        };
+      }),
       grounds: grounds.map((g) => ({
         id: g.id,
         citationCheckId: g.citationCheckId,

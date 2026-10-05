@@ -5,6 +5,7 @@ import logger from "../utils/logger";
 import { uploadToS3 } from "../utils/s3";
 import { AudioOverviewTurn } from "../utils/response-parser";
 import { mergeTurnsToMp3 } from "../utils/audio-overview-render";
+import { neuralVoiceFor } from "../utils/audio-overview-voices";
 import { AUDIO_OVERVIEW_OUTPUT_PREFIX } from "../constants";
 
 export default class AudioOverviewAudioSvc {
@@ -25,13 +26,23 @@ export default class AudioOverviewAudioSvc {
       }
 
       logger.info("Audio Overview: rendering started", { messageId, turns: turns.length });
-      const merged = await mergeTurnsToMp3(turns, row.voiceHostA, row.voiceHostB);
+      const { buffer, turnTimings, sentenceTimings, wordTimings } = await mergeTurnsToMp3(
+        turns,
+        neuralVoiceFor(row.voiceHostA),
+        neuralVoiceFor(row.voiceHostB),
+      );
 
       const key = `${AUDIO_OVERVIEW_OUTPUT_PREFIX}${messageId}-${randomUUID()}.mp3`;
-      const fileUrl = await uploadToS3(key, merged, "audio/mpeg");
+      const fileUrl = await uploadToS3(key, buffer, "audio/mpeg");
       const file = await FilesRepo.create(`audio-overview-${messageId}.mp3`, fileUrl, key);
 
-      await ChatRepo.updateAudioOverviewAudio(messageId, { audioFileId: file.id, audioStatus: "COMPLETED" });
+      await ChatRepo.updateAudioOverviewAudio(messageId, {
+        audioFileId: file.id,
+        audioStatus: "COMPLETED",
+        turnTimings,
+        sentenceTimings,
+        wordTimings,
+      });
       logger.info("Audio Overview: rendering completed", { messageId, fileId: file.id });
     } catch (err) {
       logger.error("Audio Overview: rendering failed", { err, messageId });

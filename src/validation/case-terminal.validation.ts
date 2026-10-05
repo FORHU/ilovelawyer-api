@@ -1,12 +1,29 @@
 import Joi from "joi";
+import { PROCEDURE_SOURCE_KINDS } from "../utils/procedure-link";
 
 const RISK_SEVERITIES = ["FATAL", "MAJOR", "UNVERIFIED", "MISSING_EVIDENCE", "DEADLINE"];
 const RISK_STATUSES = ["OPEN", "CONFIRMED", "ACCEPTED"];
 const CONFIDENCE_LEVELS = ["LOW", "MEDIUM", "HIGH"];
 const TIMELINE_SOURCES = ["AI", "LAWYER", "CALENDAR"];
 const FINDING_CATEGORIES = ["LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY"];
-const FINDING_TAGS = ["CONTESTED", "BRIEFING", "OPEN", "RESOLVED", "MATERIAL", "MINOR", "CLOSED", "STRONG", "MODERATE"];
-const DAMAGE_CATEGORIES = ["ACTUAL", "MORAL", "EXEMPLARY", "ATTORNEYS_FEES", "OTHER"];
+const FINDING_TAGS = [
+  "CONTESTED",
+  "BRIEFING",
+  "OPEN",
+  "RESOLVED",
+  "MATERIAL",
+  "MINOR",
+  "CLOSED",
+  "STRONG",
+  "MODERATE",
+  "READY",
+  "DRAFTING",
+  "BLOCKED",
+  "ANSWERED",
+  "PARTIAL",
+  "UNANSWERED",
+];
+const DAMAGE_KINDS = ["DAMAGE", "REMEDY"];
 const PRIVILEGE_STATUSES = ["NONE", "ATTORNEY_CLIENT", "WORK_PRODUCT"];
 const HEARSAY_CATEGORIES = [
   "DIRECT_EVIDENCE",
@@ -167,6 +184,13 @@ export const createProcedureItemSchema = Joi.object({
   // Where a to-do sent over from another panel ("To checklist") came from, e.g. the finding or
   // document it was raised on — shown as the item's source, same as an AI item's.
   sourceLabel: Joi.string().max(200).optional().allow(null, ""),
+  // The item it was sent from, so the to-do can tick itself once that item is fixed
+  // (utils/procedure-link.ts). sourceKey is a witness need's key and only applies to WITNESS_NEED.
+  sourceKind: Joi.string().valid(...PROCEDURE_SOURCE_KINDS).optional(),
+  sourceId: Joi.string().max(64).when("sourceKind", { is: Joi.exist(), then: Joi.required(), otherwise: Joi.forbidden() }),
+  sourceKey: Joi.string()
+    .max(64)
+    .when("sourceKind", { is: "WITNESS_NEED", then: Joi.required(), otherwise: Joi.forbidden() }),
 });
 
 export const updateProcedureItemSchema = Joi.object({
@@ -255,20 +279,30 @@ export const witnessFactorSchema = Joi.object({
   note: Joi.string().max(500).allow("").default(""),
 });
 
-export const createDamageSchema = Joi.object({
-  category: Joi.string()
-    .valid(...DAMAGE_CATEGORIES)
-    .required(),
-  description: Joi.string().allow("").optional(),
+const damageFields = {
+  title: Joi.string().trim().min(1).max(200),
+  description: Joi.string().allow("", null).optional(),
+  // Most remedies (reinstatement, an apology) have no amount.
   amount: Joi.number().min(0).optional().allow(null),
+  // Awarded by the tribunal or received by the client.
+  done: Joi.boolean().optional(),
+  dueDate: Joi.date().iso().optional().allow(null),
+};
+
+export const createDamageSchema = Joi.object({
+  kind: Joi.string()
+    .valid(...DAMAGE_KINDS)
+    .required(),
+  ...damageFields,
+  title: damageFields.title.required(),
 });
 
 export const updateDamageSchema = Joi.object({
-  category: Joi.string()
-    .valid(...DAMAGE_CATEGORIES)
+  kind: Joi.string()
+    .valid(...DAMAGE_KINDS)
     .optional(),
-  description: Joi.string().allow("").optional(),
-  amount: Joi.number().min(0).optional().allow(null),
+  ...damageFields,
+  title: damageFields.title.optional(),
 }).min(1);
 
 export const createClaimSchema = Joi.object({
@@ -319,6 +353,8 @@ export const exportBriefHistorySchema = Joi.object({
   cursor: Joi.string().optional(),
 });
 
+export const audioOverviewHistorySchema = exportBriefHistorySchema;
+
 export const listDecisionsSchema = Joi.object({
   status: Joi.string()
     .valid(...DECISION_STATUSES)
@@ -346,6 +382,13 @@ export const addTheoryClaimSchema = Joi.object({
     .required(),
   graphNodeId: Joi.string().optional(),
 });
+
+export const updateTheoryClaimSchema = Joi.object({
+  statement: Joi.string().optional(),
+  stance: Joi.string()
+    .valid(...THEORY_STANCES)
+    .optional(),
+}).min(1);
 
 export const addTheoryAssumptionSchema = Joi.object({
   statement: Joi.string().required(),

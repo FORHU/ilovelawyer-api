@@ -7,7 +7,8 @@ import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
-import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding } from "../utils/chatWonder";
+import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding, ChatWonderStage } from "../utils/chatWonder";
+import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -18,21 +19,28 @@ import GeneratedDocumentExportSvc from "./generated-document-export.service";
 import CaseTimelineSvc from "./case-timeline.service";
 import { documentBelongsToScope } from "../utils/case-document-scope";
 import { getChatTitlePromptBuilder } from "../legal/prompt-registry";
+import type { ChatTitleContext } from "../legal/shared/chat-title-context";
+import { buildChatRetitlePrompt } from "../legal/shared/chat-retitle.prompt";
 import { TenantCode } from "../types/tenant-code";
 import { voicePairForCase } from "../utils/audio-overview-voices";
+import type { MarkTiming } from "../utils/audio-overview-render";
 import AudioOverviewQueue from "../queues/audio-overview.queue";
+import { audioOverviewFilename } from "../utils/audio-overview-filename";
+import { checkAudioOverviewTurns, isAudioOverviewJevEnabled } from "../utils/audio-overview-jev";
 import CaseGraphPromotionQueue, { CaseGraphPromotionPayload } from "../queues/case-graph-promotion.queue";
 import GroundingVerifierSvc from "./grounding-verifier.service";
+import CitationRankSvc from "./citation-rank.service";
 import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
 import NotificationSvc from "./notification.service";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getProxyFileUrl } from "../utils/s3";
 import CaseMindMapSvc from "./case-mind-map.service";
+import DamageClaimSvc, { type CaseDamagesChatContext } from "./damage-claim.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
-import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL } from "../constants";
+import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL, PROVISIONAL_UNCLEAR_TITLE, KEEP_TITLE_SENTINEL, SMALL_TALK_TITLE_SENTINEL, PROVISIONAL_GREETING_TITLE } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 
@@ -568,21 +576,41 @@ export default class ChatSvc {
       });
     }
 
-    const needsTitle = consultation.title === null;
+    // Untitled or only provisionally titled -> generate one. AI-titled -> check it still fits
+    // (refreshTitle). Renamed by the user -> leave it alone. A null source on a titled row is
+    // treated as AI-titled (pre-titleSource rows are backfilled AUTO; this is belt and braces).
+    const needsTitle = consultation.title === null || consultation.titleSource === "PROVISIONAL";
+    const canRefreshTitle = !needsTitle && consultation.titleSource !== "USER";
 
     // content stays a stored empty string for a file-only send (see ADR) — everything the AI
     // and title generation actually see substitutes in a fixed stand-in instead.
     const effectiveUserInput = userInput.trim() ? userInput : ATTACHMENT_ONLY_PROMPT;
 
+    // File names give the title something to go on when the message itself is vague ("what are
+    // these documents?") — often the only real signal of what the consultation is about.
+    const attachmentNames = needsTitle || canRefreshTitle
+      ? await DocumentRepo.listNamesByMessage(parentMessageId).catch(() => [] as string[])
+      : [];
+
+    if (canRefreshTitle && consultation.title && (isSubstantive(userInput) || attachmentNames.length > 0)) {
+      void ChatSvc.refreshTitle({ consultationId, tenantCode, userId, currentTitle: consultation.title, attachmentNames });
+    }
+
+    // Pass 1 runs alongside the reply (usually done in 1-2s). Its outcome is kept so the
+    // post-reply pass (titleAfterReply, below) can tell whether it still needs to run.
+    let titlePass: Promise<TitleOutcome> = Promise.resolve("saved");
     if (needsTitle) {
       const titleStartedAt = Date.now();
-      ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode, userId).catch((err) => {
-        logger.error("Chat title: generation failed (non-fatal — reply unaffected, retries next message)", {
+      titlePass = ChatSvc.generateAndSaveTitle(consultationId, effectiveUserInput, tenantCode, userId, {
+        attachmentNames,
+      }).catch((err) => {
+        logger.error("Chat title: generation failed (non-fatal — reply unaffected, retried after the reply)", {
           consultationId,
           tenantCode,
           err,
           elapsedMs: Date.now() - titleStartedAt,
         });
+        return "failed" as const;
       });
     }
 
@@ -913,6 +941,26 @@ export default class ChatSvc {
                 return undefined;
               })
             : undefined;
+        // The case's damages model, so "how much can we claim?" quotes the panel's figures.
+        // Best-effort, like the map context: a failure just sends the turn without it.
+        const caseDamages = effectiveCaseId
+          ? await DamageClaimSvc.chatContext(effectiveCaseId, tenantCode).catch((err) => {
+              logger.warn("Chat: damages model unavailable, sending the turn without it", {
+                err,
+                consultationId,
+                caseId: effectiveCaseId,
+              });
+              return undefined;
+            })
+          : undefined;
+        // A locked generation (audio overview script, mind map) records its stage on the lock row,
+        // which is what turns the panel's spinner into real steps. Fire-and-forget: setStage
+        // never throws, and a late report for a finished job is dropped there.
+        const lockedCaseId = generationKind ? effectiveCaseId : undefined;
+        const onStage =
+          generationKind && lockedCaseId
+            ? (stage: ChatWonderStage) => void AiGenerationLockSvc.setStage(lockedCaseId, generationKind, stage)
+            : undefined;
         const runStream = () =>
           ChatSvc.streamWithSessionRetry(
             consultationId,
@@ -934,7 +982,17 @@ export default class ChatSvc {
             },
             replyLanguage,
             // Any turn that asks for a map, case or not: chat-wonder builds one only on this flag.
-            { mindMapRequested: wantsMindMap, mindMapContext: mindMapContext || undefined },
+            {
+              mindMapRequested: wantsMindMap,
+              mindMapContext: mindMapContext || undefined,
+              caseDamages,
+              onStage,
+              // Only a question a person asked is explained to them: background generations (the
+              // mind map and audio overview triggers) are not turns anyone reads a trace for.
+              trace: generationKind
+                ? undefined
+                : { consultationId, caseId: effectiveCaseId ?? null, organizationId, turnId: parentMessageId, userId: userId ?? null },
+            },
           );
         const result =
           generationKind && effectiveCaseId
@@ -1092,6 +1150,19 @@ export default class ChatSvc {
       });
     }
 
+    if (needsTitle && assistantMessage) {
+      void ChatSvc.titleAfterReply({
+        consultationId,
+        tenantCode,
+        userId,
+        userInput: effectiveUserInput,
+        typedInput: userInput,
+        attachmentNames,
+        fullResponse,
+        firstPass: titlePass,
+      });
+    }
+
     // Grounding verification (docs/plans/grounding-verifier.md). Deliberately after chat:done:
     // the lawyer already has the reply, and this only attaches what the bundle says about the
     // claims in it. Fire-and-forget, never awaited — GroundingVerifierSvc.verifyAnswer swallows
@@ -1111,6 +1182,20 @@ export default class ChatSvc {
           if (counts.checked) emitEvent("chat:grounding", { assistantMessageId: verifiedMessageId, ...counts });
         })
         .catch((err) => logger.warn("Grounding verifier: unexpected rejection", { err, consultationId, messageId: parentMessageId }));
+    }
+
+    // Citation ranking (src/utils/citation-rank.ts). Also after chat:done and also fire-and-forget:
+    // the answer is already saved, and this only attaches a relevance tier per cited authority, read
+    // from the user's message and never from the answer. Unlike the grounding verifier it is not
+    // gated on a case id, and it runs on the cache path too because it reads the saved reply.
+    // CitationRankSvc.rankReply never throws; a failure leaves every link neutral.
+    if (assistantMessage && CitationRankSvc.enabled) {
+      const rankedMessageId = assistantMessage.id;
+      void CitationRankSvc.rankReply({ parentMessageId, tenantCode })
+        .then((r) => {
+          if (r.ranked) emitEvent("chat:citation-ranking", { assistantMessageId: rankedMessageId, ranked: r.ranked });
+        })
+        .catch((err) => logger.warn("Citation ranking: unexpected rejection", { err, consultationId, messageId: parentMessageId }));
     }
 
     // Only now enqueue the secondary/background work — case-graph enrichment (promoting the
@@ -1303,9 +1388,11 @@ export default class ChatSvc {
     if (mindMap) await ChatRepo.saveMindMap(assistantMessage.id, mindMap);
     if (audioOverview) {
       const { hostA, hostB } = voicePairForCase(p.effectiveCaseId ?? p.consultationId);
-      await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB).catch((err) => {
-        logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
-      });
+      await ChatRepo.saveAudioOverview(assistantMessage.id, audioOverview, hostA, hostB)
+        .then(() => ChatSvc.checkAudioOverviewInBackground(assistantMessage.id, audioOverview, p.effectiveCaseId, p.userId))
+        .catch((err) => {
+          logger.error("Failed to persist Audio Overview script", { err, messageId: assistantMessage.id });
+        });
     }
     if (reasoning) {
       await ChatRepo.saveReasoning(assistantMessage.id, reasoning).catch((err) => {
@@ -1364,15 +1451,13 @@ export default class ChatSvc {
   }
 
   /**
-   * Case-graph enrichment for an already-persisted chat turn: promotes the AI's timeline into
-   * the case's own Timeline table (CaseTimelineSvc.promoteFromAi) and its decision records into
+   * Case-graph enrichment for an already-persisted chat turn: promotes its decision records into
    * the case's DecisionRecord table + CaseGraph nodes/edges (DecisionRecordSvc.promote). Called
    * from CaseGraphPromotionQueue, after ChatSvc.persistAssistantTurn has already durably created
    * the assistant Message this enriches — this step is a nice-to-have on top of an already-
    * complete, already-visible reply, never a prerequisite for it.
    *
-   * Idempotent: CaseTimelineSvc.promoteFromAi already dedupes by title+date against existing
-   * rows. DecisionRecordSvc.promote does not dedupe on its own (each call is meant to add new
+   * Idempotent: DecisionRecordSvc.promote does not dedupe on its own (each call is meant to add new
    * records), so a guard here checks for records already promoted from this assistantMessageId
    * before calling it — needed now that SQS redelivery of this job is the only thing that would
    * otherwise call promote() twice for the same turn.
@@ -1380,15 +1465,8 @@ export default class ChatSvc {
   static async promoteAssistantTurnToCaseGraph(p: CaseGraphPromotionPayload): Promise<void> {
     if (!p.effectiveCaseId) return;
 
-    if (p.timeline?.length) {
-      await CaseTimelineSvc.promoteFromAi(p.effectiveCaseId, p.timeline, p.userId).catch((err) => {
-        logger.error("Case graph promotion: failed to promote timeline", {
-          err,
-          caseId: p.effectiveCaseId,
-          assistantMessageId: p.assistantMessageId,
-        });
-      });
-    }
+    // The answer's timeline is no longer copied into the case's Timeline: chat dates carry no
+    // document, and the case timeline holds only dates found in the documents (CaseStrategySvc).
 
     if (p.decisions?.records.length) {
       const alreadyPromoted = await DecisionRecordRepo.existsForSourceMessage(p.assistantMessageId);
@@ -1427,19 +1505,44 @@ export default class ChatSvc {
     signal?: AbortSignal,
     onAnswerComplete?: () => void,
     replyLanguage?: string,
-    mindMap?: { mindMapRequested: boolean; mindMapContext?: string },
+    extras?: {
+      mindMapRequested: boolean;
+      mindMapContext?: string;
+      caseDamages?: CaseDamagesChatContext;
+      onStage?: (stage: ChatWonderStage) => void;
+      /** Set on a real user turn: records its customer-facing trace for the Terminal's trace pane. */
+      trace?: TraceTurn;
+    },
   ) {
-    const opts = mindMap?.mindMapRequested ? mindMap : undefined;
+    // Map fields only on a turn that asked for a map; the damages model on any case turn.
+    const opts =
+      extras?.mindMapRequested || extras?.caseDamages || extras?.onStage || extras?.trace
+        ? {
+            ...(extras.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
+            ...(extras.caseDamages ? { caseDamages: extras.caseDamages } : {}),
+            ...(extras.onStage ? { onStage: extras.onStage } : {}),
+            ...(extras.trace ? { traceTurnId: extras.trace.turnId } : {}),
+          }
+        : undefined;
+    // Subscribed before the turn is sent (chat-wonder fans events out live, with no replay), and
+    // never allowed to fail the turn — see TraceCollectorSvc.
+    const collector = extras?.trace ? await TraceCollectorSvc.start(extras.trace, sessionId) : undefined;
     try {
-      return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
-    } catch (err) {
-      if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
-      const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
-      // Report the rotation before streaming starts, so the caller (ChatCtrl) can still
-      // set a response header — nothing has been written to the HTTP response yet at
-      // this point, since "Unknown session." always arrives before any real content.
-      onSessionRotated?.(freshSessionId);
-      return streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+      try {
+        return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+      } catch (err) {
+        if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
+        const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
+        // Report the rotation before streaming starts, so the caller (ChatCtrl) can still
+        // set a response header — nothing has been written to the HTTP response yet at
+        // this point, since "Unknown session." always arrives before any real content.
+        onSessionRotated?.(freshSessionId);
+        // The trace follows the turn onto the new session, so the log stays one continuous record.
+        await collector?.rebind(freshSessionId);
+        return await streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+      }
+    } finally {
+      await collector?.stop();
     }
   }
 
@@ -1514,6 +1617,24 @@ export default class ChatSvc {
     return { status: "IN_PROGRESS" as const };
   }
 
+  /** Fire-and-forget Jev check of a just-saved script — logs rather than throws, since nothing
+   * is waiting on it. Needs a case to read the case data from; a case-less consultation has none. */
+  private static checkAudioOverviewInBackground(
+    messageId: string,
+    turns: AudioOverviewTurn[],
+    caseId: string | null,
+    userId: string,
+  ): void {
+    if (!isAudioOverviewJevEnabled() || !caseId) return;
+    void (async () => {
+      const context = await CaseMindMapSvc.jevContext(caseId, userId);
+      const checks = await checkAudioOverviewTurns(turns, context);
+      if (checks.length) await ChatRepo.saveAudioOverviewChecks(messageId, checks);
+    })().catch((err) => {
+      logger.warn("Audio Overview: Jev check failed", { err, messageId });
+    });
+  }
+
   static async pollAudioOverviewAudio(organizationId: string, consultationId: string, messageId: string) {
     await ChatSvc.assertConsultationOwned(organizationId, consultationId);
     const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
@@ -1522,7 +1643,13 @@ export default class ChatSvc {
     if (row.audioStatus === "COMPLETED" && row.audioFile?.s3Key) {
       return {
         status: "COMPLETED" as const,
-        audioFile: { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key) },
+        audioFile: {
+          id: row.audioFile.id,
+          fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }),
+        },
+        turnTimings: (row.turnTimings as unknown as number[] | null) ?? null,
+        sentenceTimings: (row.sentenceTimings as unknown as MarkTiming[][] | null) ?? null,
+        wordTimings: (row.wordTimings as unknown as MarkTiming[][] | null) ?? null,
       };
     }
     if (row.audioStatus === "FAILED") return { status: "FAILED" as const };
@@ -1532,17 +1659,27 @@ export default class ChatSvc {
   /** tenantCode defaults to PH to preserve scripts/backfill-titles.ts's existing single-arg
    * call signature — callers that know the tenant's actual tenantCode (generateAndSaveTitle
    * below) must pass it explicitly. */
-  static buildTitlePrompt(userMessage: string, tenantCode: TenantCode = "PH"): string {
-    return getChatTitlePromptBuilder(tenantCode)(userMessage);
+  static buildTitlePrompt(userMessage: string, tenantCode: TenantCode = "PH", context: ChatTitleContext = {}): string {
+    return getChatTitlePromptBuilder(tenantCode)(userMessage, context);
   }
 
   static parseTitle(raw: string): string {
     return raw
       .split("\n")[0]
-      .replace(/^["'""'']|["'""'']$/g, "")
+      // Double quotes never belong in a title; single quotes only as apostrophes inside a word
+      // ("Driver's"). Quotes the model puts around a word ('Hi') are dropped as a pair instead of
+      // one end being trimmed off and the other left dangling.
+      .replace(/["\u201C\u201D]/g, "")
+      // (\u2026except a plural possessive: "Parents' Custody" keeps its apostrophe.)
+      .replace(/(^|[\s(])['\u2018\u2019]|['\u2018\u2019](?=[),:;.!?]|$)|(?<![sS])['\u2018\u2019](?=\s)/g, "$1")
       .replace(/\.$/, "")
       .trim()
       .slice(0, TITLE_MAX_CHARS);
+  }
+
+  /** The title prompts' "only a greeting / small talk" answer (see SMALL_TALK_TITLE_SENTINEL). */
+  static isSmallTalkTitle(title: string): boolean {
+    return title.trim().toUpperCase().replace(/[^A-Z_]/g, "") === SMALL_TALK_TITLE_SENTINEL;
   }
 
   /** True when a parsed title is the title prompts' explicit "couldn't confidently categorize
@@ -1564,62 +1701,230 @@ export default class ChatSvc {
     return /^[^:]{2,}:\s*\S/.test(t);
   }
 
+  /** "saved" — a title was written. "unclear" — the model deliberately declined (nothing coherent
+   * to title). "failed" — no usable reply from the model (empty, error text, off-format), which
+   * says nothing about the input — titleAfterReply retries those and, failing again, falls back
+   * to a title built from the message/file names rather than leaving it untitled. */
   private static async generateAndSaveTitle(
     consultationId: string,
     userMessage: string,
     tenantCode: TenantCode,
     userId: string,
-  ): Promise<void> {
-    const cacheKey = titleCacheKey(userMessage, tenantCode);
+    context: ChatTitleContext = {},
+  ): Promise<TitleOutcome> {
+    // Keyed on the attachment names too: the same vague "what is this?" over different files
+    // must not reuse one cached title. Never cached with a reply excerpt (unique per turn).
+    const cacheable = !context.replyExcerpt;
+    const cacheKey = titleCacheKey(
+      [userMessage, ...(context.attachmentNames ?? [])].join("\n"),
+      tenantCode,
+    );
     const startedAt = Date.now();
 
-    let title = await redis.get<string>(cacheKey);
+    let title = cacheable ? await redis.get<string>(cacheKey) : null;
     // Titles cached before isValidTitle existed may be error text — regenerate instead.
     if (title && !ChatSvc.isValidTitle(title)) title = null;
 
     if (title) {
       logger.info("Chat title: cache hit", { consultationId, tenantCode });
     } else {
-      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode));
+      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode, context));
       if (!raw) {
-        logger.info("Chat title: model returned no content, leaving untitled (retries next message)", {
+        logger.info("Chat title: model returned no content", {
           consultationId,
           tenantCode,
           elapsedMs: Date.now() - startedAt,
         });
-        return;
+        return "failed";
       }
       title = ChatSvc.parseTitle(raw);
       // Left untitled rather than saved — gibberish/unclear input stays untitled (frontend
       // falls back to "Untitled consultation") instead of a fabricated legal category, and
       // since consultation.title stays null, the next message's send retries generation with
       // whatever the user says next.
-      if (!title || ChatSvc.isUnclearTitle(title)) {
-        logger.info(
-          !title
-            ? "Chat title: parsed title was empty, leaving untitled"
-            : "Chat title: model returned UNCLEAR_INPUT sentinel (working as intended), leaving untitled",
-          { consultationId, tenantCode, raw: raw.slice(0, 120) },
-        );
-        return;
-      }
-      if (!ChatSvc.isValidTitle(title)) {
-        logger.warn("Chat title: model reply wasn't a valid title (error text or off-format), leaving untitled", {
+      if (title && ChatSvc.isUnclearTitle(title)) {
+        logger.info("Chat title: model returned UNCLEAR_INPUT sentinel (working as intended)", {
           consultationId,
           tenantCode,
           raw: raw.slice(0, 120),
         });
-        return;
+        return "unclear";
       }
-      redis.set(cacheKey, title, TITLE_CACHE_TTL);
+      if (title && ChatSvc.isSmallTalkTitle(title)) {
+        logger.info("Chat title: greeting/small talk, provisional title", { consultationId, tenantCode });
+        return "smalltalk";
+      }
+      if (!title || !ChatSvc.isValidTitle(title)) {
+        logger.warn("Chat title: model reply wasn't a valid title (empty, error text or off-format)", {
+          consultationId,
+          tenantCode,
+          raw: raw.slice(0, 120),
+        });
+        return "failed";
+      }
+      if (cacheable) redis.set(cacheKey, title, TITLE_CACHE_TTL);
     }
 
-    await ChatRepo.updateConsultation(consultationId, title);
-    logger.info("Chat title: saved", { consultationId, tenantCode, title, elapsedMs: Date.now() - startedAt });
+    const saved = await ChatSvc.saveTitle(consultationId, userId, title, "AUTO");
+    logger.info(saved ? "Chat title: saved" : "Chat title: user renamed it meanwhile, not overwritten", {
+      consultationId,
+      tenantCode,
+      title,
+      elapsedMs: Date.now() - startedAt,
+    });
+    return "saved";
+  }
+
+  /** A provisional title only fills an empty slot — an existing provisional title is left as it
+   * is rather than flipping between "New Consultation" and "Unclear Request" each message. */
+  private static async saveProvisionalIfUntitled(consultationId: string, userId: string, title: string): Promise<void> {
+    const current = await ChatRepo.findConsultationTitleState(consultationId);
+    if (current?.title) return;
+    await ChatSvc.saveTitle(consultationId, userId, title, "PROVISIONAL");
+  }
+
+  /** Saves an AI/provisional title unless the user has set their own (see saveGeneratedTitle). */
+  private static async saveTitle(
+    consultationId: string,
+    userId: string,
+    title: string,
+    source: "AUTO" | "PROVISIONAL",
+  ): Promise<boolean> {
+    const saved = await ChatRepo.saveGeneratedTitle(consultationId, title, source);
+    if (!saved) return false;
     // Pushed the moment it's saved (title generation usually finishes in 1-2s, well before the
     // reply itself) rather than waiting for the frontend's end-of-turn refetch, so the sidebar/
     // header title updates immediately instead of trailing behind the topic breakdown, which
     // only becomes available once the full reply is persisted.
     emitToUser(userId, "chat:title-updated", { consultationId, title });
+    return true;
+  }
+
+  /**
+   * Smart re-titling: on each substantive new message in an AI-titled consultation, asks the
+   * model whether the title still fits the conversation (usually KEEP) or should become a
+   * sharper/new one. Runs alongside the reply like the first title pass. Never throws, never
+   * touches a user-set title (saveGeneratedTitle is conditional).
+   */
+  private static async refreshTitle(p: {
+    consultationId: string;
+    tenantCode: TenantCode;
+    userId: string;
+    currentTitle: string;
+    attachmentNames: string[];
+  }): Promise<void> {
+    try {
+      // Includes the new message: it's saved before generation starts.
+      const userMessages = await ChatRepo.listRecentUserMessageContents(p.consultationId, RETITLE_MESSAGE_WINDOW);
+      if (userMessages.length === 0) return;
+      const raw = await generateTitleViaWs(
+        buildChatRetitlePrompt({
+          jurisdiction: p.tenantCode === "UK" ? "UK" : "Philippine",
+          currentTitle: p.currentTitle,
+          userMessages,
+          attachmentNames: p.attachmentNames,
+        }),
+      );
+      const title = raw ? ChatSvc.parseTitle(raw) : "";
+      if (!title || title.toUpperCase().includes(KEEP_TITLE_SENTINEL) || ChatSvc.isUnclearTitle(title)) return;
+      if (!ChatSvc.isValidTitle(title) || title.toLowerCase() === p.currentTitle.trim().toLowerCase()) return;
+      const saved = await ChatSvc.saveTitle(p.consultationId, p.userId, title, "AUTO");
+      if (saved) logger.info("Chat title: refreshed", { consultationId: p.consultationId, from: p.currentTitle, to: title });
+    } catch (err) {
+      logger.warn("Chat title: refresh failed (non-fatal, title unchanged)", { consultationId: p.consultationId, err });
+    }
+  }
+
+  /**
+   * Second title pass, once the reply is saved: a vague first message ("what are these
+   * documents?", a bare file upload) is usually only titleable from what the answer says about
+   * it. Runs only if pass 1 didn't save a title. If the model still gives nothing usable — an
+   * outage, error text, off-format — falls back to a title built from the file names or the
+   * message itself; only a deliberate "nothing coherent here" (gibberish) stays untitled.
+   * Never throws: a title problem must not surface as a failed turn.
+   */
+  private static async titleAfterReply(p: {
+    consultationId: string;
+    tenantCode: TenantCode;
+    userId: string;
+    userInput: string;
+    typedInput: string;
+    attachmentNames: string[];
+    fullResponse: string;
+    firstPass: Promise<TitleOutcome>;
+  }): Promise<void> {
+    try {
+      const first = await p.firstPass;
+      if (first === "saved") return;
+      // A greeting has nothing more to title after the reply either (the reply is a greeting
+      // back) — skip the second call and hold a neutral placeholder until a real question.
+      if (first === "smalltalk") {
+        await ChatSvc.saveProvisionalIfUntitled(p.consultationId, p.userId, PROVISIONAL_GREETING_TITLE);
+        return;
+      }
+      // Pass 1 may have lost a race with a rename, or saved via another instance. A provisional
+      // title doesn't count — this pass exists to replace it.
+      const current = await ChatRepo.findConsultationTitleState(p.consultationId);
+      if (current?.title && current.titleSource !== "PROVISIONAL") return;
+
+      const replyExcerpt = stripStructuredBlocks(p.fullResponse);
+      const second = await ChatSvc.generateAndSaveTitle(p.consultationId, p.userInput, p.tenantCode, p.userId, {
+        attachmentNames: p.attachmentNames,
+        replyExcerpt,
+      }).catch(() => "failed" as const);
+      if (second === "saved") return;
+      if (second === "smalltalk") {
+        await ChatSvc.saveProvisionalIfUntitled(p.consultationId, p.userId, PROVISIONAL_GREETING_TITLE);
+        return;
+      }
+
+      const fallback = second === "failed" ? fallbackTitle(p.typedInput, p.attachmentNames) : null;
+      if (!fallback) {
+        // Nothing coherent to title (gibberish): a provisional title beats "Untitled
+        // consultation", and the next real message replaces it (needsTitle in the send path).
+        await ChatSvc.saveProvisionalIfUntitled(p.consultationId, p.userId, PROVISIONAL_UNCLEAR_TITLE);
+        return;
+      }
+      await ChatSvc.saveTitle(p.consultationId, p.userId, fallback, "AUTO");
+      logger.info("Chat title: saved fallback title (model unavailable)", {
+        consultationId: p.consultationId,
+        title: fallback,
+      });
+    } catch (err) {
+      logger.error("Chat title: post-reply pass failed (non-fatal)", { consultationId: p.consultationId, err });
+    }
   }
 }
+
+type TitleOutcome = "saved" | "unclear" | "smalltalk" | "failed";
+
+/** How many recent user messages the re-title prompt sees — enough for the thread's direction. */
+const RETITLE_MESSAGE_WINDOW = 6;
+
+/** A message worth re-checking the title for: two or more real words ("thanks" / "ok" / "asdf"
+ * never change what a consultation is about, so they don't cost a model call). */
+function isSubstantive(text: string): boolean {
+  return (text.match(/\p{L}{2,}/gu) ?? []).length >= 2;
+}
+
+/** Last resort when the title model is unavailable: "Document Review: <first file>" for an
+ * upload, otherwise the start of the message itself. Null when there's nothing wordlike to use. */
+function fallbackTitle(typedInput: string, attachmentNames: string[]): string | null {
+  const clip = (text: string) => {
+    const clean = text.replace(/\s+/g, " ").trim();
+    if (clean.length <= TITLE_MAX_CHARS) return clean;
+    const cut = clean.slice(0, TITLE_MAX_CHARS - 1);
+    return `${cut.slice(0, cut.lastIndexOf(" ") > 20 ? cut.lastIndexOf(" ") : cut.length)}…`;
+  };
+  // With files attached the message is usually the vague part ("what are these?") — the file
+  // name says more about the matter.
+  const file = attachmentNames[0]?.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[_-]+/g, " ").trim();
+  if (file) return clip(`Document Review: ${file}`);
+  const text = typedInput.trim().replace(/[?.!]+$/, "");
+  // Two or more letter-words: a real phrase, not "asdf" or a lone emoji.
+  if ((text.match(/\p{L}{2,}/gu) ?? []).length >= 2) {
+    return clip(text.charAt(0).toUpperCase() + text.slice(1));
+  }
+  return null;
+}
+

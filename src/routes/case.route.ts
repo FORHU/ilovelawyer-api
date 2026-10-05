@@ -4,6 +4,7 @@ import validSession from "../middleware/valid-session.middleware";
 import resolveOrganization from "../middleware/resolve-organization.middleware";
 import CaseCtrl from "../controllers/case.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
+import TraceCtrl from "../controllers/trace.controller";
 import CaseEdgeCtrl from "../controllers/case-edge.controller";
 import CaseMindMapCtrl from "../controllers/case-mind-map.controller";
 
@@ -21,6 +22,7 @@ router.post("/:id/archive", asyncHandler(CaseCtrl.archive));
 router.post("/:id/unarchive", asyncHandler(CaseCtrl.unarchive));
 router.post("/archive", asyncHandler(CaseCtrl.archiveMany));
 router.post("/unarchive", asyncHandler(CaseCtrl.unarchiveMany));
+router.delete("/", asyncHandler(CaseCtrl.deleteMany));
 
 /**
  *  UI routes for user document management.
@@ -114,7 +116,9 @@ router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitn
 
 router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
 router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
+router.post("/:caseId/damages/propose", asyncHandler(CaseTerminalCtrl.proposeDamages));
 router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage));
+router.post("/:caseId/damages/:id/accept", asyncHandler(CaseTerminalCtrl.acceptDamage));
 router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
 
 router.get("/:caseId/claims", asyncHandler(CaseTerminalCtrl.listClaims));
@@ -137,7 +141,11 @@ router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generate
 
 router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/export/history", asyncHandler(CaseTerminalCtrl.exportBriefHistory));
+router.get("/:caseId/audio-overview/history", asyncHandler(CaseTerminalCtrl.audioOverviewHistory));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
+// Explanation (XAI) trace — what the AI did to answer each turn, for the Terminal trace pane
+router.get("/:caseId/trace/turns", asyncHandler(TraceCtrl.listTurns));
+router.get("/:caseId/trace/turns/:turnId", asyncHandler(TraceCtrl.listTurnEvents));
 router.post("/:caseId/decisions/:id/dispute", asyncHandler(CaseTerminalCtrl.disputeDecision));
 router.post("/:caseId/decisions/:id/reactivate", asyncHandler(CaseTerminalCtrl.reactivateDecision));
 
@@ -147,12 +155,19 @@ router.post("/:caseId/theories/propose", asyncHandler(CaseTerminalCtrl.proposeTh
 router.get("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.getTheoryDiff));
 router.post("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.generateTheoryDiff));
 router.patch("/:caseId/theories/:id", asyncHandler(CaseTerminalCtrl.updateTheory));
+router.delete("/:caseId/theories/:id", asyncHandler(CaseTerminalCtrl.deleteTheory));
 router.post("/:caseId/theories/:id/publish", asyncHandler(CaseTerminalCtrl.publishTheory));
 router.post("/:caseId/theories/:id/retire", asyncHandler(CaseTerminalCtrl.retireTheory));
 router.post("/:caseId/theories/:id/fork", asyncHandler(CaseTerminalCtrl.forkTheory));
 router.post("/:caseId/theories/:id/claims", asyncHandler(CaseTerminalCtrl.addTheoryClaim));
 router.post("/:caseId/theories/:id/assumptions", asyncHandler(CaseTerminalCtrl.addTheoryAssumption));
 router.post("/:caseId/theories/:id/open-questions", asyncHandler(CaseTerminalCtrl.addTheoryOpenQuestion));
+router.patch("/:caseId/theories/:id/claims/:itemId", asyncHandler(CaseTerminalCtrl.updateTheoryClaim));
+router.delete("/:caseId/theories/:id/claims/:itemId", asyncHandler(CaseTerminalCtrl.deleteTheoryClaim));
+router.patch("/:caseId/theories/:id/assumptions/:itemId", asyncHandler(CaseTerminalCtrl.updateTheoryAssumption));
+router.delete("/:caseId/theories/:id/assumptions/:itemId", asyncHandler(CaseTerminalCtrl.deleteTheoryAssumption));
+router.patch("/:caseId/theories/:id/open-questions/:itemId", asyncHandler(CaseTerminalCtrl.updateTheoryOpenQuestion));
+router.delete("/:caseId/theories/:id/open-questions/:itemId", asyncHandler(CaseTerminalCtrl.deleteTheoryOpenQuestion));
 
 router.get("/:caseId/annotations", asyncHandler(CaseTerminalCtrl.listAnnotations));
 router.post("/:caseId/annotations", asyncHandler(CaseTerminalCtrl.createAnnotation));

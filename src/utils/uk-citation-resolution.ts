@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import LawRepo from "../repositories/law.repository";
 import { UK_CASELAW_BASE_URL, UK_LEGISLATION_BASE_URL } from "../config";
 import { legislationHitToCreateInput, legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
-import { legislationSearch, resolveUkCitation, UkResolvedCitation } from "./uk-legal-mcp";
+import { legislationTitleLookup, resolveUkCitation, UkResolvedCitation } from "./uk-legal-mcp";
 
 export interface UkCitationResolutionResult {
   lawId: string;
@@ -132,9 +132,9 @@ export async function resolveUkLegislationTitleToLaw(label: string): Promise<UkC
   const actTitle = extractActTitle(label).trim();
   if (!actTitle) return null;
 
-  let result: Awaited<ReturnType<typeof legislationSearch>>;
+  let result: Awaited<ReturnType<typeof legislationTitleLookup>>;
   try {
-    result = await legislationSearch({ query: actTitle, limit: 5 });
+    result = await legislationTitleLookup({ query: actTitle, limit: 5 });
   } catch {
     return null;
   }

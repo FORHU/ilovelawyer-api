@@ -287,6 +287,9 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
   });
 }
 
+/** How far a streamed turn has got, for progress UI — see streamChatWonderMessage's opts.onStage. */
+export type ChatWonderStage = "answering" | "extras";
+
 export interface ChatWonderStreamResult {
   content: string;
   /** Related cases Chat Wonder itself resolved via its own juris.ph MCP tool calls
@@ -388,7 +391,26 @@ export function streamChatWonderMessage(
    * self-check for this turn. For one-shot calls whose reply is structured output rather than an
    * answer (CaseMindMapSvc's document-built map), where a quotation/contradiction audit only adds a
    * rewrite round. */
-  opts?: { resolveOnAnswerEnd?: boolean; mindMapRequested?: boolean; mindMapContext?: string; skipLegalVerify?: boolean },
+  opts?: {
+    resolveOnAnswerEnd?: boolean;
+    mindMapRequested?: boolean;
+    mindMapContext?: string;
+    skipLegalVerify?: boolean;
+    /** Sent as `case_damages`: the case's Damages & Remedies model (DamageClaimSvc.chatContext),
+     * which chat-wonder's legal personas inject so answers quote the lawyer's own figures. A
+     * chat-wonder build that doesn't know the field drops it. */
+    caseDamages?: unknown;
+    /** Sent as `trace_turn_id`: this turn's id (the user Message that asked), which chat-wonder
+     * stamps on every trace event it emits so TraceCollectorSvc can attribute them to the turn and
+     * its user. Only real chat turns set it — background generators don't, and a chat-wonder build
+     * that doesn't know the field drops it. */
+    traceTurnId?: string;
+    /** Fired once per stage as the turn moves through them: "answering" at the first answer
+     * chunk (everything before it is Chat Wonder reading the case), then "extras" at `__END__`
+     * (the second model call that writes the timeline/mind map/audio overview script). For a
+     * progress indicator only — never throws into the stream. */
+    onStage?: (stage: ChatWonderStage) => void;
+  },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -415,6 +437,16 @@ export function streamChatWonderMessage(
     let firstChunkAt: number | undefined;
     let endFrameAt: number | undefined;
     const resolved = normalizeGrounding(grounding);
+    let reportedStage: ChatWonderStage | undefined;
+    const reportStage = (stage: ChatWonderStage) => {
+      if (reportedStage === stage) return;
+      reportedStage = stage;
+      try {
+        opts?.onStage?.(stage);
+      } catch (err) {
+        logger.warn("Chat Wonder: onStage threw, continuing", { sessionId, stage, err });
+      }
+    };
     // Kicked off alongside the WS connect so the chunk ids are ready (or close to it) by
     // the time onopen fires, instead of waiting on this serially after the socket is up.
     // When chunk ids are already supplied (case-scoped ranking), reuse them; otherwise
@@ -489,6 +521,7 @@ export function streamChatWonderMessage(
     const armPostEndWait = () => {
       if (postEndTimer) return;
       endFrameAt = Date.now();
+      reportStage("extras");
       try {
         onAnswerComplete?.();
       } catch (err) {
@@ -527,6 +560,8 @@ export function streamChatWonderMessage(
             mind_map_requested?: boolean;
             case_mind_map_context?: string;
             skip_legal_verify?: boolean;
+            case_damages?: unknown;
+            trace_turn_id?: string;
           } = {
             type: "chat",
             user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
@@ -544,6 +579,12 @@ export function streamChatWonderMessage(
           }
           if (opts?.skipLegalVerify) {
             payload.skip_legal_verify = true;
+          }
+          if (opts?.caseDamages) {
+            payload.case_damages = opts.caseDamages;
+          }
+          if (opts?.traceTurnId) {
+            payload.trace_turn_id = opts.traceTurnId;
           }
           if (opts?.mindMapContext) {
             payload.case_mind_map_context = opts.mindMapContext;
@@ -775,6 +816,7 @@ export function streamChatWonderMessage(
             sessionId,
             timeToFirstChunkMs: firstChunkAt - streamStartedAt,
           });
+          reportStage("answering");
         }
         accumulated += message;
         onChunk(message);

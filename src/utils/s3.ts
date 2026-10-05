@@ -97,6 +97,19 @@ export function getProxyFileUrl(
   return `/files/${token}`;
 }
 
+const STABLE_PROXY_WINDOW_SECONDS = 3600;
+
+/** Like getProxyFileUrl (inline), but the token is issued at the start of the current hour and
+ * lives two, so the same file yields the same URL for a whole hour and every URL handed out is
+ * still valid for at least an hour. Used for avatars: /me is refetched often, and a URL that
+ * changed on every response would make the browser re-download the image each time. */
+export function getStableProxyFileUrl(key: string): string {
+  const windowStart = Math.floor(Date.now() / 1000 / STABLE_PROXY_WINDOW_SECONDS) * STABLE_PROXY_WINDOW_SECONDS;
+  const payload: FileTokenPayload & { iat: number } = { s3Key: key, disposition: "inline", iat: windowStart };
+  const token = jwt.sign(payload, FILE_TOKEN_SECRET, { expiresIn: STABLE_PROXY_WINDOW_SECONDS * 2 });
+  return `/files/${token}`;
+}
+
 /** Downloads an object's full contents into memory — used by document extraction to read an
  * uploaded Case Document's bytes back out of S3 for text extraction. */
 export async function getObjectBuffer(key: string): Promise<Buffer> {

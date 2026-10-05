@@ -5,11 +5,8 @@ export const PANEL_IDS = [
   "dates",
   "chat",
   "mindMap",
-  "citationMap",
   "redTeam",
   "procedure",
-  "teamAudit",
-  "contradictions",
   "legalIssues",
   "weaknesses",
   "strengths",
@@ -21,7 +18,7 @@ export const PANEL_IDS = [
   "audioOverview",
   "decisions",
   "theories",
-  "verification",
+  "trace",
 ] as const;
 
 export type PanelId = (typeof PANEL_IDS)[number];
@@ -29,7 +26,12 @@ export type PanelId = (typeof PANEL_IDS)[number];
 export const PRESET_VALUES = ["PANE_1", "PANE_2", "PANE_4", "PANE_6"] as const;
 export type PresetValue = (typeof PRESET_VALUES)[number];
 
-export const ARRANGEMENT_VALUES = ["columns", "tabs", "focus", "split"] as const;
+// "split" was a legacy value never actually referenced anywhere else in this codebase — replaced
+// with "free" to match the app's real arrangement values (apps/web/lib/terminal/types.ts). This
+// list gates normalizeLayout's isArrangementValue check, so before this fix any workspace saved
+// with "free" (every multi-screen Free-canvas layout) was silently coerced to "columns" on every
+// save — the arrangement mode itself never survived a reload.
+export const ARRANGEMENT_VALUES = ["free", "columns", "tabs", "focus"] as const;
 export type ArrangementValue = (typeof ARRANGEMENT_VALUES)[number];
 
 export interface PanelLayout {
@@ -48,6 +50,10 @@ export interface PanelLayout {
   tabGroup?: number;
   /** Protects this pane's own slot from move/resize/reassignment. */
   pinned?: boolean;
+  /** Which physical screen this pane renders on. 0 or absent = primary; 1-5 = a secondary canvas
+   * window, numbered left-to-right and recomputed fresh each session — mirrors
+   * apps/web/lib/terminal/types.ts's PanelLayout.screen exactly. */
+  screen?: number;
 }
 
 export interface WorkspaceLayout {
@@ -62,6 +68,20 @@ export interface WorkspaceLayout {
   tabsSplit?: number;
   tabsActiveA?: PanelId;
   tabsActiveB?: PanelId;
+  /** Per-secondary-screen arrangement state, keyed by screen index (1-5) — mirrors
+   * apps/web/lib/terminal/types.ts's WorkspaceLayout.screenLayouts exactly. The top-level
+   * arrangement/columnCount/columnWidths/tabsSplit/tabsActiveA/B fields above are screen 0's own. */
+  screenLayouts?: Record<
+    number,
+    {
+      arrangement?: ArrangementValue;
+      columnCount?: number;
+      columnWidths?: number[];
+      tabsSplit?: number;
+      tabsActiveA?: PanelId;
+      tabsActiveB?: PanelId;
+    }
+  >;
 }
 
 export interface PanelCatalogEntry {
@@ -89,14 +109,6 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: false,
     minSku: "SOLO",
     description: "Documents, source links, case timeline",
-  },
-  {
-    id: "contradictions",
-    label: "Contradictions",
-    phase: "P1",
-    defaultHidden: false,
-    minSku: "SOLO",
-    description: "Cross-document contradictions found by the evidence scan, split out of Evidence & Timeline",
   },
   {
     id: "law",
@@ -131,14 +143,6 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     description: "Case strategy mind map generated from the consultation",
   },
   {
-    id: "citationMap",
-    label: "Citation Map",
-    phase: "P3",
-    defaultHidden: true,
-    minSku: "SOLO",
-    description: "Network graph of the case's cited jurisprudence, expandable into what those decisions cite — Philippine jurisdiction only",
-  },
-  {
     id: "redTeam",
     label: "Red Team",
     phase: "P3",
@@ -153,14 +157,6 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     defaultHidden: false,
     minSku: "SOLO",
     description: "Deadlines and filing checklist",
-  },
-  {
-    id: "teamAudit",
-    label: "Team & Audit",
-    phase: "P5",
-    defaultHidden: false,
-    minSku: "PROFESSIONAL",
-    description: "Assignments, approvals, audit trail",
   },
   {
     id: "legalIssues",
@@ -216,7 +212,7 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     phase: "P3",
     defaultHidden: true,
     minSku: "SOLO",
-    description: "Claimed damages by category: actual, moral, exemplary, attorney's fees, other",
+    description: "Money claimed and other orders sought, each with the document line it comes from, the total, and what is awarded so far",
   },
   {
     id: "caseReconstruction",
@@ -243,21 +239,20 @@ export const PANEL_CATALOG: PanelCatalogEntry[] = [
     description: "The 'Why?' behind a legal answer's conclusions — rule, evidence for and against, the alternative considered and rejected, and what fact would change it. Populated automatically from legal chat turns, not generated on demand.",
   },
   {
-    id: "verification",
-    label: "Verification",
-    phase: "P3",
-    defaultHidden: true,
-    minSku: "SOLO",
-    description:
-      "What was checked and what failed — citations the bundle does not support or contradicts, and documents an answer said were missing when they were not. Populated automatically from legal chat turns by the grounding verifier; shows nothing until USE_GROUNDING_VERIFIER is on.",
-  },
-  {
     id: "theories",
     label: "Theories",
     phase: "P3",
     defaultHidden: true,
     minSku: "SOLO",
     description: "Several lawyers' theories of the case, side by side — never merged. Diff any two to see what they share, what they disagree on, and the evidence that would decide it.",
+  },
+  {
+    id: "trace",
+    label: "AI Reasoning",
+    phase: "P3",
+    defaultHidden: true,
+    minSku: "SOLO",
+    description: "How the AI reached each answer, turn by turn — the research it ran, what it found, and the checks it applied. Recorded as the answer is written, and kept with the consultation.",
   },
 ];
 

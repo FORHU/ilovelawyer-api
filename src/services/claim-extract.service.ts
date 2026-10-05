@@ -83,6 +83,7 @@ export default class ClaimExtractSvc {
         causeOfAction: claim.causeOfAction,
         sourceLabel: nameOf.get(claim.documentId) ?? "Unknown document",
         sourceQuote: claim.quote,
+        sourceDocumentId: nameOf.has(claim.documentId) ? claim.documentId : null,
       });
       await CaseGraphSvc.ensureNode(caseId, "CLAIM", row.id);
       created.push(row.id);

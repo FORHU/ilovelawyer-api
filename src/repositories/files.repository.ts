@@ -17,6 +17,12 @@ export default class FilesRepo {
    * when the count truly hits zero. Marking (not deleting outright) leaves the actual S3 object
    * removal to a separate sweep job, same as `deletedAt`'s existing soft-delete convention on
    * this model — this repo has no opinion on when/how that sweep runs. */
+  /** Same soft-delete convention as markForDeletionIfOrphaned, for a File with a single owner
+   * (a replaced or removed avatar): the S3 object is left to the sweep job. */
+  static async markForDeletion(fileId: string): Promise<void> {
+    await prisma.file.update({ where: { id: fileId }, data: { fileStatus: "FOR_DELETION", deletedAt: new Date() } });
+  }
+
   static async markForDeletionIfOrphaned(fileId: string): Promise<void> {
     const stillReferenced = await prisma.document.findFirst({ where: { fileId }, select: { id: true } });
     if (stillReferenced) return;

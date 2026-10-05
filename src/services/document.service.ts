@@ -20,10 +20,19 @@ import { DocumentStatus } from "@prisma/client";
  * browser anyway — this hands back a same-origin proxy link instead (see getProxyFileUrl), never
  * the stored fileUrl column, which may be a raw S3/CloudFront URL. Pre-migration rows with no
  * s3Key get null rather than that stored URL. */
-export async function mapDocumentToDto<T extends { file?: { fileUrl: string | null; s3Key: string | null } | null }>(doc: T) {
+export async function mapDocumentToDto<
+  T extends { file?: { fileUrl: string | null; s3Key: string | null; filename: string | null } | null },
+>(doc: T) {
   const { file, ...rest } = doc;
-  const fileUrl = file?.s3Key ? getProxyFileUrl(file.s3Key) : null;
+  const fileUrl = file?.s3Key ? documentFileUrl(file.s3Key, file.filename) : null;
   return { ...rest, fileUrl };
+}
+
+/** Carries the original filename in the token so the browser saves the document under it (the
+ * S3 key is a timestamp, and without a filename the save dialog falls back to the JWT itself).
+ * Inline, not attachment: Studio's Documents tile previews this same URL in an <iframe>. */
+export function documentFileUrl(s3Key: string, filename: string | null): string {
+  return getProxyFileUrl(s3Key, { filename: filename ?? undefined, disposition: "inline" });
 }
 
 export default class DocumentSvc {
@@ -121,8 +130,8 @@ export default class DocumentSvc {
     // `createdDocuments` since both were built from the same ordered `items` input.
     return Promise.all(
       createdDocuments.map(async (doc, i) => {
-        const { s3Key } = files[i];
-        return { ...doc, fileUrl: s3Key ? getProxyFileUrl(s3Key) : null };
+        const { s3Key, filename } = files[i];
+        return { ...doc, fileUrl: s3Key ? documentFileUrl(s3Key, filename) : null };
       }),
     );
   }
@@ -208,6 +217,20 @@ export default class DocumentSvc {
     return mapDocumentToDto(updated);
   }
 
+  /** Bulk archive from the documents view — same per-document path as archive() (audit row +
+   * cache invalidation each), fanned out with allSettled so one missing/already-archived id
+   * doesn't fail the whole batch. Mirrors unarchiveMany below. */
+  static async archiveMany(ids: string[], organizationId: string, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.archive(id, organizationId, actorId)));
+    const succeeded: Awaited<ReturnType<typeof mapDocumentToDto>>[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(result.value);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to archive document" });
+    });
+    return { succeeded, failed };
+  }
+
   /** Bulk "Select All" restore from the Archived documents view — same per-document path as
    * unarchive() (audit row + cache invalidation each), fanned out with allSettled so one missing/
    * already-active id doesn't fail the whole batch the user selected. */
@@ -244,6 +267,20 @@ export default class DocumentSvc {
     for (const doc of docs) {
       if (doc.status === "ARCHIVED") await this.unarchive(doc.id, organizationId, actorId);
     }
+  }
+
+  /** Bulk delete from the documents view — loops delete() over every selected id with
+   * allSettled so one missing document doesn't fail the rest of the batch. `succeeded` is the
+   * deleted ids, since there's no row left to return. */
+  static async deleteMany(ids: string[], organizationId: string, userId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.delete(id, organizationId, userId)));
+    const succeeded: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") succeeded.push(ids[i]);
+      else failed.push({ id: ids[i], error: result.reason instanceof Error ? result.reason.message : "Failed to delete document" });
+    });
+    return { succeeded, failed };
   }
 
   /** userId is the authenticated deleter — needed only to attribute an auto-triggered

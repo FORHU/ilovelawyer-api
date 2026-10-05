@@ -1,13 +1,21 @@
 import prisma from "../lib/prisma";
 import { OrganizationRole, OrganizationMemberStatus } from "@prisma/client";
+import { getStableProxyFileUrl } from "../utils/s3";
 
 export default class OrganizationMemberRepo {
+  /** Each member's `user` carries `avatarUrl` (null → the app shows initials), same as /me. */
   static async list(organizationId: string) {
-    return prisma.organizationMember.findMany({
+    const members = await prisma.organizationMember.findMany({
       where: { organizationId },
-      include: { user: { select: { id: true, name: true, email: true, username: true } } },
+      include: {
+        user: { select: { id: true, name: true, email: true, username: true, avatar: { select: { s3Key: true } } } },
+      },
       orderBy: { createdAt: "asc" },
     });
+    return members.map(({ user: { avatar, ...user }, ...member }) => ({
+      ...member,
+      user: { ...user, avatarUrl: avatar?.s3Key ? getStableProxyFileUrl(avatar.s3Key) : null },
+    }));
   }
 
   /** userId is globally unique (a user belongs to at most one org), so this also verifies

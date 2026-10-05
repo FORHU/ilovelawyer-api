@@ -266,6 +266,25 @@ describe("Case mind map (built from documents)", () => {
     expect(map).to.equal(null);
   });
 
+  // R v Doyle QA: Regenerate finished DONE but the map stayed at version 4. A manual build that
+  // saves nothing must throw, so AiGenerationLockSvc.finishWith marks the job FAILED.
+  it("fails a manual Regenerate that saves nothing, instead of finishing quietly", async () => {
+    await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+    replyFrames = ["I could not build a map from these files."];
+    await CaseMindMapSvc.generateFromDocuments("case1", "u1", "manual").then(
+      () => expect.fail("expected a 502"),
+      (err) => expect(err.statusCode).to.equal(502),
+    );
+    expect(map!.version).to.equal(1);
+
+    documents = [];
+    map = null;
+    await CaseMindMapSvc.generateFromDocuments("case1", "u1", "manual").then(
+      () => expect.fail("expected a 422"),
+      (err) => expect(err.statusCode).to.equal(422),
+    );
+  });
+
   it("does nothing without READY documents, or when CASE_MIND_MAP_AUTO is off", async () => {
     documents = [{ id: DOC_A, name: "Scan.pdf", ragStatus: "PENDING" }];
     expect((await CaseMindMapSvc.generateFromDocuments("case1", "u1")).skipped).to.equal("noDocuments");
@@ -339,13 +358,42 @@ describe("Case mind map (built from documents)", () => {
       documents = documents.map((d) => (d.id === DOC_B ? ({ ...d, status: "ARCHIVED" } as any) : d));
       expect(await CaseMindMapSvc.documentsChangedSinceBuild("case1")).to.equal(true);
     });
+
+    it("needsFirstMap: true for a case with documents and no map, false once it has one", async () => {
+      expect(await CaseMindMapSvc.needsFirstMap("case1")).to.equal(true);
+      await CaseMindMapSvc.generateFromDocuments("case1", "u1");
+      expect(await CaseMindMapSvc.needsFirstMap("case1")).to.equal(false);
+    });
+
+    it("needsFirstMap: false when no document can be built from", async () => {
+      documents = documents.map((d) => ({ ...d, status: "ARCHIVED" }) as any);
+      expect(await CaseMindMapSvc.needsFirstMap("case1")).to.equal(false);
+    });
   });
 
   describe("expand and undo on the case map", () => {
     beforeEach(async () => {
       await CaseMindMapSvc.generateFromDocuments("case1", "u1");
       prompts = [];
-      replyFrames = [`[MINDMAP_CHILDREN]${JSON.stringify([{ label: "Note signed 3 March" }])}[/MINDMAP_CHILDREN]`];
+      // Cited: the case map keeps only points that cite one of its documents.
+      replyFrames = [`[MINDMAP_CHILDREN]${JSON.stringify([{ label: "Note signed 3 March", sources: [{ documentId: DOC_A, page: 3 }] }])}[/MINDMAP_CHILDREN]`];
+    });
+
+    it("adds only the new points that cite a case document, and refuses an expand that cites none", async () => {
+      replyFrames = [
+        `[MINDMAP_CHILDREN]${JSON.stringify([
+          { label: "Note signed 3 March", sources: [{ documentId: DOC_A, page: 3 }] },
+          { label: "General observation" },
+        ])}[/MINDMAP_CHILDREN]`,
+      ];
+      const result = await MindMapSvc.expandCaseNode({ userId: "u1", caseId: "case1", nodeId: "legalBasis.1" });
+      expect(findMindMapNode(result.mindMap, "legalBasis.1")!.node.children.map((c) => c.label)).to.deep.equal(["Note signed 3 March"]);
+
+      replyFrames = [`[MINDMAP_CHILDREN]${JSON.stringify([{ label: "Another observation" }])}[/MINDMAP_CHILDREN]`];
+      await MindMapSvc.expandCaseNode({ userId: "u1", caseId: "case1", nodeId: "legalBasis.1" }).then(
+        () => expect.fail("expected a 502"),
+        (err) => expect(err.statusCode).to.equal(502),
+      );
     });
 
     it("asks for sources on the case map, keeps only real case documents, and has Jev check just the new points", async () => {
@@ -356,7 +404,9 @@ describe("Case mind map (built from documents)", () => {
       ];
       const result = await MindMapSvc.expandCaseNode({ userId: "u1", caseId: "case1", nodeId: "legalBasis.1" });
       expect(prompts[0]).to.contain("## DOCUMENTS");
-      expect(prompts[0]).to.contain(DOC_A);
+      // Documents are listed by handle; the model never sees the raw id.
+      expect(prompts[0]).to.contain("`D1`");
+      expect(prompts[0]).to.not.contain(DOC_A);
       expect(findMindMapNode(result.mindMap, "legalBasis.1.1")!.node.sources).to.deep.equal([{ documentId: DOC_A, page: 1 }]);
       expect(checked).to.deep.equal([new Set(["legalBasis.1.1"])]);
     });
@@ -392,12 +442,14 @@ describe("case mind map helpers", () => {
     expect(findMindMapNode(tree, "keyFacts.1")!.node.sources).to.equal(undefined);
   });
 
-  it("normalizeMindMap keeps well-formed sources and discards malformed ones", () => {
+  it("normalizeMindMap keeps every source that names a document, and discards ones that name none", () => {
     const tree = normalizeMindMap({
       label: "Case",
       children: [{ label: "x", sources: [{ documentId: " a " , page: "3" }, { page: 2 }, { documentId: "b", page: -1 }, "junk"], children: [] }],
     })!;
-    expect(tree.children[0].sources).to.deep.equal([{ documentId: "a", page: 3 }, { documentId: "b" }]);
+    // A bare string is kept as a reference: resolveCaseSources settles it against the case's
+    // documents, and drops it there when it matches none.
+    expect(tree.children[0].sources).to.deep.equal([{ documentId: "a", page: 3 }, { documentId: "b" }, { documentId: "junk" }]);
   });
 
   it("computeReadySetFingerprint ignores order and non-READY documents", () => {

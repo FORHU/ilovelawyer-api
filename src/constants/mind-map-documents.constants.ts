@@ -39,15 +39,17 @@ go wrong, and what to do next — every point specific to this case and traceabl
   Risks → specific risk → mitigation; Next Steps → step → sub-task or deadline.
 - At most ${Math.min(MIND_MAP_LIMITS.maxNodes, 80)} nodes in total and never more than ${MIND_MAP_LIMITS.maxDepth} levels below the root.
   Where a branch could clearly go further but you stopped, set "hasMore": true on that node.
-- A branch the documents say nothing about gets one child saying what is missing (e.g.
-  "No demand letter in the file") rather than invented content.
+- A branch the documents say nothing about gets "children": [] rather than invented content.
+- A point about something missing is kept only when a document shows the gap (e.g. the complaint
+  refers to a demand letter that is not in the file); cite that document.
 
 ## EVERY NODE BELOW THE FIRST LEVEL
 - "label": at most 8 words, specific (names, dates, sums, sections), never a generic category.
 - "description": 1-3 sentences of the actual reasoning or evidence, naming the document by its
   name (never its id). Markdown allowed.
-- "sources": the documents it comes from, as [{"documentId": "<id from the list below>", "page": <number or null>}].
-  Use only ids from the DOCUMENTS list. Omit "sources" when the point isn't from a document.
+- "sources": REQUIRED. The documents it comes from, as [{"documentId": "<handle from the list below, e.g. D1>", "page": <number or null>}].
+  Use only the handles in the DOCUMENTS list, copied exactly. A risk or next step cites the document that makes it
+  necessary. A point no document supports is removed from the map, so leave it out instead.
 - "children": [] on leaves.
 - Do not invent parties, amounts, dates, or authorities that are not in the documents.
 

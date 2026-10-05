@@ -11,7 +11,9 @@ export interface RiskDriver {
     | "upcomingDeadlines"
     | "failedDocuments"
     | "invalidCitations"
-    | "unverifiedEvidence";
+    | "unverifiedEvidence"
+    | "openWeaknesses"
+    | "openLegalIssues";
   count: number;
 }
 
@@ -33,6 +35,9 @@ export interface RiskScoreInput {
   citations?: { status: string }[];
   deadlines?: { computedDueDate: Date | string; confirmations?: { confirmed: boolean }[] }[];
   matrix?: { authenticity?: string | null; admissibility?: string | null; needsVerify?: boolean | null }[];
+  /** Legal Issues / Weaknesses panels. A case's analysis often lands only here, not in `risks`,
+   * so leaving these out scored a case with 8 weaknesses as risk 0 / health 100. */
+  findings?: { category: string; tag?: string | null }[];
   now?: Date;
 }
 
@@ -54,6 +59,7 @@ export function scoreCaseRisks(input: RiskScoreInput): CaseRiskAnalysis {
   ).length;
 
   const { overdue, upcoming } = deadlineCounts(input.deadlines ?? [], now);
+  const { openWeaknesses, materialWeaknesses, openLegalIssues, contestedLegalIssues } = openFindingCounts(input.findings ?? []);
 
   return {
     overall: meterFromContributions([
@@ -64,6 +70,16 @@ export function scoreCaseRisks(input: RiskScoreInput): CaseRiskAnalysis {
       { code: "contradictions", count: contradictions.length, points: Math.min(30, contradictions.length * 10) },
       { code: "failedDocuments", count: failedDocuments, points: Math.min(20, failedDocuments * 10) },
       { code: "invalidCitations", count: invalidCitations, points: invalidCitations * 12 },
+      {
+        code: "openWeaknesses",
+        count: openWeaknesses,
+        points: Math.min(40, materialWeaknesses * 8 + (openWeaknesses - materialWeaknesses) * 4),
+      },
+      {
+        code: "openLegalIssues",
+        count: openLegalIssues,
+        points: Math.min(24, contestedLegalIssues * 6 + (openLegalIssues - contestedLegalIssues) * 3),
+      },
     ]),
     liability: meterFromContributions([
       { code: "missingEvidence", count: missingEvidence, points: missingEvidence * 28 },
@@ -72,6 +88,7 @@ export function scoreCaseRisks(input: RiskScoreInput): CaseRiskAnalysis {
       { code: "unverifiedEvidence", count: unverifiedEvidence, points: Math.min(24, unverifiedEvidence * 8) },
       { code: "major", count: major, points: major * 10 },
       { code: "contradictions", count: contradictions.length, points: Math.min(20, contradictions.length * 6) },
+      { code: "openWeaknesses", count: materialWeaknesses, points: Math.min(30, materialWeaknesses * 6) },
     ]),
   };
 }
@@ -89,6 +106,18 @@ function deadlineCounts(deadlines: NonNullable<RiskScoreInput["deadlines"]>, now
     else if (days <= 7) upcoming += 1;
   }
   return { overdue, upcoming };
+}
+
+/** RESOLVED legal issues and CLOSED weaknesses are done; every other tag (or none) is open. */
+export function openFindingCounts(findings: NonNullable<RiskScoreInput["findings"]>) {
+  const weaknesses = findings.filter((f) => f.category === "WEAKNESS" && f.tag !== "CLOSED");
+  const legalIssues = findings.filter((f) => f.category === "LEGAL_ISSUE" && f.tag !== "RESOLVED");
+  return {
+    openWeaknesses: weaknesses.length,
+    materialWeaknesses: weaknesses.filter((f) => f.tag === "MATERIAL").length,
+    openLegalIssues: legalIssues.length,
+    contestedLegalIssues: legalIssues.filter((f) => f.tag === "CONTESTED").length,
+  };
 }
 
 function meterFromContributions(rows: { code: RiskDriver["code"]; count: number; points: number }[]): RiskMeterScore {

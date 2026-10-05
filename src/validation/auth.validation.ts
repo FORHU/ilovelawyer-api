@@ -11,19 +11,22 @@ const strongPassword = Joi.string().pattern(PASSWORD_PATTERN).required().message
 
 export const signupSchema = Joi.object({
   username: Joi.string().required(),
-  email: Joi.string().email().required(),
+  email: Joi.string().trim().email().required(),
   password: strongPassword,
   name: Joi.string().trim().max(120).allow(""),
+  // Optional for now so an older app build can still sign up (see AuthSvc.signup); when
+  // present it can only be `true`.
+  acceptedTerms: Joi.boolean().valid(true).optional(),
 });
 
 export const loginSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().trim().email().required(),
   password: Joi.string().min(8).required(),
   remember: Joi.boolean().optional(),
 });
 
 export const updateRequiredPasswordSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().trim().email().required(),
   currentPassword: Joi.string().required(),
   newPassword: strongPassword,
   remember: Joi.boolean().optional(),
@@ -32,10 +35,17 @@ export const updateRequiredPasswordSchema = Joi.object({
 export const googleLoginSchema = Joi.object({
   idToken: Joi.string().required(),
   remember: Joi.boolean().optional(),
+  acceptedTerms: Joi.boolean().optional(),
+});
+
+export const googleLinkSchema = Joi.object({
+  idToken: Joi.string().required(),
+  password: Joi.string().required(),
+  remember: Joi.boolean().optional(),
 });
 
 export const forgotPasswordSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().trim().email().required(),
 });
 
 export const validateResetTokenSchema = Joi.object({
@@ -48,15 +58,15 @@ export const resetPasswordSchema = Joi.object({
 });
 
 export const sendOtpSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().trim().email().required(),
 });
 
 export const cancelSignupSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().trim().email().required(),
 });
 
 export const verifyOtpSchema = Joi.object({
-  email: Joi.string().email().required(),
+  email: Joi.string().trim().email().required(),
   code: Joi.string().length(6).required(),
 });
 

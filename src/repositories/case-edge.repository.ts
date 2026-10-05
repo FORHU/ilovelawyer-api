@@ -22,6 +22,13 @@ export default class CaseEdgeRepo {
     return result.count > 0;
   }
 
+  /** The edge CaseTheorySvc.addClaim mirrors a graph-linked claim as (tagged via metadata). */
+  static async deleteByTheoryClaim(caseId: string, theoryClaimId: string) {
+    return prisma.caseEdge.deleteMany({
+      where: { caseId, metadata: { path: ["theoryClaimId"], equals: theoryClaimId } },
+    });
+  }
+
   static async listArchivedForCase(caseId: string) {
     return prisma.caseEdgeArchive.findMany({ where: { caseId }, orderBy: { archivedAt: "desc" } });
   }

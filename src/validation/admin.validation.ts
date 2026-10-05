@@ -10,6 +10,11 @@ export const listUsersSchema = Joi.object({
 
 export const denyUserSchema = Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
 
+export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid("PH", "UK").required() });
+
+// strict(): only a real JSON boolean — "true"/"false"/1/0 are rejected, not coerced.
+export const updateTenantSettingsSchema = Joi.object({ autoApproveSignups: Joi.boolean().strict().required() });
+
 export const lawSearchSchema = Joi.object({
   category: Joi.string().valid("jurisprudence", "republic-acts").required(),
   q: Joi.string().trim().min(1).max(300).required(),

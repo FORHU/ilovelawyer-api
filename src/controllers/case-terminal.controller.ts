@@ -19,12 +19,14 @@ import CitationGroundSvc from "../services/citation-ground.service";
 import AdverseSweepSvc from "../services/adverse-sweep.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
+import DamagesExtractSvc from "../services/damages-extract.service";
 import CaseClaimSvc from "../services/case-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
+import AudioOverviewHistorySvc from "../services/audio-overview-history.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -70,11 +72,13 @@ import {
   graphViewSchema,
   exportBriefSchema,
   exportBriefHistorySchema,
+  audioOverviewHistorySchema,
   listDecisionsSchema,
   disputeDecisionSchema,
   createTheorySchema,
   updateTheorySchema,
   addTheoryClaimSchema,
+  updateTheoryClaimSchema,
   addTheoryAssumptionSchema,
   addTheoryOpenQuestionSchema,
   diffTheoriesSchema,
@@ -547,6 +551,21 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  /** Queues a damages pass over every document of the case (DamagesExtractSvc.propose); the panel
+   * follows ai-jobs/damagesExtract for completion. */
+  static async proposeDamages(req: Request, res: Response) {
+    const { caseId } = req.params;
+    await DamagesExtractSvc.propose(caseId, req.user.userId);
+    const status = await AiGenerationLockSvc.getStatus(caseId, "damagesExtract");
+    return res.status(202).json(status);
+  }
+
+  /** Accepts an AI-proposed entry, so it counts in the total. */
+  static async acceptDamage(req: Request, res: Response) {
+    const result = await DamageClaimSvc.accept(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
   static async deleteDamage(req: Request, res: Response) {
     await DamageClaimSvc.delete(req.params.caseId, req.params.id, req.user.userId);
     return res.status(204).send();
@@ -688,6 +707,16 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  static async audioOverviewHistory(req: Request, res: Response) {
+    const { error, value } = audioOverviewHistorySchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await AudioOverviewHistorySvc.list(req.params.caseId, req.user.userId, {
+      limit: value.limit,
+      cursor: value.cursor,
+    });
+    return res.status(200).json(result);
+  }
+
   /** Decision Records (differentiation program, Phase 1) — see
    * docs/plans/differentiation-program.md Workstream A. Unlike every other panel above,
    * there is no generate/refresh action here: rows are promoted automatically by
@@ -742,6 +771,11 @@ export default class CaseTerminalCtrl {
     return res.status(200).json(result);
   }
 
+  static async deleteTheory(req: Request, res: Response) {
+    await CaseTheorySvc.remove(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
   static async forkTheory(req: Request, res: Response) {
     const result = await CaseTheorySvc.fork(req.params.caseId, req.params.id, req.user.userId);
     return res.status(201).json(result);
@@ -766,6 +800,48 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await CaseTheorySvc.addOpenQuestion(req.params.caseId, req.params.id, req.user.userId, value.question);
     return res.status(201).json(result);
+  }
+
+  static async updateTheoryClaim(req: Request, res: Response) {
+    const { error, value } = updateTheoryClaimSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId, id, itemId } = req.params;
+    const result = await CaseTheorySvc.updateClaim(caseId, id, itemId, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteTheoryClaim(req: Request, res: Response) {
+    const { caseId, id, itemId } = req.params;
+    await CaseTheorySvc.deleteClaim(caseId, id, itemId, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async updateTheoryAssumption(req: Request, res: Response) {
+    const { error, value } = addTheoryAssumptionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId, id, itemId } = req.params;
+    const result = await CaseTheorySvc.updateAssumption(caseId, id, itemId, req.user.userId, value.statement);
+    return res.status(200).json(result);
+  }
+
+  static async deleteTheoryAssumption(req: Request, res: Response) {
+    const { caseId, id, itemId } = req.params;
+    await CaseTheorySvc.deleteAssumption(caseId, id, itemId, req.user.userId);
+    return res.status(204).send();
+  }
+
+  static async updateTheoryOpenQuestion(req: Request, res: Response) {
+    const { error, value } = addTheoryOpenQuestionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId, id, itemId } = req.params;
+    const result = await CaseTheorySvc.updateOpenQuestion(caseId, id, itemId, req.user.userId, value.question);
+    return res.status(200).json(result);
+  }
+
+  static async deleteTheoryOpenQuestion(req: Request, res: Response) {
+    const { caseId, id, itemId } = req.params;
+    await CaseTheorySvc.deleteOpenQuestion(caseId, id, itemId, req.user.userId);
+    return res.status(204).send();
   }
 
   /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */

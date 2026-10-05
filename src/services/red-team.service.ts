@@ -126,7 +126,24 @@ export default class RedTeamSvc {
         rightExcerpt: c.rightExcerpt,
       })),
       witnesses: snapshot.witnesses.map((w) => ({ name: w.name, role: w.role })),
-      damages: snapshot.damages.map((d) => ({ category: d.category, description: d.description, amount: d.amount })),
+      // Only accepted entries: an AI proposal no lawyer has accepted isn't part of the claim yet.
+      damages: snapshot.damages
+        .filter((d) => d.accepted)
+        .map((d) => ({
+          kind: d.kind,
+          title: d.title,
+          description: d.description,
+          amount: d.amount,
+          done: d.done,
+          dueDate: d.dueDate,
+        })),
+      damagesTotals: snapshot.damagesSummary.headCount
+        ? {
+            currency: snapshot.damagesSummary.currency,
+            total: snapshot.damagesSummary.total,
+            awarded: snapshot.damagesSummary.awarded,
+          }
+        : null,
     };
   }
 

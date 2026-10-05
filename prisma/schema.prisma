@@ -25,6 +25,8 @@ enum ApprovalStatus {
 
 model User {
   id                 String    @id @default(uuid())
+  // Always stored trimmed + lowercased (see normalizeEmail in src/utils/auth.utils.ts and the
+  // normalize_user_emails migration) — @unique is therefore effectively case-insensitive.
   email              String    @unique
   password           String?
   name               String?
@@ -37,6 +39,9 @@ model User {
   googleId           String?   @unique
   googleAccessToken  String?
   googleRefreshToken String?
+  // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
+  // poll takes a fresh baseline. Reset on connect and disconnect.
+  googleCalendarSyncToken String?
   avatarId           String?
   tenantId           String?
   isEmailVerified    Boolean   @default(false)
@@ -47,6 +52,14 @@ model User {
   // blocks the session and routes the client to AuthSvc.updateRequiredPassword instead.
   // Cleared the moment that succeeds — a one-time gate, never re-asked after that.
   mustChangePassword Boolean @default(false)
+
+  // Terms of Service acceptance, recorded at account creation for both password signup and
+  // first-time Google signup (AuthSvc.loginWithGoogle refuses to create a Google account
+  // without it — see TERMS_ACCEPTANCE_REQUIRED). termsVersion is TERMS_VERSION at that time.
+  // Null for accounts created before acceptance was recorded server-side; those aren't
+  // re-prompted.
+  termsAcceptedAt DateTime?
+  termsVersion    String?
 
   // Independent of Email Verification and of login itself — a new User starts PENDING
   // regardless of signup method. Login still succeeds for a PENDING/DENIED user (they
@@ -83,6 +96,8 @@ model User {
   loginLinkTokenExpiry DateTime?
 
   sessions                 Session[]
+  productTours             ProductTour[]
+  traceEvents              ConsultationTraceEvent[]
   avatar                   File?                     @relation(fields: [avatarId], references: [id])
   consultations            Consultation[]
   messages                 Message[]
@@ -100,6 +115,7 @@ model User {
   notes                   Note[]
   notifications           Notification[]
   terminalWorkspaces      TerminalWorkspace[]
+  screenPresets           ScreenPreset[]
   organizationMemberships OrganizationMember[]
   createdOrganizations    Organization[]                   @relation("OrgCreator")
   ownedRisks              CaseRisk[]
@@ -109,6 +125,7 @@ model User {
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
   caseBriefExports        CaseBriefExport[]
   caseViews               CaseView[]
+  updatedTenantSettings   TenantSetting[]
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -126,23 +143,23 @@ model Session {
 }
 
 model File {
-  id                          String                 @id @default(uuid())
+  id                          String                     @id @default(uuid())
   filename                    String?
   fileUrl                     String?
   s3Key                       String?
-  createdAt                   DateTime               @default(now())
-  updatedAt                   DateTime               @updatedAt
+  createdAt                   DateTime                   @default(now())
+  updatedAt                   DateTime                   @updatedAt
   deletedAt                   DateTime?
   metaData                    Json?
   users                       User[]
   transcriptions              Transcription[]
   caseDocuments               Document[]
-  caseReconstructionAudio     CaseReconstruction[]   @relation("CaseReconstructionAudio")
-  caseReconstructionTableRead CaseReconstruction[]   @relation("CaseReconstructionTableRead")
+  caseReconstructionAudio     CaseReconstruction[]       @relation("CaseReconstructionAudio")
+  caseReconstructionTableRead CaseReconstruction[]       @relation("CaseReconstructionTableRead")
   audioOverviews              MessageAudioOverview[]
   caseBriefExports            CaseBriefExport[]
   generatedDocuments          MessageGeneratedDocument[]
-  fileStatus                  FileStatus?            @default(ACTIVE)
+  fileStatus                  FileStatus?                @default(ACTIVE)
 }
 
 enum FileStatus {
@@ -164,12 +181,15 @@ enum PackageSku {
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 model Consultation {
-  id             String   @id @default(uuid())
+  id             String                   @id @default(uuid())
   userId         String
   organizationId String
   caseId         String?
   title          String?
-  createdAt      DateTime @default(now())
+  // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
+  // Null while untitled.
+  titleSource    ConsultationTitleSource?
+  createdAt      DateTime                 @default(now())
   // When the most recent Jev-triaged user message was flagged urgent (see message-triage.ts).
   // Set on an urgent turn, cleared on the next routine one, so the consultation list can badge
   // and sort chats that currently need attention without walking every message. Null when
@@ -183,6 +203,7 @@ model Consultation {
   messageGroups  MessageGroup[]
   invites        ConsultationInvite[]
   participants   ConsultationParticipant[]
+  traceEvents    ConsultationTraceEvent[]
   documents      Document[]
   transcriptions Transcription[]
 
@@ -231,21 +252,22 @@ model Message {
   // supplied. Stored so "answered about a document it never had" is queryable after the fact.
   refersToAttachment  Float?
 
-  consultation    Consultation           @relation(fields: [consultationId], references: [id], onDelete: Cascade)
-  user            User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
-  parent          Message?               @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
-  replies         Message[]              @relation("MessageThread")
-  group           MessageGroup?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  timeline        MessageTimeline?
-  mindMap         MessageMindMap?
-  relatedCases    MessageRelatedCases?
-  audioOverview   MessageAudioOverview?
-  reasoning       MessageReasoning?
-  decisionRecords MessageDecisionRecord?
-  researchSteps   MessageResearchSteps?
-  documents       Document[]
+  consultation      Consultation              @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  user              User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parent            Message?                  @relation("MessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  replies           Message[]                 @relation("MessageThread")
+  group             MessageGroup?             @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  timeline          MessageTimeline?
+  mindMap           MessageMindMap?
+  relatedCases      MessageRelatedCases?
+  citationRanking   MessageCitationRanking?
+  audioOverview     MessageAudioOverview?
+  reasoning         MessageReasoning?
+  decisionRecords   MessageDecisionRecord?
+  researchSteps     MessageResearchSteps?
+  documents         Document[]
   generatedDocument MessageGeneratedDocument?
-  groundingChecks AnswerGroundingCheck[]
+  groundingChecks   AnswerGroundingCheck[]
 
   @@index([consultationId])
   @@index([userId])
@@ -324,32 +346,45 @@ model MindMapRevision {
 /// expanded/edited it since the last build, in which case it's left alone and goes Stale.
 /// Same `data`/`version` contract as MessageMindMap.
 model CaseMindMap {
-  id                  String   @id @default(uuid())
-  caseId              String   @unique
+  id                  String    @id @default(uuid())
+  caseId              String    @unique
   data                Json
-  version             Int      @default(1)
+  version             Int       @default(1)
   /// Case.readySetFingerprint as of the build — which documents this map was built from.
   readySetFingerprint String?
   /// How many READY documents it was built from (Studio's "From 5 documents").
-  documentCount       Int      @default(0)
+  documentCount       Int       @default(0)
   /// Exactly which documents it was built from (READY, not archived) — so the Stale badge can
   /// say what changed ("2 added, 1 removed") and a map that isn't rebuilt can drop citations to
   /// removed ones. The fingerprint above only says *that* the set changed.
-  documentIds         String[] @default([])
+  documentIds         String[]  @default([])
   /// Set when the case's last document was removed or archived: the map was built entirely from
   /// documents that are no longer in the case, so it's hidden rather than shown (Studio/Terminal
   /// treat it as no map). Kept, with its versions, rather than deleted; the next build clears it.
   retiredAt           DateTime?
   /// Last auto/regenerate build. Expanding doesn't move it — see MessageMindMap.createdAt.
-  generatedAt         DateTime @default(now())
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  generatedAt         DateTime  @default(now())
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   case      Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
   revisions MindMapRevision[]
 }
 
 model MessageRelatedCases {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  items     Json
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+// Citation ranking for one assistant reply (src/utils/citation-rank.ts): per Library href, how
+// relevant the cited authority is to the USER's message. A side table, never written into
+// Message.content, so the saved answer stays immutable and a re-rank rewrites nothing. The
+// ranking runs after chat:done, so a message briefly has none and its links show neutral.
+model MessageCitationRanking {
   id        String   @id @default(uuid())
   messageId String   @unique
   items     Json
@@ -368,6 +403,22 @@ model MessageAudioOverview {
   voiceHostB  String
   audioFileId String?
   audioStatus AudioOverviewStatus?
+  // Jev's verdict per script turn (see audio-overview-jev.ts / USE_JEV_AUDIO_OVERVIEW) — null
+  // when the check never ran or found nothing checkable; a turn Jev couldn't check has no entry.
+  checks      Json?
+  // Cumulative start second of each turn within the rendered audio (see turnStartTimes in
+  // audio-overview-render.ts) — number[], one entry per `turns` element, index-aligned. Null
+  // until audioStatus reaches COMPLETED (set alongside audioFileId); the frontend's line-by-line
+  // highlight/auto-scroll has nothing to sync to before then.
+  turnTimings Json?
+  // Per turn, where each of its sentences starts in the rendered audio (see
+  // markTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
+  // { time, start, end }[][], index-aligned with `turns`; start/end are string indices into
+  // that turn's text. Set alongside turnTimings; null on overviews rendered before it existed.
+  sentenceTimings Json?
+  // Same shape as sentenceTimings, per word (Polly's word speech marks) — the player fills the
+  // active turn in word by word. Null on overviews rendered before it existed.
+  wordTimings Json?
   createdAt   DateTime             @default(now())
 
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -431,6 +482,36 @@ model MessageResearchSteps {
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+// The customer-facing explanation log (the Terminal's "trace" pane): one row per plain-language
+// event chat-wonder emitted while answering a turn. Keyed by consultation and turn, never by
+// session — a consultation gets a new chat-wonder session whenever the old one expires, and on a
+// shared case several users' turns share one. `turnId` is the user Message that asked (the same
+// id sent to chat-wonder as trace_turn_id); `userId` is who asked, nullable so removing a user
+// keeps the log. The name shown beside an event is joined from User at read time, never stored.
+// `seq` is the primary key on purpose: a global autoincrement is race-free across concurrent
+// collectors and doubles as the "everything after this" cursor for resuming a live stream.
+model ConsultationTraceEvent {
+  seq            Int      @id @default(autoincrement())
+  consultationId String
+  caseId         String?
+  organizationId String
+  turnId         String
+  userId         String?
+  // The chat-wonder session that emitted it. Informational — it changes within one consultation.
+  sessionId      String
+  type           String
+  summary        String   @db.Text
+  createdAt      DateTime @default(now())
+
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([consultationId, seq])
+  @@index([caseId, turnId, seq])
+  @@index([caseId, createdAt])
+  @@index([userId])
 }
 
 enum DecisionStatus {
@@ -606,6 +687,15 @@ enum AudioOverviewStatus {
   FAILED
 }
 
+/// AUTO: generated from the conversation, kept current as the topic develops.
+/// PROVISIONAL: a stand-in (e.g. for a gibberish first message), replaced by the next real one.
+/// USER: set or renamed by the user — the AI never touches it.
+enum ConsultationTitleSource {
+  AUTO
+  PROVISIONAL
+  USER
+}
+
 enum MessageRole {
   user
   assistant
@@ -652,80 +742,80 @@ enum CaseStatus {
 }
 
 model Case {
-  id                  String     @id @default(uuid())
-  userId              String
-  organizationId      String?
-  caseName            String
-  actionType          String?
-  jurisdiction        String?
+  id                    String     @id @default(uuid())
+  userId                String
+  organizationId        String?
+  caseName              String
+  actionType            String?
+  jurisdiction          String?
   // Constrained (England and Wales / Scotland / Northern Ireland) selector for which UK legal
   // system applies to this case — distinct from `jurisdiction` above (a free-text court/venue
   // field) and from Tenant.code (the PH/UK deployment-region boundary, see CONTEXT.md). Only
   // meaningful for UK-tenant organizations; left null for PH.
-  ukJurisdiction      String?
-  language            String     @default("en")
-  notes               String?    @db.Text
-  lastRefreshedAt     DateTime?
+  ukJurisdiction        String?
+  language              String     @default("en")
+  notes                 String?    @db.Text
+  lastRefreshedAt       DateTime?
   // Archiving is a pure visibility flag — an ARCHIVED case behaves identically to an ACTIVE one
   // everywhere else (documents, chat, auto-refresh, CaseAccess); it only changes which of the
   // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
   // param and CaseRepo.setStatus.
-  status              CaseStatus @default(ACTIVE)
+  status                CaseStatus @default(ACTIVE)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
   // a delete immediately followed by a re-add that nets out to the same set). Null until the
   // first refresh runs.
-  readySetFingerprint String?
+  readySetFingerprint   String?
   // When the Citation Map's adverse-citation sweep last finished (AdverseSweepSvc). Null until
   // the first sweep — the library badge reads "Pending" until then.
-  adverseSweptAt      DateTime?
+  adverseSweptAt        DateTime?
   // Which FINDINGS_FORMAT_VERSION (case-finding.constants.ts) the case's AI findings were last
   // generated with. Null for cases whose findings predate the stamp. Opening the Terminal on an
   // older one queues a findings-only regeneration (CaseFindingAiSvc.scheduleIfOutdated).
   findingsFormatVersion Int?
-  createdAt           DateTime   @default(now())
-  updatedAt           DateTime   @updatedAt
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
 
-  user               User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization       Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  documents          Document[]
-  parties            Party[]
-  consultations      Consultation[]
-  transcriptions     Transcription[]
-  events             Event[]
-  timelineEvents     CaseTimelineEvent[]
-  risks              CaseRisk[]
-  evidenceMatrix     EvidenceMatrixItem[]
-  contradictions     EvidenceContradiction[]
-  factPairChecks     FactPairCheck[]
-  citationChecks     CitationCheck[]
-  authorities        CaseAuthority[]
-  deadlines          ProceduralDeadline[]
-  procedureItems     ProcedureItem[]
-  accesses           CaseAccess[]
-  auditEvents        AuditEvent[]
-  findings           CaseFinding[]
-  witnesses          Witness[]
-  damageClaims       DamageClaim[]
-  claims             CaseClaim[]
-  citationGrounds    CitationGround[]
-  adverseHits        AdverseCitationHit[]
-  reconstruction     CaseReconstruction?
+  user                 User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization         Organization?             @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  documents            Document[]
+  parties              Party[]
+  consultations        Consultation[]
+  transcriptions       Transcription[]
+  events               Event[]
+  timelineEvents       CaseTimelineEvent[]
+  risks                CaseRisk[]
+  evidenceMatrix       EvidenceMatrixItem[]
+  contradictions       EvidenceContradiction[]
+  factPairChecks       FactPairCheck[]
+  citationChecks       CitationCheck[]
+  authorities          CaseAuthority[]
+  deadlines            ProceduralDeadline[]
+  procedureItems       ProcedureItem[]
+  accesses             CaseAccess[]
+  auditEvents          AuditEvent[]
+  findings             CaseFinding[]
+  witnesses            Witness[]
+  damageClaims         DamageClaim[]
+  claims               CaseClaim[]
+  citationGrounds      CitationGround[]
+  adverseHits          AdverseCitationHit[]
+  reconstruction       CaseReconstruction?
   reconstructionEvents CaseReconstructionEvents?
-  redTeamAssessment  RedTeamAssessment?
-  graphNodes         CaseGraphNode[]
-  graphEdges         CaseGraphEdge[]
-  edges              CaseEdge[]
-  decisionRecords    DecisionRecord[]
-  theories           CaseTheory[]
-  theoryDiffs        TheoryDiff[]
-  briefExports       CaseBriefExport[]
-  views              CaseView[]
-  terminalWorkspaces TerminalWorkspace[]
-  annotations        Annotation[]
-  outlooks           CaseOutlook[]
-  mindMap            CaseMindMap?
+  redTeamAssessment    RedTeamAssessment?
+  graphNodes           CaseGraphNode[]
+  graphEdges           CaseGraphEdge[]
+  edges                CaseEdge[]
+  decisionRecords      DecisionRecord[]
+  theories             CaseTheory[]
+  theoryDiffs          TheoryDiff[]
+  briefExports         CaseBriefExport[]
+  views                CaseView[]
+  terminalWorkspaces   TerminalWorkspace[]
+  annotations          Annotation[]
+  outlooks             CaseOutlook[]
+  mindMap              CaseMindMap?
 
   @@index([userId])
   @@index([organizationId])
@@ -769,11 +859,13 @@ model Document {
 
   // Lawyer-curated subset of a case's Documents shown in the Case Brief export's Exhibit list —
   // not every uploaded document is an Exhibit just by being uploaded. See CONTEXT.md's Exhibit entry.
-  isExhibit Boolean @default(false)
+  isExhibit            Boolean   @default(false)
   // Set once WitnessExtractSvc has read this document, so the automatic post-extraction witness
   // pass only ever sends new documents to the model — a witness the lawyer deleted is never
   // re-created from a document that was already read.
   witnessesExtractedAt DateTime?
+  // Same idea for the damages pass (DamagesExtractSvc): set once it has read this document.
+  damagesExtractedAt   DateTime?
   // Archiving is a pure visibility flag, same as Case.status — an ARCHIVED document stays fully
   // intact (chunks, RAG grounding, metadata, relationships) and is only hidden from the active
   // document view by default. See DocumentRepo.list's status param and DocumentRepo.setStatus.
@@ -781,14 +873,15 @@ model Document {
   status    DocumentStatus @default(ACTIVE)
   createdAt DateTime       @default(now())
 
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  case         Case?               @relation(fields: [caseId], references: [id])
-  consultation Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
-  message      Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
-  file         File?               @relation(fields: [fileId], references: [id])
-  chunks       CaseDocumentChunk[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  case               Case?               @relation(fields: [caseId], references: [id])
+  consultation       Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  message            Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  file               File?               @relation(fields: [fileId], references: [id])
+  chunks             CaseDocumentChunk[]
   extractedWitnesses Witness[]
+  extractedDamages   DamageClaim[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1112,6 +1205,15 @@ model Event {
   status               String    @default("pending")
   googleLink           String?   @map("google_link")
   googleEventId        String?   @map("google_event_id")
+  // Google's `updated` time for its copy of this event, as last written or applied by the sync
+  // (GoogleCalendarSyncSvc / GoogleCalendarPullSvc). A Google change newer than this is new;
+  // anything else is the sync's own write echoing back.
+  googleUpdatedAt      DateTime? @map("google_updated_at")
+  // When the app last changed something the Google copy shows (title, time, notes, status, ...)
+  // that hasn't reached Google yet; cleared by a successful push. The pull compares it with a
+  // Google edit's time so the newer edit wins — `updatedAt` can't, since bookkeeping writes
+  // (reminder sent, acknowledged) bump it too.
+  googleDirtyAt        DateTime? @map("google_dirty_at")
   reminderLeadMinutes  Int?      @map("reminder_lead_minutes")
   lastReminderSentAt   DateTime? @map("last_reminder_sent_at")
   lawyerAcknowledgedAt DateTime? @map("lawyer_acknowledged_at")
@@ -1375,6 +1477,34 @@ model TerminalWorkspace {
   @@index([caseId])
 }
 
+// A named multi-screen workspace template (which panel lives on which physical screen, and that
+// screen's arrangement mode) — see apps/web/lib/terminal/screen-presets.ts's ScreenPresetDef,
+// which this mirrors field-for-field via `screens`. `userId: null` marks a system preset, global
+// to every user and only ever written by the seeder (prisma/seeders/screen-preset.seeder.ts);
+// otherwise it's a lawyer's own saved preset, cascade-deleted with their account.
+model ScreenPreset {
+  id             String   @id @default(uuid())
+  userId         String?
+  // System presets only — resolved through terminal.json client-side. Null on a user's own
+  // preset, which has no i18n key: `name`/`description` below are shown directly instead.
+  labelKey       String?
+  descriptionKey String?
+  // User presets: lawyer-entered text. System presets: an English fallback/admin-readable label,
+  // never actually shown to a lawyer while labelKey is set.
+  name           String
+  description    String?  @db.Text
+  // Denormalized from screens.length, so filtering by screen count doesn't need a JSON query.
+  screenCount    Int
+  screens        Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([screenCount])
+}
+
 model CaseTimelineEvent {
   id          String         @id @default(uuid())
   caseId      String
@@ -1397,12 +1527,12 @@ model CaseTimelineEvent {
 }
 
 model CaseRisk {
-  id          String       @id @default(uuid())
+  id          String           @id @default(uuid())
   caseId      String
   title       String
-  description String?      @db.Text
+  description String?          @db.Text
   severity    RiskSeverity
-  status      RiskStatus   @default(OPEN)
+  status      RiskStatus       @default(OPEN)
   ownerUserId String?
   documentId  String?
   chunkId     String?
@@ -1410,8 +1540,8 @@ model CaseRisk {
   // How sure the author is that this risk is real. Risks are lawyer-authored (no AI risk
   // generator exists), so this is optional manual input and null unless set.
   confidence  ConfidenceLevel?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
   case  Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
   owner User? @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
@@ -1475,24 +1605,24 @@ model EvidenceCustodyEvent {
 }
 
 model EvidenceContradiction {
-  id              String   @id @default(uuid())
-  caseId          String
-  kind            String
-  leftDocumentId  String
-  rightDocumentId String
-  leftExcerpt     String   @db.Text
-  rightExcerpt    String   @db.Text
-  factKey         String
-  leftValue       String
-  rightValue      String
-  confidence      Float    @default(0.5)
+  id               String               @id @default(uuid())
+  caseId           String
+  kind             String
+  leftDocumentId   String
+  rightDocumentId  String
+  leftExcerpt      String               @db.Text
+  rightExcerpt     String               @db.Text
+  factKey          String
+  leftValue        String
+  rightValue       String
+  confidence       Float                @default(0.5)
   // Lawyer's triage. Every scan rebuilds this table (EvidenceRepo.replaceContradictions), so these
   // and the Jev fields below are carried over to the re-found row with the same fingerprint (see
   // contradictionKey) — a resolved contradiction stays resolved across rescans.
-  status          ContradictionStatus @default(OPEN)
-  resolutionNote  String?  @db.Text
-  resolvedAt      DateTime?
-  resolvedById    String?
+  status           ContradictionStatus  @default(OPEN)
+  resolutionNote   String?              @db.Text
+  resolvedAt       DateTime?
+  resolvedById     String?
   // Jev's read of the two passages (USE_JEV_CONTRADICTIONS) — null when the flag was off at scan
   // time or the call failed; the panel then falls back to banding `confidence`.
   nature           ContradictionNature?
@@ -1501,7 +1631,7 @@ model EvidenceContradiction {
   // often pairs two exhibits inside one merged PDF, so the document name alone can't tell them apart.
   leftLocator      String?
   rightLocator     String?
-  createdAt       DateTime @default(now())
+  createdAt        DateTime             @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -1563,7 +1693,7 @@ model CitationCheck {
   // no officialText to classify against at all.
   propositionType CitationPropositionType?
 
-  case        Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case        Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
   resolvedLaw Law?                 @relation("ResolvedLaw", fields: [resolvedLawId], references: [id], onDelete: SetNull)
   grounds     CitationGround[]
   adverseHits AdverseCitationHit[]
@@ -1628,12 +1758,26 @@ model ProcedureItem {
   // { verdict, confidence, checkedAt }. Null for to-dos, lawyer-entered items, and when
   // USE_JEV_CASE_STRATEGY is off.
   check       Json?
+  // A to-do sent over from another panel ("To checklist") remembers the item it was raised on, so
+  // the item reaching its fixed state can tick it (utils/procedure-link.ts): FINDING, DAMAGE or
+  // WITNESS_NEED, that row's id, and for a witness need the need's key. Not a foreign key — the
+  // sources live in different tables, and the to-do outlives a deleted source.
+  sourceKind  String?
+  sourceId    String?
+  sourceKey   String?
+  // Set when the source ticked this to-do, with why (a ProcedureAutoCloseReason). Cleared when a
+  // lawyer reopens it.
+  autoClosedAt     DateTime?
+  autoClosedReason String?
+  // A to-do sent from a Damages & Remedies entry carries that entry's due date, and follows it.
+  dueDate          DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+  @@index([caseId, sourceKind, sourceId])
 }
 
 // ── Case Findings, Witnesses, Damages, Reconstruction ──────────────────────────
@@ -1646,8 +1790,9 @@ enum FindingCategory {
   DEFENSE_STRATEGY
 }
 
-// The pill on a Legal Issues / Weaknesses / Strengths row. One enum for all three categories;
-// which values a category may use is FINDING_TAGS_BY_CATEGORY (case-finding.constants.ts).
+// The pill on a Legal Issues / Weaknesses / Strengths / Attack Strategy / Defense Strategy row.
+// One enum for all five categories; which values a category may use is
+// FINDING_TAGS_BY_CATEGORY (case-finding.constants.ts).
 enum FindingTag {
   CONTESTED
   BRIEFING
@@ -1658,6 +1803,12 @@ enum FindingTag {
   CLOSED
   STRONG
   MODERATE
+  READY
+  DRAFTING
+  BLOCKED
+  ANSWERED
+  PARTIAL
+  UNANSWERED
 }
 
 // A short strategic-assessment entry, categorized by FindingCategory. Backs five Terminal
@@ -1723,23 +1874,23 @@ enum AuthoritySource {
 // Precedent panel. findingId points at a CaseFinding with category LEGAL_ISSUE (the "ground");
 // null when the authority isn't tied to one. Dismissing an authority deletes the row.
 model CaseAuthority {
-  id            String          @id @default(uuid())
+  id            String           @id @default(uuid())
   caseId        String
   kind          AuthorityKind
   stance        AuthorityStance
   title         String
   subtitle      String?
   citation      String?
-  rationale     String?         @db.Text
+  rationale     String?          @db.Text
   findingId     String?
   resolvedLawId String?
-  source        AuthoritySource @default(MANUAL)
+  source        AuthoritySource  @default(MANUAL)
   // Jev's second opinion on `stance` (see authority-stance-jev.ts) — never overwrites it; the panel
   // only offers it when it disagrees. Null when the USE_JEV_AUTHORITY flag is off or Jev failed.
   jevStance     AuthorityStance?
   jevConfidence Float?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   case        Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
   finding     CaseFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
@@ -1760,18 +1911,18 @@ enum WitnessSource {
 }
 
 model Witness {
-  id        String   @id @default(uuid())
-  caseId    String
-  name      String
-  role      String?
-  summary   String?
+  id                  String         @id @default(uuid())
+  caseId              String
+  name                String
+  role                String?
+  summary             String?
   // AI = found by WitnessExtractSvc in `sourceDocumentId`; `sourceQuote` is the verbatim line it
   // relied on, checked against that document's text before the row is written.
-  source           WitnessSource @default(MANUAL)
-  sourceDocumentId String?
-  sourceQuote      String?       @db.Text
-  status    WitnessStatus @default(OUTSTANDING)
-  credibility Int    @default(50)
+  source              WitnessSource  @default(MANUAL)
+  sourceDocumentId    String?
+  sourceQuote         String?        @db.Text
+  status              WitnessStatus  @default(OUTSTANDING)
+  credibility         Int            @default(50)
   // AI-proposed values — never applied to status/credibility on their own. The displayed score is
   // credibilityOverride ?? aiCredibility ?? credibility, so re-scoring can't wipe a lawyer's edit.
   aiCredibility       Int?
@@ -1788,11 +1939,11 @@ model Witness {
   needsDone           Json?
   scoredAt            DateTime?
   statementDueOn      DateTime?
-  statementReceived   Boolean  @default(false)
-  contact   String?
-  notes     String?  @db.Text
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  statementReceived   Boolean        @default(false)
+  contact             String?
+  notes               String?        @db.Text
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
   sourceDocument    Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
@@ -1801,24 +1952,54 @@ model Witness {
   @@index([caseId])
 }
 
-enum DamageCategory {
-  ACTUAL
-  MORAL
-  EXEMPLARY
-  ATTORNEYS_FEES
-  OTHER
+// Whether an entry is money the client is owed (DAMAGE) or another order the case asks for, such
+// as reinstatement (REMEDY).
+enum DamageKind {
+  DAMAGE
+  REMEDY
 }
 
-model DamageClaim {
-  id          String         @id @default(uuid())
-  caseId      String
-  category    DamageCategory
-  description String?        @db.Text
-  amount      Float?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+enum DamageSource {
+  MANUAL
+  AI
+}
 
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+enum DamageAmountBasis {
+  STATED
+  CALCULATED
+  ESTIMATE
+}
+
+// One entry of the Damages & Remedies panel: a title, what it is, an amount (none for most
+// remedies), whether it has been awarded or received, and the date it is due. The case total is
+// the sum of accepted amounts (utils/damages-compute.ts).
+model DamageClaim {
+  id               String       @id @default(uuid())
+  caseId           String
+  kind             DamageKind   @default(DAMAGE)
+  title            String
+  description      String?      @db.Text
+  amount           Float?
+  // Where an AI entry's amount came from (a quoted figure, rate × period from quoted lines, or an
+  // AI estimate to review) and its working. Cleared when a lawyer changes the amount.
+  amountBasis      DamageAmountBasis?
+  amountNote       String?      @db.Text
+  // Awarded by the tribunal or received by the client.
+  done             Boolean      @default(false)
+  dueDate          DateTime?
+  // AI = proposed by DamagesExtractSvc from `sourceDocumentId`; `sourceQuote` is the verbatim
+  // line it relied on, checked against that document's text before the row is written.
+  source           DamageSource @default(MANUAL)
+  sourceDocumentId String?
+  sourceQuote      String?      @db.Text
+  // An AI proposal is a suggestion until a lawyer accepts it, and isn't counted in the total
+  // until then. Lawyer-entered rows start accepted.
+  accepted         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
 
   @@index([caseId])
 }
@@ -1827,18 +2008,22 @@ model DamageClaim {
 // distinct from DamageClaim, which is a monetary damages line item sought under one or more
 // of these claims, not the legal theory itself.
 model CaseClaim {
-  id            String          @id @default(uuid())
-  caseId        String
-  title         String
-  causeOfAction String?
-  description   String?         @db.Text
+  id               String          @id @default(uuid())
+  caseId           String
+  title            String
+  causeOfAction    String?
+  description      String?         @db.Text
   // AI = proposed by ClaimExtractSvc from the pleadings; sourceLabel/sourceQuote then say which
   // document and the verbatim line it was found in (checked against that document's text).
-  source        AuthoringSource @default(MANUAL)
-  sourceLabel   String?
-  sourceQuote   String?         @db.Text
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  source           AuthoringSource @default(MANUAL)
+  sourceLabel      String?
+  sourceQuote      String?         @db.Text
+  // The Document sourceLabel names, so the Citation Map can open it. A plain id, not a relation:
+  // a deleted document just leaves the claim without a link. Null on claims found before this
+  // was saved (the seed falls back to matching sourceLabel against the case's document names).
+  sourceDocumentId String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   case    Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
   grounds CitationGround[]
@@ -2175,6 +2360,25 @@ model Tenant {
   organizations             Organization[]
   legalSourceAnalysisCaches LegalSourceAnalysisCache[]
   laws                      Law[]
+  settings                  TenantSetting[]
+}
+
+// Admin-editable settings scoped to one Tenant (PH / UK) — one row per (tenant, key).
+// Read through TenantSettingSvc (Redis-cached); a missing row means the setting's default.
+// Today only "signup.autoApprove" (see TENANT_SETTING_KEYS); an email-domain allow-list
+// could live here later.
+model TenantSetting {
+  tenantId    String
+  key         String
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updatedBy User?  @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@id([tenantId, key])
+  @@index([updatedById])
 }
 
 // userId is globally unique — a user belongs to at most one Organization (see
@@ -2196,6 +2400,33 @@ model OrganizationMember {
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+}
+
+enum ProductTourStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  DISMISSED
+}
+
+// A user's progress through an onboarding tour (the app's spotlight walkthrough). The step
+// scripts live in ilovelawyer-app (lib/tour) — this only remembers where the user is, so the
+// tour follows them across devices. One row per track — one per page tour, see
+// PRODUCT_TOUR_TRACKS.
+model ProductTour {
+  userId      String
+  track       String            @default("main")
+  status      ProductTourStatus @default(NOT_STARTED)
+  // The "How do you practice?" answer that picked the step script — see PRODUCT_TOUR_ARCHETYPES.
+  archetype   String?
+  currentStep String?
+  doneSteps   String[]          @default([])
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, track])
 }
 
 model CaseAccess {
@@ -2271,6 +2502,10 @@ model AiGenerationJob {
   startedAt  DateTime           @default(now())
   finishedAt DateTime?
   error      String?
+  /// Where an IN_PROGRESS job has got to, for a progress indicator — null until the job reports
+  /// one (AiGenerationLockSvc.setStage). Only Chat-Wonder-backed chat turns report stages today
+  /// ("answering", then "extras"); every other kind leaves it null throughout.
+  stage      String?
 
   @@unique([subjectId, kind])
   @@index([subjectId])

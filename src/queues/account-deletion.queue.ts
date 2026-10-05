@@ -1,4 +1,6 @@
 import AuthRepo from "../repositories/auth.repository";
+import AvatarSvc from "../services/avatar.service";
+import GoogleCalendarSvc from "../services/google-calendar.service";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS } from "../constants/account-deletion.constants";
@@ -50,6 +52,11 @@ export default class AccountDeletionQueue {
       await sendEmail({ to: user.email, subject: "Your ilovelawyer account has been deleted", html }).catch((err) =>
         logger.error("Account deletion queue: failed to send account-deleted email", { err, userId: user.id }),
       );
+
+      // Both non-fatal: revoke any Google Calendar grant and flag the avatar File while the
+      // User row still points at them.
+      await GoogleCalendarSvc.releaseForDeletedUser(user.id);
+      await AvatarSvc.releaseForDeletedUser(user.id);
 
       await AuthRepo.deleteSessionsByUserId(user.id);
       await AuthRepo.deleteUser(user.id);

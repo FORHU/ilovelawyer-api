@@ -2,11 +2,12 @@ import prisma from "../lib/prisma";
 import { MessageRole, Prisma, AudioOverviewStatus, MessageReplyStatus } from "@prisma/client";
 import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import { RelatedCase } from "../utils/chatWonder";
+import type { MarkTiming } from "../utils/audio-overview-render";
 
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
   static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
-    return prisma.consultation.create({ data: { organizationId, userId, title, caseId } });
+    return prisma.consultation.create({ data: { organizationId, userId, title, caseId, titleSource: title ? "USER" : null } });
   }
 
   /** With a caseId: that case's consultations. Without: only standalone (non-case) consultations,
@@ -36,8 +37,34 @@ export default class ChatRepo {
     });
   }
 
+  static async findConsultationTitleState(consultationId: string) {
+    return prisma.consultation.findUnique({ where: { id: consultationId }, select: { title: true, titleSource: true } });
+  }
+
+  /** A user rename — locks the title against any later AI re-titling. */
   static async updateConsultation(consultationId: string, title: string) {
-    return prisma.consultation.update({ where: { id: consultationId }, data: { title } });
+    return prisma.consultation.update({ where: { id: consultationId }, data: { title, titleSource: "USER" } });
+  }
+
+  /** An AI-generated (or provisional) title. Conditional, so it can never overwrite a title the
+   * user set — including one renamed while this title was still being generated. True if saved. */
+  static async saveGeneratedTitle(consultationId: string, title: string, source: "AUTO" | "PROVISIONAL"): Promise<boolean> {
+    const result = await prisma.consultation.updateMany({
+      where: { id: consultationId, OR: [{ titleSource: null }, { titleSource: { in: ["AUTO", "PROVISIONAL"] } }] },
+      data: { title, titleSource: source },
+    });
+    return result.count > 0;
+  }
+
+  /** The consultation's most recent user messages, oldest first (blank file-only sends skipped). */
+  static async listRecentUserMessageContents(consultationId: string, limit: number): Promise<string[]> {
+    const rows = await prisma.message.findMany({
+      where: { consultationId, role: "user", NOT: { content: "" } },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      select: { content: true },
+    });
+    return rows.map((row) => row.content).reverse();
   }
 
   static async deleteConsultation(consultationId: string) {
@@ -52,6 +79,9 @@ export default class ChatRepo {
         timeline: true,
         mindMap: true,
         relatedCases: true,
+        // Present only once the background ranking has run (see CitationRankSvc); links with no
+        // entry render neutral.
+        citationRanking: true,
         audioOverview: true,
         reasoning: true,
         decisionRecords: true,
@@ -225,6 +255,32 @@ export default class ChatRepo {
     });
   }
 
+  /** Every assistant message of one turn: a single row for an ordinary reply, several siblings
+   * under one MessageGroup for a split multi-topic answer. */
+  static async findAssistantRepliesByParent(parentMessageId: string) {
+    return prisma.message.findMany({
+      where: { parentMessageId, role: "assistant" },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, content: true },
+    });
+  }
+
+  /** The user's own text for a turn, for ranking citations against what they asked. */
+  static async findUserMessageContent(messageId: string) {
+    const row = await prisma.message.findUnique({ where: { id: messageId }, select: { content: true } });
+    return row?.content ?? null;
+  }
+
+  /** Upsert, not create: a re-rank (calibration, a retried job) replaces the old result. */
+  static async saveCitationRanking(messageId: string, items: unknown[]) {
+    const data = items as unknown as Prisma.InputJsonValue;
+    return prisma.messageCitationRanking.upsert({
+      where: { messageId },
+      create: { messageId, items: data },
+      update: { items: data },
+    });
+  }
+
   static async findMessageById(messageId: string) {
     return prisma.message.findUnique({
       where: { id: messageId },
@@ -336,11 +392,45 @@ export default class ChatRepo {
     });
   }
 
+  static async saveAudioOverviewChecks(messageId: string, checks: unknown[]) {
+    return prisma.messageAudioOverview.update({
+      where: { messageId },
+      data: { checks: checks as Prisma.InputJsonValue },
+    });
+  }
+
+  /** A case's Audio Overviews across all its consultations, newest first — the history list.
+   * Same cursor convention (and `id` tiebreaker) as CaseBriefExportRepo.listByCase. */
+  static async listAudioOverviewsByCase(caseId: string, filters: { limit?: number; cursor?: string } = {}) {
+    return prisma.messageAudioOverview.findMany({
+      where: { message: { consultation: { caseId } } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      include: { audioFile: true, message: { select: { id: true, consultationId: true } } },
+      take: filters.limit ?? 20,
+      ...(filters.cursor && { cursor: { id: filters.cursor }, skip: 1 }),
+    });
+  }
+
   static async updateAudioOverviewAudio(
     messageId: string,
-    data: { audioFileId?: string; audioStatus?: AudioOverviewStatus },
+    data: {
+      audioFileId?: string;
+      audioStatus?: AudioOverviewStatus;
+      turnTimings?: number[];
+      sentenceTimings?: MarkTiming[][];
+      wordTimings?: MarkTiming[][];
+    },
   ) {
-    return prisma.messageAudioOverview.update({ where: { messageId }, data });
+    const { turnTimings, sentenceTimings, wordTimings, ...rest } = data;
+    return prisma.messageAudioOverview.update({
+      where: { messageId },
+      data: {
+        ...rest,
+        ...(turnTimings && { turnTimings: turnTimings as unknown as Prisma.InputJsonValue }),
+        ...(sentenceTimings && { sentenceTimings: sentenceTimings as unknown as Prisma.InputJsonValue }),
+        ...(wordTimings && { wordTimings: wordTimings as unknown as Prisma.InputJsonValue }),
+      },
+    });
   }
 
   /** Re-queued on server start by AudioOverviewQueue — rows a prior process left stuck

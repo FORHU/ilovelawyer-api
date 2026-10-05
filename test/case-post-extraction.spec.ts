@@ -22,6 +22,7 @@ import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
 import CaseReconstructionAudioSvc from "../src/services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../src/queues/case-reconstruction-audio.queue";
 import WitnessExtractSvc from "../src/services/witness-extract.service";
+import DamagesExtractSvc from "../src/services/damages-extract.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
 import HttpError from "../src/utils/http-error";
 import { redis } from "../src/lib/redis";
@@ -53,10 +54,13 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     startAudioJob: CaseReconstructionAudioSvc.startAudioJob,
     audioEnqueue: CaseReconstructionAudioQueue.enqueue,
     witnessSchedule: WitnessExtractSvc.schedule,
+    damagesSchedule: DamagesExtractSvc.schedule,
     mapChanged: CaseMindMapSvc.documentsChangedSinceBuild,
+    mapNeedsFirst: CaseMindMapSvc.needsFirstMap,
     mapGenerate: CaseMindMapSvc.generateFromDocuments,
   };
   let mapChanged: boolean;
+  let mapMissing: boolean;
   let mapBuilds: { caseId: string; reason?: string }[];
   let mapBuildError: Error | null;
 
@@ -66,12 +70,18 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
   // WitnessExtractSvc.schedule enqueues its own "witnessExtract" message — stubbed out of `sent`
   // so these tests keep counting only the refresh's own (re)schedule messages.
   let witnessScheduled: string[];
+  // Same for DamagesExtractSvc's "damagesExtract" message.
+  let damagesScheduled: string[];
 
   beforeEach(() => {
     sent = [];
     witnessScheduled = [];
     (WitnessExtractSvc as any).schedule = (caseId: string) => {
       witnessScheduled.push(caseId);
+    };
+    damagesScheduled = [];
+    (DamagesExtractSvc as any).schedule = (caseId: string) => {
+      damagesScheduled.push(caseId);
     };
     fingerprintStore = {};
     caseExistsStore = { "case-1": true };
@@ -95,9 +105,11 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseReconstructionAudioSvc as any).startAudioJob = async () => {};
     (CaseReconstructionAudioQueue as any).enqueue = () => {};
     mapChanged = false;
+    mapMissing = false;
     mapBuilds = [];
     mapBuildError = null;
     (CaseMindMapSvc as any).documentsChangedSinceBuild = async () => mapChanged;
+    (CaseMindMapSvc as any).needsFirstMap = async () => mapMissing;
     (CaseMindMapSvc as any).generateFromDocuments = async (caseId: string, _userId: string, reason?: string) => {
       if (mapBuildError) throw mapBuildError;
       mapBuilds.push({ caseId, reason });
@@ -119,7 +131,9 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseReconstructionAudioSvc as any).startAudioJob = originals.startAudioJob;
     (CaseReconstructionAudioQueue as any).enqueue = originals.audioEnqueue;
     (WitnessExtractSvc as any).schedule = originals.witnessSchedule;
+    (DamagesExtractSvc as any).schedule = originals.damagesSchedule;
     (CaseMindMapSvc as any).documentsChangedSinceBuild = originals.mapChanged;
+    (CaseMindMapSvc as any).needsFirstMap = originals.mapNeedsFirst;
     (CaseMindMapSvc as any).generateFromDocuments = originals.mapGenerate;
   });
 
@@ -137,6 +151,17 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
         refreshed = true;
       };
       mapChanged = true;
+      await runCasePostExtraction("case-1", "user-1");
+      expect(refreshed).to.equal(false);
+      expect(mapBuilds).to.deep.equal([{ caseId: "case-1", reason: undefined }]);
+    });
+
+    it("builds the case's first map when it never got one, without a full refresh", async () => {
+      let refreshed = false;
+      (CaseRefreshSvc as any).runQueued = async () => {
+        refreshed = true;
+      };
+      mapMissing = true;
       await runCasePostExtraction("case-1", "user-1");
       expect(refreshed).to.equal(false);
       expect(mapBuilds).to.deep.equal([{ caseId: "case-1", reason: undefined }]);
@@ -272,11 +297,19 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     expect(witnessScheduled).to.deep.equal(["case-1"]);
   });
 
+  it("schedules the damages pass alongside it, with the same unchanged-READY-set rule", async () => {
+    (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1"]);
+    fingerprintStore["case-1"] = fingerprintOf(["d1"]);
+    await runCasePostExtraction("case-1", "user-1");
+    expect(damagesScheduled).to.deep.equal(["case-1"]);
+  });
+
   it("does not schedule witness extraction while documents are still extracting", async () => {
     (DocumentRepo as any).countPendingExtractionByCase = async () => 2;
     await runCasePostExtraction("case-1", "user-1");
     await flush();
     expect(witnessScheduled).to.deep.equal([]);
+    expect(damagesScheduled).to.deep.equal([]);
   });
 
   it("propagates a non-409 lock error instead of silently swallowing it", async () => {

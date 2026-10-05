@@ -24,6 +24,8 @@ import {
 import * as LegalIssueJev from "../utils/legal-issue-jev";
 import * as WeaknessJev from "../utils/weakness-jev";
 import * as StrengthJev from "../utils/strength-jev";
+import * as AttackStrategyJev from "../utils/attack-strategy-jev";
+import * as DefenseStrategyJev from "../utils/defense-strategy-jev";
 import { embedText } from "../utils/embedding";
 
 // Jev's checks are stored as-is in CaseFinding.jev; the panel reads the per-category shape.
@@ -79,6 +81,20 @@ const CHECKERS: Partial<Record<FindingCategory, FindingChecker>> = {
     // "The documents that do the most work."
     order: (a, b) => StrengthJev.compareByWeight(a as StrengthJev.StrengthJevCheck, b as StrengthJev.StrengthJevCheck),
   },
+  ATTACK_STRATEGY: {
+    enabled: AttackStrategyJev.isAttackStrategyJevEnabled,
+    async run(target, context) {
+      const check = await AttackStrategyJev.checkAttackStrategyWithJev(target, context);
+      return { check, tag: AttackStrategyJev.tagFromCheck(check) };
+    },
+  },
+  DEFENSE_STRATEGY: {
+    enabled: DefenseStrategyJev.isDefenseStrategyJevEnabled,
+    async run(target, context) {
+      const check = await DefenseStrategyJev.checkDefenseStrategyWithJev(target, context);
+      return { check, tag: DefenseStrategyJev.tagFromCheck(check) };
+    },
+  },
 };
 
 const MAX_SOURCE_PASSAGES = 3;
@@ -97,8 +113,8 @@ function withoutSelf(context: CaseJevContext, category: FindingCategory, label: 
 
 /**
  * Runs the per-category Jev checks for CaseFinding rows: over a freshly generated batch before
- * it's saved (verifyParsed), and on request for one row (checkOne). Legal Issues, Weaknesses and
- * Strengths have a check (CHECKERS); Attack and Defense Strategies don't.
+ * it's saved (verifyParsed), and on request for one row (checkOne). All five categories have a
+ * check (CHECKERS).
  */
 export default class FindingJevSvc {
   /** The passages of the finding's cited document (matched by name, as the model cites it) that

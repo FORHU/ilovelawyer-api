@@ -13,9 +13,20 @@ const TAGS: Record<FindingCategory, string> = {
 };
 
 const MAX_ITEMS = 8;
-const MAX_LABEL = 160;
+// Generous: a hard cut at 160 left labels stopping mid-sentence ("…and unsanded or unpainted").
+const MAX_LABEL = 400;
 const MAX_SOURCE_LABEL = 200;
-const MAX_DETAIL = 160;
+const MAX_DETAIL = 300;
+
+/** Collapses whitespace and, past `max`, cuts at the last word boundary with an ellipsis, so an
+ * over-long label reads as shortened rather than as a sentence that just stops. */
+export function clampText(value: string, max: number): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:.-]+$/, "")}…`;
+}
 
 export interface ParsedCaseFinding {
   category: FindingCategory;
@@ -92,13 +103,13 @@ function extractItemList(text: string, tag: string): ParsedItem[] | undefined {
 
 function normalizeItem(row: unknown): ParsedItem {
   if (typeof row === "string") {
-    return { label: row.replace(/\s+/g, " ").trim().slice(0, MAX_LABEL), sourceLabel: null, detail: null, status: null, burden: null };
+    return { label: clampText(row, MAX_LABEL), sourceLabel: null, detail: null, status: null, burden: null };
   }
   if (row && typeof row === "object" && "label" in row) {
     const r = row as { label: unknown; sourceLabel?: unknown; detail?: unknown; status?: unknown; burden?: unknown };
-    const label = String(r.label).replace(/\s+/g, " ").trim().slice(0, MAX_LABEL);
+    const label = clampText(String(r.label), MAX_LABEL);
     const sourceLabel = typeof r.sourceLabel === "string" ? r.sourceLabel.trim().slice(0, MAX_SOURCE_LABEL) || null : null;
-    const detail = typeof r.detail === "string" ? r.detail.replace(/\s+/g, " ").trim().slice(0, MAX_DETAIL) || null : null;
+    const detail = typeof r.detail === "string" ? clampText(r.detail, MAX_DETAIL) || null : null;
     const status = typeof r.status === "string" ? r.status.trim().toUpperCase() || null : null;
     const burdenRaw = typeof r.burden === "string" ? r.burden.trim().toUpperCase() : "";
     // UNCLEAR is Jev's answer, not one the model is asked for — from the model it means no call.

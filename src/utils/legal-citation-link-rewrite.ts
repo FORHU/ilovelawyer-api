@@ -6,6 +6,7 @@ import { TenantCode } from "../types/tenant-code";
 import type { RelatedCase } from "./chatWonder";
 import { normalizeUkLegislationUrl, resolveUkCitationToLaw, resolveUkLegislationTitleToLaw } from "./uk-citation-resolution";
 import logger from "./logger";
+import { libraryHref as buildLibraryHref, legislationSection } from "./law-library-href";
 
 export interface CitationRewriteResult {
   content: string;
@@ -35,11 +36,6 @@ const HTML_LINK_RE = /<a\s+[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g
 // resolved by then falls back to today's external-link behavior for that citation only.
 const REWRITE_TIMEOUT_MS = 4_500;
 
-const WIRE_CATEGORY: Record<TenantCode, Record<LawCategory, string>> = {
-  UK: { JURISPRUDENCE: "uk-case-law", REPUBLIC_ACT: "uk-legislation" },
-  PH: { JURISPRUDENCE: "jurisprudence", REPUBLIC_ACT: "republic-acts" },
-};
-
 interface Resolution {
   /** The Library detail route's `[id]` segment — NOT uniformly `Law.id`. Per
    * law.controller.ts's own doc comment on GET /api/law/document, that endpoint's `id` is
@@ -48,6 +44,8 @@ interface Resolution {
    * UK resolvers set this to `Law.id`; the PH resolver sets it to the juris.ph item id instead. */
   routeId: string;
   category: LawCategory;
+  /** UK legislation only: the cited section, so the link opens the Act there. */
+  section?: string | null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -55,7 +53,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function libraryHref(tenantCode: TenantCode, resolution: Resolution): string {
-  return `/homepage/library/laws/${resolution.routeId}?category=${WIRE_CATEGORY[tenantCode][resolution.category]}`;
+  return buildLibraryHref(tenantCode, resolution.routeId, resolution.category, resolution.section);
 }
 
 // The model is instructed to suffix a citation label with a literal " Law"/" Jurisprudence"
@@ -101,10 +99,11 @@ export function isKnownLawHost(href: string, tenantCode: TenantCode): boolean {
 async function resolveUkHref(href: string, label: string): Promise<Resolution | null> {
   const isLegislation = ukHostKind(href) === "legislation";
   const category: LawCategory = isLegislation ? "REPUBLIC_ACT" : "JURISPRUDENCE";
+  const section = isLegislation ? legislationSection(href, label) : null;
 
   const jurisSourceId = isLegislation ? normalizeUkLegislationUrl(href) : href;
   const existing = await LawRepo.findByJurisSourceId(jurisSourceId);
-  if (existing) return { routeId: existing.id, category };
+  if (existing) return { routeId: existing.id, category, section };
 
   const strippedLabel = stripCitationSuffix(label);
   if (isLegislation) {
@@ -115,12 +114,12 @@ async function resolveUkHref(href: string, label: string): Promise<Resolution | 
     // real phrasing, so it's tried first; the OSCOLA resolver is only a fallback for the rare
     // case the label already happens to be in strict citation form (e.g. a bare "SI YYYY/N").
     const byTitle = await resolveUkLegislationTitleToLaw(strippedLabel);
-    if (byTitle) return { routeId: byTitle.lawId, category };
+    if (byTitle) return { routeId: byTitle.lawId, category, section };
   }
 
   const resolved = await resolveUkCitationToLaw(strippedLabel);
   if (!resolved) return null;
-  return { routeId: resolved.lawId, category };
+  return { routeId: resolved.lawId, category, section };
 }
 
 const JURIS_PH_PATH_RE = /^\/(case|republic-act)\/([^/?#]+)/;
