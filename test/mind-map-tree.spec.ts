@@ -77,6 +77,17 @@ describe("mind-map-tree", () => {
       expect(out.map((c) => c.label)).to.deep.equal(["New point"]);
     });
 
+    it("keeps every point when a description quotes a word followed by a comma", () => {
+      // The model quoting a witness unescaped — this used to lose the whole reply (502).
+      const out = parseExpandedChildren(
+        tagged('[{"label":"First statement","description":"Pyle said the ties were "satisfactory", then changed his account."},{"label":"HSE survey"}]'),
+        [],
+        5,
+      );
+      expect(out.map((c) => c.label)).to.deep.equal(["First statement", "HSE survey"]);
+      expect(out[0].description).to.equal('Pyle said the ties were "satisfactory", then changed his account.');
+    });
+
     it("returns at most max", () => {
       expect(parseExpandedChildren(tagged('[{"label":"A"},{"label":"B"},{"label":"C"}]'), [], 2)).to.have.length(2);
     });

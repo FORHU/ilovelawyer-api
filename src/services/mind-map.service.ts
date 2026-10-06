@@ -8,6 +8,7 @@ import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWo
 import { newTraceRun } from "./trace-collector.service";
 import { getMindMapExpandPromptBuilder } from "../legal/prompt-registry";
 import { MIND_MAP_LIMITS } from "../constants/mind-map-limits.constants";
+import { MIND_MAP_CHILDREN_TAG } from "../constants/mind-map-expand.constants";
 import { MindMapItem, normalizeMindMap } from "../utils/response-parser";
 import {
   appendMindMapChildren,
@@ -136,12 +137,33 @@ export default class MindMapSvc {
 
   /** Expand a node on a consultation's (chat-generated) map. */
   static async expandNode(t: ConsultationTarget & { nodeId: string; count?: number }): Promise<MindMapChange> {
-    return MindMapSvc.expandOnMap(await MindMapSvc.loadConsultationMap(t), t.userId, t.nodeId, t.count);
+    return MindMapSvc.logExpandFailure({ kind: "message", consultationId: t.consultationId, nodeId: t.nodeId }, async () =>
+      MindMapSvc.expandOnMap(await MindMapSvc.loadConsultationMap(t), t.userId, t.nodeId, t.count),
+    );
   }
 
   /** Expand a node on the case's document-built map. */
   static async expandCaseNode(t: CaseTarget & { nodeId: string; count?: number }): Promise<MindMapChange> {
-    return MindMapSvc.expandOnMap(await MindMapSvc.loadCaseMap(t), t.userId, t.nodeId, t.count);
+    return MindMapSvc.logExpandFailure({ kind: "case", caseId: t.caseId, nodeId: t.nodeId }, async () =>
+      MindMapSvc.expandOnMap(await MindMapSvc.loadCaseMap(t), t.userId, t.nodeId, t.count),
+    );
+  }
+
+  /** The error handler doesn't log HttpErrors, and most expand refusals (node not found, map
+   * gone, no usable points) are HttpErrors — so the app's "Couldn't expand" had no server trace. */
+  private static async logExpandFailure<T>(context: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      const { statusCode, code } = err as { statusCode?: number; code?: string };
+      logger.warn("Mind map expand: failed", {
+        ...context,
+        status: statusCode ?? 500,
+        code,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   /** "Undo expand" on a consultation's map. */
@@ -259,8 +281,14 @@ export default class MindMapSvc {
         durationMs: Date.now() - startedAt,
       });
       if (!parsed.length) {
-        logger.warn("Mind map expand: no points in the reply", { caseId, nodeId, replyStart: result.content.slice(0, 600) });
-        throw new HttpError("The AI didn't return any new points for this node", 502);
+        // The whole reply, not a prefix: when the block is there but won't parse, the fault is
+        // usually far into it (an unescaped quote in the third point's description).
+        const hadBlock = result.content.includes(`[${MIND_MAP_CHILDREN_TAG}]`);
+        logger.warn("Mind map expand: no points in the reply", { caseId, nodeId, hadBlock, reply: result.content });
+        throw new HttpError(
+          hadBlock ? "The AI's reply for this node couldn't be read. Try again." : "The AI didn't return any new points for this node",
+          502,
+        );
       }
       if (!children.length) throw new HttpError("The AI didn't return any new points backed by the case documents", 502);
 
