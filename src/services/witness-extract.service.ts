@@ -20,12 +20,16 @@ const MAX_DOC_CHARS = 12000;
 const MAX_TOTAL_DOC_CHARS = 60000;
 // Backoff before retrying when another witnessExtract run for the case still holds the lock.
 const BUSY_RETRY_SECONDS = 30;
+// Batches one analysis refresh reads inline before handing the rest to the queued job, so a very
+// large upload can't hold the refresh (and the case's one Chat Wonder slot) indefinitely.
+const MAX_BATCHES_PER_REFRESH = 25;
 
 /**
- * Automatic witness list: after document extraction settles (runCasePostExtraction), reads each
- * READY document it hasn't read before and adds the people in it as Witness rows with
- * source=AI. No controller or button — AiGenerationQueue kind "witnessExtract" is the only
- * entry point, and runQueued claims its own lock the way casePostExtraction does.
+ * Automatic witness list: reads each READY document it hasn't read before and adds the people in
+ * it as Witness rows with source=AI. No controller or button. Two entry points, both under the
+ * "witnessExtract" lock: the analysis refresh's witness step (extractAllPending, inline, so the
+ * scoring right after it sees every witness), and AiGenerationQueue kind "witnessExtract"
+ * (runQueued) for the backfill runCasePostExtraction schedules when the refresh doesn't run.
  *
  * Verifiable by construction: every row carries the document it came from and a verbatim quote
  * that extractWitnesses has already found in that document's text. Additive only — it never
@@ -44,6 +48,24 @@ export default class WitnessExtractSvc {
         logger.error("Witness extract: failed to enqueue", { err, caseId, userId });
       }
     })();
+  }
+
+  /** The analysis refresh's witness step (CaseRefreshSvc): reads every pending document, batch
+   * after batch, under one "witnessExtract" lock. Throws 409 when a queued run holds the lock —
+   * the refresh then skips to scoring. Past MAX_BATCHES_PER_REFRESH, the rest goes to the queue. */
+  static async extractAllPending(caseId: string, userId: string): Promise<{ batches: number }> {
+    if ((await DocumentRepo.listPendingWitnessExtraction(caseId)).length === 0) return { batches: 0 };
+    let batches = 0;
+    const hasMore = await AiGenerationLockSvc.run(caseId, "witnessExtract", async () => {
+      let more = true;
+      while (more && batches < MAX_BATCHES_PER_REFRESH) {
+        more = await WitnessExtractSvc.extractBatch(caseId, userId);
+        batches += 1;
+      }
+      return more;
+    });
+    if (hasMore) WitnessExtractSvc.schedule(caseId, userId);
+    return { batches };
   }
 
   /** Run by AiGenerationQueue's worker. */

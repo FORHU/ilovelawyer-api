@@ -2,6 +2,7 @@ import prisma from "../lib/prisma";
 import { LawCategory, Prisma } from "@prisma/client";
 import TenantRepo from "./tenant.repository";
 import HttpError from "../utils/http-error";
+import { UK_CASELAW_BASE_URL } from "../config";
 
 export type LawSortBy = "year" | "createdAt";
 export type SortDir = "asc" | "desc";
@@ -156,12 +157,17 @@ export default class LawRepo {
   /** UK equivalent of `localSearch` — plain ILIKE over stored UK-tenant rows for the given
    * category. The UK Legal MCP is only consulted when this returns nothing. No `facts` column
    * for UK rows (left null in v1), so it isn't searched. */
-  static async localSearchUk(params: { category: LawCategory; q: string; limit: number }) {
+  /** `courts` (case-law slugs, e.g. "ewca/civ") match on the canonical URL's path rather than the
+   * stored `division` label, which older rows hold in a different capitalisation. */
+  static async localSearchUk(params: { category: LawCategory; q: string; limit: number; courts?: string[] }) {
     const tenantId = await LawRepo.resolveUkTenantId();
     return prisma.law.findMany({
       where: {
         tenantId,
         category: params.category,
+        ...(params.courts?.length
+          ? { AND: [{ OR: params.courts.map((c) => ({ jurisSourceId: { startsWith: `${UK_CASELAW_BASE_URL}/${c}/` } })) }] }
+          : {}),
         OR: [
           { title: { contains: params.q, mode: "insensitive" } },
           { caseNumber: { contains: params.q, mode: "insensitive" } },

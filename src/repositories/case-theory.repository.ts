@@ -42,6 +42,45 @@ export default class CaseTheoryRepo {
     return CaseTheoryRepo.findById(id, caseId);
   }
 
+  /** The case's newest AI-authored theory — the one CaseTheorySvc.proposeInner rewrites in place. */
+  static async findLatestAiDraft(caseId: string) {
+    return prisma.caseTheory.findFirst({ where: { caseId, authorUserId: null }, orderBy: { createdAt: "desc" } });
+  }
+
+  /** Rewrites an AI draft in place: new title/thesis, claims, assumptions and open questions,
+   * and drops the cached diffs it's half of, since they describe the old text. The id stays,
+   * so forks (forkedFromId) and notes on it keep pointing at it. AI claims never carry a
+   * graphNodeId, so there are no mirrored CaseEdges to clean up. */
+  static async replaceAiDraft(
+    id: string,
+    caseId: string,
+    proposal: {
+      title: string;
+      thesis: string;
+      claims: { statement: string; stance: TheoryStance }[];
+      assumptions: string[];
+      openQuestions: string[];
+    },
+  ) {
+    const result = await prisma.$transaction(async (tx) => {
+      const updated = await tx.caseTheory.updateMany({
+        where: { id, caseId, authorUserId: null },
+        data: { title: proposal.title, thesis: proposal.thesis },
+      });
+      if (updated.count === 0) return 0;
+      await tx.theoryClaim.deleteMany({ where: { theoryId: id } });
+      await tx.theoryAssumption.deleteMany({ where: { theoryId: id } });
+      await tx.theoryOpenQuestion.deleteMany({ where: { theoryId: id } });
+      await tx.theoryDiff.deleteMany({ where: { caseId, OR: [{ theoryAId: id }, { theoryBId: id }] } });
+      await tx.theoryClaim.createMany({ data: proposal.claims.map((c) => ({ theoryId: id, statement: c.statement, stance: c.stance })) });
+      await tx.theoryAssumption.createMany({ data: proposal.assumptions.map((statement) => ({ theoryId: id, statement })) });
+      await tx.theoryOpenQuestion.createMany({ data: proposal.openQuestions.map((question) => ({ theoryId: id, question })) });
+      return updated.count;
+    });
+    if (result === 0) return null;
+    return CaseTheoryRepo.findById(id, caseId);
+  }
+
   /** Deletes the theory with everything that points at it by id alone (no FK, so no cascade):
    * cached diffs it's half of, and notes left on it. Claims/assumptions/open questions cascade. */
   static async deleteWithDependents(id: string, caseId: string) {

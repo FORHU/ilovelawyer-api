@@ -21,6 +21,11 @@ import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import CaseSnapshotSvc from "../src/services/case-snapshot.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
 import DamagesExtractSvc from "../src/services/damages-extract.service";
+import RedTeamSvc from "../src/services/red-team.service";
+import WitnessExtractSvc from "../src/services/witness-extract.service";
+import WitnessScoringSvc from "../src/services/witness-scoring.service";
+import CaseTheorySvc from "../src/services/case-theory.service";
+import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
 import HttpError from "../src/utils/http-error";
 
 describe("CaseRefreshSvc.runQueued — audit reason", () => {
@@ -38,7 +43,13 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     snapshotGet: CaseSnapshotSvc.get,
     mapGenerate: CaseMindMapSvc.generateFromDocuments,
     damagesRefresh: DamagesExtractSvc.refreshStep,
+    damagesExtractAll: DamagesExtractSvc.extractAllPending,
     outlookGenerate: CaseOutlookAiSvc.generateFromDocuments,
+    redTeamGenerate: RedTeamSvc.generateFromDocuments,
+    witnessExtractAll: WitnessExtractSvc.extractAllPending,
+    witnessScore: WitnessScoringSvc.scoreFromDocuments,
+    theoryRefresh: CaseTheorySvc.refreshAiDraft,
+    reconstructionAuto: CaseReconstructionSvc.autoRegenerate,
   };
   let steps: string[];
   let mapReasons: (string | undefined)[];
@@ -73,6 +84,13 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
       mapReasons.push(reason);
       return { skipped: null, map: null };
     };
+    // The downstream panes' steps — covered by analysis-refresh-downstream-panes.spec.ts.
+    (WitnessExtractSvc as any).extractAllPending = async () => ({ batches: 0 });
+    (DamagesExtractSvc as any).extractAllPending = async () => ({ batches: 0 });
+    (WitnessScoringSvc as any).scoreFromDocuments = async () => ({ skipped: true });
+    (RedTeamSvc as any).generateFromDocuments = async () => ({ skipped: true });
+    (CaseTheorySvc as any).refreshAiDraft = async () => ({ skipped: true });
+    (CaseReconstructionSvc as any).autoRegenerate = async () => "skipped-edited";
   });
 
   afterEach(() => {
@@ -89,11 +107,18 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (CaseSnapshotSvc as any).get = originals.snapshotGet;
     (CaseMindMapSvc as any).generateFromDocuments = originals.mapGenerate;
     (DamagesExtractSvc as any).refreshStep = originals.damagesRefresh;
+    (DamagesExtractSvc as any).extractAllPending = originals.damagesExtractAll;
+    (WitnessExtractSvc as any).extractAllPending = originals.witnessExtractAll;
+    (WitnessScoringSvc as any).scoreFromDocuments = originals.witnessScore;
+    (RedTeamSvc as any).generateFromDocuments = originals.redTeamGenerate;
+    (CaseTheorySvc as any).refreshAiDraft = originals.theoryRefresh;
+    (CaseReconstructionSvc as any).autoRegenerate = originals.reconstructionAuto;
   });
 
-  it("runs the damages step after the outlook, since Jev's awardability reads the fresh findings", async () => {
+  it("re-rates damages after the findings, since Jev's awardability reads the fresh findings", async () => {
+    (CaseFindingAiSvc as any).generateFromDocuments = async () => void steps.push("findings");
     await CaseRefreshSvc.runQueued("case-1", "user-1");
-    expect(steps).to.deep.equal(["outlook", "damages"]);
+    expect(steps.indexOf("damages")).to.be.greaterThan(steps.indexOf("findings"));
   });
 
   it("still completes the refresh when the damages step throws", async () => {

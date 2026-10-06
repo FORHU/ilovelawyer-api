@@ -23,41 +23,72 @@ const isRecord = (value: unknown): value is Record<string, unknown> => !!value &
  * Verification). normalizeLayout does this when a workspace is SAVED, but a workspace saved before then is returned as
  * stored, and the web app crashes rendering a retired pane that is visible. Applied to every layout this service hands out.
  *
- * Deliberately narrower than normalizeLayout: it only drops unknown ids, clears a tab that pointed at one, and shows the
- * Command pane if nothing visible is left. It does not re-clamp sizes, re-apply SKU gating or add missing panes, so reading a
- * workspace never changes anything else about it. Returns the same object when there is nothing to drop, and anything that is
- * not a layout untouched. */
+ * Deliberately narrower than normalizeLayout: it only drops unknown ids and shows the Command pane if nothing visible is
+ * left. It does not re-clamp sizes, re-apply SKU gating or add missing panes, so reading a workspace never changes anything
+ * else about it. Returns the same object when there is nothing to drop, and anything that is not a layout untouched. */
 export function dropUnknownPanelsFromLayout(layoutJson: unknown): unknown {
   if (!isRecord(layoutJson) || !Array.isArray(layoutJson.panels)) return layoutJson;
 
   const panels = layoutJson.panels.filter((p) => isRecord(p) && isPanelId(p.id));
-  const badTab = (value: unknown) => value !== undefined && value !== null && !isPanelId(value);
-  const screens = isRecord(layoutJson.screenLayouts) ? layoutJson.screenLayouts : undefined;
-  const screenTabsBad = !!screens && Object.values(screens).some((s) => isRecord(s) && (badTab(s.tabsActiveA) || badTab(s.tabsActiveB)));
-  const dropped = panels.length < layoutJson.panels.length;
-  if (!dropped && !badTab(layoutJson.tabsActiveA) && !badTab(layoutJson.tabsActiveB) && !screenTabsBad) return layoutJson;
-
-  const withoutBadTabs = <T extends Record<string, unknown>>(obj: T): T => {
-    const copy = { ...obj };
-    if (badTab(copy.tabsActiveA)) delete copy.tabsActiveA;
-    if (badTab(copy.tabsActiveB)) delete copy.tabsActiveB;
-    return copy;
-  };
+  if (panels.length === layoutJson.panels.length) return layoutJson;
 
   let kept = panels as Record<string, unknown>[];
-  if (dropped && !kept.some((p) => p.visible === true)) {
+  if (!kept.some((p) => p.visible === true)) {
     kept = kept.map((p) => (p.id === "command" ? { ...p, visible: true, order: 0, width: 1, height: 1 } : p));
   }
+  return { ...layoutJson, panels: kept };
+}
 
-  const out: Record<string, unknown> = { ...withoutBadTabs(layoutJson), panels: kept };
-  if (screens) {
-    out.screenLayouts = Object.fromEntries(Object.entries(screens).map(([index, s]) => [index, isRecord(s) ? withoutBadTabs(s) : s]));
+const TAB_FIELDS = ["tabsSplit", "tabsActiveA", "tabsActiveB"];
+
+/** The Tabs arrangement was removed. A layout saved with it becomes 2 Columns (tabGroup 0/1 -> columnIndex 0/1, tabsSplit ->
+ * columnWidths) and the Tabs-only fields are dropped. Idempotent: returns the same object once nothing Tabs-related is left.
+ * Runs on read and on save, so an old client's save is converted too. Anything that is not a layout comes back untouched. */
+export function tabsToColumns(layoutJson: unknown): unknown {
+  if (!isRecord(layoutJson) || !Array.isArray(layoutJson.panels)) return layoutJson;
+  const screens = isRecord(layoutJson.screenLayouts) ? layoutJson.screenLayouts : {};
+  const dirty = (c: unknown) => isRecord(c) && (c.arrangement === "tabs" || TAB_FIELDS.some((k) => k in c));
+  const rows = layoutJson.panels as Record<string, unknown>[];
+  if (!dirty(layoutJson) && !Object.values(screens).some(dirty) && !rows.some((p) => isRecord(p) && "tabGroup" in p)) return layoutJson;
+
+  const convert = (cfg: Record<string, unknown>) => {
+    const split = typeof cfg.tabsSplit === "number" ? clampRatio(cfg.tabsSplit) : 0.5;
+    const out = { ...cfg };
+    for (const k of TAB_FIELDS) delete out[k];
+    return cfg.arrangement === "tabs" ? { ...out, arrangement: "columns", columnCount: 2, columnWidths: [split, 1 - split] } : out;
+  };
+
+  const tabScreens = new Set<number>();
+  if (layoutJson.arrangement === "tabs") tabScreens.add(0);
+  for (const [i, s] of Object.entries(screens)) if (isRecord(s) && s.arrangement === "tabs") tabScreens.add(Number(i));
+
+  // A pane without a tabGroup auto-joined the group with fewer tabs; keep that.
+  const sizes = new Map<number, [number, number]>();
+  const screenOf = (p: Record<string, unknown>) => (typeof p.screen === "number" ? p.screen : 0);
+  const placed = rows.map((p) => {
+    if (!isRecord(p)) return p;
+    const { tabGroup, ...rest } = p;
+    if (!tabScreens.has(screenOf(p)) || p.visible !== true) return rest;
+    const n = sizes.get(screenOf(p)) ?? [0, 0];
+    sizes.set(screenOf(p), n);
+    const col = tabGroup === 0 || tabGroup === 1 ? tabGroup : n[0] <= n[1] ? 0 : 1;
+    n[col]++;
+    return { ...rest, columnIndex: col };
+  });
+  const panels = placed.map((p) => {
+    const n = isRecord(p) ? sizes.get(screenOf(p)) : undefined;
+    return n && typeof p.columnIndex === "number" ? { ...p, height: 1 / n[p.columnIndex as 0 | 1] } : p;
+  });
+
+  const out: Record<string, unknown> = { ...convert(layoutJson), panels };
+  if (isRecord(layoutJson.screenLayouts)) {
+    out.screenLayouts = Object.fromEntries(Object.entries(screens).map(([i, s]) => [i, isRecord(s) ? convert(s) : s]));
   }
   return out;
 }
 
 /** One-time regroup of a saved layout so related panes (PANEL_GROUPS) sit together. Runs when `layoutVersion` is below
- * LAYOUT_VERSION, then stamps it, so a later manual drag is never undone. Columns and Tabs only: Free x/y and Focus are
+ * LAYOUT_VERSION, then stamps it, so a later manual drag is never undone. Columns only: Free x/y and Focus are
  * deliberate placements, and pinned panes keep their slot. Anything that is not a layout comes back untouched. */
 export function regroupLayoutOnce(layoutJson: unknown): unknown {
   if (!isRecord(layoutJson) || !Array.isArray(layoutJson.panels)) return layoutJson;
@@ -71,8 +102,8 @@ export function regroupLayoutOnce(layoutJson: unknown): unknown {
     const cfg = (screen === 0 ? layoutJson : screens[screen]) as Record<string, unknown> | undefined;
     if (!isRecord(cfg)) continue;
     const arrangement = cfg.arrangement ?? "columns";
-    if (arrangement !== "columns" && arrangement !== "tabs") continue;
-    const slots = arrangement === "tabs" ? 2 : Math.min(8, Math.max(1, Math.round(Number(cfg.columnCount) || 3)));
+    if (arrangement !== "columns") continue;
+    const slots = Math.min(8, Math.max(1, Math.round(Number(cfg.columnCount) || 3)));
 
     const movable = panels
       .filter((p) => isRecord(p) && isPanelId(p.id) && p.visible === true && p.pinned !== true && p.id !== "dates" && ((p.screen as number) || 0) === screen)
@@ -100,10 +131,7 @@ export function regroupLayoutOnce(layoutJson: unknown): unknown {
     const patch = new Map<unknown, Record<string, unknown>>();
     movable.forEach((p, i) => {
       const slot = slotOf(i);
-      patch.set(
-        p,
-        arrangement === "tabs" ? { tabGroup: slot, order: i } : { columnIndex: slot, order: i, height: 1 / sizes.get(slot)! },
-      );
+      patch.set(p, { columnIndex: slot, order: i, height: 1 / sizes.get(slot)! });
     });
     panels = panels.map((p) => (patch.has(p) ? { ...p, ...patch.get(p) } : p));
   }
@@ -142,7 +170,7 @@ export function buildDefaultLayout(preset: PresetValue, sku = "SOLO"): Workspace
 }
 
 export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
-  const raw = (input ?? {}) as Partial<WorkspaceLayout> & { preset?: string; panels?: unknown[] };
+  const raw = tabsToColumns(input ?? {}) as Partial<WorkspaceLayout> & { preset?: string; panels?: unknown[] };
   const preset: PresetValue =
     raw.preset === "PANE_1" || raw.preset === "PANE_2" || raw.preset === "PANE_4" || raw.preset === "PANE_6"
       ? raw.preset
@@ -173,7 +201,6 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
       x: Number.isFinite(Number(row.x)) ? clampRatio(row.x) : undefined,
       y: Number.isFinite(Number(row.y)) ? clampRatio(row.y) : undefined,
       columnIndex: clampInt(row.columnIndex, 0, MAX_COLUMNS - 1),
-      tabGroup: clampInt(row.tabGroup, 0, 1),
       pinned: row.pinned === true ? true : undefined,
       // 0 means "primary", same as absent — clampInt would instead clamp a 0 UP into [1,5], so
       // that case is treated as "omit" here rather than reusing clampInt directly.
@@ -205,13 +232,12 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     }
   }
 
-  // The arrangement-mode fields below are what make a Columns/Tabs layout survive a reload —
+  // The arrangement-mode fields below are what make a Columns layout survive a reload —
   // dropping them turned every saved Columns layout into a legacy Free one on the client
   // (it treats a missing columnCount as "pre-rework save") and snapped panes back to old x/y.
   const columnWidths = Array.isArray(raw.columnWidths)
     ? raw.columnWidths.slice(0, MAX_COLUMNS).map((w) => clampRatio(w))
     : undefined;
-  const tabsSplit = typeof raw.tabsSplit === "number" && Number.isFinite(raw.tabsSplit) ? clampRatio(raw.tabsSplit) : undefined;
 
   return {
     preset,
@@ -221,9 +247,6 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     layoutVersion: typeof raw.layoutVersion === "number" ? raw.layoutVersion : undefined,
     columnCount: clampInt(raw.columnCount, 1, MAX_COLUMNS),
     columnWidths,
-    tabsSplit,
-    tabsActiveA: isPanelId(raw.tabsActiveA) ? raw.tabsActiveA : undefined,
-    tabsActiveB: isPanelId(raw.tabsActiveB) ? raw.tabsActiveB : undefined,
     screenLayouts: normalizeScreenLayouts(raw.screenLayouts),
   };
 }
@@ -249,9 +272,6 @@ function normalizeScreenLayouts(raw: unknown): WorkspaceLayout["screenLayouts"] 
       columnWidths: Array.isArray(entry.columnWidths)
         ? entry.columnWidths.slice(0, MAX_COLUMNS).map((w: unknown) => clampRatio(w))
         : undefined,
-      tabsSplit: typeof entry.tabsSplit === "number" && Number.isFinite(entry.tabsSplit) ? clampRatio(entry.tabsSplit) : undefined,
-      tabsActiveA: isPanelId(entry.tabsActiveA) ? entry.tabsActiveA : undefined,
-      tabsActiveB: isPanelId(entry.tabsActiveB) ? entry.tabsActiveB : undefined,
     };
   }
   return Object.keys(out).length > 0 ? out : undefined;

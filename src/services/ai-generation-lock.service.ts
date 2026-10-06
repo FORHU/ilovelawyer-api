@@ -1,6 +1,6 @@
 import HttpError from "../utils/http-error";
 import CaseAccess from "../utils/case-access";
-import { AiGenerationKind } from "../constants";
+import { AiGenerationKind, HEARTBEAT_INTERVAL_MS } from "../constants";
 import { isJobStale, isUniqueConstraintError } from "../utils/ai-generation-lock.utils";
 import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
 import { emitToCase } from "../lib/socket";
@@ -53,9 +53,9 @@ export default class AiGenerationLockSvc {
     await CaseAccess.loadAccessibleCase(caseId, userId);
     const row = await this.getStatus(caseId, kind);
     // A run the server never finished (it crashed or restarted mid-run) stays IN_PROGRESS, and the
-    // panel polling it would show "updating" forever. Past STALE_AFTER_MS — the same age `begin`
-    // already treats as abandoned — close it out as failed so the panel offers a retry instead.
-    if (row?.status === "IN_PROGRESS" && isJobStale(row.startedAt)) {
+    // panel polling it would show "updating" forever. Once its heartbeat has gone silent — the
+    // same test `begin` uses to reclaim it — close it out as failed instead.
+    if (row?.status === "IN_PROGRESS" && isJobStale(row)) {
       logger.warn("AiGenerationLockSvc: closing a run that never finished", { caseId, kind, startedAt: row.startedAt });
       await this.finish(caseId, kind, "FAILED", "Interrupted: the run stopped before it finished. Try again.");
       return this.getStatus(caseId, kind);
@@ -81,7 +81,7 @@ export default class AiGenerationLockSvc {
     }
 
     const existing = await this.getStatus(subjectId, kind);
-    if (existing?.status === "IN_PROGRESS" && !isJobStale(existing.startedAt)) {
+    if (existing?.status === "IN_PROGRESS" && !isJobStale(existing)) {
       throw new HttpError(`${kind} generation is already in progress`, 409);
     }
     const row = await AiGenerationJobRepo.markInProgress(subjectId, kind);
@@ -133,13 +133,31 @@ export default class AiGenerationLockSvc {
    * out. Calling `run` here instead would throw 409 against the row `begin()` just created.
    */
   static async finishWith<T>(subjectId: string, kind: AiGenerationKind, fn: () => Promise<T>): Promise<T> {
+    const stopHeartbeat = this.startHeartbeat(subjectId, kind);
     try {
       const result = await fn();
+      stopHeartbeat();
       await this.finish(subjectId, kind, "DONE");
       return result;
     } catch (err) {
+      stopHeartbeat();
       await this.finish(subjectId, kind, "FAILED", err instanceof Error ? err.message : String(err));
       throw err;
     }
+  }
+
+  /** Stamps the job's heartbeat now and every HEARTBEAT_INTERVAL_MS until the returned stop is
+   * called, so a run lost to a restart is recognised by its silence (isJobStale) instead of
+   * looking busy for as long as the slowest legitimate run could take. Best-effort: a failed
+   * stamp is logged, never thrown. */
+  private static startHeartbeat(subjectId: string, kind: AiGenerationKind): () => void {
+    const beat = () =>
+      AiGenerationJobRepo.touchHeartbeat(subjectId, kind).catch((err) =>
+        logger.warn("AiGenerationLockSvc: heartbeat failed", { err, subjectId, kind }),
+      );
+    void beat();
+    const timer = setInterval(() => void beat(), HEARTBEAT_INTERVAL_MS);
+    timer.unref?.();
+    return () => clearInterval(timer);
   }
 }

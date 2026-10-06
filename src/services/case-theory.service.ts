@@ -256,16 +256,29 @@ export default class CaseTheorySvc {
     await AiGenerationLockSvc.finishWith(caseId, "caseTheoryPropose", () => CaseTheorySvc.proposeInner(caseId, userId));
   }
 
+  /** The analysis refresh's Theories step (CaseRefreshSvc), holding the same
+   * "caseTheoryPropose" lock as the lawyer's Regenerate. A case with no findings yet is skipped
+   * quietly — the 422 proposeInner throws is for a button click, not a background step. */
+  static async refreshAiDraft(caseId: string, userId: string): Promise<{ skipped: boolean }> {
+    if ((await CaseFindingRepo.list(caseId)).length === 0) return { skipped: true };
+    await AiGenerationLockSvc.run(caseId, "caseTheoryPropose", () => CaseTheorySvc.proposeInner(caseId, userId));
+    return { skipped: false };
+  }
+
   /**
-   * Seeds a DRAFT theory (authorUserId: null — AI-authored, see the plan's Open Decisions:
-   * "private DRAFT until published") from the case's own findings/strategy — not from raw
-   * documents, so this is a synthesis of work already done, not a fresh investigation.
+   * Writes the case's one AI draft theory (authorUserId: null — AI-authored, see the plan's Open
+   * Decisions: "private DRAFT until published") from the case's own findings/strategy — not from
+   * raw documents, so this is a synthesis of work already done, not a fresh investigation.
+   *
+   * One draft per case, updated in place: the newest AI theory is rewritten (same id, so forks'
+   * forkedFromId and an open diff still point at it), and only created when none exists. Lawyer
+   * theories and forks are never touched. Older AI drafts from before this rule are left alone.
    */
   private static async proposeInner(caseId: string, userId: string) {
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const findings = await CaseFindingRepo.list(caseId);
     if (findings.length === 0) {
-      throw new HttpError("No findings yet to propose a theory from — run Refresh analysis first", 422);
+      throw new HttpError("No findings yet to propose a theory from — add documents so the analysis can run first", 422);
     }
 
     const byCategory = new Map<string, string[]>();
@@ -305,18 +318,29 @@ Respond with exactly this fenced block and nothing else:
     const proposal = parseTheoryProposal(result.content);
     if (!proposal) throw new HttpError("Chat Wonder returned no usable theory proposal", 502);
 
-    const theory = await CaseTheoryRepo.create(caseId, { authorUserId: null, title: proposal.title, thesis: proposal.thesis });
+    const existing = await CaseTheoryRepo.findLatestAiDraft(caseId);
+    const theory = existing
+      ? await CaseTheoryRepo.replaceAiDraft(existing.id, caseId, proposal)
+      : await CaseTheoryRepo.create(caseId, { authorUserId: null, title: proposal.title, thesis: proposal.thesis });
+    if (!theory) throw new HttpError("Theory not found", 404);
     await CaseGraphSvc.ensureNode(caseId, "THEORY", theory.id);
-    for (const claim of proposal.claims) {
-      await CaseTheoryRepo.addClaim(theory.id, { statement: claim.statement, stance: claim.stance });
+    if (!existing) {
+      for (const claim of proposal.claims) {
+        await CaseTheoryRepo.addClaim(theory.id, { statement: claim.statement, stance: claim.stance });
+      }
+      for (const assumption of proposal.assumptions) {
+        await CaseTheoryRepo.addAssumption(theory.id, assumption);
+      }
+      for (const openQuestion of proposal.openQuestions) {
+        await CaseTheoryRepo.addOpenQuestion(theory.id, openQuestion);
+      }
     }
-    for (const assumption of proposal.assumptions) {
-      await CaseTheoryRepo.addAssumption(theory.id, assumption);
-    }
-    for (const openQuestion of proposal.openQuestions) {
-      await CaseTheoryRepo.addOpenQuestion(theory.id, openQuestion);
-    }
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.propose", payload: { id: theory.id } });
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId: userId,
+      action: "theory.propose",
+      payload: { id: theory.id, replaced: !!existing },
+    });
     return CaseTheoryRepo.findById(theory.id, caseId);
   }
 }

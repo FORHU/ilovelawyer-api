@@ -91,9 +91,6 @@ export default class EventReminderQueue {
       caseName: event.case?.caseName ?? "",
       notes: event.notes ?? "",
       calendarLink: `${CLIENT_URL[0] ?? ""}/homepage/calendar`,
-      // The dark lockup (light-colored logo) reads correctly against the header's dark band —
-      // the plain "light" variant (dark-colored logo) would disappear against it.
-      logoSrc: `${CLIENT_URL[0] ?? ""}/assets/logo/ilovelawyer-lockup-dark.png`,
     });
     const text = [
       `This is a reminder for your upcoming ${eventType}:`,
