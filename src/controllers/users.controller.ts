@@ -5,7 +5,7 @@ import GoogleCalendarSvc from "../services/google-calendar.service";
 import ProductTourSvc from "../services/product-tour.service";
 import HttpError from "../utils/http-error";
 import { clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
-import { updateMeSchema, changePasswordSchema, connectGoogleCalendarSchema, saveProductTourSchema } from "../validation/users.validation";
+import { updateMeSchema, changePasswordSchema, deleteMeSchema, connectGoogleCalendarSchema, saveProductTourSchema } from "../validation/users.validation";
 import { PRODUCT_TOUR_TRACKS } from "../constants";
 
 export default class UsersCtrl {
@@ -35,7 +35,10 @@ export default class UsersCtrl {
   }
 
   static async deleteMe(req: Request, res: Response) {
-    const user = await UsersSvc.requestDeletion(req.user.userId);
+    const { error, value } = deleteMeSchema.validate({ password: req.body?.password });
+    if (error) throw new HttpError(error.message, 400);
+
+    const user = await UsersSvc.requestDeletion(req.user.userId, value.password);
     // requestDeletion revoked every session; drop this browser's now-dead refresh cookie too.
     clearRefreshTokenCookie(res);
     return res.status(200).json(user);

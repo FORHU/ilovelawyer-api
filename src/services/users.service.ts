@@ -53,11 +53,22 @@ export default class UsersSvc {
    * ACCOUNT_DELETION_GRACE_PERIOD_DAYS and AccountDeletionQueue, which performs the eventual
    * hard delete. Every session is revoked: signing back in is how a user keeps their account
    * (AccountDeletionSvc.restoreOnSignIn), so a session left open would sidestep that. The
-   * controller clears this request's refresh cookie too. */
-  static async requestDeletion(userId: string) {
+   * controller clears this request's refresh cookie too.
+   *
+   * A password account must re-enter its password, same as changePassword — an open session
+   * alone isn't enough to schedule a deletion. Google SSO accounts have no password to check. A
+   * wrong password is a 400, not a 401, so the client doesn't treat it as an expired session. */
+  static async requestDeletion(userId: string, password: string | undefined) {
     const user = await AuthRepo.findById(userId);
     if (!user) throw new HttpError("User not found", 404);
     if (user.deletionRequestedAt) throw new HttpError("Account deletion is already scheduled", 409);
+
+    const credentials = await AuthRepo.findByIdWithPasswordHash(userId);
+    if (credentials?.password && !isGoogleSsoAccount(credentials)) {
+      if (!password) throw new HttpError("Password is required to delete your account", 400);
+      const isValid = await bcrypt.compare(password, credentials.password);
+      if (!isValid) throw new HttpError("Password is incorrect", 400);
+    }
 
     const updated = await AuthRepo.setDeletionRequested(userId, new Date());
     await AuthRepo.deleteSessionsByUserId(userId);
