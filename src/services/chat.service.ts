@@ -1067,11 +1067,16 @@ export default class ChatSvc {
               mindMapContext: mindMapContext || undefined,
               caseDamages,
               onStage,
-              // Only a question a person asked is explained to them: background generations (the
-              // mind map and audio overview triggers) are not turns anyone reads a trace for.
-              trace: generationKind
-                ? undefined
-                : { consultationId, caseId: effectiveCaseId ?? null, organizationId, turnId: parentMessageId, userId: userId ?? null },
+              // A question is traced as "chat"; the mind map and audio overview triggers, which go
+              // through this same path, are traced under their own names.
+              trace: {
+                consultationId,
+                caseId: effectiveCaseId ?? null,
+                organizationId,
+                source: generationKind === "mindMap" ? "mindMap" : generationKind === "audioOverviewScript" ? "audioOverview" : "chat",
+                turnId: parentMessageId,
+                userId: userId ?? null,
+              },
             },
           );
         const result =

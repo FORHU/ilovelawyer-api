@@ -6,6 +6,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import HttpError from "../utils/http-error";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { parseTheoryDiff } from "../utils/theory-parse";
 
 function theoryBlock(label: string, theory: { title: string; thesis: string; claims: { statement: string; stance: string }[]; assumptions: { statement: string }[]; openQuestions: { question: string }[] }): string {
@@ -73,13 +74,15 @@ Respond with exactly this fenced block and nothing else:
 {"sharedClaims": [string], "divergentClaims": [{"claimA": string, "claimB": string, "decidingEvidence": string, "missing": string}]}
 [/THEORY_DIFF]`;
 
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("theoryDiff", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const diff = parseTheoryDiff(result.content);

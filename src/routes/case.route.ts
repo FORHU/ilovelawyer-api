@@ -103,6 +103,7 @@ router.post("/:caseId/access", asyncHandler(CaseTerminalCtrl.grantAccess));
 
 router.get("/:caseId/findings", asyncHandler(CaseTerminalCtrl.listFindings));
 router.post("/:caseId/findings", asyncHandler(CaseTerminalCtrl.createFinding));
+router.post("/:caseId/findings/regenerate", asyncHandler(CaseTerminalCtrl.regenerateFindings));
 router.patch("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.updateFinding));
 router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFinding));
 router.post("/:caseId/findings/:id/jev-check", asyncHandler(CaseTerminalCtrl.jevCheckFinding));

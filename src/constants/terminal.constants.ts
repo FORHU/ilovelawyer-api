@@ -23,7 +23,25 @@ export const PANEL_IDS = [
 
 export type PanelId = (typeof PANEL_IDS)[number];
 
-export const PRESET_VALUES = ["PANE_1", "PANE_2", "PANE_4", "PANE_6"] as const;
+/** Panes that belong together sit next to each other in Columns/Tabs. Mirrors apps/web/lib/terminal/types.ts's PANEL_GROUP —
+ * keep both in sync. Array order = group order on the board. Panes absent here (dates) are hidden and never placed. */
+export const PANEL_GROUPS: readonly (readonly PanelId[])[] = [
+  ["command", "evidence", "procedure", "witnesses", "damages"],
+  ["law", "legalIssues", "decisions"],
+  ["strengths", "weaknesses", "attackStrategy", "defenseStrategy", "redTeam", "theories"],
+  ["chat", "mindMap", "caseReconstruction", "audioOverview", "trace"],
+];
+
+/** Sort key for grouping: group index, then position inside the group. Unlisted panes sort last. */
+export const panelGroupRank = (id: PanelId): number => {
+  const g = PANEL_GROUPS.findIndex((ids) => ids.includes(id));
+  return g === -1 ? 1000 : g * 100 + PANEL_GROUPS[g]!.indexOf(id);
+};
+
+/** Saved layouts below this get their Columns/Tabs panes regrouped once (see regroupLayoutOnce). */
+export const LAYOUT_VERSION = 1;
+
+export const PRESET_VALUES =["PANE_1", "PANE_2", "PANE_4", "PANE_6"] as const;
 export type PresetValue = (typeof PRESET_VALUES)[number];
 
 // "split" was a legacy value never actually referenced anywhere else in this codebase — replaced
@@ -61,6 +79,8 @@ export interface WorkspaceLayout {
   /** Optional — absent on workspaces saved before arrangement modes existed, treated as "columns". */
   arrangement?: ArrangementValue;
   panels: PanelLayout[];
+  /** Absent on layouts saved before pane grouping; see LAYOUT_VERSION. */
+  layoutVersion?: number;
   /** Columns mode: how many columns and their widths as fractions summing to 1. */
   columnCount?: number;
   columnWidths?: number[];

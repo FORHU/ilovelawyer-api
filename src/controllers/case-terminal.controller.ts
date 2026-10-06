@@ -35,6 +35,7 @@ import AnnotationSvc from "../services/annotation.service";
 import CaseGraphViewSvc, { GraphViewType } from "../services/case-graph-view.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import AiGenerationQueue from "../queues/ai-generation.queue";
+import CaseFindingAiSvc from "../services/case-finding-ai.service";
 import { AI_GENERATION_KINDS, AiGenerationKind } from "../constants";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
@@ -58,6 +59,7 @@ import {
   grantAccessSchema,
   listFindingsSchema,
   createFindingSchema,
+  regenerateFindingsSchema,
   updateFindingSchema,
   createWitnessSchema,
   updateWitnessSchema,
@@ -176,6 +178,20 @@ export default class CaseTerminalCtrl {
   /** Queued via AiGenerationQueue (SQS) — refreshes only the Case Strategy panel's pass (plan,
    * to-dos, key dates), so a lawyer whose panel is flagged stale doesn't pay for a full Refresh
    * analysis. Ticked to-dos survive (see planAiProcedureItems). */
+  /** Queued via AiGenerationQueue — one findings panel's Regenerate (Weaknesses or Strengths). Only
+   * that category's AI rows are replaced; the panel follows its own job kind. */
+  static async regenerateFindings(req: Request, res: Response) {
+    const { error, value } = regenerateFindingsSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    const kind = value.category === "WEAKNESS" ? "weaknessRegenerate" : "strengthRegenerate";
+    await CaseFindingAiSvc.beginCategory(caseId, userId, value.category);
+    AiGenerationQueue.enqueue({ kind, caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, kind);
+    return res.status(202).json(status);
+  }
+
   static async refreshStrategy(req: Request, res: Response) {
     const { caseId } = req.params;
     const userId = req.user.userId;

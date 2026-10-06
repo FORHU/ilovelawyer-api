@@ -8,6 +8,7 @@ import AiGenerationLockSvc from "./ai-generation-lock.service";
 import CaseGraphSvc from "./case-graph.service";
 import { getDamagesExtractPromptBuilder } from "../legal/prompt-registry";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun, TraceRun } from "./trace-collector.service";
 import { damageHeadKey, extractDamageHeads, isExcludedOnUkCriminalCase, parseDamageEstimates } from "../utils/damages-extract-parse";
 import { isCriminalCase } from "../utils/case-kind";
 import { quotedFigureOf, vetDamageHeads } from "../utils/damages-jev";
@@ -137,7 +138,9 @@ export default class DamagesExtractSvc {
       documents: promptDocs,
     });
 
-    const result = await DamagesExtractSvc.ask(prompt, tenantCode);
+    // One trace run for the batch's extraction, its price estimates and its vetting round.
+    const trace = newTraceRun("damagesExtract", caseId, userId);
+    const result = await DamagesExtractSvc.ask(prompt, tenantCode, trace);
 
     // Quotes are checked against the full text, not the clipped prompt copy — same as witnesses.
     const proposed = extractDamageHeads(result.content, fullTexts, docs);
@@ -145,7 +148,7 @@ export default class DamagesExtractSvc {
     if (proposed === undefined) throw new HttpError("Chat Wonder returned no [DAMAGES] block", 502);
     // Jev reviews every proposal before anything is saved; a rejected figure goes back to Chat
     // Wonder once for the right one (or is dropped), so nothing questionable reaches the panel.
-    const vetted = await DamagesExtractSvc.vetWithJev(caseId, proposed, { tenantCode, fullTexts, docs, promptDocs });
+    const vetted = await DamagesExtractSvc.vetWithJev(caseId, proposed, { tenantCode, fullTexts, docs, promptDocs, trace });
     // The prompt tells the model a criminal court awards no civil heads; this holds it to that.
     const found = ukCriminal ? vetted.filter((h) => !isExcludedOnUkCriminalCase(h)) : vetted;
 
@@ -163,7 +166,7 @@ export default class DamagesExtractSvc {
         ...unpricedFound.map((h) => ({ title: h.title, description: h.description, quote: h.quote })),
         ...unpricedWaiting.map((e) => ({ title: e.title, description: e.description, quote: e.sourceQuote })),
       ],
-      { tenantCode, caseName: header?.caseName ?? "Untitled case", venue: tenantCode === "UK" ? header?.ukJurisdiction || "England and Wales" : "the Philippines", promptDocs },
+      { tenantCode, caseName: header?.caseName ?? "Untitled case", venue: tenantCode === "UK" ? header?.ukJurisdiction || "England and Wales" : "the Philippines", promptDocs, trace },
     );
     for (const h of unpricedFound) {
       const estimate = estimates.get(damageHeadKey(h.kind, h.title));
@@ -272,12 +275,12 @@ export default class DamagesExtractSvc {
   private static async estimateMissing(
     caseId: string,
     heads: { title: string; description: string | null; quote: string | null }[],
-    ctx: { tenantCode: TenantCode; caseName: string; venue: string; promptDocs: { id: string; name: string; text: string }[] },
+    ctx: { tenantCode: TenantCode; caseName: string; venue: string; promptDocs: { id: string; name: string; text: string }[]; trace?: TraceRun },
   ): Promise<Map<string, { amount: number; basis: string }>> {
     if (heads.length === 0) return new Map();
     try {
       const prompt = buildDamagesEstimatePrompt({ caseName: ctx.caseName, venue: ctx.venue, heads, documents: ctx.promptDocs });
-      const estimates = parseDamageEstimates((await DamagesExtractSvc.ask(prompt, ctx.tenantCode)).content);
+      const estimates = parseDamageEstimates((await DamagesExtractSvc.ask(prompt, ctx.tenantCode, ctx.trace)).content);
       logger.info("Damages extract: estimates", { caseId, asked: heads.length, got: estimates.size });
       return estimates;
     } catch (err) {
@@ -292,11 +295,12 @@ export default class DamagesExtractSvc {
    * resolveOnAnswerEnd skips the post-answer extras (timeline, map, reasoning) this call never uses,
    * and skipLegalVerify skips the quotation/contradiction audit, which would only add a rewrite
    * round to a [DAMAGES] block. Retried once on a fresh session. */
-  private static async ask(prompt: string, tenantCode: TenantCode): Promise<{ content: string }> {
+  private static async ask(prompt: string, tenantCode: TenantCode, trace?: TraceRun): Promise<{ content: string }> {
     const call = (sessionId: string) =>
       streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, {
         resolveOnAnswerEnd: true,
         skipLegalVerify: true,
+        trace,
       });
     try {
       return await call(await getChatWonderSessionId());
@@ -323,6 +327,8 @@ export default class DamagesExtractSvc {
       docs: CaseDoc[];
       /** The same documents as the prompt shows them: handle, name, clipped text. */
       promptDocs: { id: string; name: string; text: string }[];
+      /** The batch's trace run, so vetting adds to the same entry as the extraction. */
+      trace?: TraceRun;
     },
   ): Promise<ExtractedDamageHead[]> {
     const first = await vetDamageHeads(proposed);
@@ -344,7 +350,7 @@ export default class DamagesExtractSvc {
         })),
         documents: ctx.promptDocs.filter((d) => citedHandles.has(d.id)),
       });
-      const reply = await DamagesExtractSvc.ask(prompt, ctx.tenantCode);
+      const reply = await DamagesExtractSvc.ask(prompt, ctx.tenantCode, ctx.trace);
       corrected = (extractDamageHeads(reply.content, ctx.fullTexts, ctx.docs) ?? []).filter((h) =>
         rejectedKeys.has(damageHeadKey(h.kind, h.title)),
       );

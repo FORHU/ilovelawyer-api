@@ -509,13 +509,21 @@ model MessageResearchSteps {
 // shared case several users' turns share one. `turnId` is the user Message that asked (the same
 // id sent to chat-wonder as trace_turn_id); `userId` is who asked, nullable so removing a user
 // keeps the log. The name shown beside an event is joined from User at read time, never stored.
-// `seq` is the primary key on purpose: a global autoincrement is race-free across concurrent
-// collectors and doubles as the "everything after this" cursor for resuming a live stream.
+// `seq` is a separate autoincrement column: race-free ordering across concurrent collectors, and
+// the "everything after this" cursor for resuming a poll. Order by it, never by id or createdAt
+// (createdAt is the event's own timestamp, so two events can share one).
 model ConsultationTraceEvent {
-  seq            Int      @id @default(autoincrement())
-  consultationId String
+  id             String   @id @default(uuid())
+  // Insertion order, race-free across concurrent collectors, and the "everything after this" cursor
+  // the pane polls with. Not the primary key, so ids stay uuids like every other model.
+  seq            Int      @default(autoincrement())
+  // Null for a run that belongs to a pane (witness scoring, case reconstruction...) and not to a chat.
+  consultationId String?
   caseId         String?
-  organizationId String
+  organizationId String?
+  // What produced this run: "chat" for a question, otherwise the pane's generation (TRACE_SOURCES in
+  // trace.constants.ts). Runs are numbered per source ("Witness scoring 2"), and the pane filters by it.
+  source         String   @default("chat")
   turnId         String
   userId         String?
   // The chat-wonder session that emitted it. Informational — it changes within one consultation.
@@ -524,12 +532,14 @@ model ConsultationTraceEvent {
   summary        String   @db.Text
   createdAt      DateTime @default(now())
 
-  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  consultation Consultation? @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  case         Case?         @relation(fields: [caseId], references: [id], onDelete: Cascade)
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([consultationId, seq])
   @@index([caseId, turnId, seq])
   @@index([caseId, createdAt])
+  @@index([caseId, source])
   @@index([userId])
 }
 
@@ -760,8 +770,17 @@ enum CaseStatus {
   ARCHIVED
 }
 
+// Which side the lawyer acts for, in the findings prompt's burden terms: CLAIMANT brought the case
+// (claimant, applicant, appellant, the prosecution), RESPONDENT defends it (respondent, defendant,
+// the accused).
+enum ClientSide {
+  CLAIMANT
+  RESPONDENT
+}
+
 model Case {
   id                    String     @id @default(uuid())
+  traceEvents           ConsultationTraceEvent[]
   userId                String
   organizationId        String?
   caseName              String
@@ -793,6 +812,10 @@ model Case {
   // generated with. Null for cases whose findings predate the stamp. Opening the Terminal on an
   // older one queues a findings-only regeneration (CaseFindingAiSvc.scheduleIfOutdated).
   findingsFormatVersion Int?
+  // Which side the lawyer acts for — "this case" in the findings prompt means this side's case.
+  // Null when the lawyer hasn't said; the prompt then keeps its claimant framing. Changing it
+  // clears findingsFormatVersion so the findings regenerate from the new side (CaseSvc.update).
+  clientSide            ClientSide?
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
 
@@ -1499,7 +1522,7 @@ model TerminalWorkspace {
 // A named multi-screen workspace template (which panel lives on which physical screen, and that
 // screen's arrangement mode) — see apps/web/lib/terminal/screen-presets.ts's ScreenPresetDef,
 // which this mirrors field-for-field via `screens`. `userId: null` marks a system preset, global
-// to every user and only ever written by the seeder (prisma/seeders/screen-preset.seeder.ts);
+// to every user and only ever written by the seeder (prisma/seeders/screen-preset-grouped.seeder.ts);
 // otherwise it's a lawyer's own saved preset, cascade-deleted with their account.
 model ScreenPreset {
   id             String   @id @default(uuid())
@@ -1861,6 +1884,9 @@ model CaseFinding {
   modelTag     FindingTag?
   modelImpact  Int?
   jevCheckedAt DateTime?
+  // When a lawyer last changed an AI row's label, detail or tag. A regeneration
+  // (replaceAiFindings) keeps such rows instead of replacing them. Null for untouched rows.
+  lawyerEditedAt DateTime?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 

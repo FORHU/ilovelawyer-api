@@ -148,8 +148,13 @@ export const createAuthoritySchema = Joi.object({
   findingId: Joi.string().allow(null).optional(),
 });
 
+// Same convention as updateCitationSchema below: a field left out is kept, "" or null clears it.
+// The title can't be emptied — it's what the row is.
 export const updateAuthoritySchema = Joi.object({
   stance: authorityStance.optional(),
+  title: Joi.string().trim().optional(),
+  subtitle: Joi.string().trim().allow(null, "").optional(),
+  citation: Joi.string().trim().allow(null, "").optional(),
   rationale: Joi.string().trim().allow(null, "").optional(),
   findingId: Joi.string().allow(null).optional(),
 }).min(1);
@@ -186,7 +191,10 @@ export const createProcedureItemSchema = Joi.object({
   sourceLabel: Joi.string().max(200).optional().allow(null, ""),
   // The item it was sent from, so the to-do can tick itself once that item is fixed
   // (utils/procedure-link.ts). sourceKey is a witness need's key and only applies to WITNESS_NEED.
-  sourceKind: Joi.string().valid(...PROCEDURE_SOURCE_KINDS).optional(),
+  // SCENE to-dos are only raised by scene generation (CaseReconstructionSvc), never sent from a panel.
+  sourceKind: Joi.string()
+    .valid(...PROCEDURE_SOURCE_KINDS.filter((kind) => kind !== "SCENE"))
+    .optional(),
   sourceId: Joi.string().max(64).when("sourceKind", { is: Joi.exist(), then: Joi.required(), otherwise: Joi.forbidden() }),
   sourceKey: Joi.string()
     .max(64)
@@ -202,6 +210,10 @@ export const updateProcedureItemSchema = Joi.object({
 export const grantAccessSchema = Joi.object({
   userId: Joi.string().required(),
   permission: Joi.string().valid("VIEW", "EDIT", "ADMIN").required(),
+});
+
+export const regenerateFindingsSchema = Joi.object({
+  category: Joi.string().valid("WEAKNESS", "STRENGTH").required(),
 });
 
 export const listFindingsSchema = Joi.object({ category: Joi.string().valid(...FINDING_CATEGORIES).optional() });

@@ -3,6 +3,7 @@ import { docsForPrompt, excerptsWithHandles } from "../utils/case-document-handl
 import DocumentRepo from "../repositories/document.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getCaseStrategyPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseStrategy, attachKeyDateDocuments } from "../utils/case-strategy-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
@@ -77,12 +78,14 @@ ${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
 `;
 
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseStrategy", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     const tCallStart = Date.now();
     let usedSessionRetry = false;
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch (err) {
       logger.warn("Chat Wonder case strategy: first call failed, retrying with a new session", {
         err,
@@ -91,7 +94,7 @@ ${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
       });
       usedSessionRetry = true;
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
     const callMs = Date.now() - tCallStart;
     logger.info("Chat Wonder case strategy: main call done", { caseId, durationMs: callMs, usedSessionRetry, packMs });
@@ -110,7 +113,7 @@ ${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
       const tRetryStart = Date.now();
       try {
         const retrySessionId = await getChatWonderSessionId();
-        const retryResult = await streamChatWonderMessage(retrySessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+        const retryResult = await streamChatWonderMessage(retrySessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
         const retryParsed = extractCaseStrategy(retryResult.content);
         if (retryParsed?.dates !== undefined) parsed = { ...parsed, dates: retryParsed.dates };
       } catch (err) {

@@ -1,15 +1,34 @@
-import { CHAT_WONDER_API_KEY, CHAT_WONDER_API_URL } from "../config";
+import { CHAT_WONDER_API_URL, TRACE_STREAM_API_KEY } from "../config";
 import TraceRepo from "../repositories/trace.repository";
+import { randomUUID } from "crypto";
+import { TraceSource } from "../constants/trace.constants";
 import logger from "../utils/logger";
 import { SseParser, parseStreamPayload } from "../utils/trace-stream.utils";
 
-/** Who and what a turn's trace belongs to. `turnId` is the user Message that asked. */
+/** Who and what a turn's trace belongs to. `turnId` is the user Message that asked (a chat turn) or
+ * a generated id (a pane's run). */
 export interface TraceTurn {
-  consultationId: string;
+  /** Null for a run that belongs to a pane, not a chat. */
+  consultationId: string | null;
   caseId: string | null;
-  organizationId: string;
+  organizationId: string | null;
+  source: TraceSource;
   turnId: string;
   userId: string | null;
+}
+
+/** One AI generation a pane runs — witness scoring, case reconstruction, ... — to be traced. Made
+ * once per logical run and passed to every attempt of it, so a retry on a fresh session adds to the
+ * same entry in the pane instead of starting a second one. */
+export interface TraceRun {
+  source: TraceSource;
+  caseId: string;
+  userId: string | null;
+  turnId: string;
+}
+
+export function newTraceRun(source: TraceSource, caseId: string, userId?: string | null): TraceRun {
+  return { source, caseId, userId: userId ?? null, turnId: randomUUID() };
 }
 
 export interface TraceCollector {
@@ -40,10 +59,27 @@ const NOOP: TraceCollector = { rebind: async () => {}, stop: async () => {} };
  */
 export default class TraceCollectorSvc {
   static async start(turn: TraceTurn, sessionId: string): Promise<TraceCollector> {
-    if (!CHAT_WONDER_API_URL || !CHAT_WONDER_API_KEY) return NOOP;
+    if (!CHAT_WONDER_API_URL || !TRACE_STREAM_API_KEY) return NOOP;
     const collector = new ActiveCollector(turn);
     await collector.open(sessionId);
     return collector;
+  }
+
+  /** Start tracing one attempt of a pane's run. Looks the case's organization up itself; like
+   * start(), it never throws — a failure here just means this run goes untraced. */
+  static async startRun(run: TraceRun, sessionId: string): Promise<TraceCollector> {
+    try {
+      // A run with no real case has nowhere to be recorded (rows are tied to their case).
+      const organizationId = run.caseId ? await TraceRepo.caseOrganizationId(run.caseId) : undefined;
+      if (organizationId === undefined) return NOOP;
+      return await TraceCollectorSvc.start(
+        { consultationId: null, caseId: run.caseId, organizationId, source: run.source, turnId: run.turnId, userId: run.userId },
+        sessionId,
+      );
+    } catch (err) {
+      logger.warn("Trace: could not start tracing a run", { err, source: run.source, caseId: run.caseId });
+      return NOOP;
+    }
   }
 }
 
@@ -90,7 +126,7 @@ class ActiveCollector implements TraceCollector {
   private async read(sessionId: string, signal: AbortSignal, markConnected: () => void) {
     try {
       const res = await fetch(`${CHAT_WONDER_API_URL}/trace-stream/${encodeURIComponent(sessionId)}`, {
-        headers: { "x-api-key": CHAT_WONDER_API_KEY, Accept: "text/event-stream" },
+        headers: { "x-api-key": TRACE_STREAM_API_KEY, Accept: "text/event-stream" },
         signal,
       });
       if (!res.ok || !res.body) {
@@ -121,6 +157,7 @@ class ActiveCollector implements TraceCollector {
           consultationId: this.turn.consultationId,
           caseId: this.turn.caseId,
           organizationId: this.turn.organizationId,
+          source: this.turn.source,
           turnId: this.turn.turnId,
           userId: this.turn.userId,
           sessionId,

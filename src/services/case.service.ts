@@ -35,8 +35,12 @@ export default class CaseSvc {
   }
 
   static async update(id: string, organizationId: string, data: CaseData) {
+    const before = data.clientSide !== undefined ? await CaseRepo.findById(id, organizationId) : null;
     const updated = await CaseRepo.update(id, organizationId, data);
     if (!updated) throw new HttpError("Case not found", 404);
+    // The findings were written for the other side — the next Terminal load regenerates them
+    // (CaseFindingAiSvc.scheduleIfOutdated).
+    if (before && before.clientSide !== data.clientSide) await CaseRepo.clearFindingsFormatVersion(id);
     return CaseRepo.findById(id, organizationId);
   }
 

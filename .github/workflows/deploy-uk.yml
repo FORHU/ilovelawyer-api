@@ -210,6 +210,7 @@ jobs:
           CHAT_WONDER_API_URL: ${{ vars.UK_CHAT_WONDER_API_URL }}
           CHAT_WONDER_WS_URL: ${{ vars.UK_CHAT_WONDER_WS_URL }}
           CHAT_WONDER_API_KEY: ${{ secrets.CHAT_WONDER_API_KEY }}
+          TRACE_STREAM_API_KEY: ${{ secrets.TRACE_STREAM_API_KEY }}
           CLOUDFRONT_URL: ${{ vars.UK_CLOUDFRONT_URL }}
           FILE_TOKEN_SECRET: ${{ secrets.FILE_TOKEN_SECRET }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -266,6 +267,7 @@ jobs:
           CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
           CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}
           CHAT_WONDER_API_KEY=${CHAT_WONDER_API_KEY}
+          TRACE_STREAM_API_KEY=${TRACE_STREAM_API_KEY}
           AWS_S3_BUCKET=ilovelawyer-dev
           DOCUMENT_EXTRACTION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/document-extraction
           CITATION_EXTRACTION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/citation-extraction

@@ -11,6 +11,7 @@ import AiGenerationLockSvc from "./ai-generation-lock.service";
 import { documentFileUrl } from "./document.service";
 import { buildCitationGroundsPrompt } from "../constants/citation-grounds.constants";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { extractCitationGrounds } from "../utils/citation-grounds-parse";
 import { checkCitationGroundWithJev, CitationGroundJevInput, isCitationGroundJevEnabled } from "../utils/citation-ground-jev";
 import { isUniqueConstraintError } from "../utils/ai-generation-lock.utils";
@@ -124,13 +125,15 @@ export default class CitationGroundSvc {
     });
 
     // Streaming WS path, not the blocking REST call — same reason as RedTeamSvc (Cloudflare 524).
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("citationGround", caseId, userId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
     const proposed = extractCitationGrounds(result.content, new Set(checks.map((c) => c.id)), new Set(claims.map((c) => c.id)));
     if (proposed === undefined) throw new HttpError("Chat Wonder returned no [GROUNDS] block", 502);

@@ -7,6 +7,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import CaseGraphSvc from "./case-graph.service";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import { findingCloseReason } from "../utils/procedure-link";
+import { isLawyerEdit } from "../utils/finding-lawyer-edit";
 
 function assertTagFits(category: FindingCategory, tag: FindingTag | null | undefined) {
   if (tag && !isTagAllowed(category, tag)) throw new HttpError(`${tag} is not a valid tag for ${category}`, 400);
@@ -37,7 +38,11 @@ export default class CaseFindingSvc {
     const existing = await CaseFindingRepo.find(id, caseId);
     if (!existing) throw new HttpError("Finding not found", 404);
     assertTagFits(existing.category, data.tag);
-    const row = await CaseFindingRepo.update(id, caseId, normalize(data));
+    const changes = normalize(data);
+    const row = await CaseFindingRepo.update(id, caseId, {
+      ...changes,
+      ...(isLawyerEdit(existing, changes) ? { lawyerEditedAt: new Date() } : {}),
+    });
     if (!row) throw new HttpError("Finding not found", 404);
     await CaseGraphSvc.markStale(caseId, "FINDING", id, "Finding updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.update", payload: { id } });

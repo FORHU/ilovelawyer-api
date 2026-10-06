@@ -6,6 +6,7 @@ const UNSUPPORTED_FILE_TYPE_MESSAGE = `Unsupported file type. Supported formats:
 const ACTION_TYPES = ["Civil Litigation", "Criminal Proceeding", "Labor Dispute", "Commercial Arbitration"];
 const PARTY_DESIGNATIONS = ["Petitioner / Plaintiff", "Respondent / Defendant", "Intervenor / Third-Party"];
 export const UK_JURISDICTIONS = ["England and Wales", "Scotland", "Northern Ireland"];
+export const CLIENT_SIDES = ["CLAIMANT", "RESPONDENT"];
 
 export const partySchema = Joi.object({
   name: Joi.string().required(),
@@ -25,6 +26,10 @@ export const createCaseSchema = Joi.object({
   jurisdiction: Joi.string().allow("").optional(),
   ukJurisdiction: Joi.string()
     .valid(...UK_JURISDICTIONS)
+    .optional(),
+  clientSide: Joi.string()
+    .valid(...CLIENT_SIDES)
+    .allow(null)
     .optional(),
   notes: Joi.string().allow("").optional(),
   parties: Joi.array().items(partySchema).optional(),
@@ -46,6 +51,10 @@ export const updateCaseSchema = Joi.object({
   jurisdiction: Joi.string().allow("").optional(),
   ukJurisdiction: Joi.string()
     .valid(...UK_JURISDICTIONS)
+    .optional(),
+  clientSide: Joi.string()
+    .valid(...CLIENT_SIDES)
+    .allow(null)
     .optional(),
   notes: Joi.string().allow("").optional(),
   parties: Joi.array().items(partySchema).optional(),

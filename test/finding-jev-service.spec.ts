@@ -179,6 +179,17 @@ describe("FindingJevSvc.verifyParsed", () => {
     expect(byLabel.failed.impact).to.equal(undefined);
   });
 
+  it("adds the passages matching the sub-line to those matching the label, without repeats", async () => {
+    (embedding as any).embedText = async (text: string) => (text.startsWith("Rev. C") ? [0.9] : [0.1]);
+    (DocumentChunkRepo as any).findRelevantByDocument = async (_doc: string, vector: number[]) =>
+      vector[0] === 0.9 ? ["c-rev", "c1"] : ["c1"];
+    (DocumentChunkRepo as any).findTextsByIds = async (ids: string[]) =>
+      ids.map((id) => ({ id, caseDocumentId: "doc-payroll", chunkText: id === "c-rev" ? "Rev. C is the controlled revision" : "Present 4–8 August", chunkIndex: 0, pageNumber: 2 }));
+    const withDetail = await FindingJevSvc.sourcePassages("case-1", "750 kg drawing", "Payroll register", "Rev. C is controlled");
+    expect(withDetail).to.deep.equal(["[p. 2] Present 4–8 August", "[p. 2] Rev. C is the controlled revision"]);
+    expect(await FindingJevSvc.sourcePassages("case-1", "750 kg drawing", "Payroll register", null)).to.deep.equal(["[p. 2] Present 4–8 August"]);
+  });
+
   it("reads the cited document's passages for strengths and orders them by the work they do", async () => {
     process.env.USE_JEV_STRENGTHS = "true";
     replies.light = strengthAnswers(1);

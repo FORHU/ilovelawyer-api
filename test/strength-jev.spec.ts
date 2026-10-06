@@ -29,6 +29,10 @@ describe("tagFromCheck (strengths)", () => {
     expect(tagFromCheck({ ...strong, weight: 1 / 3 })).to.equal("MODERATE");
     expect(tagFromCheck({ ...strong, rebuttal: "ALREADY_REBUTTED" })).to.equal("MODERATE");
   });
+  it("is STRONG once weight rounds to level 2, MODERATE just below it", () => {
+    expect(tagFromCheck({ ...strong, weight: 0.55 })).to.equal("STRONG");
+    expect(tagFromCheck({ ...strong, weight: 0.48 })).to.equal("MODERATE");
+  });
 });
 
 describe("impactFromCheck / compareByWeight (strengths)", () => {

@@ -1,9 +1,12 @@
 import prisma from "../lib/prisma";
 
 export interface TraceEventInsert {
-  consultationId: string;
+  /** Null for a run that belongs to a pane, not a chat. */
+  consultationId: string | null;
   caseId: string | null;
-  organizationId: string;
+  organizationId: string | null;
+  /** What produced the run — see TRACE_SOURCES. */
+  source: string;
   turnId: string;
   userId: string | null;
   sessionId: string;
@@ -14,6 +17,7 @@ export interface TraceEventInsert {
 
 export interface TurnHeader {
   turnId: string;
+  source: string;
   userId: string | null;
   firstSeq: number;
   startedAt: Date;
@@ -34,7 +38,7 @@ export default class TraceRepo {
    * consultations, since on a shared case several members each have their own. */
   static async listTurnHeaders(caseId: string): Promise<TurnHeader[]> {
     const groups = await prisma.consultationTraceEvent.groupBy({
-      by: ["turnId", "userId"],
+      by: ["turnId", "userId", "source"],
       where: { caseId },
       _min: { seq: true, createdAt: true },
       _count: { _all: true },
@@ -43,6 +47,7 @@ export default class TraceRepo {
     });
     return groups.map((g) => ({
       turnId: g.turnId,
+      source: g.source,
       userId: g.userId,
       firstSeq: g._min.seq!,
       startedAt: g._min.createdAt!,
@@ -69,6 +74,13 @@ export default class TraceRepo {
       select: { id: true, content: true },
     });
     return new Map(rows.map((r) => [r.id, r.content]));
+  }
+
+  /** The organization a case belongs to, for tagging a pane run's trace: null for a personal case,
+   * undefined when there is no such case (nothing to attach a trace to). */
+  static async caseOrganizationId(caseId: string): Promise<string | null | undefined> {
+    const row = await prisma.case.findUnique({ where: { id: caseId }, select: { organizationId: true } });
+    return row ? row.organizationId : undefined;
   }
 
   static async namesByUserId(userIds: string[]) {
