@@ -114,13 +114,16 @@ export default class CaseTheorySvc {
     return CaseTheoryRepo.findById(forked.id, caseId);
   }
 
-  /** Only a fork can be deleted — it's a working copy of someone else's (or the AI's) theory, so
-   * throwing it away loses nothing that isn't still in the source. An original theory is
-   * retired instead, which keeps its history visible to the other lawyers on the case. */
+  /** The author can delete any theory they wrote (original or fork). An AI-proposed theory
+   * (authorUserId: null) has no author, so anyone who can edit the case may dismiss it. Another
+   * lawyer's theory stays protected — that's theirs to retire or delete. Forks of a deleted
+   * theory survive; forkedFromId has no FK, so they just lose their parent link in the UI. */
   static async remove(caseId: string, theoryId: string, userId: string) {
-    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
-    if (!theory.forkedFromId) {
-      throw new HttpError("Only a forked theory can be deleted — retire this one instead", 400);
+    await CaseAccess.assertCanEdit(caseId, userId);
+    const theory = await CaseTheoryRepo.findById(theoryId, caseId);
+    if (!theory) throw new HttpError("Theory not found", 404);
+    if (theory.authorUserId !== null && theory.authorUserId !== userId) {
+      throw new HttpError("Only this theory's author can delete it", 403);
     }
     const deleted = await CaseTheoryRepo.deleteWithDependents(theoryId, caseId);
     if (!deleted) throw new HttpError("Theory not found", 404);
