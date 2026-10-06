@@ -32,6 +32,7 @@ export default class LawCtrl {
       q: value.q,
       limit: value.limit,
       courts: value.court,
+      cursor: value.cursor,
     });
     return res.status(200).json(result);
   }

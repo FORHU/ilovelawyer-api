@@ -124,12 +124,17 @@ async function postJurisPh(url: string, body: unknown, label: string): Promise<u
   return data;
 }
 
+/** juris.ph rejects a search `limit` above this ("invalid_limit") and has no offset/page
+ * parameter, so this is the most results a single PH search can ever return. */
+export const JURIS_PH_SEARCH_MAX_LIMIT = 10;
+
 export async function searchJurisPh(
   dataset: JurisPhDataset,
   q: string,
   limit: number,
 ): Promise<JurisPhSearchResponse> {
-  const url = `${searchUrl()}?dataset=${encodeURIComponent(dataset)}&q=${encodeURIComponent(q)}&limit=${limit}`;
+  const capped = Math.min(limit, JURIS_PH_SEARCH_MAX_LIMIT);
+  const url = `${searchUrl()}?dataset=${encodeURIComponent(dataset)}&q=${encodeURIComponent(q)}&limit=${capped}`;
 
   let res: Response;
   try {

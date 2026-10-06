@@ -75,30 +75,18 @@ export class UkLawSourceProvider implements LawSourceProvider {
 
   // ── search ────────────────────────────────────────────────────────────────
 
-  async search(params: { category: LawCategory; q: string; limit: number; courts?: string[] }): Promise<SearchResult> {
+  async search(params: {
+    category: LawCategory;
+    q: string;
+    limit: number;
+    courts?: string[];
+    cursor?: string;
+  }): Promise<SearchResult> {
     const { category, q, limit } = params;
     const wire = UK_WIRE_BY_CATEGORY[category];
 
     if (category === "JURISPRUDENCE") {
-      const courts = params.courts ?? [];
-      const localRows = await LawRepo.localSearchUk({ category, q, limit, courts });
-      if (localRows.length > 0) {
-        return this.toResult(wire, q, limit, localRows, "cache");
-      }
-      const tenantId = await LawRepo.resolveUkTenantId();
-      let created: Law[];
-      try {
-        created = await this.searchCaseLaw(q, limit, tenantId, courts);
-      } catch (err) {
-        if (err instanceof UkLegalMcpUnavailableError) {
-          throw new HttpError(
-            "The UK legal source is unavailable and no matching laws are stored locally",
-            502,
-          );
-        }
-        throw err;
-      }
-      return this.toResult(wire, q, limit, created, "uk-legal-mcp");
+      return this.searchCaseLaw(wire, q, limit, params.courts ?? [], decodeSearchCursor(params.cursor));
     }
 
     // Legislation: a recognised acronym/short form ("HRA") is expanded to the Act's full
@@ -134,23 +122,98 @@ export class UkLawSourceProvider implements LawSourceProvider {
     return this.toResult(wire, q, limit, created, "uk-legal-mcp");
   }
 
-  /** With a court filter, TNA takes one `court=` per request (as in browse), so each selected
-   * court is searched in parallel and the per-court relevance lists are interleaved. Hits are
-   * re-checked against the selection by slug in case upstream ever ignores the parameter. */
-  private async searchCaseLaw(q: string, limit: number, tenantId: string, courts: string[] = []): Promise<Law[]> {
-    const perCourt = courts.length
-      ? await Promise.all(courts.map((court) => caseLawSearch({ query: q, court, limit })))
-      : [await caseLawSearch({ query: q, limit })];
-    const lists = perCourt.map(({ results }) =>
-      courts.length ? results.filter((hit) => courts.some((c) => hit.uri.replace(/^\/+/, "").startsWith(`${c}/`))) : results,
-    );
-    const hits: UkCaseLawSearchHit[] = [];
-    for (let i = 0; hits.length < limit && lists.some((l) => i < l.length); i++) {
-      for (const list of lists) if (i < list.length && hits.length < limit) hits.push(list[i]);
+  /**
+   * Case-law search is paged the way browse is: page N of a (query, courts) search is fetched
+   * from TNA once, written through, and cached as a `LawBrowsePage` (same TTL as browse), so
+   * paging back and forth — or re-running the search — is served from the DB with no duplicates
+   * or gaps between pages. Only when the MCP is unreachable does page 1 fall back to whatever
+   * stored rows match the text (with no further pages), else 502.
+   *
+   * With a court filter, TNA takes one `court=` per request, so each selected court is searched
+   * in parallel and the per-court pages interleaved. Each court's page size is `limit` split
+   * across the courts, so a page never holds more than it can show and nothing is skipped.
+   */
+  private async searchCaseLaw(
+    wire: UkCategoryWire,
+    q: string,
+    limit: number,
+    courts: string[],
+    page: number,
+  ): Promise<SearchResult> {
+    const sources: (string | undefined)[] = courts.length ? courts : [undefined];
+    const perSourceLimit = Math.ceil(limit / sources.length);
+
+    let pages: { rows: Law[]; hasMore: boolean; cached: boolean }[];
+    try {
+      pages = await Promise.all(sources.map((court) => this.fetchSearchPage(q, court, page, perSourceLimit)));
+    } catch (err) {
+      if (!(err instanceof UkLegalMcpUnavailableError)) throw err;
+      const localRows = page === 1 ? await LawRepo.localSearchUk({ category: "JURISPRUDENCE", q, limit, courts }) : [];
+      if (localRows.length === 0) {
+        throw new HttpError("The UK legal source is unavailable and no matching laws are stored locally", 502);
+      }
+      return { ...this.toResult(wire, q, limit, localRows, "cache"), cursor: null };
     }
-    return this.writeThrough(
-      hits.map((hit) => caseLawHitToCreateInput(hit, tenantId)),
+
+    const rows: Law[] = [];
+    for (let i = 0; pages.some((p) => i < p.rows.length); i++) {
+      for (const p of pages) if (i < p.rows.length) rows.push(p.rows[i]);
+    }
+    const hasMore = pages.some((p) => p.hasMore);
+    return {
+      ...this.toResult(wire, q, limit, rows, pages.every((p) => p.cached) ? "cache" : "uk-legal-mcp"),
+      cursor: hasMore ? encodePage(page + 1) : null,
+    };
+  }
+
+  /** One court's (or, with `court` undefined, every court's) page of a case-law search,
+   * DB-cached like browse's `fetchCourtPage`. A stale cached page still beats a 502 when the MCP
+   * is down. Throws UkLegalMcpUnavailableError only when there's no cached page at all. */
+  private async fetchSearchPage(
+    q: string,
+    court: string | undefined,
+    page: number,
+    limit: number,
+  ): Promise<{ rows: Law[]; hasMore: boolean; cached: boolean }> {
+    const filterKey = `t=UK|d=uk-case-law|q=${q.trim().toLowerCase()}|court=${court ?? ""}|l=${limit}`;
+    const pageKey = browsePageKey(filterKey, String(page));
+
+    const cached = await LawRepo.findBrowsePage(pageKey);
+    // Unlike browse, every search page goes stale: a newly published judgment can land anywhere
+    // in a relevance ranking, not just on page 1.
+    if (cached && Date.now() - cached.fetchedAt.getTime() < BROWSE_CACHE_TTL_MS) {
+      return { rows: await this.rowsFor(cached.jurisIds), hasMore: cached.hasMore, cached: true };
+    }
+
+    let hits: Awaited<ReturnType<typeof caseLawSearch>>;
+    try {
+      hits = await caseLawSearch({ query: q, court, page, limit });
+    } catch (err) {
+      if (err instanceof UkLegalMcpUnavailableError && cached) {
+        return { rows: await this.rowsFor(cached.jurisIds), hasMore: cached.hasMore, cached: true };
+      }
+      throw err;
+    }
+
+    const tenantId = await LawRepo.resolveUkTenantId();
+    const rows = await this.writeThrough(
+      hits.results.filter((hit) => inCourt(hit, court)).map((hit) => caseLawHitToCreateInput(hit, tenantId)),
     );
+    await LawRepo.saveBrowsePage({
+      pageKey,
+      filterKey,
+      isFirstPage: page === 1,
+      jurisIds: rows.map((r) => r.jurisSourceId),
+      hasMore: hits.has_more,
+      nextCursor: hits.has_more ? encodePage(page + 1) : null,
+    });
+    return { rows, hasMore: hits.has_more, cached: false };
+  }
+
+  private async rowsFor(jurisIds: string[]): Promise<Law[]> {
+    const rows = await LawRepo.findByJurisSourceIds(jurisIds);
+    const byId = new Map(rows.map((r) => [r.jurisSourceId, r]));
+    return jurisIds.map((id) => byId.get(id)).filter((r): r is Law => !!r);
   }
 
   private async searchLegislation(plan: UkLegislationPlan, limit: number, tenantId: string): Promise<Law[]> {
@@ -557,6 +620,27 @@ function compareDecisionDateDesc(a: string | null, b: string | null): number {
 // no longer reads it back, it tracks per-source progress itself via BrowseCursorState).
 function encodePage(page: number): string {
   return Buffer.from(JSON.stringify({ page })).toString("base64url");
+}
+
+/** A search cursor is the same `{page}` token as `encodePage`; absent means page 1. */
+function decodeSearchCursor(raw: string | undefined): number {
+  if (!raw) return 1;
+  try {
+    const { page } = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as { page?: unknown };
+    if (typeof page === "number" && Number.isInteger(page) && page >= 1) return page;
+  } catch {
+    // fall through to the 400 below
+  }
+  throw new HttpError("Invalid cursor", 400);
+}
+
+/** Re-checks a court-filtered hit in case upstream ever ignores `court=`. Only slug-shaped uris
+ * ("ewca/civ/2024/1") can be checked: TNA's newer judgments use opaque ids ("tna.c36t47w7") that
+ * carry no court, and those are trusted to the upstream filter rather than dropped. */
+function inCourt(hit: UkCaseLawSearchHit, court: string | undefined): boolean {
+  if (!court) return true;
+  const uri = hit.uri.replace(/^\/+/, "");
+  return !uri.includes("/") || uri.startsWith(`${court}/`);
 }
 
 function browsePageKey(filterKey: string, cursorRaw: string): string {

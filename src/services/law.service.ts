@@ -95,6 +95,9 @@ export interface SearchResult {
      * recognised as a document type we don't index (PH EO/PD/AO/MO) and nothing was searched. */
     source: string;
   };
+  /** Opaque token for the next page of this search, or null/absent when there is none (PH
+   * search never pages — juris.ph has no search offset; see JURIS_PH_SEARCH_MAX_LIMIT). */
+  cursor?: string | null;
   notice: string;
 }
 

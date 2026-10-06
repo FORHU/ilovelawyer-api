@@ -45,8 +45,15 @@ export interface LawSourceProvider {
   parseCategory(wire: string): LawCategory;
 
   /** `courts` (UK case law only, same slugs as `LawFacets.courts`) narrows the search to those
-   * courts; empty/absent means all courts. Other providers/categories ignore it. */
-  search(params: { category: LawCategory; q: string; limit: number; courts?: string[] }): Promise<SearchResult>;
+   * courts; empty/absent means all courts. `cursor` is a previous result's `cursor`, for the next
+   * page. Providers/categories that can't page ignore it and return no cursor. */
+  search(params: {
+    category: LawCategory;
+    q: string;
+    limit: number;
+    courts?: string[];
+    cursor?: string;
+  }): Promise<SearchResult>;
 
   browse(params: {
     category: LawCategory;

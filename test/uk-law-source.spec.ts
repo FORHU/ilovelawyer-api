@@ -57,6 +57,12 @@ describe("UK Library source (LawSourceProvider)", () => {
     return body.params?.arguments?.court;
   }
 
+  /** Same, for the `page` argument — lets a paging test answer each page differently. */
+  function pageArgFrom(init?: RequestInit): number | undefined {
+    const body = JSON.parse(String(init?.body)) as { params?: { arguments?: { page?: number } } };
+    return body.params?.arguments?.page;
+  }
+
   /** Builds one `case_law_search` hit for the merge/pagination tests below — distinct from the
    * shared `caseLawSearchResult` fixture used by the single-court tests. */
   function caseHit(opts: { slug: string; ncn: string; published: string }) {
@@ -135,7 +141,7 @@ describe("UK Library source (LawSourceProvider)", () => {
     expect(row!.tenantId).to.equal(ukTenant!.id);
   });
 
-  it("search: follow-up is served from the local DB with no MCP call", async () => {
+  it("search: MCP unreachable -> page 1 falls back to stored rows matching the text", async () => {
     stubFetch(() => {
       throw new Error("MCP must not be reached on a local hit");
     });
@@ -190,6 +196,73 @@ describe("UK Library source (LawSourceProvider)", () => {
         where: { jurisSourceId: { in: [ewca, stray].map((h) => `${UK_CASELAW_BASE}/${h.uri}`) } },
       });
     }
+  });
+
+  it("search: pages via an opaque cursor, and a fetched page is served from cache after", async () => {
+    const p1 = caseHit({ slug: "uksc/2099/50", ncn: "[2099] UKSC 50", published: "2099-03-01T00:00:00Z" });
+    const p2 = caseHit({ slug: "uksc/2099/51", ncn: "[2099] UKSC 51", published: "2099-03-02T00:00:00Z" });
+    const pagesAsked: (number | undefined)[] = [];
+    stubFetch((init) => {
+      const page = pageArgFrom(init);
+      pagesAsked.push(page);
+      return mcpResponse(page === 2 ? { results: [p2], page: 1, has_more: false } : { results: [p1], page: 1, has_more: true });
+    });
+    const q = `paging-nonce-${crypto.randomUUID()}`;
+    const get = (extra = "") =>
+      request(app)
+        .get(`/api/law/search?category=uk-case-law&q=${q}&limit=1${extra}`)
+        .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+        .set("X-Organization-Id", ukOrgId);
+
+    try {
+      const first = await get();
+      expect(first.status).to.equal(200);
+      expect(first.body.items.map((i: { case_number: string }) => i.case_number)).to.deep.equal(["[2099] UKSC 50"]);
+      expect(first.body.cursor).to.be.a("string");
+
+      const second = await get(`&cursor=${first.body.cursor}`);
+      expect(second.status).to.equal(200);
+      expect(second.body.items.map((i: { case_number: string }) => i.case_number)).to.deep.equal(["[2099] UKSC 51"]);
+      expect(second.body.cursor).to.be.null;
+      expect(pagesAsked).to.deep.equal([1, 2]);
+
+      // Paging back is served from the cached page, not re-fetched.
+      stubFetch(() => {
+        throw new Error("MCP must not be reached for a cached search page");
+      });
+      const again = await get();
+      expect(again.status).to.equal(200);
+      expect(again.body.meta.source).to.equal("cache");
+      expect(again.body.cursor).to.equal(first.body.cursor);
+    } finally {
+      await prisma.law.deleteMany({
+        where: { jurisSourceId: { in: [p1, p2].map((h) => `${UK_CASELAW_BASE}/${h.uri}`) } },
+      });
+    }
+  });
+
+  it("search: a court filter keeps TNA's opaque-id hits (no court in the uri)", async () => {
+    const opaque = caseHit({ slug: "tna.zz99test", ncn: "[2099] UKSC 52", published: "2099-03-03T00:00:00Z" });
+    stubFetch(() => mcpResponse({ results: [opaque], page: 1, has_more: false }));
+    try {
+      const res = await request(app)
+        .get(`/api/law/search?category=uk-case-law&q=opaque-nonce-${crypto.randomUUID()}&court=uksc`)
+        .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+        .set("X-Organization-Id", ukOrgId);
+      expect(res.status).to.equal(200);
+      expect(res.body.items.map((i: { case_number: string }) => i.case_number)).to.deep.equal(["[2099] UKSC 52"]);
+    } finally {
+      await prisma.law.deleteMany({ where: { jurisSourceId: `${UK_CASELAW_BASE}/${opaque.uri}` } });
+    }
+  });
+
+  it("search: rejects a malformed cursor", async () => {
+    const res = await request(app)
+      .get("/api/law/search?category=uk-case-law&q=anything&cursor=not-a-cursor")
+      .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+      .set("X-Organization-Id", ukOrgId);
+
+    expect(res.status).to.equal(400);
   });
 
   it("search: rejects an unknown court", async () => {
