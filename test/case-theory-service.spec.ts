@@ -41,7 +41,9 @@ describe("CaseTheorySvc", () => {
     addClaim: CaseTheoryRepo.addClaim,
     addAssumption: CaseTheoryRepo.addAssumption,
     addOpenQuestion: CaseTheoryRepo.addOpenQuestion,
+    deleteWithDependents: CaseTheoryRepo.deleteWithDependents,
     ensureNode: CaseGraphSvc.ensureNode,
+    removeNode: CaseGraphSvc.removeNode,
     edgeCreate: CaseEdgeRepo.create,
     writeAudit: OrganizationRepo.writeAudit,
   };
@@ -88,7 +90,13 @@ describe("CaseTheorySvc", () => {
       if (rows[theoryId]) rows[theoryId].openQuestions.push(row);
       return row;
     };
+    (CaseTheoryRepo as any).deleteWithDependents = async (id: string, caseId: string) => {
+      if (!rows[id] || rows[id].caseId !== caseId) return false;
+      delete rows[id];
+      return true;
+    };
     (CaseGraphSvc as any).ensureNode = async (caseId: string, nodeType: string, refId: string) => ({ id: `node-${nodeType}-${refId}` });
+    (CaseGraphSvc as any).removeNode = async () => {};
     (CaseEdgeRepo as any).create = async (caseId: string, data: any) => {
       edgeCalls.push({ caseId, ...data });
       return { id: `edge-${edgeCalls.length}` };
@@ -108,7 +116,9 @@ describe("CaseTheorySvc", () => {
     (CaseTheoryRepo as any).addClaim = originals.addClaim;
     (CaseTheoryRepo as any).addAssumption = originals.addAssumption;
     (CaseTheoryRepo as any).addOpenQuestion = originals.addOpenQuestion;
+    (CaseTheoryRepo as any).deleteWithDependents = originals.deleteWithDependents;
     (CaseGraphSvc as any).ensureNode = originals.ensureNode;
+    (CaseGraphSvc as any).removeNode = originals.removeNode;
     (CaseEdgeRepo as any).create = originals.edgeCreate;
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
   });
@@ -205,6 +215,30 @@ describe("CaseTheorySvc", () => {
     await CaseTheorySvc.addOpenQuestion("case-1", "th-1", "user-1", "New question");
     expect(rows["th-1"].assumptions).to.have.length(1);
     expect(rows["th-1"].openQuestions).to.have.length(1);
+  });
+
+  it("remove lets the author delete their own original theory", async () => {
+    await CaseTheorySvc.remove("case-1", "th-1", "user-1");
+    expect(rows["th-1"]).to.be.undefined;
+    expect(audits.find((a) => a.action === "theory.delete")).to.exist;
+  });
+
+  it("remove lets any case editor dismiss an AI-proposed theory", async () => {
+    rows["th-1"] = theoryRow({ authorUserId: null });
+    await CaseTheorySvc.remove("case-1", "th-1", "user-2");
+    expect(rows["th-1"]).to.be.undefined;
+  });
+
+  it("remove refuses another lawyer's theory", async () => {
+    let threw: any;
+    try {
+      await CaseTheorySvc.remove("case-1", "th-1", "someone-else");
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).to.exist;
+    expect(threw.statusCode ?? threw.status).to.equal(403);
+    expect(rows["th-1"]).to.exist;
   });
 
   it("update/publish/addClaim throw 404 for a theory not in this case", async () => {

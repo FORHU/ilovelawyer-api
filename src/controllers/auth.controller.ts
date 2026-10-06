@@ -45,10 +45,10 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.login(email, password, !!remember, resolveTenantCodeFromRequest(req));
+    const { user, accessToken, refreshToken, deletionCancelled } = await AuthSvc.login(email, password, !!remember, resolveTenantCodeFromRequest(req));
     setRefreshTokenCookie(res, refreshToken, !!remember);
 
-    return res.status(200).json({ user, accessToken });
+    return res.status(200).json({ user, accessToken, deletionCancelled });
   }
 
   /** Completes the one-time forced password update a 428 from login() sends the client to. */
@@ -60,7 +60,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.updateRequiredPassword(
+    const { user, accessToken, refreshToken, deletionCancelled } = await AuthSvc.updateRequiredPassword(
       email,
       currentPassword,
       newPassword,
@@ -69,7 +69,7 @@ export default class AuthCtrl {
     );
     setRefreshTokenCookie(res, refreshToken, !!remember);
 
-    return res.status(200).json({ user, accessToken });
+    return res.status(200).json({ user, accessToken, deletionCancelled });
   }
 
   static async refresh(req: Request, res: Response) {
@@ -107,7 +107,7 @@ export default class AuthCtrl {
 
     // The app always sends `remember` now (the sign-in tab's checkbox, or true from the
     // sign-up tab); the `true` fallback only keeps older clients' behavior unchanged.
-    const { user, accessToken, refreshToken } = await AuthSvc.loginWithGoogle(
+    const { user, accessToken, refreshToken, deletionCancelled } = await AuthSvc.loginWithGoogle(
       idToken,
       remember ?? true,
       resolveTenantCodeFromRequest(req),
@@ -115,7 +115,7 @@ export default class AuthCtrl {
     );
     setRefreshTokenCookie(res, refreshToken, remember ?? true);
 
-    return res.status(200).json({ user, accessToken });
+    return res.status(200).json({ user, accessToken, deletionCancelled });
   }
 
   /** Completes the password-confirmed link a GOOGLE_LINK_REQUIRED 409 from google() sends the
@@ -128,7 +128,7 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.linkGoogle(
+    const { user, accessToken, refreshToken, deletionCancelled } = await AuthSvc.linkGoogle(
       idToken,
       password,
       !!remember,
@@ -136,7 +136,7 @@ export default class AuthCtrl {
     );
     setRefreshTokenCookie(res, refreshToken, !!remember);
 
-    return res.status(200).json({ user, accessToken });
+    return res.status(200).json({ user, accessToken, deletionCancelled });
   }
 
   static async refreshGoogleToken(req: Request, res: Response) {
@@ -178,10 +178,10 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { accessToken, refreshToken } = await AuthSvc.resetPassword(token, password);
+    const { accessToken, refreshToken, deletionCancelled } = await AuthSvc.resetPassword(token, password);
     setRefreshTokenCookie(res, refreshToken, true);
 
-    return res.status(200).json({ accessToken });
+    return res.status(200).json({ accessToken, deletionCancelled });
   }
 
   static async sendOtp(req: Request, res: Response) {
@@ -232,9 +232,9 @@ export default class AuthCtrl {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.consumeLoginLink(token);
+    const { user, accessToken, refreshToken, deletionCancelled } = await AuthSvc.consumeLoginLink(token);
     setRefreshTokenCookie(res, refreshToken, true);
 
-    return res.status(200).json({ user, accessToken });
+    return res.status(200).json({ user, accessToken, deletionCancelled });
   }
 }

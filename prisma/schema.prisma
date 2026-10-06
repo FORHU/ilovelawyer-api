@@ -73,7 +73,8 @@ model User {
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
   // ACCOUNT_DELETION_GRACE_PERIOD_DAYS has elapsed since this timestamp, unless the user
-  // cancels first by clearing it back to null. Null means no deletion is scheduled.
+  // cancels first by clearing it back to null — or signs in again, which does the same (see
+  // AccountDeletionSvc.restoreOnSignIn). Null means no deletion is scheduled.
   deletionRequestedAt        DateTime?
   otpCode                    String?
   otpExpiry                  DateTime?
@@ -129,6 +130,7 @@ model User {
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
+  @@index([deletionRequestedAt])
 }
 
 model Session {

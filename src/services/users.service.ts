@@ -5,12 +5,8 @@ import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
 import { isGoogleSsoAccount } from "../utils/auth.utils";
-import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS } from "../constants/account-deletion.constants";
+import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS, accountDeletionDueAt } from "../constants/account-deletion.constants";
 import { BCRYPT_SALT_ROUNDS } from "../constants";
-
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
-}
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", { dateStyle: "long" });
@@ -55,14 +51,17 @@ export default class UsersSvc {
 
   /** Starts the grace period rather than deleting immediately — see
    * ACCOUNT_DELETION_GRACE_PERIOD_DAYS and AccountDeletionQueue, which performs the eventual
-   * hard delete. The session stays valid so the user can still cancel from their profile page. */
+   * hard delete. Every session is revoked: signing back in is how a user keeps their account
+   * (AccountDeletionSvc.restoreOnSignIn), so a session left open would sidestep that. The
+   * controller clears this request's refresh cookie too. */
   static async requestDeletion(userId: string) {
     const user = await AuthRepo.findById(userId);
     if (!user) throw new HttpError("User not found", 404);
     if (user.deletionRequestedAt) throw new HttpError("Account deletion is already scheduled", 409);
 
     const updated = await AuthRepo.setDeletionRequested(userId, new Date());
-    const scheduledFor = addDays(updated.deletionRequestedAt!, ACCOUNT_DELETION_GRACE_PERIOD_DAYS);
+    await AuthRepo.deleteSessionsByUserId(userId);
+    const scheduledFor = accountDeletionDueAt(updated.deletionRequestedAt!);
 
     const html = await renderTemplate("account-deletion-scheduled", {
       name: updated.name || "there",
@@ -77,7 +76,8 @@ export default class UsersSvc {
   }
 
   /** Undoes requestDeletion — only valid while the grace period is still running (the row still
-   * exists to call this on otherwise). */
+   * exists to call this on otherwise). Signing in does the same (restoreOnSignIn); this endpoint
+   * remains for a tab whose access token outlived the revoked sessions. */
   static async cancelDeletion(userId: string) {
     const user = await AuthRepo.findById(userId);
     if (!user) throw new HttpError("User not found", 404);

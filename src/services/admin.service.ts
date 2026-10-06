@@ -3,6 +3,7 @@ import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import TenantRepo from "../repositories/tenant.repository";
+import AccountDeletionSvc from "./account-deletion.service";
 import AuthSvc from "./auth.service";
 import type { TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
@@ -140,5 +141,24 @@ export default class AdminSvc {
       });
     }
     return updated;
+  }
+
+  /** Hard-deletes a user immediately, whatever their approvalStatus — unlike the self-service
+   * UsersSvc.requestDeletion, there is no grace period, no undo and no email to the user. Admin
+   * accounts (including the caller's own) are refused: the admin list only manages USER rows.
+   * The audit row keeps the email, since the User row is gone once this returns. */
+  static async deleteUser(userId: string, adminId: string) {
+    const user = await AuthRepo.findById(userId);
+    if (!user) throw new HttpError("User not found", 404);
+    if (userId === adminId) throw new HttpError("You can't delete your own account", 403);
+    if (user.role === "ADMIN") throw new HttpError("Admin accounts can't be deleted here", 403);
+
+    await AccountDeletionSvc.purge(userId);
+
+    await OrganizationRepo.writeAudit({
+      actorId: adminId,
+      action: "users.deleted",
+      payload: { userId, email: user.email },
+    });
   }
 }
