@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { afterEach, describe, it } from "mocha";
-import { dropUnknownPanelsFromLayout, regroupLayoutOnce } from "../src/utils/terminal-layout";
+import { dropUnknownPanelsFromLayout, regroupLayoutOnce, tabsToColumns } from "../src/utils/terminal-layout";
 import TerminalWorkspaceSvc from "../src/services/terminal-workspace.service";
 import TerminalWorkspaceRepo from "../src/repositories/terminal-workspace.repository";
 
@@ -33,29 +33,13 @@ describe("dropUnknownPanelsFromLayout", () => {
       arrangement: "columns",
       columnCount: 3,
       columnWidths: [0.2, 0.5, 0.3],
-      tabsSplit: 0.4,
       panels: [panel("command", true, 0, { columnIndex: 1, pinned: true, screen: 2, x: 0.25, y: 0.5 }), panel("contradictions", true, 1)],
     };
     const out = dropUnknownPanelsFromLayout(layout) as typeof layout;
     expect(out.arrangement).to.equal("columns");
     expect(out.columnCount).to.equal(3);
     expect(out.columnWidths).to.deep.equal([0.2, 0.5, 0.3]);
-    expect(out.tabsSplit).to.equal(0.4);
     expect(out.panels[0]).to.deep.equal(layout.panels[0]);
-  });
-
-  it("clears a tab that pointed at a dropped pane, at the top level and per screen", () => {
-    const layout = {
-      panels: [panel("command"), panel("evidence")],
-      tabsActiveA: "contradictions",
-      tabsActiveB: "evidence",
-      screenLayouts: { 1: { tabsActiveA: "verification", tabsActiveB: "command" } },
-    };
-    const out = dropUnknownPanelsFromLayout(layout) as any;
-    expect(out.tabsActiveA).to.equal(undefined);
-    expect(out.tabsActiveB).to.equal("evidence");
-    expect(out.screenLayouts[1].tabsActiveA).to.equal(undefined);
-    expect(out.screenLayouts[1].tabsActiveB).to.equal("command");
   });
 
   it("shows the Command pane when dropping leaves nothing visible", () => {
@@ -76,7 +60,7 @@ describe("dropUnknownPanelsFromLayout", () => {
   });
 
   it("does not mutate its input", () => {
-    const layout = { panels: [panel("command"), panel("contradictions")], tabsActiveA: "verification" };
+    const layout = { panels: [panel("command"), panel("contradictions")] };
     const before = JSON.stringify(layout);
     dropUnknownPanelsFromLayout(layout);
     expect(JSON.stringify(layout)).to.equal(before);
@@ -121,6 +105,30 @@ describe("TerminalWorkspaceSvc returns cleaned layouts", () => {
     const clean = { id: "w2", layoutJson: { layoutVersion: 1, panels: [panel("command"), panel("evidence")] } };
     stub("findById", clean);
     expect(await TerminalWorkspaceSvc.getById("w2", "u1")).to.equal(clean);
+  });
+});
+
+describe("tabsToColumns", () => {
+  it("turns Tabs screens into 2 Columns, top level and per screen, and drops the Tabs fields", () => {
+    const layout = {
+      arrangement: "tabs",
+      tabsSplit: 0.3,
+      tabsActiveA: "command",
+      panels: [panel("command", true, 0, { tabGroup: 0 }), panel("law", true, 1, { tabGroup: 1, screen: 1 }), panel("evidence", true, 2, { screen: 1 })],
+      screenLayouts: { 1: { arrangement: "tabs", tabsActiveB: "law" } },
+    };
+    const out = tabsToColumns(layout) as any;
+    expect(out).to.deep.include({ arrangement: "columns", columnCount: 2 });
+    expect(out.columnWidths).to.deep.equal([0.3, 0.7]);
+    expect(out.screenLayouts[1]).to.deep.equal({ arrangement: "columns", columnCount: 2, columnWidths: [0.5, 0.5] });
+    expect(out.panels.map((p: any) => p.columnIndex)).to.deep.equal([0, 1, 0]);
+    expect(JSON.stringify(out)).to.not.contain("tab");
+  });
+
+  it("returns the same object when there is nothing Tabs-related, and non-layouts untouched", () => {
+    const layout = { arrangement: "columns", panels: [panel("command")] };
+    expect(tabsToColumns(layout)).to.equal(layout);
+    expect(tabsToColumns(null)).to.equal(null);
   });
 });
 

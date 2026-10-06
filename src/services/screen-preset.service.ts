@@ -6,13 +6,16 @@ import TerminalWorkspaceSvc from "./terminal-workspace.service";
 
 export default class ScreenPresetSvc {
   // System presets (userId: null, seeded — see prisma/seeders/screen-preset-grouped.seeder.ts) unioned
-  // with this caller's own, optionally narrowed to one screen count. A user never sees another
-  // user's presets.
+  // with this caller's own. A system preset is written for an exact screen count, so it only matches that count. The
+  // caller's own workflow is whatever they built (often fewer screens than they have monitors), so it matches every
+  // count it fits on. A user never sees another user's presets.
   static async list(userId: string, screenCount?: number) {
     const rows = await prisma.screenPreset.findMany({
       where: {
-        OR: [{ userId: null }, { userId }],
-        ...(screenCount !== undefined ? { screenCount } : {}),
+        OR: [
+          { userId: null, ...(screenCount !== undefined ? { screenCount } : {}) },
+          { userId, ...(screenCount !== undefined ? { screenCount: { lte: screenCount } } : {}) },
+        ],
       },
       orderBy: [{ userId: "asc" }, { createdAt: "asc" }],
     });
