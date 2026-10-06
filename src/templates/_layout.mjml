@@ -1,0 +1,37 @@
+<mjml>
+  <mj-head>
+    <mj-attributes>
+      <mj-all font-family="Helvetica, Arial, sans-serif" />
+      <mj-text font-size="15px" line-height="24px" color="#27272a" padding="6px 32px" />
+      <mj-button background-color="#6d5bd0" color="#ffffff" font-size="15px" font-weight="bold" border-radius="8px" inner-padding="12px 28px" padding="18px 32px" />
+    </mj-attributes>
+    <mj-style>
+      a { color: #6d5bd0; }
+    </mj-style>
+  </mj-head>
+  <mj-body background-color="#f4f4f5">
+    <mj-section background-color="#0b0b0f" padding="24px 32px">
+      <mj-column>
+        <mj-image src="{{logoSrc}}" alt="ilovelawyer" width="170px" align="left" padding="0" />
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#9d8fe8" padding="2px 0">
+      <mj-column><mj-spacer height="2px" /></mj-column>
+    </mj-section>
+    <mj-section background-color="#ffffff" padding="28px 0 20px 0">
+      <mj-column>
+        {{{content}}}
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#f4f4f5" padding="20px 32px">
+      <mj-column>
+        <mj-text align="center" font-size="12px" line-height="18px" color="#71717a">
+          You're receiving this email because of activity on your ilovelawyer account.
+        </mj-text>
+        <mj-text align="center" font-size="12px" line-height="18px" color="#a1a1aa">
+          &copy; {{year}} ilovelawyer. All rights reserved.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
