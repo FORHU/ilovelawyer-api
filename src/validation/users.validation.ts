@@ -24,6 +24,12 @@ export const changePasswordSchema = Joi.object({
   }),
 });
 
+// Optional here: UsersSvc.requestDeletion decides whether the account needs one (Google SSO
+// accounts have no password).
+export const deleteMeSchema = Joi.object({
+  password: Joi.string().max(1024).optional(),
+});
+
 // The one-time code from the app's Google auth-code popup (Connect Google Calendar).
 export const connectGoogleCalendarSchema = Joi.object({
   code: Joi.string().trim().max(2048).required(),

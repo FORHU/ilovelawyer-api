@@ -78,6 +78,7 @@ describe("Restore a scheduled account on sign-in", () => {
         "findByEmail",
         "findByGoogleId",
         "findById",
+        "findByIdWithPasswordHash",
         "clearDeletionRequestIfSet",
         "createSession",
         "updateLastLogin",
@@ -99,6 +100,7 @@ describe("Restore a scheduled account on sign-in", () => {
     (AuthRepo as any).findByEmail = async () => ({ ...user });
     (AuthRepo as any).findByGoogleId = async () => ({ ...user, googleId: "sub-1", password: null, provider: "google" });
     (AuthRepo as any).findById = async (id: string) => ({ ...user, id });
+    (AuthRepo as any).findByIdWithPasswordHash = async (id: string) => ({ id, password: user.password, provider: user.provider });
     (AuthRepo as any).clearDeletionRequestIfSet = async (id: string) => {
       cleared.push(id);
       if (clearResult) user.deletionRequestedAt = null;
@@ -233,8 +235,36 @@ describe("Restore a scheduled account on sign-in", () => {
   it("scheduling a deletion revokes every session", async () => {
     user.deletionRequestedAt = null;
     (AuthRepo as any).setDeletionRequested = async (_id: string, at: Date) => ({ ...user, deletionRequestedAt: at });
-    await UsersSvc.requestDeletion("user-1");
+    await UsersSvc.requestDeletion("user-1", PASSWORD);
     expect(sessionsRevoked).to.deep.equal(["user-1"]);
     expect(emails.map((e) => e.html)).to.deep.equal(["account-deletion-scheduled"]);
+  });
+
+  describe("scheduling a deletion requires the password", () => {
+    let scheduled: string[];
+
+    beforeEach(() => {
+      scheduled = [];
+      user.deletionRequestedAt = null;
+      (AuthRepo as any).setDeletionRequested = async (id: string, at: Date) => {
+        scheduled.push(id);
+        return { ...user, deletionRequestedAt: at };
+      };
+    });
+
+    it("refuses a missing or wrong password with a 400, scheduling nothing", async () => {
+      expect(await statusOf(UsersSvc.requestDeletion("user-1", undefined))).to.equal(400);
+      expect(await statusOf(UsersSvc.requestDeletion("user-1", "Wrong-horse-1"))).to.equal(400);
+      expect(scheduled).to.have.length(0);
+      expect(sessionsRevoked).to.have.length(0);
+      expect(emails).to.have.length(0);
+    });
+
+    it("needs no password from a Google SSO account", async () => {
+      user.provider = "google";
+      user.password = null;
+      await UsersSvc.requestDeletion("user-1", undefined);
+      expect(scheduled).to.deep.equal(["user-1"]);
+    });
   });
 });
