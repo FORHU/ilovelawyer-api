@@ -34,6 +34,8 @@ export const lawSearchSchema = (p: LawSourceProvider) =>
     limit: Joi.number().integer().min(1).max(20).default(5),
     // UK case law only — csv, same vocab as browse. Narrows the search to these courts.
     court: csvFacet(p.facetVocab.courts),
+    // The previous response's `cursor`, for the next page (UK case law; other searches return none).
+    cursor: Joi.string().max(2000).optional(),
   });
 
 export const lawDocumentSchema = (p: LawSourceProvider) =>
