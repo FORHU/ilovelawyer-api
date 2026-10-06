@@ -82,6 +82,12 @@ export default class AdminCtrl {
     return res.status(200).json(user);
   }
 
+  /** DELETE /api/admin/users/:id — immediate, permanent hard delete. */
+  static async deleteUser(req: Request, res: Response) {
+    await AdminSvc.deleteUser(req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
   /** GET /api/admin/settings — per-Tenant signup settings, pending backlog and bulk-run progress. */
   static async getSettings(_req: Request, res: Response) {
     const tenants = await TenantSettingSvc.listForAdmin();

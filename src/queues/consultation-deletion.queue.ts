@@ -1,6 +1,7 @@
 import cron, { type ScheduledTask } from "node-cron";
 import ChatRepo from "../repositories/chat.repository";
 import { CONSULTATION_DELETION_GRACE_PERIOD_DAYS } from "../constants/consultation-deletion.constants";
+import { withCronLock } from "../lib/cron-lock";
 import logger from "../utils/logger";
 
 const GRACE_PERIOD_MS = CONSULTATION_DELETION_GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000;
@@ -29,11 +30,12 @@ export default class ConsultationDeletionQueue {
       if (cron.validate(configured)) schedule = configured;
       else logger.error("Consultation deletion: invalid CONSULTATION_DELETION_CRON, using the default", { configured, schedule });
     }
-    this.task = cron.schedule(schedule, () => this.tick(), {
-      name: "consultation-deletion",
-      timezone: "UTC",
-      noOverlap: true,
-    });
+    // withCronLock: node-cron fires on every API instance; only one runs the sweep.
+    this.task = cron.schedule(
+      schedule,
+      () => withCronLock("consultation-deletion", () => this.tick()).catch((err) => logger.error("Consultation deletion: run failed", { err })),
+      { name: "consultation-deletion", timezone: "UTC", noOverlap: true },
+    );
     logger.info("Consultation deletion: cron job scheduled", { schedule, gracePeriodDays: CONSULTATION_DELETION_GRACE_PERIOD_DAYS });
   }
 

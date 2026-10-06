@@ -8,6 +8,7 @@ import TenantRepo from "../repositories/tenant.repository";
 import TenantSettingSvc from "./tenant-setting.service";
 import loginToken from "../utils/loginToken";
 import AvatarSvc from "./avatar.service";
+import AccountDeletionSvc from "./account-deletion.service";
 import GoogleCalendarSvc from "./google-calendar.service";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
@@ -151,6 +152,17 @@ export default class AuthSvc {
     );
   }
 
+  /** Every path below that issues a session calls this once its checks have passed (refresh
+   * never does): a completed sign-in during the deletion grace period restores the account —
+   * see AccountDeletionSvc.restoreOnSignIn. Touches the DB only when the row the caller already
+   * read shows a scheduled deletion. */
+  private static async restoreIfScheduled(
+    user: { id: string; email: string; name: string | null; deletionRequestedAt?: Date | null } | null,
+  ): Promise<boolean> {
+    if (!user?.deletionRequestedAt) return false;
+    return AccountDeletionSvc.restoreOnSignIn(user);
+  }
+
   static async login(email: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
     const user = await AuthRepo.findByEmail(email);
     // A Google SSO account gets the same generic 401 as a wrong password, so this endpoint
@@ -182,6 +194,7 @@ export default class AuthSvc {
     }
 
     await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(user);
 
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
@@ -193,6 +206,7 @@ export default class AuthSvc {
       user: await AuthRepo.findById(user.id),
       accessToken,
       refreshToken,
+      deletionCancelled,
     };
   }
 
@@ -227,6 +241,7 @@ export default class AuthSvc {
 
     const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
     await AuthRepo.updatePasswordAndClearMustChange(user.id, hashedPassword);
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(user);
 
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
@@ -238,6 +253,7 @@ export default class AuthSvc {
       user: await AuthRepo.findById(user.id),
       accessToken,
       refreshToken,
+      deletionCancelled,
     };
   }
 
@@ -462,6 +478,10 @@ export default class AuthSvc {
       await AuthRepo.updateLastLogin(user.id);
     }
 
+    // A just-created account never has a deletion scheduled, so this only ever acts on a
+    // returning user.
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(user);
+
     const { accessToken, refreshToken } = loginToken(user.id, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
@@ -470,6 +490,7 @@ export default class AuthSvc {
       user: await AuthRepo.findById(user.id),
       accessToken,
       refreshToken,
+      deletionCancelled,
     };
   }
 
@@ -556,6 +577,8 @@ export default class AuthSvc {
       }
     }
 
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(user);
+
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -566,6 +589,7 @@ export default class AuthSvc {
       user: await AuthRepo.findById(user.id),
       accessToken,
       refreshToken,
+      deletionCancelled,
     };
   }
 
@@ -626,12 +650,14 @@ export default class AuthSvc {
     }
 
     await AuthRepo.deleteSessionsByUserId(userId);
+    // Resetting the password signs the user in (below), so it restores a scheduled account too.
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(await AuthRepo.findById(userId));
 
     const { accessToken, refreshToken } = loginToken(userId, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(userId, refreshToken, expiresAt);
 
-    return { accessToken, refreshToken };
+    return { accessToken, refreshToken, deletionCancelled };
   }
 
   /** Consumes the one-time "Login" link sent in the approval email (AdminSvc.transition) and
@@ -646,6 +672,7 @@ export default class AuthSvc {
     // Defense in depth: transition() already revoked sessions at approval time, but this
     // clears anything created since (e.g. a normal login the user did in the meantime).
     await AuthRepo.deleteSessionsByUserId(userId);
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(await AuthRepo.findById(userId));
 
     const { accessToken, refreshToken } = loginToken(userId, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -656,6 +683,7 @@ export default class AuthSvc {
       user: await AuthRepo.findById(userId),
       accessToken,
       refreshToken,
+      deletionCancelled,
     };
   }
 }

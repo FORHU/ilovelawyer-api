@@ -177,13 +177,39 @@ export default class AuthRepo {
     return toPublicUser(user);
   }
 
-  /** Users whose grace period has fully elapsed as of `cutoff` (i.e. `now - gracePeriod`) —
-   * candidates for AccountDeletionQueue to hard-delete. */
-  static async findDueForHardDeletion(cutoff: Date) {
-    return prisma.user.findMany({
-      where: { deletionRequestedAt: { lte: cutoff } },
-      select: { id: true, email: true, name: true },
+  /** Signing in cancels a scheduled deletion (AccountDeletionSvc.restoreOnSignIn). Conditional,
+   * so of two simultaneous sign-ins only one sees `true` and sends the "restored" email. */
+  static async clearDeletionRequestIfSet(userId: string): Promise<boolean> {
+    const { count } = await prisma.user.updateMany({
+      where: { id: userId, deletionRequestedAt: { not: null } },
+      data: { deletionRequestedAt: null },
     });
+    return count === 1;
+  }
+
+  /** Users whose grace period has fully elapsed as of `cutoff` (i.e. `now - gracePeriod`) —
+   * candidates for AccountDeletionQueue to hard-delete. Paged by id like
+   * ChatRepo.findConsultationsDueForDeletion. */
+  static async findDueForHardDeletion(cutoff: Date, opts: { afterId?: string; take?: number } = {}) {
+    return prisma.user.findMany({
+      where: { deletionRequestedAt: { lte: cutoff }, ...(opts.afterId && { id: { gt: opts.afterId } }) },
+      select: { id: true, email: true, name: true },
+      orderBy: { id: "asc" },
+      ...(opts.take && { take: opts.take }),
+    });
+  }
+
+  static async findDeletionRequestedAt(userId: string): Promise<Date | null> {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { deletionRequestedAt: true } });
+    return user?.deletionRequestedAt ?? null;
+  }
+
+  /** AccountDeletionQueue's final delete — only while the request is still due, so a user who
+   * signed in a moment ago (clearing deletionRequestedAt) is never removed. */
+  static async deleteUserIfDeletionDue(userId: string, cutoff: Date): Promise<boolean> {
+    const { count } = await prisma.user.deleteMany({ where: { id: userId, deletionRequestedAt: { lte: cutoff } } });
+    if (count > 0) await bustUsersList(null);
+    return count > 0;
   }
 
   /** Self-service "use a different email" cleanup (AuthSvc.cancelSignup) — scoped narrowly so

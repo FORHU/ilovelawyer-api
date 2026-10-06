@@ -20,6 +20,7 @@ router.post("/users/:id/block", asyncHandler(AdminCtrl.blockUser));
 router.post("/users/:id/unblock", asyncHandler(AdminCtrl.unblockUser));
 router.post("/users/:id/verify-email", asyncHandler(AdminCtrl.verifyUserEmail));
 router.patch("/users/:id/tenant", asyncHandler(AdminCtrl.changeUserTenant));
+router.delete("/users/:id", asyncHandler(AdminCtrl.deleteUser));
 
 router.get("/settings", asyncHandler(AdminCtrl.getSettings));
 router.patch("/settings/tenants/:code", asyncHandler(AdminCtrl.updateTenantSettings));

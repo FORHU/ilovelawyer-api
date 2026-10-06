@@ -1,0 +1,12 @@
+<mjml>
+  <mj-body>
+    <mj-section>
+      <mj-column>
+        <mj-text>Hello {{name}},</mj-text>
+        <mj-text>Welcome back. You signed in to your ilovelawyer account, so its scheduled deletion has been cancelled. Your account is safe and nothing has been deleted.</mj-text>
+        <mj-text>If you still want to delete your account, you can request it again from your profile's Danger Zone.</mj-text>
+        <mj-text>If you didn't sign in just now, please change your password and contact support.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
