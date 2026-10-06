@@ -1,7 +1,6 @@
 import DocumentRepo from "../repositories/document.repository";
 import CaseRepo from "../repositories/case.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
-import CaseReconstructionAudioQueue from "./case-reconstruction-audio.queue";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import WitnessExtractSvc from "../services/witness-extract.service";
@@ -65,14 +64,6 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       return;
     }
 
-    // Its own queued job with its own lock, so it runs alongside the refresh below rather than
-    // after it. Scheduled regardless of readySetChanged: it only ever reads documents it hasn't
-    // read yet (Document.witnessesExtractedAt), so an unchanged corpus is a quick no-op, and a
-    // case whose documents predate this job gets backfilled on its next trigger.
-    WitnessExtractSvc.schedule(caseId, userId);
-    // Same reasoning for the damages pass: it only reads documents with no damagesExtractedAt.
-    DamagesExtractSvc.schedule(caseId, userId);
-
     const docs = await DocumentRepo.listAllByCase(caseId);
     const fingerprint = computeReadySetFingerprint(docs);
     const previousFingerprint = await CaseRepo.getReadySetFingerprint(caseId);
@@ -108,6 +99,12 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       await CaseRefreshSvc.runQueued(caseId, userId, "post-extraction");
       logger.info("Case refresh completed", { caseId, userId, source: "auto" });
     } else {
+      // Witnesses and damages are read inside the refresh (its first wave) so the next wave
+      // scores and re-rates all of them. With no refresh this time, their queued jobs still
+      // backfill documents never read for them (witnessesExtractedAt / damagesExtractedAt) — a
+      // quick no-op when there are none.
+      WitnessExtractSvc.schedule(caseId, userId);
+      DamagesExtractSvc.schedule(caseId, userId);
       // Archiving/unarchiving a document leaves the case's READY set — and so the rest of the
       // analysis — alone, but the case mind map leaves archived documents out (it follows chat
       // grounding; see mindMapDocumentIds). Bring just the map back in step when its document set
@@ -125,27 +122,16 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       }
     }
 
-    // Narrative generation is a separate, heavier single-shot call — only auto-run it the first
-    // time a case gets an indexed corpus. Once a narrative exists, later corpus changes only
-    // refresh findings/strategy/contradictions above, never silently rewriting a narrative that
-    // may already include the lawyer's own edits (see CaseReconstructionSvc.update). Checked
-    // regardless of readySetChanged — a cheap existence read, and it also covers a case where an
-    // earlier attempt at this step failed (see catch below) even though the corpus hasn't
-    // changed since that attempt.
+    // Case Reconstruction is now a step of the refresh above (CaseReconstructionSvc.autoRegenerate),
+    // so a changed READY set already (re)generated it. This catches the one case the refresh
+    // skips: an unchanged READY set on a case that still has no narrative — e.g. an earlier
+    // attempt at its first one failed. A cheap existence read, checked regardless of readySetChanged.
     const existingReconstruction = await CaseReconstructionRepo.get(caseId);
     if (!existingReconstruction) {
       const CaseReconstructionSvc = (await import("../services/case-reconstruction.service")).default;
-      const CaseReconstructionAudioSvc = (await import("../services/case-reconstruction-audio.service")).default;
-      // Narrative must exist before Polly has anything to narrate — sequential, not
-      // Promise.all'd with the refresh above. Polly synthesis itself is async (no completion
-      // webhook), so startAudioJob only kicks the job off — CaseReconstructionAudioQueue is
-      // what actually polls it to COMPLETED/FAILED without waiting on a viewer to open the case.
-      await CaseReconstructionSvc.generate(caseId, userId)
-        .then(() => CaseReconstructionAudioSvc.startAudioJob(caseId))
-        .then(() => CaseReconstructionAudioQueue.enqueue(caseId))
-        .catch((err) => {
-          logger.warn("Post-extraction case reconstruction/audio failed", { err, caseId, userId });
-        });
+      await CaseReconstructionSvc.autoRegenerate(caseId, userId).catch((err) => {
+        logger.warn("Post-extraction case reconstruction/audio failed", { err, caseId, userId });
+      });
     }
   } catch (err) {
     logger.error("Case refresh failed", { err, caseId, userId, source: "auto" });

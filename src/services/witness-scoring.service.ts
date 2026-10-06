@@ -99,6 +99,16 @@ export default class WitnessScoringSvc {
     return (await WitnessRepo.list(caseId)).find((w) => w.id === witnessId);
   }
 
+  /** The analysis refresh's scoring step (CaseRefreshSvc), right after its witness extraction,
+   * under the same "witnessScoring" lock the queued path uses. Only the ai* columns change, and a
+   * lawyer's factor overrides are re-applied on top, so re-scoring on every refresh is safe. A
+   * case with no witnesses is skipped. */
+  static async scoreFromDocuments(caseId: string, userId: string): Promise<{ skipped: boolean }> {
+    if ((await WitnessRepo.list(caseId)).length === 0) return { skipped: true };
+    await AiGenerationLockSvc.run(caseId, "witnessScoring", () => WitnessScoringSvc.scoreInner(caseId, userId));
+    return { skipped: false };
+  }
+
   /** Run by AiGenerationQueue's worker after beginQueued has claimed the job row. */
   static async runQueued(caseId: string, userId: string): Promise<void> {
     await AiGenerationLockSvc.finishWith(caseId, "witnessScoring", () => WitnessScoringSvc.scoreInner(caseId, userId));

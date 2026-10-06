@@ -297,6 +297,14 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     expect(witnessScheduled).to.deep.equal(["case-1"]);
   });
 
+  it("leaves witness and damages extraction to the refresh when the READY set changed", async () => {
+    (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1", "d2"]);
+    fingerprintStore["case-1"] = fingerprintOf(["d1"]);
+    await runCasePostExtraction("case-1", "user-1");
+    expect(witnessScheduled).to.deep.equal([]);
+    expect(damagesScheduled).to.deep.equal([]);
+  });
+
   it("schedules the damages pass alongside it, with the same unchanged-READY-set rule", async () => {
     (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1"]);
     fingerprintStore["case-1"] = fingerprintOf(["d1"]);

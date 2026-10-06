@@ -21,6 +21,8 @@ import { CASE_RECONSTRUCTION_TABLE_READ_OUTPUT_PREFIX } from "../constants";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import CaseReconstructionAudioSvc from "./case-reconstruction-audio.service";
+import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import logger from "../utils/logger";
 import { cleanRegister } from "../utils/case-reconstruction.utils";
 import { extractBundleFacts, BundleFact } from "../utils/bundle-facts";
@@ -37,14 +39,33 @@ export default class CaseReconstructionSvc {
     return CaseReconstructionRepo.get(caseId);
   }
 
-  /** A dedicated action, not folded into CaseRefreshSvc.refresh — narrative generation is a
-   * heavier, slower single-shot call than the short tagged-list prompts refresh already runs,
-   * so it's the lawyer's call when to (re)generate rather than happening on every refresh.
-   * userId is optional so case-post-extraction.ts's background job can call this once
-   * documents finish indexing — same pattern as CaseStrategySvc.generateFromDocuments. */
+  /** Unqueued generate, holding the "caseReconstruction" lock. Used by autoRegenerate (the
+   * analysis refresh's step) and case-post-extraction.ts's first-narrative fallback. userId is
+   * optional for the same reason as CaseStrategySvc.generateFromDocuments. */
   static async generate(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
     return AiGenerationLockSvc.run(caseId, "caseReconstruction", () => CaseReconstructionSvc.generateInner(caseId, userId));
+  }
+
+  /** The analysis refresh's reconstruction step (CaseRefreshSvc). Generates the first narrative,
+   * and regenerates it on later corpus changes while it is still the AI's — once a lawyer has
+   * edited any register (narrativeEditedAt), it is left alone; the lawyer's Regenerate button
+   * hands it back. Narration follows the narrative: always for the first one, and on a
+   * regeneration only when there was audio to replace, so nobody pays for audio they never
+   * asked for. A narration failure is logged and never fails the step. */
+  static async autoRegenerate(caseId: string, userId: string): Promise<"generated" | "regenerated" | "skipped-edited"> {
+    const existing = await CaseReconstructionRepo.get(caseId);
+    if (existing?.narrativeEditedAt) return "skipped-edited";
+    const hadAudio = !!existing?.audioFileId;
+
+    await CaseReconstructionSvc.generate(caseId, userId);
+
+    if (!existing || hadAudio) {
+      await CaseReconstructionAudioSvc.startAudioJob(caseId)
+        .then(() => CaseReconstructionAudioQueue.enqueue(caseId))
+        .catch((err) => logger.warn("Case reconstruction: narration after regenerate failed", { err, caseId }));
+    }
+    return existing ? "regenerated" : "generated";
   }
 
   /** Fast, synchronous half of a queued generate — access check + claiming the

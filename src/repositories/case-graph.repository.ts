@@ -1,13 +1,28 @@
 import prisma from "../lib/prisma";
 import { CaseGraphNodeType } from "@prisma/client";
+import { isUniqueConstraintError } from "../utils/ai-generation-lock.utils";
+
+/** Prisma's upsert is a read-then-insert, so two callers creating the same node or edge at the
+ * same moment (the analysis refresh runs its steps side by side) can both miss and one insert
+ * fails on the unique key. The row exists by then, so one retry finds and returns it. */
+async function retryOnDuplicate<T>(upsert: () => Promise<T>): Promise<T> {
+  try {
+    return await upsert();
+  } catch (err) {
+    if (!isUniqueConstraintError(err)) throw err;
+    return upsert();
+  }
+}
 
 export default class CaseGraphRepo {
   static async upsertNode(caseId: string, nodeType: CaseGraphNodeType, refId: string) {
-    return prisma.caseGraphNode.upsert({
-      where: { nodeType_refId: { nodeType, refId } },
-      create: { caseId, nodeType, refId },
-      update: {},
-    });
+    return retryOnDuplicate(() =>
+      prisma.caseGraphNode.upsert({
+        where: { nodeType_refId: { nodeType, refId } },
+        create: { caseId, nodeType, refId },
+        update: {},
+      }),
+    );
   }
 
   static async upsertEdge(
@@ -16,11 +31,13 @@ export default class CaseGraphRepo {
     targetNodeId: string,
     kind: string,
   ) {
-    return prisma.caseGraphEdge.upsert({
-      where: { sourceNodeId_targetNodeId_kind: { sourceNodeId, targetNodeId, kind } },
-      create: { caseId, sourceNodeId, targetNodeId, kind },
-      update: {},
-    });
+    return retryOnDuplicate(() =>
+      prisma.caseGraphEdge.upsert({
+        where: { sourceNodeId_targetNodeId_kind: { sourceNodeId, targetNodeId, kind } },
+        create: { caseId, sourceNodeId, targetNodeId, kind },
+        update: {},
+      }),
+    );
   }
 
   static async findNode(nodeType: CaseGraphNodeType, refId: string) {
