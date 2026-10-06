@@ -23,7 +23,7 @@ export const PANEL_IDS = [
 
 export type PanelId = (typeof PANEL_IDS)[number];
 
-/** Panes that belong together sit next to each other in Columns/Tabs. Mirrors apps/web/lib/terminal/types.ts's PANEL_GROUP —
+/** Panes that belong together sit next to each other in Columns. Mirrors apps/web/lib/terminal/types.ts's PANEL_GROUP —
  * keep both in sync. Array order = group order on the board. Panes absent here (dates) are hidden and never placed. */
 export const PANEL_GROUPS: readonly (readonly PanelId[])[] = [
   ["command", "evidence", "procedure", "witnesses", "damages"],
@@ -38,7 +38,7 @@ export const panelGroupRank = (id: PanelId): number => {
   return g === -1 ? 1000 : g * 100 + PANEL_GROUPS[g]!.indexOf(id);
 };
 
-/** Saved layouts below this get their Columns/Tabs panes regrouped once (see regroupLayoutOnce). */
+/** Saved layouts below this get their Columns panes regrouped once (see regroupLayoutOnce). */
 export const LAYOUT_VERSION = 1;
 
 export const PRESET_VALUES =["PANE_1", "PANE_2", "PANE_4", "PANE_6"] as const;
@@ -49,7 +49,7 @@ export type PresetValue = (typeof PRESET_VALUES)[number];
 // list gates normalizeLayout's isArrangementValue check, so before this fix any workspace saved
 // with "free" (every multi-screen Free-canvas layout) was silently coerced to "columns" on every
 // save — the arrangement mode itself never survived a reload.
-export const ARRANGEMENT_VALUES = ["free", "columns", "tabs", "focus"] as const;
+export const ARRANGEMENT_VALUES = ["free", "columns", "focus"] as const;
 export type ArrangementValue = (typeof ARRANGEMENT_VALUES)[number];
 
 export interface PanelLayout {
@@ -64,8 +64,6 @@ export interface PanelLayout {
   y?: number;
   /** Columns mode only: which column (0-based) this pane is stacked in. */
   columnIndex?: number;
-  /** Tabs mode only: which of the 2 groups this pane's tab lives in. */
-  tabGroup?: number;
   /** Protects this pane's own slot from move/resize/reassignment. */
   pinned?: boolean;
   /** Which physical screen this pane renders on. 0 or absent = primary; 1-5 = a secondary canvas
@@ -84,22 +82,15 @@ export interface WorkspaceLayout {
   /** Columns mode: how many columns and their widths as fractions summing to 1. */
   columnCount?: number;
   columnWidths?: number[];
-  /** Tabs mode: the 2 groups' width split and each group's active tab. */
-  tabsSplit?: number;
-  tabsActiveA?: PanelId;
-  tabsActiveB?: PanelId;
   /** Per-secondary-screen arrangement state, keyed by screen index (1-5) — mirrors
    * apps/web/lib/terminal/types.ts's WorkspaceLayout.screenLayouts exactly. The top-level
-   * arrangement/columnCount/columnWidths/tabsSplit/tabsActiveA/B fields above are screen 0's own. */
+   * arrangement/columnCount/columnWidths fields above are screen 0's own. */
   screenLayouts?: Record<
     number,
     {
       arrangement?: ArrangementValue;
       columnCount?: number;
       columnWidths?: number[];
-      tabsSplit?: number;
-      tabsActiveA?: PanelId;
-      tabsActiveB?: PanelId;
     }
   >;
 }

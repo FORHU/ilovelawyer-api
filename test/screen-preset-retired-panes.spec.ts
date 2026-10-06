@@ -7,12 +7,16 @@ describe("dropUnknownPanelIds", () => {
     expect(
       dropUnknownPanelIds([
         { arrangement: "free", panelIds: ["command", "contradictions"] },
-        { arrangement: "tabs", panelIds: ["teamAudit", "verification"] },
+        { arrangement: "columns", panelIds: ["teamAudit", "verification"] },
       ]),
     ).to.deep.equal([
       { arrangement: "free", panelIds: ["command"] },
-      { arrangement: "tabs", panelIds: [] },
+      { arrangement: "columns", panelIds: [] },
     ]);
+  });
+
+  it("opens a stored Tabs preset screen as Columns", () => {
+    expect(dropUnknownPanelIds([{ arrangement: "tabs", panelIds: ["command"] }])).to.deep.equal([{ arrangement: "columns", panelIds: ["command"] }]);
   });
 
   it("leaves anything that isn't a list of screens alone", () => {
