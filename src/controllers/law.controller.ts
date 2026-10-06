@@ -31,6 +31,7 @@ export default class LawCtrl {
       category: provider.parseCategory(value.category),
       q: value.q,
       limit: value.limit,
+      courts: value.court,
     });
     return res.status(200).json(result);
   }

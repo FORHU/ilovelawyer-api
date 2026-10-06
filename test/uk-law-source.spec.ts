@@ -152,6 +152,55 @@ describe("UK Library source (LawSourceProvider)", () => {
     );
   });
 
+  it("search: a court filter scopes the local cache and searches upstream per selected court", async () => {
+    // The stored UKSC row above matches the text but not the court, so this must go upstream.
+    const ewca = caseHit({ slug: "ewca/civ/2099/40", ncn: "[2099] EWCA Civ 40", published: "2099-02-01T00:00:00Z" });
+    // A stray other-court hit, as if upstream ignored the court argument — must be dropped.
+    const stray = caseHit({ slug: "ewhc/admin/2099/41", ncn: "[2099] EWHC 41 (Admin)", published: "2099-02-01T00:00:00Z" });
+    const courtsAsked: (string | undefined)[] = [];
+    stubFetch((init) => {
+      courtsAsked.push(courtArgFrom(init));
+      return mcpResponse({ results: [ewca, stray], page: 1, has_more: false });
+    });
+
+    try {
+      const res = await request(app)
+        .get("/api/law/search?category=uk-case-law&q=UK Test Appellant&court=ewca/civ")
+        .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+        .set("X-Organization-Id", ukOrgId);
+
+      expect(res.status).to.equal(200);
+      expect(res.body.meta.source).to.equal("uk-legal-mcp");
+      expect(courtsAsked).to.deep.equal(["ewca/civ"]);
+      expect(res.body.items.map((i: { case_number: string }) => i.case_number)).to.deep.equal(["[2099] EWCA Civ 40"]);
+
+      // And a court the stored row does belong to is still served from the local cache.
+      stubFetch(() => {
+        throw new Error("MCP must not be reached on a court-matching local hit");
+      });
+      const cached = await request(app)
+        .get("/api/law/search?category=uk-case-law&q=UK Test Appellant&court=uksc,ukpc")
+        .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+        .set("X-Organization-Id", ukOrgId);
+      expect(cached.status).to.equal(200);
+      expect(cached.body.meta.source).to.equal("cache");
+      expect(cached.body.items.map((i: { case_number: string }) => i.case_number)).to.include("[2099] UKSC 1");
+    } finally {
+      await prisma.law.deleteMany({
+        where: { jurisSourceId: { in: [ewca, stray].map((h) => `${UK_CASELAW_BASE}/${h.uri}`) } },
+      });
+    }
+  });
+
+  it("search: rejects an unknown court", async () => {
+    const res = await request(app)
+      .get("/api/law/search?category=uk-case-law&q=anything&court=not-a-court")
+      .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
+      .set("X-Organization-Id", ukOrgId);
+
+    expect(res.status).to.equal(400);
+  });
+
   it("document: fills lazy detail from the MCP, then serves it from cache", async () => {
     const lawId = (await prisma.law.findUnique({ where: { jurisSourceId: CASE_URL } }))!.id;
     await prisma.law.update({ where: { id: lawId }, data: { detailFetchedAt: null } });
