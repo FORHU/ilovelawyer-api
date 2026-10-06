@@ -51,8 +51,9 @@ export default class CaseReconstructionRepo {
     const claimsJson = claims ? (claims as unknown as Prisma.InputJsonValue) : Prisma.JsonNull;
     return prisma.caseReconstruction.upsert({
       where: { caseId },
+      // A fresh generate hands the narrative back to the AI, so it is no longer "edited".
       create: { caseId, ...rest, claims: claimsJson },
-      update: { ...rest, claims: claimsJson },
+      update: { ...rest, claims: claimsJson, narrativeEditedAt: null },
     });
   }
 
@@ -66,7 +67,10 @@ export default class CaseReconstructionRepo {
     // verbatim-substring match against the new text would either silently miss (safe) or, worse,
     // land on a coincidentally-matching but now-wrong sentence. Clearing is the safer default.
     const claimsUpdate = data.narrative !== undefined ? { claims: Prisma.JsonNull } : {};
-    return prisma.caseReconstruction.update({ where: { caseId }, data: { ...data, ...claimsUpdate } });
+    // Any register edited marks the narrative as the lawyer's, so the analysis refresh stops
+    // regenerating it (CaseReconstructionSvc.autoRegenerate).
+    const edited = Object.values(data).some((v) => v !== undefined) ? { narrativeEditedAt: new Date() } : {};
+    return prisma.caseReconstruction.update({ where: { caseId }, data: { ...data, ...claimsUpdate, ...edited } });
   }
 
   static async updateAudio(caseId: string, data: ReconstructionAudioUpdate) {

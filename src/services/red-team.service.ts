@@ -101,6 +101,19 @@ export default class RedTeamSvc {
     await AiGenerationLockSvc.finishWith(caseId, "redTeam", () => RedTeamSvc.generateInner(caseId, userId));
   }
 
+  /** The analysis refresh's Red Team step (CaseRefreshSvc), holding the same "redTeam" lock as
+   * the lawyer's Regenerate. Nobody edits an assessment, so it is always rebuilt — except on a
+   * case with no findings and no contradictions yet, where there is nothing to attack and an
+   * empty assessment would only be noise. */
+  static async generateFromDocuments(caseId: string, userId: string): Promise<{ skipped: boolean }> {
+    const promptData = await RedTeamSvc.promptDataFor(caseId, userId);
+    if (!promptData.legalIssues.length && !promptData.weaknesses.length && !promptData.contradictions.length) {
+      return { skipped: true };
+    }
+    await AiGenerationLockSvc.run(caseId, "redTeam", () => RedTeamSvc.generateInner(caseId, userId));
+    return { skipped: false };
+  }
+
   /** The case data the red-team prompt is built from — also what Jev judges against, and what
    * scripts/jev-red-team-benchmark.ts --harvest snapshots, so all three see the same input. */
   static async promptDataFor(caseId: string, userId: string): Promise<RedTeamPromptData> {

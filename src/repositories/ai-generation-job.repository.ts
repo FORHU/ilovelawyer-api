@@ -14,7 +14,7 @@ export default class AiGenerationJobRepo {
   static async markInProgress(subjectId: string, kind: AiGenerationKind) {
     return prisma.aiGenerationJob.update({
       where: { subjectId_kind: { subjectId, kind } },
-      data: { status: "IN_PROGRESS", startedAt: new Date(), finishedAt: null, error: null, stage: null },
+      data: { status: "IN_PROGRESS", startedAt: new Date(), finishedAt: null, error: null, stage: null, heartbeatAt: null },
     });
   }
 
@@ -34,5 +34,14 @@ export default class AiGenerationJobRepo {
       data: { stage },
     });
     return count > 0;
+  }
+
+  /** Stamps a running job's heartbeat. Filtered on IN_PROGRESS, like updateStage, so a late tick
+   * can't touch a finished row. */
+  static async touchHeartbeat(subjectId: string, kind: AiGenerationKind): Promise<void> {
+    await prisma.aiGenerationJob.updateMany({
+      where: { subjectId, kind, status: "IN_PROGRESS" },
+      data: { heartbeatAt: new Date() },
+    });
   }
 }

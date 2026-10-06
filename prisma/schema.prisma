@@ -2196,6 +2196,10 @@ model CaseReconstruction {
   tableReadFileId   String?
   tableReadStatus   String?
   tableReadStaleAt  DateTime?
+  // Set when a lawyer edits any of the three registers (CaseReconstructionSvc.update), cleared
+  // by every generate. While set, the analysis refresh leaves the narrative alone rather than
+  // overwriting the lawyer's words (CaseReconstructionSvc.autoRegenerate).
+  narrativeEditedAt DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -2532,6 +2536,11 @@ model AiGenerationJob {
   /// one (AiGenerationLockSvc.setStage). Only Chat-Wonder-backed chat turns report stages today
   /// ("answering", then "extras"); every other kind leaves it null throughout.
   stage      String?
+  /// Stamped every few seconds while the job's work is running (AiGenerationLockSvc.finishWith).
+  /// A run whose heartbeat stopped was lost — the API process restarted or crashed mid-run — and
+  /// is treated as abandoned no matter how long legitimate runs of its kind take. Null until the
+  /// work starts (a job still waiting in the queue), which falls back to an age check on startedAt.
+  heartbeatAt DateTime?
 
   @@unique([subjectId, kind])
   @@index([subjectId])

@@ -26,13 +26,17 @@ const MAX_DOC_CHARS = 12000;
 const MAX_TOTAL_DOC_CHARS = 60000;
 // Backoff before retrying when another damagesExtract run for the case still holds the lock.
 const BUSY_RETRY_SECONDS = 30;
+// Batches one analysis refresh reads inline before handing the rest to the queued job — same cap
+// as WitnessExtractSvc's.
+const MAX_BATCHES_PER_REFRESH = 25;
 
 /**
  * Proposes Damages & Remedies entries from the case's documents: amounts a pleading prays for, a
- * stated backwages figure, reinstatement asked for. Runs after document extraction settles
- * (runCasePostExtraction schedules it next to the witness pass) and on the panel's "Propose from
- * documents" button. AiGenerationQueue kind "damagesExtract" is the only way it runs; runQueued
- * claims its own lock.
+ * stated backwages figure, reinstatement asked for. Two entry points, both under the
+ * "damagesExtract" lock: the analysis refresh's first wave (extractAllPending, inline, so the
+ * re-rating in the next wave sees every new entry), and AiGenerationQueue kind "damagesExtract"
+ * (runQueued) for the backfill runCasePostExtraction schedules when the refresh doesn't run. The
+ * Terminal has no "Propose from documents" button any more; `propose` is kept for the API route.
  *
  * Verifiable by construction, same as WitnessExtractSvc: every entry carries the document it came
  * from and a verbatim quote that extractDamageHeads has found in that document's text, holding its
@@ -82,6 +86,25 @@ export default class DamagesExtractSvc {
   static async runQueuedPropose(caseId: string, userId: string): Promise<void> {
     const hasMore = await AiGenerationLockSvc.finishWith(caseId, "damagesExtract", () => DamagesExtractSvc.extractBatch(caseId, userId));
     if (hasMore) DamagesExtractSvc.schedule(caseId, userId);
+  }
+
+  /** The analysis refresh's damages-reading step (CaseRefreshSvc, first wave): reads every pending
+   * document, batch after batch, under one "damagesExtract" lock, so the re-rating in the next
+   * wave sees every new entry. Throws 409 when a queued run holds the lock. Past
+   * MAX_BATCHES_PER_REFRESH, the rest goes to the queue. */
+  static async extractAllPending(caseId: string, userId: string): Promise<{ batches: number }> {
+    if ((await DocumentRepo.listPendingDamagesExtraction(caseId)).length === 0) return { batches: 0 };
+    let batches = 0;
+    const hasMore = await AiGenerationLockSvc.run(caseId, "damagesExtract", async () => {
+      let more = true;
+      while (more && batches < MAX_BATCHES_PER_REFRESH) {
+        more = await DamagesExtractSvc.extractBatch(caseId, userId);
+        batches += 1;
+      }
+      return more;
+    });
+    if (hasMore) DamagesExtractSvc.schedule(caseId, userId);
+    return { batches };
   }
 
   /** Run by AiGenerationQueue's worker. */

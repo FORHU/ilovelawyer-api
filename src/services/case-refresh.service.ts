@@ -12,6 +12,12 @@ import DamagesExtractSvc from "./damages-extract.service";
 import OrganizationRepo from "../repositories/organization.repository";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+import RedTeamSvc from "./red-team.service";
+import WitnessExtractSvc from "./witness-extract.service";
+import WitnessScoringSvc from "./witness-scoring.service";
+import CaseTheorySvc from "./case-theory.service";
+import CaseReconstructionSvc from "./case-reconstruction.service";
+import HttpError from "../utils/http-error";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
 
@@ -38,6 +44,29 @@ export default class CaseRefreshSvc {
         );
     }
 
+    /** Runs a wave's steps side by side and waits for all of them. Never throws. */
+    private static async runWave(caseId: string, wave: number, steps: [string, () => Promise<object>][]): Promise<void> {
+        const startedAt = Date.now();
+        await Promise.all(steps.map(([name, fn]) => CaseRefreshSvc.runStep(caseId, name, fn)));
+        logger.info(`Refresh analysis: wave ${wave} done`, { caseId, steps: steps.length, durationMs: Date.now() - startedAt });
+    }
+
+    /** One step of the refresh: logs how it went, treats a 409 (the same piece's own job is
+     * already running) as a skip, and swallows any other failure. */
+    private static async runStep(caseId: string, name: string, fn: () => Promise<object>): Promise<void> {
+        const startedAt = Date.now();
+        try {
+            const result = await fn();
+            logger.info(`Refresh analysis: ${name} done`, { caseId, ...result, durationMs: Date.now() - startedAt });
+        } catch (err) {
+            if (err instanceof HttpError && err.statusCode === 409) {
+                logger.info(`Refresh analysis: ${name} already running, skipped`, { caseId });
+                return;
+            }
+            logger.warn(`Refresh analysis: ${name} failed`, { err, caseId, durationMs: Date.now() - startedAt });
+        }
+    }
+
     private static async refreshInner(caseId: string, userId: string, reason: "manual" | "post-extraction") {
         logger.info("Refresh analysis: started", { caseId, userId, reason });
 
@@ -59,102 +88,56 @@ export default class CaseRefreshSvc {
             DocumentExtractionQueue.enqueueMany(pending.map((d) => d.id));
         }
 
-        let stepStartedAt = Date.now();
-        await EvidenceIntelligenceSvc.scanContradictions(caseId, userId)
-            .then(() => {
-                logger.info("Refresh analysis: contradictions scan done", { caseId, durationMs: Date.now() - stepStartedAt });
-            })
-            .catch((err) => {
-                logger.warn("Chat Wonder contradictions scan failed", {
-                    err,
-                    caseId,
-                    durationMs: Date.now() - stepStartedAt,
-                });
-                return [];
-            });
+        // The steps run in three waves. Within a wave every step runs at the same time; a wave
+        // starts once the one before it has settled, because its steps read what that wave wrote.
+        // Each step holds its own lock and runs through runStep, so one that fails — or is skipped
+        // because the same piece's own job already holds its lock — never stops the others.
 
-        stepStartedAt = Date.now();
-        await CaseStrategySvc.generateFromDocuments(caseId, userId)
-            .then(() => {
-                logger.info("Refresh analysis: case strategy done", { caseId, durationMs: Date.now() - stepStartedAt });
-            })
-            .catch((err) => {
-                logger.warn("Chat Wonder case strategy failed", {
-                    err,
-                    caseId,
-                    durationMs: Date.now() - stepStartedAt,
-                });
-            });
+        // Wave 1: everything that reads only the documents.
+        await CaseRefreshSvc.runWave(caseId, 1, [
+            ["contradictions scan", async () => ({ found: (await EvidenceIntelligenceSvc.scanContradictions(caseId, userId))?.length })],
+            // Plan, to-dos and the timeline's document dates.
+            ["case strategy", async () => (await CaseStrategySvc.generateFromDocuments(caseId, userId), {})],
+            ["case findings", async () => (await CaseFindingAiSvc.generateFromDocuments(caseId, userId), {})],
+            // Inline, batch after batch, so the next wave scores and re-rates every new entry.
+            ["witness extraction", () => WitnessExtractSvc.extractAllPending(caseId, userId)],
+            ["damages extraction", () => DamagesExtractSvc.extractAllPending(caseId, userId)],
+            // The narrative reads the documents alone; it is rewritten only while nobody has edited it.
+            ["case reconstruction", async () => ({ outcome: await CaseReconstructionSvc.autoRegenerate(caseId, userId) })],
+        ]);
 
-        stepStartedAt = Date.now();
-        await CaseFindingAiSvc.generateFromDocuments(caseId, userId)
-            .then(() => {
-                logger.info("Refresh analysis: case finding done", { caseId, durationMs: Date.now() - stepStartedAt });
-            })
-            .catch((err) => {
-                logger.warn("Chat Wonder case finding generation failed", {
-                    err,
-                    caseId,
-                    durationMs: Date.now() - stepStartedAt,
-                });
-            });
+        // Wave 2: what reads the findings, strategy, contradictions, witnesses and damages above.
+        await CaseRefreshSvc.runWave(caseId, 2, [
+            // The outlook prompt reads the findings.
+            ["case outlook", async () => (await CaseOutlookAiSvc.generateFromDocuments(caseId, userId), {})],
+            // Jev's awardability reads the findings; every head (old and just extracted) is re-rated.
+            ["damages re-rating", () => DamagesExtractSvc.refreshStep(caseId)],
+            // Scoring reads the witnesses, contradictions, evidence and timeline dates.
+            ["witness scoring", () => WitnessScoringSvc.scoreFromDocuments(caseId, userId)],
+            ["theory draft", () => CaseTheorySvc.refreshAiDraft(caseId, userId)],
+            // The map prompt reads the key dates, findings and to-dos. The automatic run skips
+            // itself when the documents haven't changed; "Refresh analysis" rebuilds anyway. Neither
+            // overwrites a map someone has expanded — see CaseMindMapSvc. Another build already
+            // running (a Regenerate) may have read the documents before this change, so a busy lock
+            // queues one coalesced retry rather than losing it (CaseMindMapSvc.scheduleResync).
+            [
+                "case mind map",
+                async () => {
+                    try {
+                        const result = await CaseMindMapSvc.generateFromDocuments(caseId, userId, reason === "manual" ? "refresh" : "auto");
+                        return { skipped: result.skipped };
+                    } catch (err) {
+                        if (!isCaseMindMapBusy(err)) throw err;
+                        await CaseMindMapSvc.scheduleResync(caseId, userId);
+                        return { resyncQueued: true };
+                    }
+                },
+            ],
+        ]);
 
-        // After findings, since the outlook prompt reads them. A failed outlook never fails the
-        // refresh — the previous outlook just stays current.
-        stepStartedAt = Date.now();
-        await CaseOutlookAiSvc.generateFromDocuments(caseId, userId)
-            .then(() => {
-                logger.info("Refresh analysis: case outlook done", { caseId, durationMs: Date.now() - stepStartedAt });
-            })
-            .catch((err) => {
-                logger.warn("Chat Wonder case outlook generation failed", {
-                    err,
-                    caseId,
-                    durationMs: Date.now() - stepStartedAt,
-                });
-            });
-
-        // After strategy/findings, since the map prompt reads them (key dates, findings, to-dos).
-        // The automatic run skips itself when the documents haven't changed; "Refresh analysis"
-        // rebuilds anyway, since it just re-ran those findings. Neither overwrites a map someone
-        // has expanded — see CaseMindMapSvc. A failed build never fails the refresh. Another build
-        // already running (a Regenerate) may have read the documents before this change, so a busy
-        // lock queues one coalesced retry rather than losing it (CaseMindMapSvc.scheduleResync).
-        stepStartedAt = Date.now();
-        await CaseMindMapSvc.generateFromDocuments(caseId, userId, reason === "manual" ? "refresh" : "auto")
-            .then((result) => {
-                logger.info("Refresh analysis: case mind map done", {
-                    caseId,
-                    skipped: result.skipped,
-                    durationMs: Date.now() - stepStartedAt,
-                });
-            })
-            .catch(async (err) => {
-                if (isCaseMindMapBusy(err)) {
-                    await CaseMindMapSvc.scheduleResync(caseId, userId);
-                    return;
-                }
-                logger.warn("Chat Wonder case mind map build failed", {
-                    err,
-                    caseId,
-                    durationMs: Date.now() - stepStartedAt,
-                });
-            });
-
-        // After findings and outlook, since Jev's awardability reads the findings just rewritten.
-        // Recomputes every head and re-rates them; a failure never fails the refresh.
-        stepStartedAt = Date.now();
-        await DamagesExtractSvc.refreshStep(caseId)
-            .then((result) => {
-                logger.info("Refresh analysis: damages done", { caseId, ...result, durationMs: Date.now() - stepStartedAt });
-            })
-            .catch((err) => {
-                logger.warn("Damages refresh step failed", {
-                    err,
-                    caseId,
-                    durationMs: Date.now() - stepStartedAt,
-                });
-            });
+        // Wave 3: Red Team attacks everything above — findings, contradictions, witnesses and the
+        // re-rated damages — so it goes last.
+        await CaseRefreshSvc.runWave(caseId, 3, [["red team", () => RedTeamSvc.generateFromDocuments(caseId, userId)]]);
 
         // Chat dates no longer go on the case timeline (they carry no document); clear the ones
         // earlier versions copied in. A failure never fails the refresh.
@@ -168,7 +151,7 @@ export default class CaseRefreshSvc {
         // Persisted here (not only in the automatic post-extraction path) so a manual "Refresh
         // analysis" click also counts as "the last successful refresh" for the fingerprint skip —
         // otherwise an auto-trigger for the same still-unchanged READY set right after a manual
-        // click would see a stale/missing fingerprint and burn the three Chat Wonder calls again.
+        // click would see a stale/missing fingerprint and burn every Chat Wonder call again.
         await CaseRepo.setReadySetFingerprint(caseId, computeReadySetFingerprint(docs));
         await OrganizationRepo.writeAudit({
             caseId,
