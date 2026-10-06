@@ -11,6 +11,7 @@ import {
   legislationGetSection,
   getCitationsNetwork,
   UkLegalMcpUnavailableError,
+  type UkCaseLawSearchHit,
   type UkLegislationSectionResult,
 } from "../../../utils/uk-legal-mcp";
 import { extractCaseUri } from "../../../utils/uk-citation-resolution";
@@ -74,19 +75,20 @@ export class UkLawSourceProvider implements LawSourceProvider {
 
   // ── search ────────────────────────────────────────────────────────────────
 
-  async search(params: { category: LawCategory; q: string; limit: number }): Promise<SearchResult> {
+  async search(params: { category: LawCategory; q: string; limit: number; courts?: string[] }): Promise<SearchResult> {
     const { category, q, limit } = params;
     const wire = UK_WIRE_BY_CATEGORY[category];
 
     if (category === "JURISPRUDENCE") {
-      const localRows = await LawRepo.localSearchUk({ category, q, limit });
+      const courts = params.courts ?? [];
+      const localRows = await LawRepo.localSearchUk({ category, q, limit, courts });
       if (localRows.length > 0) {
         return this.toResult(wire, q, limit, localRows, "cache");
       }
       const tenantId = await LawRepo.resolveUkTenantId();
       let created: Law[];
       try {
-        created = await this.searchCaseLaw(q, limit, tenantId);
+        created = await this.searchCaseLaw(q, limit, tenantId, courts);
       } catch (err) {
         if (err instanceof UkLegalMcpUnavailableError) {
           throw new HttpError(
@@ -132,10 +134,22 @@ export class UkLawSourceProvider implements LawSourceProvider {
     return this.toResult(wire, q, limit, created, "uk-legal-mcp");
   }
 
-  private async searchCaseLaw(q: string, limit: number, tenantId: string): Promise<Law[]> {
-    const { results } = await caseLawSearch({ query: q, limit });
+  /** With a court filter, TNA takes one `court=` per request (as in browse), so each selected
+   * court is searched in parallel and the per-court relevance lists are interleaved. Hits are
+   * re-checked against the selection by slug in case upstream ever ignores the parameter. */
+  private async searchCaseLaw(q: string, limit: number, tenantId: string, courts: string[] = []): Promise<Law[]> {
+    const perCourt = courts.length
+      ? await Promise.all(courts.map((court) => caseLawSearch({ query: q, court, limit })))
+      : [await caseLawSearch({ query: q, limit })];
+    const lists = perCourt.map(({ results }) =>
+      courts.length ? results.filter((hit) => courts.some((c) => hit.uri.replace(/^\/+/, "").startsWith(`${c}/`))) : results,
+    );
+    const hits: UkCaseLawSearchHit[] = [];
+    for (let i = 0; hits.length < limit && lists.some((l) => i < l.length); i++) {
+      for (const list of lists) if (i < list.length && hits.length < limit) hits.push(list[i]);
+    }
     return this.writeThrough(
-      results.map((hit) => caseLawHitToCreateInput(hit, tenantId)),
+      hits.map((hit) => caseLawHitToCreateInput(hit, tenantId)),
     );
   }
 

@@ -44,7 +44,9 @@ export interface LawSourceProvider {
    * unknown value. */
   parseCategory(wire: string): LawCategory;
 
-  search(params: { category: LawCategory; q: string; limit: number }): Promise<SearchResult>;
+  /** `courts` (UK case law only, same slugs as `LawFacets.courts`) narrows the search to those
+   * courts; empty/absent means all courts. Other providers/categories ignore it. */
+  search(params: { category: LawCategory; q: string; limit: number; courts?: string[] }): Promise<SearchResult>;
 
   browse(params: {
     category: LawCategory;

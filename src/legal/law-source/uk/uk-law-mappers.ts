@@ -13,17 +13,22 @@ import { UK_LEGISLATION_TYPES } from "./uk-law-vocab";
 const asJson = (v: unknown[]): Prisma.InputJsonValue | typeof Prisma.JsonNull =>
   v.length > 0 ? (v as Prisma.InputJsonValue) : Prisma.JsonNull;
 
-/** "uksc/2024/12" -> "UKSC"; "ewca/civ/2023/450" -> "EWCA (Civ)". Everything before the first
- * 4-digit year segment is the court; the rest is year/number. */
+/** Division segments that are initialisms, written in capitals in neutral citations
+ * ("EWHC (KB)", "UKUT (IAC)"); every other segment is a word abbreviation ("Civ", "Admlty").
+ * Mirrors UK_DIVISION_INITIALISMS in the web app's library-config.ts. */
+const UK_DIVISION_INITIALISMS = new Set(["kb", "qb", "tcc", "ipec", "scco", "iac", "aac", "lc", "tc", "grc"]);
+
+/** "uksc/2024/12" -> "UKSC"; "ewca/civ/2023/450" -> "EWCA (Civ)"; "ewhc/kb/2024/1" -> "EWHC (KB)".
+ * Everything before the first 4-digit year segment is the court; the rest is year/number. */
 export function courtCodeFromSlug(slug: string): string | null {
   const parts = slug.split("/").filter(Boolean);
   const yearIdx = parts.findIndex((p) => /^\d{4}$/.test(p));
   const courtParts = yearIdx > 0 ? parts.slice(0, yearIdx) : parts.slice(0, 1);
   if (courtParts.length === 0) return null;
   const [head, ...rest] = courtParts;
-  return rest.length > 0
-    ? `${head.toUpperCase()} (${rest.map((r) => r[0].toUpperCase() + r.slice(1)).join(" ")})`
-    : head.toUpperCase();
+  const division = (r: string) =>
+    UK_DIVISION_INITIALISMS.has(r.toLowerCase()) ? r.toUpperCase() : r[0].toUpperCase() + r.slice(1);
+  return rest.length > 0 ? `${head.toUpperCase()} (${rest.map(division).join(" ")})` : head.toUpperCase();
 }
 
 function yearFromSlug(slug: string): number | null {
