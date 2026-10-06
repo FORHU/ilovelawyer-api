@@ -43,6 +43,11 @@ describe("Legal Terminal — workspace catalog", () => {
     expect(layout.panels.find((p) => p.id === "command")?.visible).to.equal(true);
   });
 
+  it("keeps a deliberately emptied layout empty", () => {
+    const layout = normalizeLayout({ preset: "PANE_2", panels: [{ id: "command", visible: false, order: 0, width: 1, height: 1 }] }, "ENTERPRISE");
+    expect(layout.panels.some((p) => p.visible)).to.equal(false);
+  });
+
   it("lets redTeam be shown when the client requests it (unlike the permanently-folded dates panel)", () => {
     const layout = normalizeLayout(
       {

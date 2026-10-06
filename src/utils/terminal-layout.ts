@@ -182,16 +182,26 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
 
   const seen = new Set<PanelId>();
   const panels: PanelLayout[] = [];
+  // A pane that was visible but dropped (retired, or not in this SKU) is the only reason to force
+  // one back on; a layout the user deliberately emptied must stay empty.
+  let droppedVisible = false;
 
   for (const item of raw.panels) {
     const row = item as Partial<PanelLayout>;
-    if (!isPanelId(row.id) || seen.has(row.id)) continue;
+    if (!isPanelId(row.id) || seen.has(row.id)) {
+      if (!isPanelId(row.id) && row.visible === true) droppedVisible = true;
+      continue;
+    }
     const entry = PANEL_CATALOG.find((p) => p.id === row.id);
-    if (!entry || !skuAllowsPanel(sku, entry.minSku)) continue;
+    if (!entry || !skuAllowsPanel(sku, entry.minSku)) {
+      if (row.visible === true) droppedVisible = true;
+      continue;
+    }
     seen.add(row.id);
     // "dates" is permanently folded into Evidence & Timeline (TerminalPanelBody renders it as
     // null) — redTeam is a real, addable panel now, not force-hidden the way it used to be.
     const visible = row.id === "dates" ? false : Boolean(row.visible);
+    if (row.id === "dates" && row.visible === true) droppedVisible = true;
     panels.push({
       id: row.id,
       visible,
@@ -222,7 +232,7 @@ export function normalizeLayout(input: unknown, sku = "SOLO"): WorkspaceLayout {
     });
   }
 
-  if (!panels.some((p) => p.visible)) {
+  if (droppedVisible && !panels.some((p) => p.visible)) {
     const command = panels.find((p) => p.id === "command");
     if (command) {
       command.visible = true;
