@@ -699,13 +699,19 @@ function safeJsonParse(str: string): any {
         if (char === '"' && !escaped) {
           if (inQuote) {
             let nextChar = "";
+            let nextIdx = -1;
             for (let j = i + 1; j < sanitized.length; j++) {
               if (!/\s/.test(sanitized[j])) {
                 nextChar = sanitized[j];
+                nextIdx = j;
                 break;
               }
             }
-            if (nextChar && ![":", ",", "}", "]"].includes(nextChar)) {
+            // A quote then a comma only ends the string when JSON follows the comma — a quoted
+            // word mid-sentence (`the ties were "satisfactory", then…`) is followed by prose.
+            const proseAfterComma =
+              nextChar === "," && !/^\s*(?:["{[\]}]|(?:-?\d[\d.eE+-]*|true|false|null)\s*[,}\]])/.test(sanitized.slice(nextIdx + 1));
+            if ((nextChar && ![":", ",", "}", "]"].includes(nextChar)) || proseAfterComma) {
               processed += '\\"';
               continue;
             }

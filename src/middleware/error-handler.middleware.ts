@@ -9,7 +9,7 @@ function isEntityTooLarge(err: unknown): boolean {
   return e.status === 413 || e.type === "entity.too.large";
 }
 
-export default function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {
+export default function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
   // A streaming response (e.g. chat) may already have sent headers/content before failing
   // partway through; calling res.json()/res.status() at that point throws ERR_HTTP_HEADERS_SENT
   // and masks the original error. Still log it, but delegate to Express's default handler
@@ -20,6 +20,9 @@ export default function errorHandler(err: unknown, _req: Request, res: Response,
   }
 
   if (err instanceof HttpError) {
+    // 4xx are expected refusals; a 5xx HttpError is a real failure (bad AI reply, unreadable
+    // data) and was otherwise invisible in the logs.
+    if (err.statusCode >= 500) logger.error(err.message, { status: err.statusCode, code: err.code, path: req.originalUrl });
     return res.status(err.statusCode).json({ message: err.message, ...(err.code ? { code: err.code } : {}), ...(err.details ?? {}) });
   }
 
