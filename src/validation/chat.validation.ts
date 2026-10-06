@@ -1,7 +1,10 @@
 import Joi from "joi";
 import { MIND_MAP_LIMITS } from "../constants/mind-map-limits.constants";
 
-export const listConsultationsSchema = Joi.object({ caseId: Joi.string().guid().optional() });
+export const listConsultationsSchema = Joi.object({
+  caseId: Joi.string().guid().optional(),
+  status: Joi.string().valid("ACTIVE", "ARCHIVED").default("ACTIVE"),
+});
 
 export const createConsultationSchema = Joi.object({
   title: Joi.string().optional(),

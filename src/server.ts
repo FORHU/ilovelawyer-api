@@ -9,6 +9,7 @@ import CaseGraphPromotionQueue from "./queues/case-graph-promotion.queue";
 import ChatGenerationQueue from "./queues/chat-generation.queue";
 import EventReminderQueue from "./queues/event-reminder.queue";
 import AccountDeletionQueue from "./queues/account-deletion.queue";
+import ConsultationDeletionQueue from "./queues/consultation-deletion.queue";
 import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
 
 import { PORT } from "./config";
@@ -22,6 +23,7 @@ CaseGraphPromotionQueue.start();
 ChatGenerationQueue.start();
 EventReminderQueue.start();
 AccountDeletionQueue.start();
+ConsultationDeletionQueue.start();
 GoogleCalendarSyncQueue.start();
 
 app.listen(PORT, "0.0.0.0", () => {

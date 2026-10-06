@@ -631,7 +631,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
       },
     ];
     try {
-      const messages: any[] = await ChatSvc.listMessages("org1", "c1");
+      const messages: any[] = await ChatSvc.listMessages("org1", "u1", "c1");
       const assistant = messages.find((m) => m.id === "a1");
       expect(assistant.content).to.equal('See "Letter before claim.pdf" for the claim.');
       expect(assistant.decisionRecords.records[0].evidenceFor[0].doc).to.equal(DOC_NAME);
@@ -662,7 +662,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
       { id: "a1", role: "assistant", content: "A clean answer.", documents: [], decisionRecords: null, generatedDocument: null },
     ];
     try {
-      const messages: any[] = await ChatSvc.listMessages("org1", "c1");
+      const messages: any[] = await ChatSvc.listMessages("org1", "u1", "c1");
       expect(messages).to.have.length(2);
       expect(lookups).to.equal(0);
     } finally {
