@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { OrganizationRole, OrganizationMemberStatus } from "@prisma/client";
+import { OrganizationRole, OrganizationMemberStatus, Prisma } from "@prisma/client";
 import { getStableProxyFileUrl } from "../utils/s3";
 
 export default class OrganizationMemberRepo {
@@ -19,9 +19,8 @@ export default class OrganizationMemberRepo {
   }
 
   /** userId is globally unique (a user belongs to at most one org), so this also verifies
-   * the membership found actually belongs to the given organizationId. Returns a membership
-   * regardless of status (PENDING or ACCEPTED) — callers that need to gate on acceptance
-   * (e.g. requireMembership) must check `.status` themselves. Includes the organization's
+   * the membership found actually belongs to the given organizationId. Invitations aren't
+   * memberships — see OrganizationInviteRepo. Includes the organization's
    * tenant code so requireMembership can populate TenantContext without a second query. */
   static async find(organizationId: string, userId: string) {
     const membership = await prisma.organizationMember.findUnique({
@@ -40,31 +39,10 @@ export default class OrganizationMemberRepo {
   static async findAnyForUser(userId: string) {
     return prisma.organizationMember.findUnique({
       where: { userId },
-      include: { organization: { select: { isPersonal: true, tenant: { select: { code: true } } } } },
+      include: {
+        organization: { select: { name: true, isPersonal: true, tenantId: true, tenant: { select: { code: true } } } },
+      },
     });
-  }
-
-  /** Invites a user who is currently in their own personal workspace. userId is unique, so the
-   * PENDING invite has to replace that membership. The workspace itself stays, dormant, and
-   * comes back if they decline (see OrganizationSvc.declineInvite). */
-  static async replaceWithInvite(organizationId: string, userId: string, role: OrganizationRole) {
-    return prisma.$transaction(async (tx) => {
-      await tx.organizationMember.delete({ where: { userId } });
-      return tx.organizationMember.create({
-        data: { organizationId, userId, role, status: OrganizationMemberStatus.PENDING },
-        include: { user: { select: { id: true, name: true, email: true, username: true } } },
-      });
-    });
-  }
-
-  /** The caller's own pending invite, if any — used by the accept/decline endpoints, which
-   * aren't scoped to an already-known organizationId. */
-  static async findPendingForUser(userId: string) {
-    const membership = await prisma.organizationMember.findUnique({
-      where: { userId },
-      include: { organization: true },
-    });
-    return membership && membership.status === OrganizationMemberStatus.PENDING ? membership : null;
   }
 
   static async countByRole(organizationId: string, role: OrganizationRole) {
@@ -97,9 +75,25 @@ export default class OrganizationMemberRepo {
     });
   }
 
-  static async remove(organizationId: string, userId: string) {
-    return prisma.organizationMember.delete({
-      where: { userId },
+  /** Also revokes the user's per-case grants (CaseAccess) on this org's cases — CaseAccess
+   * honours those grants on its own, so they'd otherwise outlive the membership and keep
+   * the case readable from whichever workspace the user lands in next. */
+  /** `andThen` runs in the same transaction — e.g. queueing the leaver's portfolio copies. */
+  static async remove(
+    organizationId: string,
+    userId: string,
+    andThen?: (tx: Prisma.TransactionClient) => Promise<unknown>,
+  ) {
+    return prisma.$transaction(async (tx) => {
+      const removed = await OrganizationMemberRepo.removeIn(tx, organizationId, userId);
+      if (andThen) await andThen(tx);
+      return removed;
     });
+  }
+
+  /** remove(), inside a transaction the caller already holds. */
+  static async removeIn(tx: Prisma.TransactionClient, organizationId: string, userId: string) {
+    await tx.caseAccess.deleteMany({ where: { userId, case: { organizationId } } });
+    return tx.organizationMember.delete({ where: { userId } });
   }
 }

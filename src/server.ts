@@ -11,6 +11,7 @@ import EventReminderQueue from "./queues/event-reminder.queue";
 import AccountDeletionQueue from "./queues/account-deletion.queue";
 import ConsultationDeletionQueue from "./queues/consultation-deletion.queue";
 import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
+import CaseCopyQueue from "./queues/case-copy.queue";
 
 import { PORT } from "./config";
 
@@ -25,6 +26,7 @@ EventReminderQueue.start();
 AccountDeletionQueue.start();
 ConsultationDeletionQueue.start();
 GoogleCalendarSyncQueue.start();
+CaseCopyQueue.start();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on http://0.0.0.0:${PORT}`);

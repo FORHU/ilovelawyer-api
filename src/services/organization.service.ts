@@ -1,6 +1,9 @@
 import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
+import OrganizationInviteRepo from "../repositories/organization-invite.repository";
+import CaseCopyRepo from "../repositories/case-copy.repository";
+import CaseCopyQueue from "../queues/case-copy.queue";
 import AuthRepo from "../repositories/auth.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import CaseAccess from "../utils/case-access";
@@ -16,8 +19,9 @@ import logger from "../utils/logger";
 
 export default class OrganizationSvc {
   /** `personal` is onboarding's "Skip for now": a private workspace the app never presents as
-   * an organization (see Organization.isPersonal). Creating a real org while in one upgrades
-   * it in place instead of starting over, so the user's work carries into the new org. */
+   * an organization (see Organization.isPersonal). A real organization is always a new one —
+   * the personal workspace stays behind as the user's portfolio, so cases made solo never
+   * become the organization's (see getPortfolio). */
   static async create(
     userId: string,
     name: string,
@@ -33,7 +37,7 @@ export default class OrganizationSvc {
     const existing = await OrganizationMemberRepo.findAnyForUser(userId);
     const inPersonal = !!existing?.organization.isPersonal && existing.status === OrganizationMemberStatus.ACCEPTED;
     if (existing && !inPersonal) {
-      throw new HttpError("You already belong to (or have a pending invite from) an organization.", 409);
+      throw new HttpError("You already belong to an organization.", 409);
     }
 
     if (personal) {
@@ -46,11 +50,32 @@ export default class OrganizationSvc {
     }
 
     const slug = await OrganizationSvc.generateUniqueSlug(name);
-    const promote = { name, slug, packageSku: packageSku ?? "PROFESSIONAL" };
-    if (inPersonal) return OrganizationRepo.activatePersonal(existing!.organizationId, userId, { addMember: false, promote });
-    const dormant = await OrganizationRepo.findDormantPersonal(userId, tenantId);
-    if (dormant) return OrganizationRepo.activatePersonal(dormant.id, userId, { addMember: true, promote });
-    return OrganizationRepo.create(userId, name, slug, promote.packageSku, tenantId);
+    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", tenantId, false, { parkCurrent: inPersonal });
+  }
+
+  /** The caller's portfolio: their personal workspace, which holds the cases they made solo and
+   * the copies they keep of cases they made in organizations they've left. Created on demand,
+   * in their current organization's tenant. While they're in an organization they reach it
+   * without being its member (see requireMembership); if they're in it, it's their workspace. */
+  static async getPortfolio(userId: string) {
+    const current = await OrganizationMemberRepo.findAnyForUser(userId);
+    if (!current) throw new HttpError("Join or create a workspace first", 409);
+    const portfolio = current.organization.isPersonal
+      ? await OrganizationRepo.findById(current.organizationId)
+      : await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
+    if (!portfolio) throw new HttpError("Organization not found", 404);
+    const tenant = { code: current.organization.tenant.code };
+    const copies = await CaseCopyRepo.listUnfinishedForUser(userId, portfolio.id);
+    return { ...portfolio, tenant, role: OrganizationRole.OWNER, copies };
+  }
+
+  /** The user's personal workspace in `tenantId`, made (without a membership) if they have none. */
+  private static async ensurePersonal(userId: string, tenantId: string) {
+    const existing = await OrganizationRepo.findPersonal(userId, tenantId);
+    if (existing) return existing;
+    const user = await AuthRepo.findById(userId);
+    const name = user?.name || user?.username || "Personal workspace";
+    return OrganizationRepo.createPersonalWithoutMember(userId, name, await OrganizationSvc.generateUniqueSlug(name), tenantId);
   }
 
   private static async generateUniqueSlug(name: string): Promise<string> {
@@ -62,13 +87,12 @@ export default class OrganizationSvc {
     return slug;
   }
 
-  /** Orgs the given user is an ACCEPTED member of, with their role in each. A PENDING
-   * invite doesn't count as belonging yet — see OrganizationMemberRepo.findPendingForUser. */
+  /** Orgs the given user is a member of, with their role in each. An invite doesn't count as
+   * belonging yet — see getPendingInviteForUser. */
   static async listForUser(userId: string) {
     const orgs = await OrganizationRepo.listForUser(userId);
-    // Each org was fetched with `members` pre-filtered to this user and ACCEPTED status
-    // (see repo), so it's always exactly one row — flatten it into a plain `role` field.
-    // A PENDING invite deliberately doesn't show up here; see getPendingInviteForUser.
+    // Each org was fetched with `members` pre-filtered to this user (see repo), so it's always
+    // exactly one row — flatten it into a plain `role` field.
     return orgs.map(({ members, ...org }) => ({ ...org, role: members[0]?.role }));
   }
 
@@ -86,23 +110,39 @@ export default class OrganizationSvc {
     return OrganizationRepo.update(id, data);
   }
 
+  /** Members, then outstanding invites as PENDING rows (the shape the app's members list renders). */
   static async listMembers(organizationId: string) {
-    return OrganizationMemberRepo.list(organizationId);
+    const [members, invites] = await Promise.all([
+      OrganizationMemberRepo.list(organizationId),
+      OrganizationInviteRepo.list(organizationId),
+    ]);
+    const pending = invites.map((invite) => ({
+      ...invite,
+      status: OrganizationMemberStatus.PENDING,
+      updatedAt: invite.createdAt,
+    }));
+    return [...members, ...pending];
   }
 
   /** Resolves the caller's membership/role in an org, or throws 403 if they're not a member.
    * A PENDING invite doesn't count — the invitee has no access until they accept it. */
   static async requireMembership(organizationId: string, userId: string) {
     const membership = await OrganizationMemberRepo.find(organizationId, userId);
-    if (!membership) throw new HttpError("Not a member of this organization", 403);
+    if (!membership) {
+      // Their own personal workspace is their portfolio, open to them from any organization.
+      const portfolio = await OrganizationRepo.findOwnPersonal(organizationId, userId);
+      if (portfolio) return { organizationId, userId, role: OrganizationRole.OWNER, organization: { tenant: portfolio.tenant } };
+      throw new HttpError("Not a member of this organization", 403);
+    }
     if (membership.status === OrganizationMemberStatus.PENDING) {
       throw new HttpError("Your invite to this organization is still pending", 403);
     }
     return membership;
   }
 
-  /** Invites an existing user by email. The invitee lands as PENDING until they accept —
-   * only an OWNER can grant the OWNER role. */
+  /** Invites an existing user by email — including one who already belongs to another
+   * organization, who then decides whether to leave it (acceptInvite) or stay (declineInvite).
+   * Only an OWNER can grant the OWNER role. */
   static async inviteMember(
     organizationId: string,
     actingRole: OrganizationRole,
@@ -127,63 +167,93 @@ export default class OrganizationSvc {
     const user = await AuthRepo.findByEmail(email);
     if (!user) throw new HttpError("No user found with this email", 404);
 
-    const existing = await OrganizationMemberRepo.find(organizationId, user.id);
-    if (existing) {
+    if (await OrganizationMemberRepo.find(organizationId, user.id)) {
+      throw new HttpError("User is already a member of this organization", 409);
+    }
+
+    const outstanding = await OrganizationInviteRepo.findForUser(user.id);
+    if (outstanding) {
       const message =
-        existing.status === OrganizationMemberStatus.PENDING
+        outstanding.organizationId === organizationId
           ? "User already has a pending invite to this organization"
-          : "User is already a member of this organization";
+          : "This user already has a pending invite from another organization. They must accept or decline it first.";
       throw new HttpError(message, 409);
     }
 
-    // Someone who skipped onboarding is in a personal workspace, not an organization — they
-    // can be invited, which parks that workspace until they accept or decline.
-    const elsewhere = await OrganizationMemberRepo.findAnyForUser(user.id);
-    const inPersonal = !!elsewhere?.organization.isPersonal && elsewhere.status === OrganizationMemberStatus.ACCEPTED;
-    if (elsewhere && !inPersonal) {
-      throw new HttpError(
-        "This user already belongs to (or has a pending invite from) another organization. They must leave/decline it before joining a new one.",
-        409,
-      );
-    }
+    const invite = await OrganizationInviteRepo.create(organizationId, user.id, role);
 
-    const member = inPersonal
-      ? await OrganizationMemberRepo.replaceWithInvite(organizationId, user.id, role)
-      : await OrganizationMemberRepo.add(organizationId, user.id, role, OrganizationMemberStatus.PENDING);
+    const inviterName = inviter?.name || "A team member";
+    const orgName = organization?.name ?? "";
     const html = await renderTemplate("org-invite", {
-      inviterName: inviter?.name || "A team member",
-      orgName: organization?.name ?? "",
+      inviterName,
+      orgName,
       role,
       loginLink: `${CLIENT_URL[0]}/login`,
     });
     // user.email, not the typed `email`: AuthRepo.findByEmail matched it case-insensitively,
     // so the stored address is the canonical one to send to.
-    await sendEmail({ to: user.email, subject: `You've been invited to join ${organization?.name}`, html });
+    await sendEmail({ to: user.email, subject: `You've been invited to join ${orgName}`, html });
 
+    // No organizationId: the invitee isn't in the inviting org, and an org-less notification
+    // shows in whichever workspace they're in (see NotificationRepo.findMany).
+    const current = await OrganizationMemberRepo.findAnyForUser(user.id);
+    const switching = !!current && !current.organization.isPersonal;
+    await NotificationSvc.create({
+      userId: user.id,
+      type: "SYSTEM",
+      title: `You've been invited to join ${orgName}`,
+      message: switching
+        ? `${inviterName} invited you to join ${orgName} as ${role}. Accepting will remove you from your current organization.`
+        : `${inviterName} invited you to join ${orgName} as ${role}.`,
+      link: "/homepage/organization",
+    }).catch((err) => logger.error("inviteMember: failed to create notification", { err, organizationId, userId: user.id }));
+
+    return invite;
+  }
+
+  /** The caller's own pending invite, if any (a user can have at most one). */
+  static async getPendingInviteForUser(userId: string) {
+    const invite = await OrganizationInviteRepo.findForUser(userId);
+    return invite ? { ...invite, status: OrganizationMemberStatus.PENDING } : null;
+  }
+
+  /** Joins the inviting organization. Someone already in a real organization leaves it as part
+   * of accepting, under the same rules as leave() — so a last owner with teammates has to hand
+   * ownership over first — and keeps portfolio copies of the cases they made there. A personal
+   * workspace is just parked; it stays their portfolio. */
+  static async acceptInvite(organizationId: string, userId: string) {
+    const invite = await OrganizationInviteRepo.findForUser(userId);
+    if (!invite || invite.organizationId !== organizationId) {
+      throw new HttpError("No pending invite found for this organization", 404);
+    }
+
+    const current = await OrganizationMemberRepo.findAnyForUser(userId);
+    if (!current || current.organization.isPersonal) return OrganizationInviteRepo.accept(invite, current);
+
+    await this.assertCanLeave(current.organizationId, current.role);
+    const portfolio = await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
+    const member = await OrganizationInviteRepo.accept(invite, current, (tx) =>
+      CaseCopyRepo.enqueueForCreatorIn(tx, {
+        sourceOrganizationId: current.organizationId,
+        sourceOrganizationName: current.organization.name,
+        userId,
+        targetOrganizationId: portfolio.id,
+      }),
+    );
+    CaseCopyQueue.kick();
     return member;
   }
 
-  /** The caller's own pending invite, if any (a user can have at most one, org-wide). */
-  static async getPendingInviteForUser(userId: string) {
-    return OrganizationMemberRepo.findPendingForUser(userId);
-  }
-
-  static async acceptInvite(organizationId: string, userId: string) {
-    const membership = await OrganizationMemberRepo.find(organizationId, userId);
-    if (!membership || membership.status !== OrganizationMemberStatus.PENDING) {
-      throw new HttpError("No pending invite found for this organization", 404);
-    }
-    return OrganizationMemberRepo.updateStatus(userId, OrganizationMemberStatus.ACCEPTED);
-  }
-
+  /** Turns the invite down; whatever organization the user is in now is left alone. */
   static async declineInvite(organizationId: string, userId: string) {
-    const membership = await OrganizationMemberRepo.find(organizationId, userId);
-    if (!membership || membership.status !== OrganizationMemberStatus.PENDING) {
+    const invite = await OrganizationInviteRepo.findForUser(userId);
+    if (!invite || invite.organizationId !== organizationId) {
       throw new HttpError("No pending invite found for this organization", 404);
     }
-    await OrganizationMemberRepo.remove(organizationId, userId);
-    // An invite to someone in their personal workspace parked it (see inviteMember) — declining
-    // puts them back where they were instead of leaving them with no workspace at all.
+    await OrganizationInviteRepo.delete(userId);
+    // Invites used to park a personal workspace when sent (before 20261007150000_organization_invites)
+    // — someone declining one of those gets it back instead of being left with no workspace.
+    if (await OrganizationMemberRepo.findAnyForUser(userId)) return;
     const dormant = await OrganizationRepo.findDormantPersonal(userId);
     if (dormant) await OrganizationRepo.activatePersonal(dormant.id, userId, { addMember: true });
   }
@@ -222,7 +292,7 @@ export default class OrganizationSvc {
       await this.assertNotLastOwner(organizationId);
     }
 
-    await OrganizationMemberRepo.remove(organizationId, targetUserId);
+    await OrganizationSvc.exit(organizationId, targetUserId);
   }
 
   /** Self-service: a member removes their own membership. A sole-member OWNER may leave
@@ -234,18 +304,45 @@ export default class OrganizationSvc {
     const membership = await OrganizationMemberRepo.find(organizationId, userId);
     if (!membership) throw new HttpError("Not a member of this organization", 404);
 
-    // Leaving it would strand the user with no workspace; creating an org upgrades it instead.
+    // It's their portfolio, and leaving it would strand them with no workspace.
     const organization = await OrganizationRepo.findById(organizationId);
     if (organization?.isPersonal) throw new HttpError("A personal workspace can't be left", 400);
 
-    if (membership.role === OrganizationRole.OWNER) {
-      const members = await OrganizationMemberRepo.list(organizationId);
-      if (members.length > 1) {
-        await this.assertNotLastOwner(organizationId);
-      }
-    }
+    await this.assertCanLeave(organizationId, membership.role);
 
-    await OrganizationMemberRepo.remove(organizationId, userId);
+    await OrganizationSvc.exit(organizationId, userId);
+  }
+
+  /** How a member stops belonging to an organization, whether they left or were removed: the
+   * membership goes, every case they created there is queued for a copy in their portfolio (in
+   * the same transaction), and they land in that portfolio — their personal workspace, in this
+   * organization's tenant, made if they had none. The organization keeps the originals. */
+  private static async exit(organizationId: string, userId: string) {
+    const organization = await OrganizationRepo.findById(organizationId);
+    if (!organization) throw new HttpError("Organization not found", 404);
+    const portfolio = await OrganizationSvc.ensurePersonal(userId, organization.tenantId);
+    await OrganizationMemberRepo.remove(organizationId, userId, (tx) =>
+      CaseCopyRepo.enqueueForCreatorIn(tx, {
+        sourceOrganizationId: organizationId,
+        sourceOrganizationName: organization.name,
+        userId,
+        targetOrganizationId: portfolio.id,
+      }),
+    );
+    await OrganizationRepo.activatePersonal(portfolio.id, userId, { addMember: true });
+    CaseCopyQueue.kick();
+  }
+
+  /** Shared by leave() and acceptInvite(): an OWNER can walk away from an org they're alone
+   * in, but not leave teammates without an owner. */
+  private static async assertCanLeave(organizationId: string, role: OrganizationRole) {
+    if (role !== OrganizationRole.OWNER) return;
+    const members = await OrganizationMemberRepo.list(organizationId);
+    if (members.length <= 1) return;
+    const ownerCount = await OrganizationMemberRepo.countByRole(organizationId, OrganizationRole.OWNER);
+    if (ownerCount <= 1) {
+      throw new HttpError("You're this organization's only owner. Make another member an owner before you leave.", 400);
+    }
   }
 
   /** Throws if the org currently has exactly one OWNER — the caller is about to remove/demote them. */

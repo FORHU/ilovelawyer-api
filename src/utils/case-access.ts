@@ -1,9 +1,18 @@
 import prisma from "../lib/prisma";
 import HttpError from "./http-error";
-import { CasePermission, ClientSide } from "@prisma/client";
+import { CasePermission, ClientSide, Prisma } from "@prisma/client";
 import { TenantCode, asTenantCode } from "../types/tenant-code";
 
 const EDIT_PERMS: CasePermission[] = ["EDIT", "ADMIN"];
+
+/** Having created a case is attribution, not access: an organization's case is reached through
+ * membership (or a per-case grant), so its creator loses it on leaving — they keep their
+ * portfolio copy instead (see CaseCopySvc). Creator access only covers a case with no
+ * organization, and the creator's own personal workspace (their portfolio), which they reach
+ * from whichever organization they're in. */
+function ownedByUser(userId: string): Prisma.CaseWhereInput[] {
+  return [{ userId, organizationId: null }, { organization: { isPersonal: true, createdById: userId } }];
+}
 
 export default class CaseAccess {
   static async loadAccessibleCase(caseId: string, userId: string) {
@@ -11,7 +20,7 @@ export default class CaseAccess {
       where: {
         id: caseId,
         OR: [
-          { userId },
+          ...ownedByUser(userId),
           { accesses: { some: { userId } } },
           { organization: { members: { some: { userId, status: "ACCEPTED" } } } },
         ],
@@ -27,7 +36,7 @@ export default class CaseAccess {
       where: {
         id: caseId,
         OR: [
-          { userId },
+          ...ownedByUser(userId),
           { accesses: { some: { userId, permission: { in: EDIT_PERMS } } } },
           { organization: { members: { some: { userId, status: "ACCEPTED", role: { in: ["OWNER", "ADMIN"] } } } } },
         ],

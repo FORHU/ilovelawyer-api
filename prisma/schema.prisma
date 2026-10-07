@@ -118,6 +118,8 @@ model User {
   terminalWorkspaces      TerminalWorkspace[]
   screenPresets           ScreenPreset[]
   organizationMemberships OrganizationMember[]
+  organizationInvites     OrganizationInvite[]
+  caseCopies              CaseCopy[]
   createdOrganizations    Organization[]                   @relation("OrgCreator")
   ownedRisks              CaseRisk[]
   auditEvents             AuditEvent[]
@@ -184,6 +186,9 @@ enum PackageSku {
 
 model Consultation {
   id             String                   @id @default(uuid())
+  // On a portfolio copy (see CaseCopySvc): the consultation in the original case this was copied
+  // from, so the copy can later be compared with the original item by item. No foreign key.
+  copiedFromId String?
   userId         String
   organizationId String
   caseId         String?
@@ -791,8 +796,17 @@ enum ClientSide {
 model Case {
   id                    String     @id @default(uuid())
   traceEvents           ConsultationTraceEvent[]
-  userId                String
+  // Who created the case — attribution only, never access on its own (see CaseAccess). Nullable
+  // so deleting that account leaves the case with its organization; createdByName keeps the
+  // name to show after that.
+  userId                String?
+  createdByName         String?
   organizationId        String?
+  // Set on a creator's portfolio copy, made when they leave the organization the original
+  // stays in (see CaseCopySvc). No foreign key — the original may be deleted later.
+  copiedFromCaseId      String?
+  copiedFromOrgName     String?
+  copiedAt              DateTime?
   caseName              String
   actionType            String?
   jurisdiction          String?
@@ -829,7 +843,7 @@ model Case {
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
 
-  user                 User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                 User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
   organization         Organization?             @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   documents            Document[]
   parties              Party[]
@@ -873,10 +887,14 @@ model Case {
   @@index([userId])
   @@index([organizationId])
   @@index([organizationId, status])
+  @@index([copiedFromCaseId])
 }
 
 model Party {
   id          String  @id @default(uuid())
+  // On a portfolio copy (see CaseCopySvc): the party in the original case this was copied
+  // from, so the copy can later be compared with the original item by item. No foreign key.
+  copiedFromId String?
   caseId      String
   name        String
   designation String
@@ -893,6 +911,9 @@ model Party {
 
 model Document {
   id               String    @id @default(uuid())
+  // On a portfolio copy (see CaseCopySvc): the document in the original case this was copied
+  // from, so the copy can later be compared with the original item by item. No foreign key.
+  copiedFromId String?
   userId           String
   organizationId   String
   caseId           String?
@@ -1247,6 +1268,9 @@ model CalendarWatchChannel {
 
 model Event {
   id                   String    @id @default(uuid())
+  // On a portfolio copy (see CaseCopySvc): the event in the original case this was copied
+  // from, so the copy can later be compared with the original item by item. No foreign key.
+  copiedFromId String? @map("copied_from_id")
   userId               String
   organizationId       String    @map("organization_id")
   title                String
@@ -1560,6 +1584,9 @@ model ScreenPreset {
 
 model CaseTimelineEvent {
   id          String         @id @default(uuid())
+  // On a portfolio copy (see CaseCopySvc): the timeline entry in the original case this was copied
+  // from, so the copy can later be compared with the original item by item. No foreign key.
+  copiedFromId String?
   caseId      String
   title       String
   occurredOn  DateTime?
@@ -2400,6 +2427,8 @@ model Organization {
   createdBy      User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
   tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   members        OrganizationMember[]
+  invites        OrganizationInvite[]
+  caseCopies     CaseCopy[]
   cases          Case[]
   documents      Document[]
   consultations  Consultation[]
@@ -2453,9 +2482,8 @@ model OrganizationMember {
   organizationId String
   userId         String                   @unique
   role           OrganizationRole         @default(OWNER)
-  // Invited members start PENDING until they accept; the owner created alongside a new
-  // organization (see OrganizationRepo.create) is never invited, so it defaults straight
-  // to ACCEPTED.
+  // Always ACCEPTED now — invitations live in OrganizationInvite. PENDING is what invites used
+  // to be stored as here, before 20261007150000_organization_invites moved them out.
   status         OrganizationMemberStatus @default(ACCEPTED)
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
@@ -2464,6 +2492,55 @@ model OrganizationMember {
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+}
+
+// An invitation to join an organization. Kept apart from OrganizationMember (one row per
+// user) so that someone who already belongs to an organization can still be invited —
+// accepting moves their membership (see OrganizationSvc.acceptInvite), declining leaves it.
+// One outstanding invite per user.
+model OrganizationInvite {
+  id             String           @id @default(uuid())
+  organizationId String
+  userId         String           @unique
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+enum CaseCopyStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+// One portfolio copy to make: a case its creator made in an organization they've just left
+// (left, removed, or switched away from by accepting an invite). Written in the same transaction
+// as the membership change; CaseCopyQueue works through them in the background.
+model CaseCopy {
+  id                     String         @id @default(uuid())
+  sourceCaseId           String
+  // Snapshots, so the portfolio can show "Copying <case> from <org>…" before the copy exists.
+  caseName               String
+  sourceOrganizationName String
+  userId                 String
+  targetOrganizationId   String
+  status                 CaseCopyStatus @default(PENDING)
+  copyCaseId             String?
+  attempts               Int            @default(0)
+  error                  String?        @db.Text
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetOrganization Organization @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, updatedAt])
 }
 
 enum ProductTourStatus {

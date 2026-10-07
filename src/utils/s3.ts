@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
@@ -38,6 +38,21 @@ export async function uploadToS3(key: string, body: Buffer, contentType: string)
   );
 
   return s3UrlForKey(key);
+}
+
+/** Server-side copy within the bucket — the bytes never pass through the API. */
+export async function copyS3Object(sourceKey: string, destinationKey: string): Promise<void> {
+  if (!AWS_S3_BUCKET) {
+    throw new Error("AWS_S3_BUCKET is not configured");
+  }
+  await client.send(
+    new CopyObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: destinationKey,
+      // CopySource is "<bucket>/<key>", URL-encoded per path segment.
+      CopySource: `${AWS_S3_BUCKET}/${sourceKey.split("/").map(encodeURIComponent).join("/")}`,
+    }),
+  );
 }
 
 /** Short-expiry presigned PUT the client uploads its file bytes to directly, bypassing the API. */
