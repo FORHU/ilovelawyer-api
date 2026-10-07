@@ -416,9 +416,14 @@ model MessageCitationRanking {
 
 // Restored after the tenant-implementation merge dropped the model declaration while its
 // migration (20260825153126_) stayed applied — see ChatRepo's audio-overview methods.
+// An Audio Overview script and its recording. Two owners, exactly one per row (a CHECK in the
+// migration): a chat message (`messageId`) when a lawyer asked for one in chat or Studio, or the
+// case (`caseId`) when the case analysis wrote it (AudioOverviewSvc.generateForCase). Rendering and
+// the history list work on the row id, so both kinds go through the same path.
 model MessageAudioOverview {
   id          String               @id @default(uuid())
-  messageId   String               @unique
+  messageId   String?              @unique
+  caseId      String?
   turns       Json
   voiceHostA  String
   voiceHostB  String
@@ -442,8 +447,11 @@ model MessageAudioOverview {
   wordTimings Json?
   createdAt   DateTime             @default(now())
 
-  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  audioFile File?   @relation(fields: [audioFileId], references: [id])
+  message   Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  case      Case?    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  audioFile File?    @relation(fields: [audioFileId], references: [id])
+
+  @@index([caseId])
 }
 
 // The legal/legal_uk "how I reached this answer" trace — see
@@ -848,6 +856,7 @@ model Case {
   reconstruction       CaseReconstruction?
   reconstructionEvents CaseReconstructionEvents?
   redTeamAssessment    RedTeamAssessment?
+  audioOverviews       MessageAudioOverview[]
   graphNodes           CaseGraphNode[]
   graphEdges           CaseGraphEdge[]
   edges                CaseEdge[]

@@ -22,6 +22,7 @@ import OrganizationRepo from "../src/repositories/organization.repository";
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import CaseSnapshotSvc from "../src/services/case-snapshot.service";
 import RedTeamSvc from "../src/services/red-team.service";
+import AudioOverviewSvc from "../src/services/audio-overview.service";
 import WitnessExtractSvc from "../src/services/witness-extract.service";
 import WitnessScoringSvc from "../src/services/witness-scoring.service";
 import WitnessRepo from "../src/repositories/witness.repository";
@@ -91,6 +92,7 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
       [CaseTheorySvc, "refreshAiDraft", step("theory", { skipped: false })],
       [CaseMindMapSvc, "generateFromDocuments", step("mindMap", { skipped: null, map: null })],
       [RedTeamSvc, "generateFromDocuments", step("redTeam", { skipped: false })],
+      [AudioOverviewSvc, "generateForCase", step("audioOverview", { skipped: false, id: "ao-1" })],
       [CaseTimelineSvc, "removeChatCopiedEvents", async () => 0],
       [OrganizationRepo, "writeAudit", async (data: any) => void audits.push(data)],
       [AiGenerationLockSvc, "finishWith", async (_c: string, _k: string, fn: () => Promise<unknown>) => fn()],
@@ -100,12 +102,12 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
 
   afterEach(restoreAll);
 
-  it("runs every step once, in three waves: document readers, then what reads them, then Red Team", async () => {
+  it("runs every step once, in three waves: document readers, then what reads them, then Red Team and the Audio Overview", async () => {
     await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
     const order = started();
     expect(order.slice(0, 6)).to.have.members(WAVE_1);
     expect(order.slice(6, 11)).to.have.members(WAVE_2);
-    expect(order.slice(11)).to.deep.equal(["redTeam"]);
+    expect(order.slice(11)).to.have.members(["redTeam", "audioOverview"]);
   });
 
   it("starts a wave's steps together, and the next wave only once the slowest of them has finished", async () => {

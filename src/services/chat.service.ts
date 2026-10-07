@@ -1697,8 +1697,8 @@ export default class ChatSvc {
     const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
     if (!row) throw new HttpError("No Audio Overview script for this message yet", 404);
 
-    await ChatRepo.updateAudioOverviewAudio(messageId, { audioStatus: "IN_PROGRESS" });
-    AudioOverviewQueue.enqueue(messageId);
+    await ChatRepo.updateAudioOverviewAudio(row.id, { audioStatus: "IN_PROGRESS" });
+    AudioOverviewQueue.enqueue(row.id);
     return { status: "IN_PROGRESS" as const };
   }
 
