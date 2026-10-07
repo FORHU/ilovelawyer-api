@@ -18,6 +18,7 @@ import WitnessExtractSvc from "./witness-extract.service";
 import WitnessScoringSvc from "./witness-scoring.service";
 import CaseTheorySvc from "./case-theory.service";
 import CaseReconstructionSvc from "./case-reconstruction.service";
+import MissingEvidenceAiSvc from "./missing-evidence-ai.service";
 import HttpError from "../utils/http-error";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
@@ -113,6 +114,9 @@ export default class CaseRefreshSvc {
             ["damages extraction", () => DamagesExtractSvc.extractAllPending(caseId, userId)],
             // The narrative reads the documents alone; it is rewritten only while nobody has edited it.
             ["case reconstruction", async () => ({ outcome: await CaseReconstructionSvc.autoRegenerate(caseId, userId) })],
+            // Reads the documents and the case's claims; claims are lawyer- or ClaimExtract-authored,
+            // never written by this refresh, so there is nothing earlier in the run to wait for.
+            ["missing evidence", async () => ({ found: (await MissingEvidenceAiSvc.generateFromDocuments(caseId, userId)).length })],
         ]);
 
         // Wave 2: what reads the findings, strategy, contradictions, witnesses and damages above.
