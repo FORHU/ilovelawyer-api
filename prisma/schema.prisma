@@ -1481,15 +1481,19 @@ enum ConfidenceLevel {
 // table itself (latest row = current outlook). A failed or unparseable generation writes nothing
 // and the previous row stays current. See CaseOutlookAiSvc.
 model CaseOutlook {
-  id         String          @id @default(uuid())
-  caseId     String
-  band       OutlookBand
-  confidence ConfidenceLevel
-  rationale  String          @db.Text
+  id               String          @id @default(uuid())
+  caseId           String
+  band             OutlookBand
+  confidence       ConfidenceLevel
+  rationale        String          @db.Text
   // [{ label, direction: "HELPS" | "HURTS", sourceDocId? }] — see utils/case-outlook-parse.ts.
   // sourceDocId is only kept when it names a document on this case.
-  drivers    Json
-  createdAt  DateTime        @default(now())
+  drivers          Json
+  // utils/case-outlook-fingerprint.ts — the material this outlook was built from. A run whose
+  // fingerprint matches the newest row keeps it instead of asking the model again. Null on rows
+  // from before the column, so their next run always writes a new row.
+  inputFingerprint String?
+  createdAt        DateTime        @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
