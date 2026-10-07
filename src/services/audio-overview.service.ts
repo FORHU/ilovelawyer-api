@@ -38,6 +38,25 @@ export default class AudioOverviewSvc {
     return { skipped: false, id };
   }
 
+  /** The Audio Overview pane's own Regenerate: claims the "audioOverviewScript" lock before the
+   * job is queued (409 if a chat request or the analysis is writing one). Refused while the case
+   * analysis runs, and for a case with no findings yet. */
+  static async beginQueued(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
+    if ((await CaseFindingRepo.list(caseId)).length === 0) {
+      throw new HttpError("This case has no findings yet — add documents so the analysis can run first", 422);
+    }
+    await AiGenerationLockSvc.begin(caseId, "audioOverviewScript");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginQueued claimed the lock: write the script, then
+   * queue its recording. */
+  static async runQueued(caseId: string, userId: string): Promise<void> {
+    const id = await AiGenerationLockSvc.finishWith(caseId, "audioOverviewScript", () => AudioOverviewSvc.writeScript(caseId, userId));
+    if (id) await AudioOverviewSvc.startRecording(id);
+  }
+
   /** The case's newest overview, from either owner, or null when it has none. */
   static async latest(caseId: string, userId: string) {
     await CaseAccess.loadAccessibleCase(caseId, userId);

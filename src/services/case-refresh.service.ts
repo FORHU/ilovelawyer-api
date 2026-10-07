@@ -28,6 +28,8 @@ export default class CaseRefreshSvc {
      * AiGenerationQueue, so a 403/409 surfaces immediately instead of after an enqueue. */
     static async beginQueued(caseId: string, userId: string): Promise<void> {
         await CaseAccess.assertCanEdit(caseId, userId);
+        // A pane's own Regenerate and the analysis never overlap (ADR 0018).
+        await AiGenerationLockSvc.assertNoPaneRunning(caseId);
         // Own outer lock, purely to stop a double-click on "Refresh analysis" itself — the
         // sub-calls below each hold their own lock too (contradictions/caseStrategy/caseFinding),
         // so a 409 from one of those (e.g. Contradictions already running standalone) is caught by

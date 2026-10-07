@@ -42,6 +42,7 @@ describe("POST /:caseId/refresh (manual Refresh analysis)", () => {
       return row;
     });
     patch(AiGenerationQueue, "enqueue", (job: unknown) => void queued.push(job));
+    patch(AiGenerationJobRepo, "listInProgress", async () => []);
     patch(AiGenerationLockSvc as any, "emit", () => {});
   });
 
@@ -62,6 +63,28 @@ describe("POST /:caseId/refresh (manual Refresh analysis)", () => {
     await CaseTerminalCtrl.refresh(req, response()).catch((err) => (error = err));
     expect(error?.statusCode).to.equal(409);
     expect(queued).to.have.length(1);
+  });
+
+  it("waits for a pane's own Regenerate: 409 PANE_REGENERATING naming its job, and nothing queued", async () => {
+    patch(AiGenerationJobRepo, "listInProgress", async () => [
+      { kind: "weaknessRegenerate", status: "IN_PROGRESS", startedAt: new Date(), heartbeatAt: new Date() },
+    ]);
+    let error: any;
+    await CaseTerminalCtrl.refresh(req, response()).catch((err) => (error = err));
+    expect(error?.statusCode).to.equal(409);
+    expect(error?.code).to.equal("PANE_REGENERATING");
+    expect(error?.details).to.deep.equal({ kind: "weaknessRegenerate" });
+    expect(row).to.equal(null);
+    expect(queued).to.deep.equal([]);
+  });
+
+  it("ignores a pane job a restart left behind (silent heartbeat)", async () => {
+    patch(AiGenerationJobRepo, "listInProgress", async () => [
+      { kind: "redTeam", status: "IN_PROGRESS", startedAt: new Date(Date.now() - 20 * 60_000), heartbeatAt: new Date(Date.now() - 10 * 60_000) },
+    ]);
+    const res = response();
+    await CaseTerminalCtrl.refresh(req, res);
+    expect(res.statusCode).to.equal(202);
   });
 
   it("refuses a user who can't edit the case before touching the lock", async () => {

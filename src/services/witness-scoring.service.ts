@@ -109,6 +109,28 @@ export default class WitnessScoringSvc {
     return { skipped: false };
   }
 
+  /** The Witnesses pane's own Regenerate: read new documents for witnesses, then score everyone —
+   * the same two steps the case analysis runs, under the pane's own "witnessRefresh" kind. Refused
+   * while the case analysis runs. */
+  static async beginRefresh(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
+    await AiGenerationLockSvc.begin(caseId, "witnessRefresh");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginRefresh claimed the lock. A reading pass already
+   * running (409) is left to finish on its own; scoring still runs on the witnesses there are. */
+  static async runQueuedRefresh(caseId: string, userId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "witnessRefresh", async () => {
+      const WitnessExtractSvc = (await import("./witness-extract.service")).default;
+      await WitnessExtractSvc.extractAllPending(caseId, userId).catch((err) => {
+        if (err instanceof HttpError && err.statusCode === 409) return;
+        throw err;
+      });
+      await WitnessScoringSvc.scoreFromDocuments(caseId, userId);
+    });
+  }
+
   /** Run by AiGenerationQueue's worker after beginQueued has claimed the job row. */
   static async runQueued(caseId: string, userId: string): Promise<void> {
     await AiGenerationLockSvc.finishWith(caseId, "witnessScoring", () => WitnessScoringSvc.scoreInner(caseId, userId));

@@ -12,6 +12,13 @@ export const AI_GENERATION_KINDS = [
   // so only that panel shows it running.
   "weaknessRegenerate",
   "strengthRegenerate",
+  "legalIssueRegenerate",
+  "attackRegenerate",
+  "defenseRegenerate",
+  // A pane's own Regenerate that runs two steps in a row (read new documents, then score or
+  // re-rate) — its own kind, so only that pane shows it running.
+  "witnessRefresh",
+  "damagesRefresh",
   "caseOutlook",
   "mindMap",
   "mindMapExpand",
@@ -33,3 +40,27 @@ export const AI_GENERATION_KINDS = [
 ] as const;
 
 export type AiGenerationKind = (typeof AI_GENERATION_KINDS)[number];
+
+/** The kinds a Terminal pane's own Regenerate runs under (ADR 0018). A pane run and the case
+ * analysis never overlap: while any of these is running, "Refresh analysis" waits
+ * (AiGenerationLockSvc.assertNoPaneRunning), and while the analysis runs, every pane's route refuses
+ * (assertAnalysisIdle). Some are also held by the analysis's own steps, which is why the check runs
+ * before the analysis claims its lock, never during. */
+export const PANE_REGENERATE_KINDS = [
+  "caseOutlook",
+  "caseStrategyRefresh",
+  "timelineGenerate",
+  "contradictions",
+  "legalIssueRegenerate",
+  "strengthRegenerate",
+  "weaknessRegenerate",
+  "attackRegenerate",
+  "defenseRegenerate",
+  "witnessRefresh",
+  "damagesRefresh",
+  "caseReconstruction",
+  "caseTheoryPropose",
+  "caseMindMap",
+  "redTeam",
+  "audioOverviewScript",
+] as const satisfies readonly AiGenerationKind[];

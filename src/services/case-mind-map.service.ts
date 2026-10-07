@@ -202,6 +202,7 @@ export default class CaseMindMapSvc {
    * same rule as regenerating a chat map. */
   static async beginQueuedGenerate(caseId: string, userId: string): Promise<void> {
     await CaseAccess.loadAccessibleCase(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "caseMindMap");
   }
 

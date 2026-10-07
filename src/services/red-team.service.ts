@@ -93,6 +93,7 @@ export default class RedTeamSvc {
    * AiGenerationQueue, so a 403/409 surfaces immediately instead of after an enqueue. */
   static async beginQueued(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "redTeam");
   }
 
