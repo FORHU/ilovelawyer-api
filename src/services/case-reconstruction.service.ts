@@ -1,10 +1,8 @@
-import { randomUUID } from "crypto";
 import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
-import FilesRepo from "../repositories/files.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import CaseReconstructionEventsRepo from "../repositories/case-reconstruction-events.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
@@ -14,15 +12,9 @@ import { extractRegisterNarratives, extractReconstructionGaps } from "../utils/c
 import { extractReconstructionClaims } from "../utils/case-reconstruction-claims-parse";
 import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { parseRawScenes, auditScenes, Scene } from "../utils/case-reconstruction-scenes-parse";
-import { castForCase } from "../utils/table-read-voices";
-import { mergeCastTurnsToMp3, CastTurn } from "../utils/audio-overview-render";
-import { uploadToS3 } from "../utils/s3";
-import { CASE_RECONSTRUCTION_TABLE_READ_OUTPUT_PREFIX } from "../constants";
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
-import CaseReconstructionAudioSvc from "./case-reconstruction-audio.service";
-import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import logger from "../utils/logger";
 import { cleanRegister } from "../utils/case-reconstruction.utils";
 import { extractBundleFacts, BundleFact } from "../utils/bundle-facts";
@@ -50,21 +42,12 @@ export default class CaseReconstructionSvc {
   /** The analysis refresh's reconstruction step (CaseRefreshSvc). Generates the first narrative,
    * and regenerates it on later corpus changes while it is still the AI's — once a lawyer has
    * edited any register (narrativeEditedAt), it is left alone; the lawyer's Regenerate button
-   * hands it back. Narration follows the narrative: always for the first one, and on a
-   * regeneration only when there was audio to replace, so nobody pays for audio they never
-   * asked for. A narration failure is logged and never fails the step. */
+   * hands it back. */
   static async autoRegenerate(caseId: string, userId: string): Promise<"generated" | "regenerated" | "skipped-edited"> {
     const existing = await CaseReconstructionRepo.get(caseId);
     if (existing?.narrativeEditedAt) return "skipped-edited";
-    const hadAudio = !!existing?.audioFileId;
 
     await CaseReconstructionSvc.generate(caseId, userId);
-
-    if (!existing || hadAudio) {
-      await CaseReconstructionAudioSvc.startAudioJob(caseId)
-        .then(() => CaseReconstructionAudioQueue.enqueue(caseId))
-        .catch((err) => logger.warn("Case reconstruction: narration after regenerate failed", { err, caseId }));
-    }
     return existing ? "regenerated" : "generated";
   }
 
@@ -73,7 +56,7 @@ export default class CaseReconstructionSvc {
    * AiGenerationQueue, so a 403/409 surfaces immediately instead of after an enqueue. Unlike
    * `generate`, only used by the lawyer-triggered HTTP endpoint — case-post-extraction.ts's
    * automatic post-upload generation keeps calling `generate` directly, since it awaits the
-   * finished narrative before chaining CaseReconstructionAudioSvc.startAudioJob. */
+   * finished narrative. */
   static async beginQueued(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
     await AiGenerationLockSvc.assertAnalysisIdle(caseId);
@@ -148,30 +131,20 @@ ${wrapExtractedText("Use only these excerpts and the attached case documents.", 
     });
     if (!data.narrative) throw new HttpError("Chat Wonder returned no reconstruction text", 502);
 
-    const existing = await CaseReconstructionRepo.get(caseId);
     const row = await CaseReconstructionRepo.upsert(caseId, data);
-    if (existing?.audioFileId) {
-      await CaseReconstructionRepo.updateAudio(caseId, { audioStaleAt: new Date() });
-    }
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.generate", payload: { id: row.id } });
     return CaseReconstructionRepo.get(caseId);
   }
 
-  /** Editing any of the three registers is allowed — but only editing the General narrative
-   * (the one audio is synthesized from) marks existing audio stale. Editing Court/Opposing
-   * text doesn't touch what the lawyer is actually listening to. */
+  /** Editing any of the three registers is allowed. */
   static async update(
     caseId: string,
     userId: string,
     data: { narrative?: string; narrativeCourt?: string; narrativeOpposing?: string },
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
-    const existing = await CaseReconstructionRepo.get(caseId);
     const row = await CaseReconstructionRepo.updateFields(caseId, data);
     if (!row) throw new HttpError("Case reconstruction not found — generate one first", 404);
-    if (data.narrative !== undefined && existing?.audioFileId) {
-      await CaseReconstructionRepo.updateAudio(caseId, { audioStaleAt: new Date() });
-    }
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.update", payload: { id: row.id } });
     return CaseReconstructionRepo.get(caseId);
   }
@@ -289,9 +262,6 @@ Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACT
     logger.info("Chat Wonder case reconstruction scenes reply", { caseId, sceneCount: scenes.length });
 
     await CaseReconstructionRepo.updateScenes(caseId, scenes);
-    if (existing.tableReadFileId) {
-      await CaseReconstructionRepo.updateTableRead(caseId, { tableReadStaleAt: new Date() });
-    }
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.generateScenes", payload: { sceneCount: scenes.length } });
     return CaseReconstructionRepo.get(caseId);
   }
@@ -388,58 +358,5 @@ Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACT
     await CaseReconstructionEventsRepo.upsert(caseId, events);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.generateEvents", payload: { eventCount: events.length } });
     return CaseReconstructionEventsRepo.get(caseId);
-  }
-
-  /** Rung 2 — multi-voice audio rendered from `scenes` (one Polly voice per actor, a narrator
-   * for action lines) via Audio Overview's synthesize-many-short-turns + ffmpeg-concat pipeline
-   * generalized to N voices — see mergeCastTurnsToMp3. Requires scenes to exist first. */
-  static async generateTableRead(caseId: string, userId?: string) {
-    if (userId) await CaseAccess.assertCanEdit(caseId, userId);
-    return AiGenerationLockSvc.run(caseId, "caseReconstructionTableRead", () =>
-      CaseReconstructionSvc.generateTableReadInner(caseId, userId),
-    );
-  }
-
-  static async beginQueuedTableRead(caseId: string, userId: string): Promise<void> {
-    await CaseAccess.assertCanEdit(caseId, userId);
-    await AiGenerationLockSvc.begin(caseId, "caseReconstructionTableRead");
-  }
-
-  static async runQueuedTableRead(caseId: string, userId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "caseReconstructionTableRead", () =>
-      CaseReconstructionSvc.generateTableReadInner(caseId, userId),
-    );
-  }
-
-  private static async generateTableReadInner(caseId: string, userId?: string) {
-    const existing = await CaseReconstructionRepo.get(caseId);
-    if (!existing) throw new HttpError("Case reconstruction not found — generate one first", 404);
-    const scenes = (existing.scenes as unknown as Scene[] | null) ?? [];
-    if (scenes.length === 0) throw new HttpError("No scenes to read yet — generate the scene script first", 422);
-
-    const actorNames = [...new Set(scenes.flatMap((s) => s.actors))];
-    const cast = castForCase(caseId, actorNames);
-
-    const turns: CastTurn[] = [];
-    for (const scene of scenes) {
-      const intro = [scene.time, scene.location, scene.action].filter(Boolean).join(". ");
-      if (intro) turns.push({ text: intro, voiceId: cast.NARRATOR! });
-      for (const line of scene.dialogue) {
-        turns.push({ text: `${line.actor}: ${line.line}`, voiceId: cast[line.actor] ?? cast.NARRATOR! });
-      }
-    }
-    if (turns.length === 0) throw new HttpError("Scenes have no narratable content", 422);
-
-    logger.info("Table read: rendering started", { caseId, sceneCount: scenes.length, turnCount: turns.length, castSize: Object.keys(cast).length });
-    const merged = await mergeCastTurnsToMp3(turns);
-
-    const key = `${CASE_RECONSTRUCTION_TABLE_READ_OUTPUT_PREFIX}${caseId}-${randomUUID()}.mp3`;
-    const fileUrl = await uploadToS3(key, merged, "audio/mpeg");
-    const file = await FilesRepo.create(`case-reconstruction-table-read-${caseId}.mp3`, fileUrl, key);
-
-    await CaseReconstructionRepo.updateTableRead(caseId, { tableReadFileId: file.id, tableReadStatus: "COMPLETED", tableReadStaleAt: null });
-    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.generateTableRead", payload: { fileId: file.id } });
-    logger.info("Table read: rendering completed", { caseId, fileId: file.id });
-    return CaseReconstructionRepo.get(caseId);
   }
 }

@@ -2,7 +2,6 @@
 import app from "./app";
 import DocumentExtractionQueue from "./queues/document-extraction.queue";
 import AudioOverviewQueue from "./queues/audio-overview.queue";
-import CaseReconstructionAudioQueue from "./queues/case-reconstruction-audio.queue";
 import CitationExtractionQueue from "./queues/citation-extraction.queue";
 import AiGenerationQueue from "./queues/ai-generation.queue";
 import CaseGraphPromotionQueue from "./queues/case-graph-promotion.queue";
@@ -17,7 +16,6 @@ import { PORT } from "./config";
 
 DocumentExtractionQueue.start();
 AudioOverviewQueue.start();
-CaseReconstructionAudioQueue.start();
 CitationExtractionQueue.start();
 AiGenerationQueue.start();
 CaseGraphPromotionQueue.start();
