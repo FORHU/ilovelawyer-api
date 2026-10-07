@@ -107,6 +107,27 @@ export default class DamagesExtractSvc {
     return { batches };
   }
 
+  /** The Damages pane's own Regenerate: read new documents for damage items, then re-rate every
+   * item — the same two steps the case analysis runs, under the pane's own "damagesRefresh" kind.
+   * Refused while the case analysis runs. */
+  static async beginRefresh(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
+    await AiGenerationLockSvc.begin(caseId, "damagesRefresh");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginRefresh claimed the lock. A reading pass already
+   * running (409) is left to finish on its own; the re-rating still runs. */
+  static async runQueuedRefresh(caseId: string, userId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "damagesRefresh", async () => {
+      await DamagesExtractSvc.extractAllPending(caseId, userId).catch((err) => {
+        if (err instanceof HttpError && err.statusCode === 409) return;
+        throw err;
+      });
+      await DamagesExtractSvc.refreshStep(caseId);
+    });
+  }
+
   /** Run by AiGenerationQueue's worker. */
   static async runQueued(caseId: string, userId: string): Promise<void> {
     if (!(await CaseRepo.exists(caseId))) return;

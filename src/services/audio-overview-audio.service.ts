@@ -10,44 +10,50 @@ import { AUDIO_OVERVIEW_OUTPUT_PREFIX } from "../constants";
 
 export default class AudioOverviewAudioSvc {
   /** Pulled by AudioOverviewQueue — never throws, always resolves audioStatus to COMPLETED or
-   * FAILED, same contract as DocumentExtractionSvc.process. */
-  static async process(messageId: string): Promise<void> {
+   * FAILED, same contract as DocumentExtractionSvc.process. `key` is the overview row's id, or
+   * the chat message id older queue messages carried. Chat-made and case-owned overviews (the
+   * case analysis's) render the same way. */
+  static async process(key: string): Promise<void> {
+    const row = await ChatRepo.findAudioOverviewByKey(key).catch((err) => {
+      logger.error("Audio Overview: failed to load the overview to render", { err, key });
+      return null;
+    });
+    if (!row) {
+      logger.error("Audio Overview: no MessageAudioOverview row to render", { key });
+      return;
+    }
+    const id = row.id;
     try {
-      const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
-      if (!row) {
-        logger.error("Audio Overview: no MessageAudioOverview row for message", { messageId });
-        return;
-      }
 
       const turns = row.turns as unknown as AudioOverviewTurn[];
       if (!Array.isArray(turns) || turns.length === 0) {
-        await ChatRepo.updateAudioOverviewAudio(messageId, { audioStatus: "FAILED" });
+        await ChatRepo.updateAudioOverviewAudio(id, { audioStatus: "FAILED" });
         return;
       }
 
-      logger.info("Audio Overview: rendering started", { messageId, turns: turns.length });
+      logger.info("Audio Overview: rendering started", { id, turns: turns.length });
       const { buffer, turnTimings, sentenceTimings, wordTimings } = await mergeTurnsToMp3(
         turns,
         neuralVoiceFor(row.voiceHostA),
         neuralVoiceFor(row.voiceHostB),
       );
 
-      const key = `${AUDIO_OVERVIEW_OUTPUT_PREFIX}${messageId}-${randomUUID()}.mp3`;
-      const fileUrl = await uploadToS3(key, buffer, "audio/mpeg");
-      const file = await FilesRepo.create(`audio-overview-${messageId}.mp3`, fileUrl, key);
+      const s3Key = `${AUDIO_OVERVIEW_OUTPUT_PREFIX}${id}-${randomUUID()}.mp3`;
+      const fileUrl = await uploadToS3(s3Key, buffer, "audio/mpeg");
+      const file = await FilesRepo.create(`audio-overview-${id}.mp3`, fileUrl, s3Key);
 
-      await ChatRepo.updateAudioOverviewAudio(messageId, {
+      await ChatRepo.updateAudioOverviewAudio(id, {
         audioFileId: file.id,
         audioStatus: "COMPLETED",
         turnTimings,
         sentenceTimings,
         wordTimings,
       });
-      logger.info("Audio Overview: rendering completed", { messageId, fileId: file.id });
+      logger.info("Audio Overview: rendering completed", { id, fileId: file.id });
     } catch (err) {
-      logger.error("Audio Overview: rendering failed", { err, messageId });
-      await ChatRepo.updateAudioOverviewAudio(messageId, { audioStatus: "FAILED" }).catch((updateErr) => {
-        logger.error("Audio Overview: failed to record FAILED status", { updateErr, messageId });
+      logger.error("Audio Overview: rendering failed", { err, id });
+      await ChatRepo.updateAudioOverviewAudio(id, { audioStatus: "FAILED" }).catch((updateErr) => {
+        logger.error("Audio Overview: failed to record FAILED status", { updateErr, id });
       });
     }
   }

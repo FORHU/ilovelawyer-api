@@ -27,6 +27,7 @@ import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.qu
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
 import AudioOverviewHistorySvc from "../services/audio-overview-history.service";
+import AudioOverviewSvc from "../services/audio-overview.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -35,7 +36,8 @@ import AnnotationSvc from "../services/annotation.service";
 import CaseGraphViewSvc, { GraphViewType } from "../services/case-graph-view.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import AiGenerationQueue from "../queues/ai-generation.queue";
-import CaseFindingAiSvc from "../services/case-finding-ai.service";
+import CaseFindingAiSvc, { CATEGORY_REGENERATE_KIND, type RegenerableCategory } from "../services/case-finding-ai.service";
+import CaseOutlookAiSvc from "../services/case-outlook-ai.service";
 import { AI_GENERATION_KINDS, AiGenerationKind } from "../constants";
 import HttpError from "../utils/http-error";
 import { FindingCategory } from "@prisma/client";
@@ -178,14 +180,14 @@ export default class CaseTerminalCtrl {
   /** Queued via AiGenerationQueue (SQS) — refreshes only the Case Strategy panel's pass (plan,
    * to-dos, key dates), so a lawyer whose panel is flagged stale doesn't pay for a full Refresh
    * analysis. Ticked to-dos survive (see planAiProcedureItems). */
-  /** Queued via AiGenerationQueue — one findings panel's Regenerate (Weaknesses or Strengths). Only
-   * that category's AI rows are replaced; the panel follows its own job kind. */
+  /** Queued via AiGenerationQueue — one findings panel's Regenerate (any of the five). Only that
+   * category's AI rows are replaced; the panel follows its own job kind. */
   static async regenerateFindings(req: Request, res: Response) {
     const { error, value } = regenerateFindingsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const { caseId } = req.params;
     const userId = req.user.userId;
-    const kind = value.category === "WEAKNESS" ? "weaknessRegenerate" : "strengthRegenerate";
+    const kind = CATEGORY_REGENERATE_KIND[value.category as RegenerableCategory];
     await CaseFindingAiSvc.beginCategory(caseId, userId, value.category);
     AiGenerationQueue.enqueue({ kind, caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, kind);
@@ -731,6 +733,56 @@ export default class CaseTerminalCtrl {
       cursor: value.cursor,
     });
     return res.status(200).json(result);
+  }
+
+  /** A pane's own Regenerate for the four panes that had no single-pane action: Case Summary's
+   * outlook, Witnesses (read + score), Damages (read + re-rate) and Audio Overview. Each claims its
+   * lock before queueing, so a double click or a running case analysis is a 409 straight away. */
+  static async generateOutlook(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await CaseOutlookAiSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "caseOutlookGenerate", caseId, userId });
+    return res.status(202).json(await AiGenerationLockSvc.getStatus(caseId, "caseOutlook"));
+  }
+
+  static async refreshWitnesses(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await WitnessScoringSvc.beginRefresh(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "witnessRefresh", caseId, userId });
+    return res.status(202).json(await AiGenerationLockSvc.getStatus(caseId, "witnessRefresh"));
+  }
+
+  static async refreshDamages(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await DamagesExtractSvc.beginRefresh(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "damagesRefresh", caseId, userId });
+    return res.status(202).json(await AiGenerationLockSvc.getStatus(caseId, "damagesRefresh"));
+  }
+
+  static async generateAudioOverview(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await AudioOverviewSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "audioOverviewGenerate", caseId, userId });
+    return res.status(202).json(await AiGenerationLockSvc.getStatus(caseId, "audioOverviewScript"));
+  }
+
+  /** GET /:caseId/audio-overview/latest — the case's newest Audio Overview from either owner (the
+   * case analysis's, or one asked for in chat/Studio), or null. The Terminal's Audio Overview pane
+   * reads this instead of following the newest consultation. */
+  static async latestAudioOverview(req: Request, res: Response) {
+    const result = await AudioOverviewSvc.latest(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** POST /:caseId/audio-overview/:overviewId/recording — records an overview whose recording
+   * failed. 409 while it is being recorded or once it is. */
+  static async retryAudioOverviewRecording(req: Request, res: Response) {
+    const result = await AudioOverviewSvc.retryRecording(req.params.caseId, req.params.overviewId, req.user.userId);
+    return res.status(202).json(result);
   }
 
   /** Decision Records (differentiation program, Phase 1) — see

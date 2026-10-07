@@ -6,9 +6,10 @@ import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
 import { FINDINGS_FORMAT_VERSION } from "../constants";
 import HttpError from "../utils/http-error";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import FindingJevSvc from "./finding-jev.service";
 import logger from "../utils/logger";
@@ -17,10 +18,23 @@ import logger from "../utils/logger";
 // failing to parse would otherwise re-run on every Terminal load.
 const OUTDATED_RETRY_AFTER_MS = 60 * 60 * 1000;
 
-/** The findings panels with their own Regenerate. */
-export type RegenerableCategory = "WEAKNESS" | "STRENGTH";
-const CATEGORY_REGENERATE_KIND = { WEAKNESS: "weaknessRegenerate", STRENGTH: "strengthRegenerate" } as const;
-const CATEGORY_BLOCK: Record<RegenerableCategory, string> = { WEAKNESS: "[WEAKNESSES]", STRENGTH: "[STRENGTHS]" };
+/** The findings panels with their own Regenerate: all five. */
+export type RegenerableCategory = "LEGAL_ISSUE" | "WEAKNESS" | "STRENGTH" | "ATTACK_STRATEGY" | "DEFENSE_STRATEGY";
+/** Each panel's own job kind, so only that panel shows its Regenerate running. */
+export const CATEGORY_REGENERATE_KIND = {
+  LEGAL_ISSUE: "legalIssueRegenerate",
+  WEAKNESS: "weaknessRegenerate",
+  STRENGTH: "strengthRegenerate",
+  ATTACK_STRATEGY: "attackRegenerate",
+  DEFENSE_STRATEGY: "defenseRegenerate",
+} as const;
+const CATEGORY_BLOCK: Record<RegenerableCategory, string> = {
+  LEGAL_ISSUE: "[LEGAL_ISSUES]",
+  WEAKNESS: "[WEAKNESSES]",
+  STRENGTH: "[STRENGTHS]",
+  ATTACK_STRATEGY: "[ATTACK_STRATEGY]",
+  DEFENSE_STRATEGY: "[DEFENSE_STRATEGY]",
+};
 
 // Mirrors CaseStrategySvc.generateFromDocuments — same prompt->parse->replace-AI-rows shape,
 // a different prompt/parser/table (CaseFinding instead of ProcedureItem).
@@ -116,10 +130,7 @@ Only the ${CATEGORY_BLOCK[only]} block is needed this time. Fill it as above and
       : "";
     const prompt = `${buildCaseFindingPrompt(ready, ukJurisdiction, clientSide)}${focus}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText("Use only these excerpts and the attached case documents.", pack.text)}
 `;
 
     // Streamed, not one blocking REST call: on a large bundle (20+ documents) the reply takes longer
@@ -127,13 +138,15 @@ ${pack.text || "(no indexed text)"}
     // in front of Chat Wonder — the run failed and the case kept its old findings. Same fix as
     // CaseReconstructionSvc's narrative and RedTeamSvc.generate.
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseFindings", caseId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const text = String(result.content || "");

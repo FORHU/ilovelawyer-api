@@ -7,9 +7,10 @@ import { extractFacts, findContradictions, ContradictionHit } from "../utils/fac
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { buildContradictionPrompt } from "../constants";
 import { extractContradictionHits, uniqueContradictionHits } from "../utils/contradiction-scan";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import logger from "../utils/logger";
 import { PrivilegeStatus, HearsayCategory, ContradictionStatus } from "@prisma/client";
 import { contradictionKey } from "../utils/contradiction-key";
@@ -107,6 +108,7 @@ export default class EvidenceIntelligenceSvc {
    * comes back immediately. A full-bundle scan can take minutes, far past an HTTP request. */
   static async beginQueuedScan(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "contradictions");
   }
 
@@ -124,7 +126,7 @@ export default class EvidenceIntelligenceSvc {
     let hits = regexHits;
 
     try {
-      const llmHits = await scanWithChatWonder(ready, tenantCode);
+      const llmHits = await scanWithChatWonder(ready, tenantCode, caseId);
       // undefined = missing/unparseable block → keep regex. [] = model found none → show none.
       if (llmHits) hits = uniqueContradictionHits(llmHits);
     } catch (err) {
@@ -277,31 +279,33 @@ async function scanWithRegex(ready: ReadyDoc[]): Promise<ContradictionHit[]> {
   return hits;
 }
 
-async function scanWithChatWonder(ready: ReadyDoc[], tenantCode: TenantCode): Promise<ContradictionHit[] | undefined> {
+async function scanWithChatWonder(ready: ReadyDoc[], tenantCode: TenantCode, caseId: string): Promise<ContradictionHit[] | undefined> {
   if (ready.length < 1) return undefined;
 
   const caseDocumentIds = ready.map((doc) => doc.id);
   const pack = await buildFactExcerptPack(ready);
   const prompt = `${buildContradictionPrompt(ready)}
 
-## EXTRACTED TEXT
-Excerpts below were taken from the indexed files, including later pages of a bundled PDF. Compare facts across these excerpts. Quote from them.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText(
+    "Excerpts below were taken from the indexed files, including later pages of a bundled PDF. Compare facts across these excerpts. Quote from them.",
+    pack.text,
+  )}
 `;
 
   const grounding = {
     caseDocumentIds,
     caseDocumentChunkIds: pack.chunkIds,
   };
+  // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+  const trace = newTraceRun("contradictionScan", caseId);
   let sessionId = await getChatWonderSessionId();
   let payload: { response?: string; intermediate_response?: string };
 
   try {
-    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode);
+    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode, { trace });
   } catch {
     sessionId = await getChatWonderSessionId();
-    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode);
+    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode, { trace });
   }
 
   const text = String(payload.response || payload.intermediate_response || "");

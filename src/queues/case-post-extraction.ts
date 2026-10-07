@@ -75,6 +75,12 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
       // CaseRefreshSvc.refreshInner — so Legal Issues / Strengths / Weaknesses / Attack /
       // Defense stop sitting stale until someone clicks it. There is deliberately no second,
       // independent implementation of that pipeline here.
+      // A pane's own Regenerate is running: wait for it rather than overlap (ADR 0018). Same
+      // QUIET_SECONDS backoff as the branches around it, so the corpus change isn't lost.
+      if (await AiGenerationLockSvc.runningPaneJob(caseId)) {
+        scheduleCasePostExtraction(caseId, userId);
+        return;
+      }
       try {
         await AiGenerationLockSvc.begin(caseId, "caseRefresh");
       } catch (err) {

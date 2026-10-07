@@ -13,6 +13,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import RedTeamSvc from "./red-team.service";
+import AudioOverviewSvc from "./audio-overview.service";
 import WitnessExtractSvc from "./witness-extract.service";
 import WitnessScoringSvc from "./witness-scoring.service";
 import CaseTheorySvc from "./case-theory.service";
@@ -21,12 +22,20 @@ import HttpError from "../utils/http-error";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
 
+/** The "caseRefresh" job's stage (AiGenerationJob.stage) as each wave after the first starts —
+ * null during wave 1. The app reads it to stop showing a piece as updating once the wave that
+ * writes it is over: the timeline's dates (case strategy) in wave 1, the case map in wave 2,
+ * rather than for the whole run. Mirrored in ilovelawyer-app's lib/terminal/case-refresh-stage.ts. */
+export const CASE_REFRESH_STAGE = { wave2: "wave2", wave3: "wave3" } as const;
+
 export default class CaseRefreshSvc {
     /** Fast, synchronous half of a queued refresh — access check + claiming the
      * AiGenerationJob row — called from the controller before handing off to
      * AiGenerationQueue, so a 403/409 surfaces immediately instead of after an enqueue. */
     static async beginQueued(caseId: string, userId: string): Promise<void> {
         await CaseAccess.assertCanEdit(caseId, userId);
+        // A pane's own Regenerate and the analysis never overlap (ADR 0018).
+        await AiGenerationLockSvc.assertNoPaneRunning(caseId);
         // Own outer lock, purely to stop a double-click on "Refresh analysis" itself — the
         // sub-calls below each hold their own lock too (contradictions/caseStrategy/caseFinding),
         // so a 409 from one of those (e.g. Contradictions already running standalone) is caught by
@@ -107,6 +116,7 @@ export default class CaseRefreshSvc {
         ]);
 
         // Wave 2: what reads the findings, strategy, contradictions, witnesses and damages above.
+        void AiGenerationLockSvc.setStage(caseId, "caseRefresh", CASE_REFRESH_STAGE.wave2);
         await CaseRefreshSvc.runWave(caseId, 2, [
             // The outlook prompt reads the findings.
             ["case outlook", async () => (await CaseOutlookAiSvc.generateFromDocuments(caseId, userId), {})],
@@ -135,9 +145,14 @@ export default class CaseRefreshSvc {
             ],
         ]);
 
-        // Wave 3: Red Team attacks everything above — findings, contradictions, witnesses and the
-        // re-rated damages — so it goes last.
-        await CaseRefreshSvc.runWave(caseId, 3, [["red team", () => RedTeamSvc.generateFromDocuments(caseId, userId)]]);
+        // Wave 3: what reads everything above — findings, contradictions, witnesses and the re-rated
+        // damages. Red Team attacks them; the Audio Overview's two hosts discuss them (the script is
+        // written here, and its recording queued, not awaited — the run ends while Polly records).
+        void AiGenerationLockSvc.setStage(caseId, "caseRefresh", CASE_REFRESH_STAGE.wave3);
+        await CaseRefreshSvc.runWave(caseId, 3, [
+            ["red team", () => RedTeamSvc.generateFromDocuments(caseId, userId)],
+            ["audio overview", () => AudioOverviewSvc.generateForCase(caseId, userId)],
+        ]);
 
         // Chat dates no longer go on the case timeline (they carry no document); clear the ones
         // earlier versions copied in. A failure never fails the refresh.

@@ -213,7 +213,7 @@ export const grantAccessSchema = Joi.object({
 });
 
 export const regenerateFindingsSchema = Joi.object({
-  category: Joi.string().valid("WEAKNESS", "STRENGTH").required(),
+  category: Joi.string().valid("LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY").required(),
 });
 
 export const listFindingsSchema = Joi.object({ category: Joi.string().valid(...FINDING_CATEGORIES).optional() });

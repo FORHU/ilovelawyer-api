@@ -62,7 +62,7 @@ class FakeGoogle {
 
   /** A personal event created in Google, not by the app. */
   addPersonal(summary: string) {
-    const e: GEvent = { id: `personal-${this.nextId++}`, status: "confirmed", updated: "", summary, start: { dateTime: "2026-10-05T01:00:00.000Z" } };
+    const e: GEvent = { id: `personal-${this.nextId++}`, status: "confirmed", updated: "", summary, start: { dateTime: "2099-10-05T01:00:00.000Z" } };
     this.events.set(e.id, e);
     this.touch(e);
     return e;
@@ -130,7 +130,7 @@ describe("Two-way Google Calendar sync — scenarios", () => {
     const event = await EventSvc.create(ORG, OWNER, {
       title: "Consultation",
       type: "Meeting",
-      date_time: "2026-10-03T05:00:00.000Z",
+      date_time: "2099-10-03T05:00:00.000Z",
       client_email: "client@example.com",
       notes: "Bring the contract",
       ...overrides,
@@ -212,8 +212,8 @@ describe("Two-way Google Calendar sync — scenarios", () => {
     const row = await createInApp();
     const copy = googleCopy(row);
     expect(copy.summary).to.equal("Consultation");
-    expect(copy.start.dateTime).to.equal("2026-10-03T05:00:00.000Z");
-    expect(copy.end.dateTime).to.equal("2026-10-03T06:00:00.000Z");
+    expect(copy.start.dateTime).to.equal("2099-10-03T05:00:00.000Z");
+    expect(copy.end.dateTime).to.equal("2099-10-03T06:00:00.000Z");
     expect(copy.description).to.match(/^Bring the contract\n\n— ilovelawyer —\nType: Meeting\nClient: client@example\.com\n/);
     expect(copy).not.to.have.property("attendees");
     expect(copy.extendedProperties.private.ilovelawyerEventId).to.equal(row.id);
@@ -224,10 +224,10 @@ describe("Two-way Google Calendar sync — scenarios", () => {
   it("2. edited in the app → the same Google event is updated", async () => {
     const row = await createInApp();
     const gid = row.googleEventId;
-    await editInApp(row.id, { title: "Consultation (moved)", date_time: "2026-10-04T02:00:00.000Z" });
+    await editInApp(row.id, { title: "Consultation (moved)", date_time: "2099-10-04T02:00:00.000Z" });
     expect(rows.get(row.id)!.googleEventId).to.equal(gid);
     expect(google.events.get(gid)!.summary).to.equal("Consultation (moved)");
-    expect(google.events.get(gid)!.start.dateTime).to.equal("2026-10-04T02:00:00.000Z");
+    expect(google.events.get(gid)!.start.dateTime).to.equal("2099-10-04T02:00:00.000Z");
     expect(google.events.size).to.equal(1);
   });
 
@@ -267,15 +267,15 @@ describe("Two-way Google Calendar sync — scenarios", () => {
     await tick();
     google.edit(row.googleEventId, {
       summary: "Consultation with Ms. Cruz",
-      start: { dateTime: "2026-10-03T07:00:00.000Z" },
-      end: { dateTime: "2026-10-03T08:30:00.000Z" },
+      start: { dateTime: "2099-10-03T07:00:00.000Z" },
+      end: { dateTime: "2099-10-03T08:30:00.000Z" },
       description: googleCopy(row).description.replace("Bring the contract", "Bring the contract and ID"),
     });
     await poll();
     const updated = rows.get(row.id)!;
     expect(updated.title).to.equal("Consultation with Ms. Cruz");
-    expect(updated.dateTime.toISOString()).to.equal("2026-10-03T07:00:00.000Z");
-    expect(updated.endDateTime.toISOString()).to.equal("2026-10-03T08:30:00.000Z");
+    expect(updated.dateTime.toISOString()).to.equal("2099-10-03T07:00:00.000Z");
+    expect(updated.endDateTime.toISOString()).to.equal("2099-10-03T08:30:00.000Z");
     expect(updated.notes).to.equal("Bring the contract and ID");
     expect(updated.lastReminderSentAt).to.equal(null);
   });
@@ -415,12 +415,12 @@ describe("Google Calendar sync helpers", () => {
   });
 
   it("leaves times alone for an all-day Google event", () => {
-    const event: any = { title: "T", dateTime: new Date("2026-10-03T05:00:00Z"), endDateTime: null, notes: null };
-    expect(changesFromGoogle({ id: "g", summary: "T", start: { date: "2026-10-03" }, end: { date: "2026-10-04" } }, event)).to.deep.equal({});
+    const event: any = { title: "T", dateTime: new Date("2099-10-03T05:00:00Z"), endDateTime: null, notes: null };
+    expect(changesFromGoogle({ id: "g", summary: "T", start: { date: "2099-10-03" }, end: { date: "2099-10-04" } }, event)).to.deep.equal({});
   });
 
   it("marks a cancelled appointment on Google and unmarks it when active", () => {
-    const base: any = { id: "e", title: "T", type: "Meeting", dateTime: new Date("2026-10-03T05:00:00Z"), endDateTime: null, notes: null, clientEmail: null };
+    const base: any = { id: "e", title: "T", type: "Meeting", dateTime: new Date("2099-10-03T05:00:00Z"), endDateTime: null, notes: null, clientEmail: null };
     expect(toGoogleEvent({ ...base, status: "cancelled" })).to.include({ summary: "Cancelled: T", colorId: "8", transparency: "transparent" });
     expect(toGoogleEvent({ ...base, status: "pending" })).to.include({ summary: "T", colorId: null, transparency: "opaque" });
   });

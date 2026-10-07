@@ -6,7 +6,7 @@ import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWo
 import { newTraceRun } from "./trace-collector.service";
 import { getCaseStrategyPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseStrategy, attachKeyDateDocuments } from "../utils/case-strategy-parse";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import CaseTimelineSvc from "./case-timeline.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import OrganizationRepo from "../repositories/organization.repository";
@@ -21,6 +21,7 @@ export default class CaseStrategySvc {
    * this panel's pass (plan, to-dos, key dates), not contradictions/findings/outlook/map. */
   static async beginQueued(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "caseStrategyRefresh");
   }
 
@@ -71,10 +72,7 @@ export default class CaseStrategySvc {
     // often enough that most dates lost their source. resolveDocumentRef maps it back below.
     const prompt = `${buildCaseStrategyPrompt(docsForPrompt(ready), ukJurisdiction)}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents.
-
-${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
+${wrapExtractedText("Use only these excerpts and the attached case documents.", excerptsWithHandles(pack.text, ready))}
 `;
 
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };

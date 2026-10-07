@@ -104,6 +104,7 @@ router.post("/:caseId/access", asyncHandler(CaseTerminalCtrl.grantAccess));
 router.get("/:caseId/findings", asyncHandler(CaseTerminalCtrl.listFindings));
 router.post("/:caseId/findings", asyncHandler(CaseTerminalCtrl.createFinding));
 router.post("/:caseId/findings/regenerate", asyncHandler(CaseTerminalCtrl.regenerateFindings));
+router.post("/:caseId/outlook/generate", asyncHandler(CaseTerminalCtrl.generateOutlook));
 router.patch("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.updateFinding));
 router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFinding));
 router.post("/:caseId/findings/:id/jev-check", asyncHandler(CaseTerminalCtrl.jevCheckFinding));
@@ -111,6 +112,7 @@ router.post("/:caseId/findings/:id/jev-check", asyncHandler(CaseTerminalCtrl.jev
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
 router.post("/:caseId/witnesses/score", asyncHandler(CaseTerminalCtrl.scoreWitnesses));
+router.post("/:caseId/witnesses/refresh", asyncHandler(CaseTerminalCtrl.refreshWitnesses));
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
 router.patch("/:caseId/witnesses/:id/factors/:factor", asyncHandler(CaseTerminalCtrl.setWitnessFactor));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
@@ -118,6 +120,7 @@ router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitn
 router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
 router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
 router.post("/:caseId/damages/propose", asyncHandler(CaseTerminalCtrl.proposeDamages));
+router.post("/:caseId/damages/refresh", asyncHandler(CaseTerminalCtrl.refreshDamages));
 router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage));
 router.post("/:caseId/damages/:id/accept", asyncHandler(CaseTerminalCtrl.acceptDamage));
 router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
@@ -143,6 +146,9 @@ router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generate
 router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/export/history", asyncHandler(CaseTerminalCtrl.exportBriefHistory));
 router.get("/:caseId/audio-overview/history", asyncHandler(CaseTerminalCtrl.audioOverviewHistory));
+router.get("/:caseId/audio-overview/latest", asyncHandler(CaseTerminalCtrl.latestAudioOverview));
+router.post("/:caseId/audio-overview/generate", asyncHandler(CaseTerminalCtrl.generateAudioOverview));
+router.post("/:caseId/audio-overview/:overviewId/recording", asyncHandler(CaseTerminalCtrl.retryAudioOverviewRecording));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
 // Explanation (XAI) trace — what the AI did to answer each turn, for the Terminal trace pane
 router.get("/:caseId/trace/turns", asyncHandler(TraceCtrl.listTurns));

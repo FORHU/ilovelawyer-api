@@ -1,6 +1,6 @@
 import HttpError from "../utils/http-error";
 import CaseAccess from "../utils/case-access";
-import { AiGenerationKind, HEARTBEAT_INTERVAL_MS } from "../constants";
+import { AiGenerationKind, HEARTBEAT_INTERVAL_MS, PANE_REGENERATE_KINDS } from "../constants";
 import { isJobStale, isUniqueConstraintError } from "../utils/ai-generation-lock.utils";
 import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
 import { emitToCase } from "../lib/socket";
@@ -40,6 +40,33 @@ export default class AiGenerationLockSvc {
       });
     } catch (err) {
       logger.warn("AiGenerationLockSvc: emitToCase failed, continuing without it", { err, event, subjectId, kind });
+    }
+  }
+
+  /** A pane's own Regenerate refuses to start (409) while the case analysis runs: the analysis is
+   * about to rewrite that pane anyway, and the Terminal disables the button for the same reason. */
+  static async assertAnalysisIdle(caseId: string): Promise<void> {
+    const refresh = await this.getStatus(caseId, "caseRefresh");
+    if (refresh?.status === "IN_PROGRESS" && !isJobStale(refresh)) {
+      throw new HttpError("The case analysis is updating this pane — try again when it finishes", 409);
+    }
+  }
+
+  /** The pane job (PANE_REGENERATE_KINDS) currently running on the case, if any — a live one, not
+   * a run a restart left behind. */
+  static async runningPaneJob(caseId: string): Promise<AiGenerationKind | null> {
+    const rows = await AiGenerationJobRepo.listInProgress(caseId, PANE_REGENERATE_KINDS);
+    const live = rows.find((row) => !isJobStale(row));
+    return live ? (live.kind as AiGenerationKind) : null;
+  }
+
+  /** "Refresh analysis" refuses (409, code PANE_REGENERATING) while a pane's own Regenerate runs:
+   * the two would write the same rows, and the analysis's later waves would read the pane's old
+   * content. `details.kind` names the pane's job so the client can say which pane to wait for. */
+  static async assertNoPaneRunning(caseId: string): Promise<void> {
+    const kind = await this.runningPaneJob(caseId);
+    if (kind) {
+      throw new HttpError("A pane is regenerating — refresh the analysis when it finishes", 409, "PANE_REGENERATING", { kind });
     }
   }
 

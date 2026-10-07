@@ -22,6 +22,7 @@ import CaseSnapshotSvc from "../src/services/case-snapshot.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
 import DamagesExtractSvc from "../src/services/damages-extract.service";
 import RedTeamSvc from "../src/services/red-team.service";
+import AudioOverviewSvc from "../src/services/audio-overview.service";
 import WitnessExtractSvc from "../src/services/witness-extract.service";
 import WitnessScoringSvc from "../src/services/witness-scoring.service";
 import CaseTheorySvc from "../src/services/case-theory.service";
@@ -46,6 +47,7 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     damagesExtractAll: DamagesExtractSvc.extractAllPending,
     outlookGenerate: CaseOutlookAiSvc.generateFromDocuments,
     redTeamGenerate: RedTeamSvc.generateFromDocuments,
+    audioOverviewGenerate: AudioOverviewSvc.generateForCase,
     witnessExtractAll: WitnessExtractSvc.extractAllPending,
     witnessScore: WitnessScoringSvc.scoreFromDocuments,
     theoryRefresh: CaseTheorySvc.refreshAiDraft,
@@ -89,6 +91,7 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (DamagesExtractSvc as any).extractAllPending = async () => ({ batches: 0 });
     (WitnessScoringSvc as any).scoreFromDocuments = async () => ({ skipped: true });
     (RedTeamSvc as any).generateFromDocuments = async () => ({ skipped: true });
+    (AudioOverviewSvc as any).generateForCase = async () => ({ skipped: true });
     (CaseTheorySvc as any).refreshAiDraft = async () => ({ skipped: true });
     (CaseReconstructionSvc as any).autoRegenerate = async () => "skipped-edited";
   });
@@ -111,6 +114,7 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (WitnessExtractSvc as any).extractAllPending = originals.witnessExtractAll;
     (WitnessScoringSvc as any).scoreFromDocuments = originals.witnessScore;
     (RedTeamSvc as any).generateFromDocuments = originals.redTeamGenerate;
+    (AudioOverviewSvc as any).generateForCase = originals.audioOverviewGenerate;
     (CaseTheorySvc as any).refreshAiDraft = originals.theoryRefresh;
     (CaseReconstructionSvc as any).autoRegenerate = originals.reconstructionAuto;
   });

@@ -180,7 +180,7 @@ export default class CaseSnapshotSvc {
       nextDate,
       fatalRisks,
       evidence: { matrix: evidenceMatrix, contradictions },
-      law: { citations: citationsWithAuthority, authorities: authoritiesWithLaw, summary: summarizeAuthorities(authorities) },
+      law: { citations: citationsWithAuthority, authorities: authoritiesWithLaw, summary: summarizeAuthorities(authorities, findings.filter((f) => f.category === "LEGAL_ISSUE")) },
       procedure: { deadlines, items: procedureItems, requiredConfirmations },
       teamAudit: { accesses, audit },
       findings,

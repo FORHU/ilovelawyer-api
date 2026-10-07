@@ -7,9 +7,10 @@ import EvidenceRepo from "../repositories/evidence.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getCaseOutlookPromptBuilder } from "../legal/prompt-registry";
 import { applyOutlookGuards, parseCaseOutlook } from "../utils/case-outlook-parse";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { computeCaseOutlookFingerprint } from "../utils/case-outlook-fingerprint";
 import { OUTLOOK_LOW_CONFIDENCE_RISK_SEVERITIES, OUTLOOK_MIN_READY_DOCS } from "../constants";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
@@ -22,6 +23,19 @@ export default class CaseOutlookAiSvc {
   static async generateFromDocuments(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
     return AiGenerationLockSvc.run(caseId, "caseOutlook", () => CaseOutlookAiSvc.generateFromDocumentsInner(caseId));
+  }
+
+  /** Case Summary's own Regenerate: claims the "caseOutlook" lock before the job is queued, so a
+   * double click gets a 409 at once. Refused while the case analysis runs. */
+  static async beginQueued(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
+    await AiGenerationLockSvc.begin(caseId, "caseOutlook");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginQueued claimed the lock. */
+  static async runQueued(caseId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "caseOutlook", () => CaseOutlookAiSvc.generateFromDocumentsInner(caseId));
   }
 
   private static async generateFromDocumentsInner(caseId: string) {
@@ -60,18 +74,17 @@ export default class CaseOutlookAiSvc {
       ukJurisdiction,
     })}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText("Use only these excerpts and the attached case documents.", pack.text)}
 `;
 
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
     let payload: { response?: string; intermediate_response?: string };
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseOutlook", caseId);
     try {
-      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode);
+      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode, { trace });
     } catch {
-      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode);
+      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode, { trace });
     }
 
     const text = String(payload.response || payload.intermediate_response || "");

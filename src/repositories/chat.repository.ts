@@ -501,6 +501,44 @@ export default class ChatRepo {
     });
   }
 
+  /** An overview the case analysis wrote — no chat message behind it (see MessageAudioOverview). */
+  static async saveCaseAudioOverview(caseId: string, turns: AudioOverviewTurn[], voiceHostA: string, voiceHostB: string) {
+    return prisma.messageAudioOverview.create({
+      data: { caseId, turns: turns as unknown as Prisma.InputJsonValue, voiceHostA, voiceHostB },
+    });
+  }
+
+  /** Looks a row up by its id, or by the chat message it belongs to — the render queue's messages
+   * carried a message id before case-owned overviews existed, and one may still be in flight. */
+  static async findAudioOverviewByKey(key: string) {
+    return prisma.messageAudioOverview.findFirst({
+      where: { OR: [{ id: key }, { messageId: key }] },
+      include: { audioFile: true },
+    });
+  }
+
+  /** The case's newest overview from either owner: written by the case analysis, or asked for in
+   * one of the case's consultations. */
+  static async findLatestAudioOverviewForCase(caseId: string) {
+    return prisma.messageAudioOverview.findFirst({
+      where: ChatRepo.caseAudioOverviewWhere(caseId),
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      include: { audioFile: true, message: { select: { id: true, consultationId: true } } },
+    });
+  }
+
+  /** One overview, only if it belongs to the case (either owner). */
+  static async findCaseAudioOverview(caseId: string, id: string) {
+    return prisma.messageAudioOverview.findFirst({
+      where: { AND: [{ id }, ChatRepo.caseAudioOverviewWhere(caseId)] },
+      include: { audioFile: true, message: { select: { id: true, consultationId: true } } },
+    });
+  }
+
+  private static caseAudioOverviewWhere(caseId: string): Prisma.MessageAudioOverviewWhereInput {
+    return { OR: [{ caseId }, { message: { consultation: { caseId } } }] };
+  }
+
   static async findAudioOverviewByMessageId(messageId: string) {
     return prisma.messageAudioOverview.findUnique({
       where: { messageId },
@@ -515,11 +553,19 @@ export default class ChatRepo {
     });
   }
 
-  /** A case's Audio Overviews across all its consultations, newest first — the history list.
-   * Same cursor convention (and `id` tiebreaker) as CaseBriefExportRepo.listByCase. */
+  static async saveAudioOverviewChecksById(id: string, checks: unknown[]) {
+    return prisma.messageAudioOverview.update({
+      where: { id },
+      data: { checks: checks as Prisma.InputJsonValue },
+    });
+  }
+
+  /** A case's Audio Overviews, newest first — the history list: the ones the case analysis wrote
+   * and the ones asked for in any of its consultations. Same cursor convention (and `id`
+   * tiebreaker) as CaseBriefExportRepo.listByCase. */
   static async listAudioOverviewsByCase(caseId: string, filters: { limit?: number; cursor?: string } = {}) {
     return prisma.messageAudioOverview.findMany({
-      where: { message: { consultation: { caseId } } },
+      where: ChatRepo.caseAudioOverviewWhere(caseId),
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       include: { audioFile: true, message: { select: { id: true, consultationId: true } } },
       take: filters.limit ?? 20,
@@ -527,8 +573,9 @@ export default class ChatRepo {
     });
   }
 
+  /** Keyed by the row id — the one path both chat-made and case-owned overviews render through. */
   static async updateAudioOverviewAudio(
-    messageId: string,
+    id: string,
     data: {
       audioFileId?: string;
       audioStatus?: AudioOverviewStatus;
@@ -539,7 +586,7 @@ export default class ChatRepo {
   ) {
     const { turnTimings, sentenceTimings, wordTimings, ...rest } = data;
     return prisma.messageAudioOverview.update({
-      where: { messageId },
+      where: { id },
       data: {
         ...rest,
         ...(turnTimings && { turnTimings: turnTimings as unknown as Prisma.InputJsonValue }),
@@ -554,7 +601,7 @@ export default class ChatRepo {
   static async listInProgressAudioOverviews() {
     return prisma.messageAudioOverview.findMany({
       where: { audioStatus: "IN_PROGRESS" },
-      select: { messageId: true },
+      select: { id: true },
     });
   }
 }

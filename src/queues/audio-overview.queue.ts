@@ -16,7 +16,9 @@ const VISIBILITY_TIMEOUT_SECONDS = 600;
 const CONCURRENCY = 1;
 
 interface WaitItem {
-  messageId: string;
+  /** The overview row's id (MessageAudioOverview.id), or the chat message id a message enqueued
+   * before case-owned overviews existed carries — AudioOverviewAudioSvc.process accepts either. */
+  overviewId: string;
   /** null for the enqueue-failed in-memory fallback or a re-queued-on-boot row — nothing to
    * delete/ack for those. */
   receiptHandle: string | null;
@@ -28,7 +30,7 @@ function sleep(ms: number) {
 
 /**
  * SQS queue for Audio Overview rendering (script → Polly synthesis → ffmpeg merge → S3). The
- * "Generate Audio" action sends a messageId; a single worker slot long-polls and runs
+ * "Generate Audio" action and the case analysis send the overview row id; a single worker slot long-polls and runs
  * AudioOverviewAudioSvc.process. Exact same shape as DocumentExtractionQueue, including the
  * in-memory fallback when an enqueue send fails — see that file's own comment for why this
  * shape (not a fire-and-forget in-process promise) is the right one for real background work
@@ -39,12 +41,13 @@ export default class AudioOverviewQueue {
   private static active = 0;
   private static memoryWait: WaitItem[] = [];
 
-  static enqueue(messageId: string): void {
-    if (!messageId) return;
+  /** `overviewId`: the MessageAudioOverview row to render (chat-made or case-owned). */
+  static enqueue(overviewId: string): void {
+    if (!overviewId) return;
 
-    sendMessage(AUDIO_OVERVIEW_QUEUE_URL, messageId).catch((err) => {
-      logger.error("Failed to enqueue Audio Overview render job", { err, messageId });
-      this.memoryWait.push({ messageId, receiptHandle: null });
+    sendMessage(AUDIO_OVERVIEW_QUEUE_URL, overviewId).catch((err) => {
+      logger.error("Failed to enqueue Audio Overview render job", { err, overviewId });
+      this.memoryWait.push({ overviewId, receiptHandle: null });
       this.pump();
     });
   }
@@ -58,10 +61,10 @@ export default class AudioOverviewQueue {
   private static async run(): Promise<void> {
     const pending = await ChatRepo.listInProgressAudioOverviews().catch((err) => {
       logger.error("Audio Overview queue: failed to load IN_PROGRESS rows", { err });
-      return [] as { messageId: string }[];
+      return [] as { id: string }[];
     });
     if (pending.length > 0) {
-      this.memoryWait.push(...pending.map((row) => ({ messageId: row.messageId, receiptHandle: null })));
+      this.memoryWait.push(...pending.map((row) => ({ overviewId: row.id, receiptHandle: null })));
       this.pump();
     }
 
@@ -79,7 +82,7 @@ export default class AudioOverviewQueue {
 
       const messages = await receiveMessages(AUDIO_OVERVIEW_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
       if (messages.length > 0) {
-        this.memoryWait.push(...messages.map((m) => ({ messageId: m.body, receiptHandle: m.receiptHandle })));
+        this.memoryWait.push(...messages.map((m) => ({ overviewId: m.body, receiptHandle: m.receiptHandle })));
         this.pump();
       }
     }
@@ -98,15 +101,15 @@ export default class AudioOverviewQueue {
   private static runOne(item: WaitItem): void {
     this.active += 1;
     void withVisibilityHeartbeat(AUDIO_OVERVIEW_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
-      AudioOverviewAudioSvc.process(item.messageId),
+      AudioOverviewAudioSvc.process(item.overviewId),
     )
       .catch((err) => {
-        logger.error("Audio Overview queue: job failed", { err, messageId: item.messageId });
+        logger.error("Audio Overview queue: job failed", { err, overviewId: item.overviewId });
       })
       .finally(async () => {
         if (item.receiptHandle) {
           await deleteMessage(AUDIO_OVERVIEW_QUEUE_URL, item.receiptHandle).catch((err) => {
-            logger.error("Audio Overview queue: failed to delete message", { err, messageId: item.messageId });
+            logger.error("Audio Overview queue: failed to delete message", { err, overviewId: item.overviewId });
           });
         }
         this.active -= 1;

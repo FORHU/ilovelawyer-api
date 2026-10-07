@@ -24,27 +24,27 @@ enum ApprovalStatus {
 }
 
 model User {
-  id                      String    @id @default(uuid())
+  id                 String    @id @default(uuid())
   // Always stored trimmed + lowercased (see normalizeEmail in src/utils/auth.utils.ts and the
   // normalize_user_emails migration) — @unique is therefore effectively case-insensitive.
-  email                   String    @unique
-  password                String?
-  name                    String?
-  username                String    @unique
-  role                    Role      @default(USER)
-  lastLoginAt             DateTime?
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
-  provider                String?
-  googleId                String?   @unique
-  googleAccessToken       String?
-  googleRefreshToken      String?
+  email              String    @unique
+  password           String?
+  name               String?
+  username           String    @unique
+  role               Role      @default(USER)
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  provider           String?
+  googleId           String?   @unique
+  googleAccessToken  String?
+  googleRefreshToken String?
   // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
   // poll takes a fresh baseline. Reset on connect and disconnect.
   googleCalendarSyncToken String?
-  avatarId                String?
-  tenantId                String?
-  isEmailVerified         Boolean   @default(false)
+  avatarId           String?
+  tenantId           String?
+  isEmailVerified    Boolean   @default(false)
 
   // Set true for every account that existed before the strong-password policy shipped
   // (see the add_must_change_password migration's backfill) and for any account whose
@@ -186,30 +186,30 @@ enum PackageSku {
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 model Consultation {
-  id                  String                   @id @default(uuid())
+  id             String                   @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the consultation in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
-  copiedFromId        String?
-  userId              String
-  organizationId      String
-  caseId              String?
-  title               String?
+  copiedFromId String?
+  userId         String
+  organizationId String
+  caseId         String?
+  title          String?
   // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
   // Null while untitled.
-  titleSource         ConsultationTitleSource?
-  createdAt           DateTime                 @default(now())
+  titleSource    ConsultationTitleSource?
+  createdAt      DateTime                 @default(now())
   // When the most recent Jev-triaged user message was flagged urgent (see message-triage.ts).
   // Set on an urgent turn, cleared on the next routine one, so the consultation list can badge
   // and sort chats that currently need attention without walking every message. Null when
   // triage is off or has never run for this consultation.
-  urgentAt            DateTime?
+  urgentAt       DateTime?
   // Archiving is the soft delete: an ARCHIVED consultation leaves the lists (it shows only in
   // the Archived section, ?status=ARCHIVED), takes no new messages, and can be restored as it
   // was. Deleting is only offered from there and moves it to FOR_DELETION — still listed under
   // Archived and restorable until ConsultationDeletionQueue purges it. See ChatSvc.deleteConsultation.
-  status              ConsultationStatus       @default(ACTIVE)
+  status         ConsultationStatus        @default(ACTIVE)
   // When it was last archived — the Archived list's sort key. Null while ACTIVE.
-  archivedAt          DateTime?
+  archivedAt     DateTime?
   // When it moved to FOR_DELETION — the grace period counts from here. It stays restorable
   // (which clears this) for CONSULTATION_DELETION_GRACE_PERIOD_DAYS, then
   // ConsultationDeletionQueue purges it. Null unless FOR_DELETION.
@@ -422,22 +422,27 @@ model MessageCitationRanking {
 
 // Restored after the tenant-implementation merge dropped the model declaration while its
 // migration (20260825153126_) stayed applied — see ChatRepo's audio-overview methods.
+// An Audio Overview script and its recording. Two owners, exactly one per row (a CHECK in the
+// migration): a chat message (`messageId`) when a lawyer asked for one in chat or Studio, or the
+// case (`caseId`) when the case analysis wrote it (AudioOverviewSvc.generateForCase). Rendering and
+// the history list work on the row id, so both kinds go through the same path.
 model MessageAudioOverview {
-  id              String               @id @default(uuid())
-  messageId       String               @unique
-  turns           Json
-  voiceHostA      String
-  voiceHostB      String
-  audioFileId     String?
-  audioStatus     AudioOverviewStatus?
+  id          String               @id @default(uuid())
+  messageId   String?              @unique
+  caseId      String?
+  turns       Json
+  voiceHostA  String
+  voiceHostB  String
+  audioFileId String?
+  audioStatus AudioOverviewStatus?
   // Jev's verdict per script turn (see audio-overview-jev.ts / USE_JEV_AUDIO_OVERVIEW) — null
   // when the check never ran or found nothing checkable; a turn Jev couldn't check has no entry.
-  checks          Json?
+  checks      Json?
   // Cumulative start second of each turn within the rendered audio (see turnStartTimes in
   // audio-overview-render.ts) — number[], one entry per `turns` element, index-aligned. Null
   // until audioStatus reaches COMPLETED (set alongside audioFileId); the frontend's line-by-line
   // highlight/auto-scroll has nothing to sync to before then.
-  turnTimings     Json?
+  turnTimings Json?
   // Per turn, where each of its sentences starts in the rendered audio (see
   // markTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
   // { time, start, end }[][], index-aligned with `turns`; start/end are string indices into
@@ -445,11 +450,14 @@ model MessageAudioOverview {
   sentenceTimings Json?
   // Same shape as sentenceTimings, per word (Polly's word speech marks) — the player fills the
   // active turn in word by word. Null on overviews rendered before it existed.
-  wordTimings     Json?
-  createdAt       DateTime             @default(now())
+  wordTimings Json?
+  createdAt   DateTime             @default(now())
 
-  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  audioFile File?   @relation(fields: [audioFileId], references: [id])
+  message   Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  case      Case?    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  audioFile File?    @relation(fields: [audioFileId], references: [id])
+
+  @@index([caseId])
 }
 
 // The legal/legal_uk "how I reached this answer" trace — see
@@ -542,7 +550,7 @@ model ConsultationTraceEvent {
 
   consultation Consultation? @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   case         Case?         @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([consultationId, seq])
   @@index([caseId, turnId, seq])
@@ -787,7 +795,7 @@ enum ClientSide {
 }
 
 model Case {
-  id                    String                   @id @default(uuid())
+  id                    String     @id @default(uuid())
   traceEvents           ConsultationTraceEvent[]
   // Who created the case — attribution only, never access on its own (see CaseAccess). Nullable
   // so deleting that account leaves the case with its organization; createdByName keeps the
@@ -808,14 +816,14 @@ model Case {
   // field) and from Tenant.code (the PH/UK deployment-region boundary, see CONTEXT.md). Only
   // meaningful for UK-tenant organizations; left null for PH.
   ukJurisdiction        String?
-  language              String                   @default("en")
-  notes                 String?                  @db.Text
+  language              String     @default("en")
+  notes                 String?    @db.Text
   lastRefreshedAt       DateTime?
   // Archiving is a pure visibility flag — an ARCHIVED case behaves identically to an ACTIVE one
   // everywhere else (documents, chat, auto-refresh, CaseAccess); it only changes which of the
   // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
   // param and CaseRepo.setStatus.
-  status                CaseStatus               @default(ACTIVE)
+  status                CaseStatus @default(ACTIVE)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
@@ -833,8 +841,8 @@ model Case {
   // Null when the lawyer hasn't said; the prompt then keeps its claimant framing. Changing it
   // clears findingsFormatVersion so the findings regenerate from the new side (CaseSvc.update).
   clientSide            ClientSide?
-  createdAt             DateTime                 @default(now())
-  updatedAt             DateTime                 @updatedAt
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
 
   user                 User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
   organization         Organization?             @relation(fields: [organizationId], references: [id], onDelete: SetNull)
@@ -863,6 +871,7 @@ model Case {
   reconstruction       CaseReconstruction?
   reconstructionEvents CaseReconstructionEvents?
   redTeamAssessment    RedTeamAssessment?
+  audioOverviews       MessageAudioOverview[]
   graphNodes           CaseGraphNode[]
   graphEdges           CaseGraphEdge[]
   edges                CaseEdge[]
@@ -883,16 +892,16 @@ model Case {
 }
 
 model Party {
-  id           String  @id @default(uuid())
+  id          String  @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the party in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
-  caseId       String
-  name         String
-  designation  String
+  caseId      String
+  name        String
+  designation String
   // Lawyer-entered free text shown under the party name (e.g. "Rep. by Hollis & Marr").
   // Never AI-written.
-  descriptor   String?
+  descriptor  String?
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -905,7 +914,7 @@ model Document {
   id               String    @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the document in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
-  copiedFromId     String?
+  copiedFromId String?
   userId           String
   organizationId   String
   caseId           String?
@@ -1262,7 +1271,7 @@ model Event {
   id                   String    @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the event in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
-  copiedFromId         String?   @map("copied_from_id")
+  copiedFromId String? @map("copied_from_id")
   userId               String
   organizationId       String    @map("organization_id")
   title                String
@@ -1579,22 +1588,22 @@ model ScreenPreset {
 }
 
 model CaseTimelineEvent {
-  id           String         @id @default(uuid())
+  id          String         @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the timeline entry in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
-  caseId       String
-  title        String
-  occurredOn   DateTime?
-  description  String?        @db.Text
-  status       String         @default("pending")
-  source       TimelineSource @default(LAWYER)
-  documentId   String?
-  chunkId      String?
-  pageNumber   Int?
-  createdBy    String?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  caseId      String
+  title       String
+  occurredOn  DateTime?
+  description String?        @db.Text
+  status      String         @default("pending")
+  source      TimelineSource @default(LAWYER)
+  documentId  String?
+  chunkId     String?
+  pageNumber  Int?
+  createdBy   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -1820,35 +1829,35 @@ model ProceduralDeadlineConfirmation {
 }
 
 model ProcedureItem {
-  id               String    @id @default(uuid())
-  caseId           String
-  kind             String
-  label            String
-  done             Boolean   @default(false)
-  notes            String?   @db.Text
+  id          String   @id @default(uuid())
+  caseId      String
+  kind        String
+  label       String
+  done        Boolean  @default(false)
+  notes       String?  @db.Text
   // Which source document an AI-generated STRATEGY/TODO item is grounded in (see
   // CaseStrategySvc, case-strategy-parse.ts). Null for lawyer-entered items and for AI items
   // the model didn't attribute to a specific document.
-  sourceLabel      String?
+  sourceLabel String?
   // Jev's verdict on a STRATEGY item against the case data (case-strategy-jev.ts):
   // { verdict, confidence, checkedAt }. Null for to-dos, lawyer-entered items, and when
   // USE_JEV_CASE_STRATEGY is off.
-  check            Json?
+  check       Json?
   // A to-do sent over from another panel ("To checklist") remembers the item it was raised on, so
   // the item reaching its fixed state can tick it (utils/procedure-link.ts): FINDING, DAMAGE or
   // WITNESS_NEED, that row's id, and for a witness need the need's key. Not a foreign key — the
   // sources live in different tables, and the to-do outlives a deleted source.
-  sourceKind       String?
-  sourceId         String?
-  sourceKey        String?
+  sourceKind  String?
+  sourceId    String?
+  sourceKey   String?
   // Set when the source ticked this to-do, with why (a ProcedureAutoCloseReason). Cleared when a
   // lawyer reopens it.
   autoClosedAt     DateTime?
   autoClosedReason String?
   // A to-do sent from a Damages & Remedies entry carries that entry's due date, and follows it.
   dueDate          DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -1894,35 +1903,35 @@ enum FindingTag {
 // as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
 // manually-created rows (different/no notes) are left alone.
 model CaseFinding {
-  id             String          @id @default(uuid())
-  caseId         String
-  category       FindingCategory
-  label          String
-  notes          String?
+  id           String          @id @default(uuid())
+  caseId       String
+  category     FindingCategory
+  label        String
+  notes        String?
   // Which source document an AI-generated finding is grounded in (see CaseFindingAiSvc,
   // case-finding-parse.ts). Null for lawyer-entered findings and for AI findings the model
   // didn't attribute to a specific document.
-  sourceLabel    String?
+  sourceLabel  String?
   // The row's sub-line: who bears the burden (Legal Issues), the work that would close it
   // (Weaknesses), or the document reference (Strengths).
-  detail         String?
-  tag            FindingTag?
+  detail       String?
+  tag          FindingTag?
   // -10..10, the same scale as Red Team's argument impact. Null when nothing scored it.
-  impact         Int?
+  impact       Int?
   // Display order within a category; null rows sort by createdAt after the ordered ones.
-  position       Int?
+  position     Int?
   // Jev's check of this finding (per-category shape, see the *-jev.ts utils). Null when Jev
   // wasn't run or its call failed; tag/impact are then the model's or the lawyer's own.
-  jev            Json?
+  jev          Json?
   // The drafting model's own tag/impact, kept for comparison once Jev has replaced them.
-  modelTag       FindingTag?
-  modelImpact    Int?
-  jevCheckedAt   DateTime?
+  modelTag     FindingTag?
+  modelImpact  Int?
+  jevCheckedAt DateTime?
   // When a lawyer last changed an AI row's label, detail or tag. A regeneration
   // (replaceAiFindings) keeps such rows instead of replacing them. Null for untouched rows.
   lawyerEditedAt DateTime?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   case        Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
   authorities CaseAuthority[]
@@ -2053,29 +2062,29 @@ enum DamageAmountBasis {
 // remedies), whether it has been awarded or received, and the date it is due. The case total is
 // the sum of accepted amounts (utils/damages-compute.ts).
 model DamageClaim {
-  id               String             @id @default(uuid())
+  id               String       @id @default(uuid())
   caseId           String
-  kind             DamageKind         @default(DAMAGE)
+  kind             DamageKind   @default(DAMAGE)
   title            String
-  description      String?            @db.Text
+  description      String?      @db.Text
   amount           Float?
   // Where an AI entry's amount came from (a quoted figure, rate × period from quoted lines, or an
   // AI estimate to review) and its working. Cleared when a lawyer changes the amount.
   amountBasis      DamageAmountBasis?
-  amountNote       String?            @db.Text
+  amountNote       String?      @db.Text
   // Awarded by the tribunal or received by the client.
-  done             Boolean            @default(false)
+  done             Boolean      @default(false)
   dueDate          DateTime?
   // AI = proposed by DamagesExtractSvc from `sourceDocumentId`; `sourceQuote` is the verbatim
   // line it relied on, checked against that document's text before the row is written.
-  source           DamageSource       @default(MANUAL)
+  source           DamageSource @default(MANUAL)
   sourceDocumentId String?
-  sourceQuote      String?            @db.Text
+  sourceQuote      String?      @db.Text
   // An AI proposal is a suggestion until a lawyer accepts it, and isn't counted in the total
   // until then. Lawyer-entered rows start accepted.
-  accepted         Boolean            @default(true)
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  accepted         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
   sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
@@ -2420,21 +2429,21 @@ model Organization {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  createdBy          User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
-  tenant             Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  members            OrganizationMember[]
-  invites            OrganizationInvite[]
-  caseCopies         CaseCopy[]
+  createdBy      User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  members        OrganizationMember[]
+  invites        OrganizationInvite[]
+  caseCopies     CaseCopy[]
   consultationCopies ConsultationCopy[]
-  cases              Case[]
-  documents          Document[]
-  consultations      Consultation[]
-  bookmarks          Bookmark[]
-  events             Event[]
-  notes              Note[]
-  notifications      Notification[]
-  transcriptions     Transcription[]
-  connectors         IntegrationConnector[]
+  cases          Case[]
+  documents      Document[]
+  consultations  Consultation[]
+  bookmarks      Bookmark[]
+  events         Event[]
+  notes          Note[]
+  notifications  Notification[]
+  transcriptions Transcription[]
+  connectors     IntegrationConnector[]
 
   @@index([createdById])
   @@index([tenantId])
@@ -2656,17 +2665,17 @@ model IntegrationConnector {
 // relation — it's a caseId for the case-level kinds above, a Law.id for citationExpand — this
 // is a generic lock, not a domain entity. See AiGenerationLockSvc.
 model AiGenerationJob {
-  id          String             @id @default(uuid())
-  subjectId   String
-  kind        String
-  status      AiGenerationStatus @default(IN_PROGRESS)
-  startedAt   DateTime           @default(now())
-  finishedAt  DateTime?
-  error       String?
+  id         String             @id @default(uuid())
+  subjectId  String
+  kind       String
+  status     AiGenerationStatus @default(IN_PROGRESS)
+  startedAt  DateTime           @default(now())
+  finishedAt DateTime?
+  error      String?
   /// Where an IN_PROGRESS job has got to, for a progress indicator — null until the job reports
   /// one (AiGenerationLockSvc.setStage). Only Chat-Wonder-backed chat turns report stages today
   /// ("answering", then "extras"); every other kind leaves it null throughout.
-  stage       String?
+  stage      String?
   /// Stamped every few seconds while the job's work is running (AiGenerationLockSvc.finishWith).
   /// A run whose heartbeat stopped was lost — the API process restarted or crashed mid-run — and
   /// is treated as abandoned no matter how long legitimate runs of its kind take. Null until the

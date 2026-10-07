@@ -80,6 +80,7 @@ export default class CaseTimelineSvc {
    * CaseRefreshSvc.beginQueued). */
   static async beginQueuedGenerate(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "timelineGenerate");
   }
 
