@@ -27,6 +27,7 @@ import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.qu
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
 import AudioOverviewHistorySvc from "../services/audio-overview-history.service";
+import AudioOverviewSvc from "../services/audio-overview.service";
 import CaseBriefExportSvc, { CaseBriefFormat } from "../services/case-brief-export.service";
 import DecisionRecordSvc from "../services/decision-record.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -731,6 +732,21 @@ export default class CaseTerminalCtrl {
       cursor: value.cursor,
     });
     return res.status(200).json(result);
+  }
+
+  /** GET /:caseId/audio-overview/latest — the case's newest Audio Overview from either owner (the
+   * case analysis's, or one asked for in chat/Studio), or null. The Terminal's Audio Overview pane
+   * reads this instead of following the newest consultation. */
+  static async latestAudioOverview(req: Request, res: Response) {
+    const result = await AudioOverviewSvc.latest(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** POST /:caseId/audio-overview/:overviewId/recording — records an overview whose recording
+   * failed. 409 while it is being recorded or once it is. */
+  static async retryAudioOverviewRecording(req: Request, res: Response) {
+    const result = await AudioOverviewSvc.retryRecording(req.params.caseId, req.params.overviewId, req.user.userId);
+    return res.status(202).json(result);
   }
 
   /** Decision Records (differentiation program, Phase 1) — see

@@ -13,6 +13,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import RedTeamSvc from "./red-team.service";
+import AudioOverviewSvc from "./audio-overview.service";
 import WitnessExtractSvc from "./witness-extract.service";
 import WitnessScoringSvc from "./witness-scoring.service";
 import CaseTheorySvc from "./case-theory.service";
@@ -135,9 +136,13 @@ export default class CaseRefreshSvc {
             ],
         ]);
 
-        // Wave 3: Red Team attacks everything above — findings, contradictions, witnesses and the
-        // re-rated damages — so it goes last.
-        await CaseRefreshSvc.runWave(caseId, 3, [["red team", () => RedTeamSvc.generateFromDocuments(caseId, userId)]]);
+        // Wave 3: what reads everything above — findings, contradictions, witnesses and the re-rated
+        // damages. Red Team attacks them; the Audio Overview's two hosts discuss them (the script is
+        // written here, and its recording queued, not awaited — the run ends while Polly records).
+        await CaseRefreshSvc.runWave(caseId, 3, [
+            ["red team", () => RedTeamSvc.generateFromDocuments(caseId, userId)],
+            ["audio overview", () => AudioOverviewSvc.generateForCase(caseId, userId)],
+        ]);
 
         // Chat dates no longer go on the case timeline (they carry no document); clear the ones
         // earlier versions copied in. A failure never fails the refresh.

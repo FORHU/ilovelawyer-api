@@ -143,6 +143,8 @@ router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generate
 router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/export/history", asyncHandler(CaseTerminalCtrl.exportBriefHistory));
 router.get("/:caseId/audio-overview/history", asyncHandler(CaseTerminalCtrl.audioOverviewHistory));
+router.get("/:caseId/audio-overview/latest", asyncHandler(CaseTerminalCtrl.latestAudioOverview));
+router.post("/:caseId/audio-overview/:overviewId/recording", asyncHandler(CaseTerminalCtrl.retryAudioOverviewRecording));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
 // Explanation (XAI) trace — what the AI did to answer each turn, for the Terminal trace pane
 router.get("/:caseId/trace/turns", asyncHandler(TraceCtrl.listTurns));
