@@ -4,6 +4,19 @@ import GoogleCalendarSyncSvc, { GOOGLE_SYNCED_EVENT_FIELDS } from "./google-cale
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
+/** Fields the system itself writes on an event (reminder sent, acknowledgement, Google link) —
+ * still allowed once the appointment is past, unlike anything the user would edit. */
+const BOOKKEEPING_FIELDS = new Set(["last_reminder_sent_at", "lawyer_acknowledged_at", "google_link", "google_event_id"]);
+
+const REMINDER_IN_PAST_MESSAGE = "That reminder time has already passed. Choose a shorter reminder or none.";
+
+/** A reminder whose send time is already past would go out on the reminder queue's next tick,
+ * not at the chosen lead time, so it's rejected rather than silently sent early. */
+function assertReminderNotInPast(dateTime: Date, leadMinutes: number | null | undefined) {
+  if (!leadMinutes) return;
+  if (dateTime.getTime() - leadMinutes * 60_000 <= Date.now()) throw new HttpError(REMINDER_IN_PAST_MESSAGE, 400);
+}
+
 function formatEventDateTime(dateTime: Date): string {
   return dateTime.toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
 }
@@ -47,6 +60,7 @@ export default class EventSvc {
     reminder_lead_minutes?: number;
   }) {
     const endDateTimeSource = body.end_date_time || body.endDateTime;
+    assertReminderNotInPast(new Date(body.date_time || body.dateTime || ""), body.reminderLeadMinutes ?? body.reminder_lead_minutes);
     const event = await EventRepo.create(organizationId, userId, {
       title: body.title || "Consultation",
       type: body.type || "Meeting",
@@ -88,11 +102,17 @@ export default class EventSvc {
     // UI-only; without this check a stale open edit form (or a direct API call) could still
     // silently rewrite a cancelled appointment's details.
     const nonStatusFieldsPresent = Object.keys(body).some((key) => key !== "status");
+    // Once its start time has passed an appointment is a record: no edits, and no cancelling or
+    // restoring either (a restored past appointment would be "active" at a time already gone).
+    const userFieldsPresent = Object.keys(body).some((key) => !BOOKKEEPING_FIELDS.has(key));
     let existing: Awaited<ReturnType<typeof EventRepo.findById>> = null;
-    if (nonStatusFieldsPresent) {
+    if (nonStatusFieldsPresent || userFieldsPresent) {
       existing = await EventRepo.findById(id, organizationId, userId, userEmail);
       if (!existing) throw new HttpError("Event not found", 404);
-      if (existing.status === "cancelled") {
+      if (userFieldsPresent && existing.dateTime.getTime() <= Date.now()) {
+        throw new HttpError("Past appointments can't be changed.", 400);
+      }
+      if (nonStatusFieldsPresent && existing.status === "cancelled") {
         throw new HttpError("Cannot edit a cancelled appointment. Restore it first.", 400);
       }
     }
@@ -111,10 +131,14 @@ export default class EventSvc {
     if (body.client_email !== undefined || body.clientEmail !== undefined) data.clientEmail = body.client_email || body.clientEmail;
     if (body.notes !== undefined) data.notes = body.notes;
     if (body.last_reminder_sent_at !== undefined) data.lastReminderSentAt = new Date(body.last_reminder_sent_at);
+    // The edit form sends the lead time on every save, so only an actual change counts —
+    // otherwise any edit (even just the title) would clear lastReminderSentAt and re-send.
+    let reminderChanged = false;
     if (body.reminder_lead_minutes !== undefined || body.reminderLeadMinutes !== undefined) {
       data.reminderLeadMinutes = body.reminderLeadMinutes ?? body.reminder_lead_minutes ?? null;
+      reminderChanged = !existing || data.reminderLeadMinutes !== existing.reminderLeadMinutes;
       // Lead time changed: the previous send (if any) was timed for the old offset.
-      data.lastReminderSentAt = null;
+      if (reminderChanged) data.lastReminderSentAt = null;
     }
     if (body.lawyer_acknowledged_at !== undefined) data.lawyerAcknowledgedAt = new Date(body.lawyer_acknowledged_at);
     if (body.caseId !== undefined || body.case_id !== undefined) data.caseId = body.caseId || body.case_id || null;
@@ -126,6 +150,15 @@ export default class EventSvc {
     const rescheduled =
       existing && data.dateTime instanceof Date && data.dateTime.getTime() !== existing.dateTime.getTime();
     if (rescheduled) data.lastReminderSentAt = null;
+
+    // Only checked when the reminder or the time changes, so an untouched reminder that has
+    // already gone out doesn't block unrelated edits.
+    if (existing && (reminderChanged || rescheduled)) {
+      assertReminderNotInPast(
+        data.dateTime ?? existing.dateTime,
+        "reminderLeadMinutes" in data ? data.reminderLeadMinutes : existing.reminderLeadMinutes
+      );
+    }
 
     // Edits, cancels and restores reach the owner's Google Calendar copy; bookkeeping-only
     // updates (reminder sent, acknowledged) don't. Marked pending in the same write, so the

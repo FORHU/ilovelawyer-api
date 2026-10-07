@@ -1,7 +1,14 @@
 import Joi from "joi";
 
+export const EVENT_TITLE_MAX_LENGTH = 50;
+
+const titleField = Joi.string()
+  .trim()
+  .max(EVENT_TITLE_MAX_LENGTH)
+  .messages({ "string.max": `Title must be ${EVENT_TITLE_MAX_LENGTH} characters or fewer.` });
+
 export const createEventSchema = Joi.object({
-  title: Joi.string().trim().optional(),
+  title: titleField.optional(),
   type: Joi.string().trim().optional(),
   date_time: Joi.date().iso().optional(),
   dateTime: Joi.date().iso().optional(),
@@ -24,7 +31,7 @@ export const createEventSchema = Joi.object({
   .messages({ "object.missing": '"date_time" (or "dateTime") is required' });
 
 export const updateEventSchema = Joi.object({
-  title: Joi.string().trim().optional(),
+  title: titleField.optional(),
   type: Joi.string().trim().optional(),
   date_time: Joi.date().iso().optional(),
   dateTime: Joi.date().iso().optional(),
@@ -49,7 +56,7 @@ export const updateEventSchema = Joi.object({
 export const updateEventByGoogleIdSchema = Joi.object({
   status: Joi.string().optional(),
   google_link: Joi.string().uri().allow("").optional(),
-  title: Joi.string().trim().optional(),
+  title: titleField.optional(),
   type: Joi.string().trim().optional(),
   date_time: Joi.date().iso().optional(),
   dateTime: Joi.date().iso().optional(),
