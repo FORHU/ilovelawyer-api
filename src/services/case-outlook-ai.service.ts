@@ -10,7 +10,7 @@ import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder"
 import { newTraceRun } from "./trace-collector.service";
 import { getCaseOutlookPromptBuilder } from "../legal/prompt-registry";
 import { applyOutlookGuards, parseCaseOutlook } from "../utils/case-outlook-parse";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { OUTLOOK_LOW_CONFIDENCE_RISK_SEVERITIES, OUTLOOK_MIN_READY_DOCS } from "../constants";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
@@ -65,10 +65,7 @@ export default class CaseOutlookAiSvc {
       ukJurisdiction,
     })}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText("Use only these excerpts and the attached case documents.", pack.text)}
 `;
 
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };

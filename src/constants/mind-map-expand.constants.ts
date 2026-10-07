@@ -1,3 +1,5 @@
+import { wrapExtractedText } from "../utils/case-document-excerpts";
+
 export interface MindMapExpandPromptData {
   caseName?: string | null;
   actionType?: string | null;
@@ -49,7 +51,10 @@ ${list(d.existingChildren)}
 
 ${d.documents?.length ? `## DOCUMENTS\n${d.documents.map((doc) => `- \`${doc.id}\` — ${doc.name}`).join("\n")}\n\n` : ""}${
     d.excerpts
-      ? `## EXTRACTED TEXT\nPassages from those documents, each headed [handle p.page]. Cite the handle of the passage a point comes from.\n\n${d.excerpts}\n\n`
+      ? `${wrapExtractedText(
+          "Passages from those documents, each headed [handle p.page]. Cite the handle of the passage a point comes from.",
+          d.excerpts,
+        )}\n\n`
       : ""
   }## RULES
 - Exactly ${d.count} children, or fewer if the documents and the node genuinely support fewer. Never pad.
