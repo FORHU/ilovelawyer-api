@@ -57,8 +57,8 @@ describe("CaseOutlookAiSvc.generateFromDocuments", () => {
       [chatWonder, "getChatWonderSessionId", async () => "session-1"],
       [chatWonder, "callChatWonderRest", async () => ({ response: reply })],
       [CaseOutlookRepo, "latest", async () => PREVIOUS],
-      [CaseOutlookRepo, "insert", async (caseId: string, outlook: unknown) => {
-        inserted.push({ caseId, outlook });
+      [CaseOutlookRepo, "insert", async (caseId: string, outlook: unknown, inputFingerprint: string) => {
+        inserted.push({ caseId, outlook, inputFingerprint });
         return { id: "new-outlook" };
       }],
     ]);
@@ -108,6 +108,59 @@ describe("CaseOutlookAiSvc.generateFromDocuments", () => {
     const result = await CaseOutlookAiSvc.generateFromDocuments("case-1");
     expect(inserted).to.have.length(0);
     expect(result).to.equal(PREVIOUS);
+  });
+
+  it("keeps the current outlook without asking Chat Wonder when the material is unchanged", async () => {
+    reply = validReply;
+    await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    const fingerprint = inserted[0].inputFingerprint;
+    expect(fingerprint).to.be.a("string");
+
+    const current = { id: "current-outlook", inputFingerprint: fingerprint };
+    let called = false;
+    patch([
+      [CaseOutlookRepo, "latest", async () => current],
+      [chatWonder, "callChatWonderRest", async () => ((called = true), { response: validReply })],
+    ]);
+    const result = await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    expect(called).to.equal(false);
+    expect(inserted).to.have.length(1);
+    expect(result).to.equal(current);
+  });
+
+  it("runs again when a document, open risk or finding tag changes", async () => {
+    reply = validReply;
+    await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    const current = { id: "current-outlook", inputFingerprint: inserted[0].inputFingerprint };
+    patch([[CaseOutlookRepo, "latest", async () => current]]);
+
+    docs.push({ id: "doc-4", name: "Witness statement", ragStatus: "READY" });
+    await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    expect(inserted).to.have.length(2);
+
+    docs.pop();
+    risks = [{ title: "Late filing", severity: "MAJOR", status: "OPEN" }];
+    await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    expect(inserted).to.have.length(3);
+
+    risks = [];
+    patch([[CaseFindingRepo, "list", async () => [{ category: "LEGAL_ISSUE", label: "x", tag: "RESOLVED" }]]]);
+    await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    expect(inserted).to.have.length(4);
+  });
+
+  it("ignores finding wording, which the case analysis rewrites on every run", async () => {
+    reply = validReply;
+    patch([[CaseFindingRepo, "list", async () => [{ category: "WEAKNESS", label: "Rotas missing", tag: null }]]]);
+    await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    const current = { id: "current-outlook", inputFingerprint: inserted[0].inputFingerprint };
+    patch([
+      [CaseOutlookRepo, "latest", async () => current],
+      [CaseFindingRepo, "list", async () => [{ category: "WEAKNESS", label: "The shift rotas are absent", tag: null }]],
+    ]);
+    const result = await CaseOutlookAiSvc.generateFromDocuments("case-1");
+    expect(inserted).to.have.length(1);
+    expect(result).to.equal(current);
   });
 
   it("does not call Chat Wonder when the case has no READY documents", async () => {
