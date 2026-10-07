@@ -40,7 +40,20 @@ export default class OrganizationMemberRepo {
   static async findAnyForUser(userId: string) {
     return prisma.organizationMember.findUnique({
       where: { userId },
-      include: { organization: { select: { tenant: { select: { code: true } } } } },
+      include: { organization: { select: { isPersonal: true, tenant: { select: { code: true } } } } },
+    });
+  }
+
+  /** Invites a user who is currently in their own personal workspace. userId is unique, so the
+   * PENDING invite has to replace that membership. The workspace itself stays, dormant, and
+   * comes back if they decline (see OrganizationSvc.declineInvite). */
+  static async replaceWithInvite(organizationId: string, userId: string, role: OrganizationRole) {
+    return prisma.$transaction(async (tx) => {
+      await tx.organizationMember.delete({ where: { userId } });
+      return tx.organizationMember.create({
+        data: { organizationId, userId, role, status: OrganizationMemberStatus.PENDING },
+        include: { user: { select: { id: true, name: true, email: true, username: true } } },
+      });
     });
   }
 
