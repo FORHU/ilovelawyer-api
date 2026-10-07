@@ -136,7 +136,7 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     if (!existingReconstruction) {
       const CaseReconstructionSvc = (await import("../services/case-reconstruction.service")).default;
       await CaseReconstructionSvc.autoRegenerate(caseId, userId).catch((err) => {
-        logger.warn("Post-extraction case reconstruction/audio failed", { err, caseId, userId });
+        logger.warn("Post-extraction case reconstruction failed", { err, caseId, userId });
       });
     }
   } catch (err) {

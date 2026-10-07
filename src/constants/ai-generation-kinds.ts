@@ -29,7 +29,6 @@ export const AI_GENERATION_KINDS = [
   "theoryDiff",
   "caseReconstructionScenes",
   "caseReconstructionEvents",
-  "caseReconstructionTableRead",
   "timelineGenerate",
   "witnessScoring",
   "witnessExtract",

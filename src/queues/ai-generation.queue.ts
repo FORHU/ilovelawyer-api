@@ -29,7 +29,6 @@ export type QueuedAiGenerationKind =
   | "theoryDiff"
   | "caseReconstructionScenes"
   | "caseReconstructionEvents"
-  | "caseReconstructionTableRead"
   | "casePostExtraction"
   | "timelineGenerate"
   | "caseStrategyRefresh"
@@ -65,7 +64,7 @@ export interface QueuedAiGenerationJob {
 }
 
 // Each of caseRefresh/redTeam/caseReconstruction/caseTheoryPropose/theoryDiff/
-// caseReconstructionScenes/caseReconstructionTableRead's controller endpoint already ran
+// caseReconstructionScenes' controller endpoint already ran
 // CaseAccess.assertCanEdit + AiGenerationLockSvc.begin synchronously (see each service's
 // beginQueued) before enqueueing here — runQueued just does the actual work and closes out the
 // lock via AiGenerationLockSvc.finishWith.
@@ -88,7 +87,6 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   theoryDiff: (job) => TheoryDiffSvc.runQueuedDiff(job.caseId, job.userId, job.theoryAId!, job.theoryBId!),
   caseReconstructionScenes: (job) => CaseReconstructionSvc.runQueuedScenes(job.caseId, job.userId),
   caseReconstructionEvents: (job) => CaseReconstructionSvc.runQueuedEvents(job.caseId, job.userId),
-  caseReconstructionTableRead: (job) => CaseReconstructionSvc.runQueuedTableRead(job.caseId, job.userId),
   casePostExtraction: async (job) => {
     const { runCasePostExtraction } = await import("./case-post-extraction");
     return runCasePostExtraction(job.caseId, job.userId);
@@ -140,7 +138,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
 const VISIBILITY_TIMEOUT_SECONDS = 900;
 // Each job is one (or a few sequential) Chat Wonder call — I/O-bound, not CPU/memory heavy like
 // DocumentExtractionQueue's PDF parsing, so a few can run concurrently without real resource
-// pressure. Same reasoning CaseReconstructionAudioQueue used for its poll-only jobs.
+// pressure.
 const CONCURRENCY = 3;
 
 interface WaitItem {

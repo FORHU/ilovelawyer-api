@@ -23,8 +23,6 @@ import DamageClaimSvc from "../services/damage-claim.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
 import CaseClaimSvc from "../services/case-claim.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
-import CaseReconstructionAudioSvc from "../services/case-reconstruction-audio.service";
-import CaseReconstructionAudioQueue from "../queues/case-reconstruction-audio.queue";
 import RedTeamSvc from "../services/red-team.service";
 import WitnessScoringSvc from "../services/witness-scoring.service";
 import AudioOverviewHistorySvc from "../services/audio-overview-history.service";
@@ -677,30 +675,6 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "caseReconstructionEvents", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionEvents");
     return res.status(202).json(status);
-  }
-
-  /** Grounded Reconstruction Rung 2 (differentiation program, Phase 3). Queued via
-   * AiGenerationQueue (SQS) — see refresh() above for why. */
-  static async generateTableRead(req: Request, res: Response) {
-    const { caseId } = req.params;
-    const userId = req.user.userId;
-    await CaseReconstructionSvc.beginQueuedTableRead(caseId, userId);
-    AiGenerationQueue.enqueue({ kind: "caseReconstructionTableRead", caseId, userId });
-    const status = await AiGenerationLockSvc.getStatus(caseId, "caseReconstructionTableRead");
-    return res.status(202).json(status);
-  }
-
-  static async generateReconstructionAudio(req: Request, res: Response) {
-    const result = await CaseReconstructionAudioSvc.startAudioJob(req.params.caseId, req.user.userId);
-    // Poll to completion server-side too — same queue case-post-extraction.ts's auto-generation
-    // uses — so it finishes even if nobody keeps this case's audio panel open to poll it.
-    CaseReconstructionAudioQueue.enqueue(req.params.caseId);
-    return res.status(202).json(result);
-  }
-
-  static async pollReconstructionAudio(req: Request, res: Response) {
-    const result = await CaseReconstructionAudioSvc.pollAudioJob(req.params.caseId, req.user.userId);
-    return res.status(200).json(result);
   }
 
   /** GET /api/my-cases/:caseId/graph-view?view_type=timeline|witnesses|contradictions|issues —

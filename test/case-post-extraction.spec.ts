@@ -4,7 +4,7 @@
  * that pipeline or spamming Chat Wonder for a large upload.
  *
  * No live Postgres/SQS: DocumentRepo, CaseRepo, CaseReconstructionRepo, AiGenerationLockSvc,
- * CaseRefreshSvc, CaseReconstructionSvc, CaseReconstructionAudioSvc, CaseReconstructionAudioQueue
+ * CaseRefreshSvc, CaseReconstructionSvc
  * and lib/sqs's sendMessage are monkeypatched on their CommonJS module objects, same idiom as
  * test/message-persistence-durability.spec.ts and test/decision-record-service.spec.ts.
  */
@@ -19,8 +19,6 @@ import CaseReconstructionRepo from "../src/repositories/case-reconstruction.repo
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import CaseRefreshSvc from "../src/services/case-refresh.service";
 import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
-import CaseReconstructionAudioSvc from "../src/services/case-reconstruction-audio.service";
-import CaseReconstructionAudioQueue from "../src/queues/case-reconstruction-audio.queue";
 import WitnessExtractSvc from "../src/services/witness-extract.service";
 import DamagesExtractSvc from "../src/services/damages-extract.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
@@ -52,8 +50,6 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     runningPaneJob: AiGenerationLockSvc.runningPaneJob,
     refreshRunQueued: CaseRefreshSvc.runQueued,
     reconstructionGenerate: CaseReconstructionSvc.generate,
-    startAudioJob: CaseReconstructionAudioSvc.startAudioJob,
-    audioEnqueue: CaseReconstructionAudioQueue.enqueue,
     witnessSchedule: WitnessExtractSvc.schedule,
     damagesSchedule: DamagesExtractSvc.schedule,
     mapChanged: CaseMindMapSvc.documentsChangedSinceBuild,
@@ -98,14 +94,12 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
       fingerprintStore[id] = fp;
     };
     // Default: reconstruction already exists, so tests that aren't specifically about
-    // first-ingest don't incidentally exercise the generate/audio branch.
+    // first-ingest don't incidentally exercise the generate branch.
     (CaseReconstructionRepo as any).get = async () => ({ id: "recon-1" });
     (AiGenerationLockSvc as any).begin = async () => {};
     (AiGenerationLockSvc as any).runningPaneJob = async () => null;
     (CaseRefreshSvc as any).runQueued = async () => {};
     (CaseReconstructionSvc as any).generate = async () => ({ id: "recon-1" });
-    (CaseReconstructionAudioSvc as any).startAudioJob = async () => {};
-    (CaseReconstructionAudioQueue as any).enqueue = () => {};
     mapChanged = false;
     mapMissing = false;
     mapBuilds = [];
@@ -131,8 +125,6 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (AiGenerationLockSvc as any).runningPaneJob = originals.runningPaneJob;
     (CaseRefreshSvc as any).runQueued = originals.refreshRunQueued;
     (CaseReconstructionSvc as any).generate = originals.reconstructionGenerate;
-    (CaseReconstructionAudioSvc as any).startAudioJob = originals.startAudioJob;
-    (CaseReconstructionAudioQueue as any).enqueue = originals.audioEnqueue;
     (WitnessExtractSvc as any).schedule = originals.witnessSchedule;
     (DamagesExtractSvc as any).schedule = originals.damagesSchedule;
     (CaseMindMapSvc as any).documentsChangedSinceBuild = originals.mapChanged;
@@ -370,27 +362,17 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
 
   // ── Phase 1 reconstruction rule: first ingest vs later refresh ───────────────────────────
 
-  it("generates Case Reconstruction + starts Polly on first ingest (no existing reconstruction)", async () => {
+  it("generates Case Reconstruction on first ingest (no existing reconstruction)", async () => {
     (CaseReconstructionRepo as any).get = async () => null;
     let generateCalls = 0;
-    let audioStartCalls = 0;
-    let audioEnqueueCalls = 0;
     (CaseReconstructionSvc as any).generate = async () => {
       generateCalls += 1;
       return { id: "recon-1" };
-    };
-    (CaseReconstructionAudioSvc as any).startAudioJob = async () => {
-      audioStartCalls += 1;
-    };
-    (CaseReconstructionAudioQueue as any).enqueue = () => {
-      audioEnqueueCalls += 1;
     };
 
     await runCasePostExtraction("case-1", "user-1");
 
     expect(generateCalls).to.equal(1);
-    expect(audioStartCalls).to.equal(1);
-    expect(audioEnqueueCalls).to.equal(1);
   });
 
   it("does not regenerate Case Reconstruction on a later corpus change (protects lawyer edits)", async () => {
