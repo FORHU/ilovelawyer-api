@@ -7,6 +7,7 @@ import { extractFacts, findContradictions, ContradictionHit } from "../utils/fac
 import HttpError from "../utils/http-error";
 import OrganizationRepo from "../repositories/organization.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { buildContradictionPrompt } from "../constants";
 import { extractContradictionHits, uniqueContradictionHits } from "../utils/contradiction-scan";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
@@ -125,7 +126,7 @@ export default class EvidenceIntelligenceSvc {
     let hits = regexHits;
 
     try {
-      const llmHits = await scanWithChatWonder(ready, tenantCode);
+      const llmHits = await scanWithChatWonder(ready, tenantCode, caseId);
       // undefined = missing/unparseable block → keep regex. [] = model found none → show none.
       if (llmHits) hits = uniqueContradictionHits(llmHits);
     } catch (err) {
@@ -278,7 +279,7 @@ async function scanWithRegex(ready: ReadyDoc[]): Promise<ContradictionHit[]> {
   return hits;
 }
 
-async function scanWithChatWonder(ready: ReadyDoc[], tenantCode: TenantCode): Promise<ContradictionHit[] | undefined> {
+async function scanWithChatWonder(ready: ReadyDoc[], tenantCode: TenantCode, caseId: string): Promise<ContradictionHit[] | undefined> {
   if (ready.length < 1) return undefined;
 
   const caseDocumentIds = ready.map((doc) => doc.id);
@@ -295,14 +296,16 @@ ${pack.text || "(no indexed text)"}
     caseDocumentIds,
     caseDocumentChunkIds: pack.chunkIds,
   };
+  // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+  const trace = newTraceRun("contradictionScan", caseId);
   let sessionId = await getChatWonderSessionId();
   let payload: { response?: string; intermediate_response?: string };
 
   try {
-    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode);
+    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode, { trace });
   } catch {
     sessionId = await getChatWonderSessionId();
-    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode);
+    payload = await callChatWonderRest(prompt, sessionId, grounding, tenantCode, { trace });
   }
 
   const text = String(payload.response || payload.intermediate_response || "");

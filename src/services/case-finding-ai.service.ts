@@ -6,6 +6,7 @@ import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
 import { FINDINGS_FORMAT_VERSION } from "../constants";
 import HttpError from "../utils/http-error";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
@@ -140,13 +141,15 @@ ${pack.text || "(no indexed text)"}
     // in front of Chat Wonder — the run failed and the case kept its old findings. Same fix as
     // CaseReconstructionSvc's narrative and RedTeamSvc.generate.
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseFindings", caseId);
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode);
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
     }
 
     const text = String(result.content || "");

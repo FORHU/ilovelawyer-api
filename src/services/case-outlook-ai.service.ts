@@ -7,6 +7,7 @@ import EvidenceRepo from "../repositories/evidence.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import CaseOutlookRepo from "../repositories/case-outlook.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
+import { newTraceRun } from "./trace-collector.service";
 import { getCaseOutlookPromptBuilder } from "../legal/prompt-registry";
 import { applyOutlookGuards, parseCaseOutlook } from "../utils/case-outlook-parse";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
@@ -72,10 +73,12 @@ ${pack.text || "(no indexed text)"}
 
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
     let payload: { response?: string; intermediate_response?: string };
+    // One trace run for both attempts: a retry on a fresh session adds to the same entry in the AI Reasoning pane.
+    const trace = newTraceRun("caseOutlook", caseId);
     try {
-      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode);
+      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode, { trace });
     } catch {
-      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode);
+      payload = await callChatWonderRest(prompt, await getChatWonderSessionId(), grounding, tenantCode, { trace });
     }
 
     const text = String(payload.response || payload.intermediate_response || "");

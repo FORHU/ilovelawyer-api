@@ -19,6 +19,9 @@ export const TRACE_SOURCES = [
   "damagesExtract",
   "citationGround",
   "claimExtract",
+  "caseFindings",
+  "caseOutlook",
+  "contradictionScan",
 ] as const;
 
 export type TraceSource = (typeof TRACE_SOURCES)[number];

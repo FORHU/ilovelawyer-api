@@ -84,3 +84,23 @@ export function promptTitle(content: string | undefined | null, turnNumber: numb
   if (!flat) return `Turn ${turnNumber}`;
   return flat.length > PROMPT_TITLE_MAX_CHARS ? `${flat.slice(0, PROMPT_TITLE_MAX_CHARS - 1).trimEnd()}…` : flat;
 }
+
+/** The trace entry type for the closing "why this answer" explanation. Not something chat-wonder's
+ * trace stream sends: ilovelawyer-api writes it, last, from the reasoning explanation the turn
+ * returned (the same text the chat shows as "How I got this"). */
+export const EXPLANATION_TYPE = "explanation";
+
+/** The text of a run's closing entry: the plain-language "why this answer", then the sources behind
+ * it with why each was cited. Null when the turn returned no explanation (chat-wonder makes none
+ * when the AI used no tools or sources). Already customer-facing — it is shown to the user in chat. */
+export function explanationSummary(
+  reasoning: { reasoning?: string; citation_reasons?: { title?: string; why_cited?: string }[] } | null | undefined,
+): string | null {
+  const why = reasoning?.reasoning?.trim();
+  if (!why) return null;
+  const sources = (reasoning?.citation_reasons ?? [])
+    .filter((c) => c.title?.trim() && c.why_cited?.trim())
+    .map((c) => `• ${c.title!.trim()} — ${c.why_cited!.trim()}`);
+  const body = sources.length > 0 ? `${why}\n\nSources behind it:\n${sources.join("\n")}` : why;
+  return body.slice(0, MAX_TRACE_SUMMARY_CHARS);
+}
