@@ -1,3 +1,6 @@
+import CaseChangeRun from "./case-change-run.service";
+import CaseChangeReads from "./case-change-reads";
+import { diffMindMap } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import CaseRepo from "../repositories/case.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -208,9 +211,17 @@ export default class CaseMindMapSvc {
 
   /** Run by AiGenerationQueue's worker after beginQueuedGenerate claimed the job row. */
   static async runQueuedGenerate(caseId: string, userId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "caseMindMap", async () => {
-      await CaseMindMapSvc.build(caseId, userId, "manual");
-    });
+    // The "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "caseMindMap", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "mindMap",
+        () => CaseChangeReads.mindMap(caseId),
+        () => CaseMindMapSvc.build(caseId, userId, "manual"),
+        (before, after, result) => diffMindMap(before, after, result.skipped === "userChanges"),
+      ),
+    );
   }
 
   /** The case data mind-map points are judged against — read from the case snapshot, the same

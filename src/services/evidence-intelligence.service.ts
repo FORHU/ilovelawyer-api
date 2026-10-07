@@ -14,6 +14,8 @@ import { buildFactExcerptPack } from "../utils/case-document-excerpts";
 import logger from "../utils/logger";
 import { PrivilegeStatus, HearsayCategory, ContradictionStatus } from "@prisma/client";
 import { contradictionKey } from "../utils/contradiction-key";
+import { diffContradictions } from "../utils/case-change-delta";
+import CaseChangeRun from "./case-change-run.service";
 import { classifyContradictionWithJev, isContradictionJevEnabled } from "../utils/contradiction-nature-jev";
 import FullContradictionScanSvc, { FullScanHit, isFullContradictionScanEnabled } from "./full-contradiction-scan.service";
 import { TenantCode } from "../types/tenant-code";
@@ -113,8 +115,19 @@ export default class EvidenceIntelligenceSvc {
   }
 
   /** Run by AiGenerationQueue's worker after beginQueuedScan has claimed the job row. */
-  static async runQueuedScan(caseId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "contradictions", () => EvidenceIntelligenceSvc.scanContradictionsInner(caseId));
+  static async runQueuedScan(caseId: string, userId?: string): Promise<void> {
+    // The panel's own Scan: the "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "contradictions", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId ?? null,
+        "contradictions",
+        // The scan compares against the table it replaces itself; nothing to read around it.
+        async () => null,
+        () => EvidenceIntelligenceSvc.scanContradictionsInner(caseId),
+        (_before, _after, { delta }) => delta,
+      ),
+    );
   }
 
   private static async scanContradictionsInner(caseId: string) {
@@ -156,7 +169,8 @@ export default class EvidenceIntelligenceSvc {
     // Every scan rebuilds the table, so carry the lawyer's triage and Jev's classification over
     // to each re-found contradiction; only ones not seen before, and not already classified by
     // the full scan, get sent to Jev.
-    const previous = new Map((await EvidenceRepo.listContradictions(caseId)).map((row) => [contradictionKey(row), row]));
+    const previousRows = await EvidenceRepo.listContradictions(caseId);
+    const previous = new Map(previousRows.map((row) => [contradictionKey(row), row]));
     const docName = new Map(ready.map((d) => [d.id, d.name]));
     const jev = isContradictionJevEnabled();
     const fresh = allHits.filter((hit) => !previous.has(contradictionKey(hit)) && !("nature" in hit));
@@ -178,14 +192,19 @@ export default class EvidenceIntelligenceSvc {
       }
       return { ...hit, ...(natures.get(hit) ?? {}) };
     });
+    // What this scan changed against the table it replaces — the analysis refresh's change summary
+    // (CaseRefreshSvc) reads it; the panel's own Scan ignores it.
+    const delta = diffContradictions(previousRows, allHits, docName);
     logger.info("Contradiction scan: carried over", {
       caseId,
       total: allHits.length,
       fullScan: fullHits.length,
-      carriedOver: allHits.filter((hit) => previous.has(contradictionKey(hit))).length,
+      carriedOver: delta.carriedOver,
+      added: delta.addedCount,
+      dropped: delta.droppedCount,
       jevClassified: natures.size,
     });
-    return EvidenceRepo.replaceContradictions(caseId, rows);
+    return { rows: await EvidenceRepo.replaceContradictions(caseId, rows), delta };
   }
 
   static async updateContradiction(

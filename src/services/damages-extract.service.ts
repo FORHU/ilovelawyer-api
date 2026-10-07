@@ -1,3 +1,6 @@
+import CaseChangeRun from "./case-change-run.service";
+import CaseChangeReads from "./case-change-reads";
+import { diffDamages } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import CaseRepo from "../repositories/case.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -119,13 +122,23 @@ export default class DamagesExtractSvc {
   /** Run by AiGenerationQueue's worker after beginRefresh claimed the lock. A reading pass already
    * running (409) is left to finish on its own; the re-rating still runs. */
   static async runQueuedRefresh(caseId: string, userId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "damagesRefresh", async () => {
-      await DamagesExtractSvc.extractAllPending(caseId, userId).catch((err) => {
-        if (err instanceof HttpError && err.statusCode === 409) return;
-        throw err;
-      });
-      await DamagesExtractSvc.refreshStep(caseId);
-    });
+    // The "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "damagesRefresh", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "damages",
+        () => CaseChangeReads.damages(caseId),
+        async () => {
+          await DamagesExtractSvc.extractAllPending(caseId, userId).catch((err) => {
+            if (err instanceof HttpError && err.statusCode === 409) return;
+            throw err;
+          });
+          await DamagesExtractSvc.refreshStep(caseId);
+        },
+        (before, after) => diffDamages(before, after),
+      ),
+    );
   }
 
   /** Run by AiGenerationQueue's worker. */

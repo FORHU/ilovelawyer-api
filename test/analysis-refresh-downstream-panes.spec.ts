@@ -35,6 +35,10 @@ import CaseReconstructionRepo from "../src/repositories/case-reconstruction.repo
 import CaseReconstructionAudioSvc from "../src/services/case-reconstruction-audio.service";
 import CaseReconstructionAudioQueue from "../src/queues/case-reconstruction-audio.queue";
 import CaseAccess from "../src/utils/case-access";
+import CaseOutlookRepo from "../src/repositories/case-outlook.repository";
+import RedTeamRepo from "../src/repositories/red-team.repository";
+import CaseChangeSummaryRepo from "../src/repositories/case-change-summary.repository";
+import CaseChangeReads from "../src/services/case-change-reads";
 import * as chatWonder from "../src/utils/chatWonder";
 import HttpError from "../src/utils/http-error";
 
@@ -53,10 +57,14 @@ function restoreAll() {
   }
 }
 
+// What scanContradictions now returns beside the rebuilt rows (see case-change-delta.spec.ts).
+const noContradictionChanges = { status: "unchanged", added: [], addedCount: 0, dropped: [], droppedCount: 0, carriedOver: 0, droppedTriaged: 0 };
+
 describe("Analysis refresh — waves of side-by-side steps", () => {
   // Every step records when it starts and when it ends, so a test can tell what overlapped.
   let events: string[];
   let audits: any[];
+  let summaries: any[];
   // A step's stub: logs start, waits for `gate` (if any), logs end.
   const gates = new Map<string, Promise<void>>();
   function step(name: string, result: unknown = {}) {
@@ -74,13 +82,14 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
   beforeEach(() => {
     events = [];
     audits = [];
+    summaries = [];
     gates.clear();
     patch([
       [CaseRepo, "exists", async () => true],
       [CaseRepo, "markRefreshed", async () => ({ count: 1 })],
       [CaseRepo, "setReadySetFingerprint", async () => undefined],
       [DocumentRepo, "listAllByCase", async () => []],
-      [EvidenceIntelligenceSvc, "scanContradictions", step("contradictions", [])],
+      [EvidenceIntelligenceSvc, "scanContradictions", step("contradictions", { rows: [], delta: noContradictionChanges })],
       [CaseStrategySvc, "generateFromDocuments", step("strategy")],
       [CaseFindingAiSvc, "generateFromDocuments", step("findings")],
       [WitnessExtractSvc, "extractAllPending", step("witnessExtract", { batches: 1 })],
@@ -98,6 +107,19 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
       [AiGenerationLockSvc, "finishWith", async (_c: string, _k: string, fn: () => Promise<unknown>) => fn()],
       [AiGenerationLockSvc, "setStage", async (_c: string, kind: string, stage: string) => void events.push(`stage:${kind}:${stage}`)],
       [CaseSnapshotSvc, "get", async () => ({})],
+      // The change summary's before/after reads of each tracked pane, and its own row.
+      [CaseFindingRepo, "list", async () => []],
+      [CaseReconstructionRepo, "get", async () => null],
+      [CaseOutlookRepo, "latest", async () => null],
+      [RedTeamRepo, "get", async () => null],
+      [CaseChangeSummaryRepo, "latestRefresh", async () => null],
+      [CaseChangeSummaryRepo, "create", async (data: any) => (summaries.push(data), data)],
+      [CaseRepo, "getLastRefreshedAt", async () => new Date("2026-10-01")],
+      [CaseChangeReads, "strategy", async () => ({ items: [], dates: [] })],
+      [CaseChangeReads, "witnesses", async () => []],
+      [CaseChangeReads, "damages", async () => []],
+      [CaseChangeReads, "theory", async () => null],
+      [CaseChangeReads, "mindMap", async () => null],
     ]);
   });
 
@@ -163,6 +185,159 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
     ]);
     await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
     expect(scheduled).to.deep.equal(["case-1"]);
+  });
+
+  // Each tracked pane is read before its step and after it; these hand out `before` then `after`.
+  const beforeThenAfter = (before: unknown, after: unknown) => {
+    let calls = 0;
+    return async () => (calls++ === 0 ? before : after);
+  };
+
+  it("saves one change summary with each tracked pane's difference, and links it from the audit row", async () => {
+    patch([
+      [
+        EvidenceIntelligenceSvc,
+        "scanContradictions",
+        async () => ({ rows: [{}, {}], delta: { ...noContradictionChanges, status: "changed", addedCount: 2, carriedOver: 0 } }),
+      ],
+      [CaseFindingRepo, "list", beforeThenAfter([], [{ category: "WEAKNESS", label: "No signed contract", tag: null, impact: null }])],
+      [
+        CaseOutlookRepo,
+        "latest",
+        beforeThenAfter(
+          { id: "o1", band: "LEANS_FAVORABLE", confidence: "MEDIUM", drivers: [] },
+          { id: "o2", band: "UNCERTAIN", confidence: "MEDIUM", drivers: [] },
+        ),
+      ],
+    ]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+
+    expect(summaries).to.have.length(1);
+    const [summary] = summaries;
+    expect(summary).to.include({ caseId: "case-1", reason: "post-extraction", actorId: "user-1", totalChanges: 4 });
+    expect(summary.perPaneDeltas.contradictions.addedCount).to.equal(2);
+    expect(summary.perPaneDeltas.findings.byCategory.WEAKNESS.added).to.deep.equal(["No signed contract"]);
+    expect(summary.perPaneDeltas.outlook.band).to.deep.equal({ from: "LEANS_FAVORABLE", to: "UNCERTAIN" });
+    expect(summary.perPaneDeltas.reconstruction).to.include({ status: "unchanged", outcome: "regenerated" });
+    expect(audits.find((a) => a.action === "case.refresh").payload).to.include({ changeSummaryId: summary.id, totalChanges: 4 });
+  });
+
+  it("marks a pane failed when its step throws and skipped when its own job holds the lock, and still saves the summary", async () => {
+    patch([
+      [RedTeamSvc, "generateFromDocuments", async () => Promise.reject(new Error("chat-wonder timeout"))],
+      [CaseOutlookAiSvc, "generateFromDocuments", async () => Promise.reject(new HttpError("caseOutlook generation is already in progress", 409))],
+    ]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "manual");
+    expect(summaries[0].perPaneDeltas.redTeam).to.deep.equal({ status: "failed" });
+    expect(summaries[0].perPaneDeltas.outlook).to.deep.equal({ status: "skipped" });
+  });
+
+  it("records Red Team as skipped when there was nothing for it to attack", async () => {
+    patch([[RedTeamSvc, "generateFromDocuments", async () => ({ skipped: true })]]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "manual");
+    expect(summaries[0].perPaneDeltas.redTeam).to.deep.equal({ status: "skipped" });
+  });
+
+  it("names the documents added since the previous summary, and none on a case's first summary", async () => {
+    patch([
+      [
+        DocumentRepo,
+        "listAllByCase",
+        async () => [
+          { id: "d1", name: "Termination letter", ragStatus: "READY" },
+          { id: "d2", name: "Payroll", ragStatus: "READY" },
+          { id: "d3", name: "Old memo", ragStatus: "READY", status: "ARCHIVED" },
+        ],
+      ],
+    ]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(summaries[0]).to.deep.include({ readyDocumentIds: ["d1", "d2"], documentsAdded: [], documentsRemoved: [] });
+
+    expect(summaries[0].firstAnalysis).to.equal(false);
+
+    patch([[CaseChangeSummaryRepo, "latestRefresh", async () => ({ readyDocumentIds: ["d1", "d9"] })]]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(summaries[1].documentsAdded).to.deep.equal([{ id: "d2", name: "Payroll" }]);
+    expect(summaries[1].documentsRemoved).to.deep.equal([{ id: "d9", name: null }]);
+  });
+
+  it("compares witnesses from before wave 1 to after wave 2, so both witness steps count", async () => {
+    patch([
+      [
+        CaseChangeReads,
+        "witnesses",
+        beforeThenAfter([{ name: "J. Cruz", credibility: 50, aiCredibility: 70 }], [
+          { name: "J. Cruz", credibility: 50, aiCredibility: 45 },
+          { name: "M. Reyes", credibility: 50 },
+        ]),
+      ],
+    ]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(summaries[0].perPaneDeltas.witnesses).to.deep.equal({
+      status: "changed",
+      added: ["M. Reyes"],
+      removed: [],
+      rescored: [{ name: "J. Cruz", from: 70, to: 45 }],
+    });
+  });
+
+  it("still shows what changed in a two-step pane when one of its steps failed, and says failed when nothing did", async () => {
+    patch([
+      [WitnessExtractSvc, "extractAllPending", async () => Promise.reject(new Error("chat-wonder timeout"))],
+      [CaseChangeReads, "witnesses", beforeThenAfter([{ name: "J. Cruz", credibility: 50, aiCredibility: 70 }], [{ name: "J. Cruz", credibility: 50, aiCredibility: 40 }])],
+      [DamagesExtractSvc, "extractAllPending", async () => Promise.reject(new Error("chat-wonder timeout"))],
+    ]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(summaries[0].perPaneDeltas.witnesses.status).to.equal("changed");
+    expect(summaries[0].perPaneDeltas.damages).to.deep.equal({ status: "failed" });
+  });
+
+  it("records the strategy, theory, map and audio overview steps", async () => {
+    patch([
+      [
+        CaseChangeReads,
+        "strategy",
+        beforeThenAfter({ items: [], dates: [] }, { items: [{ kind: "TODO", label: "Request payroll records" }], dates: [] }),
+      ],
+      [
+        CaseChangeReads,
+        "theory",
+        beforeThenAfter(
+          { title: "Unpaid overtime", claims: [], assumptions: [], openQuestions: [] },
+          { title: "Unpaid overtime", claims: [{ statement: "Overtime was ordered", stance: "ASSERTS" }], assumptions: [], openQuestions: [] },
+        ),
+      ],
+      [CaseMindMapSvc, "generateFromDocuments", async () => ({ skipped: "userChanges", map: null })],
+    ]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    const d = summaries[0].perPaneDeltas;
+    expect(d.strategy).to.include({ status: "changed" }).and.deep.include({ todosAdded: ["Request payroll records"] });
+    expect(d.theory).to.include({ status: "changed" }).and.deep.include({ claimsAdded: ["Overtime was ordered"] });
+    expect(d.mindMap).to.include({ status: "skipped", keptUserChanges: true });
+    expect(d.audioOverview).to.deep.equal({ status: "changed", overviewId: "ao-1" });
+    // 1 to-do + 1 claim; the audio overview never counts.
+    expect(summaries[0].totalChanges).to.equal(2);
+  });
+
+  it("flags the case's first analysis, so the banner doesn't list every pane's first content as changes", async () => {
+    patch([[CaseRepo, "getLastRefreshedAt", async () => null]]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(summaries[0].firstAnalysis).to.equal(true);
+  });
+
+  it("still completes the refresh when the summary can't be saved", async () => {
+    patch([[CaseChangeSummaryRepo, "create", async () => Promise.reject(new Error("db down"))]]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    const audit = audits.find((a) => a.action === "case.refresh");
+    expect(audit).to.exist;
+    expect(audit.payload).not.to.have.property("changeSummaryId");
+  });
+
+  it("still runs a tracked step when the read before it fails, and only loses that pane's difference", async () => {
+    patch([[CaseFindingRepo, "list", async () => Promise.reject(new Error("db blip"))]]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(started()).to.include("findings");
+    expect(summaries[0].perPaneDeltas).not.to.have.property("findings");
   });
 });
 

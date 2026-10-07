@@ -884,6 +884,7 @@ model Case {
   annotations          Annotation[]
   outlooks             CaseOutlook[]
   mindMap              CaseMindMap?
+  changeSummaries      CaseChangeSummary[]
 
   @@index([userId])
   @@index([organizationId])
@@ -2288,6 +2289,40 @@ model RedTeamAssessment {
   updatedAt DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+// What one analysis refresh (CaseRefreshSvc.refreshInner) changed in the panes it rewrote, compared
+// with what they said before it — read by the Legal Terminal's "What changed" modal. One row per
+// finished refresh, written once after the last wave and never updated. The row's id is the run's
+// id (AiGenerationJob is one row per case+kind, reused by every run). Holds case content (finding
+// labels, contradiction values, document names), so it goes with the case — unlike AuditEvent,
+// which outlives it.
+model CaseChangeSummary {
+  id               String   @id @default(uuid())
+  caseId           String
+  // "manual" (Refresh analysis), "post-extraction" (the automatic run after a corpus change), or
+  // "regenerate" (one pane's own Regenerate — perPaneDeltas holds that pane alone, and the
+  // document fields stay empty: it read no new evidence).
+  reason           String
+  actorId          String?
+  // READY, unarchived documents this run read (mindMapDocumentIds) — the next run diffs against it.
+  readyDocumentIds String[] @default([])
+  // [{ id, name }] relative to the previous summary's readyDocumentIds. Both empty on a case's
+  // first summary, and on a manual run with no document change.
+  documentsAdded   Json     @default("[]")
+  documentsRemoved Json     @default("[]")
+  // countChanges(perPaneDeltas) — what the modal's headline counts.
+  totalChanges     Int      @default(0)
+  // The case's first analysis: every pane was empty before it, so everything it wrote reads as
+  // "added". The modal stays quiet for it; there was nothing to change.
+  firstAnalysis    Boolean  @default(false)
+  // CaseChangeDeltas (types/case-change.ts), one entry per pane the refresh tracks.
+  perPaneDeltas    Json
+  createdAt        DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
 }
 
 // ── Case Graph (Phase A: dependency tracking + staleness, no auto-recompute) ───────────────

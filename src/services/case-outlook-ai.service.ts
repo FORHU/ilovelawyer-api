@@ -1,3 +1,5 @@
+import CaseChangeRun from "./case-change-run.service";
+import { diffOutlook } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import CaseRepo from "../repositories/case.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -33,8 +35,18 @@ export default class CaseOutlookAiSvc {
   }
 
   /** Run by AiGenerationQueue's worker after beginQueued claimed the lock. */
-  static async runQueued(caseId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "caseOutlook", () => CaseOutlookAiSvc.generateFromDocumentsInner(caseId));
+  static async runQueued(caseId: string, userId?: string): Promise<void> {
+    // The Case Summary pane's Regenerate: the "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "caseOutlook", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId ?? null,
+        "outlook",
+        () => CaseOutlookRepo.latest(caseId),
+        () => CaseOutlookAiSvc.generateFromDocumentsInner(caseId),
+        (before, after) => diffOutlook(before, after),
+      ),
+    );
   }
 
   private static async generateFromDocumentsInner(caseId: string) {

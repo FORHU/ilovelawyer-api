@@ -1,3 +1,6 @@
+import CaseChangeRun from "./case-change-run.service";
+import CaseChangeReads from "./case-change-reads";
+import { diffStrategy } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import CaseTimelineRepo, { TimelineInput } from "../repositories/case-timeline.repository";
 import CaseRepo from "../repositories/case.repository";
@@ -92,24 +95,37 @@ export default class CaseTimelineSvc {
   static async runQueuedGenerate(caseId: string, userId: string): Promise<void> {
     const startedAt = Date.now();
     logger.info("Timeline generate: job claimed", { caseId, userId });
-    await AiGenerationLockSvc.finishWith(caseId, "timelineGenerate", async () => {
-      if (!(await CaseRepo.exists(caseId))) return;
-      const CaseStrategySvc = (await import("./case-strategy.service")).default;
-      try {
-        await CaseStrategySvc.generateFromDocuments(caseId, userId);
-      } catch (err) {
-        if (err instanceof HttpError && err.statusCode === 409) {
-          logger.info("Timeline generate: case strategy already running, timeline reflects that run", {
-            caseId,
-            userId,
-            durationMs: Date.now() - startedAt,
-          });
-          return;
-        }
-        throw err;
-      }
-      await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "timeline.generate", payload: {} });
-    });
+    // The "What changed" modal then describes this run (CaseChangeRun) — the key dates, and the
+    // plan and to-dos the same step rewrites.
+    await AiGenerationLockSvc.finishWith(caseId, "timelineGenerate", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "strategy",
+        () => CaseChangeReads.strategy(caseId),
+        () => CaseTimelineSvc.generateInner(caseId, userId, startedAt),
+        diffStrategy,
+      ),
+    );
     logger.info("Timeline generate: job finished", { caseId, userId, durationMs: Date.now() - startedAt });
+  }
+
+  private static async generateInner(caseId: string, userId: string, startedAt: number): Promise<void> {
+    if (!(await CaseRepo.exists(caseId))) return;
+    const CaseStrategySvc = (await import("./case-strategy.service")).default;
+    try {
+      await CaseStrategySvc.generateFromDocuments(caseId, userId);
+    } catch (err) {
+      if (err instanceof HttpError && err.statusCode === 409) {
+        logger.info("Timeline generate: case strategy already running, timeline reflects that run", {
+          caseId,
+          userId,
+          durationMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      throw err;
+    }
+    await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "timeline.generate", payload: {} });
   }
 }
