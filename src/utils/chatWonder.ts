@@ -118,7 +118,10 @@ export async function callChatWonderRest(
   // Routes to chat-wonder-v2-api's `legal_uk` persona (its own UK tool whitelist and prompt)
   // instead of the PH-only default — see the_server.py::process_persona.
   tenantCode?: TenantCode,
-): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown }> {
+  /** `trace` records this call for the AI Reasoning pane (see TraceCollectorSvc), the same as
+   * streamChatWonderMessage's opts.trace, and closes it with the reply's "why this answer". */
+  opts?: { trace?: TraceRun },
+): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown; reasoning?: ReasoningExplanation }> {
   const resolved = normalizeGrounding(grounding);
   const payload: {
     session_id: string;
@@ -129,11 +132,13 @@ export async function callChatWonderRest(
     // Wire field name is `jurisdiction` — chat-wonder-v2-api's own contract (the_server.py::
     // process_persona), unrelated to our internal TenantCode rename.
     jurisdiction?: TenantCode;
+    trace_turn_id?: string;
   } = {
     session_id: sessionId,
     user_input: prompt,
   };
   if (tenantCode) payload.jurisdiction = tenantCode;
+  if (opts?.trace) payload.trace_turn_id = opts.trace.turnId;
   // Lets Chat Wonder pull chunks itself via GET /api/v1/case-document/:caseDocumentId
   // instead of us inlining the full document text into the prompt. Chunk ids are ranked
   // by embedding similarity when not already provided — see relevantChunkIdsFor.
@@ -155,11 +160,19 @@ export async function callChatWonderRest(
   }
 
   logger.info("Chat Wonder REST payload", { url: `${CHAT_WONDER_API_URL}/chat`, ...payload });
-  const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload, {
-    timeout: CHAT_WONDER_REST_TIMEOUT_MS,
-  });
-  if (data?.usage) logger.info("Chat Wonder usage", data.usage);
-  return data;
+  // Subscribed before the call goes out (chat-wonder fans trace events out live, with no replay).
+  const collector = opts?.trace ? await TraceCollectorSvc.startRun(opts.trace, sessionId) : undefined;
+  let reasoning: ReasoningExplanation | undefined;
+  try {
+    const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload, {
+      timeout: CHAT_WONDER_REST_TIMEOUT_MS,
+    });
+    if (data?.usage) logger.info("Chat Wonder usage", data.usage);
+    reasoning = data?.reasoning ?? undefined;
+    return data;
+  } finally {
+    await collector?.stop(reasoning);
+  }
 }
 
 export async function getChatWonderSessionId(): Promise<string> {
@@ -359,12 +372,16 @@ export async function streamChatWonderMessage(...args: Parameters<typeof streamC
   if (!run) return streamChatWonderMessageOnce(...args);
 
   const collector = await TraceCollectorSvc.startRun(run, sessionId);
+  // Set only on a successful attempt, so a failed attempt that is retried does not close the run.
+  let reasoning: ReasoningExplanation | undefined;
   try {
     const traced = [...args] as typeof args;
     traced[10] = { ...opts, traceTurnId: run.turnId };
-    return await streamChatWonderMessageOnce(...traced);
+    const result = await streamChatWonderMessageOnce(...traced);
+    reasoning = result.reasoning;
+    return result;
   } finally {
-    await collector.stop();
+    await collector.stop(reasoning);
   }
 }
 

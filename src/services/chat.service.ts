@@ -1612,9 +1612,13 @@ export default class ChatSvc {
     // Subscribed before the turn is sent (chat-wonder fans events out live, with no replay), and
     // never allowed to fail the turn — see TraceCollectorSvc.
     const collector = extras?.trace ? await TraceCollectorSvc.start(extras.trace, sessionId) : undefined;
+    // The turn's "why this answer", closing its trace once the turn is over (see TraceCollector.stop).
+    let reasoning: ReasoningExplanation | undefined;
     try {
       try {
-        return await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+        const result = await streamChatWonderMessage(sessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+        reasoning = result.reasoning;
+        return result;
       } catch (err) {
         if (!(err instanceof Error) || !err.message.includes("Unknown session")) throw err;
         const freshSessionId = await ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
@@ -1624,10 +1628,12 @@ export default class ChatSvc {
         onSessionRotated?.(freshSessionId);
         // The trace follows the turn onto the new session, so the log stays one continuous record.
         await collector?.rebind(freshSessionId);
-        return await streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+        const result = await streamChatWonderMessage(freshSessionId, userInput, onChunk, resolvedContext, grounding, caseId, tenantCode, signal, onAnswerComplete, replyLanguage, opts);
+        reasoning = result.reasoning;
+        return result;
       }
     } finally {
-      await collector?.stop();
+      await collector?.stop(reasoning);
     }
   }
 

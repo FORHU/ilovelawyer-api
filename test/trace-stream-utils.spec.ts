@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { MAX_TRACE_SUMMARY_CHARS, SseParser, parseStreamPayload, promptTitle } from "../src/utils/trace-stream.utils";
+import { EXPLANATION_TYPE, MAX_TRACE_SUMMARY_CHARS, SseParser, explanationSummary, parseStreamPayload, promptTitle } from "../src/utils/trace-stream.utils";
 
 const event = (over: Record<string, unknown> = {}) =>
   JSON.stringify({ type: "action", summary: "Looked up a statute.", turn_id: "turn-1", ts: 1700000000, ...over });
@@ -100,5 +100,48 @@ describe("promptTitle", () => {
   it("falls back to a numbered label when the message is missing or blank", () => {
     expect(promptTitle(undefined, 4)).to.equal("Turn 4");
     expect(promptTitle("  \n ", 5)).to.equal("Turn 5");
+  });
+});
+
+describe("explanationSummary", () => {
+  it("is the why-this-answer text on its own when no sources are named", () => {
+    expect(explanationSummary({ reasoning: "  The AI read the lease.  ", citation_reasons: [] })).to.equal("The AI read the lease.");
+  });
+
+  it("lists the sources behind it, each with why it was cited", () => {
+    const text = explanationSummary({
+      reasoning: "The notice period is 28 days.",
+      citation_reasons: [
+        { title: "Housing Act 1988", why_cited: "Sets the minimum notice." },
+        { title: "Lease.pdf", why_cited: "Names the tenant." },
+      ],
+    });
+    expect(text).to.equal(
+      ["The notice period is 28 days.", "", "Sources behind it:", "• Housing Act 1988 — Sets the minimum notice.", "• Lease.pdf — Names the tenant."].join("\n"),
+    );
+  });
+
+  it("skips a source that is missing its title or its reason", () => {
+    const text = explanationSummary({
+      reasoning: "Because.",
+      citation_reasons: [{ title: "No reason", why_cited: " " }, { title: "", why_cited: "No title" }],
+    });
+    expect(text).to.equal("Because.");
+  });
+
+  it("is null when the turn returned no explanation", () => {
+    expect(explanationSummary(undefined)).to.equal(null);
+    expect(explanationSummary(null)).to.equal(null);
+    expect(explanationSummary({ reasoning: "   ", citation_reasons: [] })).to.equal(null);
+  });
+
+  it("bounds a runaway explanation", () => {
+    const text = explanationSummary({ reasoning: "x".repeat(MAX_TRACE_SUMMARY_CHARS + 900), citation_reasons: [] });
+    expect(text).to.have.length(MAX_TRACE_SUMMARY_CHARS);
+  });
+
+  it("is recorded under its own entry type, which chat-wonder's stream never sends", () => {
+    expect(EXPLANATION_TYPE).to.equal("explanation");
+    expect(parseStreamPayload(JSON.stringify({ type: EXPLANATION_TYPE, summary: "x", turn_id: "t1" }), "t1")).to.deep.equal({ kind: "ignore" });
   });
 });

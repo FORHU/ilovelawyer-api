@@ -3,7 +3,8 @@ import TraceRepo from "../repositories/trace.repository";
 import { randomUUID } from "crypto";
 import { TraceSource } from "../constants/trace.constants";
 import logger from "../utils/logger";
-import { SseParser, parseStreamPayload } from "../utils/trace-stream.utils";
+import type { ReasoningExplanation } from "../utils/response-parser";
+import { EXPLANATION_TYPE, SseParser, explanationSummary, parseStreamPayload } from "../utils/trace-stream.utils";
 
 /** Who and what a turn's trace belongs to. `turnId` is the user Message that asked (a chat turn) or
  * a generated id (a pane's run). */
@@ -34,8 +35,9 @@ export function newTraceRun(source: TraceSource, caseId: string, userId?: string
 export interface TraceCollector {
   /** Moves collection to a new chat-wonder session — the turn's session was replaced mid-turn. */
   rebind(sessionId: string): Promise<void>;
-  /** Ends collection after a short drain for events still in flight. Never throws. */
-  stop(): Promise<void>;
+  /** Ends collection after a short drain for events still in flight. Never throws. Given the
+   * turn's "why this answer" explanation, it is written last, as the closing entry of the run. */
+  stop(reasoning?: ReasoningExplanation): Promise<void>;
 }
 
 /** How long to wait for the stream's "connected" event before the turn goes ahead untraced. The
@@ -86,12 +88,15 @@ export default class TraceCollectorSvc {
 class ActiveCollector implements TraceCollector {
   private abort?: AbortController;
   private reading?: Promise<void>;
+  /** The session of the latest attempt, which the closing entry is recorded under. */
+  private sessionId = "";
   /** Inserts run one after another so rows are stored in arrival order (seq is assigned by insert). */
   private writes: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly turn: TraceTurn) {}
 
   async open(sessionId: string): Promise<void> {
+    this.sessionId = sessionId;
     const abort = new AbortController();
     this.abort = abort;
     let markConnected!: () => void;
@@ -108,10 +113,13 @@ class ActiveCollector implements TraceCollector {
     await this.open(sessionId);
   }
 
-  async stop(): Promise<void> {
+  async stop(reasoning?: ReasoningExplanation): Promise<void> {
     try {
       await new Promise((resolve) => setTimeout(resolve, DRAIN_MS));
       await this.close();
+      // After the drain and the close, so it lands after every step the stream delivered.
+      const summary = explanationSummary(reasoning);
+      if (summary) this.store(this.sessionId, { type: EXPLANATION_TYPE, summary, createdAt: new Date() });
       await this.writes;
     } catch (err) {
       logger.warn("Trace: stop failed", { err, turnId: this.turn.turnId });
