@@ -63,6 +63,11 @@ export default class OrganizationCtrl {
     return res.status(201).json(result);
   }
 
+  static async getPortfolio(req: Request, res: Response) {
+    const result = await OrganizationSvc.getPortfolio(req.user.userId);
+    return res.status(200).json(result);
+  }
+
   static async getMyInvite(req: Request, res: Response) {
     const result = await OrganizationSvc.getPendingInviteForUser(req.user.userId);
     return res.status(200).json(result);

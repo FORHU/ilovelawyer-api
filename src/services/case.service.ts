@@ -16,8 +16,17 @@ export default class CaseSvc {
     return CaseRepo.create(organizationId, userId, data);
   }
 
-  static async list(organizationId: string, userId: string, page: number, limit: number, search?: string, status?: CaseStatus) {
-    return CaseRepo.list(organizationId, userId, page, limit, search, status);
+  static async list(
+    organizationId: string,
+    userId: string,
+    page: number,
+    limit: number,
+    search?: string,
+    status?: CaseStatus,
+    createdBy?: string,
+  ) {
+    const result = await CaseRepo.list(organizationId, userId, page, limit, search, status, createdBy);
+    return { ...result, data: await CaseRepo.withCopyContext(result.data, userId) };
   }
 
   /** "Last opened" for the requesting user. Org-scoped existence check first so a caseId from
@@ -28,10 +37,14 @@ export default class CaseSvc {
     await CaseRepo.markOpened(id, userId);
   }
 
-  static async getById(id: string, organizationId: string) {
+  /** With `userId`, a portfolio copy also says how it relates to its original (see
+   * CaseRepo.withCopyContext) — what the case page shows. */
+  static async getById(id: string, organizationId: string, userId?: string) {
     const caseRecord = await CaseRepo.findById(id, organizationId);
     if (!caseRecord) throw new HttpError("Case not found", 404);
-    return caseRecord;
+    if (!userId) return { ...caseRecord, copyVersion: null, original: null };
+    const [withContext] = await CaseRepo.withCopyContext([caseRecord], userId);
+    return withContext;
   }
 
   static async update(id: string, organizationId: string, data: CaseData) {

@@ -40,6 +40,7 @@ export const listCasesSchema = Joi.object({
   limit: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().trim().allow("").optional(),
   status: Joi.string().valid("ACTIVE", "ARCHIVED").default("ACTIVE"),
+  createdBy: Joi.string().uuid().optional(),
 });
 
 export const updateCaseSchema = Joi.object({

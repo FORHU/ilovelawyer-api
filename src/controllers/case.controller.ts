@@ -36,7 +36,15 @@ export default class CaseCtrl {
     const { error, value } = listCasesSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.list(req.organization!.id, req.user.userId, value.page, value.limit, value.search, value.status);
+    const result = await CaseSvc.list(
+      req.organization!.id,
+      req.user.userId,
+      value.page,
+      value.limit,
+      value.search,
+      value.status,
+      value.createdBy,
+    );
     return res.status(200).json(result);
   }
 
@@ -49,7 +57,7 @@ export default class CaseCtrl {
   }
 
   static async getById(req: Request, res: Response) {
-    const result = await CaseSvc.getById(req.params.id, req.organization!.id);
+    const result = await CaseSvc.getById(req.params.id, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 

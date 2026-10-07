@@ -37,7 +37,8 @@ export default class CaseSnapshotSvc {
   static async get(caseId: string, userId: string) {
     const caseRecord = await CaseAccess.loadAccessibleCase(caseId, userId);
     // Findings generated in an older format regenerate in the background (no-op when current).
-    void CaseFindingAiSvc.scheduleIfOutdated(caseRecord);
+    // Run as the viewer: the creator may have left the organization or deleted their account.
+    void CaseFindingAiSvc.scheduleIfOutdated({ ...caseRecord, userId });
 
     const [
       documents,

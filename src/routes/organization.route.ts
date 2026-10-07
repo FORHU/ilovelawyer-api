@@ -16,6 +16,9 @@ router.get("/", asyncHandler(OrganizationCtrl.list));
 // The caller's own pending invite. Deliberately not gated by resolveOrganizationFromParam
 // (which requires an already-ACCEPTED membership) — a pending invitee has none yet.
 router.get("/invites/me", asyncHandler(OrganizationCtrl.getMyInvite));
+
+// The caller's own portfolio (their personal workspace) — reachable whatever org they're in.
+router.get("/portfolio", asyncHandler(OrganizationCtrl.getPortfolio));
 router.post("/invites/:id/accept", asyncHandler(OrganizationCtrl.acceptInvite));
 router.post("/invites/:id/decline", asyncHandler(OrganizationCtrl.declineInvite));
 

@@ -1,5 +1,43 @@
 import prisma from "../lib/prisma";
 import { CaseStatus, ClientSide } from "@prisma/client";
+import { getStableProxyFileUrl } from "../utils/s3";
+
+/** The creator, for "Created by" — with whether they're still in the case's organization. */
+function creatorSelect(organizationId: string) {
+  return {
+    select: {
+      id: true,
+      name: true,
+      username: true,
+      avatar: { select: { s3Key: true } },
+      organizationMemberships: { where: { organizationId, status: "ACCEPTED" as const }, select: { id: true } },
+    },
+  };
+}
+
+type CreatorRow = {
+  id: string;
+  name: string | null;
+  username: string;
+  avatar: { s3Key: string | null } | null;
+  organizationMemberships: { id: string }[];
+};
+
+/** Swaps the raw `user` relation for `createdBy`: null once the account is deleted, in which case
+ * the row's createdByName still names them. */
+function withCreator<T extends { user: CreatorRow | null }>({ user, ...row }: T) {
+  return {
+    ...row,
+    createdBy: user
+      ? {
+          id: user.id,
+          name: user.name || user.username,
+          avatarUrl: user.avatar?.s3Key ? getStableProxyFileUrl(user.avatar.s3Key) : null,
+          isMember: user.organizationMemberships.length > 0,
+        }
+      : null,
+  };
+}
 
 export interface PartyInput {
   name: string;
@@ -19,16 +57,19 @@ export interface CaseData {
 
 export default class CaseRepo {
   /**
-   * userId is stamped for "created by" audit purposes only — every read/update/delete
+   * userId is stamped for "created by" attribution only — every read/update/delete
    * below scopes by organizationId, since a Case is a shared org resource once created.
+   * createdByName keeps the creator's name for after their account is gone.
    */
   static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {
     const { parties, ...caseFields } = data;
+    const creator = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, username: true } });
 
     return prisma.case.create({
       data: {
         organizationId,
         userId,
+        createdByName: creator?.name || creator?.username,
         ...caseFields,
         parties: parties ? { create: parties } : undefined,
       },
@@ -39,12 +80,22 @@ export default class CaseRepo {
   /** `userId` scopes the joined "Last opened" (CaseView) to the requesting user — each row comes
    * back with a flat `lastOpenedAt` (null if this user has never opened that case) instead of the
    * raw `views` relation. */
-  static async list(organizationId: string, userId: string, page: number, limit: number, search?: string, status: CaseStatus = "ACTIVE") {
+  /** `createdBy` narrows to one creator's cases (the "Created by me" / per-member filter). */
+  static async list(
+    organizationId: string,
+    userId: string,
+    page: number,
+    limit: number,
+    search?: string,
+    status: CaseStatus = "ACTIVE",
+    createdBy?: string,
+  ) {
     const skip = (page - 1) * limit;
 
     const where = {
       organizationId,
       status,
+      ...(createdBy ? { userId: createdBy } : {}),
       ...(search
         ? {
             OR: [
@@ -62,11 +113,15 @@ export default class CaseRepo {
         skip,
         take: limit,
         orderBy: { updatedAt: "desc" },
-        include: { parties: true, views: { where: { userId }, select: { lastOpenedAt: true } } },
+        include: {
+          parties: true,
+          views: { where: { userId }, select: { lastOpenedAt: true } },
+          user: creatorSelect(organizationId),
+        },
       }),
     ]);
 
-    const data = rows.map(({ views, ...row }) => ({ ...row, lastOpenedAt: views[0]?.lastOpenedAt ?? null }));
+    const data = rows.map(({ views, ...row }) => ({ ...withCreator(row), lastOpenedAt: views[0]?.lastOpenedAt ?? null }));
     return { total, data };
   }
 
@@ -105,8 +160,65 @@ export default class CaseRepo {
     });
   }
 
+  /**
+   * For portfolio copies (rows with copiedFromCaseId): `copyVersion` numbers repeat copies of the
+   * same original in order (leave, rejoin, leave again makes a second one) — null for the only
+   * one. `original` is set while the user is back in the original's organization, so the copy
+   * can link to it and say whether it has changed since the copy was made; null when they can't
+   * open it there (not a member, or it was deleted). Other rows get null for both.
+   */
+  static async withCopyContext<
+    T extends { id: string; organizationId: string | null; copiedFromCaseId: string | null; copiedAt: Date | null },
+  >(rows: T[], userId: string) {
+    const copies = rows.filter((r) => r.copiedFromCaseId && r.organizationId);
+    if (copies.length === 0) return rows.map((r) => ({ ...r, copyVersion: null, original: null }));
+
+    const sourceIds = [...new Set(copies.map((c) => c.copiedFromCaseId!))];
+    const portfolioIds = [...new Set(copies.map((c) => c.organizationId!))];
+    const [siblings, originals] = await Promise.all([
+      prisma.case.findMany({
+        where: { copiedFromCaseId: { in: sourceIds }, organizationId: { in: portfolioIds } },
+        select: { id: true, copiedFromCaseId: true, organizationId: true },
+        orderBy: [{ copiedAt: "asc" }, { createdAt: "asc" }],
+      }),
+      prisma.case.findMany({
+        where: { id: { in: sourceIds }, organization: { members: { some: { userId, status: "ACCEPTED" } } } },
+        select: { id: true, updatedAt: true, organization: { select: { name: true } } },
+      }),
+    ]);
+
+    const groups = new Map<string, string[]>();
+    for (const s of siblings) {
+      const key = `${s.organizationId}:${s.copiedFromCaseId}`;
+      groups.set(key, [...(groups.get(key) ?? []), s.id]);
+    }
+    const originalById = new Map(originals.map((o) => [o.id, o]));
+
+    return rows.map((r) => {
+      if (!r.copiedFromCaseId || !r.organizationId) return { ...r, copyVersion: null, original: null };
+      const group = groups.get(`${r.organizationId}:${r.copiedFromCaseId}`) ?? [];
+      const number = group.indexOf(r.id) + 1;
+      const original = originalById.get(r.copiedFromCaseId);
+      return {
+        ...r,
+        copyVersion: group.length > 1 && number > 0 ? { number, total: group.length } : null,
+        original: original
+          ? {
+              id: original.id,
+              organizationName: original.organization?.name ?? null,
+              changedSinceCopy: !!r.copiedAt && original.updatedAt > r.copiedAt,
+            }
+          : null,
+      };
+    });
+  }
+
   static async findById(id: string, organizationId: string) {
-    return prisma.case.findFirst({ where: { id, organizationId }, include: { parties: true } });
+    const record = await prisma.case.findFirst({
+      where: { id, organizationId },
+      include: { parties: true, user: creatorSelect(organizationId) },
+    });
+    return record ? withCreator(record) : null;
   }
 
   /** Unscoped by organization — for background AI jobs that already hold a checked caseId. */
