@@ -8,6 +8,7 @@ import OrganizationInviteRepo from "../src/repositories/organization-invite.repo
 import CaseCopySvc from "../src/services/case-copy.service";
 import CaseCopyQueue from "../src/queues/case-copy.queue";
 import CaseRepo from "../src/repositories/case.repository";
+import ChatRepo from "../src/repositories/chat.repository";
 import CaseSvc from "../src/services/case.service";
 import CaseAccess from "../src/utils/case-access";
 import DocumentExtractionQueue from "../src/queues/document-extraction.queue";
@@ -37,11 +38,13 @@ describe("Case portfolio", () => {
     const caseIds = (await prisma.case.findMany({ where: { organizationId: { in: orgIds } }, select: { id: true } })).map((c) => c.id);
     const docs = await prisma.document.findMany({ where: { organizationId: { in: orgIds } }, select: { fileId: true } });
     await prisma.event.deleteMany({ where: { organizationId: { in: orgIds } } });
+    await prisma.note.deleteMany({ where: { organizationId: { in: orgIds } } });
     await prisma.document.deleteMany({ where: { organizationId: { in: orgIds } } });
     await prisma.file.deleteMany({ where: { id: { in: docs.map((d) => d.fileId!).filter(Boolean) } } });
     await prisma.consultation.deleteMany({ where: { organizationId: { in: orgIds } } });
     await prisma.case.deleteMany({ where: { id: { in: caseIds } } });
     await prisma.caseCopy.deleteMany({ where: { userId: { in: createdUserIds } } });
+    await prisma.consultationCopy.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.organizationInvite.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.organizationMember.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
@@ -282,6 +285,146 @@ describe("Case portfolio", () => {
       const versions = Object.fromEntries(listed.data.map((c) => [c.id, c.copyVersion]));
       expect(versions[firstCopyId]).to.deep.equal({ number: 1, total: 2 });
       expect(versions[secondCopyId]).to.deep.equal({ number: 2, total: 2 });
+    });
+  });
+
+  describe("the rest of a removed member's work comes with them", () => {
+    it("moves their own calendar, copies their appointments on others' cases, and queues their standalone consultations", async () => {
+      const firm = await makeOrg("Opal Firm");
+      const removedId = await memberOf(firm.organizationId, "Rae");
+      const theirCase = await CaseRepo.create(firm.organizationId, removedId, { caseName: "Theirs" });
+      const ownersCase = await CaseRepo.create(firm.organizationId, firm.ownerId, { caseName: "Owner's" });
+      const event = (data: { title: string; caseId?: string; googleEventId?: string }) =>
+        prisma.event.create({
+          data: { userId: removedId, organizationId: firm.organizationId, dateTime: new Date(), reminderLeadMinutes: 15, ...data },
+        });
+      const googleEventId = `g-${crypto.randomUUID()}`;
+      const ownAppointment = await event({ title: "Own", googleEventId });
+      const onTheirCase = await event({ title: "On theirs", caseId: theirCase.id });
+      const onOwnersCase = await event({ title: "On owner's", caseId: ownersCase.id });
+      const note = await prisma.note.create({
+        data: { userId: removedId, organizationId: firm.organizationId, date: new Date(), body: "Call client" },
+      });
+      const consultation = (data: { title: string; userId?: string; caseId?: string; status?: "ARCHIVED" | "FOR_DELETION" }) =>
+        prisma.consultation.create({ data: { userId: removedId, organizationId: firm.organizationId, ...data } });
+      const standalone = await consultation({ title: "Standalone" });
+      const archived = await consultation({ title: "Archived", status: "ARCHIVED" });
+      await consultation({ title: "Doomed", status: "FOR_DELETION" });
+      await consultation({ title: "On owner's case", caseId: ownersCase.id });
+      await consultation({ title: "Owner's chat", userId: firm.ownerId });
+
+      await OrganizationSvc.removeMember(firm.organizationId, "OWNER", firm.ownerId, removedId);
+      const portfolio = (await personalOf(removedId))!;
+
+      // Their own appointment and note move as they are, Google link and reminder included.
+      const moved = await prisma.event.findUniqueOrThrow({ where: { id: ownAppointment.id } });
+      expect(moved.organizationId).to.equal(portfolio.id);
+      expect(moved.googleEventId).to.equal(googleEventId);
+      expect(moved.reminderLeadMinutes).to.equal(15);
+      expect((await prisma.note.findUniqueOrThrow({ where: { id: note.id } })).organizationId).to.equal(portfolio.id);
+
+      // Appointments on cases stay with the organization's cases.
+      expect((await prisma.event.findUniqueOrThrow({ where: { id: onTheirCase.id } })).organizationId).to.equal(firm.organizationId);
+      expect((await prisma.event.findUniqueOrThrow({ where: { id: onOwnersCase.id } })).organizationId).to.equal(firm.organizationId);
+      // On someone else's case they get an unlinked copy; on their own, the case's copy brings it.
+      const copies = await prisma.event.findMany({ where: { organizationId: portfolio.id, copiedFromId: { not: null } } });
+      expect(copies.map((e) => e.copiedFromId)).to.deep.equal([onOwnersCase.id]);
+      expect(copies[0]).to.include({ caseId: null, googleEventId: null, reminderLeadMinutes: null, title: "On owner's" });
+
+      // Their standalone consultations (archived too) are queued for copies; the rest stay behind.
+      const queued = await prisma.consultationCopy.findMany({ where: { userId: removedId } });
+      expect(queued.map((q) => q.sourceConsultationId).sort()).to.deep.equal([standalone.id, archived.id].sort());
+      expect(queued.every((q) => q.targetOrganizationId === portfolio.id)).to.equal(true);
+    });
+
+    it("shows them their consultations and calendar in the workspace they log back into, once copies finish", async () => {
+      const firm = await makeOrg("Pia Firm");
+      const removedId = await memberOf(firm.organizationId);
+      const chat = await prisma.consultation.create({
+        data: { userId: removedId, organizationId: firm.organizationId, title: "Advice" },
+      });
+      await prisma.message.create({ data: { consultationId: chat.id, role: "user", content: "Help?" } });
+      await prisma.event.create({
+        data: { userId: removedId, organizationId: firm.organizationId, title: "Meeting", dateTime: new Date() },
+      });
+
+      await OrganizationSvc.removeMember(firm.organizationId, "OWNER", firm.ownerId, removedId);
+      await CaseCopyQueue.tick();
+
+      // The workspace logging back in lands them in.
+      const workspaceId = (await OrganizationMemberRepo.findAnyForUser(removedId))!.organizationId;
+      expect(workspaceId).to.equal((await personalOf(removedId))!.id);
+      const consultations = await ChatRepo.listConsultations(workspaceId);
+      expect(consultations.map((c) => c.title)).to.deep.equal(["Advice"]);
+      expect(consultations[0].messageCount).to.equal(1);
+      const events = await prisma.event.findMany({ where: { organizationId: workspaceId, userId: removedId } });
+      expect(events.map((e) => e.title)).to.deep.equal(["Meeting"]);
+      // The organization keeps its original.
+      expect((await ChatRepo.listConsultations(firm.organizationId)).map((c) => c.id)).to.include(chat.id);
+    });
+
+    it("doesn't copy an unchanged appointment twice when they leave, rejoin and leave again", async () => {
+      const firm = await makeOrg("Quinn Firm");
+      const leaverId = await memberOf(firm.organizationId);
+      const ownersCase = await CaseRepo.create(firm.organizationId, firm.ownerId, { caseName: "Owner's" });
+      await prisma.event.create({
+        data: { userId: leaverId, organizationId: firm.organizationId, caseId: ownersCase.id, title: "Hearing", dateTime: new Date() },
+      });
+
+      await OrganizationSvc.leave(firm.organizationId, leaverId);
+      await OrganizationInviteRepo.create(firm.organizationId, leaverId, "MEMBER");
+      await OrganizationSvc.acceptInvite(firm.organizationId, leaverId);
+      await OrganizationSvc.leave(firm.organizationId, leaverId);
+
+      const portfolio = (await personalOf(leaverId))!;
+      expect(await prisma.event.count({ where: { organizationId: portfolio.id, title: "Hearing" } })).to.equal(1);
+    });
+  });
+
+  describe("CaseCopySvc.copyConsultation", () => {
+    it("copies a standalone consultation with its messages and attachments, and reuses an unchanged copy", async () => {
+      const firm = await makeOrg("Rex Firm");
+      const leaverId = await memberOf(firm.organizationId);
+      const source = await prisma.consultation.create({
+        data: { userId: leaverId, organizationId: firm.organizationId, title: "Lease" },
+      });
+      const question = await prisma.message.create({ data: { consultationId: source.id, role: "user", content: "Q?" } });
+      await prisma.message.create({
+        data: { consultationId: source.id, role: "assistant", content: "A.", parentMessageId: question.id },
+      });
+      const file = await prisma.file.create({
+        data: { filename: "lease.pdf", s3Key: `documents/consultations/${source.id}/1-ab.pdf` },
+      });
+      const doc = await prisma.document.create({
+        data: {
+          userId: leaverId,
+          organizationId: firm.organizationId,
+          consultationId: source.id,
+          messageId: question.id,
+          name: "lease.pdf",
+          fileId: file.id,
+        },
+      });
+
+      await OrganizationSvc.leave(firm.organizationId, leaverId);
+      const portfolio = (await personalOf(leaverId))!;
+      const request = { sourceConsultationId: source.id, userId: leaverId, targetOrganizationId: portfolio.id };
+      const copyId = await CaseCopySvc.copyConsultation(request);
+
+      const copy = await prisma.consultation.findUniqueOrThrow({
+        where: { id: copyId },
+        include: { messages: true, documents: { include: { file: true } } },
+      });
+      expect(copy).to.include({ organizationId: portfolio.id, userId: leaverId, caseId: null, title: "Lease", copiedFromId: source.id });
+      const copiedQuestion = copy.messages.find((m) => m.content === "Q?")!;
+      expect(copy.messages.find((m) => m.content === "A.")!.parentMessageId).to.equal(copiedQuestion.id);
+      const [copiedDoc] = copy.documents;
+      expect(copiedDoc).to.include({ copiedFromId: doc.id, organizationId: portfolio.id, caseId: null, messageId: copiedQuestion.id });
+      expect(copiedDoc.file?.s3Key).to.match(new RegExp(`^documents/consultations/${copyId}/.+\\.pdf$`));
+      expect(copiedKeys).to.deep.include([file.s3Key!, copiedDoc.file!.s3Key!]);
+      expect(enqueued).to.include(copiedDoc.id);
+
+      expect(await CaseCopySvc.copyConsultation(request)).to.equal(copyId);
     });
   });
 
