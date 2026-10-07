@@ -7,6 +7,8 @@ import ClaimExtractSvc from "../services/claim-extract.service";
 import CitationGroundSvc from "../services/citation-ground.service";
 import AdverseSweepSvc from "../services/adverse-sweep.service";
 import CaseFindingAiSvc from "../services/case-finding-ai.service";
+import CaseOutlookAiSvc from "../services/case-outlook-ai.service";
+import AudioOverviewSvc from "../services/audio-overview.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import CaseReconstructionSvc from "../services/case-reconstruction.service";
 import CaseTheorySvc from "../services/case-theory.service";
@@ -40,6 +42,13 @@ export type QueuedAiGenerationKind =
   | "caseFinding"
   | "weaknessRegenerate"
   | "strengthRegenerate"
+  | "legalIssueRegenerate"
+  | "attackRegenerate"
+  | "defenseRegenerate"
+  | "caseOutlookGenerate"
+  | "witnessRefresh"
+  | "damagesRefresh"
+  | "audioOverviewGenerate"
   | "contradictions"
   | "caseMindMapGenerate"
   | "caseMindMapResync";
@@ -100,6 +109,15 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // A panel's Regenerate: the controller already claimed the lock (CaseFindingAiSvc.beginCategory).
   weaknessRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "WEAKNESS"),
   strengthRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "STRENGTH"),
+  legalIssueRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "LEGAL_ISSUE"),
+  attackRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "ATTACK_STRATEGY"),
+  defenseRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "DEFENSE_STRATEGY"),
+  // A pane's own Regenerate for the panes that had no single-pane action (the controller already
+  // claimed the lock): Case Summary's outlook, Witnesses, Damages, Audio Overview.
+  caseOutlookGenerate: (job) => CaseOutlookAiSvc.runQueued(job.caseId),
+  witnessRefresh: (job) => WitnessScoringSvc.runQueuedRefresh(job.caseId, job.userId),
+  damagesRefresh: (job) => DamagesExtractSvc.runQueuedRefresh(job.caseId, job.userId),
+  audioOverviewGenerate: (job) => AudioOverviewSvc.runQueued(job.caseId, job.userId),
   contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
   caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
   // No controller either: the one coalesced retry after a document change found a map build

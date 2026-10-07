@@ -6,6 +6,11 @@ export default class AiGenerationJobRepo {
     return prisma.aiGenerationJob.findUnique({ where: { subjectId_kind: { subjectId, kind } } });
   }
 
+  /** The subject's jobs of these kinds that are IN_PROGRESS (staleness is the caller's to judge). */
+  static async listInProgress(subjectId: string, kinds: readonly AiGenerationKind[]) {
+    return prisma.aiGenerationJob.findMany({ where: { subjectId, kind: { in: [...kinds] }, status: "IN_PROGRESS" } });
+  }
+
   static async create(subjectId: string, kind: AiGenerationKind) {
     return prisma.aiGenerationJob.create({ data: { subjectId, kind } });
   }

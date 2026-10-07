@@ -49,6 +49,7 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     setFingerprint: CaseRepo.setReadySetFingerprint,
     reconstructionGet: CaseReconstructionRepo.get,
     lockBegin: AiGenerationLockSvc.begin,
+    runningPaneJob: AiGenerationLockSvc.runningPaneJob,
     refreshRunQueued: CaseRefreshSvc.runQueued,
     reconstructionGenerate: CaseReconstructionSvc.generate,
     startAudioJob: CaseReconstructionAudioSvc.startAudioJob,
@@ -100,6 +101,7 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     // first-ingest don't incidentally exercise the generate/audio branch.
     (CaseReconstructionRepo as any).get = async () => ({ id: "recon-1" });
     (AiGenerationLockSvc as any).begin = async () => {};
+    (AiGenerationLockSvc as any).runningPaneJob = async () => null;
     (CaseRefreshSvc as any).runQueued = async () => {};
     (CaseReconstructionSvc as any).generate = async () => ({ id: "recon-1" });
     (CaseReconstructionAudioSvc as any).startAudioJob = async () => {};
@@ -126,6 +128,7 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseRepo as any).setReadySetFingerprint = originals.setFingerprint;
     (CaseReconstructionRepo as any).get = originals.reconstructionGet;
     (AiGenerationLockSvc as any).begin = originals.lockBegin;
+    (AiGenerationLockSvc as any).runningPaneJob = originals.runningPaneJob;
     (CaseRefreshSvc as any).runQueued = originals.refreshRunQueued;
     (CaseReconstructionSvc as any).generate = originals.reconstructionGenerate;
     (CaseReconstructionAudioSvc as any).startAudioJob = originals.startAudioJob;
@@ -318,6 +321,23 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     await flush();
     expect(witnessScheduled).to.deep.equal([]);
     expect(damagesScheduled).to.deep.equal([]);
+  });
+
+  it("waits for a pane's own Regenerate instead of overlapping it: reschedules, runs nothing", async () => {
+    (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1", "d2"]);
+    fingerprintStore["case-1"] = fingerprintOf(["d1"]);
+    (AiGenerationLockSvc as any).runningPaneJob = async () => "redTeam";
+    let began = false;
+    (AiGenerationLockSvc as any).begin = async () => void (began = true);
+    let refreshCalls = 0;
+    (CaseRefreshSvc as any).runQueued = async () => void (refreshCalls += 1);
+
+    await runCasePostExtraction("case-1", "user-1");
+    await flush();
+
+    expect(began).to.equal(false);
+    expect(refreshCalls).to.equal(0);
+    expect(sent).to.have.length(1); // the reschedule message
   });
 
   it("propagates a non-409 lock error instead of silently swallowing it", async () => {

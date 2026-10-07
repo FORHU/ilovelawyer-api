@@ -76,6 +76,7 @@ export default class CaseReconstructionSvc {
    * finished narrative before chaining CaseReconstructionAudioSvc.startAudioJob. */
   static async beginQueued(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "caseReconstruction");
   }
 

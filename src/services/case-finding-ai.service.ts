@@ -17,10 +17,23 @@ import logger from "../utils/logger";
 // failing to parse would otherwise re-run on every Terminal load.
 const OUTDATED_RETRY_AFTER_MS = 60 * 60 * 1000;
 
-/** The findings panels with their own Regenerate. */
-export type RegenerableCategory = "WEAKNESS" | "STRENGTH";
-const CATEGORY_REGENERATE_KIND = { WEAKNESS: "weaknessRegenerate", STRENGTH: "strengthRegenerate" } as const;
-const CATEGORY_BLOCK: Record<RegenerableCategory, string> = { WEAKNESS: "[WEAKNESSES]", STRENGTH: "[STRENGTHS]" };
+/** The findings panels with their own Regenerate: all five. */
+export type RegenerableCategory = "LEGAL_ISSUE" | "WEAKNESS" | "STRENGTH" | "ATTACK_STRATEGY" | "DEFENSE_STRATEGY";
+/** Each panel's own job kind, so only that panel shows its Regenerate running. */
+export const CATEGORY_REGENERATE_KIND = {
+  LEGAL_ISSUE: "legalIssueRegenerate",
+  WEAKNESS: "weaknessRegenerate",
+  STRENGTH: "strengthRegenerate",
+  ATTACK_STRATEGY: "attackRegenerate",
+  DEFENSE_STRATEGY: "defenseRegenerate",
+} as const;
+const CATEGORY_BLOCK: Record<RegenerableCategory, string> = {
+  LEGAL_ISSUE: "[LEGAL_ISSUES]",
+  WEAKNESS: "[WEAKNESSES]",
+  STRENGTH: "[STRENGTHS]",
+  ATTACK_STRATEGY: "[ATTACK_STRATEGY]",
+  DEFENSE_STRATEGY: "[DEFENSE_STRATEGY]",
+};
 
 // Mirrors CaseStrategySvc.generateFromDocuments — same prompt->parse->replace-AI-rows shape,
 // a different prompt/parser/table (CaseFinding instead of ProcedureItem).

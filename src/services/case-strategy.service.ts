@@ -21,6 +21,7 @@ export default class CaseStrategySvc {
    * this panel's pass (plan, to-dos, key dates), not contradictions/findings/outlook/map. */
   static async beginQueued(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "caseStrategyRefresh");
   }
 

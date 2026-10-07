@@ -23,6 +23,19 @@ export default class CaseOutlookAiSvc {
     return AiGenerationLockSvc.run(caseId, "caseOutlook", () => CaseOutlookAiSvc.generateFromDocumentsInner(caseId));
   }
 
+  /** Case Summary's own Regenerate: claims the "caseOutlook" lock before the job is queued, so a
+   * double click gets a 409 at once. Refused while the case analysis runs. */
+  static async beginQueued(caseId: string, userId: string): Promise<void> {
+    await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
+    await AiGenerationLockSvc.begin(caseId, "caseOutlook");
+  }
+
+  /** Run by AiGenerationQueue's worker after beginQueued claimed the lock. */
+  static async runQueued(caseId: string): Promise<void> {
+    await AiGenerationLockSvc.finishWith(caseId, "caseOutlook", () => CaseOutlookAiSvc.generateFromDocumentsInner(caseId));
+  }
+
   private static async generateFromDocumentsInner(caseId: string) {
     const docs = await DocumentRepo.listAllByCase(caseId);
     const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));

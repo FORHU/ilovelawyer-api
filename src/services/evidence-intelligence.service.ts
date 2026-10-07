@@ -107,6 +107,7 @@ export default class EvidenceIntelligenceSvc {
    * comes back immediately. A full-bundle scan can take minutes, far past an HTTP request. */
   static async beginQueuedScan(caseId: string, userId: string): Promise<void> {
     await CaseAccess.assertCanEdit(caseId, userId);
+    await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "contradictions");
   }
 
