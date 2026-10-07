@@ -7,9 +7,21 @@ const ACTION_TYPES = ["Civil Litigation", "Criminal Proceeding", "Labor Dispute"
 const PARTY_DESIGNATIONS = ["Petitioner / Plaintiff", "Respondent / Defendant", "Intervenor / Third-Party"];
 export const UK_JURISDICTIONS = ["England and Wales", "Scotland", "Northern Ireland"];
 export const CLIENT_SIDES = ["CLAIMANT", "RESPONDENT"];
+// Mirrored by the web app's case-field limits (lib/cases/limits.ts) — keep the two in step.
+export const CASE_NAME_MAX_LENGTH = 150;
+export const PARTY_NAME_MAX_LENGTH = 80;
+
+const caseName = Joi.string()
+  .trim()
+  .max(CASE_NAME_MAX_LENGTH)
+  .messages({ "string.max": `Case title must be ${CASE_NAME_MAX_LENGTH} characters or fewer.` });
 
 export const partySchema = Joi.object({
-  name: Joi.string().required(),
+  name: Joi.string()
+    .trim()
+    .max(PARTY_NAME_MAX_LENGTH)
+    .required()
+    .messages({ "string.max": `Party name must be ${PARTY_NAME_MAX_LENGTH} characters or fewer.` }),
   designation: Joi.string()
     .valid(...PARTY_DESIGNATIONS)
     .required(),
@@ -18,7 +30,7 @@ export const partySchema = Joi.object({
 });
 
 export const createCaseSchema = Joi.object({
-  caseName: Joi.string().required(),
+  caseName: caseName.required(),
   partyInvolved: Joi.string().allow("").optional(),
   actionType: Joi.string()
     .valid(...ACTION_TYPES)
@@ -44,7 +56,7 @@ export const listCasesSchema = Joi.object({
 });
 
 export const updateCaseSchema = Joi.object({
-  caseName: Joi.string().optional(),
+  caseName: caseName.optional(),
   partyInvolved: Joi.string().allow("").optional(),
   actionType: Joi.string()
     .valid(...ACTION_TYPES)
