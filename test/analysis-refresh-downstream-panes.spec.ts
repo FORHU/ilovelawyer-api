@@ -96,6 +96,7 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
       [CaseTimelineSvc, "removeChatCopiedEvents", async () => 0],
       [OrganizationRepo, "writeAudit", async (data: any) => void audits.push(data)],
       [AiGenerationLockSvc, "finishWith", async (_c: string, _k: string, fn: () => Promise<unknown>) => fn()],
+      [AiGenerationLockSvc, "setStage", async (_c: string, kind: string, stage: string) => void events.push(`stage:${kind}:${stage}`)],
       [CaseSnapshotSvc, "get", async () => ({})],
     ]);
   });
@@ -123,6 +124,16 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
     await run;
     expect(events.indexOf("start:outlook")).to.be.greaterThan(events.indexOf("end:findings"));
     expect(events.indexOf("start:redTeam")).to.be.greaterThan(events.indexOf("end:mindMap"));
+  });
+
+  it("marks the job's stage as each later wave starts, so the app stops showing the timeline and the map as updating once their wave is over", async () => {
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    const wave2 = events.indexOf("stage:caseRefresh:wave2");
+    const wave3 = events.indexOf("stage:caseRefresh:wave3");
+    expect(wave2).to.be.greaterThan(events.indexOf("end:strategy"));
+    expect(wave2).to.be.lessThan(events.indexOf("start:outlook"));
+    expect(wave3).to.be.greaterThan(events.indexOf("end:mindMap"));
+    expect(wave3).to.be.lessThan(events.indexOf("start:redTeam"));
   });
 
   it("still scores the existing witnesses when witness extraction fails", async () => {
