@@ -13,6 +13,8 @@ const roleSchema = Joi.string().valid(...Object.values(OrganizationRole));
 export const createOrganizationSchema = Joi.object({
   name: Joi.string().trim().min(1).max(120).required(),
   packageSku: Joi.string().valid("SOLO", "PROFESSIONAL", "ENTERPRISE").optional(),
+  // Onboarding's "Skip for now" — see OrganizationSvc.create.
+  personal: Joi.boolean().optional(),
 });
 
 export const updateOrganizationSchema = Joi.object({

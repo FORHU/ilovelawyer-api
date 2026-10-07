@@ -2379,6 +2379,10 @@ model Organization {
   name        String
   slug        String     @unique
   packageSku  PackageSku @default(PROFESSIONAL)
+  // A user who skipped workspace onboarding still needs an org (every resource route is
+  // org-scoped), so they get a private one-member workspace that the app never presents as
+  // an organization. Creating a real org upgrades it in place — see OrganizationSvc.create.
+  isPersonal  Boolean    @default(false)
   createdById String
   tenantId    String
   createdAt   DateTime   @default(now())

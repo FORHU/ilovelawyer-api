@@ -12,16 +12,52 @@ export default class OrganizationRepo {
     slug: string,
     packageSku: PackageSku = "PROFESSIONAL",
     tenantId: string,
+    isPersonal = false,
   ) {
     return prisma.$transaction(async (tx) => {
       const org = await tx.organization.create({
-        data: { name, slug, packageSku, createdById, tenantId },
+        data: { name, slug, packageSku, createdById, tenantId, isPersonal },
       });
       await tx.organizationMember.create({
         data: { organizationId: org.id, userId: createdById, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },
       });
       return tx.organization.findUniqueOrThrow({
         where: { id: org.id },
+        include: { members: true, tenant: { select: { code: true } } },
+      });
+    });
+  }
+
+  /** A personal workspace the user created but no longer belongs to — they joined another
+   * org through an invite (see OrganizationMemberRepo.replaceWithInvite). Its data is still
+   * there, so skipping onboarding again (or declining that invite) brings it back. */
+  static async findDormantPersonal(userId: string, tenantId?: string) {
+    return prisma.organization.findFirst({
+      where: { createdById: userId, isPersonal: true, members: { none: {} }, ...(tenantId ? { tenantId } : {}) },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  /** Puts the user back into their own personal workspace (as its OWNER). `promote` also
+   * turns it into a real organization in the same transaction — name, slug and plan replace
+   * the personal placeholders, and everything already in it (cases, consultations, ...)
+   * carries over. Same return shape as create(). */
+  static async activatePersonal(
+    organizationId: string,
+    userId: string,
+    { addMember, promote }: { addMember: boolean; promote?: { name: string; slug: string; packageSku: PackageSku } },
+  ) {
+    return prisma.$transaction(async (tx) => {
+      if (addMember) {
+        await tx.organizationMember.create({
+          data: { organizationId, userId, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },
+        });
+      }
+      if (promote) {
+        await tx.organization.update({ where: { id: organizationId }, data: { ...promote, isPersonal: false } });
+      }
+      return tx.organization.findUniqueOrThrow({
+        where: { id: organizationId },
         include: { members: true, tenant: { select: { code: true } } },
       });
     });
