@@ -219,8 +219,8 @@ export default class OrganizationSvc {
 
   /** Joins the inviting organization. Someone already in a real organization leaves it as part
    * of accepting, under the same rules as leave() — so a last owner with teammates has to hand
-   * ownership over first — and keeps portfolio copies of the cases they made there. A personal
-   * workspace is just parked; it stays their portfolio. */
+   * ownership over first — and takes their work there along to their portfolio, as exit() does.
+   * A personal workspace is just parked; it stays their portfolio. */
   static async acceptInvite(organizationId: string, userId: string) {
     const invite = await OrganizationInviteRepo.findForUser(userId);
     if (!invite || invite.organizationId !== organizationId) {
@@ -233,7 +233,7 @@ export default class OrganizationSvc {
     await this.assertCanLeave(current.organizationId, current.role);
     const portfolio = await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
     const member = await OrganizationInviteRepo.accept(invite, current, (tx) =>
-      CaseCopyRepo.enqueueForCreatorIn(tx, {
+      CaseCopyRepo.carryOverIn(tx, {
         sourceOrganizationId: current.organizationId,
         sourceOrganizationName: current.organization.name,
         userId,
@@ -314,15 +314,17 @@ export default class OrganizationSvc {
   }
 
   /** How a member stops belonging to an organization, whether they left or were removed: the
-   * membership goes, every case they created there is queued for a copy in their portfolio (in
-   * the same transaction), and they land in that portfolio — their personal workspace, in this
-   * organization's tenant, made if they had none. The organization keeps the originals. */
+   * membership goes, their work there is carried over to their portfolio in the same transaction
+   * (copies queued of the cases they created and the standalone consultations they started, their
+   * own calendar moved — see CaseCopyRepo.carryOverIn), and they land in that portfolio — their
+   * personal workspace, in this organization's tenant, made if they had none. The organization
+   * keeps its originals. */
   private static async exit(organizationId: string, userId: string) {
     const organization = await OrganizationRepo.findById(organizationId);
     if (!organization) throw new HttpError("Organization not found", 404);
     const portfolio = await OrganizationSvc.ensurePersonal(userId, organization.tenantId);
     await OrganizationMemberRepo.remove(organizationId, userId, (tx) =>
-      CaseCopyRepo.enqueueForCreatorIn(tx, {
+      CaseCopyRepo.carryOverIn(tx, {
         sourceOrganizationId: organizationId,
         sourceOrganizationName: organization.name,
         userId,

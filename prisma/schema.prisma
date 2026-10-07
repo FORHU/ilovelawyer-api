@@ -120,6 +120,7 @@ model User {
   organizationMemberships OrganizationMember[]
   organizationInvites     OrganizationInvite[]
   caseCopies              CaseCopy[]
+  consultationCopies      ConsultationCopy[]
   createdOrganizations    Organization[]                   @relation("OrgCreator")
   ownedRisks              CaseRisk[]
   auditEvents             AuditEvent[]
@@ -2429,6 +2430,7 @@ model Organization {
   members        OrganizationMember[]
   invites        OrganizationInvite[]
   caseCopies     CaseCopy[]
+  consultationCopies ConsultationCopy[]
   cases          Case[]
   documents      Document[]
   consultations  Consultation[]
@@ -2535,6 +2537,29 @@ model CaseCopy {
   error                  String?        @db.Text
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
+
+  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetOrganization Organization @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([status, updatedAt])
+}
+
+// One portfolio copy to make of a standalone consultation (one not on a case) that a member
+// started in an organization they've just left. Consultations are shared with the organization,
+// so like a case it keeps the original and the member gets a copy. Case consultations go with
+// their case instead (see CaseCopy). Worked through by CaseCopyQueue alongside CaseCopy.
+model ConsultationCopy {
+  id                   String         @id @default(uuid())
+  sourceConsultationId String
+  userId               String
+  targetOrganizationId String
+  status               CaseCopyStatus @default(PENDING)
+  copyConsultationId   String?
+  attempts             Int            @default(0)
+  error                String?        @db.Text
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
   user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   targetOrganization Organization @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)

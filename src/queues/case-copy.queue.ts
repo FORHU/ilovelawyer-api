@@ -11,9 +11,9 @@ const BATCH = 20;
 const STALE_RUNNING_MS = 30 * 60_000;
 
 /**
- * Works through queued portfolio copies (CaseCopy rows, written when a creator leaves an
- * organization — see OrganizationSvc). Sweeps every minute, and OrganizationSvc kicks it right
- * after a leave so copies usually start at once. Each row is claimed atomically
+ * Works through queued portfolio copies (CaseCopy and ConsultationCopy rows, written when a
+ * member leaves an organization — see OrganizationSvc). Sweeps every minute, and OrganizationSvc
+ * kicks it right after a leave so copies usually start at once. Each row is claimed atomically
  * (CaseCopyRepo.claim), so every API instance can sweep without doing the same copy twice.
  */
 export default class CaseCopyQueue {
@@ -45,6 +45,10 @@ export default class CaseCopyQueue {
         ids = await CaseCopyRepo.listPendingIds(BATCH);
         for (const id of ids) await this.process(id);
       } while (ids.length === BATCH);
+      do {
+        ids = await CaseCopyRepo.listPendingConsultationIds(BATCH);
+        for (const id of ids) await this.processConsultation(id);
+      } while (ids.length === BATCH);
     } catch (err) {
       logger.error("Case copy: sweep failed", { err });
     } finally {
@@ -63,6 +67,20 @@ export default class CaseCopyQueue {
       const retry = !(err instanceof CaseCopyAbandoned) && job.attempts < MAX_ATTEMPTS;
       await CaseCopyRepo.markFailed(id, err instanceof Error ? err.message : String(err), retry);
       logger.error("Case copy: copy failed", { err, copyId: id, sourceCaseId: job.sourceCaseId, willRetry: retry });
+    }
+  }
+
+  private static async processConsultation(id: string): Promise<void> {
+    const job = await CaseCopyRepo.claimConsultation(id);
+    if (!job) return; // another instance took it
+    try {
+      const copyConsultationId = await CaseCopySvc.copyConsultation(job);
+      await CaseCopyRepo.markConsultationDone(id, copyConsultationId);
+      logger.info("Case copy: copied consultation to portfolio", { copyId: id, sourceConsultationId: job.sourceConsultationId, copyConsultationId });
+    } catch (err) {
+      const retry = !(err instanceof CaseCopyAbandoned) && job.attempts < MAX_ATTEMPTS;
+      await CaseCopyRepo.markConsultationFailed(id, err instanceof Error ? err.message : String(err), retry);
+      logger.error("Case copy: consultation copy failed", { err, copyId: id, sourceConsultationId: job.sourceConsultationId, willRetry: retry });
     }
   }
 }
