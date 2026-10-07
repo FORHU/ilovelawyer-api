@@ -1,4 +1,4 @@
-import { AWS_REGION, AWS_S3_BUCKET } from "../config";
+import { AWS_REGION, AWS_S3_BUCKET, AWS_S3_REGION } from "../config";
 import { awsCredentials } from "../lib/aws-client-config";
 import logger from "./logger";
 
@@ -79,8 +79,10 @@ export async function ocrPdfFromS3(s3Key: string): Promise<OcrPage[]> {
       StartDocumentTextDetectionCommand: new (input: object) => unknown;
       GetDocumentTextDetectionCommand: new (input: object) => unknown;
     };
+    // Textract can only read from a bucket in its own region, so this follows the bucket's
+    // region rather than AWS_REGION (the two differ only if the bucket lives elsewhere).
     const client = new textract.TextractClient({
-      region: AWS_REGION || "us-east-1",
+      region: AWS_S3_REGION || "us-east-1",
       ...awsCredentials,
     });
 
