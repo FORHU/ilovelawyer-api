@@ -4,6 +4,7 @@ import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseRiskSvc from "../services/case-risk.service";
 import CaseRefreshSvc from "../services/case-refresh.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
+import MissingEvidenceAiSvc from "../services/missing-evidence-ai.service";
 import CitationCheckSvc from "../services/citation-check.service";
 import CaseAuthoritySvc from "../services/case-authority.service";
 import GroundingVerifierSvc from "../services/grounding-verifier.service";
@@ -67,6 +68,7 @@ import {
   updateWitnessSchema,
   witnessFactorSchema,
   updateContradictionSchema,
+  updateMissingEvidenceSchema,
   createDamageSchema,
   updateDamageSchema,
   createClaimSchema,
@@ -286,6 +288,24 @@ export default class CaseTerminalCtrl {
     const { error, value } = updateContradictionSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     const result = await EvidenceIntelligenceSvc.updateContradiction(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  /** The Missing Evidence pane's own Regenerate. Queued via AiGenerationQueue like the other
+   * panes' — the pane follows the "missingEvidence" job status and refreshes when it's DONE. */
+  static async regenerateMissingEvidence(req: Request, res: Response) {
+    const { caseId } = req.params;
+    const userId = req.user.userId;
+    await MissingEvidenceAiSvc.beginQueued(caseId, userId);
+    AiGenerationQueue.enqueue({ kind: "missingEvidence", caseId, userId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "missingEvidence");
+    return res.status(202).json(status);
+  }
+
+  static async updateMissingEvidence(req: Request, res: Response) {
+    const { error, value } = updateMissingEvidenceSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await MissingEvidenceAiSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
     return res.status(200).json(result);
   }
 

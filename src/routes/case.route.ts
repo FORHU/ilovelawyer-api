@@ -65,6 +65,8 @@ router.post("/:caseId/evidence/matrix/:documentId/custody", asyncHandler(CaseTer
 router.delete("/:caseId/evidence/matrix/:documentId/custody/:eventId", asyncHandler(CaseTerminalCtrl.deleteCustodyEvent));
 router.post("/:caseId/evidence/contradictions/scan", asyncHandler(CaseTerminalCtrl.scanContradictions));
 router.patch("/:caseId/evidence/contradictions/:id", asyncHandler(CaseTerminalCtrl.updateContradiction));
+router.post("/:caseId/evidence/missing/regenerate", asyncHandler(CaseTerminalCtrl.regenerateMissingEvidence));
+router.patch("/:caseId/evidence/missing/:id", asyncHandler(CaseTerminalCtrl.updateMissingEvidence));
 router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl.traces));
 
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
