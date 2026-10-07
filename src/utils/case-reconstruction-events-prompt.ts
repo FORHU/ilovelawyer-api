@@ -1,4 +1,5 @@
 import type { BundleFact } from "./bundle-facts";
+import { wrapExtractedText } from "./case-document-excerpts";
 
 const MAX_ANCHORS = 150;
 
@@ -68,8 +69,7 @@ ${input.anchors || "(none found)"}
 ## DOCUMENTS
 ${docsBlock}
 
-## EXTRACTED TEXT
-${input.excerpts || "(no indexed text)"}
+${wrapExtractedText("Build events only from these excerpts.", input.excerpts)}
 
 ## OUTPUT
 Reply with exactly this block and nothing else:

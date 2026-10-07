@@ -12,7 +12,7 @@ import { newTraceRun } from "./trace-collector.service";
 import { getCaseReconstructionPromptBuilder } from "../legal/prompt-registry";
 import { extractRegisterNarratives, extractReconstructionGaps } from "../utils/case-reconstruction-parse";
 import { extractReconstructionClaims } from "../utils/case-reconstruction-claims-parse";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { parseRawScenes, auditScenes, Scene } from "../utils/case-reconstruction-scenes-parse";
 import { castForCase } from "../utils/table-read-voices";
 import { mergeCastTurnsToMp3, CastTurn } from "../utils/audio-overview-render";
@@ -98,10 +98,7 @@ export default class CaseReconstructionSvc {
     const pack = await buildFactExcerptPack(ready);
     const prompt = `${buildCaseReconstructionPrompt(ready, ukJurisdiction)}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText("Use only these excerpts and the attached case documents.", pack.text)}
 `;
 
     // A single blocking REST call (callChatWonderRest) waits for the entire response before
@@ -231,8 +228,7 @@ ${timelineBlock}
 ## DOCUMENTS
 ${docsBlock}
 
-## EXTRACTED TEXT
-${pack.text || "(no indexed text)"}
+${wrapExtractedText("Source every scene and quote from these excerpts.", pack.text)}
 
 ## OUTPUT
 Reply with exactly this block and nothing else:
