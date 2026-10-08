@@ -67,20 +67,51 @@ export default class CaseReconstructionSvc {
     await AiGenerationLockSvc.begin(caseId, "caseReconstruction");
   }
 
-  /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
+  /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. The
+   * pane's Regenerate covers the whole pane: the narrative, the scenes and the event chain side by
+   * side (Storyboard is a view of the scenes). Scenes read the timeline, not the narrative's text,
+   * but need its row to exist — so only a case's very first narrative makes them wait for it; a
+   * regenerate keeps the row's id and never touches `scenes`. The job stands or falls on the
+   * narrative; scenes and events run under their own locks, so each tab still shows its own run
+   * and failure. */
   static async runQueued(caseId: string, userId: string): Promise<void> {
-    // The lawyer's Regenerate (even over their own edits): the "What changed" modal then
-    // describes this run (CaseChangeRun).
-    await AiGenerationLockSvc.finishWith(caseId, "caseReconstruction", () =>
-      CaseChangeRun.regenerate(
-        caseId,
-        userId,
-        "reconstruction",
-        () => CaseReconstructionRepo.get(caseId),
-        () => CaseReconstructionSvc.generateInner(caseId, userId),
-        (before, after) => diffReconstruction(before, after, before ? "regenerated" : "generated"),
-      ),
-    );
+    await AiGenerationLockSvc.finishWith(caseId, "caseReconstruction", async () => {
+      const scenesNow = !!(await CaseReconstructionRepo.get(caseId));
+      const scenes = () => CaseReconstructionSvc.followOn(caseId, "scenes", () => CaseReconstructionSvc.generateScenes(caseId, userId));
+      const alongside = [
+        CaseReconstructionSvc.followOn(caseId, "events", () => CaseReconstructionSvc.generateEvents(caseId, userId)),
+        ...(scenesNow ? [scenes()] : []),
+      ];
+      try {
+        // The lawyer's Regenerate (even over their own edits): the "What changed" modal then
+        // describes this run (CaseChangeRun).
+        await CaseChangeRun.regenerate(
+          caseId,
+          userId,
+          "reconstruction",
+          () => CaseReconstructionRepo.get(caseId),
+          () => CaseReconstructionSvc.generateInner(caseId, userId),
+          (before, after) => diffReconstruction(before, after, before ? "regenerated" : "generated"),
+        );
+      } finally {
+        await Promise.all(alongside);
+      }
+      if (!scenesNow) await scenes();
+    });
+  }
+
+  /** Scenes or events run as part of a bigger run: a 409 (that tab's own Generate is already
+   * running) or a failure is logged, never thrown, so it can't fail the narrative's run. */
+  private static async followOn(caseId: string, name: "scenes" | "events", fn: () => Promise<unknown>): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      if (err instanceof HttpError && err.statusCode === 409) {
+        logger.info(`Case reconstruction: ${name} already running, skipped`, { caseId });
+        return;
+      }
+      logger.warn(`Case reconstruction: ${name} failed`, { err, caseId });
+    }
   }
 
   private static async generateInner(caseId: string, userId?: string) {
@@ -173,13 +204,22 @@ ${wrapExtractedText("Use only these excerpts and the attached case documents.", 
 
   // ── Grounded Reconstruction, Rungs 1-2 (differentiation program, Phase 3 — Workstream C) ──
 
-  /** Rung 1 — a dedicated action, not folded into `generate()`: a lawyer may want the narrative
-   * without paying for a scene script. Requires a narrative to already exist (scenes are built
-   * from the case's timeline/evidence, not from re-reading the narrative, but there's nothing
-   * to reconstruct scenes "of" without one). */
+  /** Rung 1 — its own action (the Scenes tab's Generate) and lock, also run by the pane's
+   * Regenerate (runQueued) and by the analysis refresh (autoGenerateScenes). Requires a
+   * narrative to already exist (scenes are built from the case's timeline/evidence, not from
+   * re-reading the narrative, but there's nothing to reconstruct scenes "of" without one). */
   static async generateScenes(caseId: string, userId?: string) {
     if (userId) await CaseAccess.assertCanEdit(caseId, userId);
     return AiGenerationLockSvc.run(caseId, "caseReconstructionScenes", () => CaseReconstructionSvc.generateScenesInner(caseId, userId));
+  }
+
+  /** The analysis refresh's scenes step. Scenes are rebuilt even over an edited narrative — they
+   * come from the timeline and the documents, not its text — but need one to exist, so a case
+   * whose first narrative failed is skipped rather than refused. */
+  static async autoGenerateScenes(caseId: string, userId: string): Promise<{ skipped: boolean }> {
+    if (!(await CaseReconstructionRepo.get(caseId))) return { skipped: true };
+    await CaseReconstructionSvc.generateScenes(caseId, userId);
+    return { skipped: false };
   }
 
   static async beginQueuedScenes(caseId: string, userId: string): Promise<void> {

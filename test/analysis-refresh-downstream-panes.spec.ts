@@ -37,6 +37,7 @@ import CaseOutlookRepo from "../src/repositories/case-outlook.repository";
 import RedTeamRepo from "../src/repositories/red-team.repository";
 import CaseChangeSummaryRepo from "../src/repositories/case-change-summary.repository";
 import CaseChangeReads from "../src/services/case-change-reads";
+import CaseChangeRun from "../src/services/case-change-run.service";
 import * as chatWonder from "../src/utils/chatWonder";
 import HttpError from "../src/utils/http-error";
 
@@ -73,8 +74,8 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
       return result;
     };
   }
-  const WAVE_1 = ["contradictions", "strategy", "findings", "witnessExtract", "damagesExtract", "reconstruction"];
-  const WAVE_2 = ["outlook", "damagesRerate", "witnessScore", "theory", "mindMap"];
+  const WAVE_1 = ["contradictions", "strategy", "findings", "witnessExtract", "damagesExtract", "reconstruction", "reconstructionEvents"];
+  const WAVE_2 = ["reconstructionScenes", "outlook", "damagesRerate", "witnessScore", "theory", "mindMap"];
   const started = () => events.filter((e) => e.startsWith("start:")).map((e) => e.slice(6));
 
   beforeEach(() => {
@@ -93,6 +94,8 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
       [WitnessExtractSvc, "extractAllPending", step("witnessExtract", { batches: 1 })],
       [DamagesExtractSvc, "extractAllPending", step("damagesExtract", { batches: 1 })],
       [CaseReconstructionSvc, "autoRegenerate", step("reconstruction", "regenerated")],
+      [CaseReconstructionSvc, "generateEvents", step("reconstructionEvents", { events: [] })],
+      [CaseReconstructionSvc, "autoGenerateScenes", step("reconstructionScenes", { skipped: false })],
       [CaseOutlookAiSvc, "generateFromDocuments", step("outlook", null)],
       [DamagesExtractSvc, "refreshStep", step("damagesRerate", { heads: 0 })],
       [WitnessScoringSvc, "scoreFromDocuments", step("witnessScore", { skipped: false })],
@@ -126,9 +129,9 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
   it("runs every step once, in three waves: document readers, then what reads them, then Red Team and the Audio Overview", async () => {
     await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
     const order = started();
-    expect(order.slice(0, 6)).to.have.members(WAVE_1);
-    expect(order.slice(6, 11)).to.have.members(WAVE_2);
-    expect(order.slice(11)).to.have.members(["redTeam", "audioOverview"]);
+    expect(order.slice(0, 7)).to.have.members(WAVE_1);
+    expect(order.slice(7, 13)).to.have.members(WAVE_2);
+    expect(order.slice(13)).to.have.members(["redTeam", "audioOverview"]);
   });
 
   it("starts a wave's steps together, and the next wave only once the slowest of them has finished", async () => {
@@ -144,6 +147,19 @@ describe("Analysis refresh — waves of side-by-side steps", () => {
     await run;
     expect(events.indexOf("start:outlook")).to.be.greaterThan(events.indexOf("end:findings"));
     expect(events.indexOf("start:redTeam")).to.be.greaterThan(events.indexOf("end:mindMap"));
+  });
+
+  it("builds Case Reconstruction's scenes only once the narrative and the timeline's dates (wave 1) are written", async () => {
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(events.indexOf("start:reconstructionScenes")).to.be.greaterThan(events.indexOf("end:reconstruction"));
+    expect(events.indexOf("start:reconstructionScenes")).to.be.greaterThan(events.indexOf("end:strategy"));
+  });
+
+  it("still builds the scenes when the event chain fails", async () => {
+    patch([[CaseReconstructionSvc, "generateEvents", async () => Promise.reject(new Error("chat-wonder timeout"))]]);
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(started()).to.include("reconstructionScenes");
+    expect(audits.filter((a) => a.action === "case.refresh")).to.have.length(1);
   });
 
   it("marks the job's stage as each later wave starts, so the app stops showing the timeline and the map as updating once their wave is over", async () => {
@@ -450,6 +466,134 @@ describe("CaseReconstructionSvc.autoRegenerate", () => {
     setup({ narrativeEditedAt: null });
     expect(await CaseReconstructionSvc.autoRegenerate("case-1", "user-1")).to.equal("regenerated");
     expect(generated).to.equal(1);
+  });
+});
+
+describe("CaseReconstructionSvc.autoGenerateScenes", () => {
+  afterEach(restoreAll);
+
+  function setup(existing: unknown) {
+    const calls: string[] = [];
+    patch([
+      [CaseReconstructionRepo, "get", async () => existing],
+      [CaseReconstructionSvc, "generateScenes", async (caseId: string) => void calls.push(caseId)],
+    ]);
+    return calls;
+  }
+
+  it("skips a case with no narrative yet instead of refusing", async () => {
+    const calls = setup(null);
+    expect(await CaseReconstructionSvc.autoGenerateScenes("case-1", "user-1")).to.deep.equal({ skipped: true });
+    expect(calls).to.deep.equal([]);
+  });
+
+  it("rebuilds the scenes even over an edited narrative — they come from the timeline and documents", async () => {
+    const calls = setup({ id: "recon-1", narrativeEditedAt: new Date() });
+    expect(await CaseReconstructionSvc.autoGenerateScenes("case-1", "user-1")).to.deep.equal({ skipped: false });
+    expect(calls).to.deep.equal(["case-1"]);
+  });
+});
+
+describe("CaseReconstructionSvc.runQueued — the pane's Regenerate covers the whole pane", () => {
+  let log: string[];
+  let finished: string[];
+  const gates = new Map<string, Promise<void>>();
+  function step(name: string, fail?: Error) {
+    return async () => {
+      log.push(`start:${name}`);
+      await (gates.get(name) ?? Promise.resolve());
+      log.push(`end:${name}`);
+      if (fail) throw fail;
+    };
+  }
+
+  beforeEach(() => {
+    log = [];
+    finished = [];
+    gates.clear();
+    patch([
+      [
+        AiGenerationLockSvc,
+        "finishWith",
+        async (_c: string, kind: string, fn: () => Promise<unknown>) => {
+          try {
+            await fn();
+            finished.push(`${kind}:DONE`);
+          } catch (err) {
+            finished.push(`${kind}:FAILED`);
+            throw err;
+          }
+        },
+      ],
+      [CaseChangeRun, "regenerate", async (_c: string, _a: string, _p: string, _r: unknown, run: () => Promise<unknown>) => run()],
+      // Default: a regenerate — the case already has a narrative row.
+      [CaseReconstructionRepo, "get", async () => ({ id: "recon-1" })],
+      [CaseReconstructionSvc, "generateInner", step("narrative")],
+      [CaseReconstructionSvc, "generateEvents", step("events")],
+      [CaseReconstructionSvc, "generateScenes", step("scenes")],
+    ]);
+  });
+
+  afterEach(restoreAll);
+
+  function holdNarrative() {
+    let release!: () => void;
+    gates.set("narrative", new Promise<void>((resolve) => (release = resolve)));
+    return () => release();
+  }
+
+  it("regenerates the narrative, the scenes and the event chain all at once", async () => {
+    const releaseNarrative = holdNarrative();
+    const run = CaseReconstructionSvc.runQueued("case-1", "user-1");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The narrative is still running, and the other two tabs have already started beside it.
+    expect(log).to.include.members(["start:narrative", "start:events", "start:scenes"]);
+    expect(log).not.to.include("end:narrative");
+    releaseNarrative();
+    await run;
+    expect(finished).to.deep.equal(["caseReconstruction:DONE"]);
+  });
+
+  it("on a case's first narrative, starts the scenes once its row exists — the event chain still runs beside it", async () => {
+    patch([[CaseReconstructionRepo, "get", async () => null]]);
+    const releaseNarrative = holdNarrative();
+    const run = CaseReconstructionSvc.runQueued("case-1", "user-1");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(log).to.include.members(["start:narrative", "start:events"]);
+    expect(log).not.to.include("start:scenes");
+    releaseNarrative();
+    await run;
+    expect(log.indexOf("start:scenes")).to.be.greaterThan(log.indexOf("end:narrative"));
+    expect(finished).to.deep.equal(["caseReconstruction:DONE"]);
+  });
+
+  it("still finishes the pane's job when the scenes or the event chain fail or are already running", async () => {
+    patch([
+      [CaseReconstructionSvc, "generateEvents", step("events", new Error("chat-wonder timeout"))],
+      [CaseReconstructionSvc, "generateScenes", step("scenes", new HttpError("caseReconstructionScenes generation is already in progress", 409))],
+    ]);
+    await CaseReconstructionSvc.runQueued("case-1", "user-1");
+    expect(finished).to.deep.equal(["caseReconstruction:DONE"]);
+  });
+
+  it("fails the job when the narrative fails, after letting the scenes and the event chain finish", async () => {
+    patch([[CaseReconstructionSvc, "generateInner", step("narrative", new Error("chat-wonder timeout"))]]);
+    let threw = false;
+    await CaseReconstructionSvc.runQueued("case-1", "user-1").catch(() => (threw = true));
+    expect(threw).to.equal(true);
+    expect(log).to.include.members(["end:events", "end:scenes"]);
+    expect(finished).to.deep.equal(["caseReconstruction:FAILED"]);
+  });
+
+  it("builds no scenes when a case's first narrative fails", async () => {
+    patch([
+      [CaseReconstructionRepo, "get", async () => null],
+      [CaseReconstructionSvc, "generateInner", step("narrative", new Error("chat-wonder timeout"))],
+    ]);
+    await CaseReconstructionSvc.runQueued("case-1", "user-1").catch(() => undefined);
+    expect(log).to.include("end:events");
+    expect(log).not.to.include("start:scenes");
+    expect(finished).to.deep.equal(["caseReconstruction:FAILED"]);
   });
 });
 

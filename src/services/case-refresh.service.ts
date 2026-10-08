@@ -182,6 +182,11 @@ export default class CaseRefreshSvc {
                         (before, after, { outcome }) => diffReconstruction(before, after, outcome),
                     ),
             ],
+            // Case Reconstruction's event chain reads the documents alone, not the narrative.
+            [
+                "reconstruction events",
+                async () => ({ events: (await CaseReconstructionSvc.generateEvents(caseId, userId))?.events.length ?? 0 }),
+            ],
             // Reads the documents and the case's claims; claims are lawyer- or ClaimExtract-authored,
             // never written by this refresh, so there is nothing earlier in the run to wait for.
             ["missing evidence", async () => ({ found: (await MissingEvidenceAiSvc.generateFromDocuments(caseId, userId)).length })],
@@ -190,6 +195,9 @@ export default class CaseRefreshSvc {
         // Wave 2: what reads the findings, strategy, contradictions, witnesses and damages above.
         void AiGenerationLockSvc.setStage(caseId, "caseRefresh", CASE_REFRESH_STAGE.wave2);
         await CaseRefreshSvc.runWave(caseId, 2, [
+            // Case Reconstruction's scenes (and the Storyboard built on them) read the timeline's
+            // dates and need the narrative, both written in wave 1.
+            ["reconstruction scenes", () => CaseReconstructionSvc.autoGenerateScenes(caseId, userId)],
             // The outlook prompt reads the findings.
             [
                 "case outlook",
