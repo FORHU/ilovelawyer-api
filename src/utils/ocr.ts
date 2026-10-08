@@ -17,6 +17,11 @@ export async function ocrDocument(buffer: Buffer): Promise<string> {
     logger.warn("OCR skipped: document exceeds Textract sync limit", { bytes: buffer.length });
     return "";
   }
+  // No default region: guessing one (us-east-1) would send a UK document to a US region.
+  if (!AWS_REGION) {
+    logger.warn("OCR skipped: AWS_REGION not configured");
+    return "";
+  }
 
   try {
     // Optional dependency — OCR is skipped if the client is not installed.
@@ -26,7 +31,7 @@ export async function ocrDocument(buffer: Buffer): Promise<string> {
       DetectDocumentTextCommand: new (input: object) => unknown;
     };
     const client = new textract.TextractClient({
-      region: AWS_REGION || "us-east-1",
+      region: AWS_REGION,
       ...awsCredentials,
     });
     const result = await client.send(
@@ -71,6 +76,11 @@ export async function ocrPdfFromS3(s3Key: string): Promise<OcrPage[]> {
     logger.warn("OCR skipped: AWS_S3_BUCKET not configured");
     return [];
   }
+  // No default region, same reason as ocrDocument. AWS_S3_REGION already falls back to AWS_REGION.
+  if (!AWS_S3_REGION) {
+    logger.warn("OCR skipped: AWS_S3_REGION / AWS_REGION not configured");
+    return [];
+  }
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -82,7 +92,7 @@ export async function ocrPdfFromS3(s3Key: string): Promise<OcrPage[]> {
     // Textract can only read from a bucket in its own region, so this follows the bucket's
     // region rather than AWS_REGION (the two differ only if the bucket lives elsewhere).
     const client = new textract.TextractClient({
-      region: AWS_S3_REGION || "us-east-1",
+      region: AWS_S3_REGION,
       ...awsCredentials,
     });
 
