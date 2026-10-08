@@ -110,18 +110,18 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   missingEvidence: (job) => MissingEvidenceAiSvc.runQueued(job.caseId),
   caseFinding: (job) => CaseFindingAiSvc.runQueued(job.caseId),
   // A panel's Regenerate: the controller already claimed the lock (CaseFindingAiSvc.beginCategory).
-  weaknessRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "WEAKNESS"),
-  strengthRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "STRENGTH"),
-  legalIssueRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "LEGAL_ISSUE"),
-  attackRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "ATTACK_STRATEGY"),
-  defenseRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "DEFENSE_STRATEGY"),
+  weaknessRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "WEAKNESS", job.userId),
+  strengthRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "STRENGTH", job.userId),
+  legalIssueRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "LEGAL_ISSUE", job.userId),
+  attackRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "ATTACK_STRATEGY", job.userId),
+  defenseRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "DEFENSE_STRATEGY", job.userId),
   // A pane's own Regenerate for the panes that had no single-pane action (the controller already
   // claimed the lock): Case Summary's outlook, Witnesses, Damages, Audio Overview.
-  caseOutlookGenerate: (job) => CaseOutlookAiSvc.runQueued(job.caseId),
+  caseOutlookGenerate: (job) => CaseOutlookAiSvc.runQueued(job.caseId, job.userId),
   witnessRefresh: (job) => WitnessScoringSvc.runQueuedRefresh(job.caseId, job.userId),
   damagesRefresh: (job) => DamagesExtractSvc.runQueuedRefresh(job.caseId, job.userId),
   audioOverviewGenerate: (job) => AudioOverviewSvc.runQueued(job.caseId, job.userId),
-  contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId),
+  contradictions: (job) => EvidenceIntelligenceSvc.runQueuedScan(job.caseId, job.userId),
   caseMindMapGenerate: (job) => CaseMindMapSvc.runQueuedGenerate(job.caseId, job.userId),
   // No controller either: the one coalesced retry after a document change found a map build
   // running (CaseMindMapSvc.scheduleResync). Claims the "caseMindMap" lock itself.

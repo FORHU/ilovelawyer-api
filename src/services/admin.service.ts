@@ -3,6 +3,7 @@ import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import TenantRepo from "../repositories/tenant.repository";
+import AuditEventRepo, { type ListAuditEventsParams } from "../repositories/audit-event.repository";
 import AccountDeletionSvc from "./account-deletion.service";
 import AuthSvc from "./auth.service";
 import type { TenantCode } from "../types/tenant-code";
@@ -27,6 +28,11 @@ export default class AdminSvc {
     const result = await AuthRepo.listUsers(params);
     await redis.set(cacheKey, result, USERS_LIST_CACHE_TTL_S);
     return result;
+  }
+
+  /** Not cached: the audit trail is read rarely and is expected to be current. */
+  static async listAuditEvents(params: ListAuditEventsParams) {
+    return AuditEventRepo.list(params);
   }
 
   private static async transition(action: keyof typeof TRANSITIONS, userId: string, reason?: string) {

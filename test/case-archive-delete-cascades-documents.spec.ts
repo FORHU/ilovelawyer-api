@@ -12,17 +12,20 @@ import CaseRepo from "../src/repositories/case.repository";
 import DocumentRepo from "../src/repositories/document.repository";
 import DocumentSvc from "../src/services/document.service";
 import OrganizationRepo from "../src/repositories/organization.repository";
+import CaseAccess from "../src/utils/case-access";
 
 describe("CaseSvc.archive — cascades into the case's documents", () => {
   const originals = {
     setStatus: CaseRepo.setStatus,
     writeAudit: OrganizationRepo.writeAudit,
     archiveByCase: DocumentSvc.archiveByCase,
+    assertCanEdit: CaseAccess.assertCanEdit,
   };
   let archivedFor: { caseId: string; organizationId: string; actorId: string }[];
 
   beforeEach(() => {
     archivedFor = [];
+    (CaseAccess as any).assertCanEdit = async () => ({});
     (CaseRepo as any).setStatus = async () => ({ id: "case-1", status: "ARCHIVED" });
     (OrganizationRepo as any).writeAudit = async () => {};
     (DocumentSvc as any).archiveByCase = async (caseId: string, organizationId: string, actorId: string) => {
@@ -34,6 +37,7 @@ describe("CaseSvc.archive — cascades into the case's documents", () => {
     (CaseRepo as any).setStatus = originals.setStatus;
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
     (DocumentSvc as any).archiveByCase = originals.archiveByCase;
+    (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
   });
 
   it("archives the case's documents after flipping the case's own status", async () => {
@@ -103,6 +107,7 @@ describe("CaseSvc.delete — cascades into the case's documents", () => {
     delete: CaseRepo.delete,
     listAllByCase: DocumentRepo.listAllByCase,
     documentDelete: DocumentSvc.delete,
+    assertCanEdit: CaseAccess.assertCanEdit,
   };
   let deletedDocIds: string[];
   let caseDeleted: boolean;
@@ -110,6 +115,7 @@ describe("CaseSvc.delete — cascades into the case's documents", () => {
   beforeEach(() => {
     deletedDocIds = [];
     caseDeleted = false;
+    (CaseAccess as any).assertCanEdit = async () => ({});
     (DocumentRepo as any).listAllByCase = async () => [{ id: "doc-1" }, { id: "doc-2" }];
     (DocumentSvc as any).delete = async (id: string) => {
       deletedDocIds.push(id);
@@ -125,6 +131,7 @@ describe("CaseSvc.delete — cascades into the case's documents", () => {
     (CaseRepo as any).delete = originals.delete;
     (DocumentRepo as any).listAllByCase = originals.listAllByCase;
     (DocumentSvc as any).delete = originals.documentDelete;
+    (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
   });
 
   it("deletes every document under the case before deleting the case itself", async () => {

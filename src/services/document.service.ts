@@ -6,10 +6,12 @@ import FilesRepo from "../repositories/files.repository";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentChunkSvc from "./document-chunk.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
+import CaseAccess from "../utils/case-access";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { DocumentStatus } from "@prisma/client";
 
@@ -141,7 +143,9 @@ export default class DocumentSvc {
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async listByCase(organizationId: string, caseId: string, status?: DocumentStatus) {
+  /** Reads of a case's documents need the case to be one the user can open (#346). */
+  static async listByCase(organizationId: string, caseId: string, userId: string, status?: DocumentStatus) {
+    await CaseAccess.loadAccessibleCase(caseId, userId);
     const docs = await DocumentRepo.listByCase(organizationId, caseId, status);
     return Promise.all(docs.map(mapDocumentToDto));
   }
@@ -151,10 +155,21 @@ export default class DocumentSvc {
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async getById(id: string, organizationId: string) {
+  static async getById(id: string, organizationId: string, userId: string) {
+    const doc = await DocumentSvc.loadForRead(id, organizationId, userId);
+    return mapDocumentToDto(doc);
+  }
+
+  /** A document on a case the user can't open (a confidential one, #346) reads as not found. */
+  private static async loadForRead(id: string, organizationId: string, userId: string) {
     const doc = await DocumentRepo.findById(id, organizationId);
     if (!doc) throw new HttpError("Document not found", 404);
-    return mapDocumentToDto(doc);
+    if (doc.caseId) {
+      await CaseAccess.loadAccessibleCase(doc.caseId, userId).catch(() => {
+        throw new HttpError("Document not found", 404);
+      });
+    }
+    return doc;
   }
 
   /** Plain-text fallback preview for formats the browser has no rich in-app viewer for (legacy
@@ -162,9 +177,8 @@ export default class DocumentSvc {
    * indexing pipeline uses (document-text-extraction.ts) directly against the S3 bytes rather
    * than reading persisted CaseDocumentChunk rows, so it works immediately after upload without
    * waiting on (or depending on the success of) RAG extraction/chunking. */
-  static async getTextPreview(id: string, organizationId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId);
-    if (!doc) throw new HttpError("Document not found", 404);
+  static async getTextPreview(id: string, organizationId: string, userId: string) {
+    const doc = await DocumentSvc.loadForRead(id, organizationId, userId);
     if (!doc.file?.s3Key) throw new HttpError("Document has no file", 404);
 
     const buffer = await getObjectBuffer(doc.file.s3Key);
@@ -176,7 +190,30 @@ export default class DocumentSvc {
     }
   }
 
-  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean }) {
+  /** A document attached to a case is part of that case, so changing it (update, delete,
+   * archive, unarchive) takes the same bar as editing the case itself — CaseAccess.assertCanEdit,
+   * see CaseSvc.update (#345). One with no case stays organization-scoped. */
+  private static async loadForChange(id: string, organizationId: string, actorId: string) {
+    const doc = await DocumentRepo.findById(id, organizationId);
+    if (!doc) throw new HttpError("Document not found", 404);
+    if (doc.caseId) await CaseAccess.assertCanEdit(doc.caseId, actorId);
+    return doc;
+  }
+
+  /** Moving a document into a case adds to that case, so the target needs the same bar as the
+   * case it leaves — and must be in this organization, since assertCanEdit alone would accept a
+   * grant on another organization's case. */
+  static async update(
+    id: string,
+    organizationId: string,
+    actorId: string,
+    data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean },
+  ) {
+    const doc = await DocumentSvc.loadForChange(id, organizationId, actorId);
+    if (data.caseId && data.caseId !== doc.caseId) {
+      const target = await CaseAccess.assertCanEdit(data.caseId, actorId);
+      if (target.organizationId !== organizationId) throw new HttpError("Case not found or not editable", 404);
+    }
     const updated = await DocumentRepo.update(id, organizationId, data);
     if (!updated) throw new HttpError("Document not found", 404);
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
@@ -189,6 +226,7 @@ export default class DocumentSvc {
    * chat instead and leaves them out, so both schedule the post-upload job, which rebuilds only the
    * map when only the map's document set moved (see runCasePostExtraction). */
   static async archive(id: string, organizationId: string, actorId: string) {
+    await DocumentSvc.loadForChange(id, organizationId, actorId);
     const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED");
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.archive", payload: { documentId: id } });
@@ -207,6 +245,7 @@ export default class DocumentSvc {
   }
 
   static async unarchive(id: string, organizationId: string, actorId: string) {
+    await DocumentSvc.loadForChange(id, organizationId, actorId);
     const updated = await DocumentRepo.setStatus(id, organizationId, "ACTIVE");
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.unarchive", payload: { documentId: id } });
@@ -287,11 +326,16 @@ export default class DocumentSvc {
    * post-extraction refresh (case-post-extraction.ts) to a real actor when a READY, case-scoped
    * document is removed, same as the uploader is used when extraction finishes. */
   static async delete(id: string, organizationId: string, userId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId);
-    if (!doc) throw new HttpError("Document not found", 404);
+    const doc = await DocumentSvc.loadForChange(id, organizationId, userId);
 
     const deleted = await DocumentRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Document not found", 404);
+    await AuditSvc.record({
+      action: AuditAction.DocumentDeleted,
+      actorId: userId,
+      caseId: doc.caseId ?? undefined,
+      payload: { documentId: id, organizationId },
+    });
 
     // The Document row (and its RAG chunks, via cascade) are gone now, but its File row and the
     // S3 object it points at are not touched by DocumentRepo.delete — mark the File FOR_DELETION

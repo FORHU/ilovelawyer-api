@@ -9,16 +9,16 @@ export default class TranscriptionCtrl {
     const { caseId } = req.query;
 
     if (caseId && typeof caseId === "string") {
-      const items = await TranscriptionSvc.listByCase(req.organization!.id, caseId);
+      const items = await TranscriptionSvc.listByCase(req.organization!.id, caseId, req.user.userId);
       return res.status(200).json(items);
     }
 
-    const items = await TranscriptionSvc.list(req.organization!.id);
+    const items = await TranscriptionSvc.list(req.organization!.id, req.user.userId);
     return res.status(200).json(items);
   }
 
   static async getById(req: Request, res: Response) {
-    const item = await TranscriptionSvc.getById(req.params.id, req.organization!.id);
+    const item = await TranscriptionSvc.getById(req.params.id, req.organization!.id, req.user.userId);
     return res.status(200).json(item);
   }
 
@@ -33,12 +33,12 @@ export default class TranscriptionCtrl {
   }
 
   static async startJob(req: Request, res: Response) {
-    const result = await TranscriptionSvc.startBatchJob(req.params.id, req.organization!.id);
+    const result = await TranscriptionSvc.startBatchJob(req.params.id, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 
   static async pollJob(req: Request, res: Response) {
-    const result = await TranscriptionSvc.pollJobStatus(req.params.id, req.organization!.id);
+    const result = await TranscriptionSvc.pollJobStatus(req.params.id, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -48,17 +48,17 @@ export default class TranscriptionCtrl {
     if (value.consultationId) {
       await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
     }
-    const item = await TranscriptionSvc.update(req.params.id, req.organization!.id, value);
+    const item = await TranscriptionSvc.update(req.params.id, req.organization!.id, req.user.userId, value);
     return res.status(200).json(item);
   }
 
   static async delete(req: Request, res: Response) {
-    await TranscriptionSvc.delete(req.params.id, req.organization!.id);
+    await TranscriptionSvc.delete(req.params.id, req.organization!.id, req.user.userId);
     return res.status(204).send();
   }
 
   static async chunk(req: Request, res: Response) {
-    const result = await TranscriptionSvc.chunk(req.params.id, req.organization!.id);
+    const result = await TranscriptionSvc.chunk(req.params.id, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 }

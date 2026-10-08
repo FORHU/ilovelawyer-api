@@ -40,6 +40,8 @@ router.post("/:caseId/relevant-chunks", asyncHandler(CaseCtrl.relevantChunks));
 router.get("/:caseId/snapshot", asyncHandler(CaseTerminalCtrl.snapshot));
 router.post("/:caseId/refresh", asyncHandler(CaseTerminalCtrl.refresh));
 router.get("/:caseId/ai-jobs/:kind", asyncHandler(CaseTerminalCtrl.getAiJobStatus));
+router.get("/:caseId/change-summaries", asyncHandler(CaseTerminalCtrl.listChangeSummaries));
+router.get("/:caseId/change-summaries/days", asyncHandler(CaseTerminalCtrl.listChangeSummaryDays));
 
 router.get("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.listTimeline));
 router.post("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.createTimeline));
@@ -101,7 +103,10 @@ router.post("/:caseId/procedure/items", asyncHandler(CaseTerminalCtrl.createProc
 router.patch("/:caseId/procedure/items/:id", asyncHandler(CaseTerminalCtrl.updateProcedureItem));
 
 router.get("/:caseId/team", asyncHandler(CaseTerminalCtrl.teamAudit));
+router.get("/:caseId/access", asyncHandler(CaseTerminalCtrl.listAccess));
 router.post("/:caseId/access", asyncHandler(CaseTerminalCtrl.grantAccess));
+router.delete("/:caseId/access/:userId", asyncHandler(CaseTerminalCtrl.revokeAccess));
+router.patch("/:caseId/confidential", asyncHandler(CaseTerminalCtrl.setConfidential));
 
 router.get("/:caseId/findings", asyncHandler(CaseTerminalCtrl.listFindings));
 router.post("/:caseId/findings", asyncHandler(CaseTerminalCtrl.createFinding));

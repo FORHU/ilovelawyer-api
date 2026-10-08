@@ -5,6 +5,7 @@ import NotificationSvc from "./notification.service";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
+import AuditSvc, { AuditAction } from "./audit.service";
 
 export default class AccountDeletionSvc {
   /** The one place a User row is actually hard-deleted, shared by AccountDeletionQueue (after the
@@ -17,6 +18,9 @@ export default class AccountDeletionSvc {
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);
+    // No actorId: the row is deleted next, and AuditEvent.actorId would be nulled anyway. The id
+    // goes in the payload so the event still says whose account it was.
+    await AuditSvc.record({ action: AuditAction.AccountPurged, payload: { userId } });
     await AuthRepo.deleteUser(userId);
   }
 
@@ -32,7 +36,9 @@ export default class AccountDeletionSvc {
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);
-    return AuthRepo.deleteUserIfDeletionDue(userId, cutoff);
+    const deleted = await AuthRepo.deleteUserIfDeletionDue(userId, cutoff);
+    if (deleted) await AuditSvc.record({ action: AuditAction.AccountPurged, payload: { userId, via: "grace_period_elapsed" } });
+    return deleted;
   }
 
   /** Option A of the self-service deletion flow: a completed sign-in during the grace period
@@ -43,6 +49,7 @@ export default class AccountDeletionSvc {
   static async restoreOnSignIn(user: { id: string; email: string; name: string | null }): Promise<boolean> {
     const restored = await AuthRepo.clearDeletionRequestIfSet(user.id);
     if (!restored) return false;
+    await AuditSvc.record({ action: AuditAction.AccountRestoredOnSignIn, actorId: user.id });
 
     try {
       const html = await renderTemplate("account-deletion-restored", { name: user.name || "there" });

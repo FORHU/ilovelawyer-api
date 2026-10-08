@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
-import DocumentSvc from "../services/document.service";
 import ChatSvc from "../services/chat.service";
+import DocumentSvc from "../services/document.service";
 import HttpError from "../utils/http-error";
 import {
   presignDocumentSchema,
@@ -67,11 +67,12 @@ export default class DocumentCtrl {
     const { caseId, consultationId, status } = value;
 
     if (caseId) {
-      const docs = await DocumentSvc.listByCase(req.organization!.id, caseId, status);
+      const docs = await DocumentSvc.listByCase(req.organization!.id, caseId, req.user.userId, status);
       return res.status(200).json(docs);
     }
 
     if (consultationId) {
+      // Same rule as opening the consultation itself — a case-linked one follows its case (#346).
       await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, consultationId);
       const docs = await DocumentSvc.listByConsultation(req.organization!.id, consultationId, status);
       return res.status(200).json(docs);
@@ -82,12 +83,12 @@ export default class DocumentCtrl {
   }
 
   static async getById(req: Request, res: Response) {
-    const doc = await DocumentSvc.getById(req.params.id, req.organization!.id);
+    const doc = await DocumentSvc.getById(req.params.id, req.organization!.id, req.user.userId);
     return res.status(200).json(doc);
   }
 
   static async getTextPreview(req: Request, res: Response) {
-    const result = await DocumentSvc.getTextPreview(req.params.id, req.organization!.id);
+    const result = await DocumentSvc.getTextPreview(req.params.id, req.organization!.id, req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -98,7 +99,7 @@ export default class DocumentCtrl {
       await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
     }
 
-    await DocumentSvc.update(req.params.id, req.organization!.id, value);
+    await DocumentSvc.update(req.params.id, req.organization!.id, req.user.userId, value);
     return res.status(204).send();
   }
 

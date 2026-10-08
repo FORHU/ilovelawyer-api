@@ -28,6 +28,12 @@ import WitnessScoringSvc from "../src/services/witness-scoring.service";
 import CaseTheorySvc from "../src/services/case-theory.service";
 import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
 import HttpError from "../src/utils/http-error";
+import CaseFindingRepo from "../src/repositories/case-finding.repository";
+import CaseReconstructionRepo from "../src/repositories/case-reconstruction.repository";
+import CaseOutlookRepo from "../src/repositories/case-outlook.repository";
+import RedTeamRepo from "../src/repositories/red-team.repository";
+import CaseChangeSummaryRepo from "../src/repositories/case-change-summary.repository";
+import CaseChangeReads from "../src/services/case-change-reads";
 
 describe("CaseRefreshSvc.runQueued — audit reason", () => {
   const originals = {
@@ -52,6 +58,14 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     witnessScore: WitnessScoringSvc.scoreFromDocuments,
     theoryRefresh: CaseTheorySvc.refreshAiDraft,
     reconstructionAuto: CaseReconstructionSvc.autoRegenerate,
+    findingsList: CaseFindingRepo.list,
+    reconstructionGet: CaseReconstructionRepo.get,
+    outlookLatest: CaseOutlookRepo.latest,
+    redTeamGet: RedTeamRepo.get,
+    summaryLatest: CaseChangeSummaryRepo.latestRefresh,
+    summaryCreate: CaseChangeSummaryRepo.create,
+    lastRefreshedAt: CaseRepo.getLastRefreshedAt,
+    reads: { ...CaseChangeReads },
   };
   let steps: string[];
   let mapReasons: (string | undefined)[];
@@ -62,7 +76,7 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     audits = [];
     (CaseRepo as any).exists = async () => true;
     (DocumentRepo as any).listAllByCase = async () => [];
-    (EvidenceIntelligenceSvc as any).scanContradictions = async () => [];
+    (EvidenceIntelligenceSvc as any).scanContradictions = async () => ({ rows: [], delta: { status: "unchanged", addedCount: 0, droppedCount: 0 } });
     (CaseStrategySvc as any).generateFromDocuments = async () => ({});
     (CaseFindingAiSvc as any).generateFromDocuments = async () => ({});
     steps = [];
@@ -94,6 +108,21 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (AudioOverviewSvc as any).generateForCase = async () => ({ skipped: true });
     (CaseTheorySvc as any).refreshAiDraft = async () => ({ skipped: true });
     (CaseReconstructionSvc as any).autoRegenerate = async () => "skipped-edited";
+    // The change summary's reads and its own row — covered by analysis-refresh-downstream-panes.spec.ts.
+    (CaseFindingRepo as any).list = async () => [];
+    (CaseReconstructionRepo as any).get = async () => null;
+    (CaseOutlookRepo as any).latest = async () => null;
+    (RedTeamRepo as any).get = async () => null;
+    (CaseChangeSummaryRepo as any).latestRefresh = async () => null;
+    (CaseChangeSummaryRepo as any).create = async (data: any) => data;
+    (CaseRepo as any).getLastRefreshedAt = async () => null;
+    Object.assign(CaseChangeReads, {
+      strategy: async () => ({ items: [], dates: [] }),
+      witnesses: async () => [],
+      damages: async () => [],
+      theory: async () => null,
+      mindMap: async () => null,
+    });
   });
 
   afterEach(() => {
@@ -117,6 +146,14 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     (AudioOverviewSvc as any).generateForCase = originals.audioOverviewGenerate;
     (CaseTheorySvc as any).refreshAiDraft = originals.theoryRefresh;
     (CaseReconstructionSvc as any).autoRegenerate = originals.reconstructionAuto;
+    (CaseFindingRepo as any).list = originals.findingsList;
+    (CaseReconstructionRepo as any).get = originals.reconstructionGet;
+    (CaseOutlookRepo as any).latest = originals.outlookLatest;
+    (RedTeamRepo as any).get = originals.redTeamGet;
+    (CaseChangeSummaryRepo as any).latestRefresh = originals.summaryLatest;
+    (CaseChangeSummaryRepo as any).create = originals.summaryCreate;
+    (CaseRepo as any).getLastRefreshedAt = originals.lastRefreshedAt;
+    Object.assign(CaseChangeReads, originals.reads);
   });
 
   it("re-rates damages after the findings, since Jev's awardability reads the fresh findings", async () => {
@@ -132,6 +169,14 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     await CaseRefreshSvc.runQueued("case-1", "user-1");
     expect(audits).to.have.length(1);
     expect(audits[0]).to.include({ action: "case.refresh" });
+  });
+
+  it('"Refresh analysis" re-reads every document for damages; the automatic run reads only new ones', async () => {
+    const opts: unknown[] = [];
+    (DamagesExtractSvc as any).extractAllPending = async (_c: string, _u: string, o?: unknown) => (opts.push(o), { batches: 0 });
+    await CaseRefreshSvc.runQueued("case-1", "user-1");
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(opts).to.deep.equal([{ rereadAll: true }, { rereadAll: false }]);
   });
 
   it('"Refresh analysis" rebuilds the case mind map ("refresh"); the automatic run only when documents changed ("auto")', async () => {

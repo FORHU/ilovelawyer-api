@@ -231,6 +231,36 @@ const swaggerSpec: OAS3Definition = {
           createdAt: { type: "string", format: "date-time" },
         },
       },
+      CaseChangeSummary: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "Also the refresh run's id" },
+          caseId: { type: "string" },
+          reason: {
+            type: "string",
+            enum: ["manual", "post-extraction", "regenerate"],
+            description: "regenerate = one pane's own Regenerate; perPaneDeltas then holds that pane alone",
+          },
+          actorId: { type: "string", nullable: true },
+          readyDocumentIds: { type: "array", items: { type: "string" } },
+          documentsAdded: {
+            type: "array",
+            description: "Since the previous summary; empty on the first one",
+            items: { type: "object", properties: { id: { type: "string" }, name: { type: "string", nullable: true } } },
+          },
+          documentsRemoved: {
+            type: "array",
+            items: { type: "object", properties: { id: { type: "string" }, name: { type: "string", nullable: true } } },
+          },
+          totalChanges: { type: "integer" },
+          firstAnalysis: { type: "boolean", description: "The case's first analysis — nothing to compare with; the app shows no banner" },
+          perPaneDeltas: {
+            type: "object",
+            description: "Keys: contradictions, findings, redTeam, reconstruction, outlook. Shapes in src/types/case-change.ts.",
+          },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
       WeeklyTrendPoint: {
         type: "object",
         properties: {
@@ -2501,6 +2531,11 @@ const swaggerSpec: OAS3Definition = {
                       description: "Newest first, up to 20.",
                       items: { $ref: "#/components/schemas/OutlookHistoryItem" },
                     },
+                    latestChangeSummary: {
+                      allOf: [{ $ref: "#/components/schemas/CaseChangeSummary" }],
+                      nullable: true,
+                      description: "What the last analysis refresh changed, pane by pane; null until the case's first refresh after it shipped.",
+                    },
                     trends: {
                       type: "object",
                       description: "12 weekly buckets for KPI tiles, oldest first. Derived from risk and document timestamps.",
@@ -2508,6 +2543,60 @@ const swaggerSpec: OAS3Definition = {
                         openIssues: { type: "array", items: { $ref: "#/components/schemas/WeeklyTrendPoint" } },
                         evidence: { type: "array", items: { $ref: "#/components/schemas/WeeklyTrendPoint" } },
                       },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/my-cases/{caseId}/change-summaries": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "What each analysis refresh changed, newest first",
+        description:
+          "One per finished refresh (manual or after a document change). `perPaneDeltas` holds one entry per tracked pane — contradictions, findings, redTeam, reconstruction, outlook — each with a `status` of changed, unchanged, skipped or failed. Readable by anyone who can open the case.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "caseId", in: "path", required: true, schema: { type: "string" } },
+          { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 50, default: 50 } },
+          { name: "day", in: "query", required: false, description: "Only this calendar day's runs (YYYY-MM-DD), read in `tz`", schema: { type: "string", format: "date" } },
+          { name: "tz", in: "query", required: false, description: "The viewer's IANA time zone, e.g. Asia/Manila. Unknown or missing = UTC", schema: { type: "string" } },
+        ],
+        responses: {
+          200: {
+            description: "Change summaries",
+            content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/CaseChangeSummary" } } } },
+          },
+          400: { description: "day isn't a YYYY-MM-DD date" },
+        },
+      },
+    },
+    "/my-cases/{caseId}/change-summaries/days": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "The days the case has change summaries on, newest first",
+        description: "Grouped by calendar day in the viewer's time zone — the What changed modal's date picker. Up to 366 days.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "caseId", in: "path", required: true, schema: { type: "string" } },
+          { name: "tz", in: "query", required: false, description: "The viewer's IANA time zone. Unknown or missing = UTC", schema: { type: "string" } },
+        ],
+        responses: {
+          200: {
+            description: "Days",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      day: { type: "string", format: "date" },
+                      runs: { type: "integer" },
+                      totalChanges: { type: "integer", description: "Summed over the day's runs; a first analysis counts none" },
                     },
                   },
                 },

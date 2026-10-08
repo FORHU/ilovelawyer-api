@@ -110,6 +110,7 @@ model User {
   cases                   Case[]
   documents               Document[]
   bookmarks               Bookmark[]
+  consents                Consent[]
   transcriptions          Transcription[]
   calendarWatchChannels   CalendarWatchChannel[]
   events                  Event[]
@@ -824,6 +825,10 @@ model Case {
   // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
   // param and CaseRepo.setStatus.
   status                CaseStatus @default(ACTIVE)
+  // A confidential matter (#346): reachable only by the organization's OWNER and people holding a
+  // CaseAccess grant — plain membership, org ADMIN included, no longer opens it, and it's left out
+  // of every listing for everyone else (see CaseAccess). Off by default.
+  confidential          Boolean    @default(false)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
@@ -866,6 +871,7 @@ model Case {
   findings             CaseFinding[]
   witnesses            Witness[]
   damageClaims         DamageClaim[]
+  damageClaimDismissals DamageClaimDismissal[]
   claims               CaseClaim[]
   citationGrounds      CitationGround[]
   adverseHits          AdverseCitationHit[]
@@ -885,6 +891,7 @@ model Case {
   annotations          Annotation[]
   outlooks             CaseOutlook[]
   mindMap              CaseMindMap?
+  changeSummaries      CaseChangeSummary[]
 
   @@index([userId])
   @@index([organizationId])
@@ -2135,6 +2142,19 @@ model DamageClaim {
   @@index([caseId])
 }
 
+// An AI suggestion the lawyer deleted or renamed, by its damageHeadKey (kind + normalised title),
+// so a later read of the case's documents doesn't propose it again.
+model DamageClaimDismissal {
+  id        String   @id @default(uuid())
+  caseId    String
+  key       String
+  createdAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, key])
+}
+
 // A legal claim/cause of action being pursued (e.g. "Breach of Contract", "Negligence") —
 // distinct from DamageClaim, which is a monetary damages line item sought under one or more
 // of these claims, not the legal theory itself.
@@ -2335,6 +2355,40 @@ model RedTeamAssessment {
   updatedAt DateTime @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+// What one analysis refresh (CaseRefreshSvc.refreshInner) changed in the panes it rewrote, compared
+// with what they said before it — read by the Legal Terminal's "What changed" modal. One row per
+// finished refresh, written once after the last wave and never updated. The row's id is the run's
+// id (AiGenerationJob is one row per case+kind, reused by every run). Holds case content (finding
+// labels, contradiction values, document names), so it goes with the case — unlike AuditEvent,
+// which outlives it.
+model CaseChangeSummary {
+  id               String   @id @default(uuid())
+  caseId           String
+  // "manual" (Refresh analysis), "post-extraction" (the automatic run after a corpus change), or
+  // "regenerate" (one pane's own Regenerate — perPaneDeltas holds that pane alone, and the
+  // document fields stay empty: it read no new evidence).
+  reason           String
+  actorId          String?
+  // READY, unarchived documents this run read (mindMapDocumentIds) — the next run diffs against it.
+  readyDocumentIds String[] @default([])
+  // [{ id, name }] relative to the previous summary's readyDocumentIds. Both empty on a case's
+  // first summary, and on a manual run with no document change.
+  documentsAdded   Json     @default("[]")
+  documentsRemoved Json     @default("[]")
+  // countChanges(perPaneDeltas) — what the modal's headline counts.
+  totalChanges     Int      @default(0)
+  // The case's first analysis: every pane was empty before it, so everything it wrote reads as
+  // "added". The modal stays quiet for it; there was nothing to change.
+  firstAnalysis    Boolean  @default(false)
+  // CaseChangeDeltas (types/case-change.ts), one entry per pane the refresh tracks.
+  perPaneDeltas    Json
+  createdAt        DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
 }
 
 // ── Case Graph (Phase A: dependency tracking + staleness, no auto-recompute) ───────────────
@@ -2656,6 +2710,34 @@ model CaseAccess {
   @@index([userId])
 }
 
+// What a user has agreed to, per purpose. Terms of Service is not a row here: it stays on
+// User.termsAcceptedAt/termsVersion and ConsentSvc reports it from there. A row exists once the
+// user has answered for a purpose; no row means they have not been asked. `version` is the
+// version of the policy text they answered for (see constants/consent.constants.ts).
+enum ConsentPurpose {
+  TERMS_OF_SERVICE
+  AI_PROCESSING
+  ANALYTICS
+  MARKETING
+}
+
+model Consent {
+  id          String         @id @default(uuid())
+  userId      String
+  purpose     ConsentPurpose
+  version     String
+  grantedAt   DateTime
+  withdrawnAt DateTime?
+  source      String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, purpose])
+  @@index([userId])
+}
+
 model AuditEvent {
   id        String   @id @default(uuid())
   caseId    String?
@@ -2669,6 +2751,8 @@ model AuditEvent {
 
   @@index([caseId])
   @@index([actorId])
+  @@index([createdAt])
+  @@index([action])
 }
 
 model JurisdictionModule {

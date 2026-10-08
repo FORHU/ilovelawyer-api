@@ -18,6 +18,24 @@ import WitnessExtractSvc from "./witness-extract.service";
 import WitnessScoringSvc from "./witness-scoring.service";
 import CaseTheorySvc from "./case-theory.service";
 import CaseReconstructionSvc from "./case-reconstruction.service";
+import CaseChangeRun from "./case-change-run.service";
+import CaseFindingRepo from "../repositories/case-finding.repository";
+import CaseOutlookRepo from "../repositories/case-outlook.repository";
+import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
+import RedTeamRepo from "../repositories/red-team.repository";
+import CaseChangeReads from "./case-change-reads";
+import {
+    audioOverviewDelta,
+    diffDamages,
+    diffFindings,
+    diffMindMap,
+    diffOutlook,
+    diffReconstruction,
+    diffRedTeam,
+    diffStrategy,
+    diffTheory,
+    diffWitnesses,
+} from "../utils/case-change-delta";
 import MissingEvidenceAiSvc from "./missing-evidence-ai.service";
 import HttpError from "../utils/http-error";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
@@ -45,9 +63,9 @@ export default class CaseRefreshSvc {
     }
 
     /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row.
-     * `reason` is audit-trail only — it never changes what runs, just distinguishes a lawyer's
-     * "Refresh analysis" click from the automatic post-extraction trigger in the case.refresh
-     * audit row (case-post-extraction.ts passes "post-extraction" explicitly). */
+     * `reason` distinguishes a lawyer's "Refresh analysis" click from the automatic
+     * post-extraction trigger (case-post-extraction.ts passes "post-extraction" explicitly): in the
+     * case.refresh audit row, the map's build reason, and whether damages re-reads every document. */
     static async runQueued(caseId: string, userId: string, reason: "manual" | "post-extraction" = "manual"): Promise<void> {
         await AiGenerationLockSvc.finishWith(caseId, "caseRefresh", () =>
             CaseRefreshSvc.refreshInner(caseId, userId, reason),
@@ -98,22 +116,72 @@ export default class CaseRefreshSvc {
             DocumentExtractionQueue.enqueueMany(pending.map((d) => d.id));
         }
 
+        // What each tracked pane said before its step and after it, saved as one CaseChangeSummary
+        // at the end — the Legal Terminal's "What changed" modal reads it.
+        const changes = new CaseChangeRun(caseId);
+
         // The steps run in three waves. Within a wave every step runs at the same time; a wave
         // starts once the one before it has settled, because its steps read what that wave wrote.
         // Each step holds its own lock and runs through runStep, so one that fails — or is skipped
         // because the same piece's own job already holds its lock — never stops the others.
 
+        // Witnesses and damages are each written by two steps (read new documents in wave 1, score or
+        // re-rate in wave 2), so they are read before wave 1 and compared after wave 2.
+        await Promise.all([
+            changes.capture("witnesses", () => CaseChangeReads.witnesses(caseId)),
+            changes.capture("damages", () => CaseChangeReads.damages(caseId)),
+        ]);
+
         // Wave 1: everything that reads only the documents.
         await CaseRefreshSvc.runWave(caseId, 1, [
-            ["contradictions scan", async () => ({ found: (await EvidenceIntelligenceSvc.scanContradictions(caseId, userId))?.length })],
+            [
+                "contradictions scan",
+                () =>
+                    changes.track("contradictions", async () => {
+                        const { rows, delta } = await EvidenceIntelligenceSvc.scanContradictions(caseId, userId);
+                        changes.record("contradictions", delta);
+                        return { found: rows.length, added: delta.addedCount, dropped: delta.droppedCount };
+                    }),
+            ],
             // Plan, to-dos and the timeline's document dates.
-            ["case strategy", async () => (await CaseStrategySvc.generateFromDocuments(caseId, userId), {})],
-            ["case findings", async () => (await CaseFindingAiSvc.generateFromDocuments(caseId, userId), {})],
+            [
+                "case strategy",
+                () =>
+                    changes.compare(
+                        "strategy",
+                        () => CaseChangeReads.strategy(caseId),
+                        async () => (await CaseStrategySvc.generateFromDocuments(caseId, userId), {}),
+                        (before, after) => diffStrategy(before, after),
+                    ),
+            ],
+            [
+                "case findings",
+                () =>
+                    changes.compare(
+                        "findings",
+                        () => CaseFindingRepo.list(caseId),
+                        async () => (await CaseFindingAiSvc.generateFromDocuments(caseId, userId), {}),
+                        (before, after) => diffFindings(before, after),
+                    ),
+            ],
             // Inline, batch after batch, so the next wave scores and re-rates every new entry.
-            ["witness extraction", () => WitnessExtractSvc.extractAllPending(caseId, userId)],
-            ["damages extraction", () => DamagesExtractSvc.extractAllPending(caseId, userId)],
+            ["witness extraction", () => changes.track("witnesses", () => WitnessExtractSvc.extractAllPending(caseId, userId))],
+            // A lawyer's click reads every document again; the automatic run reads only new ones.
+            [
+                "damages extraction",
+                () => changes.track("damages", () => DamagesExtractSvc.extractAllPending(caseId, userId, { rereadAll: reason === "manual" })),
+            ],
             // The narrative reads the documents alone; it is rewritten only while nobody has edited it.
-            ["case reconstruction", async () => ({ outcome: await CaseReconstructionSvc.autoRegenerate(caseId, userId) })],
+            [
+                "case reconstruction",
+                () =>
+                    changes.compare(
+                        "reconstruction",
+                        () => CaseReconstructionRepo.get(caseId),
+                        async () => ({ outcome: await CaseReconstructionSvc.autoRegenerate(caseId, userId) }),
+                        (before, after, { outcome }) => diffReconstruction(before, after, outcome),
+                    ),
+            ],
             // Reads the documents and the case's claims; claims are lawyer- or ClaimExtract-authored,
             // never written by this refresh, so there is nothing earlier in the run to wait for.
             ["missing evidence", async () => ({ found: (await MissingEvidenceAiSvc.generateFromDocuments(caseId, userId)).length })],
@@ -123,12 +191,31 @@ export default class CaseRefreshSvc {
         void AiGenerationLockSvc.setStage(caseId, "caseRefresh", CASE_REFRESH_STAGE.wave2);
         await CaseRefreshSvc.runWave(caseId, 2, [
             // The outlook prompt reads the findings.
-            ["case outlook", async () => (await CaseOutlookAiSvc.generateFromDocuments(caseId, userId), {})],
+            [
+                "case outlook",
+                () =>
+                    changes.compare(
+                        "outlook",
+                        () => CaseOutlookRepo.latest(caseId),
+                        async () => (await CaseOutlookAiSvc.generateFromDocuments(caseId, userId), {}),
+                        (before, after) => diffOutlook(before, after),
+                    ),
+            ],
             // Jev's awardability reads the findings; every head (old and just extracted) is re-rated.
-            ["damages re-rating", () => DamagesExtractSvc.refreshStep(caseId)],
+            ["damages re-rating", () => changes.track("damages", () => DamagesExtractSvc.refreshStep(caseId))],
             // Scoring reads the witnesses, contradictions, evidence and timeline dates.
-            ["witness scoring", () => WitnessScoringSvc.scoreFromDocuments(caseId, userId)],
-            ["theory draft", () => CaseTheorySvc.refreshAiDraft(caseId, userId)],
+            ["witness scoring", () => changes.track("witnesses", () => WitnessScoringSvc.scoreFromDocuments(caseId, userId))],
+            [
+                "theory draft",
+                () =>
+                    changes.compare(
+                        "theory",
+                        () => CaseChangeReads.theory(caseId),
+                        () => CaseTheorySvc.refreshAiDraft(caseId, userId),
+                        // No findings yet to build a theory from: the step didn't run.
+                        (before, after, { skipped }) => (skipped ? { status: "skipped" as const } : diffTheory(before, after)),
+                    ),
+            ],
             // The map prompt reads the key dates, findings and to-dos. The automatic run skips
             // itself when the documents haven't changed; "Refresh analysis" rebuilds anyway. Neither
             // overwrites a map someone has expanded — see CaseMindMapSvc. Another build already
@@ -136,17 +223,28 @@ export default class CaseRefreshSvc {
             // queues one coalesced retry rather than losing it (CaseMindMapSvc.scheduleResync).
             [
                 "case mind map",
-                async () => {
-                    try {
-                        const result = await CaseMindMapSvc.generateFromDocuments(caseId, userId, reason === "manual" ? "refresh" : "auto");
-                        return { skipped: result.skipped };
-                    } catch (err) {
-                        if (!isCaseMindMapBusy(err)) throw err;
-                        await CaseMindMapSvc.scheduleResync(caseId, userId);
-                        return { resyncQueued: true };
-                    }
-                },
+                () =>
+                    changes.compare(
+                        "mindMap",
+                        () => CaseChangeReads.mindMap(caseId),
+                        async (): Promise<{ skipped?: string | null; resyncQueued?: boolean }> => {
+                            try {
+                                const result = await CaseMindMapSvc.generateFromDocuments(caseId, userId, reason === "manual" ? "refresh" : "auto");
+                                return { skipped: result.skipped };
+                            } catch (err) {
+                                if (!isCaseMindMapBusy(err)) throw err;
+                                await CaseMindMapSvc.scheduleResync(caseId, userId);
+                                return { resyncQueued: true };
+                            }
+                        },
+                        (before, after, result) =>
+                            result.resyncQueued ? { status: "skipped" as const } : diffMindMap(before, after, result.skipped === "userChanges"),
+                    ),
             ],
+        ]);
+        await Promise.all([
+            changes.settle("witnesses", () => CaseChangeReads.witnesses(caseId), diffWitnesses),
+            changes.settle("damages", () => CaseChangeReads.damages(caseId), diffDamages),
         ]);
 
         // Wave 3: what reads everything above — findings, contradictions, witnesses and the re-rated
@@ -154,8 +252,26 @@ export default class CaseRefreshSvc {
         // written here, and its recording queued, not awaited — the run ends while Polly records).
         void AiGenerationLockSvc.setStage(caseId, "caseRefresh", CASE_REFRESH_STAGE.wave3);
         await CaseRefreshSvc.runWave(caseId, 3, [
-            ["red team", () => RedTeamSvc.generateFromDocuments(caseId, userId)],
-            ["audio overview", () => AudioOverviewSvc.generateForCase(caseId, userId)],
+            [
+                "red team",
+                () =>
+                    changes.compare(
+                        "redTeam",
+                        () => RedTeamRepo.get(caseId),
+                        () => RedTeamSvc.generateFromDocuments(caseId, userId),
+                        // Nothing to attack yet (no findings, no contradictions): the step didn't run.
+                        (before, after, { skipped }) => (skipped ? { status: "skipped" as const } : diffRedTeam(before, after)),
+                    ),
+            ],
+            [
+                "audio overview",
+                () =>
+                    changes.track("audioOverview", async () => {
+                        const result = await AudioOverviewSvc.generateForCase(caseId, userId);
+                        changes.record("audioOverview", audioOverviewDelta(result.skipped ? null : result.id));
+                        return result;
+                    }),
+            ],
         ]);
 
         // Chat dates no longer go on the case timeline (they carry no document); clear the ones
@@ -165,6 +281,8 @@ export default class CaseRefreshSvc {
                 if (removed) logger.info("Refresh analysis: removed chat-copied timeline events", { caseId, removed });
             })
             .catch((err) => logger.warn("Refresh analysis: chat-copied timeline cleanup failed", { err, caseId }));
+
+        const summary = await changes.save({ reason, actorId: userId, documents: docs });
 
         await CaseRepo.markRefreshed(caseId);
         // Persisted here (not only in the automatic post-extraction path) so a manual "Refresh
@@ -176,7 +294,11 @@ export default class CaseRefreshSvc {
             caseId,
             actorId: userId,
             action: "case.refresh",
-            payload: { pendingDocs: pending.length, reason },
+            payload: {
+                pendingDocs: pending.length,
+                reason,
+                ...(summary ? { changeSummaryId: summary.id, totalChanges: summary.totalChanges } : {}),
+            },
         });
         logger.info("Refresh analysis: completed", { caseId, userId, reason });
         return CaseSnapshotSvc.get(caseId, userId);

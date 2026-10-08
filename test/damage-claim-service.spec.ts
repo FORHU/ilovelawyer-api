@@ -34,6 +34,7 @@ describe("DamageClaimSvc", () => {
   let audits: string[];
   let closedTodos: { id: string; reason: string }[];
   let movedDueDates: { id: string; dueDate: Date | null }[];
+  let dismissed: string[];
 
   function patch(target: object, key: string, value: unknown) {
     const original = (target as any)[key];
@@ -46,6 +47,7 @@ describe("DamageClaimSvc", () => {
     audits = [];
     closedTodos = [];
     movedDueDates = [];
+    dismissed = [];
     rows = [
       row("backwages", { title: "Backwages", amount: 486000 }),
       row("moral", { title: "Moral damages", amount: 200000 }),
@@ -69,6 +71,12 @@ describe("DamageClaimSvc", () => {
       Object.assign(target, data);
       return { ...target };
     });
+    patch(DamageClaimRepo, "delete", async (id: string) => {
+      const before = rows.length;
+      rows = rows.filter((r) => r.id !== id);
+      return rows.length < before;
+    });
+    patch(DamageClaimRepo, "dismiss", async (_caseId: string, key: string) => void dismissed.push(key));
     patch(CaseGraphSvc, "ensureNode", async () => ({}));
     patch(CaseGraphSvc, "markStale", async () => {});
     patch(OrganizationRepo, "writeAudit", async (entry: { action: string }) => {
@@ -114,6 +122,21 @@ describe("DamageClaimSvc", () => {
     const accepted = await DamageClaimSvc.accept("case-1", "ai", "user-1");
     expect(accepted).to.include({ accepted: true });
     expect(audits).to.deep.equal(["damage.accept"]);
+  });
+
+  it("dismisses an AI entry the lawyer deletes, but not the lawyer's own", async () => {
+    await DamageClaimSvc.delete("case-1", "ai", "user-1");
+    await DamageClaimSvc.delete("case-1", "moral", "user-1");
+    expect(dismissed).to.deep.equal(["DAMAGE:exemplary damages"]);
+    expect(rows.map((r) => r.id)).to.deep.equal(["backwages", "reinstatement"]);
+  });
+
+  it("dismisses an AI entry's old name when the lawyer renames it, so a re-read doesn't bring it back", async () => {
+    await DamageClaimSvc.update("case-1", "ai", "user-1", { amount: 90000 });
+    await DamageClaimSvc.update("case-1", "moral", "user-1", { title: "Moral damages (revised)" });
+    expect(dismissed).to.deep.equal([]);
+    await DamageClaimSvc.update("case-1", "ai", "user-1", { title: "Exemplary damages (Art. 2229)" });
+    expect(dismissed).to.deep.equal(["DAMAGE:exemplary damages"]);
   });
 
   it("gives chat the accepted entries in the shape it reads, or nothing for a case without any", async () => {

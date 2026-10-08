@@ -87,7 +87,7 @@ export default class OrganizationCtrl {
     const { error, value } = changeMemberRoleSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await OrganizationSvc.changeMemberRole(req.params.id, req.organization!.role, req.params.userId, value.role);
+    const result = await OrganizationSvc.changeMemberRole(req.params.id, req.organization!.role, req.params.userId, value.role, req.user.userId);
     return res.status(200).json(result);
   }
 

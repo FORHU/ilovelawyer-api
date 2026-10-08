@@ -1,3 +1,5 @@
+import CaseChangeRun from "./case-change-run.service";
+import { audioOverviewDelta } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import CaseRepo from "../repositories/case.repository";
 import CaseFindingRepo from "../repositories/case-finding.repository";
@@ -53,7 +55,17 @@ export default class AudioOverviewSvc {
   /** Run by AiGenerationQueue's worker after beginQueued claimed the lock: write the script, then
    * queue its recording. */
   static async runQueued(caseId: string, userId: string): Promise<void> {
-    const id = await AiGenerationLockSvc.finishWith(caseId, "audioOverviewScript", () => AudioOverviewSvc.writeScript(caseId, userId));
+    // The "What changed" modal then says a new overview is ready (CaseChangeRun).
+    const id = await AiGenerationLockSvc.finishWith(caseId, "audioOverviewScript", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "audioOverview",
+        async () => null,
+        () => AudioOverviewSvc.writeScript(caseId, userId),
+        (_before, _after, written) => audioOverviewDelta(written),
+      ),
+    );
     if (id) await AudioOverviewSvc.startRecording(id);
   }
 

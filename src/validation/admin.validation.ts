@@ -8,7 +8,15 @@ export const listUsersSchema = Joi.object({
   q: Joi.string().trim().max(200).optional(),
 });
 
-export const denyUserSchema = Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
+export const listAuditEventsSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  sortDir: Joi.string().valid("asc", "desc").default("desc"),
+  q: Joi.string().trim().max(200).optional(),
+  actorId: Joi.string().uuid().optional(),
+});
+
+export const denyUserSchema =Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
 
 export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid("PH", "UK").required() });
 
