@@ -8,6 +8,7 @@ import logger from "../utils/logger";
 import { isGoogleSsoAccount } from "../utils/auth.utils";
 import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS, accountDeletionDueAt } from "../constants/account-deletion.constants";
 import { BCRYPT_SALT_ROUNDS } from "../constants";
+import AuditSvc, { AuditAction } from "./audit.service";
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", { dateStyle: "long" });
@@ -61,6 +62,7 @@ export default class UsersSvc {
     // still be walled off by it on their next login.
     await AuthRepo.updatePasswordAndClearMustChange(userId, hashedPassword);
     await SecurityAuditSvc.record({ action: "auth.password_changed", actorId: userId, payload: { reason: "self_service" } });
+    await AuditSvc.record({ action: AuditAction.PasswordChanged, actorId: userId });
   }
 
   /** Starts the grace period rather than deleting immediately — see
@@ -94,6 +96,11 @@ export default class UsersSvc {
       targetId: userId,
       payload: { scheduledFor: scheduledFor.toISOString() },
     });
+    await AuditSvc.record({
+      action: AuditAction.AccountDeletionRequested,
+      actorId: userId,
+      payload: { scheduledFor: scheduledFor.toISOString() },
+    });
 
     const html = await renderTemplate("account-deletion-scheduled", {
       name: updated.name || "there",
@@ -117,6 +124,7 @@ export default class UsersSvc {
 
     const updated = await AuthRepo.setDeletionRequested(userId, null);
     await SecurityAuditSvc.record({ action: "account.deletion_cancelled", actorId: userId, targetType: "user", targetId: userId });
+    await AuditSvc.record({ action: AuditAction.AccountDeletionCancelled, actorId: userId });
 
     const html = await renderTemplate("account-deletion-cancelled", { name: updated.name || "there" });
     await sendEmail({ to: updated.email, subject: "Your ilovelawyer account deletion has been cancelled", html }).catch((err) =>

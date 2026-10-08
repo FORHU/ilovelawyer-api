@@ -2,6 +2,7 @@ import crypto from "crypto";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import TenantRepo from "../repositories/tenant.repository";
+import AuditEventRepo, { type ListAuditEventsParams } from "../repositories/audit-event.repository";
 import AccountDeletionSvc from "./account-deletion.service";
 import AuthSvc from "./auth.service";
 import SecurityAuditSvc from "./security-audit.service";
@@ -36,6 +37,11 @@ export default class AdminSvc {
     const result = await AuthRepo.listUsers(params);
     await redis.set(cacheKey, result, USERS_LIST_CACHE_TTL_S);
     return result;
+  }
+
+  /** Not cached: the audit trail is read rarely and is expected to be current. */
+  static async listAuditEvents(params: ListAuditEventsParams) {
+    return AuditEventRepo.list(params);
   }
 
   /** `adminId` defaults to the signed-in admin of the current request (SecurityAuditSvc); the bulk

@@ -3,6 +3,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationInviteRepo from "../repositories/organization-invite.repository";
 import CaseCopyRepo from "../repositories/case-copy.repository";
+import CaseRepo from "../repositories/case.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
 import AuthRepo from "../repositories/auth.repository";
 import TenantRepo from "../repositories/tenant.repository";
@@ -16,6 +17,7 @@ import { CLIENT_URL } from "../config";
 import { TenantCode } from "../types/tenant-code";
 import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 import logger from "../utils/logger";
 
 export default class OrganizationSvc {
@@ -207,6 +209,11 @@ export default class OrganizationSvc {
       targetId: user.id,
       payload: { role, email: user.email },
     });
+    await AuditSvc.record({
+      action: AuditAction.OrgInviteSent,
+      actorId: actingUserId,
+      payload: { organizationId, inviteeId: user.id, role },
+    });
 
     const inviterName = inviter?.name || "A team member";
     const orgName = organization?.name ?? "";
@@ -253,6 +260,9 @@ export default class OrganizationSvc {
       throw new HttpError("No pending invite found for this organization", 404);
     }
 
+    const audit = () =>
+      AuditSvc.record({ action: AuditAction.OrgInviteAccepted, actorId: userId, payload: { organizationId, role: invite.role } });
+
     const current = await OrganizationMemberRepo.findAnyForUser(userId);
     const recordAccepted = () =>
       SecurityAuditSvc.record({
@@ -266,6 +276,7 @@ export default class OrganizationSvc {
     if (!current || current.organization.isPersonal) {
       const member = await OrganizationInviteRepo.accept(invite, current);
       await recordAccepted();
+      await audit();
       return member;
     }
 
@@ -290,6 +301,7 @@ export default class OrganizationSvc {
       payload: { role: current.role, reason: "joined_another_organization" },
     });
     await recordAccepted();
+    await audit();
     return member;
   }
 
@@ -308,6 +320,7 @@ export default class OrganizationSvc {
       targetId: userId,
       payload: { role: invite.role },
     });
+    await AuditSvc.record({ action: AuditAction.OrgInviteDeclined, actorId: userId, payload: { organizationId } });
     // Invites used to park a personal workspace when sent (before 20261007150000_organization_invites)
     // — someone declining one of those gets it back instead of being left with no workspace.
     if (await OrganizationMemberRepo.findAnyForUser(userId)) return;
@@ -316,7 +329,13 @@ export default class OrganizationSvc {
   }
 
   /** Changes a member's role. Guards against granting OWNER without being one, and against demoting the last OWNER. */
-  static async changeMemberRole(organizationId: string, actingRole: OrganizationRole, targetUserId: string, role: OrganizationRole) {
+  static async changeMemberRole(
+    organizationId: string,
+    actingRole: OrganizationRole,
+    targetUserId: string,
+    role: OrganizationRole,
+    actingUserId?: string,
+  ) {
     const target = await OrganizationMemberRepo.find(organizationId, targetUserId);
     if (!target) throw new HttpError("Member not found", 404);
 
@@ -335,6 +354,11 @@ export default class OrganizationSvc {
       targetType: "user",
       targetId: targetUserId,
       payload: { from: target.role, to: role },
+    });
+    await AuditSvc.record({
+      action: AuditAction.OrgMemberRoleChanged,
+      actorId: actingUserId,
+      payload: { organizationId, targetUserId, from: target.role, to: role },
     });
     return updated;
   }
@@ -366,6 +390,7 @@ export default class OrganizationSvc {
       targetId: targetUserId,
       payload: { role: target.role },
     });
+    await AuditSvc.record({ action: AuditAction.OrgMemberRemoved, actorId: actingUserId, payload: { organizationId, targetUserId } });
   }
 
   /** Self-service: a member removes their own membership. A sole-member OWNER may leave
@@ -392,6 +417,7 @@ export default class OrganizationSvc {
       targetId: userId,
       payload: { role: membership.role },
     });
+    await AuditSvc.record({ action: AuditAction.OrgMemberLeft, actorId: userId, payload: { organizationId } });
   }
 
   /** How a member stops belonging to an organization, whether they left or were removed: the
@@ -458,8 +484,16 @@ export default class OrganizationSvc {
     return updated;
   }
 
+  /** Sharing (#347): only someone who can manage the case's access may grant (see
+   * CaseAccess.assertCanManageAccess — an EDIT holder can't), and in v1 only to an accepted member
+   * of the case's own organization. Granting again changes the level (upsert). */
   static async grantAccess(caseId: string, actorId: string, userId: string, permission: CasePermission) {
-    const caseRecord = await CaseAccess.assertCanEdit(caseId, actorId);
+    const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
+    if (!caseRecord.organizationId) throw new HttpError("This case has no organization to share it within", 400);
+    const membership = await OrganizationMemberRepo.find(caseRecord.organizationId, userId);
+    if (membership?.status !== "ACCEPTED") {
+      throw new HttpError("A case can only be shared with an accepted member of its organization", 400);
+    }
     const access = await OrganizationRepo.grantCaseAccess(caseId, userId, permission);
     await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.grant_access", payload: { userId, permission } });
     await SecurityAuditSvc.record({
@@ -484,6 +518,72 @@ export default class OrganizationSvc {
     }
 
     return access;
+  }
+
+  /** Removes an explicit grant. Access someone has through their org role isn't a grant, so
+   * there's nothing to revoke for it — that 404s rather than looking like it worked. */
+  static async revokeAccess(caseId: string, actorId: string, userId: string) {
+    await CaseAccess.assertCanManageAccess(caseId, actorId);
+    const removed = await OrganizationRepo.revokeCaseAccess(caseId, userId);
+    if (!removed) throw new HttpError("This person has no access grant on the case", 404);
+    await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.revoke_access", payload: { userId } });
+  }
+
+  /** Who can reach the case and how, for the sharing panel: every accepted member of its
+   * organization (all of whom can read it today) with their org role and grant, plus any grant
+   * held by someone outside it. `canEdit`/`canManage` say what the caller may do — the app uses
+   * them rather than guessing from the org role, which misses per-case grants. */
+  static async listAccess(caseId: string, actorId: string) {
+    const caseRecord = await CaseAccess.loadAccessibleCase(caseId, actorId);
+    const [members, grants, canEdit, canManage] = await Promise.all([
+      caseRecord.organizationId ? OrganizationMemberRepo.list(caseRecord.organizationId) : [],
+      OrganizationRepo.listCaseAccess(caseId),
+      CaseAccess.canEdit(caseId, actorId),
+      CaseAccess.canManageAccess(caseId, actorId),
+    ]);
+    const grantByUser = new Map(grants.map((g) => [g.userId, g.permission]));
+
+    const people = members
+      .filter((m) => m.status === "ACCEPTED")
+      .map((m) => ({
+        userId: m.userId,
+        name: m.user.name,
+        email: m.user.email,
+        username: m.user.username,
+        avatarUrl: m.user.avatarUrl,
+        orgRole: m.role as OrganizationRole | null,
+        grant: grantByUser.get(m.userId) ?? null,
+      }));
+    const listed = new Set(people.map((p) => p.userId));
+    for (const g of grants) {
+      if (listed.has(g.userId)) continue;
+      people.push({
+        userId: g.userId,
+        name: g.user.name,
+        email: g.user.email,
+        username: g.user.username,
+        avatarUrl: null,
+        orgRole: null,
+        grant: g.permission,
+      });
+    }
+    return { confidential: caseRecord.confidential, canEdit, canManage, people };
+  }
+
+  /** Marks a case confidential or ordinary (#346). Whoever can manage its access may (D7). Marking
+   * it first gives the marker an ADMIN grant (D8) — an org ADMIN would otherwise wall themselves
+   * off the moment it took effect. Unmarking leaves grants as they are. Audited either way. */
+  static async setConfidential(caseId: string, actorId: string, confidential: boolean) {
+    const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
+    if (caseRecord.confidential === confidential) return { confidential };
+    if (confidential) await OrganizationRepo.grantCaseAccess(caseId, actorId, "ADMIN");
+    await CaseRepo.setConfidential(caseId, confidential);
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId,
+      action: confidential ? "case.confidential_set" : "case.confidential_unset",
+    });
+    return { confidential };
   }
 
   static async teamAudit(caseId: string, userId: string) {

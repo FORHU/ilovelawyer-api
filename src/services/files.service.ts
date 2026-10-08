@@ -8,6 +8,7 @@ import logger from "../utils/logger";
 import { uploadToS3, getPresignedGetUrl, FileTokenPayload } from "../utils/s3";
 import { FILE_TOKEN_SECRET } from "../config";
 import SecurityAuditSvc from "./security-audit.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -80,6 +81,8 @@ export default class FilesSvc {
       });
     }
 
+    // The token carries no user, only the org it was minted for, so the event has no actor.
+    await AuditSvc.record({ action: AuditAction.FileDownloaded, payload: { s3Key: payload.s3Key, orgId: payload.orgId } });
     return getPresignedGetUrl(payload.s3Key, 60, payload.filename, payload.disposition);
   }
 }

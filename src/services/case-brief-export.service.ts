@@ -7,6 +7,7 @@ import { renderBriefToDocx } from "../utils/case-brief-docx-renderer";
 import { renderBriefToPdf } from "../utils/case-brief-pdf-renderer";
 import { uploadToS3, getProxyFileUrl } from "../utils/s3";
 import SecurityAuditSvc from "./security-audit.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 
 export type CaseBriefFormat = "docx" | "pdf";
 
@@ -57,6 +58,7 @@ export default class CaseBriefExportSvc {
       caseId,
       payload: { format, exportId: exportRow.id },
     });
+    await AuditSvc.record({ action: AuditAction.CaseBriefExported, actorId: userId, caseId, payload: { format, fileId: file.id } });
 
     return { file: { id: file.id, fileUrl: briefFileUrl(key, filename, { exportId: exportRow.id, caseId }) } };
   }

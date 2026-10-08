@@ -145,8 +145,8 @@ export default class CaseCtrl {
     const { error, value } = relevantChunksSchema.validate(req.body, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    // Ownership check — throws 404 if the case is missing or not in this organization.
-    await CaseSvc.getById(req.params.caseId, req.organization!.id);
+    // Throws 404 if the case is missing, not in this organization, or one this user can't open.
+    await CaseSvc.getById(req.params.caseId, req.organization!.id, req.user.userId);
 
     const result = await DocumentChunkSvc.relevantChunksForCase(
       req.params.caseId,

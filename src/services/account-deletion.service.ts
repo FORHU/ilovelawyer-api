@@ -7,6 +7,7 @@ import OrganizationMemberRepo from "../repositories/organization-member.reposito
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
+import AuditSvc, { AuditAction } from "./audit.service";
 
 export default class AccountDeletionSvc {
   /** The one place a User row is actually hard-deleted, shared by AccountDeletionQueue (after the
@@ -19,6 +20,9 @@ export default class AccountDeletionSvc {
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);
+    // No actorId: the row is deleted next, and AuditEvent.actorId would be nulled anyway. The id
+    // goes in the payload so the event still says whose account it was.
+    await AuditSvc.record({ action: AuditAction.AccountPurged, payload: { userId } });
     await AuthRepo.deleteUser(userId);
   }
 
@@ -48,6 +52,7 @@ export default class AccountDeletionSvc {
         payload: { email: user?.email ?? null, requestedAt: requestedAt.toISOString() },
       });
     }
+    if (deleted) await AuditSvc.record({ action: AuditAction.AccountPurged, payload: { userId, via: "grace_period_elapsed" } });
     return deleted;
   }
 
@@ -66,6 +71,7 @@ export default class AccountDeletionSvc {
       targetId: user.id,
       payload: { via: "sign_in" },
     });
+    await AuditSvc.record({ action: AuditAction.AccountRestoredOnSignIn, actorId: user.id });
 
     try {
       const html = await renderTemplate("account-deletion-restored", { name: user.name || "there" });

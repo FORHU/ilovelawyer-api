@@ -1,10 +1,11 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
 import { AWS_S3_BUCKET, AWS_S3_REGION, CLOUDFRONT_URL, FILE_TOKEN_SECRET } from "../config";
 import { awsCredentials } from "../lib/aws-client-config";
 import { getRequestContext } from "../lib/request-context";
+import logger from "./logger";
 
 const client = new S3Client({
   region: AWS_S3_REGION,
@@ -151,4 +152,35 @@ export async function getObjectBuffer(key: string): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+/** The message to log when the bucket really lives in a different region than AWS_S3_REGION, or
+ * null when they agree (or the real region is unknown). Pure, so it is testable without AWS. */
+export function bucketRegionWarning(actualRegion: string | undefined, configuredRegion: string): string | null {
+  if (!actualRegion || actualRegion === configuredRegion) return null;
+  return (
+    `S3 bucket ${AWS_S3_BUCKET} is in ${actualRegion} but AWS_S3_REGION is ${configuredRegion}. ` +
+    `Presigned URLs and Textract will fail, and documents are stored outside the configured region.`
+  );
+}
+
+/** Startup check: asks S3 where the document bucket actually is and warns if that is not
+ * AWS_S3_REGION. Never throws or blocks boot — a failed check only logs. */
+export async function verifyDocumentBucketRegion(): Promise<void> {
+  if (!AWS_S3_BUCKET) return;
+  try {
+    let actual: string | undefined;
+    try {
+      actual = (await client.send(new HeadBucketCommand({ Bucket: AWS_S3_BUCKET }))).BucketRegion;
+    } catch (err) {
+      // Asking the wrong region fails, but S3 names the right one in a response header.
+      const headers = (err as { $response?: { headers?: Record<string, string> } }).$response?.headers;
+      actual = headers?.["x-amz-bucket-region"];
+      if (!actual) throw err;
+    }
+    const warning = bucketRegionWarning(actual, AWS_S3_REGION);
+    if (warning) logger.warn(warning);
+  } catch (err) {
+    logger.warn("Could not verify the document bucket's region", { err });
+  }
 }

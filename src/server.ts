@@ -14,6 +14,9 @@ import CaseCopyQueue from "./queues/case-copy.queue";
 import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
 
 import { PORT } from "./config";
+import { verifyDocumentBucketRegion } from "./utils/s3";
+
+void verifyDocumentBucketRegion();
 
 DocumentExtractionQueue.start();
 AudioOverviewQueue.start();

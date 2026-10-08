@@ -60,6 +60,7 @@ import {
   createProcedureItemSchema,
   updateProcedureItemSchema,
   grantAccessSchema,
+  setConfidentialSchema,
   listFindingsSchema,
   createFindingSchema,
   regenerateFindingsSchema,
@@ -517,6 +518,23 @@ export default class CaseTerminalCtrl {
     if (error) throw new HttpError(error.message, 400);
     const result = await OrganizationSvc.grantAccess(req.params.caseId, req.user.userId, value.userId, value.permission);
     return res.status(201).json(result);
+  }
+
+  static async listAccess(req: Request, res: Response) {
+    const result = await OrganizationSvc.listAccess(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async setConfidential(req: Request, res: Response) {
+    const { error, value } = setConfidentialSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await OrganizationSvc.setConfidential(req.params.caseId, req.user.userId, value.confidential);
+    return res.status(200).json(result);
+  }
+
+  static async revokeAccess(req: Request, res: Response) {
+    await OrganizationSvc.revokeAccess(req.params.caseId, req.user.userId, req.params.userId);
+    return res.status(204).send();
   }
 
   static async listFindings(req: Request, res: Response) {

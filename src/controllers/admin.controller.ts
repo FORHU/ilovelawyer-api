@@ -7,6 +7,7 @@ import HttpError from "../utils/http-error";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
 import {
   listUsersSchema,
+  listAuditEventsSchema,
   denyUserSchema,
   lawSearchSchema,
   listLawsSchema,
@@ -32,6 +33,24 @@ export default class AdminCtrl {
 
     return res.status(200).json({
       data,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  }
+
+  /** GET /api/admin/audit-events — the audit trail, newest first. */
+  static async listAuditEvents(req: Request, res: Response) {
+    const { error, value } = listAuditEventsSchema.validate(req.query, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const { page, limit, sortDir, q, actorId } = value;
+    const { data, total, resolved } = await AdminSvc.listAuditEvents({ page, limit, sortDir, q, actorId });
+
+    return res.status(200).json({
+      data,
+      resolved,
       total,
       page,
       limit,

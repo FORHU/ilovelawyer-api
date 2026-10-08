@@ -3,6 +3,7 @@ import FilesRepo from "../repositories/files.repository";
 import { renderGeneratedDocx, renderGeneratedPdf } from "../utils/generated-document-renderer";
 import { uploadToS3, getProxyFileUrl } from "../utils/s3";
 import SecurityAuditSvc from "./security-audit.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 
 export type GeneratedDocumentFormat = "docx" | "pdf";
 
@@ -40,6 +41,8 @@ export default class GeneratedDocumentExportSvc {
       targetId: file.id,
       payload: { format, via: "api_key" },
     });
+    // Called server-to-server by Chat Wonder with an API key, so there is no user to attribute it to.
+    await AuditSvc.record({ action: AuditAction.GeneratedDocumentExported, payload: { format, fileId: file.id } });
 
     return {
       file: { id: file.id, fileUrl: getProxyFileUrl(key, { filename, audit: { kind: "generated_document", id: file.id } }), filename },

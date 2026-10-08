@@ -110,6 +110,7 @@ model User {
   cases                   Case[]
   documents               Document[]
   bookmarks               Bookmark[]
+  consents                Consent[]
   transcriptions          Transcription[]
   calendarWatchChannels   CalendarWatchChannel[]
   events                  Event[]
@@ -825,6 +826,10 @@ model Case {
   // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
   // param and CaseRepo.setStatus.
   status                CaseStatus @default(ACTIVE)
+  // A confidential matter (#346): reachable only by the organization's OWNER and people holding a
+  // CaseAccess grant — plain membership, org ADMIN included, no longer opens it, and it's left out
+  // of every listing for everyone else (see CaseAccess). Off by default.
+  confidential          Boolean    @default(false)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
@@ -2725,6 +2730,34 @@ model CaseAccess {
   @@index([userId])
 }
 
+// What a user has agreed to, per purpose. Terms of Service is not a row here: it stays on
+// User.termsAcceptedAt/termsVersion and ConsentSvc reports it from there. A row exists once the
+// user has answered for a purpose; no row means they have not been asked. `version` is the
+// version of the policy text they answered for (see constants/consent.constants.ts).
+enum ConsentPurpose {
+  TERMS_OF_SERVICE
+  AI_PROCESSING
+  ANALYTICS
+  MARKETING
+}
+
+model Consent {
+  id          String         @id @default(uuid())
+  userId      String
+  purpose     ConsentPurpose
+  version     String
+  grantedAt   DateTime
+  withdrawnAt DateTime?
+  source      String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, purpose])
+  @@index([userId])
+}
+
 model AuditEvent {
   id        String   @id @default(uuid())
   caseId    String?
@@ -2738,6 +2771,8 @@ model AuditEvent {
 
   @@index([caseId])
   @@index([actorId])
+  @@index([createdAt])
+  @@index([action])
 }
 
 enum SecurityAuditOutcome {
