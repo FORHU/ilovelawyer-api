@@ -2704,6 +2704,8 @@ model AuditEvent {
 
   @@index([caseId])
   @@index([actorId])
+  @@index([createdAt])
+  @@index([action])
 }
 
 model JurisdictionModule {
