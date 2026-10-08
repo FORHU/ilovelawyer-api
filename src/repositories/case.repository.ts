@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma";
+import CaseAccess from "../utils/case-access";
 import { CaseStatus, ClientSide } from "@prisma/client";
 import { getStableProxyFileUrl } from "../utils/s3";
 
@@ -92,9 +93,11 @@ export default class CaseRepo {
   ) {
     const skip = (page - 1) * limit;
 
+    // A confidential case (#346) is left out for anyone walled off from it (D4).
     const where = {
       organizationId,
       status,
+      AND: [CaseAccess.visibleWhere(userId)],
       ...(createdBy ? { userId: createdBy } : {}),
       ...(search
         ? {

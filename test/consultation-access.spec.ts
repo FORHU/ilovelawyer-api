@@ -39,6 +39,7 @@ describe("Consultation access", () => {
     createConsultation: ChatRepo.createConsultation,
     participantExists: ParticipantRepo.exists,
     loadAccessibleCase: CaseAccess.loadAccessibleCase,
+    isConfidential: CaseAccess.isConfidential,
     assertCanEdit: CaseAccess.assertCanEdit,
     getCaseById: CaseSvc.getById,
   };
@@ -84,7 +85,13 @@ describe("Consultation access", () => {
       if (!caseEditors.has(userId)) throw new HttpError("Case not found or not editable", 404);
       return { id: "case-1" };
     };
-    (CaseSvc as any).getById = async () => ({ id: "case-1" });
+    // Like the real one: org check (always passes here) plus the user's access to the case (#346).
+    (CaseSvc as any).getById = async (caseId: string, _org: string, userId: string) => {
+      await CaseAccess.loadAccessibleCase(caseId, userId);
+      return { id: "case-1" };
+    };
+    // An ordinary case: a creator or participant keeps their consultation without the case rule.
+    (CaseAccess as any).isConfidential = async () => false;
   });
 
   afterEach(() => {
@@ -102,6 +109,7 @@ describe("Consultation access", () => {
     (ParticipantRepo as any).exists = originals.participantExists;
     (CaseAccess as any).loadAccessibleCase = originals.loadAccessibleCase;
     (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
+    (CaseAccess as any).isConfidential = originals.isConfidential;
     (CaseSvc as any).getById = originals.getCaseById;
   });
 

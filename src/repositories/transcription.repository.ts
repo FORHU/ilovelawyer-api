@@ -1,10 +1,12 @@
 import prisma from "../lib/prisma";
+import CaseAccess from "../utils/case-access";
 import { RagStatus } from "@prisma/client";
 
 export default class TranscriptionRepo {
-  static async findAllByUser(organizationId: string) {
+  /** The organization's transcriptions, minus those on a case `userId` can't open (#346). */
+  static async findAllByUser(organizationId: string, userId: string) {
     return prisma.transcription.findMany({
-      where: { organizationId },
+      where: { organizationId, OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] },
       include: { audioFile: true },
       orderBy: { createdAt: "desc" },
     });

@@ -137,12 +137,14 @@ export default class DocumentSvc {
     );
   }
 
-  static async list(organizationId: string, status?: DocumentStatus) {
-    const docs = await DocumentRepo.list(organizationId, status);
+  static async list(organizationId: string, userId: string, status?: DocumentStatus) {
+    const docs = await DocumentRepo.list(organizationId, status, userId);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async listByCase(organizationId: string, caseId: string, status?: DocumentStatus) {
+  /** Reads of a case's documents need the case to be one the user can open (#346). */
+  static async listByCase(organizationId: string, caseId: string, userId: string, status?: DocumentStatus) {
+    await CaseAccess.loadAccessibleCase(caseId, userId);
     const docs = await DocumentRepo.listByCase(organizationId, caseId, status);
     return Promise.all(docs.map(mapDocumentToDto));
   }
@@ -152,10 +154,21 @@ export default class DocumentSvc {
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async getById(id: string, organizationId: string) {
+  static async getById(id: string, organizationId: string, userId: string) {
+    const doc = await DocumentSvc.loadForRead(id, organizationId, userId);
+    return mapDocumentToDto(doc);
+  }
+
+  /** A document on a case the user can't open (a confidential one, #346) reads as not found. */
+  private static async loadForRead(id: string, organizationId: string, userId: string) {
     const doc = await DocumentRepo.findById(id, organizationId);
     if (!doc) throw new HttpError("Document not found", 404);
-    return mapDocumentToDto(doc);
+    if (doc.caseId) {
+      await CaseAccess.loadAccessibleCase(doc.caseId, userId).catch(() => {
+        throw new HttpError("Document not found", 404);
+      });
+    }
+    return doc;
   }
 
   /** Plain-text fallback preview for formats the browser has no rich in-app viewer for (legacy
@@ -163,9 +176,8 @@ export default class DocumentSvc {
    * indexing pipeline uses (document-text-extraction.ts) directly against the S3 bytes rather
    * than reading persisted CaseDocumentChunk rows, so it works immediately after upload without
    * waiting on (or depending on the success of) RAG extraction/chunking. */
-  static async getTextPreview(id: string, organizationId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId);
-    if (!doc) throw new HttpError("Document not found", 404);
+  static async getTextPreview(id: string, organizationId: string, userId: string) {
+    const doc = await DocumentSvc.loadForRead(id, organizationId, userId);
     if (!doc.file?.s3Key) throw new HttpError("Document has no file", 404);
 
     const buffer = await getObjectBuffer(doc.file.s3Key);
