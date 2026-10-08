@@ -44,6 +44,7 @@ export default class AccountDeletionSvc {
         organizationId: membership?.organizationId ?? null,
         targetType: "user",
         targetId: userId,
+        targetName: user?.name ?? user?.email ?? null,
         payload: { email: user?.email ?? null, requestedAt: requestedAt.toISOString() },
       });
     }

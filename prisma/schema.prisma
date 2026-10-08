@@ -134,6 +134,7 @@ model User {
 
   @@index([tenantId])
   @@index([deletionRequestedAt])
+  manualEdits        CaseManualEdit[]
 }
 
 model Session {
@@ -886,6 +887,7 @@ model Case {
   outlooks             CaseOutlook[]
   mindMap              CaseMindMap?
   changeSummaries      CaseChangeSummary[]
+  manualEdits          CaseManualEdit[]
 
   @@index([userId])
   @@index([organizationId])
@@ -2365,11 +2367,43 @@ model CaseChangeSummary {
   firstAnalysis    Boolean  @default(false)
   // CaseChangeDeltas (types/case-change.ts), one entry per pane the refresh tracks.
   perPaneDeltas    Json
+  // When the run began (createdAt is when it saved). Lawyers' edits between the previous run's
+  // save and this start are "edits since the previous run". Null on rows from before it existed.
+  startedAt        DateTime?
   createdAt        DateTime @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId, createdAt])
+}
+
+// One edit a lawyer made by hand in a Terminal pane (ManualEditLog) — the Change Summary's record of
+// manual changes, grouped into editing sessions when read (utils/manual-edit-sessions.ts). Written
+// once, except that the same person editing the same field of the same item again within five
+// minutes updates the row instead of adding one. The AI's own writes are never recorded here.
+// Holds case content (item names), so it goes with the case.
+model CaseManualEdit {
+  id        String   @id @default(uuid())
+  caseId    String
+  actorId   String?
+  // The Terminal pane (a PanelId) the item shows in — types/manual-edit.ts.
+  pane      String
+  // What was edited: finding, contradiction, todo, witness, … (ManualEditKind).
+  kind      String
+  itemId    String?
+  // added | edited | removed | resolved | ticked | accepted | … (ManualEditAction).
+  action    String
+  // The item's name when it was edited, kept after a delete.
+  label     String
+  // [{ field, from?, to? }]: short values keep from/to; long text only names the field.
+  changes   Json?
+  createdAt DateTime @default(now())
+
+  case  Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([caseId, createdAt])
+  @@index([caseId, actorId, itemId])
 }
 
 // ── Case Graph (Phase A: dependency tracking + staleness, no auto-recompute) ───────────────
@@ -2738,6 +2772,10 @@ model SecurityAuditEvent {
   /// What it was done to: "user", "organization", "case", "document", "consultation", "file", ...
   targetType     String?
   targetId       String?
+  /// The target's name as it read when the row was written — set only where the target is about
+  /// to stop existing (a deleted document, case or transcription), so the log can still say which
+  /// one. Live targets are named from their current record when the log is read.
+  targetName     String?
   caseId         String?
   ip             String?
   userAgent      String?

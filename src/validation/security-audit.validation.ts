@@ -18,8 +18,8 @@ const filterKeys = {
 
 export const securityAuditListSchema = Joi.object({
   ...filterKeys,
-  limit: Joi.number().integer().min(1).max(SECURITY_AUDIT_PAGE_SIZE_MAX).default(50),
-  cursor: Joi.string().trim().max(64).optional(),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(SECURITY_AUDIT_PAGE_SIZE_MAX).default(SECURITY_AUDIT_PAGE_SIZE_MAX),
 });
 
 export const securityAuditExportSchema = Joi.object(filterKeys);

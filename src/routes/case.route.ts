@@ -45,6 +45,8 @@ router.post("/:caseId/refresh", asyncHandler(CaseTerminalCtrl.refresh));
 router.get("/:caseId/ai-jobs/:kind", asyncHandler(CaseTerminalCtrl.getAiJobStatus));
 router.get("/:caseId/change-summaries", asyncHandler(CaseTerminalCtrl.listChangeSummaries));
 router.get("/:caseId/change-summaries/days", asyncHandler(CaseTerminalCtrl.listChangeSummaryDays));
+router.get("/:caseId/change-summaries/:summaryId/edits-before", asyncHandler(CaseTerminalCtrl.listEditsBeforeRun));
+router.get("/:caseId/manual-edits", asyncHandler(CaseTerminalCtrl.listManualEdits));
 
 router.get("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.listTimeline));
 router.post("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.createTimeline));

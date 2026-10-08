@@ -4,6 +4,7 @@ export * from "./ai-generation-lock.constants";
 export * from "./audio-overview-audio.constants";
 export * from "./auth.constants";
 export * from "./case-change.constants";
+export * from "./manual-edit.constants";
 export * from "./case-finding.constants";
 export * from "./case-outlook.constants";
 export * from "./case-reconstruction.constants";

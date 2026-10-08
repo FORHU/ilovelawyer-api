@@ -89,6 +89,7 @@ export default class CaseSvc {
       organizationId,
       targetType: "case",
       targetId: id,
+      targetName: caseRecord.caseName,
       caseId: id,
       payload: { documentsDeleted: docs.length },
     });

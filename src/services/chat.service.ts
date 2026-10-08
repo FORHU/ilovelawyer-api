@@ -267,6 +267,7 @@ export default class ChatSvc {
       organizationId,
       targetType: "consultation",
       targetId: consultationId,
+      targetName: consultation.title ?? null,
       caseId: consultation.caseId ?? null,
       payload: { deletionScheduledFor: deletionScheduledFor.toISOString() },
     });

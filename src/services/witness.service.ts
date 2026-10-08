@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import WitnessRepo, { WitnessInput } from "../repositories/witness.repository";
 import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
@@ -21,6 +23,7 @@ export default class WitnessSvc {
     const row = await WitnessRepo.create(caseId, data);
     await CaseGraphSvc.ensureNode(caseId, "WITNESS", row.id);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "witness.create", payload: { id: row.id } });
+    await ManualEditLog.record(caseId, userId, { pane: "witnesses", kind: "witness", itemId: row.id, action: "added", label: row.name });
     return row;
   }
 
@@ -31,6 +34,7 @@ export default class WitnessSvc {
     data: Partial<Omit<WitnessInput, "needsDone">> & { needsDone?: NeedDoneInput[] },
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await WitnessRepo.find(id, caseId);
     const { needsDone, ...rest } = data;
     let stored: unknown[] | undefined;
     let priorDone: NeedDone[] = [];
@@ -87,6 +91,28 @@ export default class WitnessSvc {
     if (!row) throw new HttpError("Witness not found", 404);
     await CaseGraphSvc.markStale(caseId, "WITNESS", id, "Witness updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "witness.update", payload: { id } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "witnesses",
+      kind: "witness",
+      itemId: id,
+      action: "edited",
+      label: row.name,
+      changes: [
+        ...fieldChanges(before, rest, {
+          name: "value",
+          role: "value",
+          summary: "text",
+          status: "value",
+          credibilityOverride: "value",
+          statementDueOn: "value",
+          statementReceived: "value",
+          contact: "text",
+          notes: "text",
+        }),
+        // A ticked "what's needed" item, with its proof document.
+        ...(stored ? [{ field: "needsDone" }] : []),
+      ],
+    });
     const ticked = stored ? newlyDoneNeedKeys(priorDone, stored as NeedDone[]) : [];
     // Marking the statement received settles the STATEMENT need without a tick of its own.
     if (rest.statementReceived === true) ticked.push("STATEMENT");
@@ -96,8 +122,10 @@ export default class WitnessSvc {
 
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await WitnessRepo.find(id, caseId);
     const deleted = await WitnessRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Witness not found", 404);
+    if (before) await ManualEditLog.record(caseId, userId, { pane: "witnesses", kind: "witness", itemId: id, action: "removed", label: before.name });
     // CaseGraphViewSvc's "witnesses" view reads CaseGraphNode, never Witness directly — without
     // this the row keeps rendering as a ghost "Unnamed witness".
     await CaseGraphSvc.removeNode("WITNESS", id);

@@ -6,6 +6,8 @@ import {
   SecurityAuditAction,
   SecurityAuditTargetType,
 } from "../constants/security-audit.constants";
+import { renderAuditLogPdf } from "../utils/audit-log-pdf-renderer";
+import { describeAuditEvent, loadNames } from "./security-audit-describe";
 import { normalizeEmail } from "../utils/auth.utils";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -21,6 +23,9 @@ export interface SecurityAuditInput {
   organizationId?: string | null;
   targetType?: SecurityAuditTargetType;
   targetId?: string | null;
+  /** The target's name, for a target this action is deleting — once it's gone the log can't look
+   * it up. Leave unset for anything that will still exist. */
+  targetName?: string | null;
   caseId?: string | null;
   /** Ids, counts, field names, reasons — never case content (rows outlive the case). */
   payload?: Record<string, unknown>;
@@ -103,6 +108,7 @@ export default class SecurityAuditSvc {
       actorEmail: actor?.email ?? null,
       targetType: targetType ?? null,
       targetId: targetId ?? null,
+      targetName: input.targetName ?? null,
       caseId: input.caseId ?? null,
       ip: context?.ip ?? null,
       userAgent: context?.userAgent ?? null,
@@ -111,72 +117,66 @@ export default class SecurityAuditSvc {
     };
   }
 
-  /** One page of the log, newest first, plus the cursor for the next page (null at the end). */
-  static async list(filter: SecurityAuditFilter, limit: number, cursor?: string) {
-    const rows = await SecurityAuditRepo.list(filter, limit + 1, cursor);
-    const page = rows.slice(0, limit);
-    return { events: page, nextCursor: rows.length > limit ? (page.at(-1)?.id ?? null) : null };
+  /** One page of the log, newest first (pages count from 1), with the totals the app's
+   * pagination needs. Each event carries `display`: who, what was affected and the details, named
+   * and in plain words (security-audit-describe.ts) — what the app shows instead of ids. */
+  static async list(filter: SecurityAuditFilter, page: number, pageSize: number) {
+    const [rows, total] = await Promise.all([
+      SecurityAuditRepo.list(filter, pageSize, (page - 1) * pageSize),
+      SecurityAuditRepo.count(filter),
+    ]);
+    const names = await loadNames(rows);
+    const events = rows.map((row) => ({
+      id: row.id,
+      createdAt: row.createdAt,
+      action: row.action,
+      outcome: row.outcome,
+      requestId: row.requestId,
+      display: describeAuditEvent(row, names),
+    }));
+    return { events, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
   }
 
-  /** The filtered log as CSV, newest first, capped at SECURITY_AUDIT_EXPORT_MAX_ROWS. The export
-   * itself is recorded (export.audit_log). */
-  static async exportCsv(filter: SecurityAuditFilter): Promise<{ csv: string; rowCount: number; truncated: boolean }> {
-    const lines = [CSV_COLUMNS.join(",")];
-    let cursor: string | undefined;
-    let rowCount = 0;
-    let truncated = false;
-    for (;;) {
-      const rows = await SecurityAuditRepo.list(filter, 1000, cursor);
-      for (const row of rows) {
-        if (rowCount === SECURITY_AUDIT_EXPORT_MAX_ROWS) {
-          truncated = true;
-          break;
-        }
-        lines.push(toCsvLine(row));
-        rowCount++;
-      }
-      if (truncated || rows.length < 1000) break;
-      cursor = rows.at(-1)!.id;
+  /** The filtered log as a PDF table, newest first, capped at SECURITY_AUDIT_EXPORT_MAX_ROWS. The
+   * export itself is recorded (export.audit_log), after the rows it covers were read. */
+  static async exportPdf(filter: SecurityAuditFilter, scope: string): Promise<{ pdf: Buffer; rowCount: number; truncated: boolean }> {
+    const total = await SecurityAuditRepo.count(filter);
+    const wanted = Math.min(total, SECURITY_AUDIT_EXPORT_MAX_ROWS);
+    const events: SecurityAuditEvent[] = [];
+    while (events.length < wanted) {
+      const take = Math.min(1000, wanted - events.length);
+      const rows = await SecurityAuditRepo.list(filter, take, events.length);
+      events.push(...rows);
+      if (rows.length < take) break;
     }
+    const truncated = total > events.length;
+
+    const context = getRequestContext();
+    const generatedById = context?.userId();
+    const generatedBy = generatedById ? ((await SecurityAuditRepo.findUserAuditInfo(generatedById))?.email ?? null) : null;
+    const names = await loadNames(events);
+    const pdf = await renderAuditLogPdf(
+      {
+        scope,
+        generatedAt: new Date(),
+        generatedBy,
+        filters: Object.entries(describeFilter(filter)).map(([key, value]) => `${key}: ${value}`),
+        rowCount: total,
+        truncated,
+        maxRows: SECURITY_AUDIT_EXPORT_MAX_ROWS,
+      },
+      events.map((event) => ({ event, display: describeAuditEvent(event, names) })),
+    );
 
     await SecurityAuditSvc.record({
       action: "export.audit_log",
       ...(filter.organizationId !== undefined && { organizationId: filter.organizationId }),
       targetType: filter.organizationId ? "organization" : undefined,
       targetId: filter.organizationId ?? null,
-      payload: { rowCount, truncated, filter: describeFilter(filter) },
+      payload: { format: "pdf", rowCount: events.length, truncated, filter: describeFilter(filter) },
     });
-    return { csv: lines.join("\r\n") + "\r\n", rowCount, truncated };
+    return { pdf, rowCount: events.length, truncated };
   }
-}
-
-const CSV_COLUMNS = [
-  "createdAt",
-  "action",
-  "outcome",
-  "actorEmail",
-  "actorId",
-  "targetType",
-  "targetId",
-  "caseId",
-  "organizationId",
-  "ip",
-  "userAgent",
-  "requestId",
-  "payload",
-] as const;
-
-/** RFC 4180 quoting, plus a leading ' on anything a spreadsheet would run as a formula — a user
- * agent or typed email is attacker-controlled and this file is meant to be opened in Excel. */
-export function csvCell(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  let text = value instanceof Date ? value.toISOString() : typeof value === "object" ? JSON.stringify(value) : String(value);
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function toCsvLine(row: SecurityAuditEvent): string {
-  return CSV_COLUMNS.map((column) => csvCell(row[column])).join(",");
 }
 
 function describeFilter(filter: SecurityAuditFilter): Record<string, string> {

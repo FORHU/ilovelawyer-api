@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import CaseAccess from "../utils/case-access";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
@@ -88,6 +90,7 @@ export default class ProceduralDeadlineSvc {
       action: "deadline.create",
       payload: { id: row.id, due: row.computedDueDate },
     });
+    await ManualEditLog.record(caseId, userId, { pane: "procedure", kind: "deadline", itemId: row.id, action: "added", label: row.label });
     return row;
   }
 
@@ -134,6 +137,14 @@ export default class ProceduralDeadlineSvc {
         confirmationsCleared: dueDateChanged,
       },
     });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "procedure",
+      kind: "deadline",
+      itemId: deadlineId,
+      action: "recomputed",
+      label: deadline.label,
+      changes: fieldChanges(deadline, { computedDueDate: row.computedDueDate }, { computedDueDate: "value" }),
+    });
     return row;
   }
 
@@ -175,6 +186,13 @@ export default class ProceduralDeadlineSvc {
       action: "deadline.confirm",
       payload: { deadlineId, confirmed, confirmCount: confirms.length },
     });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "procedure",
+      kind: "deadline",
+      itemId: deadlineId,
+      action: confirmed ? "confirmed" : "unconfirmed",
+      label: deadline.label,
+    });
     return {
       confirmation,
       dualConfirmed: confirms.length >= requiredConfirmations,
@@ -206,7 +224,7 @@ export default class ProceduralDeadlineSvc {
       const existing = await ProceduralDeadlineRepo.findOpenLinked(caseId, body.sourceKind, body.sourceId, sourceKey);
       if (existing) return existing;
     }
-    return ProceduralDeadlineRepo.createProcedureItem(caseId, {
+    const item = await ProceduralDeadlineRepo.createProcedureItem(caseId, {
       ...body,
       sourceLabel: body.sourceLabel || null,
       sourceKind: body.sourceKind ?? null,
@@ -214,6 +232,8 @@ export default class ProceduralDeadlineSvc {
       sourceKey,
       dueDate,
     });
+    await ManualEditLog.record(caseId, userId, { pane: "procedure", kind: "todo", itemId: item.id, action: "added", label: item.label });
+    return item;
   }
 
   /** A to-do may only link to an item on its own case (and, for a witness need, a need that
@@ -240,8 +260,20 @@ export default class ProceduralDeadlineSvc {
 
   static async updateItem(caseId: string, id: string, userId: string, body: { done?: boolean; notes?: string; label?: string }) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await ProceduralDeadlineRepo.findProcedureItem(id, caseId);
     const row = await ProceduralDeadlineRepo.updateProcedureItem(id, caseId, body);
     if (!row) throw new HttpError("Procedure item not found", 404);
+    if (body.done !== undefined && before && before.done !== row.done) {
+      await ManualEditLog.record(caseId, userId, { pane: "procedure", kind: "todo", itemId: id, action: row.done ? "ticked" : "unticked", label: row.label });
+    }
+    await ManualEditLog.record(caseId, userId, {
+      pane: "procedure",
+      kind: "todo",
+      itemId: id,
+      action: "edited",
+      label: row.label,
+      changes: fieldChanges(before, body, { label: "value", notes: "text" }),
+    });
     if (body.done === true && row.sourceKind && row.sourceId) {
       await ProceduralDeadlineSvc.settleSource(caseId, userId, row.sourceKind as ProcedureSourceKind, row.sourceId, row.sourceKey);
     }

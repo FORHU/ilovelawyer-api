@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import CaseChangeRun from "./case-change-run.service";
 import CaseChangeReads from "./case-change-reads";
 import { diffStrategy } from "../utils/case-change-delta";
@@ -22,13 +24,23 @@ export default class CaseTimelineSvc {
     const row = await CaseTimelineRepo.create(caseId, { ...data, createdBy: data.createdBy ?? userId });
     await CaseGraphSvc.ensureNode(caseId, "TIMELINE_EVENT", row.id);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "timeline.create", payload: { id: row.id } });
+    await ManualEditLog.record(caseId, userId, { pane: "evidence", kind: "timelineEntry", itemId: row.id, action: "added", label: row.title });
     return row;
   }
 
   static async update(caseId: string, id: string, userId: string, data: Partial<TimelineInput>) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await CaseTimelineRepo.findById(id, caseId);
     const row = await CaseTimelineRepo.update(id, caseId, data);
     if (!row) throw new HttpError("Timeline event not found", 404);
+    await ManualEditLog.record(caseId, userId, {
+      pane: "evidence",
+      kind: "timelineEntry",
+      itemId: id,
+      action: "edited",
+      label: row.title,
+      changes: fieldChanges(before, data, { title: "value", occurredOn: "value", description: "text", status: "value" }),
+    });
     if (data.occurredOn !== undefined || data.status !== undefined) {
       await CaseGraphSvc.markStale(caseId, "TIMELINE_EVENT", id, "Timeline event date/status changed");
     }
@@ -37,8 +49,10 @@ export default class CaseTimelineSvc {
 
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await CaseTimelineRepo.findById(id, caseId);
     const deleted = await CaseTimelineRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Timeline event not found", 404);
+    if (before) await ManualEditLog.record(caseId, userId, { pane: "evidence", kind: "timelineEntry", itemId: id, action: "removed", label: before.title });
     // Otherwise CaseGraphViewSvc's "timeline" view — which reads CaseGraphNode, never
     // CaseTimelineEvent directly — keeps rendering this as a ghost "Untitled event" forever.
     await CaseGraphSvc.removeNode("TIMELINE_EVENT", id);

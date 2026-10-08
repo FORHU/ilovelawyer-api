@@ -186,6 +186,7 @@ export default class AdminSvc {
       organizationId: membership?.organizationId ?? null,
       targetType: "user",
       targetId: userId,
+      targetName: user.name ?? user.email,
       payload: { email: user.email },
     });
   }

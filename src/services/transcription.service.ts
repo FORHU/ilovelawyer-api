@@ -183,6 +183,7 @@ export default class TranscriptionSvc {
       organizationId,
       targetType: "transcription",
       targetId: id,
+      targetName: item.title ?? null,
       caseId: item.caseId ?? null,
     });
   }

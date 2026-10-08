@@ -1,3 +1,4 @@
+import ManualEditLog from "./manual-edit-log.service";
 import CaseChangeRun from "./case-change-run.service";
 import CaseChangeReads from "./case-change-reads";
 import { diffWitnesses } from "../utils/case-change-delta";
@@ -98,6 +99,14 @@ export default class WitnessScoringSvc {
       actorId: userId,
       action: "witness.factor_override",
       payload: { id: witnessId, factor: key, answer },
+    });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "witnesses",
+      kind: "witness",
+      itemId: witnessId,
+      action: "edited",
+      label: witness.name,
+      changes: [{ field: `factor_${key}`, from: parseOverrides(witness.factorOverrides)?.[key]?.answer ?? null, to: answer }],
     });
     return (await WitnessRepo.list(caseId)).find((w) => w.id === witnessId);
   }

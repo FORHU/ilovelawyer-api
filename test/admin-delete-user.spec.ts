@@ -71,6 +71,8 @@ describe("AdminSvc.deleteUser", () => {
           organizationId: null,
           targetType: "user",
           targetId: "user-1",
+          // The name it had, since the account is gone once this returns (no name → its email).
+          targetName: "user@example.com",
           payload: { email: "user@example.com" },
         },
       ]);

@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import CaseAccess from "../utils/case-access";
 import EvidenceRepo from "../repositories/evidence.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -20,6 +22,9 @@ import { classifyContradictionWithJev, isContradictionJevEnabled } from "../util
 import FullContradictionScanSvc, { FullScanHit, isFullContradictionScanEnabled } from "./full-contradiction-scan.service";
 import { TenantCode } from "../types/tenant-code";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
+
+/** A triage status as the change log names it. */
+const TRIAGE_ACTION = { RESOLVED: "resolved", DISMISSED: "dismissed", OPEN: "reopened" } as const;
 
 export default class EvidenceIntelligenceSvc {
   static async list(caseId: string, userId: string) {
@@ -56,8 +61,27 @@ export default class EvidenceIntelligenceSvc {
         throw new HttpError("Witness not found on this case", 404);
       }
     }
+    const before = await EvidenceRepo.findMatrixItem(caseId, documentId);
     const row = await EvidenceRepo.upsertMatrix(caseId, documentId, data);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "evidence.matrix.upsert", payload: { documentId } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "evidence",
+      kind: "evidenceRating",
+      itemId: documentId,
+      action: "edited",
+      label: docs.find((d) => d.id === documentId)?.name ?? "Document",
+      changes: fieldChanges(before, data, {
+        authenticity: "value",
+        admissibility: "value",
+        probative: "value",
+        originalFile: "value",
+        needsVerify: "value",
+        notes: "text",
+        privilegeStatus: "value",
+        hearsayCategory: "value",
+        sponsoringWitnessId: "text",
+      }),
+    });
     return row;
   }
 
@@ -78,6 +102,14 @@ export default class EvidenceIntelligenceSvc {
       action: "evidence.custody.add",
       payload: { documentId, custodianName: data.custodianName },
     });
+    const docName = docs.find((d) => d.id === documentId)?.name ?? "Document";
+    await ManualEditLog.record(caseId, userId, {
+      pane: "evidence",
+      kind: "custodyEvent",
+      itemId: event.id,
+      action: "added",
+      label: `${docName}: ${data.action} (${data.custodianName})`,
+    });
     return event;
   }
 
@@ -87,8 +119,17 @@ export default class EvidenceIntelligenceSvc {
     if (!docs.some((d) => d.id === documentId)) throw new HttpError("Document not found on this case", 404);
     const matrixItem = await EvidenceRepo.findMatrixItem(caseId, documentId);
     if (!matrixItem) throw new HttpError("Evidence item not found for this document", 404);
+    const event = await EvidenceRepo.findCustodyEvent(matrixItem.id, eventId);
     const deleted = await EvidenceRepo.deleteCustodyEvent(matrixItem.id, eventId);
     if (!deleted) throw new HttpError("Custody event not found", 404);
+    const docName = docs.find((d) => d.id === documentId)?.name ?? "Document";
+    await ManualEditLog.record(caseId, userId, {
+      pane: "evidence",
+      kind: "custodyEvent",
+      itemId: eventId,
+      action: "removed",
+      label: event ? `${docName}: ${event.action} (${event.custodianName})` : docName,
+    });
     await OrganizationRepo.writeAudit({
       caseId,
       actorId: userId,
@@ -214,6 +255,7 @@ export default class EvidenceIntelligenceSvc {
     data: { status: ContradictionStatus; resolutionNote?: string | null },
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await EvidenceRepo.findContradiction(id, caseId);
     const row = await EvidenceRepo.updateContradictionStatus(id, caseId, {
       status: data.status,
       resolutionNote: data.resolutionNote?.trim() || null,
@@ -226,6 +268,16 @@ export default class EvidenceIntelligenceSvc {
       action: "evidence.contradiction.status",
       payload: { id, status: data.status },
     });
+    if (before?.status !== row.status) {
+      await ManualEditLog.record(caseId, userId, {
+        pane: "evidence",
+        kind: "contradiction",
+        itemId: id,
+        action: TRIAGE_ACTION[row.status],
+        label: `${row.factKey}: ${row.leftValue} vs ${row.rightValue}`,
+        changes: row.resolutionNote ? [{ field: "resolutionNote" }] : undefined,
+      });
+    }
     return row;
   }
 

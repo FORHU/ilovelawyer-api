@@ -1,5 +1,7 @@
 import CaseAccess from "../utils/case-access";
 import CaseChangeSummaryRepo from "../repositories/case-change-summary.repository";
+import CaseManualEditRepo from "../repositories/case-manual-edit.repository";
+import { dayKeyOf, groupEditSessions } from "../utils/manual-edit-sessions";
 import HttpError from "../utils/http-error";
 import { CASE_CHANGE_SUMMARY_DAYS_LIMIT, CASE_CHANGE_SUMMARY_LIST_LIMIT } from "../constants";
 
@@ -31,10 +33,24 @@ export default class CaseChangeSvc {
     return CaseChangeSummaryRepo.listOnDay(caseId, options.day, resolveTimeZone(options.tz), limit);
   }
 
-  /** The days the case has change summaries on, in the viewer's time zone, newest first — the
-   * "What changed" modal's date picker. */
+  /** The days the case has change summaries or lawyers' editing sessions on, in the viewer's time
+   * zone, newest first — the "What changed" modal's date picker. A session counts on the day it
+   * started. */
   static async days(caseId: string, userId: string, tz: unknown) {
     await CaseAccess.loadAccessibleCase(caseId, userId);
-    return CaseChangeSummaryRepo.days(caseId, resolveTimeZone(tz), CASE_CHANGE_SUMMARY_DAYS_LIMIT);
+    const zone = resolveTimeZone(tz);
+    const [runDays, edits, runTimes] = await Promise.all([
+      CaseChangeSummaryRepo.days(caseId, zone, CASE_CHANGE_SUMMARY_DAYS_LIMIT),
+      CaseManualEditRepo.listTimes(caseId),
+      CaseChangeSummaryRepo.listTimes(caseId),
+    ]);
+    const days = new Map(runDays.map((d) => [d.day, { ...d, editSessions: 0 }]));
+    for (const session of groupEditSessions(edits, runTimes)) {
+      const day = dayKeyOf(session.startedAt, zone);
+      const entry = days.get(day) ?? { day, runs: 0, totalChanges: 0, editSessions: 0 };
+      entry.editSessions += 1;
+      days.set(day, entry);
+    }
+    return [...days.values()].sort((a, b) => (a.day < b.day ? 1 : -1)).slice(0, CASE_CHANGE_SUMMARY_DAYS_LIMIT);
   }
 }

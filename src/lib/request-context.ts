@@ -40,6 +40,12 @@ export function withRequestContextOf<T>(req: Request, fn: () => T): T {
 
 const REQUEST_ID_HEADER = "x-request-id";
 
+/** "::ffff:127.0.0.1" (an IPv4 address on an IPv6 socket) → "127.0.0.1". */
+export function normalizeIp(ip: string | undefined | null): string | null {
+  if (!ip) return null;
+  return ip.startsWith("::ffff:") && ip.includes(".") ? ip.slice(7) : ip;
+}
+
 /** Mounted once in app.ts, before the router. Reuses an incoming X-Request-Id (from a load
  * balancer or the app's server-side calls) when it looks sane, else mints one, and echoes it
  * back so a support ticket can quote it. */
@@ -52,7 +58,7 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
   const context: RequestContext = {
     requestId,
     // trust proxy is set in app.ts, so this is the client's address, not the load balancer's.
-    ip: req.ip ?? null,
+    ip: normalizeIp(req.ip),
     userAgent: typeof userAgent === "string" ? userAgent.slice(0, 512) : null,
     userId: () => req.user?.userId ?? null,
     organizationId: () => req.organization?.id ?? null,

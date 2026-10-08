@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import CaseAccess from "../utils/case-access";
 import CitationCheckRepo from "../repositories/citation-check.repository";
 import { evaluateCitation } from "../utils/citation-validity";
@@ -12,6 +14,11 @@ import { detectPinpoint } from "../utils/citation-pinpoint";
 import HttpError from "../utils/http-error";
 import { TenantCode } from "../types/tenant-code";
 import { ResolvedCitationAuthority } from "../types/citation-check.types";
+
+/** How the change log names a citation: its reference, else the start of the quoted text. */
+function citationLabel(row: { citedReference: string | null; quotedText: string }): string {
+  return row.citedReference || (row.quotedText.length > 80 ? `${row.quotedText.slice(0, 80)}…` : row.quotedText);
+}
 
 export default class CitationCheckSvc {
   static async list(caseId: string, userId: string) {
@@ -99,13 +106,23 @@ export default class CitationCheckSvc {
     if (!row) throw new HttpError("Citation not found", 404);
 
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "citation.update", payload: { id, status: row.status } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "law",
+      kind: "citation",
+      itemId: id,
+      action: "edited",
+      label: citationLabel(row),
+      changes: fieldChanges(existing, body, { quotedText: "text", citedReference: "value", sourceUrl: "value", officialText: "text", pinpoint: "value" }),
+    });
     return { ...row, resolvedAuthority: evaluated.authority };
   }
 
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await CitationCheckRepo.findInCase(id, caseId);
     const deleted = await CitationCheckRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Citation not found", 404);
+    if (before) await ManualEditLog.record(caseId, userId, { pane: "law", kind: "citation", itemId: id, action: "removed", label: citationLabel(before) });
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "citation.delete", payload: { id } });
   }
 

@@ -5,7 +5,8 @@
  */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
-import SecurityAuditSvc, { csvCell } from "../src/services/security-audit.service";
+import SecurityAuditSvc from "../src/services/security-audit.service";
+import * as pdfRenderer from "../src/utils/audit-log-pdf-renderer";
 import SecurityAuditRepo from "../src/repositories/security-audit.repository";
 import { runWithRequestContext, RequestContext } from "../src/lib/request-context";
 import HttpError from "../src/utils/http-error";
@@ -74,6 +75,7 @@ describe("SecurityAuditSvc.record", () => {
         actorEmail: "lawyer@firm.test",
         targetType: "organization",
         targetId: "org-1",
+        targetName: null,
         caseId: null,
         ip: "203.0.113.7",
         userAgent: "Mozilla/5.0",
@@ -137,14 +139,15 @@ describe("SecurityAuditSvc.record", () => {
   });
 });
 
-describe("SecurityAuditSvc.list and exportCsv", () => {
+describe("SecurityAuditSvc.list and exportPdf", () => {
   let restore: (() => void)[];
   let recorded: any[];
-  let pageCalls: { filter: unknown; take: number; cursor?: string }[];
+  let listCalls: { take: number; skip: number }[];
+  let rendered: { header: any; events: any[] }[];
 
   const row = (i: number) => ({
     id: `row-${i}`,
-    createdAt: new Date(Date.UTC(2026, 9, 8, 10, 0, i)),
+    createdAt: new Date(Date.UTC(2026, 9, 8, 10, 0, i % 60)),
     action: "auth.login",
     outcome: "SUCCESS",
     organizationId: "org-1",
@@ -162,73 +165,138 @@ describe("SecurityAuditSvc.list and exportCsv", () => {
 
   beforeEach(() => {
     recorded = [];
-    pageCalls = [];
-    restore = [stash(SecurityAuditRepo, ["list"]), stash(SecurityAuditSvc, ["record"])];
+    listCalls = [];
+    rendered = [];
+    restore = [
+      stash(SecurityAuditRepo, ["list", "count"]),
+      stash(SecurityAuditSvc, ["record"]),
+      stash(pdfRenderer, ["renderAuditLogPdf"]),
+    ];
     (SecurityAuditSvc as any).record = async (data: unknown) => void recorded.push(data);
+    (pdfRenderer as any).renderAuditLogPdf = async (header: unknown, events: any[]) => {
+      rendered.push({ header, events });
+      return Buffer.from("%PDF-test");
+    };
   });
 
   afterEach(() => restore.forEach((r) => r()));
 
-  it("returns a page and the cursor for the next one", async () => {
-    (SecurityAuditRepo as any).list = async (filter: unknown, take: number, cursor?: string) => {
-      pageCalls.push({ filter, take, cursor });
-      return [row(1), row(2), row(3)];
+  it("returns the requested page with the totals pagination needs", async () => {
+    (SecurityAuditRepo as any).list = async (_filter: unknown, take: number, skip: number) => {
+      listCalls.push({ take, skip });
+      return [row(51), row(52)];
     };
-    const result = await SecurityAuditSvc.list({ organizationId: "org-1" }, 2, "row-0");
-    expect(pageCalls).to.deep.equal([{ filter: { organizationId: "org-1" }, take: 3, cursor: "row-0" }]);
-    expect(result.events.map((e) => e.id)).to.deep.equal(["row-1", "row-2"]);
-    expect(result.nextCursor).to.equal("row-2");
+    (SecurityAuditRepo as any).count = async () => 52;
+
+    const result = await SecurityAuditSvc.list({ organizationId: "org-1" }, 3, 25);
+
+    expect(listCalls).to.deep.equal([{ take: 25, skip: 50 }]);
+    expect(result).to.include({ total: 52, page: 3, pageSize: 25, totalPages: 3 });
+    expect(result.events.map((e) => e.id)).to.deep.equal(["row-51", "row-52"]);
+    // Only what the table shows goes out: no actor, target, case or organization ids.
+    expect(Object.keys(result.events[0]!).sort()).to.deep.equal(["action", "createdAt", "display", "id", "outcome", "requestId"]);
+    expect(result.events[0]!.display).to.deep.equal({ actor: "lawyer@firm.test", target: "N/A", details: "With password", ip: "203.0.113.7" });
   });
 
-  it("returns no cursor on the last page", async () => {
-    (SecurityAuditRepo as any).list = async () => [row(1)];
-    expect((await SecurityAuditSvc.list({}, 2)).nextCursor).to.equal(null);
+  it("reports one page for an empty log", async () => {
+    (SecurityAuditRepo as any).list = async () => [];
+    (SecurityAuditRepo as any).count = async () => 0;
+    expect((await SecurityAuditSvc.list({}, 1, 25)).totalPages).to.equal(1);
   });
 
-  it("exports every page as CSV and records the export itself", async () => {
-    const pages = [Array.from({ length: 1000 }, (_, i) => row(i)), [row(1000)]];
-    (SecurityAuditRepo as any).list = async (_filter: unknown, _take: number, cursor?: string) => {
-      pageCalls.push({ filter: null, take: _take, cursor });
-      return pages.shift() ?? [];
+  it("exports every matching row as a PDF and records the export itself", async () => {
+    const all = Array.from({ length: 1500 }, (_, i) => row(i));
+    (SecurityAuditRepo as any).count = async () => all.length;
+    (SecurityAuditRepo as any).list = async (_filter: unknown, take: number, skip: number) => {
+      listCalls.push({ take, skip });
+      return all.slice(skip, skip + take);
     };
 
-    const { csv, rowCount, truncated } = await SecurityAuditSvc.exportCsv({ organizationId: "org-1", action: "auth." });
+    const { pdf, rowCount, truncated } = await SecurityAuditSvc.exportPdf({ organizationId: "org-1", action: "auth." }, "Audit QA Firm");
 
-    expect(rowCount).to.equal(1001);
+    expect(pdf.toString()).to.equal("%PDF-test");
+    expect(rowCount).to.equal(1500);
     expect(truncated).to.equal(false);
-    expect(pageCalls.map((c) => c.cursor)).to.deep.equal([undefined, "row-999"]);
-    const lines = csv.trimEnd().split("\r\n");
-    expect(lines[0]).to.equal(
-      "createdAt,action,outcome,actorEmail,actorId,targetType,targetId,caseId,organizationId,ip,userAgent,requestId,payload",
-    );
-    expect(lines[1]).to.equal(
-      '2026-10-08T10:00:00.000Z,auth.login,SUCCESS,lawyer@firm.test,user-1,,,,org-1,203.0.113.7,Mozilla/5.0,req,"{""method"":""password""}"',
-    );
+    expect(listCalls).to.deep.equal([
+      { take: 1000, skip: 0 },
+      { take: 500, skip: 1000 },
+    ]);
+    expect(rendered[0]!.events).to.have.length(1500);
+    expect(rendered[0]!.events[0].display.details).to.equal("With password");
+    expect(rendered[0]!.header).to.include({ scope: "Audit QA Firm", rowCount: 1500, truncated: false });
+    expect(rendered[0]!.header.filters).to.deep.equal(["action: auth."]);
     expect(recorded).to.deep.equal([
       {
         action: "export.audit_log",
         organizationId: "org-1",
         targetType: "organization",
         targetId: "org-1",
-        payload: { rowCount: 1001, truncated: false, filter: { action: "auth." } },
+        payload: { format: "pdf", rowCount: 1500, truncated: false, filter: { action: "auth." } },
       },
     ]);
   });
+
+  it("caps the export at 5,000 rows and says so", async () => {
+    (SecurityAuditRepo as any).count = async () => 7000;
+    (SecurityAuditRepo as any).list = async (_filter: unknown, take: number, skip: number) =>
+      Array.from({ length: take }, (_, i) => row(skip + i));
+
+    const { rowCount, truncated } = await SecurityAuditSvc.exportPdf({ organizationId: "org-1" }, "Audit QA Firm");
+
+    expect(rowCount).to.equal(5000);
+    expect(truncated).to.equal(true);
+    expect(rendered[0]!.header).to.include({ rowCount: 7000, truncated: true, maxRows: 5000 });
+  });
 });
 
-describe("csvCell", () => {
-  it("quotes commas, quotes and newlines", () => {
-    expect(csvCell('a,"b"\nc')).to.equal('"a,""b""\nc"');
+describe("renderAuditLogPdf", () => {
+  /** The page tree's /Count — pdfkit writes it uncompressed. */
+  const pageCount = (pdf: Buffer) => Number(/\/Count (\d+)/.exec(pdf.toString("latin1"))?.[1] ?? 0);
+
+  const event = (i: number, overrides: object = {}) =>
+    ({
+      id: `e-${i}`,
+      createdAt: new Date(Date.UTC(2026, 9, 8, 9, 30, 0)),
+      action: "org.member_role_changed",
+      outcome: "SUCCESS",
+      organizationId: "org-1",
+      tenantCode: "UK",
+      actorId: "user-1",
+      actorEmail: "owner@firm.test",
+      targetType: "user",
+      targetId: "user-2",
+      caseId: null,
+      ip: "203.0.113.7",
+      userAgent: "Mozilla/5.0",
+      requestId: "req",
+      payload: { from: "MEMBER", to: "ADMIN" },
+      ...overrides,
+    }) as any;
+
+  const header = { scope: "Audit QA Firm", generatedAt: new Date(), generatedBy: "owner@firm.test", filters: [], truncated: false, maxRows: 5000 };
+
+  const display = { actor: "Owner A", target: "Member B", details: "Member → Admin", ip: "203.0.113.7" };
+  const item = (i: number, overrides: object = {}) => ({ event: event(i, overrides), display });
+
+  it("lays an event out as one table row, using the display text rather than ids", () => {
+    expect(pdfRenderer.auditLogPdfRow(item(1))).to.deep.equal([
+      "2026-10-08 09:30:00",
+      "Member role changed",
+      "OK",
+      "Owner A",
+      "Member B",
+      "Member → Admin",
+      "203.0.113.7",
+    ]);
+    expect(pdfRenderer.auditLogPdfRow(item(2, { outcome: "FAILURE" }))[2]).to.equal("Failed");
   });
 
-  it("defuses spreadsheet formulas in attacker-controlled text", () => {
-    expect(csvCell("=HYPERLINK(\"http://evil\")")).to.equal('"\'=HYPERLINK(""http://evil"")"');
-    expect(csvCell("+1")).to.equal("'+1");
-    expect(csvCell("@SUM(A1)")).to.equal("'@SUM(A1)");
-  });
+  it("renders a valid multi-page PDF for a long log, and a one-page PDF for an empty one", async () => {
+    const long = await pdfRenderer.renderAuditLogPdf({ ...header, rowCount: 300 }, Array.from({ length: 300 }, (_, i) => item(i)));
+    expect(long.subarray(0, 5).toString()).to.equal("%PDF-");
+    expect(pageCount(long)).to.be.greaterThan(1);
 
-  it("writes null as empty and dates as ISO", () => {
-    expect(csvCell(null)).to.equal("");
-    expect(csvCell(new Date(Date.UTC(2026, 0, 2)))).to.equal("2026-01-02T00:00:00.000Z");
+    const empty = await pdfRenderer.renderAuditLogPdf({ ...header, rowCount: 0 }, []);
+    expect(pageCount(empty)).to.equal(1);
   });
 });

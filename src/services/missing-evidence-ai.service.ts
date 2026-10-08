@@ -1,3 +1,4 @@
+import ManualEditLog from "./manual-edit-log.service";
 import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import CaseClaimRepo from "../repositories/case-claim.repository";
@@ -46,6 +47,7 @@ export default class MissingEvidenceAiSvc {
     data: { status: MissingEvidenceStatus; resolutionNote?: string | null },
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await MissingEvidenceRepo.find(id, caseId);
     const row = await MissingEvidenceRepo.updateStatus(id, caseId, {
       status: data.status,
       resolutionNote: data.resolutionNote?.trim() || null,
@@ -58,6 +60,10 @@ export default class MissingEvidenceAiSvc {
       action: "evidence.missing.status",
       payload: { id, status: data.status },
     });
+    if (before?.status !== row.status) {
+      const action = ({ RESOLVED: "resolved", DISMISSED: "dismissed", OPEN: "reopened" } as const)[row.status];
+      await ManualEditLog.record(caseId, userId, { pane: "evidence", kind: "missingEvidence", itemId: id, action, label: row.label });
+    }
     return row;
   }
 

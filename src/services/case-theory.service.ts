@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import CaseChangeRun from "./case-change-run.service";
 import CaseChangeReads from "./case-change-reads";
 import { diffTheory } from "../utils/case-change-delta";
@@ -50,6 +52,7 @@ export default class CaseTheorySvc {
     const theory = await CaseTheoryRepo.create(caseId, { authorUserId: userId, title: data.title, thesis: data.thesis });
     await CaseGraphSvc.ensureNode(caseId, "THEORY", theory.id);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.create", payload: { id: theory.id } });
+    await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theory", itemId: theory.id, action: "added", label: theory.title });
     return theory;
   }
 
@@ -60,6 +63,14 @@ export default class CaseTheorySvc {
     assertAuthor(theory, userId);
     const row = await CaseTheoryRepo.update(theoryId, caseId, data);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.update", payload: { id: theoryId } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "theories",
+      kind: "theory",
+      itemId: theoryId,
+      action: "edited",
+      label: data.title ?? theory.title,
+      changes: fieldChanges(theory, data, { title: "value", thesis: "text" }),
+    });
     return row;
   }
 
@@ -86,6 +97,13 @@ export default class CaseTheorySvc {
     assertAuthor(theory, userId);
     const row = await CaseTheoryRepo.update(theoryId, caseId, { status });
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action, payload: { id: theoryId } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "theories",
+      kind: "theory",
+      itemId: theoryId,
+      action: status === "ACTIVE" ? "published" : "retired",
+      label: theory.title,
+    });
     return row;
   }
 
@@ -114,6 +132,7 @@ export default class CaseTheorySvc {
       await CaseTheoryRepo.addOpenQuestion(forked.id, openQuestion.question);
     }
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.fork", payload: { id: forked.id, forkedFromId: source.id } });
+    await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theory", itemId: forked.id, action: "forked", label: source.title });
     return CaseTheoryRepo.findById(forked.id, caseId);
   }
 
@@ -133,6 +152,7 @@ export default class CaseTheorySvc {
     // Its THEORY graph node, and with it (FK cascade) the edges its graph-linked claims made.
     await CaseGraphSvc.removeNode("THEORY", theoryId);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.delete", payload: { id: theoryId, forkedFromId: theory.forkedFromId } });
+    await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theory", itemId: theoryId, action: "removed", label: theory.title });
   }
 
   /** `graphNodeId` optionally links this claim to an existing CaseGraphNode (a CLAIM, FINDING
@@ -162,6 +182,7 @@ export default class CaseTheorySvc {
         metadata: { theoryClaimId: claim.id, statement: data.statement },
       }).catch(() => {});
     }
+    await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theoryClaim", itemId: claim.id, action: "added", label: claim.statement });
     return claim;
   }
 
@@ -174,9 +195,18 @@ export default class CaseTheorySvc {
     userId: string,
     data: { statement?: string; stance?: TheoryStance },
   ) {
-    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const before = theory.claims.find((c) => c.id === claimId);
     const claim = await CaseTheoryRepo.updateClaim(claimId, theoryId, data);
     if (!claim) throw new HttpError("Claim not found", 404);
+    await ManualEditLog.record(caseId, userId, {
+      pane: "theories",
+      kind: "theoryClaim",
+      itemId: claimId,
+      action: "edited",
+      label: claim.statement,
+      changes: fieldChanges(before, data, { statement: "text", stance: "value" }),
+    });
     if (claim.graphNodeId) {
       await CaseEdgeRepo.deleteByTheoryClaim(caseId, claim.id);
       const theoryNode = await CaseGraphSvc.ensureNode(caseId, "THEORY", theoryId);
@@ -192,35 +222,63 @@ export default class CaseTheorySvc {
   }
 
   static async deleteClaim(caseId: string, theoryId: string, claimId: string, userId: string) {
-    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const before = theory.claims.find((c) => c.id === claimId);
     const deleted = await CaseTheoryRepo.deleteClaim(claimId, theoryId);
     if (!deleted) throw new HttpError("Claim not found", 404);
+    if (before) await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theoryClaim", itemId: claimId, action: "removed", label: before.statement });
     await CaseEdgeRepo.deleteByTheoryClaim(caseId, claimId);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "theory.claim.delete", payload: { id: theoryId, claimId } });
   }
 
   static async updateAssumption(caseId: string, theoryId: string, assumptionId: string, userId: string, statement: string) {
-    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const before = theory.assumptions.find((a) => a.id === assumptionId);
     const row = await CaseTheoryRepo.updateAssumption(assumptionId, theoryId, statement);
     if (!row) throw new HttpError("Assumption not found", 404);
+    await ManualEditLog.record(caseId, userId, {
+      pane: "theories",
+      kind: "theoryAssumption",
+      itemId: assumptionId,
+      action: "edited",
+      label: row.statement,
+      changes: fieldChanges(before, { statement }, { statement: "text" }),
+    });
     return row;
   }
 
   static async deleteAssumption(caseId: string, theoryId: string, assumptionId: string, userId: string) {
-    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const before = theory.assumptions.find((a) => a.id === assumptionId);
     if (!(await CaseTheoryRepo.deleteAssumption(assumptionId, theoryId))) throw new HttpError("Assumption not found", 404);
+    if (before) {
+      await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theoryAssumption", itemId: assumptionId, action: "removed", label: before.statement });
+    }
   }
 
   static async updateOpenQuestion(caseId: string, theoryId: string, questionId: string, userId: string, question: string) {
-    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const before = theory.openQuestions.find((q) => q.id === questionId);
     const row = await CaseTheoryRepo.updateOpenQuestion(questionId, theoryId, question);
     if (!row) throw new HttpError("Open question not found", 404);
+    await ManualEditLog.record(caseId, userId, {
+      pane: "theories",
+      kind: "theoryQuestion",
+      itemId: questionId,
+      action: "edited",
+      label: row.question,
+      changes: fieldChanges(before, { question }, { question: "text" }),
+    });
     return row;
   }
 
   static async deleteOpenQuestion(caseId: string, theoryId: string, questionId: string, userId: string) {
-    await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const theory = await CaseTheorySvc.loadOwnTheory(caseId, theoryId, userId);
+    const before = theory.openQuestions.find((q) => q.id === questionId);
     if (!(await CaseTheoryRepo.deleteOpenQuestion(questionId, theoryId))) throw new HttpError("Open question not found", 404);
+    if (before) {
+      await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theoryQuestion", itemId: questionId, action: "removed", label: before.question });
+    }
   }
 
   /** Same gate every theory edit goes through: can edit the case, theory exists, caller wrote it. */
@@ -237,7 +295,9 @@ export default class CaseTheorySvc {
     const theory = await CaseTheoryRepo.findById(theoryId, caseId);
     if (!theory) throw new HttpError("Theory not found", 404);
     assertAuthor(theory, userId);
-    return CaseTheoryRepo.addAssumption(theoryId, statement);
+    const row = await CaseTheoryRepo.addAssumption(theoryId, statement);
+    await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theoryAssumption", itemId: row.id, action: "added", label: row.statement });
+    return row;
   }
 
   static async addOpenQuestion(caseId: string, theoryId: string, userId: string, question: string) {
@@ -245,7 +305,9 @@ export default class CaseTheorySvc {
     const theory = await CaseTheoryRepo.findById(theoryId, caseId);
     if (!theory) throw new HttpError("Theory not found", 404);
     assertAuthor(theory, userId);
-    return CaseTheoryRepo.addOpenQuestion(theoryId, question);
+    const row = await CaseTheoryRepo.addOpenQuestion(theoryId, question);
+    await ManualEditLog.record(caseId, userId, { pane: "theories", kind: "theoryQuestion", itemId: row.id, action: "added", label: row.question });
+    return row;
   }
 
   /** Fast, synchronous half of a queued propose — access check + claiming the AiGenerationJob

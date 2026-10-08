@@ -15,6 +15,10 @@ export interface RiskInput {
 }
 
 export default class CaseRiskRepo {
+  static async find(id: string, caseId: string) {
+    return prisma.caseRisk.findFirst({ where: { id, caseId } });
+  }
+
   static async list(caseId: string) {
     return prisma.caseRisk.findMany({
       where: { caseId },

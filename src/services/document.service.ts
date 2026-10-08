@@ -337,6 +337,7 @@ export default class DocumentSvc {
       organizationId,
       targetType: "document",
       targetId: id,
+      targetName: doc.name,
       caseId: doc.caseId ?? null,
       payload: { consultationId: doc.consultationId ?? null, ragStatus: doc.ragStatus },
     });

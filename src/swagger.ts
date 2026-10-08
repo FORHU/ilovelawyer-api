@@ -2597,6 +2597,7 @@ const swaggerSpec: OAS3Definition = {
                       day: { type: "string", format: "date" },
                       runs: { type: "integer" },
                       totalChanges: { type: "integer", description: "Summed over the day's runs; a first analysis counts none" },
+                      editSessions: { type: "integer", description: "Lawyers' editing sessions that started that day" },
                     },
                   },
                 },
@@ -2604,6 +2605,34 @@ const swaggerSpec: OAS3Definition = {
             },
           },
         },
+      },
+    },
+    "/my-cases/{caseId}/manual-edits": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "One day's editing sessions: lawyers' manual edits, grouped",
+        description:
+          "A session is one person's edits with no gap over 30 minutes and no analysis run in between. Newest first. Each edit names its pane (a Terminal PanelId), what was edited, the action (added, edited, removed, resolved, ticked, accepted, …), the item's name when edited, and for an edit the fields it changed.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "caseId", in: "path", required: true, schema: { type: "string" } },
+          { name: "day", in: "query", required: true, schema: { type: "string", format: "date" } },
+          { name: "tz", in: "query", required: false, description: "The viewer's IANA time zone. Unknown or missing = UTC", schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "Editing sessions" }, 400: { description: "day isn't a YYYY-MM-DD date" } },
+      },
+    },
+    "/my-cases/{caseId}/change-summaries/{summaryId}/edits-before": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "The lawyers' edits made between the previous run and this one",
+        description: "From the previous run's save to this run's start, so edits made while the run worked aren't counted. Returns the edit count, who made them, and the earliest session.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "caseId", in: "path", required: true, schema: { type: "string" } },
+          { name: "summaryId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "Edits before the run" }, 404: { description: "No such change summary on this case" } },
       },
     },
     "/my-cases/{caseId}/refresh": {

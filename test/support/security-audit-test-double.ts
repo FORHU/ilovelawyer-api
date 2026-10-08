@@ -13,3 +13,11 @@ repo.findUserIdByEmail = async () => null;
 repo.findOrganizationTenantCode = async () => null;
 repo.list = async () => [];
 repo.deleteOlderThan = async () => 0;
+repo.count = async () => 0;
+repo.findNames = async () => {
+  const names: Record<string, Map<string, unknown>> = {};
+  for (const key of ["users", "organizations", "cases", "documents", "consultations", "transcriptions", "notes", "briefs", "files", "audioOverviews", "messages", "invites", "integrations"]) {
+    names[key] = new Map();
+  }
+  return names;
+};
