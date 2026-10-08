@@ -12,17 +12,28 @@ export interface AiMissingEvidenceRow {
 }
 
 export default class MissingEvidenceRepo {
-  /** Open gaps first, then the most severe, so the panel leads with what still needs work. */
+  /**
+   * Open gaps first, then the most severe, so the panel leads with what still needs work. Each
+   * row carries its claim's title as `claimLabel`: claimId is a plain id, and the app has no
+   * claims endpoint of its own, so resolving it here is the only way the pane can name the claim
+   * a gap belongs to. Null when the gap is case-wide or the claim has since been deleted.
+   */
   static async list(caseId: string) {
-    const rows = await prisma.caseMissingEvidence.findMany({ where: { caseId } });
+    const [rows, claims] = await Promise.all([
+      prisma.caseMissingEvidence.findMany({ where: { caseId } }),
+      prisma.caseClaim.findMany({ where: { caseId }, select: { id: true, title: true } }),
+    ]);
+    const claimTitle = new Map(claims.map((claim) => [claim.id, claim.title]));
     const byStatus = { OPEN: 0, RESOLVED: 1, DISMISSED: 2 } as const;
     const bySeverity = { CRITICAL: 0, MODERATE: 1, MINOR: 2 } as const;
-    return rows.sort(
-      (a, b) =>
-        byStatus[a.status] - byStatus[b.status] ||
-        bySeverity[a.severity] - bySeverity[b.severity] ||
-        b.createdAt.getTime() - a.createdAt.getTime(),
-    );
+    return rows
+      .map((row) => ({ ...row, claimLabel: (row.claimId && claimTitle.get(row.claimId)) || null }))
+      .sort(
+        (a, b) =>
+          byStatus[a.status] - byStatus[b.status] ||
+          bySeverity[a.severity] - bySeverity[b.severity] ||
+          b.createdAt.getTime() - a.createdAt.getTime(),
+      );
   }
 
   /** The lawyer's triage. Mirrors EvidenceRepo.updateContradictionStatus: reopening clears the
