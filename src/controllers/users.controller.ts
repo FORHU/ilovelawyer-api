@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import UsersSvc from "../services/users.service";
+import DataExportSvc from "../services/data-export.service";
+import AuditSvc, { AuditAction } from "../services/audit.service";
 import AvatarSvc from "../services/avatar.service";
 import GoogleCalendarSvc from "../services/google-calendar.service";
 import ProductTourSvc from "../services/product-tour.service";
@@ -42,6 +44,34 @@ export default class UsersCtrl {
     // requestDeletion revoked every session; drop this browser's now-dead refresh cookie too.
     clearRefreshTokenCookie(res);
     return res.status(200).json(user);
+  }
+
+  /** POST /api/users/me/export — everything we hold about the caller, as one JSON download.
+   * A POST (not a GET) so the password can travel in the body, not the URL. */
+  static async exportMe(req: Request, res: Response) {
+    const { error, value } = deleteMeSchema.validate({ password: req.body?.password });
+    if (error) throw new HttpError(error.message, 400);
+    await UsersSvc.confirmPassword(req.user.userId, value.password);
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.status(200);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="ilovelawyer-my-data-${stamp}.json"`);
+    res.setHeader("Cache-Control", "no-store");
+
+    try {
+      const counts = await DataExportSvc.stream(req.user.userId, (chunk) => res.write(chunk));
+      res.end();
+      await AuditSvc.record({
+        action: AuditAction.AccountDataExported,
+        actorId: req.user.userId,
+        payload: { tables: Object.keys(counts).length, rows: Object.values(counts).reduce((a, b) => a + b, 0) },
+      });
+    } catch (err) {
+      // The download has already started, so an error page can't be sent: cut the connection so the
+      // client sees a failed download instead of a truncated file that looks complete.
+      res.destroy(err as Error);
+    }
   }
 
   static async cancelDeletion(req: Request, res: Response) {

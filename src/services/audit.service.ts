@@ -12,6 +12,7 @@ export const AuditAction = {
   AccountDeletionCancelled: "account.deletion_cancelled",
   AccountRestoredOnSignIn: "account.restored_on_sign_in",
   AccountPurged: "account.purged",
+  AccountDataExported: "account.data_export",
   FileDownloaded: "file.download",
   DocumentDeleted: "document.delete",
   CaseBriefExported: "case.brief_export",
