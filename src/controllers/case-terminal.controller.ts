@@ -59,6 +59,7 @@ import {
   createProcedureItemSchema,
   updateProcedureItemSchema,
   grantAccessSchema,
+  setConfidentialSchema,
   listFindingsSchema,
   createFindingSchema,
   regenerateFindingsSchema,
@@ -508,6 +509,13 @@ export default class CaseTerminalCtrl {
 
   static async listAccess(req: Request, res: Response) {
     const result = await OrganizationSvc.listAccess(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async setConfidential(req: Request, res: Response) {
+    const { error, value } = setConfidentialSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await OrganizationSvc.setConfidential(req.params.caseId, req.user.userId, value.confidential);
     return res.status(200).json(result);
   }
 

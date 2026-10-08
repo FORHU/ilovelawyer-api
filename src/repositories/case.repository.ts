@@ -316,6 +316,11 @@ export default class CaseRepo {
   }
 
   /** Marks the case's findings outdated, so the next Terminal load regenerates them. */
+  /** Not scoped by organizationId — the caller has already checked it may manage this case. */
+  static async setConfidential(id: string, confidential: boolean) {
+    await prisma.case.update({ where: { id }, data: { confidential } });
+  }
+
   static async clearFindingsFormatVersion(id: string) {
     return prisma.case.updateMany({ where: { id }, data: { findingsFormatVersion: null } });
   }

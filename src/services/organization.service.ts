@@ -3,6 +3,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationInviteRepo from "../repositories/organization-invite.repository";
 import CaseCopyRepo from "../repositories/case-copy.repository";
+import CaseRepo from "../repositories/case.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
 import AuthRepo from "../repositories/auth.repository";
 import TenantRepo from "../repositories/tenant.repository";
@@ -442,7 +443,23 @@ export default class OrganizationSvc {
         grant: g.permission,
       });
     }
-    return { canEdit, canManage, people };
+    return { confidential: caseRecord.confidential, canEdit, canManage, people };
+  }
+
+  /** Marks a case confidential or ordinary (#346). Whoever can manage its access may (D7). Marking
+   * it first gives the marker an ADMIN grant (D8) — an org ADMIN would otherwise wall themselves
+   * off the moment it took effect. Unmarking leaves grants as they are. Audited either way. */
+  static async setConfidential(caseId: string, actorId: string, confidential: boolean) {
+    const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
+    if (caseRecord.confidential === confidential) return { confidential };
+    if (confidential) await OrganizationRepo.grantCaseAccess(caseId, actorId, "ADMIN");
+    await CaseRepo.setConfidential(caseId, confidential);
+    await OrganizationRepo.writeAudit({
+      caseId,
+      actorId,
+      action: confidential ? "case.confidential_set" : "case.confidential_unset",
+    });
+    return { confidential };
   }
 
   static async teamAudit(caseId: string, userId: string) {
