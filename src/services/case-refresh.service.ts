@@ -63,9 +63,9 @@ export default class CaseRefreshSvc {
     }
 
     /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row.
-     * `reason` is audit-trail only — it never changes what runs, just distinguishes a lawyer's
-     * "Refresh analysis" click from the automatic post-extraction trigger in the case.refresh
-     * audit row (case-post-extraction.ts passes "post-extraction" explicitly). */
+     * `reason` distinguishes a lawyer's "Refresh analysis" click from the automatic
+     * post-extraction trigger (case-post-extraction.ts passes "post-extraction" explicitly): in the
+     * case.refresh audit row, the map's build reason, and whether damages re-reads every document. */
     static async runQueued(caseId: string, userId: string, reason: "manual" | "post-extraction" = "manual"): Promise<void> {
         await AiGenerationLockSvc.finishWith(caseId, "caseRefresh", () =>
             CaseRefreshSvc.refreshInner(caseId, userId, reason),
@@ -166,7 +166,11 @@ export default class CaseRefreshSvc {
             ],
             // Inline, batch after batch, so the next wave scores and re-rates every new entry.
             ["witness extraction", () => changes.track("witnesses", () => WitnessExtractSvc.extractAllPending(caseId, userId))],
-            ["damages extraction", () => changes.track("damages", () => DamagesExtractSvc.extractAllPending(caseId, userId))],
+            // A lawyer's click reads every document again; the automatic run reads only new ones.
+            [
+                "damages extraction",
+                () => changes.track("damages", () => DamagesExtractSvc.extractAllPending(caseId, userId, { rereadAll: reason === "manual" })),
+            ],
             // The narrative reads the documents alone; it is rewritten only while nobody has edited it.
             [
                 "case reconstruction",

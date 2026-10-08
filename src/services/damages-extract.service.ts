@@ -45,8 +45,10 @@ const MAX_BATCHES_PER_REFRESH = 25;
  * from and a verbatim quote that extractDamageHeads has found in that document's text, holding its
  * amount (or the rate and count it is worked out from). It never deletes an entry and skips any the
  * case already has (same kind and title), except to fill in the amount of an AI suggestion still
- * waiting for the lawyer. Each document is marked read (Document.damagesExtractedAt) so an entry the lawyer
- * removed isn't re-created from the same document. New entries wait for a lawyer to accept them.
+ * waiting for the lawyer, and any the lawyer dismissed (deleted or renamed — DamageClaimDismissal).
+ * Each document is marked read (Document.damagesExtractedAt) so the automatic run after an upload
+ * reads only new documents; a lawyer's "Refresh analysis" or the pane's Regenerate reads them all
+ * again (rereadAll). New entries wait for a lawyer to accept them.
  */
 export default class DamagesExtractSvc {
   static schedule(caseId: string, userId: string, delaySeconds?: number): void {
@@ -94,11 +96,16 @@ export default class DamagesExtractSvc {
   /** The analysis refresh's damages-reading step (CaseRefreshSvc, first wave): reads every pending
    * document, batch after batch, under one "damagesExtract" lock, so the re-rating in the next
    * wave sees every new entry. Throws 409 when a queued run holds the lock. Past
-   * MAX_BATCHES_PER_REFRESH, the rest goes to the queue. */
-  static async extractAllPending(caseId: string, userId: string): Promise<{ batches: number }> {
-    if ((await DocumentRepo.listPendingDamagesExtraction(caseId)).length === 0) return { batches: 0 };
+   * MAX_BATCHES_PER_REFRESH, the rest goes to the queue.
+   *
+   * `rereadAll` (a run the lawyer started) first marks every document unread, under the lock, so
+   * documents read before — whose first read found nothing — are read again. Dismissed entries
+   * stay dismissed and existing ones aren't duplicated. */
+  static async extractAllPending(caseId: string, userId: string, opts: { rereadAll?: boolean } = {}): Promise<{ batches: number }> {
+    if (!opts.rereadAll && (await DocumentRepo.listPendingDamagesExtraction(caseId)).length === 0) return { batches: 0 };
     let batches = 0;
     const hasMore = await AiGenerationLockSvc.run(caseId, "damagesExtract", async () => {
+      if (opts.rereadAll) await DocumentRepo.clearDamagesExtracted(caseId);
       let more = true;
       while (more && batches < MAX_BATCHES_PER_REFRESH) {
         more = await DamagesExtractSvc.extractBatch(caseId, userId);
@@ -130,7 +137,7 @@ export default class DamagesExtractSvc {
         "damages",
         () => CaseChangeReads.damages(caseId),
         async () => {
-          await DamagesExtractSvc.extractAllPending(caseId, userId).catch((err) => {
+          await DamagesExtractSvc.extractAllPending(caseId, userId, { rereadAll: true }).catch((err) => {
             if (err instanceof HttpError && err.statusCode === 409) return;
             throw err;
           });
@@ -207,7 +214,10 @@ export default class DamagesExtractSvc {
     // Wonder once for the right one (or is dropped), so nothing questionable reaches the panel.
     const vetted = await DamagesExtractSvc.vetWithJev(caseId, proposed, { tenantCode, fullTexts, docs, promptDocs, trace });
     // The prompt tells the model a criminal court awards no civil heads; this holds it to that.
-    const found = ukCriminal ? vetted.filter((h) => !isExcludedOnUkCriminalCase(h)) : vetted;
+    const inScope = ukCriminal ? vetted.filter((h) => !isExcludedOnUkCriminalCase(h)) : vetted;
+    // What the lawyer deleted or renamed is never proposed again.
+    const dismissed = await DamageClaimRepo.listDismissedKeys(caseId);
+    const found = inScope.filter((h) => !dismissed.has(damageHeadKey(h.kind, h.title)));
 
     const known = new Map(existing.map((h) => [damageHeadKey(h.kind, h.title), h]));
     // Every AI damage carries a figure: one still without an amount — new from this read, or a
@@ -304,7 +314,8 @@ export default class DamagesExtractSvc {
       docCount: batch.length,
       criminal,
       proposed: proposed.length,
-      outOfScope: vetted.length - found.length,
+      outOfScope: vetted.length - inScope.length,
+      dismissed: inScope.length - found.length,
       withdrawn: withdrawn.length,
       kept: found.length,
       created: created.length,

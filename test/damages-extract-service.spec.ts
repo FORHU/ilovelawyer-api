@@ -43,6 +43,7 @@ describe("DamagesExtractSvc", () => {
   let marked: string[][];
   let audits: any[];
   let scheduled: number;
+  let dismissedKeys: Set<string>;
 
   function patch(target: object, key: string, value: unknown) {
     const original = (target as any)[key];
@@ -89,6 +90,7 @@ describe("DamagesExtractSvc", () => {
     marked = [];
     audits = [];
     scheduled = 0;
+    dismissedKeys = new Set();
     reply = `[DAMAGES]${JSON.stringify([
       { kind: "DAMAGE", title: "Moral damages", description: "For the anguish of the dismissal", amount: 200000, documentId: "doc-cmp", quote: "P200,000.00 as moral damages" },
       { kind: "DAMAGE", title: "Exemplary", amount: 150000, documentId: "doc-cmp", quote: "P100,000.00 as exemplary damages" },
@@ -104,6 +106,7 @@ describe("DamagesExtractSvc", () => {
     patch(DocumentRepo, "markDamagesExtracted", async (ids: string[]) => void marked.push(ids));
     patch(DocumentChunkRepo, "findFullTextsByDocuments", async () => new Map([["doc-pay", PAYSLIP], ["doc-cmp", COMPLAINT]]));
     patch(DamageClaimRepo, "list", async () => [...existing, ...created]);
+    patch(DamageClaimRepo, "listDismissedKeys", async () => dismissedKeys);
     patch(DamageClaimRepo, "createFromAi", async (_caseId: string, data: any) => {
       const row = { id: `new-${created.length}`, ...data, sourceQuote: data.sourceQuote };
       created.push(row);
@@ -151,6 +154,45 @@ describe("DamagesExtractSvc", () => {
     expect(marked).to.deep.equal([["doc-pay", "doc-cmp"]]);
     expect(audits[0]).to.include({ action: "damage.extract" });
     expect(audits[0].payload.ids).to.deep.equal(["new-0", "new-1"]);
+  });
+
+  it("never re-creates an entry the lawyer dismissed, and still marks the document read", async () => {
+    dismissedKeys = new Set(["DAMAGE:moral damages"]);
+    await DamagesExtractSvc.runQueued("case-1", "user-1");
+    expect(created.map((h) => h.title)).to.deep.equal(["Reinstatement"]);
+    expect(marked).to.deep.equal([["doc-pay", "doc-cmp"]]);
+  });
+
+  it("rereadAll marks every document unread under the lock, so documents read before are read again", async () => {
+    const order: string[] = [];
+    let cleared = false;
+    pending = [];
+    patch(DocumentRepo, "listPendingDamagesExtraction", async () => (cleared ? [{ id: "doc-cmp", name: "Complaint.pdf" }] : []));
+    patch(DocumentRepo, "clearDamagesExtracted", async () => {
+      order.push("clear");
+      cleared = true;
+    });
+    patch(AiGenerationLockSvc, "run", async (_c: string, kind: string, fn: () => Promise<unknown>) => (order.push(`lock:${kind}`), fn()));
+
+    // Without it, a case whose documents were all read takes no lock and reads nothing.
+    expect(await DamagesExtractSvc.extractAllPending("case-1", "user-1")).to.deep.equal({ batches: 0 });
+    expect(order).to.deep.equal([]);
+
+    patch(DocumentRepo, "markDamagesExtracted", async (ids: string[]) => {
+      marked.push(ids);
+      cleared = false;
+    });
+    await DamagesExtractSvc.extractAllPending("case-1", "user-1", { rereadAll: true });
+    expect(order).to.deep.equal(["lock:damagesExtract", "clear"]);
+    expect(created.map((h) => h.title)).to.deep.equal(["Moral damages", "Reinstatement"]);
+  });
+
+  it("the pane's Regenerate re-reads every document", async () => {
+    const calls: any[] = [];
+    patch(DamagesExtractSvc, "extractAllPending", async (...args: any[]) => (calls.push(args), { batches: 0 }));
+    patch(DamagesExtractSvc, "refreshStep", async () => ({ heads: 0 }));
+    await DamagesExtractSvc.runQueuedRefresh("case-1", "user-1");
+    expect(calls).to.deep.equal([["case-1", "user-1", { rereadAll: true }]]);
   });
 
   it("resolves a handle citation to the real document, and works out rate × count", async () => {

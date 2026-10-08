@@ -171,6 +171,14 @@ describe("CaseRefreshSvc.runQueued — audit reason", () => {
     expect(audits[0]).to.include({ action: "case.refresh" });
   });
 
+  it('"Refresh analysis" re-reads every document for damages; the automatic run reads only new ones', async () => {
+    const opts: unknown[] = [];
+    (DamagesExtractSvc as any).extractAllPending = async (_c: string, _u: string, o?: unknown) => (opts.push(o), { batches: 0 });
+    await CaseRefreshSvc.runQueued("case-1", "user-1");
+    await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");
+    expect(opts).to.deep.equal([{ rereadAll: true }, { rereadAll: false }]);
+  });
+
   it('"Refresh analysis" rebuilds the case mind map ("refresh"); the automatic run only when documents changed ("auto")', async () => {
     await CaseRefreshSvc.runQueued("case-1", "user-1");
     await CaseRefreshSvc.runQueued("case-1", "user-1", "post-extraction");

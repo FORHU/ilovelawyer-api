@@ -871,6 +871,7 @@ model Case {
   findings             CaseFinding[]
   witnesses            Witness[]
   damageClaims         DamageClaim[]
+  damageClaimDismissals DamageClaimDismissal[]
   claims               CaseClaim[]
   citationGrounds      CitationGround[]
   adverseHits          AdverseCitationHit[]
@@ -2139,6 +2140,19 @@ model DamageClaim {
   sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
 
   @@index([caseId])
+}
+
+// An AI suggestion the lawyer deleted or renamed, by its damageHeadKey (kind + normalised title),
+// so a later read of the case's documents doesn't propose it again.
+model DamageClaimDismissal {
+  id        String   @id @default(uuid())
+  caseId    String
+  key       String
+  createdAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, key])
 }
 
 // A legal claim/cause of action being pursued (e.g. "Breach of Contract", "Negligence") —
