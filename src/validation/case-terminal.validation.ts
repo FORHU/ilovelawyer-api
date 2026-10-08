@@ -207,6 +207,10 @@ export const updateProcedureItemSchema = Joi.object({
   label: Joi.string().optional(),
 }).min(1);
 
+export const setConfidentialSchema = Joi.object({
+  confidential: Joi.boolean().required(),
+});
+
 export const grantAccessSchema = Joi.object({
   userId: Joi.string().required(),
   permission: Joi.string().valid("VIEW", "EDIT", "ADMIN").required(),

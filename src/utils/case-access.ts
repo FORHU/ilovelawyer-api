@@ -1,9 +1,10 @@
 import prisma from "../lib/prisma";
 import HttpError from "./http-error";
-import { CasePermission, ClientSide, Prisma } from "@prisma/client";
+import { CasePermission, ClientSide, OrganizationRole, Prisma } from "@prisma/client";
 import { TenantCode, asTenantCode } from "../types/tenant-code";
 
 const EDIT_PERMS: CasePermission[] = ["EDIT", "ADMIN"];
+const ORG_EDITORS: OrganizationRole[] = ["OWNER", "ADMIN"];
 
 /** Having created a case is attribution, not access: an organization's case is reached through
  * membership (or a per-case grant), so its creator loses it on leaving — they keep their
@@ -14,21 +15,35 @@ function ownedByUser(userId: string): Prisma.CaseWhereInput[] {
   return [{ userId, organizationId: null }, { organization: { isPersonal: true, createdById: userId } }];
 }
 
+/** Org membership that reaches a case: any accepted member, or only `roles` when given. A
+ * confidential case (#346) is the exception — membership alone no longer reaches it, org ADMIN
+ * included (D6); only the organization's OWNER keeps it (D5). Everyone else needs a grant. */
+function viaMembership(userId: string, roles?: OrganizationRole[]): Prisma.CaseWhereInput[] {
+  return [
+    { confidential: false, organization: { members: { some: { userId, status: "ACCEPTED", ...(roles ? { role: { in: roles } } : {}) } } } },
+    { organization: { members: { some: { userId, status: "ACCEPTED", role: "OWNER" } } } },
+  ];
+}
+
 export default class CaseAccess {
+  /** Every case `userId` can open — as a filter, for listings (the case list, documents,
+   * transcriptions) so a confidential case is left out for anyone it's walled off from (D4). */
+  static visibleWhere(userId: string): Prisma.CaseWhereInput {
+    return { OR: [...ownedByUser(userId), { accesses: { some: { userId } } }, ...viaMembership(userId)] };
+  }
+
   static async loadAccessibleCase(caseId: string, userId: string) {
     const record = await prisma.case.findFirst({
-      where: {
-        id: caseId,
-        OR: [
-          ...ownedByUser(userId),
-          { accesses: { some: { userId } } },
-          { organization: { members: { some: { userId, status: "ACCEPTED" } } } },
-        ],
-      },
+      where: { id: caseId, ...CaseAccess.visibleWhere(userId) },
       include: { parties: true },
     });
     if (!record) throw new HttpError("Case not found", 404);
     return record;
+  }
+
+  static async isConfidential(caseId: string): Promise<boolean> {
+    const record = await prisma.case.findUnique({ where: { id: caseId }, select: { confidential: true } });
+    return !!record?.confidential;
   }
 
   private static editWhere(caseId: string, userId: string): Prisma.CaseWhereInput {
@@ -37,7 +52,7 @@ export default class CaseAccess {
       OR: [
         ...ownedByUser(userId),
         { accesses: { some: { userId, permission: { in: EDIT_PERMS } } } },
-        { organization: { members: { some: { userId, status: "ACCEPTED", role: { in: ["OWNER", "ADMIN"] } } } } },
+        ...viaMembership(userId, ORG_EDITORS),
       ],
     };
   }
@@ -59,14 +74,15 @@ export default class CaseAccess {
 
   /** Who may grant and revoke per-case access (#347, decision D3 on #331): org OWNER/ADMIN, or an
    * ADMIN grant on the case — a level no one is above, so "never above your own level" needs no
-   * further check. An EDIT grant can change the case but not share it. */
+   * further check. An EDIT grant can change the case but not share it. On a confidential case an
+   * org ADMIN needs that grant too, like everyone but the OWNER. */
   private static manageAccessWhere(caseId: string, userId: string): Prisma.CaseWhereInput {
     return {
       id: caseId,
       OR: [
         ...ownedByUser(userId),
         { accesses: { some: { userId, permission: "ADMIN" } } },
-        { organization: { members: { some: { userId, status: "ACCEPTED", role: { in: ["OWNER", "ADMIN"] } } } } },
+        ...viaMembership(userId, ORG_EDITORS),
       ],
     };
   }
@@ -74,7 +90,7 @@ export default class CaseAccess {
   static async assertCanManageAccess(caseId: string, userId: string) {
     const record = await prisma.case.findFirst({
       where: CaseAccess.manageAccessWhere(caseId, userId),
-      select: { id: true, caseName: true, organizationId: true },
+      select: { id: true, caseName: true, organizationId: true, confidential: true },
     });
     if (!record) throw new HttpError("Case not found or you can't manage its access", 404);
     return record;

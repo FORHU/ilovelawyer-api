@@ -106,10 +106,9 @@ export default class ChatSvc {
 
   static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
     if (caseId) {
-      // Throws 404 if the case doesn't exist or isn't in this organization
-      await CaseSvc.getById(caseId, organizationId);
-      // ...or if this user can't open it — a Case's Consultations belong to the people on the Case.
-      await CaseAccess.loadAccessibleCase(caseId, userId);
+      // Throws 404 if the case doesn't exist, isn't in this organization, or this user can't open
+      // it — a Case's Consultations belong to the people on the Case.
+      await CaseSvc.getById(caseId, organizationId, userId);
     }
     return ChatRepo.createConsultation(organizationId, userId, title, caseId);
   }
@@ -197,8 +196,12 @@ export default class ChatSvc {
     consultation: { id: string; userId: string; caseId: string | null },
     userId: string,
   ) {
-    if (!consultation.caseId || consultation.userId === userId) return;
-    if (await ParticipantRepo.exists(consultation.id, userId)) return;
+    if (!consultation.caseId) return;
+    // Its creator and invited participants keep it without being on the Case — unless the Case is
+    // confidential (#346): a wall that let a thread started before it went up stay readable
+    // wouldn't be one, so then only the Case's own rule counts.
+    const ownsOrJoined = consultation.userId === userId || (await ParticipantRepo.exists(consultation.id, userId));
+    if (ownsOrJoined && !(await CaseAccess.isConfidential(consultation.caseId))) return;
     try {
       await CaseAccess.loadAccessibleCase(consultation.caseId, userId);
     } catch {
@@ -431,7 +434,7 @@ export default class ChatSvc {
     // whose consultation was created without a case link.
     let effectiveCaseId = consultation.caseId ?? undefined;
     if (!effectiveCaseId && caseId) {
-      await CaseSvc.getById(caseId, organizationId); // ownership check
+      await CaseSvc.getById(caseId, organizationId, userId); // org + access check (#346)
       effectiveCaseId = caseId;
     }
 
@@ -702,7 +705,7 @@ export default class ChatSvc {
     // enqueueChatGeneration's effectiveCaseId resolution, which already ownership-checked it).
     let caseRecord = consultation.case;
     if (!caseRecord && effectiveCaseId) {
-      caseRecord = await CaseSvc.getById(effectiveCaseId, organizationId);
+      caseRecord = await CaseSvc.getById(effectiveCaseId, organizationId, userId);
     }
     const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
     // The lawyer's hand edits to the case's strategy map (added/reworded/removed points), so the

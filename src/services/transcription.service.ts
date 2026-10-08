@@ -7,6 +7,7 @@ import axios from "axios";
 import TranscriptionRepo from "../repositories/transcription.repository";
 import TranscriptionExtractionSvc from "./transcription-extraction.service";
 import HttpError from "../utils/http-error";
+import CaseAccess from "../utils/case-access";
 import logger from "../utils/logger";
 import { AWS_S3_BUCKET } from "../config";
 import { awsClientConfig } from "../lib/aws-client-config";
@@ -80,18 +81,30 @@ export async function transcribeS3Media(s3Key: string, jobLabel: string): Promis
 }
 
 export default class TranscriptionSvc {
-  static async list(organizationId: string) {
-    return TranscriptionRepo.findAllByUser(organizationId);
+  static async list(organizationId: string, userId: string) {
+    return TranscriptionRepo.findAllByUser(organizationId, userId);
   }
 
-  static async listByCase(organizationId: string, caseId: string) {
+  static async listByCase(organizationId: string, caseId: string, userId: string) {
+    await CaseAccess.loadAccessibleCase(caseId, userId);
     return TranscriptionRepo.findAllByCase(organizationId, caseId);
   }
 
-  static async getById(id: string, organizationId: string) {
+  /** Every by-id operation goes through this: org-scoped, and a transcription on a case the user
+   * can't open (a confidential one, #346) reads as not found. */
+  private static async loadVisible(id: string, organizationId: string, userId: string) {
     const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
+    if (item.caseId) {
+      await CaseAccess.loadAccessibleCase(item.caseId, userId).catch(() => {
+        throw new HttpError("Transcription not found", 404);
+      });
+    }
     return item;
+  }
+
+  static async getById(id: string, organizationId: string, userId: string) {
+    return TranscriptionSvc.loadVisible(id, organizationId, userId);
   }
 
   static async create(organizationId: string, userId: string, data: {
@@ -110,9 +123,8 @@ export default class TranscriptionSvc {
     });
   }
 
-  static async startBatchJob(id: string, organizationId: string) {
-    const item = await TranscriptionRepo.findById(id, organizationId);
-    if (!item) throw new HttpError("Transcription not found", 404);
+  static async startBatchJob(id: string, organizationId: string, userId: string) {
+    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
 
     const s3Key = item.audioFile?.s3Key;
     if (!s3Key) throw new HttpError("No audio file or S3 key linked to this transcription", 400);
@@ -134,9 +146,8 @@ export default class TranscriptionSvc {
     return { jobName, status: "IN_PROGRESS" };
   }
 
-  static async pollJobStatus(id: string, organizationId: string) {
-    const item = await TranscriptionRepo.findById(id, organizationId);
-    if (!item) throw new HttpError("Transcription not found", 404);
+  static async pollJobStatus(id: string, organizationId: string, userId: string) {
+    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
     if (!item.jobName) throw new HttpError("No transcription job started for this record", 400);
 
     let result;
@@ -160,31 +171,30 @@ export default class TranscriptionSvc {
     return result;
   }
 
-  static async update(id: string, organizationId: string, data: {
+  static async update(id: string, organizationId: string, userId: string, data: {
     title?: string;
     transcript?: string;
     duration?: number;
     caseId?: string | null;
     consultationId?: string | null;
   }) {
-    const item = await TranscriptionRepo.findById(id, organizationId);
-    if (!item) throw new HttpError("Transcription not found", 404);
+    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
+    // Moving it onto a case needs that case to be one the user can open too.
+    if (data.caseId && data.caseId !== item.caseId) await CaseAccess.loadAccessibleCase(data.caseId, userId);
     await TranscriptionRepo.update(id, organizationId, data);
     return TranscriptionRepo.findById(id, organizationId);
   }
 
-  static async delete(id: string, organizationId: string) {
-    const item = await TranscriptionRepo.findById(id, organizationId);
-    if (!item) throw new HttpError("Transcription not found", 404);
+  static async delete(id: string, organizationId: string, userId: string) {
+    await TranscriptionSvc.loadVisible(id, organizationId, userId);
     await TranscriptionRepo.delete(id, organizationId);
   }
 
   /** Chunk → embed → store the transcript text (ADR 0013), same shared pipeline the Case
    * Document RAG pipeline uses. Idempotent: re-running deletes and re-inserts fresh chunks.
    * Ownership is checked here (org-scoped findById); the pipeline itself operates unscoped. */
-  static async chunk(id: string, organizationId: string) {
-    const item = await TranscriptionRepo.findById(id, organizationId);
-    if (!item) throw new HttpError("Transcription not found", 404);
+  static async chunk(id: string, organizationId: string, userId: string) {
+    await TranscriptionSvc.loadVisible(id, organizationId, userId);
     return TranscriptionExtractionSvc.process(id);
   }
 }

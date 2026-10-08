@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma";
+import CaseAccess from "../utils/case-access";
 import { Prisma, RagStatus, DocumentStatus } from "@prisma/client";
 import CaseRepo from "./case.repository";
 
@@ -51,9 +52,11 @@ export default class DocumentRepo {
     });
   }
 
-  static async list(organizationId: string, status: DocumentStatus = "ACTIVE") {
+  /** The organization's documents, minus those on a case `userId` can't open — a confidential
+   * case's documents are left out for anyone walled off from it (#346). */
+  static async list(organizationId: string, status: DocumentStatus = "ACTIVE", userId: string) {
     return prisma.document.findMany({
-      where: { organizationId, status },
+      where: { organizationId, status, OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });

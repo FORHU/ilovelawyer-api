@@ -18,10 +18,13 @@ export default class CaseCopyRepo {
   }
 
   /** Queues a portfolio copy of every case `userId` created in the organization they're leaving
-   * (archived ones too). Returns how many were queued. */
+   * (archived ones too) — except a confidential one (#346): a walled matter stays with the firm.
+   * Their grants and membership are already gone by now (see OrganizationMemberRepo.removeIn), so
+   * whether they could still open it can't be told here; leaving it behind is the safe side.
+   * Returns how many were queued. */
   static async enqueueForCreatorIn(tx: Prisma.TransactionClient, input: CarryOver) {
     const cases = await tx.case.findMany({
-      where: { organizationId: input.sourceOrganizationId, userId: input.userId },
+      where: { organizationId: input.sourceOrganizationId, userId: input.userId, confidential: false },
       select: { id: true, caseName: true },
     });
     if (cases.length === 0) return 0;

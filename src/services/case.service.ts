@@ -31,19 +31,21 @@ export default class CaseSvc {
   }
 
   /** "Last opened" for the requesting user. Org-scoped existence check first so a caseId from
-   * another organization can't be stamped. */
+   * another organization can't be stamped, and one they can't open (#346) isn't either. */
   static async markOpened(id: string, organizationId: string, userId: string) {
+    await CaseAccess.loadAccessibleCase(id, userId);
     const caseRecord = await CaseRepo.findById(id, organizationId);
     if (!caseRecord) throw new HttpError("Case not found", 404);
     await CaseRepo.markOpened(id, userId);
   }
 
-  /** With `userId`, a portfolio copy also says how it relates to its original (see
-   * CaseRepo.withCopyContext) — what the case page shows. */
-  static async getById(id: string, organizationId: string, userId?: string) {
+  /** The case, for a user who can open it (CaseAccess — a confidential case 404s for anyone walled
+   * off from it, #346) in this organization. A portfolio copy also says how it relates to its
+   * original (see CaseRepo.withCopyContext) — what the case page shows. */
+  static async getById(id: string, organizationId: string, userId: string) {
+    await CaseAccess.loadAccessibleCase(id, userId);
     const caseRecord = await CaseRepo.findById(id, organizationId);
     if (!caseRecord) throw new HttpError("Case not found", 404);
-    if (!userId) return { ...caseRecord, copyVersion: null, original: null };
     const [withContext] = await CaseRepo.withCopyContext([caseRecord], userId);
     return withContext;
   }
@@ -178,7 +180,9 @@ export default class CaseSvc {
     caseData: { caseId: string; organizationId: string; userId: string },
     documentData: IncomingCaseDocument[],
   ) {
-    await this.getById(caseData.caseId, caseData.organizationId);
+    // In this organization and a case the uploader can open — not a confidential one walled off
+    // from them (#346).
+    await this.getById(caseData.caseId, caseData.organizationId, caseData.userId);
 
     // fileUrl is derived from s3Key server-side, never accepted from the client (spoofing risk:
     // a client-supplied fileUrl could point a row at an S3 object it doesn't own).
