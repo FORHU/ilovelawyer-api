@@ -17,6 +17,7 @@ import {
 import { documentNumber, planPhSearch } from "../utils/ph-legal-query";
 import { fetchLawFullText } from "../utils/law-fulltext";
 import { LawPreview, toLawPreview } from "../utils/law-preview";
+import logger from "../utils/logger";
 
 type LawRow = NonNullable<Awaited<ReturnType<typeof LawRepo.findByJurisSourceId>>>;
 
@@ -474,6 +475,23 @@ export default class LawSvc {
     const row = await LawRepo.findByJurisSourceId(params.id);
     if (!row || row.category !== params.category) throw new HttpError("No such law document", 404);
     return toLawPreview(row);
+  }
+
+  /** A PH document's verbatim text, for checking a citation against it (#364): fetched (detail,
+   * then the PDF) and cached on first use exactly as the detail page does, so a later check or
+   * view reuses it. Null when it isn't a juris.ph document, or no text could be recovered. */
+  static async fullTextFor(lawId: string): Promise<string | null> {
+    const law = await LawRepo.findById(lawId);
+    // UK rows share the category names, so check the tenant too — never ask juris.ph for them.
+    if (!law || !(law.category in DATASET_BY_CATEGORY) || law.tenantId !== (await LawRepo.resolvePhTenantId())) return null;
+    if (law.fullText || law.fullTextFetchedAt) return law.fullText;
+    try {
+      await LawSvc.getDocument({ category: law.category, id: law.jurisSourceId });
+    } catch (err) {
+      logger.warn("LawSvc.fullTextFor: couldn't load the document", { err, lawId });
+      return null;
+    }
+    return (await LawRepo.findById(lawId))?.fullText ?? null;
   }
 
   /** Fetches and persists `Law.fullText` on first view (see fetchLawFullText); a no-op on every

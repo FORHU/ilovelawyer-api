@@ -178,8 +178,13 @@ export interface UkJudgmentGrepResult {
  * like "para_4"), not a guess. Used to auto-detect which paragraph a quoted passage lives in;
  * a quote that doesn't match verbatim (paraphrased slightly, or from a source the judgment
  * doesn't cover) simply returns no hits rather than a wrong pinpoint. */
-export async function grepJudgment(slug: string, pattern: string, maxHits = 3): Promise<UkJudgmentGrepResult> {
-  return callTool<UkJudgmentGrepResult>("case_law_grep_judgment", { slug, pattern, max_hits: maxHits });
+export async function grepJudgment(slug: string, pattern: string, maxHits = 3, caseInsensitive = false): Promise<UkJudgmentGrepResult> {
+  return callTool<UkJudgmentGrepResult>("case_law_grep_judgment", {
+    slug,
+    pattern,
+    max_hits: maxHits,
+    ...(caseInsensitive ? { case_insensitive: true } : {}),
+  });
 }
 
 // ── Library: search + detail tools (see legal/law-source/uk) ─────────────────
@@ -277,6 +282,18 @@ export async function legislationTitleLookup(args: {
 
 export interface UkJudgmentIndexResult {
   paragraphs: { eId: string; preview: string }[];
+}
+
+export interface UkJudgmentParagraphResult {
+  slug: string;
+  eId: string;
+  /** The paragraph as LegalDocML XML — see stripLegalDocMl (citation-source-text.ts). */
+  content: string;
+}
+
+/** One judgment paragraph's full text, by its eId (from grepJudgment or judgmentGetIndex). */
+export async function judgmentGetParagraph(slug: string, eId: string): Promise<UkJudgmentParagraphResult> {
+  return callTool<UkJudgmentParagraphResult>("judgment_get_paragraph", { slug, eId });
 }
 
 /** Paragraph navigation index for one judgment — `{ eId, preview }` per paragraph. */

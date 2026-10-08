@@ -11,6 +11,8 @@ import { resolveUkCitationToLaw } from "../utils/uk-citation-resolution";
 import { parseCitedReference } from "./citation-map.service";
 import { classifyProposition } from "../utils/citation-proposition";
 import { detectPinpoint } from "../utils/citation-pinpoint";
+import { fetchOfficialText, FetchedOfficialText } from "../utils/citation-source-text";
+import { OfficialTextSource } from "@prisma/client";
 import HttpError from "../utils/http-error";
 import { TenantCode } from "../types/tenant-code";
 import { ResolvedCitationAuthority } from "../types/citation-check.types";
@@ -41,7 +43,8 @@ export default class CitationCheckSvc {
     await CaseAccess.assertCanEdit(caseId, userId);
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
 
-    let officialText = body.officialText ?? null;
+    let officialText = body.officialText?.trim() || null;
+    let officialTextSource: OfficialTextSource | null = officialText ? "LAWYER" : null;
     if (!officialText && body.legalRagId) {
       // The legalRagId corpus is PH-only (see legal/legal-knowledge-provider.ts) — never read it
       // for a non-PH case, even though the id itself isn't secret/tenant-scoped data.
@@ -51,10 +54,18 @@ export default class CitationCheckSvc {
       const id = BigInt(body.legalRagId);
       const doc = await LegalRagRepo.findById(id).catch(() => null);
       officialText = doc?.full_text ?? doc?.formatted_markdown ?? null;
+      if (officialText) officialTextSource = "PH_LAW";
     }
 
     const evaluated = await CitationCheckSvc.evaluate(
-      { quotedText: body.quotedText, citedReference: body.citedReference, officialText, pinpoint: body.pinpoint },
+      {
+        quotedText: body.quotedText,
+        citedReference: body.citedReference,
+        officialText,
+        officialTextSource,
+        officialTextRef: null,
+        pinpoint: body.pinpoint,
+      },
       tenantCode,
     );
 
@@ -62,7 +73,6 @@ export default class CitationCheckSvc {
       quotedText: body.quotedText,
       citedReference: body.citedReference ?? null,
       sourceUrl: body.sourceUrl ?? null,
-      officialText,
       ...evaluated.fields,
     });
 
@@ -91,16 +101,41 @@ export default class CitationCheckSvc {
     if (!existing) throw new HttpError("Citation not found", 404);
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
 
+    const quotedText = body.quotedText?.trim() || existing.quotedText;
+    const citedReference = body.citedReference === undefined ? existing.citedReference : body.citedReference?.trim() || null;
+
+    // The official text (#364). A fetched passage was chosen for the old quote and reference, so it's
+    // fetched again when either changes. The edit form prefills whatever is stored, so the fetched
+    // passage coming back unchanged isn't the lawyer's text; anything else they send is.
+    const wasFetched = !!existing.officialTextSource && existing.officialTextSource !== "LAWYER";
+    const sentText = body.officialText === undefined ? undefined : body.officialText?.trim() || null;
+    let officialText: string | null;
+    let officialTextSource: OfficialTextSource | null;
+    let officialTextRef: string | null;
+    if (sentText === undefined || (wasFetched && sentText === existing.officialText)) {
+      const stale = wasFetched && (quotedText !== existing.quotedText || citedReference !== existing.citedReference);
+      officialText = stale ? null : existing.officialText;
+      officialTextSource = stale ? null : existing.officialTextSource;
+      officialTextRef = stale ? null : existing.officialTextRef;
+    } else {
+      officialText = sentText;
+      officialTextSource = sentText ? "LAWYER" : null;
+      officialTextRef = null;
+    }
+
     const merged = {
-      quotedText: body.quotedText?.trim() || existing.quotedText,
-      citedReference: body.citedReference === undefined ? existing.citedReference : body.citedReference?.trim() || null,
+      quotedText,
+      citedReference,
       sourceUrl: body.sourceUrl === undefined ? existing.sourceUrl : body.sourceUrl?.trim() || null,
-      officialText: body.officialText === undefined ? existing.officialText : body.officialText?.trim() || null,
+      officialText,
     };
     // An untouched pinpoint isn't carried over: the quote or reference may have changed, and a
     // stale auto-detected pinpoint would then point at the wrong passage. Only a lawyer-typed one
     // (sent with the edit) is kept; otherwise it's re-detected exactly as on a new check.
-    const evaluated = await CitationCheckSvc.evaluate({ ...merged, pinpoint: body.pinpoint }, tenantCode);
+    const evaluated = await CitationCheckSvc.evaluate(
+      { ...merged, officialTextSource, officialTextRef, pinpoint: body.pinpoint },
+      tenantCode,
+    );
 
     const row = await CitationCheckRepo.update(id, caseId, { ...merged, ...evaluated.fields });
     if (!row) throw new HttpError("Citation not found", 404);
@@ -126,9 +161,18 @@ export default class CitationCheckSvc {
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "citation.delete", payload: { id } });
   }
 
-  /** The verification shared by a new check and an edit. */
+  /** The verification shared by a new check and an edit. When there's no official text, it's
+   * fetched from the authority the citation resolves to (#364) before checking — see
+   * citation-source-text.ts. */
   private static async evaluate(
-    input: { quotedText: string; citedReference?: string | null; officialText: string | null; pinpoint?: string | null },
+    input: {
+      quotedText: string;
+      citedReference?: string | null;
+      officialText: string | null;
+      officialTextSource: OfficialTextSource | null;
+      officialTextRef: string | null;
+      pinpoint?: string | null;
+    },
     tenantCode: TenantCode,
   ) {
     const citedReference = input.citedReference ?? undefined;
@@ -136,22 +180,48 @@ export default class CitationCheckSvc {
     // actually exist? Reuses the same resolution engine Citation Map uses (LawSvc.search for
     // PH, the UK Legal MCP for UK) rather than a new verification path — resolving here means
     // Citation Map's own lazy resolution (CitationMapSvc.getSeed) finds it already done.
-    const [result, resolved] = await Promise.all([
-      evaluateCitation({ quotedText: input.quotedText, officialText: input.officialText, citedReference }),
-      CitationCheckSvc.resolveAuthority(citedReference, tenantCode),
+    const resolved = await CitationCheckSvc.resolveAuthority(citedReference, tenantCode);
+
+    let { officialText, officialTextSource, officialTextRef } = input;
+    let fetched: FetchedOfficialText | null = null;
+    if (!officialText && resolved.lawId) {
+      fetched = await fetchOfficialText({ tenantCode, lawId: resolved.lawId, quote: input.quotedText, ukSection: resolved.ukSection });
+      if (fetched) {
+        officialText = fetched.text;
+        officialTextSource = fetched.source;
+        officialTextRef = fetched.ref;
+      }
+    }
+
+    // A lawyer-typed pinpoint always wins; then the paragraph the fetch found; then, for a
+    // resolved UK judgment, a search of its text.
+    const pinpointPromise = input.pinpoint?.trim()
+      ? Promise.resolve(input.pinpoint.trim())
+      : fetched?.pinpoint
+        ? Promise.resolve(fetched.pinpoint)
+        : detectPinpoint(resolved.lawId, input.quotedText);
+
+    const [result, proposition, pinpoint] = await Promise.all([
+      evaluateCitation({ quotedText: input.quotedText, officialText, citedReference }),
+      classifyProposition(input.quotedText, officialText, tenantCode),
+      pinpointPromise,
     ]);
 
-    // Both computed before the row is saved so the check is persisted whole — a lawyer-typed
-    // pinpoint always wins over the auto-detected one, which only fires for a resolved UK judgment.
-    const [proposition, pinpoint] = await Promise.all([
-      classifyProposition(input.quotedText, input.officialText, tenantCode),
-      input.pinpoint?.trim() ? Promise.resolve(input.pinpoint.trim()) : detectPinpoint(resolved.lawId, input.quotedText),
-    ]);
+    // Say where the text came from, or why there wasn't any — the lawyer should be able to see
+    // what the check was (or wasn't) based on.
+    let notes = result.notes;
+    if (fetched) notes = `Checked against ${fetched.label}. ${result.notes}`;
+    else if (!officialText && resolved.lawId) {
+      notes = `Couldn't load the text of ${resolved.authority?.title ?? "the cited authority"} to check against. Paste the source passage under Add details to check it.`;
+    }
 
     return {
       fields: {
+        officialText,
+        officialTextSource,
+        officialTextRef,
         status: result.status,
-        notes: result.notes,
+        notes,
         resolvedLawId: resolved.lawId,
         resolutionConfidence: resolved.confidence,
         pinpoint,
@@ -178,6 +248,7 @@ export default class CitationCheckSvc {
 
     const law = await LawRepo.findById(resolved.lawId);
     const authority = law ? { lawId: law.id, title: law.title, jurisUrl: law.jurisUrl } : null;
-    return { lawId: resolved.lawId, confidence: resolved.confidence, authority };
+    const ukSection = tenantCode === "UK" ? ((resolved as { section?: string | null }).section ?? null) : null;
+    return { lawId: resolved.lawId, confidence: resolved.confidence, authority, ukSection };
   }
 }

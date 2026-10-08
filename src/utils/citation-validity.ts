@@ -27,8 +27,8 @@ function normalize(text: string): string {
 }
 
 /** Words, lowercased, without punctuation. Apostrophes are already gone (normalize), so
- * "don't" arrives as "dont". */
-function tokens(text: string): string[] {
+ * "don't" arrives as "dont". Shared with citation-source-text.ts so both read a quote the same way. */
+export function tokens(text: string): string[] {
   return normalize(text)
     .split(" ")
     .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
@@ -37,7 +37,7 @@ function tokens(text: string): string[] {
 
 /** Words that reverse what follows them. A quote that adds or drops one says something different,
  * so a near-match must have the same words negated as its source (#363). */
-const NEGATIONS = new Set([
+export const NEGATIONS = new Set([
   "not", "no", "never", "nor", "neither", "none", "nothing", "nobody", "nowhere", "without", "unless",
   "cannot", "except", "dont", "doesnt", "didnt", "isnt", "arent", "wasnt", "werent", "wont", "wouldnt",
   "cant", "couldnt", "shouldnt", "mustnt", "neednt", "hasnt", "havent", "hadnt",
