@@ -2562,11 +2562,46 @@ const swaggerSpec: OAS3Definition = {
         parameters: [
           { name: "caseId", in: "path", required: true, schema: { type: "string" } },
           { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 50, default: 50 } },
+          { name: "day", in: "query", required: false, description: "Only this calendar day's runs (YYYY-MM-DD), read in `tz`", schema: { type: "string", format: "date" } },
+          { name: "tz", in: "query", required: false, description: "The viewer's IANA time zone, e.g. Asia/Manila. Unknown or missing = UTC", schema: { type: "string" } },
         ],
         responses: {
           200: {
             description: "Change summaries",
             content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/CaseChangeSummary" } } } },
+          },
+          400: { description: "day isn't a YYYY-MM-DD date" },
+        },
+      },
+    },
+    "/my-cases/{caseId}/change-summaries/days": {
+      get: {
+        tags: ["Legal Terminal"],
+        summary: "The days the case has change summaries on, newest first",
+        description: "Grouped by calendar day in the viewer's time zone — the What changed modal's date picker. Up to 366 days.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "caseId", in: "path", required: true, schema: { type: "string" } },
+          { name: "tz", in: "query", required: false, description: "The viewer's IANA time zone. Unknown or missing = UTC", schema: { type: "string" } },
+        ],
+        responses: {
+          200: {
+            description: "Days",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      day: { type: "string", format: "date" },
+                      runs: { type: "integer" },
+                      totalChanges: { type: "integer", description: "Summed over the day's runs; a first analysis counts none" },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },

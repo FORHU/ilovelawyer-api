@@ -128,7 +128,17 @@ export default class CaseTerminalCtrl {
 
   /** The case's change summaries, newest first — what each analysis refresh changed. */
   static async listChangeSummaries(req: Request, res: Response) {
-    const result = await CaseChangeSvc.list(req.params.caseId, req.user.userId, Number(req.query.limit) || undefined);
+    const result = await CaseChangeSvc.list(req.params.caseId, req.user.userId, {
+      limit: Number(req.query.limit) || undefined,
+      day: req.query.day,
+      tz: req.query.tz,
+    });
+    return res.status(200).json(result);
+  }
+
+  /** The days the case has change summaries on, in the viewer's time zone (`tz`), newest first. */
+  static async listChangeSummaryDays(req: Request, res: Response) {
+    const result = await CaseChangeSvc.days(req.params.caseId, req.user.userId, req.query.tz);
     return res.status(200).json(result);
   }
 

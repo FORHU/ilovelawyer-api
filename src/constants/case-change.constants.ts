@@ -10,5 +10,8 @@ export const CASE_CHANGE_RISK_OF_LOSS_THRESHOLD = 5;
  * re-reads the documents each run, so a few points either way is noise. */
 export const CASE_CHANGE_CREDIBILITY_THRESHOLD = 10;
 
-/** Most change summaries GET /:caseId/change-summaries returns at once. */
+/** Most change summaries GET /:caseId/change-summaries returns at once (also per day). */
 export const CASE_CHANGE_SUMMARY_LIST_LIMIT = 50;
+
+/** Most days GET /:caseId/change-summaries/days lists — about a year of daily activity. */
+export const CASE_CHANGE_SUMMARY_DAYS_LIMIT = 366;
