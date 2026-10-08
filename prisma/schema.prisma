@@ -110,6 +110,7 @@ model User {
   cases                   Case[]
   documents               Document[]
   bookmarks               Bookmark[]
+  consents                Consent[]
   transcriptions          Transcription[]
   calendarWatchChannels   CalendarWatchChannel[]
   events                  Event[]
@@ -2688,6 +2689,34 @@ model CaseAccess {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([caseId, userId])
+  @@index([userId])
+}
+
+// What a user has agreed to, per purpose. Terms of Service is not a row here: it stays on
+// User.termsAcceptedAt/termsVersion and ConsentSvc reports it from there. A row exists once the
+// user has answered for a purpose; no row means they have not been asked. `version` is the
+// version of the policy text they answered for (see constants/consent.constants.ts).
+enum ConsentPurpose {
+  TERMS_OF_SERVICE
+  AI_PROCESSING
+  ANALYTICS
+  MARKETING
+}
+
+model Consent {
+  id          String         @id @default(uuid())
+  userId      String
+  purpose     ConsentPurpose
+  version     String
+  grantedAt   DateTime
+  withdrawnAt DateTime?
+  source      String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, purpose])
   @@index([userId])
 }
 
