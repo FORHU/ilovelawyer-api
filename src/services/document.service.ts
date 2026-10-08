@@ -10,6 +10,7 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
+import CaseAccess from "../utils/case-access";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { DocumentStatus } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
@@ -185,7 +186,30 @@ export default class DocumentSvc {
     }
   }
 
-  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean }) {
+  /** A document attached to a case is part of that case, so changing it (update, delete,
+   * archive, unarchive) takes the same bar as editing the case itself — CaseAccess.assertCanEdit,
+   * see CaseSvc.update (#345). One with no case stays organization-scoped. */
+  private static async loadForChange(id: string, organizationId: string, actorId: string) {
+    const doc = await DocumentRepo.findById(id, organizationId);
+    if (!doc) throw new HttpError("Document not found", 404);
+    if (doc.caseId) await CaseAccess.assertCanEdit(doc.caseId, actorId);
+    return doc;
+  }
+
+  /** Moving a document into a case adds to that case, so the target needs the same bar as the
+   * case it leaves — and must be in this organization, since assertCanEdit alone would accept a
+   * grant on another organization's case. */
+  static async update(
+    id: string,
+    organizationId: string,
+    actorId: string,
+    data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean },
+  ) {
+    const doc = await DocumentSvc.loadForChange(id, organizationId, actorId);
+    if (data.caseId && data.caseId !== doc.caseId) {
+      const target = await CaseAccess.assertCanEdit(data.caseId, actorId);
+      if (target.organizationId !== organizationId) throw new HttpError("Case not found or not editable", 404);
+    }
     const updated = await DocumentRepo.update(id, organizationId, data);
     if (!updated) throw new HttpError("Document not found", 404);
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
@@ -198,6 +222,7 @@ export default class DocumentSvc {
    * chat instead and leaves them out, so both schedule the post-upload job, which rebuilds only the
    * map when only the map's document set moved (see runCasePostExtraction). */
   static async archive(id: string, organizationId: string, actorId: string) {
+    await DocumentSvc.loadForChange(id, organizationId, actorId);
     const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED");
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.archive", payload: { documentId: id } });
@@ -216,6 +241,7 @@ export default class DocumentSvc {
   }
 
   static async unarchive(id: string, organizationId: string, actorId: string) {
+    await DocumentSvc.loadForChange(id, organizationId, actorId);
     const updated = await DocumentRepo.setStatus(id, organizationId, "ACTIVE");
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.unarchive", payload: { documentId: id } });
@@ -296,8 +322,7 @@ export default class DocumentSvc {
    * post-extraction refresh (case-post-extraction.ts) to a real actor when a READY, case-scoped
    * document is removed, same as the uploader is used when extraction finishes. */
   static async delete(id: string, organizationId: string, userId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId);
-    if (!doc) throw new HttpError("Document not found", 404);
+    const doc = await DocumentSvc.loadForChange(id, organizationId, userId);
 
     const deleted = await DocumentRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Document not found", 404);

@@ -1,6 +1,7 @@
 import CaseRepo, { CaseData } from "../repositories/case.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import HttpError from "../utils/http-error";
+import CaseAccess from "../utils/case-access";
 import FileSvc from "./files.service";
 import DocumentSvc from "./document.service";
 import DocumentRepo from "../repositories/document.repository";
@@ -48,7 +49,14 @@ export default class CaseSvc {
     return withContext;
   }
 
-  static async update(id: string, organizationId: string, data: CaseData) {
+  /** update/delete/archive/unarchive (and their bulk forms, which loop these) take the same bar
+   * as editing anything inside the case — CaseAccess.assertCanEdit: org OWNER/ADMIN, or an
+   * explicit EDIT/ADMIN grant. Before #345 they scoped by organizationId alone, so a plain
+   * member could delete a whole case while unable to edit one finding in it. The
+   * organizationId scoping below still applies on top: a grant on a case in another
+   * organization doesn't reach it through this one. */
+  static async update(id: string, organizationId: string, actorId: string, data: CaseData) {
+    await CaseAccess.assertCanEdit(id, actorId);
     const before = data.clientSide !== undefined ? await CaseRepo.findById(id, organizationId) : null;
     const updated = await CaseRepo.update(id, organizationId, data);
     if (!updated) throw new HttpError("Case not found", 404);
@@ -65,6 +73,7 @@ export default class CaseSvc {
    * is checked up front so a caseId from another organization can't reach DocumentRepo's
    * unscoped listAllByCase. */
   static async delete(id: string, organizationId: string, actorId: string) {
+    await CaseAccess.assertCanEdit(id, actorId);
     const caseRecord = await CaseRepo.findById(id, organizationId);
     if (!caseRecord) throw new HttpError("Case not found", 404);
 
@@ -101,9 +110,9 @@ export default class CaseSvc {
 
   /** Archiving/unarchiving are independent of delete — an archived case can still be deleted,
    * and archiving never blocks anything else on the case (documents, chat, auto-refresh all
-   * keep working identically). No CaseAccess check here, matching update/delete above — this
-   * service scopes purely by organizationId, unlike the CaseAccess-gated case sub-resources. */
+   * keep working identically). Gated like update/delete above. */
   static async archive(id: string, organizationId: string, actorId: string) {
+    await CaseAccess.assertCanEdit(id, actorId);
     const updated = await CaseRepo.setStatus(id, organizationId, "ARCHIVED");
     if (!updated) throw new HttpError("Case not found", 404);
     await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.archive" });
@@ -127,6 +136,7 @@ export default class CaseSvc {
   }
 
   static async unarchive(id: string, organizationId: string, actorId: string) {
+    await CaseAccess.assertCanEdit(id, actorId);
     const updated = await CaseRepo.setStatus(id, organizationId, "ACTIVE");
     if (!updated) throw new HttpError("Case not found", 404);
     await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.unarchive" });
