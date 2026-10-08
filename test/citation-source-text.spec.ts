@@ -11,6 +11,8 @@ import {
   stripLegalDocMl,
   distinctiveWords,
   fetchOfficialText,
+  legislationWarnings,
+  isRepealedSectionText,
   OfficialTextSources,
 } from "../src/utils/citation-source-text";
 
@@ -112,19 +114,24 @@ describe("fetchOfficialText — where a resolved authority's text comes from", (
         law: async () => UK_ACT,
         ukLegislationSection: async (args) => {
           asked = args;
-          return "(1) A person (A) discriminates against another (B) if, because of a protected characteristic, A treats B less favourably than A treats or would treat others.";
+          return {
+            content: "(1) A person (A) discriminates against another (B) if, because of a protected characteristic, A treats B less favourably than A treats or would treat others.",
+            inForce: null,
+            extent: ["England", "Wales", "Scotland"],
+          };
         },
       }),
     );
     expect(asked).to.deep.equal({ type: "ukpga", year: 2010, number: 15, section: "13" });
     expect(result).to.include({ source: "UK_LEGISLATION", ref: "s. 13", label: "Equality Act 2010, s. 13" });
     expect(result!.text).to.include("discriminates against another");
+    expect(result!.legislation).to.deep.equal({ inForce: null, extent: ["England", "Wales", "Scotland"] });
   });
 
   it("UK legislation without a section: nothing to fetch", async () => {
     const result = await fetchOfficialText(
       { tenantCode: "UK", lawId: UK_ACT.id, quote: "A person discriminates against another" },
-      sources({ law: async () => UK_ACT, ukLegislationSection: async () => "should not be called" }),
+      sources({ law: async () => UK_ACT, ukLegislationSection: async () => ({ content: "should not be called", inForce: null, extent: [] }) }),
     );
     expect(result).to.equal(null);
   });
@@ -188,5 +195,64 @@ describe("fetchOfficialText — where a resolved authority's text comes from", (
 
   it("no resolved authority: nothing to fetch", async () => {
     expect(await fetchOfficialText({ tenantCode: "PH", lawId: "missing", quote: "anything at all here" }, sources())).to.equal(null);
+  });
+});
+
+describe("legislationWarnings — #365: a UK section that isn't in force, or doesn't reach the case", () => {
+  it("warns when the section isn't in force", () => {
+    expect(legislationWarnings({ inForce: false, extent: ["England", "Wales"] }, "England and Wales").map((w) => w.code)).to.deep.equal(["NOT_IN_FORCE"]);
+  });
+
+  it("warns when the section doesn't extend to the case's legal system", () => {
+    const [warning] = legislationWarnings({ inForce: null, extent: ["England", "Wales"] }, "Scotland");
+    expect(warning.code).to.equal("OUTSIDE_EXTENT");
+    expect(warning.message).to.equal("It doesn't extend to Scotland (it extends to England and Wales).");
+  });
+
+  it("an England-only section still reaches an England and Wales case", () => {
+    expect(legislationWarnings({ inForce: null, extent: ["England"] }, "England and Wales")).to.deep.equal([]);
+  });
+
+  it("reads legislation.gov.uk's short codes too", () => {
+    expect(legislationWarnings({ inForce: null, extent: ["E", "W", "S"] }, "Northern Ireland").map((w) => w.code)).to.deep.equal(["OUTSIDE_EXTENT"]);
+    expect(legislationWarnings({ inForce: null, extent: ["E+W+S+N.I."] }, "Northern Ireland")).to.deep.equal([]);
+  });
+
+  it("says nothing when it doesn't know: in force unknown, no extent, or no legal system set on the case", () => {
+    expect(legislationWarnings({ inForce: null, extent: [] }, "Scotland")).to.deep.equal([]);
+    expect(legislationWarnings({ inForce: null, extent: ["England", "Wales"] }, null)).to.deep.equal([]);
+  });
+
+  it("both at once", () => {
+    expect(legislationWarnings({ inForce: false, extent: ["Scotland"] }, "England and Wales").map((w) => w.code)).to.deep.equal(["NOT_IN_FORCE", "OUTSIDE_EXTENT"]);
+  });
+});
+
+describe("isRepealedSectionText — legislation.gov.uk shows a wholly repealed section as dots", () => {
+  it("heading, section number, then only dots: repealed", () => {
+    expect(isRepealedSectionText("Mode of forming incorporated company. 1 . . . . . . . . . . . . . . . .", "1")).to.equal(true);
+    expect(isRepealedSectionText("A company’s capacity not limited by its memorandum. 35 . . . . . . . . .", "35")).to.equal(true);
+  });
+
+  it("a section with text is not", () => {
+    expect(isRepealedSectionText("Direct discrimination 13 1 A person (A) discriminates against another (B) if, because of a protected characteristic.", "13")).to.equal(false);
+  });
+
+  it("one repealed subsection doesn't make the whole section repealed", () => {
+    expect(isRepealedSectionText("Direct discrimination 13 1 A person (A) discriminates against another (B). 2 . . . . . . . .", "13")).to.equal(false);
+  });
+});
+
+describe("fetchOfficialText — a wholly repealed UK section (#365)", () => {
+  it("reports it not in force, and offers no text to check against", async () => {
+    const result = await fetchOfficialText(
+      { tenantCode: "UK", lawId: "law-ca", quote: "Any two or more persons associated for a lawful purpose may form an incorporated company", ukSection: "1" },
+      sources({
+        law: async () => ({ ...UK_ACT, title: "Companies Act 1985", jurisSourceId: "https://www.legislation.gov.uk/ukpga/1985/6" }),
+        ukLegislationSection: async () => ({ content: "Mode of forming incorporated company. 1 . . . . . . . . . .", inForce: null, extent: ["England", "Wales", "Scotland"] }),
+      }),
+    );
+    expect(result!.legislation).to.deep.equal({ inForce: false, extent: ["England", "Wales", "Scotland"] });
+    expect(result!.text).to.equal("");
   });
 });

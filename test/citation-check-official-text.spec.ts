@@ -36,6 +36,8 @@ describe("#364 — CitationCheckSvc fills in the official text", () => {
   let saved: any;
   let existingRow: any;
   let pinpointDetected: boolean;
+  let tenantCode: string;
+  let ukJurisdiction: string | null;
 
   beforeEach(() => {
     process.env.USE_JEV_VALIDITY = "false";
@@ -45,9 +47,12 @@ describe("#364 — CitationCheckSvc fills in the official text", () => {
     saved = null;
     existingRow = null;
     pinpointDetected = false;
+    tenantCode = "PH";
+    ukJurisdiction = null;
 
     stub(CaseAccess, "assertCanEdit", async () => ({}));
-    stub(CaseAccess, "resolveTenantCode", async () => "PH");
+    stub(CaseAccess, "resolveTenantCode", async () => tenantCode);
+    stub(CaseAccess, "resolveUkJurisdiction", async () => ukJurisdiction);
     stub(CitationCheckSvc, "resolveAuthority", async () => ({
       lawId: resolved.lawId,
       confidence: resolved.lawId ? 0.9 : null,
@@ -167,6 +172,74 @@ describe("#364 — CitationCheckSvc fills in the official text", () => {
       await CitationCheckSvc.update("case-1", "c-1", "u-1", { quotedText: "The employer may terminate the employee" });
       expect(fetches).to.have.length(0);
       expect(saved).to.include({ officialText: PASSAGE });
+    });
+  });
+
+  describe("#365 — UK legislation warnings", () => {
+    const ACT_TEXT = "A person discriminates against another if, because of a protected characteristic, that person treats the other less favourably.";
+    const QUOTE_ACT = "discriminates against another if, because of a protected characteristic";
+
+    beforeEach(() => {
+      tenantCode = "UK";
+      resolved = { lawId: "law-act", ukSection: "13" };
+    });
+
+    it("a section that doesn't reach the case's legal system is flagged, and the quote's status is left alone", async () => {
+      ukJurisdiction = "Northern Ireland";
+      fetchResult = {
+        text: ACT_TEXT,
+        source: "UK_LEGISLATION",
+        ref: "s. 13",
+        label: "Equality Act 2010, s. 13",
+        legislation: { inForce: null, extent: ["England", "Wales", "Scotland"] },
+      };
+      await CitationCheckSvc.check("case-1", "u-1", { quotedText: QUOTE_ACT, citedReference: "s.13 Equality Act 2010" });
+      expect(saved.sourceWarnings).to.deep.equal(["OUTSIDE_EXTENT"]);
+      expect(saved.status).to.equal("VALID");
+      expect(saved.notes).to.match(/^Warning: Equality Act 2010, s\. 13 — It doesn't extend to Northern Ireland/);
+    });
+
+    it("a section that isn't in force is flagged", async () => {
+      ukJurisdiction = "England and Wales";
+      fetchResult = { text: ACT_TEXT, source: "UK_LEGISLATION", ref: "s. 13", label: "Equality Act 2010, s. 13", legislation: { inForce: false, extent: ["England", "Wales"] } };
+      await CitationCheckSvc.check("case-1", "u-1", { quotedText: QUOTE_ACT, citedReference: "s.13 Equality Act 2010" });
+      expect(saved.sourceWarnings).to.deep.equal(["NOT_IN_FORCE"]);
+    });
+
+    it("with the lawyer's own text, still looks the section up for its status — but keeps their text", async () => {
+      ukJurisdiction = "Scotland";
+      fetchResult = { text: "fetched text", source: "UK_LEGISLATION", ref: "s. 13", label: "Equality Act 2010, s. 13", legislation: { inForce: null, extent: ["England", "Wales"] } };
+      await CitationCheckSvc.check("case-1", "u-1", { quotedText: QUOTE_ACT, citedReference: "s.13 Equality Act 2010", officialText: ACT_TEXT });
+      expect(fetches).to.have.length(1);
+      expect(saved).to.include({ officialText: ACT_TEXT, officialTextSource: "LAWYER" });
+      expect(saved.sourceWarnings).to.deep.equal(["OUTSIDE_EXTENT"]);
+    });
+
+    it("nothing to flag: no warnings, and the notes start as before", async () => {
+      ukJurisdiction = "England and Wales";
+      fetchResult = { text: ACT_TEXT, source: "UK_LEGISLATION", ref: "s. 13", label: "Equality Act 2010, s. 13", legislation: { inForce: null, extent: ["England", "Wales", "Scotland"] } };
+      await CitationCheckSvc.check("case-1", "u-1", { quotedText: QUOTE_ACT, citedReference: "s.13 Equality Act 2010" });
+      expect(saved.sourceWarnings).to.deep.equal([]);
+      expect(saved.notes).to.match(/^Checked against Equality Act 2010, s\. 13\./);
+    });
+
+    it("a wholly repealed section: flagged, and not checked against its (now empty) text", async () => {
+      ukJurisdiction = "England and Wales";
+      fetchResult = { text: "", source: "UK_LEGISLATION", ref: "s. 1", label: "Companies Act 1985, s. 1", legislation: { inForce: false, extent: ["England", "Wales", "Scotland"] } };
+      await CitationCheckSvc.check("case-1", "u-1", { quotedText: QUOTE_ACT, citedReference: "s.1 Companies Act 1985" });
+      expect(saved.sourceWarnings).to.deep.equal(["NOT_IN_FORCE"]);
+      expect(saved).to.include({ status: "UNVERIFIED", officialText: null });
+      expect(saved.notes).to.equal(
+        "Warning: Companies Act 1985, s. 1 \u2014 It isn't in force. Its text is no longer published, so the quote couldn't be checked against it.",
+      );
+    });
+
+    it("a PH citation with pasted text still fetches nothing", async () => {
+      tenantCode = "PH";
+      resolved = { lawId: "law-1" };
+      await CitationCheckSvc.check("case-1", "u-1", { quotedText: QUOTE, citedReference: "G.R. No. 158693", officialText: PASSAGE });
+      expect(fetches).to.have.length(0);
+      expect(saved.sourceWarnings).to.deep.equal([]);
     });
   });
 });

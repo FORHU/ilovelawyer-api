@@ -1803,6 +1803,11 @@ enum ContradictionNature {
   NOT_A_CONFLICT
 }
 
+enum CitationSourceWarning {
+  NOT_IN_FORCE
+  OUTSIDE_EXTENT
+}
+
 enum OfficialTextSource {
   LAWYER
   PH_LAW
@@ -1822,6 +1827,10 @@ model CitationCheck {
   officialTextSource OfficialTextSource?
   // Where in that authority, when it has a finer address: "s. 13" (UK Act), "para_37" (UK judgment).
   officialTextRef    String?
+  // #365: what's wrong with relying on the cited UK Act section here — it isn't in force, or it
+  // doesn't extend to the case's legal system. Advisory: separate from `status`, which is only
+  // about whether the quote matches the text.
+  sourceWarnings     CitationSourceWarning[] @default([])
   status         CitationValidityStatus @default(UNVERIFIED)
   notes          String?                @db.Text
   checkedAt      DateTime               @default(now())

@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { CitationValidityStatus, CitationPropositionType, OfficialTextSource } from "@prisma/client";
+import { CitationValidityStatus, CitationPropositionType, CitationSourceWarning, OfficialTextSource } from "@prisma/client";
 
 export default class CitationCheckRepo {
   static async list(caseId: string) {
@@ -21,6 +21,7 @@ export default class CitationCheckRepo {
       resolutionConfidence?: number | null;
       pinpoint?: string | null;
       propositionType?: CitationPropositionType | null;
+      sourceWarnings?: CitationSourceWarning[];
     },
   ) {
     return prisma.citationCheck.create({ data: { caseId, ...data } });
@@ -47,6 +48,7 @@ export default class CitationCheckRepo {
       resolutionConfidence: number | null;
       pinpoint: string | null;
       propositionType: CitationPropositionType | null;
+      sourceWarnings: CitationSourceWarning[];
     },
   ) {
     const existing = await prisma.citationCheck.findFirst({ where: { id, caseId }, select: { id: true } });
