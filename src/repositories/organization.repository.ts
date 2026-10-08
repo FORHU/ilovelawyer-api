@@ -90,7 +90,7 @@ export default class OrganizationRepo {
   }
 
   static async findById(id: string) {
-    return prisma.organization.findUnique({ where: { id } });
+    return prisma.organization.findUnique({ where: { id }, include: { tenant: { select: { code: true } } } });
   }
 
   static async findByIdForUser(id: string, userId: string) {

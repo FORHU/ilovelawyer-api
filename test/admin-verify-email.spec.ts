@@ -11,6 +11,7 @@ import AdminSvc from "../src/services/admin.service";
 import TenantSettingSvc from "../src/services/tenant-setting.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
+import OrganizationEmailInviteRepo from "../src/repositories/organization-email-invite.repository";
 
 function stash<T extends object>(target: T, keys: (keyof T)[]) {
   const saved = keys.map((k) => [k, target[k]] as const);
@@ -38,7 +39,9 @@ describe("AdminSvc.verifyEmail", () => {
       stash(AuthRepo, ["findById", "markEmailVerified", "setApprovalStatus"]),
       stash(TenantSettingSvc, ["isAutoApproveOn"]),
       stash(SecurityAuditSvc, ["record"]),
+      stash(OrganizationEmailInviteRepo, ["claim"]),
     ];
+    (OrganizationEmailInviteRepo as any).claim = async () => false;
 
     (AuthRepo as any).findById = async (id: string) => (current && id === current.id ? { ...current } : null);
     (AuthRepo as any).markEmailVerified = async (id: string) => {
@@ -92,6 +95,16 @@ describe("AdminSvc.verifyEmail", () => {
 
     expect(approvals).to.have.length(0);
     expect(result?.approvalStatus).to.equal("PENDING");
+  });
+
+  it("approves a PENDING user an organization invited, with auto-approve off", async () => {
+    current!.approvalStatus = "PENDING";
+    (OrganizationEmailInviteRepo as any).claim = async () => true;
+
+    const result = await AdminSvc.verifyEmail("user-1", "admin-1");
+
+    expect(approvals).to.deep.equal([{ userId: "user-1", status: "ACTIVE" }]);
+    expect(result?.approvalStatus).to.equal("ACTIVE");
   });
 
   it("refuses an already-verified user (409), without writing", async () => {

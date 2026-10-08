@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import OrganizationSvc from "../services/organization.service";
 import HttpError from "../utils/http-error";
-import { resolveTenantCodeFromRequest } from "../utils/tenant-host";
+import { requestFrontendOrigin, resolveTenantCodeFromRequest } from "../utils/tenant-host";
 import {
   createOrganizationSchema,
   updateOrganizationSchema,
@@ -59,6 +59,7 @@ export default class OrganizationCtrl {
       req.user.userId,
       value.email,
       value.role,
+      requestFrontendOrigin(req),
     );
     return res.status(201).json(result);
   }

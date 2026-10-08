@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { Prisma } from "@prisma/client";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
+import OrganizationEmailInviteRepo from "../repositories/organization-email-invite.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import TenantSettingSvc from "./tenant-setting.service";
 import loginToken from "../utils/loginToken";
@@ -87,9 +88,10 @@ export default class AuthSvc {
 
     // Sent immediately, before email verification — the user should know to expect the
     // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
-    // Skipped when the Tenant auto-approves signups: there's no wait, and verifyOtp flips
-    // the account to ACTIVE (see autoApproveIfEnabled).
-    if (!(await TenantSettingSvc.isAutoApproveOn(tenantId))) {
+    // Skipped when the Tenant auto-approves signups, or when an organization invited this
+    // address: there's no wait, and verifyOtp flips the account to ACTIVE (see
+    // autoApproveIfEnabled).
+    if (!(await TenantSettingSvc.isAutoApproveOn(tenantId)) && !(await OrganizationEmailInviteRepo.findByEmail(email))) {
       await AuthSvc.sendSignupPendingEmail(user);
     }
 
@@ -110,16 +112,20 @@ export default class AuthSvc {
   }
 
   /** Flips a freshly verified PENDING account straight to ACTIVE when its Tenant has
-   * auto-approve on (admin Settings page). Called at the moment the email becomes verified —
+   * auto-approve on (admin Settings page), or when an organization has invited it — the inviting
+   * owner/admin vouches for them. This is also where an invite sent to the address before it had
+   * an account becomes the user's own (OrganizationEmailInviteRepo.claim), whatever the account's
+   * approval status. Called at the moment the email becomes verified —
    * verifyOtp for password signups, account creation for Google ones — never at row creation
    * for password signups: AuthRepo.deleteUnverifiedPendingUser (cancelSignup) only matches
    * unverified PENDING rows, so an unverified ACTIVE row could never be cleaned up.
    * No session wipe or email, unlike AdminSvc.transition — the user is signing in right now
    * and the session about to be issued already sees ACTIVE. Also called by AdminSvc.verifyEmail,
    * where an admin marks the email verified in place of the OTP. Returns whether it approved. */
-  static async autoApproveIfEnabled(user: { id: string; tenantId: string | null; approvalStatus: string }) {
+  static async autoApproveIfEnabled(user: { id: string; email: string; tenantId: string | null; approvalStatus: string }) {
+    const invited = await OrganizationEmailInviteRepo.claim(user.id, user.email);
     if (user.approvalStatus !== "PENDING") return false;
-    if (!(await TenantSettingSvc.isAutoApproveOn(user.tenantId))) return false;
+    if (!invited && !(await TenantSettingSvc.isAutoApproveOn(user.tenantId))) return false;
     await AuthRepo.setApprovalStatus(user.id, "ACTIVE", null);
     return true;
   }

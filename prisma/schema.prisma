@@ -2564,6 +2564,7 @@ model Organization {
   tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   members        OrganizationMember[]
   invites        OrganizationInvite[]
+  emailInvites   OrganizationEmailInvite[]
   caseCopies     CaseCopy[]
   consultationCopies ConsultationCopy[]
   cases          Case[]
@@ -2644,6 +2645,22 @@ model OrganizationInvite {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// An invite to an email address with no account yet. When that address signs up and is
+// verified, AuthSvc turns it into an OrganizationInvite (and the invite approves the account),
+// so accepting works exactly as for a registered invitee. email is unique for the same reason
+// OrganizationInvite.userId is: one outstanding invite at a time.
+model OrganizationEmailInvite {
+  id             String           @id @default(uuid())
+  organizationId String
+  email          String           @unique
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
 }

@@ -1,0 +1,6 @@
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">You have been invited</mj-text>
+<mj-text>Hello,</mj-text>
+<mj-text>{{inviterName}} has invited you to join the "{{orgName}}" organization on ilovelawyer as a {{role}}.</mj-text>
+<mj-text>Create your ilovelawyer account with this email address, then accept the invite from your Organization page to get access.</mj-text>
+<mj-button href="{{signupLink}}">Sign up</mj-button>
+<mj-text>Or copy and paste this link: {{signupLink}}</mj-text>

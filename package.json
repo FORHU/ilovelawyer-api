@@ -7,7 +7,7 @@
     "dev": "cross-env NODE_OPTIONS=--use-system-ca nodemon --watch src --ext ts --exec ts-node --files ./src/server.ts",
     "lint": "eslint src/**/*.ts --fix",
     "test": "NODE_ENV=development mocha --require ts-node/register --require test/support/security-audit-test-double.ts 'test/**/*.spec.ts'",
-    "build": "tsc && copyfiles -u 1 \"src/templates/**/*.mjml\" dist",
+    "build": "tsc && copyfiles -u 1 \"src/templates/**/*.mjml\" \"src/templates/assets/*\" dist",
     "start": "cross-env NODE_OPTIONS=--use-system-ca node ./dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
