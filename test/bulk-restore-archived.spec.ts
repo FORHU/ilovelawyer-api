@@ -15,17 +15,20 @@ import CaseRepo from "../src/repositories/case.repository";
 import DocumentRepo from "../src/repositories/document.repository";
 import DocumentSvc from "../src/services/document.service";
 import OrganizationRepo from "../src/repositories/organization.repository";
+import CaseAccess from "../src/utils/case-access";
 
 describe("CaseSvc.unarchive — cascades into the case's documents", () => {
   const originals = {
     setStatus: CaseRepo.setStatus,
     writeAudit: OrganizationRepo.writeAudit,
     unarchiveByCase: DocumentSvc.unarchiveByCase,
+    assertCanEdit: CaseAccess.assertCanEdit,
   };
   let restoredFor: { caseId: string; organizationId: string; actorId: string }[];
 
   beforeEach(() => {
     restoredFor = [];
+    (CaseAccess as any).assertCanEdit = async () => ({});
     (CaseRepo as any).setStatus = async () => ({ id: "case-1", status: "ACTIVE" });
     (OrganizationRepo as any).writeAudit = async () => {};
     (DocumentSvc as any).unarchiveByCase = async (caseId: string, organizationId: string, actorId: string) => {
@@ -37,6 +40,7 @@ describe("CaseSvc.unarchive — cascades into the case's documents", () => {
     (CaseRepo as any).setStatus = originals.setStatus;
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
     (DocumentSvc as any).unarchiveByCase = originals.unarchiveByCase;
+    (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
   });
 
   it("restores the case's documents after flipping the case's own status", async () => {

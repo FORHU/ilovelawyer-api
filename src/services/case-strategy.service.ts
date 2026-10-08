@@ -1,3 +1,6 @@
+import CaseChangeRun from "./case-change-run.service";
+import CaseChangeReads from "./case-change-reads";
+import { diffStrategy } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import { docsForPrompt, excerptsWithHandles } from "../utils/case-document-handles";
 import DocumentRepo from "../repositories/document.repository";
@@ -26,9 +29,19 @@ export default class CaseStrategySvc {
   }
 
   static async runQueued(caseId: string, userId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "caseStrategyRefresh", async () => {
-      await CaseStrategySvc.generateFromDocuments(caseId, userId);
-    });
+    // The "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "caseStrategyRefresh", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "strategy",
+        () => CaseChangeReads.strategy(caseId),
+        async () => {
+          await CaseStrategySvc.generateFromDocuments(caseId, userId);
+        },
+        (before, after) => diffStrategy(before, after),
+      ),
+    );
   }
 
   static async generateFromDocuments(caseId: string, userId?: string) {

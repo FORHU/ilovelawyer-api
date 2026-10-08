@@ -1,3 +1,6 @@
+import CaseChangeRun from "./case-change-run.service";
+import CaseChangeReads from "./case-change-reads";
+import { diffWitnesses } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import WitnessRepo from "../repositories/witness.repository";
@@ -121,14 +124,24 @@ export default class WitnessScoringSvc {
   /** Run by AiGenerationQueue's worker after beginRefresh claimed the lock. A reading pass already
    * running (409) is left to finish on its own; scoring still runs on the witnesses there are. */
   static async runQueuedRefresh(caseId: string, userId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "witnessRefresh", async () => {
-      const WitnessExtractSvc = (await import("./witness-extract.service")).default;
-      await WitnessExtractSvc.extractAllPending(caseId, userId).catch((err) => {
-        if (err instanceof HttpError && err.statusCode === 409) return;
-        throw err;
-      });
-      await WitnessScoringSvc.scoreFromDocuments(caseId, userId);
-    });
+    // The "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "witnessRefresh", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "witnesses",
+        () => CaseChangeReads.witnesses(caseId),
+        async () => {
+          const WitnessExtractSvc = (await import("./witness-extract.service")).default;
+          await WitnessExtractSvc.extractAllPending(caseId, userId).catch((err) => {
+            if (err instanceof HttpError && err.statusCode === 409) return;
+            throw err;
+          });
+          await WitnessScoringSvc.scoreFromDocuments(caseId, userId);
+        },
+        (before, after) => diffWitnesses(before, after),
+      ),
+    );
   }
 
   /** Run by AiGenerationQueue's worker after beginQueued has claimed the job row. */

@@ -65,7 +65,7 @@ export default class CaseCtrl {
     const { error, value } = updateCaseSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.update(req.params.id, req.organization!.id, normalizeCaseBody(value));
+    const result = await CaseSvc.update(req.params.id, req.organization!.id, req.user.userId, normalizeCaseBody(value));
     return res.status(200).json(result);
   }
 

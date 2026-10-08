@@ -11,6 +11,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import DocumentSvc from "../src/services/document.service";
 import DocumentRepo from "../src/repositories/document.repository";
 import CaseTimelineRepo from "../src/repositories/case-timeline.repository";
+import CaseAccess from "../src/utils/case-access";
 import * as CasePostExtraction from "../src/queues/case-post-extraction";
 
 describe("DocumentSvc.delete — schedules the automatic refresh trigger", () => {
@@ -19,6 +20,7 @@ describe("DocumentSvc.delete — schedules the automatic refresh trigger", () =>
     delete: DocumentRepo.delete,
     schedule: CasePostExtraction.scheduleCasePostExtraction,
     detachDocument: CaseTimelineRepo.detachDocument,
+    assertCanEdit: CaseAccess.assertCanEdit,
   };
   let scheduled: { caseId: string; userId: string }[];
   let detached: string[];
@@ -26,6 +28,7 @@ describe("DocumentSvc.delete — schedules the automatic refresh trigger", () =>
   beforeEach(() => {
     scheduled = [];
     detached = [];
+    (CaseAccess as any).assertCanEdit = async () => ({});
     (CaseTimelineRepo as any).detachDocument = async (documentId: string) => {
       detached.push(documentId);
       return { count: 0 };
@@ -41,6 +44,7 @@ describe("DocumentSvc.delete — schedules the automatic refresh trigger", () =>
     (DocumentRepo as any).delete = originals.delete;
     (CasePostExtraction as any).scheduleCasePostExtraction = originals.schedule;
     (CaseTimelineRepo as any).detachDocument = originals.detachDocument;
+    (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
   });
 
   it("schedules a refresh, attributed to the deleting user, when a READY case document is removed", async () => {

@@ -87,7 +87,7 @@ export default class DocumentCtrl {
     const { error, value } = updateDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    await DocumentSvc.update(req.params.id, req.organization!.id, value);
+    await DocumentSvc.update(req.params.id, req.organization!.id, req.user.userId, value);
     return res.status(204).send();
   }
 

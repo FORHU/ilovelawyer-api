@@ -1,3 +1,5 @@
+import CaseChangeRun from "./case-change-run.service";
+import { diffFindings } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import CaseFindingRepo from "../repositories/case-finding.repository";
@@ -103,9 +105,17 @@ export default class CaseFindingAiSvc {
   }
 
   /** Run by AiGenerationQueue's worker after beginCategory claimed the lock. */
-  static async runQueuedCategory(caseId: string, category: RegenerableCategory): Promise<void> {
+  static async runQueuedCategory(caseId: string, category: RegenerableCategory, userId?: string): Promise<void> {
+    // The "What changed" modal then describes this panel's run (CaseChangeRun).
     await AiGenerationLockSvc.finishWith(caseId, CATEGORY_REGENERATE_KIND[category], () =>
-      CaseFindingAiSvc.generateFromDocumentsInner(caseId, category),
+      CaseChangeRun.regenerate(
+        caseId,
+        userId ?? null,
+        "findings",
+        () => CaseFindingRepo.list(caseId),
+        () => CaseFindingAiSvc.generateFromDocumentsInner(caseId, category),
+        (before, after) => diffFindings(before, after, category),
+      ),
     );
   }
 

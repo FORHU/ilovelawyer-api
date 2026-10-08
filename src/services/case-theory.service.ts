@@ -1,3 +1,6 @@
+import CaseChangeRun from "./case-change-run.service";
+import CaseChangeReads from "./case-change-reads";
+import { diffTheory } from "../utils/case-change-delta";
 import { TheoryStance } from "@prisma/client";
 import CaseTheoryRepo from "../repositories/case-theory.repository";
 import CaseFindingRepo from "../repositories/case-finding.repository";
@@ -254,7 +257,17 @@ export default class CaseTheorySvc {
   }
 
   static async runQueuedPropose(caseId: string, userId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "caseTheoryPropose", () => CaseTheorySvc.proposeInner(caseId, userId));
+    // The "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "caseTheoryPropose", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "theory",
+        () => CaseChangeReads.theory(caseId),
+        () => CaseTheorySvc.proposeInner(caseId, userId),
+        (before, after) => diffTheory(before, after),
+      ),
+    );
   }
 
   /** The analysis refresh's Theories step (CaseRefreshSvc), holding the same
