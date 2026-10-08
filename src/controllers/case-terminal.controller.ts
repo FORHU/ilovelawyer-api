@@ -506,6 +506,16 @@ export default class CaseTerminalCtrl {
     return res.status(201).json(result);
   }
 
+  static async listAccess(req: Request, res: Response) {
+    const result = await OrganizationSvc.listAccess(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async revokeAccess(req: Request, res: Response) {
+    await OrganizationSvc.revokeAccess(req.params.caseId, req.user.userId, req.params.userId);
+    return res.status(204).send();
+  }
+
   static async listFindings(req: Request, res: Response) {
     const { error, value } = listFindingsSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);

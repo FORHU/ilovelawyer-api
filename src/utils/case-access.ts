@@ -47,6 +47,34 @@ export default class CaseAccess {
     return record;
   }
 
+  /** Who may grant and revoke per-case access (#347, decision D3 on #331): org OWNER/ADMIN, or an
+   * ADMIN grant on the case — a level no one is above, so "never above your own level" needs no
+   * further check. An EDIT grant can change the case but not share it. */
+  private static manageAccessWhere(caseId: string, userId: string): Prisma.CaseWhereInput {
+    return {
+      id: caseId,
+      OR: [
+        ...ownedByUser(userId),
+        { accesses: { some: { userId, permission: "ADMIN" } } },
+        { organization: { members: { some: { userId, status: "ACCEPTED", role: { in: ["OWNER", "ADMIN"] } } } } },
+      ],
+    };
+  }
+
+  static async assertCanManageAccess(caseId: string, userId: string) {
+    const record = await prisma.case.findFirst({
+      where: CaseAccess.manageAccessWhere(caseId, userId),
+      select: { id: true, caseName: true, organizationId: true },
+    });
+    if (!record) throw new HttpError("Case not found or you can't manage its access", 404);
+    return record;
+  }
+
+  static async canManageAccess(caseId: string, userId: string): Promise<boolean> {
+    const record = await prisma.case.findFirst({ where: CaseAccess.manageAccessWhere(caseId, userId), select: { id: true } });
+    return !!record;
+  }
+
   /**
    * The authoritative Tenant code for legal/AI operations on this case: case -> its
    * organization -> organization.tenant.code. This is the seam every legal-content
