@@ -11,6 +11,18 @@ secrets/variables or a third party's terms) and needs someone with access to fil
 | UK | `.github/workflows/deploy-uk.yml` | `eu-west-2` | `ilovelawyer-uk` (`AWS_S3_REGION=eu-west-2`) |
 | Singapore (production) | `.github/workflows/deploy-production.yml` | `ap-southeast-1` | `AWS_S3_BUCKET` secret |
 
+## Environments
+
+| URL | Tenant | Runs in | Purpose |
+|---|---|---|---|
+| `uk.ilovelawyer.com` | UK | `eu-west-2` (UK stack) | UK production. This is the environment that must keep UK customer data in the UK. |
+| `uk-dev.ilovelawyer.com` | UK | `ap-southeast-1` (Singapore stack) | Sandbox and testbed. A UK tenant served from Singapore on purpose. Holds test data only. |
+
+Do not add a rule that blocks a UK-tenant user on a non-UK stack: it would lock out `uk-dev`.
+Residency is judged against `uk.ilovelawyer.com`. (Source: the team; the URLs are not in the repo.)
+
+## Bucket history
+
 The UK bucket was moved from `ilovelawyer-dev` (ap-southeast-1) to `ilovelawyer-uk` (eu-west-2)
 in b0c7d245. Existing files were copied across by maegju (believed; not verified).
 
