@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import UsersSvc from "../services/users.service";
+import { sendExportZip, exportAuditPayload } from "../utils/export-response";
+import SecurityAuditSvc from "../services/security-audit.service";
 import AvatarSvc from "../services/avatar.service";
 import GoogleCalendarSvc from "../services/google-calendar.service";
 import ProductTourSvc from "../services/product-tour.service";
@@ -42,6 +44,26 @@ export default class UsersCtrl {
     // requestDeletion revoked every session; drop this browser's now-dead refresh cookie too.
     clearRefreshTokenCookie(res);
     return res.status(200).json(user);
+  }
+
+  /** POST /api/users/me/export — everything we hold about the caller, as one ZIP download:
+   * data.json (the complete record), files/ (their uploaded files) and README.pdf (a readable
+   * summary). A POST (not a GET) so the password can travel in the body, not the URL. */
+  static async exportMe(req: Request, res: Response) {
+    const { error, value } = deleteMeSchema.validate({ password: req.body?.password });
+    if (error) throw new HttpError(error.message, 400);
+    await UsersSvc.confirmPassword(req.user.userId, value.password);
+
+    const result = await sendExportZip(res, req.user.userId);
+    if (result) {
+      await SecurityAuditSvc.record({
+        action: "export.my_data",
+        actorId: req.user.userId,
+        targetType: "user",
+        targetId: req.user.userId,
+        payload: exportAuditPayload(result),
+      });
+    }
   }
 
   static async cancelDeletion(req: Request, res: Response) {

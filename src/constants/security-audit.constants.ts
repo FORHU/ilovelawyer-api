@@ -21,6 +21,7 @@ export const SECURITY_AUDIT_ACTIONS = [
   "account.deletion_requested",
   "account.deletion_cancelled",
   "account.purged",
+  "consent.changed",
   "integration.connected",
   "integration.disconnected",
 
@@ -57,6 +58,8 @@ export const SECURITY_AUDIT_ACTIONS = [
   "export.case_brief",
   "export.generated_document",
   "export.audit_log",
+  "export.my_data",
+  "export.user_data",
   "file.accessed",
   "email.sent",
 
@@ -123,6 +126,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "account.deletion_requested": "Account deletion requested",
   "account.deletion_cancelled": "Account deletion cancelled",
   "account.purged": "Account deleted",
+  "consent.changed": "Consent granted or withdrawn",
   "integration.connected": "Integration connected",
   "integration.disconnected": "Integration disconnected",
   "org.created": "Organization created",
@@ -153,6 +157,8 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "export.case_brief": "Case brief exported",
   "export.generated_document": "Document generated",
   "export.audit_log": "Audit log exported",
+  "export.my_data": "Personal data exported by the account owner",
+  "export.user_data": "Personal data exported by an admin on someone's behalf",
   "file.accessed": "File opened or downloaded",
   "email.sent": "Email sent through ilovelawyer",
   "case.deleted": "Case deleted",

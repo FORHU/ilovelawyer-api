@@ -91,7 +91,7 @@ describe("Stopping a generation", () => {
 
     ChatRepo.findConsultationWithCase = async () =>
       ({ id: "c1", organizationId: "org1", caseId: null, case: null, title: "Existing title" }) as any;
-    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1" }) as any;
+    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", userId: "user1", caseId: null }) as any;
     ChatRepo.createMessage = async (_c, _role, content, _u, parent) => {
       created.push({ content, parent });
       return { id: "m-assistant-1", content } as any;
@@ -215,7 +215,7 @@ describe("Stopping a generation", () => {
     }
     expect(err?.message).to.equal("Consultation not found");
 
-    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1" }) as any;
+    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", userId: "user1", caseId: null }) as any;
     ChatRepo.findReplyState = async () =>
       ({ id: "x", consultationId: "c2", role: "user", userId: "u", replyStatus: "PENDING", pendingReplyContent: null }) as any;
     err = undefined;

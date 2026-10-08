@@ -53,10 +53,16 @@ export default class DocumentRepo {
   }
 
   /** The organization's documents, minus those on a case `userId` can't open — a confidential
-   * case's documents are left out for anyone walled off from it (#346). */
+   * case's documents are left out for anyone walled off from it (#346) — and minus files that live
+   * only in someone else's standalone Consultation, which is private to its creator, as are its files. */
   static async list(organizationId: string, status: DocumentStatus = "ACTIVE", userId: string) {
     return prisma.document.findMany({
-      where: { organizationId, status, OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] },
+      where: {
+        organizationId,
+        status,
+        OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }],
+        NOT: { caseId: null, consultation: { is: { userId: { not: userId } } } },
+      },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });

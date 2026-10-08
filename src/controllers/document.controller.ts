@@ -14,6 +14,9 @@ export default class DocumentCtrl {
   static async presign(req: Request, res: Response) {
     const { error, value } = presignDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+    if (value.consultationId) {
+      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+    }
 
     if (value.files) {
       const items = await DocumentSvc.presignMany(
@@ -38,6 +41,9 @@ export default class DocumentCtrl {
   static async create(req: Request, res: Response) {
     const { error, value } = createDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+    if (value.consultationId) {
+      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+    }
 
     if (value.items) {
       const docs = await DocumentSvc.createMany(
@@ -89,6 +95,9 @@ export default class DocumentCtrl {
   static async update(req: Request, res: Response) {
     const { error, value } = updateDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+    if (value.consultationId) {
+      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+    }
 
     await DocumentSvc.update(req.params.id, req.organization!.id, req.user.userId, value);
     return res.status(204).send();

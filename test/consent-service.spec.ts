@@ -5,6 +5,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { ConsentPurpose } from "@prisma/client";
 import ConsentSvc from "../src/services/consent.service";
 import ConsentRepo from "../src/repositories/consent.repository";
+import SecurityAuditSvc from "../src/services/security-audit.service";
 import { CONSENT_VERSIONS } from "../src/constants/consent.constants";
 
 type Row = {
@@ -60,6 +61,24 @@ describe("ConsentSvc", () => {
     const list = await ConsentSvc.set("u1", "AI_PROCESSING", true);
     expect(sets).to.deep.equal([{ purpose: "AI_PROCESSING", granted: true, version: CONSENT_VERSIONS.AI_PROCESSING, source: "settings" }]);
     expect(list.find((c) => c.purpose === "AI_PROCESSING")).to.deep.include({ status: "granted", withdrawnAt: null });
+  });
+
+  it("writes each change to the security audit log, since the table keeps only the latest answer", async () => {
+    const recorded: Array<Record<string, unknown>> = [];
+    const original = SecurityAuditSvc.record;
+    SecurityAuditSvc.record = (async (input: Record<string, unknown>) => {
+      recorded.push(input);
+    }) as unknown as typeof SecurityAuditSvc.record;
+    try {
+      await ConsentSvc.set("u1", "MARKETING", true);
+      await ConsentSvc.set("u1", "MARKETING", false);
+    } finally {
+      SecurityAuditSvc.record = original;
+    }
+    expect(recorded.map((r) => [r.action, r.actorId, r.targetId, (r.payload as { granted: boolean }).granted])).to.deep.equal([
+      ["consent.changed", "u1", "u1", true],
+      ["consent.changed", "u1", "u1", false],
+    ]);
   });
 
   it("withdraws a purpose and keeps when it was first granted", async () => {
