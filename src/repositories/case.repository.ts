@@ -275,6 +275,12 @@ export default class CaseRepo {
    * post-extraction trigger runs up to 45s after the corpus change that scheduled it, and the
    * Chat Wonder calls upstream of this can themselves run for tens of seconds) is a silent
    * no-op rather than a P2025 throw; nothing meaningful to stamp on a row that's already gone. */
+  /** Null until the case's first analysis refresh finishes (markRefreshed). */
+  static async getLastRefreshedAt(id: string): Promise<Date | null> {
+    const row = await prisma.case.findUnique({ where: { id }, select: { lastRefreshedAt: true } });
+    return row?.lastRefreshedAt ?? null;
+  }
+
   static async markRefreshed(id: string) {
     return prisma.case.updateMany({ where: { id }, data: { lastRefreshedAt: new Date() } });
   }

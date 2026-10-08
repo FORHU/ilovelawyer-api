@@ -1,3 +1,5 @@
+import CaseChangeRun from "./case-change-run.service";
+import { diffReconstruction } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
@@ -65,8 +67,17 @@ export default class CaseReconstructionSvc {
 
   /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
   static async runQueued(caseId: string, userId: string): Promise<void> {
+    // The lawyer's Regenerate (even over their own edits): the "What changed" modal then
+    // describes this run (CaseChangeRun).
     await AiGenerationLockSvc.finishWith(caseId, "caseReconstruction", () =>
-      CaseReconstructionSvc.generateInner(caseId, userId),
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "reconstruction",
+        () => CaseReconstructionRepo.get(caseId),
+        () => CaseReconstructionSvc.generateInner(caseId, userId),
+        (before, after) => diffReconstruction(before, after, before ? "regenerated" : "generated"),
+      ),
     );
   }
 

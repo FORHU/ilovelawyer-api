@@ -3,6 +3,7 @@ import CaseSnapshotSvc from "../services/case-snapshot.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseRiskSvc from "../services/case-risk.service";
 import CaseRefreshSvc from "../services/case-refresh.service";
+import CaseChangeSvc from "../services/case-change.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import MissingEvidenceAiSvc from "../services/missing-evidence-ai.service";
 import CitationCheckSvc from "../services/citation-check.service";
@@ -122,6 +123,22 @@ export default class CaseTerminalCtrl {
       throw new HttpError(`Unknown AI generation kind: ${kind}`, 400);
     }
     const result = await AiGenerationLockSvc.getStatusForCase(req.params.caseId, req.user.userId, kind as AiGenerationKind);
+    return res.status(200).json(result);
+  }
+
+  /** The case's change summaries, newest first — what each analysis refresh changed. */
+  static async listChangeSummaries(req: Request, res: Response) {
+    const result = await CaseChangeSvc.list(req.params.caseId, req.user.userId, {
+      limit: Number(req.query.limit) || undefined,
+      day: req.query.day,
+      tz: req.query.tz,
+    });
+    return res.status(200).json(result);
+  }
+
+  /** The days the case has change summaries on, in the viewer's time zone (`tz`), newest first. */
+  static async listChangeSummaryDays(req: Request, res: Response) {
+    const result = await CaseChangeSvc.days(req.params.caseId, req.user.userId, req.query.tz);
     return res.status(200).json(result);
   }
 

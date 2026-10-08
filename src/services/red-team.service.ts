@@ -1,3 +1,5 @@
+import CaseChangeRun from "./case-change-run.service";
+import { diffRedTeam } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
 import CaseSnapshotSvc from "./case-snapshot.service";
 import RedTeamRepo from "../repositories/red-team.repository";
@@ -99,7 +101,17 @@ export default class RedTeamSvc {
 
   /** Run by AiGenerationQueue's worker after beginQueued has already claimed the job row. */
   static async runQueued(caseId: string, userId: string): Promise<void> {
-    await AiGenerationLockSvc.finishWith(caseId, "redTeam", () => RedTeamSvc.generateInner(caseId, userId));
+    // The lawyer's Regenerate: the "What changed" modal then describes this run (CaseChangeRun).
+    await AiGenerationLockSvc.finishWith(caseId, "redTeam", () =>
+      CaseChangeRun.regenerate(
+        caseId,
+        userId,
+        "redTeam",
+        () => RedTeamRepo.get(caseId),
+        () => RedTeamSvc.generateInner(caseId, userId),
+        (before, after) => diffRedTeam(before, after),
+      ),
+    );
   }
 
   /** The analysis refresh's Red Team step (CaseRefreshSvc), holding the same "redTeam" lock as

@@ -22,6 +22,7 @@ import CaseGraphRepo from "../repositories/case-graph.repository";
 import ChatRepo from "../repositories/chat.repository";
 import LawRepo from "../repositories/law.repository";
 import CaseOutlookRepo from "../repositories/case-outlook.repository";
+import CaseChangeSummaryRepo from "../repositories/case-change-summary.repository";
 import prisma from "../lib/prisma";
 import { scoreCaseRisks } from "../utils/case-risk-score";
 import { isMindMapStale } from "../utils/mind-map-staleness";
@@ -71,6 +72,7 @@ export default class CaseSnapshotSvc {
       outlookHistory,
       caseMindMap,
       tenantCode,
+      latestChangeSummary,
     ] = await Promise.all([
       DocumentRepo.listAllByCase(caseId),
       CaseTimelineRepo.list(caseId),
@@ -103,6 +105,7 @@ export default class CaseSnapshotSvc {
       // Only picks the damages currency here; a case with no organization falls back to PHP
       // rather than failing the whole snapshot.
       CaseAccess.resolveTenantCode(caseId).catch(() => null),
+      CaseChangeSummaryRepo.latest(caseId),
     ]);
 
     // listAllByCase is unscoped by status (its other callers need archived documents for id
@@ -255,6 +258,9 @@ export default class CaseSnapshotSvc {
           }
         : null,
       outlookHistory,
+      // What the last analysis refresh changed, pane by pane (CaseChangeRun) — the Terminal's
+      // "What changed" modal. Null until the case's first refresh after it shipped.
+      latestChangeSummary,
       trends: buildCaseTrends({ risks, documents: activeDocuments, weeks: CASE_TREND_WEEKS, now }),
       riskAnalysis: scoreCaseRisks({
         risks,
