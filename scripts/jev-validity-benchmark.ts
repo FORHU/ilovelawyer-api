@@ -1,9 +1,11 @@
 /**
  * Compares evaluateCitationHeuristic vs evaluateCitationWithJev on a fixed set of quote/official
- * pairs that all have no normalized textual match (containsQuote false) — the case where the old
- * heuristic always defaults to INVALID. Checks whether Jev correctly distinguishes VALID
- * (paraphrased-but-accurate), INVALID (genuinely fabricated), and ADVERSE (contradicts the
- * source) instead.
+ * pairs. Two kinds:
+ * - no textual match at all — where the heuristic always defaults to INVALID; checks whether Jev
+ *   tells VALID (paraphrased-but-accurate), INVALID (fabricated) and ADVERSE (contradicts) apart.
+ * - near matches (#363) — quotes that differ from the source by a word or two. Some are harmless;
+ *   others add or drop a negation and so reverse the source. Before #363 the heuristic called the
+ *   reversed ones VALID, and VALID never reached Jev.
  *
  *   npx ts-node scripts/jev-validity-benchmark.ts
  *
@@ -130,6 +132,39 @@ const CASES: Case[] = [
     quotedText: "The defendant was convicted based on strong evidence of guilt.",
     expected: "ADVERSE",
   },
+
+  // Near matches (#363). The official text is the same for all of them; the quote differs by a
+  // word or two. A reversed one must not come out VALID.
+  {
+    label: "near match, harmless (can / dropped 'has')",
+    officialText: "The employer may terminate the employee without notice where the employee has committed serious misconduct.",
+    quotedText: "The employer can terminate the employee without notice where the employee committed serious misconduct.",
+    expected: "VALID",
+  },
+  {
+    label: "near match, reversed (added 'not')",
+    officialText: "The employer may terminate the employee without notice where the employee has committed serious misconduct.",
+    quotedText: "The employer may not terminate the employee without notice where the employee has committed serious misconduct.",
+    expected: "ADVERSE",
+  },
+  {
+    label: "near match, reversed (added 'never')",
+    officialText: "The employer may terminate the employee without notice where the employee has committed serious misconduct.",
+    quotedText: "The employer may terminate the employee without notice where the employee has never committed serious misconduct.",
+    expected: "ADVERSE",
+  },
+  {
+    label: "near match, reversed ('without' became 'with')",
+    officialText: "The employer may terminate the employee without notice where the employee has committed serious misconduct.",
+    quotedText: "The employer may terminate the employee with notice where the employee has committed serious misconduct.",
+    expected: "ADVERSE",
+  },
+  {
+    label: "near match, reversed (dropped the source's 'not')",
+    officialText: "A tenant shall not be evicted during the pendency of an appeal unless the supersedeas bond has lapsed.",
+    quotedText: "A tenant shall be evicted during the pendency of an appeal unless the supersedeas bond has lapsed.",
+    expected: "ADVERSE",
+  },
 ];
 
 async function timed<T>(fn: () => Promise<T> | T): Promise<{ ms: number; result: T | null; error?: string }> {
@@ -180,8 +215,9 @@ async function main() {
     ``,
     `Run: ${new Date().toISOString()}`,
     ``,
-    `All cases have no normalized textual match, so the heuristic always defaults to INVALID — this`,
-    `set exists specifically to probe that blind spot.`,
+    `Two kinds of case: no textual match at all (the heuristic defaults to INVALID), and near matches`,
+    `that differ from the source by a word or two — harmless ones, and ones that add or drop a`,
+    `negation and so reverse the source (#363).`,
     ``,
     `| Case | Expected | Heuristic | Jev | Agree |`,
     `| --- | --- | --- | --- | --- |`,
