@@ -1,7 +1,8 @@
 /** Who may use a Consultation. A Case's Consultations are shared with everyone who can open the
  * Case; archiving, restoring or deleting someone else's needs edit rights on the Case, and a
- * permanent delete only works on an archived one; a standalone (case-less)
- * Consultation keeps the organization-only check it always had. ChatRepo, ParticipantRepo,
+ * permanent delete only works on an archived one; a standalone (case-less) Consultation is
+ * private to its creator — no one else in the organization, whatever their role, can reach it,
+ * and it can't be shared by invite. ChatRepo, ParticipantRepo,
  * CaseAccess and CaseSvc are monkeypatched on their module objects, same idiom as
  * test/chat-list-messages-download-link.spec.ts.
  */
@@ -11,10 +12,13 @@ import ChatSvc from "../src/services/chat.service";
 import CaseSvc from "../src/services/case.service";
 import ChatRepo from "../src/repositories/chat.repository";
 import ParticipantRepo from "../src/repositories/participant.repository";
+import InviteRepo from "../src/repositories/invite.repository";
+import InviteSvc from "../src/services/invite.service";
 import CaseAccess from "../src/utils/case-access";
 import HttpError from "../src/utils/http-error";
 
 const CASE_CONSULTATION = { id: "c1", organizationId: "org-1", userId: "creator", caseId: "case-1", status: "ACTIVE" };
+const STANDALONE_CONSULTATION = { ...CASE_CONSULTATION, caseId: null };
 
 async function statusOf(promise: Promise<unknown>): Promise<number | "ok"> {
   try {
@@ -38,7 +42,11 @@ describe("Consultation access", () => {
     listConsultations: ChatRepo.listConsultations,
     createConsultation: ChatRepo.createConsultation,
     participantExists: ParticipantRepo.exists,
+    participantAdd: ParticipantRepo.add,
+    inviteCreate: InviteRepo.create,
+    inviteFindById: InviteRepo.findById,
     loadAccessibleCase: CaseAccess.loadAccessibleCase,
+    isConfidential: CaseAccess.isConfidential,
     assertCanEdit: CaseAccess.assertCanEdit,
     getCaseById: CaseSvc.getById,
   };
@@ -49,6 +57,8 @@ describe("Consultation access", () => {
   let deleted: string[];
   let statusChanges: [string, string][];
   let generating: boolean;
+  let listedWith: unknown[];
+  let invites: Map<string, { id: string; consultationId: string; createdBy: string; expiresAt: Date }>;
 
   beforeEach(() => {
     consultation = { ...CASE_CONSULTATION };
@@ -58,6 +68,8 @@ describe("Consultation access", () => {
     deleted = [];
     statusChanges = [];
     generating = false;
+    listedWith = [];
+    invites = new Map();
     (ChatRepo as any).hasPendingTurn = async () => generating;
     (ChatRepo as any).findConsultationById = async () => consultation;
     (ChatRepo as any).findConsultationWithCase = async () => consultation;
@@ -73,9 +85,19 @@ describe("Consultation access", () => {
       return consultation;
     };
     (ChatRepo as any).updateConsultation = async (id: string, title: string) => ({ id, title });
-    (ChatRepo as any).listConsultations = async () => [];
+    (ChatRepo as any).listConsultations = async (...args: unknown[]) => {
+      listedWith = args;
+      return [];
+    };
     (ChatRepo as any).createConsultation = async (_o: string, userId: string, title?: string, caseId?: string) => ({ id: "new", userId, title, caseId });
     (ParticipantRepo as any).exists = async (_c: string, userId: string) => participants.has(userId);
+    (ParticipantRepo as any).add = async (_c: string, userId: string) => participants.add(userId);
+    (InviteRepo as any).create = async (consultationId: string, createdBy: string, expiresAt: Date) => {
+      const invite = { id: `inv-${invites.size + 1}`, consultationId, createdBy, expiresAt };
+      invites.set(invite.id, invite);
+      return invite;
+    };
+    (InviteRepo as any).findById = async (id: string) => invites.get(id) ?? null;
     (CaseAccess as any).loadAccessibleCase = async (_caseId: string, userId: string) => {
       if (!caseReaders.has(userId) && !caseEditors.has(userId)) throw new HttpError("Case not found", 404);
       return { id: "case-1" };
@@ -84,7 +106,13 @@ describe("Consultation access", () => {
       if (!caseEditors.has(userId)) throw new HttpError("Case not found or not editable", 404);
       return { id: "case-1" };
     };
-    (CaseSvc as any).getById = async () => ({ id: "case-1" });
+    // Like the real one: org check (always passes here) plus the user's access to the case (#346).
+    (CaseSvc as any).getById = async (caseId: string, _org: string, userId: string) => {
+      await CaseAccess.loadAccessibleCase(caseId, userId);
+      return { id: "case-1" };
+    };
+    // An ordinary case: a creator or participant keeps their consultation without the case rule.
+    (CaseAccess as any).isConfidential = async () => false;
   });
 
   afterEach(() => {
@@ -100,8 +128,12 @@ describe("Consultation access", () => {
       createConsultation: originals.createConsultation,
     });
     (ParticipantRepo as any).exists = originals.participantExists;
+    (ParticipantRepo as any).add = originals.participantAdd;
+    (InviteRepo as any).create = originals.inviteCreate;
+    (InviteRepo as any).findById = originals.inviteFindById;
     (CaseAccess as any).loadAccessibleCase = originals.loadAccessibleCase;
     (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
+    (CaseAccess as any).isConfidential = originals.isConfidential;
     (CaseSvc as any).getById = originals.getCaseById;
   });
 
@@ -120,10 +152,70 @@ describe("Consultation access", () => {
     it("404s across organizations even for the creator", async () => {
       expect(await statusOf(ChatSvc.listMessages("org-2", "creator", "c1"))).to.equal(404);
     });
+  });
 
-    it("keeps the organization-only check for a standalone Consultation", async () => {
-      consultation = { ...CASE_CONSULTATION, caseId: null };
-      expect(await statusOf(ChatSvc.listMessages("org-1", "outsider", "c1"))).to.equal("ok");
+  describe("a standalone Consultation is private to its creator", () => {
+    beforeEach(() => {
+      consultation = { ...STANDALONE_CONSULTATION };
+    });
+
+    it("lets the creator read and rename it", async () => {
+      expect(await statusOf(ChatSvc.listMessages("org-1", "creator", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.renameConsultation("org-1", "creator", "c1", "Remedies"))).to.equal("ok");
+    });
+
+    it("404s for every other org member — whatever their role — on every action", async () => {
+      // Roles don't enter into it: an Owner or Admin is just another user here.
+      for (const other of ["colleague", "org-admin", "org-owner"]) {
+        const attempts: Promise<unknown>[] = [
+          ChatSvc.listMessages("org-1", other, "c1"),
+          ChatSvc.renameConsultation("org-1", other, "c1", "Remedies"),
+          ChatSvc.archiveConsultation("org-1", other, "c1"),
+          ChatSvc.unarchiveConsultation("org-1", other, "c1"),
+          ChatSvc.deleteConsultation("org-1", other, "c1"),
+          ChatSvc.deleteMessage("org-1", other, "c1", "m1"),
+          ChatSvc.enqueueChatGeneration("org-1", "PH" as any, other, "c1", "session", "hello"),
+          ChatSvc.cancelChatGeneration("org-1", other, "c1", "m1"),
+          ChatSvc.getRelatedCases("org-1", other, "PH" as any, "c1"),
+          ChatSvc.startAudioOverviewAudio("org-1", other, "c1", "m1"),
+          ChatSvc.pollAudioOverviewAudio("org-1", other, "c1", "m1"),
+          ChatSvc.assertConsultationAccess("org-1", other, "c1"),
+        ];
+        for (const attempt of attempts) expect(await statusOf(attempt)).to.equal(404);
+      }
+      expect(statusChanges).to.deep.equal([]);
+      expect(deleted).to.deep.equal([]);
+    });
+
+    it("gives a leftover participant (from before sharing was Case-only) no access", async () => {
+      participants.add("guest");
+      expect(await statusOf(ChatSvc.listMessages("org-1", "guest", "c1"))).to.equal(404);
+    });
+
+    it("lists only the caller's own standalone Consultations", async () => {
+      await ChatSvc.listConsultations("org-1", "colleague");
+      expect(listedWith).to.deep.equal(["org-1", undefined, "ACTIVE", "colleague"]);
+      await ChatSvc.listConsultations("org-1", "colleague", undefined, "ARCHIVED");
+      expect(listedWith).to.deep.equal(["org-1", undefined, "ARCHIVED", "colleague"]);
+    });
+
+    it("can't be shared: creating an invite is refused (400)", async () => {
+      expect(await statusOf(InviteSvc.create("creator", "c1"))).to.equal(400);
+      expect(invites.size).to.equal(0);
+    });
+
+    it("refuses an invite created before sharing was Case-only (400), adding no participant", async () => {
+      invites.set("old", { id: "old", consultationId: "c1", createdBy: "creator", expiresAt: new Date(Date.now() + 60_000) });
+      expect(await statusOf(InviteSvc.accept("guest", "old"))).to.equal(400);
+      expect(participants.has("guest")).to.equal(false);
+    });
+  });
+
+  describe("sharing a case-linked Consultation by invite", () => {
+    it("lets the creator invite, and the invitee accept", async () => {
+      const invite: any = await InviteSvc.create("creator", "c1");
+      expect(await statusOf(InviteSvc.accept("guest", invite.id))).to.equal("ok");
+      expect(participants.has("guest")).to.equal(true);
     });
   });
 
@@ -221,6 +313,11 @@ describe("Consultation access", () => {
       expect(await statusOf(ChatSvc.listConsultations("org-1", "colleague", "case-1"))).to.equal("ok");
       expect(await statusOf(ChatSvc.listConsultations("org-1", "outsider", "case-1"))).to.equal(404);
       expect(await statusOf(ChatSvc.listConsultations("org-1", "outsider"))).to.equal("ok");
+    });
+
+    it("lists every Consultation on the Case, not just the caller's own", async () => {
+      await ChatSvc.listConsultations("org-1", "colleague", "case-1");
+      expect(listedWith).to.deep.equal(["org-1", "case-1", "ACTIVE", undefined]);
     });
 
     it("creates on a Case only for someone who can open it, and passes the draft's title through", async () => {

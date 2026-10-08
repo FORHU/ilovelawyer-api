@@ -17,6 +17,7 @@ import OrganizationSvc from "../src/services/organization.service";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import NotificationSvc from "../src/services/notification.service";
+import CaseRepo from "../src/repositories/case.repository";
 
 async function rejection(promise: Promise<unknown>): Promise<any> {
   try {
@@ -81,6 +82,7 @@ describe("OrganizationSvc — case sharing", () => {
     listCaseAccess: OrganizationRepo.listCaseAccess,
     writeAudit: OrganizationRepo.writeAudit,
     notify: NotificationSvc.create,
+    setConfidential: CaseRepo.setConfidential,
   };
 
   const MANAGER = "manager-1";
@@ -89,6 +91,8 @@ describe("OrganizationSvc — case sharing", () => {
   let members: Record<string, { status: string; role: string }>;
   let grants: { userId: string; permission: string }[];
   let writes: string[];
+  /** The case's confidential flag, as the stubbed assertCanManageAccess reports it. */
+  let confidential: boolean;
 
   beforeEach(() => {
     managers = new Set([MANAGER]);
@@ -102,11 +106,11 @@ describe("OrganizationSvc — case sharing", () => {
 
     (CaseAccess as any).assertCanManageAccess = async (caseId: string, userId: string) => {
       if (!managers.has(userId)) throw new HttpError("Case not found or you can't manage its access", 404);
-      return { id: caseId, caseName: "Santos v. Reyes", organizationId: "org-1" };
+      return { id: caseId, caseName: "Santos v. Reyes", organizationId: "org-1", confidential };
     };
     (CaseAccess as any).canManageAccess = async (_caseId: string, userId: string) => managers.has(userId);
     (CaseAccess as any).canEdit = async (_caseId: string, userId: string) => managers.has(userId) || userId === "editor-1";
-    (CaseAccess as any).loadAccessibleCase = async (caseId: string) => ({ id: caseId, organizationId: "org-1" });
+    (CaseAccess as any).loadAccessibleCase = async (caseId: string) => ({ id: caseId, organizationId: "org-1", confidential });
     (OrganizationMemberRepo as any).find = async (organizationId: string, userId: string) =>
       organizationId === "org-1" && members[userId] ? { userId, organizationId, ...members[userId] } : null;
     (OrganizationMemberRepo as any).list = async () =>
@@ -130,6 +134,11 @@ describe("OrganizationSvc — case sharing", () => {
       writes.push(`audit:${entry.action}`);
     };
     (NotificationSvc as any).create = async () => ({});
+    confidential = false;
+    (CaseRepo as any).setConfidential = async (_caseId: string, value: boolean) => {
+      writes.push(`confidential:${value}`);
+      confidential = value;
+    };
   });
 
   afterEach(() => {
@@ -144,6 +153,7 @@ describe("OrganizationSvc — case sharing", () => {
     (OrganizationRepo as any).listCaseAccess = originals.listCaseAccess;
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
     (NotificationSvc as any).create = originals.notify;
+    (CaseRepo as any).setConfidential = originals.setConfidential;
   });
 
   describe("grantAccess", () => {
@@ -236,5 +246,36 @@ describe("OrganizationSvc — case sharing", () => {
       const err = await rejection(OrganizationSvc.listAccess("case-1", "stranger-1"));
       expect(err.statusCode).to.equal(404);
     });
+  });
+  describe("setConfidential", () => {
+    it("marking it gives the marker an ADMIN grant first, then sets the flag, with an audit entry (D7/D8)", async () => {
+      const result = await OrganizationSvc.setConfidential("case-1", MANAGER, true);
+      expect(result).to.deep.equal({ confidential: true });
+      expect(writes).to.deep.equal([`grant:${MANAGER}:ADMIN`, "confidential:true", "audit:case.confidential_set"]);
+    });
+
+    it("unmarking it clears the flag, with an audit entry, and leaves grants as they are", async () => {
+      confidential = true;
+      await OrganizationSvc.setConfidential("case-1", MANAGER, false);
+      expect(writes).to.deep.equal(["confidential:false", "audit:case.confidential_unset"]);
+    });
+
+    it("refuses someone who can't manage the case's access, changing nothing", async () => {
+      const err = await rejection(OrganizationSvc.setConfidential("case-1", "member-1", true));
+      expect(err.statusCode).to.equal(404);
+      expect(writes).to.deep.equal([]);
+    });
+
+    it("is a no-op when the flag already has that value", async () => {
+      confidential = true;
+      await OrganizationSvc.setConfidential("case-1", MANAGER, true);
+      expect(writes).to.deep.equal([]);
+    });
+  });
+
+  it("listAccess reports whether the case is confidential", async () => {
+    confidential = true;
+    const result = await OrganizationSvc.listAccess("case-1", MANAGER);
+    expect(result.confidential).to.equal(true);
   });
 });

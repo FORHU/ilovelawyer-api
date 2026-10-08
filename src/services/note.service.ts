@@ -1,5 +1,6 @@
 import NoteRepo from "../repositories/note.repository";
 import HttpError from "../utils/http-error";
+import SecurityAuditSvc from "./security-audit.service";
 
 interface NoteRecord {
   id: string;
@@ -48,5 +49,6 @@ export default class NoteSvc {
   static async deleteById(id: string, organizationId: string, userId: string) {
     const result = await NoteRepo.deleteById(id, organizationId, userId);
     if (result.count === 0) throw new HttpError("Note not found", 404);
+    await SecurityAuditSvc.record({ action: "note.deleted", actorId: userId, organizationId, targetType: "note", targetId: id });
   }
 }

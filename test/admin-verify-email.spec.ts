@@ -10,7 +10,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import AdminSvc from "../src/services/admin.service";
 import TenantSettingSvc from "../src/services/tenant-setting.service";
 import AuthRepo from "../src/repositories/auth.repository";
-import OrganizationRepo from "../src/repositories/organization.repository";
+import SecurityAuditSvc from "../src/services/security-audit.service";
 
 function stash<T extends object>(target: T, keys: (keyof T)[]) {
   const saved = keys.map((k) => [k, target[k]] as const);
@@ -25,7 +25,7 @@ describe("AdminSvc.verifyEmail", () => {
   let autoApproveOn: boolean;
   let verifiedIds: string[];
   let approvals: { userId: string; status: string }[];
-  let audits: { actorId?: string; action: string; payload?: object }[];
+  let audits: { actorId?: string | null; action: string; payload?: object }[];
 
   beforeEach(() => {
     current = { id: "user-1", tenantId: "tenant-uk", isEmailVerified: false, approvalStatus: "ACTIVE" };
@@ -37,7 +37,7 @@ describe("AdminSvc.verifyEmail", () => {
     restore = [
       stash(AuthRepo, ["findById", "markEmailVerified", "setApprovalStatus"]),
       stash(TenantSettingSvc, ["isAutoApproveOn"]),
-      stash(OrganizationRepo, ["writeAudit"]),
+      stash(SecurityAuditSvc, ["record"]),
     ];
 
     (AuthRepo as any).findById = async (id: string) => (current && id === current.id ? { ...current } : null);
@@ -52,7 +52,7 @@ describe("AdminSvc.verifyEmail", () => {
       return { ...current! };
     };
     (TenantSettingSvc as any).isAutoApproveOn = async () => autoApproveOn;
-    (OrganizationRepo as any).writeAudit = async (data: any) => void audits.push(data);
+    (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
   });
 
   afterEach(() => restore.forEach((r) => r()));
@@ -64,7 +64,13 @@ describe("AdminSvc.verifyEmail", () => {
     expect(verifiedIds).to.deep.equal(["user-1"]);
     expect(approvals).to.have.length(0);
     expect(audits).to.deep.equal([
-      { actorId: "admin-1", action: "users.email_verified", payload: { userId: "user-1", autoApproved: false } },
+      {
+        action: "admin.user.email_verified",
+        actorId: "admin-1",
+        targetType: "user",
+        targetId: "user-1",
+        payload: { autoApproved: false },
+      },
     ]);
   });
 
@@ -76,7 +82,7 @@ describe("AdminSvc.verifyEmail", () => {
 
     expect(approvals).to.deep.equal([{ userId: "user-1", status: "ACTIVE" }]);
     expect(result?.approvalStatus).to.equal("ACTIVE");
-    expect(audits[0].payload).to.deep.equal({ userId: "user-1", autoApproved: true });
+    expect(audits[0].payload).to.deep.equal({ autoApproved: true });
   });
 
   it("leaves a PENDING user pending when their Tenant has auto-approve off", async () => {

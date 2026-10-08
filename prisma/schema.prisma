@@ -135,6 +135,7 @@ model User {
 
   @@index([tenantId])
   @@index([deletionRequestedAt])
+  manualEdits        CaseManualEdit[]
 }
 
 model Session {
@@ -825,6 +826,10 @@ model Case {
   // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
   // param and CaseRepo.setStatus.
   status                CaseStatus @default(ACTIVE)
+  // A confidential matter (#346): reachable only by the organization's OWNER and people holding a
+  // CaseAccess grant — plain membership, org ADMIN included, no longer opens it, and it's left out
+  // of every listing for everyone else (see CaseAccess). Off by default.
+  confidential          Boolean    @default(false)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
@@ -867,6 +872,7 @@ model Case {
   findings             CaseFinding[]
   witnesses            Witness[]
   damageClaims         DamageClaim[]
+  damageClaimDismissals DamageClaimDismissal[]
   claims               CaseClaim[]
   citationGrounds      CitationGround[]
   adverseHits          AdverseCitationHit[]
@@ -887,6 +893,7 @@ model Case {
   outlooks             CaseOutlook[]
   mindMap              CaseMindMap?
   changeSummaries      CaseChangeSummary[]
+  manualEdits          CaseManualEdit[]
 
   @@index([userId])
   @@index([organizationId])
@@ -2137,6 +2144,19 @@ model DamageClaim {
   @@index([caseId])
 }
 
+// An AI suggestion the lawyer deleted or renamed, by its damageHeadKey (kind + normalised title),
+// so a later read of the case's documents doesn't propose it again.
+model DamageClaimDismissal {
+  id        String   @id @default(uuid())
+  caseId    String
+  key       String
+  createdAt DateTime @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, key])
+}
+
 // A legal claim/cause of action being pursued (e.g. "Breach of Contract", "Negligence") —
 // distinct from DamageClaim, which is a monetary damages line item sought under one or more
 // of these claims, not the legal theory itself.
@@ -2366,11 +2386,43 @@ model CaseChangeSummary {
   firstAnalysis    Boolean  @default(false)
   // CaseChangeDeltas (types/case-change.ts), one entry per pane the refresh tracks.
   perPaneDeltas    Json
+  // When the run began (createdAt is when it saved). Lawyers' edits between the previous run's
+  // save and this start are "edits since the previous run". Null on rows from before it existed.
+  startedAt        DateTime?
   createdAt        DateTime @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId, createdAt])
+}
+
+// One edit a lawyer made by hand in a Terminal pane (ManualEditLog) — the Change Summary's record of
+// manual changes, grouped into editing sessions when read (utils/manual-edit-sessions.ts). Written
+// once, except that the same person editing the same field of the same item again within five
+// minutes updates the row instead of adding one. The AI's own writes are never recorded here.
+// Holds case content (item names), so it goes with the case.
+model CaseManualEdit {
+  id        String   @id @default(uuid())
+  caseId    String
+  actorId   String?
+  // The Terminal pane (a PanelId) the item shows in — types/manual-edit.ts.
+  pane      String
+  // What was edited: finding, contradiction, todo, witness, … (ManualEditKind).
+  kind      String
+  itemId    String?
+  // added | edited | removed | resolved | ticked | accepted | … (ManualEditAction).
+  action    String
+  // The item's name when it was edited, kept after a delete.
+  label     String
+  // [{ field, from?, to? }]: short values keep from/to; long text only names the field.
+  changes   Json?
+  createdAt DateTime @default(now())
+
+  case  Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([caseId, createdAt])
+  @@index([caseId, actorId, itemId])
 }
 
 // ── Case Graph (Phase A: dependency tracking + staleness, no auto-recompute) ───────────────
@@ -2735,6 +2787,54 @@ model AuditEvent {
   @@index([actorId])
   @@index([createdAt])
   @@index([action])
+}
+
+enum SecurityAuditOutcome {
+  SUCCESS
+  FAILURE
+}
+
+// The security audit log (docs/adr/0006-security-audit-log.md): sign-in, membership and
+// permission changes, admin actions, exports and downloads, deletions — what a firm's security
+// questionnaire asks about. Kept apart from AuditEvent, which is the case activity feed and also
+// drives mind map / Case Strategy staleness, so nothing written here can mark a pane stale.
+//
+// Append-only, enforced in Postgres (see the security_audit_event migration's triggers): UPDATE
+// and TRUNCATE are refused, and DELETE is refused for any row younger than the retention floor —
+// only SecurityAuditRetentionQueue removes rows, once they age out. No foreign keys on purpose:
+// a row must outlive the user, case and organization it names, so ids are plain strings and the
+// actor's email is snapshotted. Rows carry ids and counts, never case content.
+model SecurityAuditEvent {
+  id             String               @id @default(uuid())
+  createdAt      DateTime             @default(now())
+  /// Dotted action name from SECURITY_AUDIT_ACTIONS (src/constants/security-audit.constants.ts).
+  action         String
+  outcome        SecurityAuditOutcome @default(SUCCESS)
+  /// The firm the event belongs to — what an org Owner/Admin's audit log view filters on. Null for
+  /// events outside any organization (a failed login for an unknown email, platform settings).
+  organizationId String?
+  tenantCode     String?
+  /// Who did it. Null when nobody signed in did (a failed login, a system sweep).
+  actorId        String?
+  /// The actor's email at the time — kept so the row still names them after their account is gone.
+  actorEmail     String?
+  /// What it was done to: "user", "organization", "case", "document", "consultation", "file", ...
+  targetType     String?
+  targetId       String?
+  /// The target's name as it read when the row was written — set only where the target is about
+  /// to stop existing (a deleted document, case or transcription), so the log can still say which
+  /// one. Live targets are named from their current record when the log is read.
+  targetName     String?
+  caseId         String?
+  ip             String?
+  userAgent      String?
+  requestId      String?
+  payload        Json?
+
+  @@index([organizationId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([caseId])
+  @@index([createdAt])
 }
 
 model JurisdictionModule {

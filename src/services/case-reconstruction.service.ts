@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import CaseChangeRun from "./case-change-run.service";
 import { diffReconstruction } from "../utils/case-change-delta";
 import CaseAccess from "../utils/case-access";
@@ -154,9 +156,18 @@ ${wrapExtractedText("Use only these excerpts and the attached case documents.", 
     data: { narrative?: string; narrativeCourt?: string; narrativeOpposing?: string },
   ) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await CaseReconstructionRepo.get(caseId);
     const row = await CaseReconstructionRepo.updateFields(caseId, data);
     if (!row) throw new HttpError("Case reconstruction not found — generate one first", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "reconstruction.update", payload: { id: row.id } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "caseReconstruction",
+      kind: "narrative",
+      itemId: row.id,
+      action: "edited",
+      label: "Case narrative",
+      changes: fieldChanges(before, data, { narrative: "text", narrativeCourt: "text", narrativeOpposing: "text" }),
+    });
     return CaseReconstructionRepo.get(caseId);
   }
 

@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import CaseAccess from "../utils/case-access";
 import CaseAuthorityRepo, { CaseAuthorityInput } from "../repositories/case-authority.repository";
 import CitationCheckSvc from "./citation-check.service";
@@ -39,6 +41,7 @@ export default class CaseAuthoritySvc {
       jevConfidence: jev?.confidence ?? null,
     });
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "authority.create", payload: { id: row.id, stance: row.stance } });
+    await ManualEditLog.record(caseId, userId, { pane: "law", kind: "authority", itemId: row.id, action: "added", label: row.title });
     return { ...row, resolvedAuthority: resolved.authority };
   }
 
@@ -68,17 +71,28 @@ export default class CaseAuthoritySvc {
       resolvedAuthority = resolved.authority;
     }
 
+    const before = await CaseAuthorityRepo.find(id, caseId);
     const row = await CaseAuthorityRepo.update(id, caseId, patch);
     if (!row) throw new HttpError("Authority not found", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "authority.update", payload: { id } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "law",
+      kind: "authority",
+      itemId: id,
+      action: "edited",
+      label: row.title,
+      changes: fieldChanges(before, patch, { stance: "value", title: "value", subtitle: "value", citation: "value", rationale: "text", findingId: "text" }),
+    });
     return resolvedAuthority === undefined ? row : { ...row, resolvedAuthority };
   }
 
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await CaseAuthorityRepo.find(id, caseId);
     const deleted = await CaseAuthorityRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Authority not found", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "authority.delete", payload: { id } });
+    if (before) await ManualEditLog.record(caseId, userId, { pane: "law", kind: "authority", itemId: id, action: "removed", label: before.title });
   }
 
   /** Returns the ground's label, or null when no ground was given. */

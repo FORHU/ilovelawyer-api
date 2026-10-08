@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import AuthRepo from "../repositories/auth.repository";
+import SecurityAuditSvc from "./security-audit.service";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
@@ -28,7 +29,15 @@ export default class UsersSvc {
       }
     }
 
-    return AuthRepo.updateProfile(userId, data);
+    const updated = await AuthRepo.updateProfile(userId, data);
+    await SecurityAuditSvc.record({
+      action: "account.profile_updated",
+      actorId: userId,
+      targetType: "user",
+      targetId: userId,
+      payload: { fields: Object.keys(data).filter((key) => data[key as keyof typeof data] !== undefined) },
+    });
+    return updated;
   }
 
   /** Requires the current password (unlike the emailed forgot-password/reset-password flow)
@@ -40,7 +49,11 @@ export default class UsersSvc {
     if (!user.password || isGoogleSsoAccount(user)) throw new HttpError("This account signed in with Google and has no password to change", 400);
 
     const isValid = await bcrypt.compare(currentPassword, user.password);
-    if (!isValid) throw new HttpError("Current password is incorrect", 400);
+    if (!isValid) {
+      const err = new HttpError("Current password is incorrect", 400);
+      await SecurityAuditSvc.recordFailure({ action: "auth.password_changed", actorId: userId }, err);
+      throw err;
+    }
 
     const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
     // changePasswordSchema enforces the current strong-password policy, so this also
@@ -48,6 +61,7 @@ export default class UsersSvc {
     // active session (e.g. one already open before the flag was ever checked) shouldn't
     // still be walled off by it on their next login.
     await AuthRepo.updatePasswordAndClearMustChange(userId, hashedPassword);
+    await SecurityAuditSvc.record({ action: "auth.password_changed", actorId: userId, payload: { reason: "self_service" } });
     await AuditSvc.record({ action: AuditAction.PasswordChanged, actorId: userId });
   }
 
@@ -75,6 +89,13 @@ export default class UsersSvc {
     const updated = await AuthRepo.setDeletionRequested(userId, new Date());
     await AuthRepo.deleteSessionsByUserId(userId);
     const scheduledFor = accountDeletionDueAt(updated.deletionRequestedAt!);
+    await SecurityAuditSvc.record({
+      action: "account.deletion_requested",
+      actorId: userId,
+      targetType: "user",
+      targetId: userId,
+      payload: { scheduledFor: scheduledFor.toISOString() },
+    });
     await AuditSvc.record({
       action: AuditAction.AccountDeletionRequested,
       actorId: userId,
@@ -114,6 +135,7 @@ export default class UsersSvc {
     if (!user.deletionRequestedAt) throw new HttpError("Account deletion is not scheduled", 409);
 
     const updated = await AuthRepo.setDeletionRequested(userId, null);
+    await SecurityAuditSvc.record({ action: "account.deletion_cancelled", actorId: userId, targetType: "user", targetId: userId });
     await AuditSvc.record({ action: AuditAction.AccountDeletionCancelled, actorId: userId });
 
     const html = await renderTemplate("account-deletion-cancelled", { name: updated.name || "there" });

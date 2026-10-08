@@ -16,6 +16,10 @@ export interface CaseAuthorityInput {
 }
 
 export default class CaseAuthorityRepo {
+  static async find(id: string, caseId: string) {
+    return prisma.caseAuthority.findFirst({ where: { id, caseId } });
+  }
+
   static async list(caseId: string) {
     return prisma.caseAuthority.findMany({ where: { caseId }, orderBy: { createdAt: "asc" } });
   }

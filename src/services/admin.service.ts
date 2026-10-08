@@ -1,11 +1,11 @@
 import crypto from "crypto";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
-import OrganizationRepo from "../repositories/organization.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import AuditEventRepo, { type ListAuditEventsParams } from "../repositories/audit-event.repository";
 import AccountDeletionSvc from "./account-deletion.service";
 import AuthSvc from "./auth.service";
+import SecurityAuditSvc from "./security-audit.service";
 import type { TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
@@ -14,6 +14,15 @@ import { originForTenantCode } from "../utils/tenant-host";
 import { redis } from "../lib/redis";
 import { ListUsersParams } from "../types/admin.types";
 import { USERS_LIST_CACHE_TTL_S, USERS_LIST_VERSION_KEY, TRANSITIONS, LOGIN_LINK_EXPIRY_MS } from "../constants";
+import type { SecurityAuditAction } from "../constants/security-audit.constants";
+
+const TRANSITION_AUDIT_ACTIONS: Record<keyof typeof TRANSITIONS, SecurityAuditAction> = {
+  approve: "admin.user.approved",
+  deny: "admin.user.denied",
+  reactivate: "admin.user.reactivated",
+  block: "admin.user.blocked",
+  unblock: "admin.user.unblocked",
+};
 
 export default class AdminSvc {
   /** Cached per page under a version number that AuthRepo bumps on every user write that changes
@@ -42,7 +51,9 @@ export default class AdminSvc {
     if (!user || user.role !== "USER") throw new HttpError("User not found", 404);
   }
 
-  private static async transition(action: keyof typeof TRANSITIONS, userId: string, reason?: string) {
+  /** `adminId` defaults to the signed-in admin of the current request (SecurityAuditSvc); the bulk
+   * approval runner passes it, since it keeps going after that request has answered. */
+  private static async transition(action: keyof typeof TRANSITIONS, userId: string, reason?: string, adminId?: string) {
     const spec = TRANSITIONS[action];
     const user = await AuthRepo.findById(userId);
     if (!user) throw new HttpError("User not found", 404);
@@ -62,6 +73,13 @@ export default class AdminSvc {
     // straight into the app once approvalStatus flips to ACTIVE). Applies uniformly to every
     // transition, not just approve.
     await AuthRepo.deleteSessionsByUserId(userId);
+    await SecurityAuditSvc.record({
+      action: TRANSITION_AUDIT_ACTIONS[action],
+      ...(adminId && { actorId: adminId }),
+      targetType: "user",
+      targetId: userId,
+      payload: { from: spec.from, to: spec.to, ...(spec.to === "DENIED" && reason ? { hasReason: true } : {}) },
+    });
 
     let loginLink = "";
     if (spec.includeLoginLink) {
@@ -82,8 +100,8 @@ export default class AdminSvc {
     return updated;
   }
 
-  static async approve(userId: string) {
-    return AdminSvc.transition("approve", userId);
+  static async approve(userId: string, adminId?: string) {
+    return AdminSvc.transition("approve", userId, undefined, adminId);
   }
 
   static async deny(userId: string, reason?: string) {
@@ -115,10 +133,12 @@ export default class AdminSvc {
     const verified = await AuthRepo.markEmailVerified(userId);
     const autoApproved = await AuthSvc.autoApproveIfEnabled(verified);
 
-    await OrganizationRepo.writeAudit({
+    await SecurityAuditSvc.record({
+      action: "admin.user.email_verified",
       actorId: adminId,
-      action: "users.email_verified",
-      payload: { userId, autoApproved },
+      targetType: "user",
+      targetId: userId,
+      payload: { autoApproved },
     });
     return AuthRepo.findById(userId);
   }
@@ -147,10 +167,12 @@ export default class AdminSvc {
 
     const updated = await AuthRepo.setTenant(userId, tenantId);
     if (user.tenantId !== tenantId) {
-      await OrganizationRepo.writeAudit({
+      await SecurityAuditSvc.record({
+        action: "admin.user.tenant_changed",
         actorId: adminId,
-        action: "users.tenant_changed",
-        payload: { userId, from: user.tenant?.code ?? null, to: code },
+        targetType: "user",
+        targetId: userId,
+        payload: { from: user.tenant?.code ?? null, to: code },
       });
     }
     return updated;
@@ -166,12 +188,19 @@ export default class AdminSvc {
     if (userId === adminId) throw new HttpError("You can't delete your own account", 403);
     if (user.role === "ADMIN") throw new HttpError("Admin accounts can't be deleted here", 403);
 
+    // Read before the purge: the membership goes with the user row, and the firm should still see
+    // that its member was deleted.
+    const membership = await OrganizationMemberRepo.findAnyForUser(userId);
     await AccountDeletionSvc.purge(userId);
 
-    await OrganizationRepo.writeAudit({
+    await SecurityAuditSvc.record({
+      action: "admin.user.deleted",
       actorId: adminId,
-      action: "users.deleted",
-      payload: { userId, email: user.email },
+      organizationId: membership?.organizationId ?? null,
+      targetType: "user",
+      targetId: userId,
+      targetName: user.name ?? user.email,
+      payload: { email: user.email },
     });
   }
 }

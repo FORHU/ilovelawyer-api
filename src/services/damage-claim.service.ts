@@ -1,3 +1,5 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
 import DamageClaimRepo, { DamageClaimInput } from "../repositories/damage-claim.repository";
 import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
@@ -6,6 +8,7 @@ import CaseGraphSvc from "./case-graph.service";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import { damageCloseReason } from "../utils/procedure-link";
 import { computeDamagesSummary } from "../utils/damages-compute";
+import { damageHeadKey } from "../utils/damages-extract-parse";
 import type { TenantCode } from "../types/tenant-code";
 
 /** The case's Damages & Remedies list as chat-wonder's `case_damages` field (see the_server.py's
@@ -39,6 +42,7 @@ export default class DamageClaimSvc {
     const row = await DamageClaimRepo.create(caseId, blankToNull(input));
     await CaseGraphSvc.ensureNode(caseId, "DAMAGE_CLAIM", row.id);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.create", payload: { id: row.id, kind: row.kind } });
+    await ManualEditLog.record(caseId, userId, { pane: "damages", kind: "damage", itemId: row.id, action: "added", label: row.title });
     return row;
   }
 
@@ -53,11 +57,24 @@ export default class DamageClaimSvc {
       ...(amountChanged ? { amountBasis: null, amountNote: null } : {}),
     });
     if (!row) throw new HttpError("Damage claim not found", 404);
+    // A renamed AI entry would otherwise come back under its old name the next time the documents
+    // are read.
+    const oldKey = damageHeadKey(existing.kind, existing.title);
+    if (existing.source === "AI" && damageHeadKey(row.kind, row.title) !== oldKey) await DamageClaimRepo.dismiss(caseId, oldKey);
     await CaseGraphSvc.markStale(caseId, "DAMAGE_CLAIM", id, "Damage claim updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.update", payload: { id } });
     if (row.done && !existing.done) {
       await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.awarded", payload: { id, kind: row.kind } });
+      await ManualEditLog.record(caseId, userId, { pane: "damages", kind: "damage", itemId: id, action: "awarded", label: row.title });
     }
+    await ManualEditLog.record(caseId, userId, {
+      pane: "damages",
+      kind: "damage",
+      itemId: id,
+      action: "edited",
+      label: row.title,
+      changes: fieldChanges(existing, input, { title: "value", kind: "value", description: "text", amount: "value", dueDate: "value" }),
+    });
     const closeReason = damageCloseReason(existing, row);
     if (closeReason) await ProceduralDeadlineRepo.closeLinked(caseId, "DAMAGE", id, closeReason);
     // The entry's to-dos carry its due date, so a new date moves them too.
@@ -73,13 +90,19 @@ export default class DamageClaimSvc {
     const row = await DamageClaimRepo.update(id, caseId, { accepted: true });
     if (!row) throw new HttpError("Damage claim not found", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.accept", payload: { id } });
+    await ManualEditLog.record(caseId, userId, { pane: "damages", kind: "damage", itemId: id, action: "accepted", label: row.title });
     return row;
   }
 
+  /** Deleting an AI entry also dismisses it: re-reading the documents never proposes it again. */
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const existing = await DamageClaimRepo.findById(id, caseId);
+    if (!existing) throw new HttpError("Damage claim not found", 404);
+    if (existing.source === "AI") await DamageClaimRepo.dismiss(caseId, damageHeadKey(existing.kind, existing.title));
     const deleted = await DamageClaimRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Damage claim not found", 404);
+    await ManualEditLog.record(caseId, userId, { pane: "damages", kind: "damage", itemId: id, action: "removed", label: existing.title });
   }
 
   /** The case's accepted entries for a case-linked chat turn, or undefined when there are none. No

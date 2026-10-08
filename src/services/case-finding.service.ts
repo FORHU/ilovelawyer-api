@@ -1,3 +1,6 @@
+import ManualEditLog from "./manual-edit-log.service";
+import { fieldChanges } from "../utils/manual-edit-changes";
+import type { ManualEditPane } from "../types/manual-edit";
 import { FindingCategory, FindingTag } from "@prisma/client";
 import CaseFindingRepo, { FindingInput } from "../repositories/case-finding.repository";
 import { isTagAllowed } from "../constants";
@@ -12,6 +15,15 @@ import { isLawyerEdit } from "../utils/finding-lawyer-edit";
 function assertTagFits(category: FindingCategory, tag: FindingTag | null | undefined) {
   if (tag && !isTagAllowed(category, tag)) throw new HttpError(`${tag} is not a valid tag for ${category}`, 400);
 }
+
+/** The Terminal pane each finding category shows in — where the change log's Open link goes. */
+const FINDING_PANE: Record<FindingCategory, ManualEditPane> = {
+  LEGAL_ISSUE: "legalIssues",
+  STRENGTH: "strengths",
+  WEAKNESS: "weaknesses",
+  ATTACK_STRATEGY: "attackStrategy",
+  DEFENSE_STRATEGY: "defenseStrategy",
+};
 
 // Joi lets "" through for detail (same as notes) — store it as no detail rather than an empty line.
 function normalize<T extends Partial<FindingInput>>(data: T): T {
@@ -30,6 +42,7 @@ export default class CaseFindingSvc {
     const row = await CaseFindingRepo.create(caseId, normalize(data));
     await CaseGraphSvc.ensureNode(caseId, "FINDING", row.id);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.create", payload: { id: row.id, category: row.category } });
+    await ManualEditLog.record(caseId, userId, { pane: FINDING_PANE[row.category], kind: "finding", itemId: row.id, action: "added", label: row.label });
     return row;
   }
 
@@ -46,6 +59,14 @@ export default class CaseFindingSvc {
     if (!row) throw new HttpError("Finding not found", 404);
     await CaseGraphSvc.markStale(caseId, "FINDING", id, "Finding updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "finding.update", payload: { id } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: FINDING_PANE[existing.category],
+      kind: "finding",
+      itemId: id,
+      action: "edited",
+      label: row.label,
+      changes: fieldChanges(existing, changes, { label: "value", detail: "text", tag: "value", impact: "value" }),
+    });
     const closeReason = findingCloseReason(existing.category, existing.tag, data.tag);
     if (closeReason) await ProceduralDeadlineRepo.closeLinked(caseId, "FINDING", id, closeReason);
     return row;
@@ -53,7 +74,11 @@ export default class CaseFindingSvc {
 
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const existing = await CaseFindingRepo.find(id, caseId);
     const deleted = await CaseFindingRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Finding not found", 404);
+    if (existing) {
+      await ManualEditLog.record(caseId, userId, { pane: FINDING_PANE[existing.category], kind: "finding", itemId: id, action: "removed", label: existing.label });
+    }
   }
 }

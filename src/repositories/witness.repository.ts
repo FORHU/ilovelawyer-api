@@ -38,6 +38,11 @@ export interface WitnessAiScoreInput {
 }
 
 export default class WitnessRepo {
+  /** One witness of this case, or null — the change log reads it before an edit or delete. */
+  static async find(id: string, caseId: string) {
+    return prisma.witness.findFirst({ where: { id, caseId } });
+  }
+
   static async list(caseId: string) {
     return prisma.witness.findMany({
       where: { caseId },

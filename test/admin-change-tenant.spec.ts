@@ -10,7 +10,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import AdminSvc from "../src/services/admin.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
-import OrganizationRepo from "../src/repositories/organization.repository";
+import SecurityAuditSvc from "../src/services/security-audit.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import { updateUserTenantSchema } from "../src/validation/admin.validation";
 
@@ -26,7 +26,7 @@ describe("AdminSvc.changeTenant", () => {
   let current: { id: string; tenantId: string | null; tenant: { code: string } | null } | null;
   let orgTenant: string | null;
   let writes: { userId: string; tenantId: string }[];
-  let audits: { actorId?: string; action: string; payload?: object }[];
+  let audits: { actorId?: string | null; action: string; payload?: object }[];
 
   beforeEach(() => {
     current = { id: "user-1", tenantId: null, tenant: null };
@@ -38,7 +38,7 @@ describe("AdminSvc.changeTenant", () => {
       stash(AuthRepo, ["findTenantById", "setTenant"]),
       stash(TenantRepo, ["findIdByCode"]),
       stash(OrganizationMemberRepo, ["findAnyForUser"]),
-      stash(OrganizationRepo, ["writeAudit"]),
+      stash(SecurityAuditSvc, ["record"]),
     ];
 
     (AuthRepo as any).findTenantById = async (id: string) => (current && id === current.id ? current : null);
@@ -50,7 +50,7 @@ describe("AdminSvc.changeTenant", () => {
     (TenantRepo as any).findIdByCode = async (code: string) => TENANT_IDS[code] ?? null;
     (OrganizationMemberRepo as any).findAnyForUser = async () =>
       orgTenant ? { organization: { tenant: { code: orgTenant } } } : null;
-    (OrganizationRepo as any).writeAudit = async (data: any) => void audits.push(data);
+    (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
   });
 
   afterEach(() => restore.forEach((r) => r()));
@@ -61,14 +61,20 @@ describe("AdminSvc.changeTenant", () => {
     expect(result).to.deep.equal({ id: "user-1", tenant: { code: "UK", name: "UK" } });
     expect(writes).to.deep.equal([{ userId: "user-1", tenantId: "tenant-uk" }]);
     expect(audits).to.deep.equal([
-      { actorId: "admin-1", action: "users.tenant_changed", payload: { userId: "user-1", from: null, to: "UK" } },
+      {
+        action: "admin.user.tenant_changed",
+        actorId: "admin-1",
+        targetType: "user",
+        targetId: "user-1",
+        payload: { from: null, to: "UK" },
+      },
     ]);
   });
 
   it("moves a user between tenants when they have no organization", async () => {
     current = { id: "user-1", tenantId: "tenant-ph", tenant: { code: "PH" } };
     await AdminSvc.changeTenant("user-1", "UK", "admin-1");
-    expect(audits[0].payload).to.deep.equal({ userId: "user-1", from: "PH", to: "UK" });
+    expect(audits[0].payload).to.deep.equal({ from: "PH", to: "UK" });
   });
 
   it("allows setting the tenant their organization is already in", async () => {

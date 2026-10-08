@@ -2,6 +2,14 @@ import prisma from "../lib/prisma";
 import { PrivilegeStatus, HearsayCategory, ContradictionStatus, ContradictionNature } from "@prisma/client";
 
 export default class EvidenceRepo {
+  static async findContradiction(id: string, caseId: string) {
+    return prisma.evidenceContradiction.findFirst({ where: { id, caseId } });
+  }
+
+  static async findCustodyEvent(evidenceMatrixItemId: string, eventId: string) {
+    return prisma.evidenceCustodyEvent.findFirst({ where: { id: eventId, evidenceMatrixItemId } });
+  }
+
   static async listMatrix(caseId: string) {
     return prisma.evidenceMatrixItem.findMany({
       where: { caseId },

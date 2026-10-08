@@ -119,9 +119,11 @@ describe("diffRedTeam", () => {
     expect(delta.status).to.equal("unchanged");
   });
 
-  it("treats the first assessment (or one from before ranked arguments) as nothing to compare", () => {
-    expect(diffRedTeam(null, assessment(40, [["A", "WEAK"]]))).to.include({ status: "unchanged", first: true });
-    expect(diffRedTeam({ arguments: null }, assessment(40, [["A", "WEAK"]]))).to.include({ status: "unchanged", first: true });
+  it("lists a first assessment's arguments (or one from before ranked arguments) without counting them", () => {
+    const first = diffRedTeam(null, assessment(40, [["A", "WEAK"]]));
+    expect(first).to.deep.include({ status: "changed", first: true, added: ["A"], riskOfLoss: { from: null, to: 40 } });
+    expect(countChanges({ redTeam: first })).to.equal(0);
+    expect(diffRedTeam({ arguments: null }, assessment(40, [["A", "WEAK"]]))).to.include({ status: "changed", first: true });
   });
 });
 
@@ -146,8 +148,10 @@ describe("diffReconstruction", () => {
     expect(diffReconstruction(row(["A"]), row(["a "]), "regenerated").status).to.equal("unchanged");
   });
 
-  it("opens no gaps on a first narrative, and is skipped when the lawyer's edit was protected", () => {
-    expect(diffReconstruction(null, row(["A"]), "generated")).to.include({ status: "unchanged" }).and.deep.include({ gapsOpened: [] });
+  it("lists a first narrative's gaps without counting them, and is skipped when the lawyer's edit was protected", () => {
+    const first = diffReconstruction(null, row(["A"]), "generated");
+    expect(first).to.include({ status: "changed" }).and.deep.include({ gapsOpened: ["A"] });
+    expect(countChanges({ reconstruction: first })).to.equal(0);
     expect(diffReconstruction(row(["A"]), row(["A"]), "skipped-edited").status).to.equal("skipped");
   });
 });
@@ -168,6 +172,17 @@ describe("diffOutlook", () => {
       driversDropped: [{ label: "Signed termination letter", direction: "HELPS" }],
     });
     expect(countChanges({ outlook: delta })).to.equal(3);
+  });
+
+  it("lists a first outlook's factors without counting them", () => {
+    const first = diffOutlook(null, outlook("o1", "LEANS_FAVORABLE", [{ label: "Signed termination letter", direction: "HELPS" }]));
+    expect(first).to.deep.include({
+      status: "changed",
+      first: true,
+      band: { from: null, to: "LEANS_FAVORABLE" },
+      driversAdded: [{ label: "Signed termination letter", direction: "HELPS" }],
+    });
+    expect(countChanges({ outlook: first })).to.equal(0);
   });
 
   it("is unchanged when the step kept the previous outlook (same row)", () => {
@@ -271,8 +286,10 @@ describe("diffTheory", () => {
     expect(countChanges({ theory: delta })).to.equal(2);
   });
 
-  it("has nothing to compare for the first AI draft", () => {
-    expect(diffTheory(null, theory("A", [["B", "ASSERTS"]]))).to.include({ status: "unchanged", first: true });
+  it("lists the first AI draft's claims without counting them", () => {
+    const first = diffTheory(null, theory("A", [["B", "ASSERTS"]]));
+    expect(first).to.deep.include({ status: "changed", first: true, claimsAdded: ["B"] });
+    expect(countChanges({ theory: first })).to.equal(0);
   });
 });
 
@@ -287,6 +304,7 @@ describe("diffMindMap", () => {
     );
     expect(delta).to.deep.equal({
       status: "changed",
+      first: false,
       branchesAdded: ["Damages"],
       branchesRemoved: ["Witnesses"],
       pointsAdded: 3,
@@ -297,9 +315,11 @@ describe("diffMindMap", () => {
     expect(countChanges({ mindMap: delta })).to.equal(2);
   });
 
-  it("is skipped when the map kept a lawyer's changes, and has nothing to compare for a first map", () => {
+  it("is skipped when the map kept a lawyer's changes, and lists a first map's branches without counting them", () => {
     expect(diffMindMap(node("Case"), node("Case"), true)).to.include({ status: "skipped", keptUserChanges: true });
-    expect(diffMindMap(null, node("Case", [node("Evidence")]), false)).to.include({ status: "unchanged" });
+    const first = diffMindMap(null, node("Case", [node("Evidence")]), false);
+    expect(first).to.deep.include({ status: "changed", first: true, branchesAdded: ["Evidence"] });
+    expect(countChanges({ mindMap: first })).to.equal(0);
   });
 });
 

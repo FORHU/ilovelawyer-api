@@ -1,3 +1,4 @@
+import ManualEditLog from "./manual-edit-log.service";
 import { GroundRole, Prisma } from "@prisma/client";
 import CaseAccess from "../utils/case-access";
 import CaseRepo from "../repositories/case.repository";
@@ -63,7 +64,7 @@ export default class CitationGroundSvc {
       claims: claims.map((c) => {
         // Claims found before sourceDocumentId was saved only have the document's name.
         const doc = (c.sourceDocumentId && docById.get(c.sourceDocumentId)) || (c.sourceLabel ? docByName.get(c.sourceLabel) : undefined);
-        const fileUrl = doc?.file?.s3Key ? documentFileUrl(doc.file.s3Key, doc.file.filename) : null;
+        const fileUrl = doc?.file?.s3Key ? documentFileUrl(doc.file.s3Key, doc.file.filename, doc) : null;
         return {
           id: c.id,
           title: c.title,
@@ -198,13 +199,33 @@ export default class CitationGroundSvc {
       }
     }
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "citationGround.create", payload: { id: row.id } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "law",
+      kind: "citationGround",
+      itemId: row.id,
+      action: "added",
+      label: `${check.citedReference || "Citation"} → ${claim.title}`,
+    });
     return row;
   }
 
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
+    const before = await CitationGroundRepo.find(id, caseId);
     const deleted = await CitationGroundRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Link not found", 404);
+    if (before) {
+      const [claims, checks] = await Promise.all([CaseClaimRepo.list(caseId), CitationCheckRepo.list(caseId)]);
+      const claim = claims.find((c) => c.id === before.claimId);
+      const check = checks.find((c) => c.id === before.citationCheckId);
+      await ManualEditLog.record(caseId, userId, {
+        pane: "law",
+        kind: "citationGround",
+        itemId: id,
+        action: "removed",
+        label: `${check?.citedReference || "Citation"} → ${claim?.title ?? "claim"}`,
+      });
+    }
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "citationGround.delete", payload: { id } });
   }
 }
