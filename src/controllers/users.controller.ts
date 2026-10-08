@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import UsersSvc from "../services/users.service";
-import DataExportSvc from "../services/data-export.service";
+import { sendExportZip, exportAuditPayload } from "../utils/export-response";
 import AuditSvc, { AuditAction } from "../services/audit.service";
 import AvatarSvc from "../services/avatar.service";
 import GoogleCalendarSvc from "../services/google-calendar.service";
@@ -54,31 +54,9 @@ export default class UsersCtrl {
     if (error) throw new HttpError(error.message, 400);
     await UsersSvc.confirmPassword(req.user.userId, value.password);
 
-    const stamp = new Date().toISOString().slice(0, 10);
-    res.status(200);
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="ilovelawyer-my-data-${stamp}.zip"`);
-    res.setHeader("Cache-Control", "no-store");
-
-    try {
-      // Waits for the client to catch up when its connection is slower than our database and storage.
-      const sink = (chunk: Buffer) => (res.write(chunk) ? undefined : new Promise<void>((resolve) => res.once("drain", resolve)));
-      const { counts, filesIncluded, filesSkipped } = await DataExportSvc.streamZip(req.user.userId, sink);
-      res.end();
-      await AuditSvc.record({
-        action: AuditAction.AccountDataExported,
-        actorId: req.user.userId,
-        payload: {
-          tables: Object.keys(counts).length,
-          rows: Object.values(counts).reduce((a, b) => a + b, 0),
-          files: filesIncluded,
-          filesSkipped,
-        },
-      });
-    } catch (err) {
-      // The download has already started, so an error page can't be sent: cut the connection so the
-      // client sees a failed download instead of a truncated file that looks complete.
-      res.destroy(err as Error);
+    const result = await sendExportZip(res, req.user.userId);
+    if (result) {
+      await AuditSvc.record({ action: AuditAction.AccountDataExported, actorId: req.user.userId, payload: exportAuditPayload(result) });
     }
   }
 

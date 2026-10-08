@@ -35,6 +35,13 @@ export default class AdminSvc {
     return AuditEventRepo.list(params);
   }
 
+  /** Throws 404 unless this is a regular user's account. Like the user list, the export tools
+   * manage regular accounts, not other admins. */
+  static async assertExportable(userId: string) {
+    const user = await AuthRepo.findById(userId);
+    if (!user || user.role !== "USER") throw new HttpError("User not found", 404);
+  }
+
   private static async transition(action: keyof typeof TRANSITIONS, userId: string, reason?: string) {
     const spec = TRANSITIONS[action];
     const user = await AuthRepo.findById(userId);
