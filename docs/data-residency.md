@@ -24,7 +24,7 @@ Residency is judged against `uk.ilovelawyer.com`. (Source: the team; the URLs ar
 ## Bucket history
 
 The UK bucket was moved from `ilovelawyer-dev` (ap-southeast-1) to `ilovelawyer-uk` (eu-west-2)
-in b0c7d245. Existing files were copied across by maegju (believed; not verified).
+in b0c7d245. maegju copied the existing files across and reports the object counts match.
 
 Container images for both stacks are stored in ECR `ap-southeast-1` (`ECR_REGION`). Images hold
 code, not customer data.
@@ -39,9 +39,9 @@ code, not customer data.
 | Image OCR (bytes) | Textract | `AWS_REGION` | |
 | Audio transcription | Transcribe | `AWS_REGION` | |
 | Speech synthesis | Polly | `AWS_REGION` | |
-| Database | `UK_DATABASE_URL` secret | **TO CONFIRM** | |
-| Redis | `UK_REDIS_HOST` variable | **TO CONFIRM** | |
-| Chat Wonder service | `UK_CHAT_WONDER_API_URL` variable | **TO CONFIRM** | runs the LLM calls |
+| Database | `UK_DATABASE_URL` secret | eu-west-2 (London) | per the team; not verifiable from the repo |
+| Redis | `UK_REDIS_HOST` variable | eu-west-2 (London) | per the team; not verifiable from the repo |
+| Chat Wonder service | `UK_CHAT_WONDER_API_URL` variable | eu-west-2 (London) | per the team; runs the LLM calls |
 | LLM provider (OpenAI) | OpenAI API | **TO CONFIRM** | retention/training terms tracked in FORHU/chat-wonder-v2-api#116 |
 | Jev pilots | TypeSafe (`@typesafe-ai/sdk`) | **TO CONFIRM** | only when a `USE_JEV_*` flag is on |
 | Email | SMTP via nodemailer (`src/utils/mailer.ts`) | **TO CONFIRM** | |
