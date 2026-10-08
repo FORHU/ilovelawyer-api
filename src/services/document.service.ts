@@ -6,6 +6,7 @@ import FilesRepo from "../repositories/files.repository";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import DocumentChunkSvc from "./document-chunk.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
@@ -317,6 +318,12 @@ export default class DocumentSvc {
 
     const deleted = await DocumentRepo.delete(id, organizationId);
     if (!deleted) throw new HttpError("Document not found", 404);
+    await AuditSvc.record({
+      action: AuditAction.DocumentDeleted,
+      actorId: userId,
+      caseId: doc.caseId ?? undefined,
+      payload: { documentId: id, organizationId },
+    });
 
     // The Document row (and its RAG chunks, via cascade) are gone now, but its File row and the
     // S3 object it points at are not touched by DocumentRepo.delete — mark the File FOR_DELETION

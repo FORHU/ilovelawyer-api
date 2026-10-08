@@ -15,6 +15,7 @@ import { slugify } from "../utils/slug";
 import { CLIENT_URL } from "../config";
 import { TenantCode } from "../types/tenant-code";
 import NotificationSvc from "./notification.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 import logger from "../utils/logger";
 
 export default class OrganizationSvc {
@@ -181,6 +182,11 @@ export default class OrganizationSvc {
     }
 
     const invite = await OrganizationInviteRepo.create(organizationId, user.id, role);
+    await AuditSvc.record({
+      action: AuditAction.OrgInviteSent,
+      actorId: actingUserId,
+      payload: { organizationId, inviteeId: user.id, role },
+    });
 
     const inviterName = inviter?.name || "A team member";
     const orgName = organization?.name ?? "";
@@ -227,8 +233,15 @@ export default class OrganizationSvc {
       throw new HttpError("No pending invite found for this organization", 404);
     }
 
+    const audit = () =>
+      AuditSvc.record({ action: AuditAction.OrgInviteAccepted, actorId: userId, payload: { organizationId, role: invite.role } });
+
     const current = await OrganizationMemberRepo.findAnyForUser(userId);
-    if (!current || current.organization.isPersonal) return OrganizationInviteRepo.accept(invite, current);
+    if (!current || current.organization.isPersonal) {
+      const joined = await OrganizationInviteRepo.accept(invite, current);
+      await audit();
+      return joined;
+    }
 
     await this.assertCanLeave(current.organizationId, current.role);
     const portfolio = await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
@@ -241,6 +254,7 @@ export default class OrganizationSvc {
       }),
     );
     CaseCopyQueue.kick();
+    await audit();
     return member;
   }
 
@@ -251,6 +265,7 @@ export default class OrganizationSvc {
       throw new HttpError("No pending invite found for this organization", 404);
     }
     await OrganizationInviteRepo.delete(userId);
+    await AuditSvc.record({ action: AuditAction.OrgInviteDeclined, actorId: userId, payload: { organizationId } });
     // Invites used to park a personal workspace when sent (before 20261007150000_organization_invites)
     // — someone declining one of those gets it back instead of being left with no workspace.
     if (await OrganizationMemberRepo.findAnyForUser(userId)) return;
@@ -259,7 +274,13 @@ export default class OrganizationSvc {
   }
 
   /** Changes a member's role. Guards against granting OWNER without being one, and against demoting the last OWNER. */
-  static async changeMemberRole(organizationId: string, actingRole: OrganizationRole, targetUserId: string, role: OrganizationRole) {
+  static async changeMemberRole(
+    organizationId: string,
+    actingRole: OrganizationRole,
+    targetUserId: string,
+    role: OrganizationRole,
+    actingUserId?: string,
+  ) {
     const target = await OrganizationMemberRepo.find(organizationId, targetUserId);
     if (!target) throw new HttpError("Member not found", 404);
 
@@ -271,7 +292,13 @@ export default class OrganizationSvc {
       await this.assertNotLastOwner(organizationId);
     }
 
-    return OrganizationMemberRepo.updateRole(organizationId, targetUserId, role);
+    const updated = await OrganizationMemberRepo.updateRole(organizationId, targetUserId, role);
+    await AuditSvc.record({
+      action: AuditAction.OrgMemberRoleChanged,
+      actorId: actingUserId,
+      payload: { organizationId, targetUserId, from: target.role, to: role },
+    });
+    return updated;
   }
 
   /** Removes a member. Only an OWNER may remove an ADMIN or another OWNER (an ADMIN may
@@ -293,6 +320,7 @@ export default class OrganizationSvc {
     }
 
     await OrganizationSvc.exit(organizationId, targetUserId);
+    await AuditSvc.record({ action: AuditAction.OrgMemberRemoved, actorId: actingUserId, payload: { organizationId, targetUserId } });
   }
 
   /** Self-service: a member removes their own membership. A sole-member OWNER may leave
@@ -311,6 +339,7 @@ export default class OrganizationSvc {
     await this.assertCanLeave(organizationId, membership.role);
 
     await OrganizationSvc.exit(organizationId, userId);
+    await AuditSvc.record({ action: AuditAction.OrgMemberLeft, actorId: userId, payload: { organizationId } });
   }
 
   /** How a member stops belonging to an organization, whether they left or were removed: the

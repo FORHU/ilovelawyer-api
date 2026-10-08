@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import FilesRepo from "../repositories/files.repository";
 import { renderGeneratedDocx, renderGeneratedPdf } from "../utils/generated-document-renderer";
 import { uploadToS3, getProxyFileUrl } from "../utils/s3";
+import AuditSvc, { AuditAction } from "./audit.service";
 
 export type GeneratedDocumentFormat = "docx" | "pdf";
 
@@ -29,6 +30,8 @@ export default class GeneratedDocumentExportSvc {
     const outputUri = await uploadToS3(key, buffer, CONTENT_TYPES[format]);
     const filename = `${sanitizeFilename(documentName)}.${format}`;
     const file = await FilesRepo.create(filename, outputUri, key, { source: "chat-wonder", documentName });
+    // Called server-to-server by Chat Wonder with an API key, so there is no user to attribute it to.
+    await AuditSvc.record({ action: AuditAction.GeneratedDocumentExported, payload: { format, fileId: file.id } });
 
     return { file: { id: file.id, fileUrl: getProxyFileUrl(key, { filename }), filename } };
   }
