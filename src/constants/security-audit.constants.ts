@@ -21,6 +21,7 @@ export const SECURITY_AUDIT_ACTIONS = [
   "account.deletion_requested",
   "account.deletion_cancelled",
   "account.purged",
+  "consent.changed",
   "integration.connected",
   "integration.disconnected",
 
@@ -125,6 +126,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "account.deletion_requested": "Account deletion requested",
   "account.deletion_cancelled": "Account deletion cancelled",
   "account.purged": "Account deleted",
+  "consent.changed": "Consent granted or withdrawn",
   "integration.connected": "Integration connected",
   "integration.disconnected": "Integration disconnected",
   "org.created": "Organization created",
