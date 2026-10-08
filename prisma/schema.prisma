@@ -855,6 +855,7 @@ model Case {
   risks                CaseRisk[]
   evidenceMatrix       EvidenceMatrixItem[]
   contradictions       EvidenceContradiction[]
+  missingEvidence      CaseMissingEvidence[]
   factPairChecks       FactPairCheck[]
   citationChecks       CitationCheck[]
   authorities          CaseAuthority[]
@@ -1482,15 +1483,19 @@ enum ConfidenceLevel {
 // table itself (latest row = current outlook). A failed or unparseable generation writes nothing
 // and the previous row stays current. See CaseOutlookAiSvc.
 model CaseOutlook {
-  id         String          @id @default(uuid())
-  caseId     String
-  band       OutlookBand
-  confidence ConfidenceLevel
-  rationale  String          @db.Text
+  id               String          @id @default(uuid())
+  caseId           String
+  band             OutlookBand
+  confidence       ConfidenceLevel
+  rationale        String          @db.Text
   // [{ label, direction: "HELPS" | "HURTS", sourceDocId? }] — see utils/case-outlook-parse.ts.
   // sourceDocId is only kept when it names a document on this case.
-  drivers    Json
-  createdAt  DateTime        @default(now())
+  drivers          Json
+  // utils/case-outlook-fingerprint.ts — the material this outlook was built from. A run whose
+  // fingerprint matches the newest row keeps it instead of asking the model again. Null on rows
+  // from before the column, so their next run always writes a new row.
+  inputFingerprint String?
+  createdAt        DateTime        @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -1718,6 +1723,48 @@ model EvidenceContradiction {
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+}
+
+enum MissingEvidenceSeverity {
+  CRITICAL
+  MODERATE
+  MINOR
+}
+
+enum MissingEvidenceStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+/// What the case's own documents don't yet establish — one row per gap, rather than the prose
+/// list CaseReconstruction.gaps holds (a flat String[] tied to nothing). The lawyer's triage
+/// fields mirror EvidenceContradiction's. A regeneration replaces AI rows (notes ===
+/// AI_MISSING_EVIDENCE_NOTE) but leaves a lawyer-edited one (lawyerEditedAt) alone, matched by
+/// label — see MissingEvidenceRepo.replaceAiItems.
+model CaseMissingEvidence {
+  id     String @id @default(uuid())
+  caseId String
+  // The claim this gap would support, as a plain id — not a relation, so re-extracting the
+  // case's claims never orphans or blocks a row. Null for a gap that isn't tied to one claim.
+  claimId         String?
+  label           String
+  detail          String?                 @db.Text
+  suggestedSource String?                 @db.Text
+  severity        MissingEvidenceSeverity
+  status          MissingEvidenceStatus   @default(OPEN)
+  resolutionNote  String?                 @db.Text
+  resolvedAt      DateTime?
+  resolvedById    String?
+  notes           String?
+  lawyerEditedAt  DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([claimId])
 }
 
 /// Jev's verdict on one candidate pair from the full-bundle contradiction scan

@@ -2,6 +2,7 @@ import CaseAccess from "../utils/case-access";
 import CaseTimelineRepo from "../repositories/case-timeline.repository";
 import CaseRiskRepo from "../repositories/case-risk.repository";
 import EvidenceRepo from "../repositories/evidence.repository";
+import MissingEvidenceRepo from "../repositories/missing-evidence.repository";
 import CitationCheckRepo from "../repositories/citation-check.repository";
 import CaseAuthorityRepo from "../repositories/case-authority.repository";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
@@ -48,6 +49,7 @@ export default class CaseSnapshotSvc {
       events,
       evidenceMatrix,
       contradictions,
+      missingEvidence,
       citations,
       authorities,
       deadlines,
@@ -78,6 +80,7 @@ export default class CaseSnapshotSvc {
       prisma.event.findMany({ where: { caseId }, orderBy: { dateTime: "asc" } }),
       EvidenceRepo.listMatrix(caseId),
       EvidenceRepo.listContradictions(caseId),
+      MissingEvidenceRepo.list(caseId),
       CitationCheckRepo.list(caseId),
       CaseAuthorityRepo.list(caseId),
       ProceduralDeadlineRepo.list(caseId),
@@ -197,6 +200,9 @@ export default class CaseSnapshotSvc {
       // narrative has been generated. Named apart from `events`, which is the calendar.
       reconstructionEvents,
       redTeamAssessment,
+      // What the documents don't establish, one row per gap — the structured replacement for
+      // `reconstruction.gaps`, which is prose tied to nothing.
+      missingEvidence,
       decisions: decisionsWithSourcePrompt,
       theories,
       annotations,

@@ -11,7 +11,7 @@ import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWo
 import { newTraceRun } from "./trace-collector.service";
 import { getCaseFindingPromptBuilder } from "../legal/prompt-registry";
 import { extractCaseFindings } from "../utils/case-finding-parse";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import FindingJevSvc from "./finding-jev.service";
 import logger from "../utils/logger";
@@ -140,10 +140,7 @@ Only the ${CATEGORY_BLOCK[only]} block is needed this time. Fill it as above and
       : "";
     const prompt = `${buildCaseFindingPrompt(ready, ukJurisdiction, clientSide)}${focus}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText("Use only these excerpts and the attached case documents.", pack.text)}
 `;
 
     // Streamed, not one blocking REST call: on a large bundle (20+ documents) the reply takes longer

@@ -32,8 +32,6 @@ import CaseFindingRepo from "../src/repositories/case-finding.repository";
 import CaseGraphSvc from "../src/services/case-graph.service";
 import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
 import CaseReconstructionRepo from "../src/repositories/case-reconstruction.repository";
-import CaseReconstructionAudioSvc from "../src/services/case-reconstruction-audio.service";
-import CaseReconstructionAudioQueue from "../src/queues/case-reconstruction-audio.queue";
 import CaseAccess from "../src/utils/case-access";
 import CaseOutlookRepo from "../src/repositories/case-outlook.repository";
 import RedTeamRepo from "../src/repositories/red-team.repository";
@@ -425,57 +423,33 @@ describe("CaseTheorySvc — one AI draft per case", () => {
 
 describe("CaseReconstructionSvc.autoRegenerate", () => {
   let generated: number;
-  let narrated: number;
 
   function setup(existing: unknown) {
     generated = 0;
-    narrated = 0;
     patch([
       [CaseReconstructionRepo, "get", async () => existing],
       [CaseReconstructionSvc, "generate", async () => void generated++],
-      [CaseReconstructionAudioSvc, "startAudioJob", async () => void narrated++],
-      [CaseReconstructionAudioQueue, "enqueue", () => undefined],
     ]);
   }
 
   afterEach(restoreAll);
 
-  it("generates and narrates the first narrative", async () => {
+  it("generates the first narrative", async () => {
     setup(null);
     expect(await CaseReconstructionSvc.autoRegenerate("case-1", "user-1")).to.equal("generated");
-    expect([generated, narrated]).to.deep.equal([1, 1]);
+    expect(generated).to.equal(1);
   });
 
   it("leaves a narrative the lawyer edited alone", async () => {
-    setup({ narrativeEditedAt: new Date(), audioFileId: "f-1" });
+    setup({ narrativeEditedAt: new Date() });
     expect(await CaseReconstructionSvc.autoRegenerate("case-1", "user-1")).to.equal("skipped-edited");
-    expect([generated, narrated]).to.deep.equal([0, 0]);
+    expect(generated).to.equal(0);
   });
 
-  it("regenerates an untouched narrative without narrating when it never had audio", async () => {
-    setup({ narrativeEditedAt: null, audioFileId: null });
+  it("regenerates an untouched narrative", async () => {
+    setup({ narrativeEditedAt: null });
     expect(await CaseReconstructionSvc.autoRegenerate("case-1", "user-1")).to.equal("regenerated");
-    expect([generated, narrated]).to.deep.equal([1, 0]);
-  });
-
-  it("re-narrates a regenerated narrative that had audio", async () => {
-    setup({ narrativeEditedAt: null, audioFileId: "f-1" });
-    await CaseReconstructionSvc.autoRegenerate("case-1", "user-1");
-    expect([generated, narrated]).to.deep.equal([1, 1]);
-  });
-
-  it("doesn't fail the step when narration fails", async () => {
-    setup(null);
-    patch([
-      [
-        CaseReconstructionAudioSvc,
-        "startAudioJob",
-        async () => {
-          throw new Error("polly down");
-        },
-      ],
-    ]);
-    expect(await CaseReconstructionSvc.autoRegenerate("case-1", "user-1")).to.equal("generated");
+    expect(generated).to.equal(1);
   });
 });
 

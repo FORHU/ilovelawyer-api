@@ -6,6 +6,7 @@ import DamagesExtractSvc from "../services/damages-extract.service";
 import ClaimExtractSvc from "../services/claim-extract.service";
 import CitationGroundSvc from "../services/citation-ground.service";
 import AdverseSweepSvc from "../services/adverse-sweep.service";
+import MissingEvidenceAiSvc from "../services/missing-evidence-ai.service";
 import CaseFindingAiSvc from "../services/case-finding-ai.service";
 import CaseOutlookAiSvc from "../services/case-outlook-ai.service";
 import AudioOverviewSvc from "../services/audio-overview.service";
@@ -28,7 +29,6 @@ export type QueuedAiGenerationKind =
   | "theoryDiff"
   | "caseReconstructionScenes"
   | "caseReconstructionEvents"
-  | "caseReconstructionTableRead"
   | "casePostExtraction"
   | "timelineGenerate"
   | "caseStrategyRefresh"
@@ -51,7 +51,8 @@ export type QueuedAiGenerationKind =
   | "audioOverviewGenerate"
   | "contradictions"
   | "caseMindMapGenerate"
-  | "caseMindMapResync";
+  | "caseMindMapResync"
+  | "missingEvidence";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -63,7 +64,7 @@ export interface QueuedAiGenerationJob {
 }
 
 // Each of caseRefresh/redTeam/caseReconstruction/caseTheoryPropose/theoryDiff/
-// caseReconstructionScenes/caseReconstructionTableRead's controller endpoint already ran
+// caseReconstructionScenes' controller endpoint already ran
 // CaseAccess.assertCanEdit + AiGenerationLockSvc.begin synchronously (see each service's
 // beginQueued) before enqueueing here — runQueued just does the actual work and closes out the
 // lock via AiGenerationLockSvc.finishWith.
@@ -86,7 +87,6 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   theoryDiff: (job) => TheoryDiffSvc.runQueuedDiff(job.caseId, job.userId, job.theoryAId!, job.theoryBId!),
   caseReconstructionScenes: (job) => CaseReconstructionSvc.runQueuedScenes(job.caseId, job.userId),
   caseReconstructionEvents: (job) => CaseReconstructionSvc.runQueuedEvents(job.caseId, job.userId),
-  caseReconstructionTableRead: (job) => CaseReconstructionSvc.runQueuedTableRead(job.caseId, job.userId),
   casePostExtraction: async (job) => {
     const { runCasePostExtraction } = await import("./case-post-extraction");
     return runCasePostExtraction(job.caseId, job.userId);
@@ -105,6 +105,9 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   claimExtract: (job) => ClaimExtractSvc.runQueued(job.caseId, job.userId),
   citationGrounds: (job) => CitationGroundSvc.runQueuedMap(job.caseId, job.userId),
   adverseSweep: (job) => AdverseSweepSvc.runQueued(job.caseId, job.userId),
+  // The Missing Evidence pane's own Regenerate: the controller already claimed the lock
+  // (MissingEvidenceAiSvc.beginQueued).
+  missingEvidence: (job) => MissingEvidenceAiSvc.runQueued(job.caseId),
   caseFinding: (job) => CaseFindingAiSvc.runQueued(job.caseId),
   // A panel's Regenerate: the controller already claimed the lock (CaseFindingAiSvc.beginCategory).
   weaknessRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "WEAKNESS", job.userId),
@@ -135,7 +138,7 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
 const VISIBILITY_TIMEOUT_SECONDS = 900;
 // Each job is one (or a few sequential) Chat Wonder call — I/O-bound, not CPU/memory heavy like
 // DocumentExtractionQueue's PDF parsing, so a few can run concurrently without real resource
-// pressure. Same reasoning CaseReconstructionAudioQueue used for its poll-only jobs.
+// pressure.
 const CONCURRENCY = 3;
 
 interface WaitItem {

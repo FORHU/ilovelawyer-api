@@ -1,5 +1,4 @@
 import prisma from "../lib/prisma";
-import { getProxyFileUrl } from "../utils/s3";
 import type { ReconstructionClaim } from "../utils/case-reconstruction-claims-parse";
 import type { Scene } from "../utils/case-reconstruction-scenes-parse";
 import { Prisma } from "@prisma/client";
@@ -18,32 +17,9 @@ export interface ReconstructionEditData {
   narrativeOpposing?: string | null;
 }
 
-export interface ReconstructionAudioUpdate {
-  audioFileId?: string | null;
-  audioJobName?: string | null;
-  audioStatus?: string | null;
-  audioStaleAt?: Date | null;
-}
-
-export interface ReconstructionTableReadUpdate {
-  tableReadFileId?: string | null;
-  tableReadStatus?: string | null;
-  tableReadStaleAt?: Date | null;
-}
-
 export default class CaseReconstructionRepo {
   static async get(caseId: string) {
-    const row = await prisma.caseReconstruction.findUnique({
-      where: { caseId },
-      include: { audioFile: true, tableReadFile: true },
-    });
-    if (row?.audioFile?.s3Key) {
-      row.audioFile.fileUrl = getProxyFileUrl(row.audioFile.s3Key);
-    }
-    if (row?.tableReadFile?.s3Key) {
-      row.tableReadFile.fileUrl = getProxyFileUrl(row.tableReadFile.s3Key);
-    }
-    return row;
+    return prisma.caseReconstruction.findUnique({ where: { caseId } });
   }
 
   static async upsert(caseId: string, data: ReconstructionUpsertData) {
@@ -73,29 +49,12 @@ export default class CaseReconstructionRepo {
     return prisma.caseReconstruction.update({ where: { caseId }, data: { ...data, ...claimsUpdate, ...edited } });
   }
 
-  static async updateAudio(caseId: string, data: ReconstructionAudioUpdate) {
-    return prisma.caseReconstruction.update({ where: { caseId }, data });
-  }
-
   /** `scenes: null` clears the script (not currently exposed as a lawyer action, but keeps the
    * type honest — a reconstruction can predate Rung 1 or have generation fail outright). */
   static async updateScenes(caseId: string, scenes: Scene[] | null) {
     return prisma.caseReconstruction.update({
       where: { caseId },
       data: { scenes: scenes ? (scenes as unknown as Prisma.InputJsonValue) : Prisma.JsonNull },
-    });
-  }
-
-  static async updateTableRead(caseId: string, data: ReconstructionTableReadUpdate) {
-    return prisma.caseReconstruction.update({ where: { caseId }, data });
-  }
-
-  /** Re-queued on server start by CaseReconstructionAudioQueue — rows a prior process left
-   * stuck mid-poll (crash/redeploy) rather than ever reaching COMPLETED/FAILED. */
-  static async listInProgressAudio() {
-    return prisma.caseReconstruction.findMany({
-      where: { audioStatus: "IN_PROGRESS" },
-      select: { caseId: true },
     });
   }
 }

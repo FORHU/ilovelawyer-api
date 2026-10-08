@@ -66,6 +66,8 @@ router.post("/:caseId/evidence/matrix/:documentId/custody", asyncHandler(CaseTer
 router.delete("/:caseId/evidence/matrix/:documentId/custody/:eventId", asyncHandler(CaseTerminalCtrl.deleteCustodyEvent));
 router.post("/:caseId/evidence/contradictions/scan", asyncHandler(CaseTerminalCtrl.scanContradictions));
 router.patch("/:caseId/evidence/contradictions/:id", asyncHandler(CaseTerminalCtrl.updateContradiction));
+router.post("/:caseId/evidence/missing/regenerate", asyncHandler(CaseTerminalCtrl.regenerateMissingEvidence));
+router.patch("/:caseId/evidence/missing/:id", asyncHandler(CaseTerminalCtrl.updateMissingEvidence));
 router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl.traces));
 
 router.get("/:caseId/citations", asyncHandler(CaseTerminalCtrl.listCitations));
@@ -137,9 +139,6 @@ router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.ge
 router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));
 router.post("/:caseId/reconstruction/scenes", asyncHandler(CaseTerminalCtrl.generateReconstructionScenes));
 router.post("/:caseId/reconstruction/events", asyncHandler(CaseTerminalCtrl.generateReconstructionEvents));
-router.post("/:caseId/reconstruction/table-read", asyncHandler(CaseTerminalCtrl.generateTableRead));
-router.post("/:caseId/reconstruction/audio", asyncHandler(CaseTerminalCtrl.generateReconstructionAudio));
-router.get("/:caseId/reconstruction/audio/poll", asyncHandler(CaseTerminalCtrl.pollReconstructionAudio));
 
 router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
 router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));

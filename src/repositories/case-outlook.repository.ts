@@ -4,7 +4,7 @@ import { ParsedCaseOutlook } from "../utils/case-outlook-parse";
 
 // Append-only — there is deliberately no update or delete here (see the CaseOutlook schema comment).
 export default class CaseOutlookRepo {
-  static async insert(caseId: string, outlook: ParsedCaseOutlook) {
+  static async insert(caseId: string, outlook: ParsedCaseOutlook, inputFingerprint: string | null = null) {
     return prisma.caseOutlook.create({
       data: {
         caseId,
@@ -12,6 +12,7 @@ export default class CaseOutlookRepo {
         confidence: outlook.confidence,
         rationale: outlook.rationale,
         drivers: outlook.drivers as unknown as Prisma.InputJsonValue,
+        inputFingerprint,
       },
     });
   }

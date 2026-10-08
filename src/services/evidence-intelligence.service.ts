@@ -10,7 +10,7 @@ import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder"
 import { newTraceRun } from "./trace-collector.service";
 import { buildContradictionPrompt } from "../constants";
 import { extractContradictionHits, uniqueContradictionHits } from "../utils/contradiction-scan";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import logger from "../utils/logger";
 import { PrivilegeStatus, HearsayCategory, ContradictionStatus } from "@prisma/client";
 import { contradictionKey } from "../utils/contradiction-key";
@@ -305,10 +305,10 @@ async function scanWithChatWonder(ready: ReadyDoc[], tenantCode: TenantCode, cas
   const pack = await buildFactExcerptPack(ready);
   const prompt = `${buildContradictionPrompt(ready)}
 
-## EXTRACTED TEXT
-Excerpts below were taken from the indexed files, including later pages of a bundled PDF. Compare facts across these excerpts. Quote from them.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText(
+    "Excerpts below were taken from the indexed files, including later pages of a bundled PDF. Compare facts across these excerpts. Quote from them.",
+    pack.text,
+  )}
 `;
 
   const grounding = {

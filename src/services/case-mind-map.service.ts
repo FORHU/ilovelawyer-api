@@ -12,7 +12,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import { getChatWonderSessionId, streamChatWonderMessage } from "../utils/chatWonder";
 import { newTraceRun } from "./trace-collector.service";
 import { getMindMapDocumentsPromptBuilder } from "../legal/prompt-registry";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { fingerprintMindMapDocuments, mindMapDocumentIds } from "../utils/ready-set-fingerprint";
 import { extractMindMap, MindMapItem } from "../utils/response-parser";
 import { keepOnlyCaseSources, requireCaseSourcesBelowHeadings, syncRemovedSources } from "../utils/mind-map-tree";
@@ -423,10 +423,10 @@ export default class CaseMindMapSvc {
       ukJurisdiction,
     })}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents. Each excerpt starts with [document handle p.page], using the handles in DOCUMENTS above.
-
-${excerptsWithHandles(pack.text, ready) || "(no indexed text)"}
+${wrapExtractedText(
+      "Use only these excerpts and the attached case documents. Each excerpt starts with [document handle p.page], using the handles in DOCUMENTS above.",
+      excerptsWithHandles(pack.text, ready),
+    )}
 `;
 
     // One-shot over the WS path (not callChatWonderRest): a full map is a long reply, and the

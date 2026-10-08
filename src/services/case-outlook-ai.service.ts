@@ -12,7 +12,8 @@ import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder"
 import { newTraceRun } from "./trace-collector.service";
 import { getCaseOutlookPromptBuilder } from "../legal/prompt-registry";
 import { applyOutlookGuards, parseCaseOutlook } from "../utils/case-outlook-parse";
-import { buildFactExcerptPack } from "../utils/case-document-excerpts";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
+import { computeCaseOutlookFingerprint } from "../utils/case-outlook-fingerprint";
 import { OUTLOOK_LOW_CONFIDENCE_RISK_SEVERITIES, OUTLOOK_MIN_READY_DOCS } from "../constants";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import logger from "../utils/logger";
@@ -64,6 +65,14 @@ export default class CaseOutlookAiSvc {
       ProceduralDeadlineRepo.list(caseId),
     ]);
     const openRisks = risks.filter((r) => r.status === "OPEN");
+    const language = caseRecord?.language ?? "en";
+
+    const inputFingerprint = computeCaseOutlookFingerprint({ docs: ready, findings, openRisks, deadlines, language, tenantCode, ukJurisdiction });
+    const current = await CaseOutlookRepo.latest(caseId);
+    if (current?.inputFingerprint === inputFingerprint) {
+      logger.info("Case outlook: material unchanged, keeping the current outlook", { caseId });
+      return current;
+    }
 
     const buildCaseOutlookPrompt = getCaseOutlookPromptBuilder(tenantCode);
     const pack = await buildFactExcerptPack(ready);
@@ -73,14 +82,11 @@ export default class CaseOutlookAiSvc {
       openRisks,
       contradictions,
       deadlines,
-      language: caseRecord?.language ?? "en",
+      language,
       ukJurisdiction,
     })}
 
-## EXTRACTED TEXT
-Use only these excerpts and the attached case documents.
-
-${pack.text || "(no indexed text)"}
+${wrapExtractedText("Use only these excerpts and the attached case documents.", pack.text)}
 `;
 
     const grounding = { caseDocumentIds: ready.map((d) => d.id), caseDocumentChunkIds: pack.chunkIds };
@@ -106,7 +112,7 @@ ${pack.text || "(no indexed text)"}
 
     if (!parsed) {
       logger.warn("Case outlook: unusable reply, keeping the previous outlook", { caseId, replyChars: text.length });
-      return CaseOutlookRepo.latest(caseId);
+      return current;
     }
 
     const guarded = applyOutlookGuards(parsed, {
@@ -119,6 +125,6 @@ ${pack.text || "(no indexed text)"}
     if (guarded.confidence !== parsed.confidence) {
       logger.info("Case outlook: confidence capped to LOW on thin evidence", { caseId, modelConfidence: parsed.confidence });
     }
-    return CaseOutlookRepo.insert(caseId, guarded);
+    return CaseOutlookRepo.insert(caseId, guarded, inputFingerprint);
   }
 }

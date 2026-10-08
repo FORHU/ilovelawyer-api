@@ -261,6 +261,11 @@ export const updateContradictionSchema = Joi.object({
   resolutionNote: Joi.string().allow("", null).max(2000).optional(),
 });
 
+export const updateMissingEvidenceSchema = Joi.object({
+  status: Joi.string().valid("OPEN", "RESOLVED", "DISMISSED").required(),
+  resolutionNote: Joi.string().allow("", null).max(2000).optional(),
+});
+
 export const updateWitnessSchema = Joi.object({
   name: Joi.string().optional(),
   role: Joi.string().allow("").optional(),

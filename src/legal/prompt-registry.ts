@@ -14,6 +14,7 @@ import {
   buildPHChatTitlePrompt,
   buildMindMapExpandPrompt,
   buildMindMapDocumentsPrompt,
+  buildMissingEvidencePrompt,
 } from "./ph/prompts";
 import {
   buildUKRedTeamPrompt,
@@ -29,6 +30,7 @@ import {
   buildUKChatTitlePrompt,
   buildUKMindMapExpandPrompt,
   buildUKMindMapDocumentsPrompt,
+  buildUKMissingEvidencePrompt,
 } from "./uk/prompts";
 
 /** Every getter below selects strictly by tenantCode — never by client input — and throws
@@ -42,6 +44,17 @@ export function getRedTeamPromptBuilder(tenantCode: TenantCode) {
       return buildUKRedTeamPrompt;
     default:
       throw new HttpError(`No red-team prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getMissingEvidencePromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildMissingEvidencePrompt;
+    case "UK":
+      return buildUKMissingEvidencePrompt;
+    default:
+      throw new HttpError(`No missing-evidence prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 

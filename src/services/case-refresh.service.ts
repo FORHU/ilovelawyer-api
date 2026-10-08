@@ -36,6 +36,7 @@ import {
     diffTheory,
     diffWitnesses,
 } from "../utils/case-change-delta";
+import MissingEvidenceAiSvc from "./missing-evidence-ai.service";
 import HttpError from "../utils/http-error";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import logger from "../utils/logger";
@@ -177,6 +178,9 @@ export default class CaseRefreshSvc {
                         (before, after, { outcome }) => diffReconstruction(before, after, outcome),
                     ),
             ],
+            // Reads the documents and the case's claims; claims are lawyer- or ClaimExtract-authored,
+            // never written by this refresh, so there is nothing earlier in the run to wait for.
+            ["missing evidence", async () => ({ found: (await MissingEvidenceAiSvc.generateFromDocuments(caseId, userId)).length })],
         ]);
 
         // Wave 2: what reads the findings, strategy, contradictions, witnesses and damages above.
