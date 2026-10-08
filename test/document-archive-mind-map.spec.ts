@@ -8,12 +8,15 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import DocumentSvc from "../src/services/document.service";
 import DocumentRepo from "../src/repositories/document.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
+import CaseAccess from "../src/utils/case-access";
 import DocumentChunkSvc from "../src/services/document-chunk.service";
 import * as postExtraction from "../src/queues/case-post-extraction";
 
 describe("Document archive → case mind map resync", () => {
   const originals = {
+    findById: DocumentRepo.findById,
     setStatus: DocumentRepo.setStatus,
+    assertCanEdit: CaseAccess.assertCanEdit,
     writeAudit: OrganizationRepo.writeAudit,
     invalidate: DocumentChunkSvc.invalidateCacheForDocument,
     schedule: postExtraction.scheduleCasePostExtraction,
@@ -24,6 +27,8 @@ describe("Document archive → case mind map resync", () => {
   beforeEach(() => {
     scheduled = [];
     doc = { id: "doc-1", caseId: "case-1", ragStatus: "READY", status: "ARCHIVED", name: "Note.pdf", file: null };
+    (DocumentRepo as any).findById = async () => doc;
+    (CaseAccess as any).assertCanEdit = async () => ({});
     (DocumentRepo as any).setStatus = async (_id: string, _org: string, status: string) => ({ ...doc, status });
     (OrganizationRepo as any).writeAudit = async () => ({});
     (DocumentChunkSvc as any).invalidateCacheForDocument = async () => {};
@@ -31,7 +36,9 @@ describe("Document archive → case mind map resync", () => {
   });
 
   afterEach(() => {
+    (DocumentRepo as any).findById = originals.findById;
     (DocumentRepo as any).setStatus = originals.setStatus;
+    (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
     (DocumentChunkSvc as any).invalidateCacheForDocument = originals.invalidate;
     (postExtraction as any).scheduleCasePostExtraction = originals.schedule;
