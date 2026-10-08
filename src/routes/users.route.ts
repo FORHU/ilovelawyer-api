@@ -15,6 +15,7 @@ router.use(validSession);
 router.get("/me", asyncHandler(UsersCtrl.me));
 router.patch("/me", asyncHandler(UsersCtrl.updateMe));
 router.post("/me/change-password", asyncHandler(UsersCtrl.changePassword));
+router.post("/me/export", asyncHandler(UsersCtrl.exportMe));
 router.delete("/me", asyncHandler(UsersCtrl.deleteMe));
 router.post("/me/cancel-deletion", asyncHandler(UsersCtrl.cancelDeletion));
 router.put("/me/avatar", avatarUpload.single("avatar"), asyncHandler(UsersCtrl.uploadAvatar));

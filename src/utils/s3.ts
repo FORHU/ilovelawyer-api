@@ -142,6 +142,13 @@ export function getStableProxyFileUrl(key: string): string {
   return `/files/${token}`;
 }
 
+/** Opens an object as a stream, for callers that pass a file along without holding it in memory
+ * (the data export). `contentLength` is S3's size for the object, when it reports one. */
+export async function getObjectStream(key: string): Promise<{ body: Readable; contentLength?: number }> {
+  const res = await client.send(new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
+  return { body: res.Body as Readable, contentLength: res.ContentLength };
+}
+
 /** Downloads an object's full contents into memory — used by document extraction to read an
  * uploaded Case Document's bytes back out of S3 for text extraction. */
 export async function getObjectBuffer(key: string): Promise<Buffer> {

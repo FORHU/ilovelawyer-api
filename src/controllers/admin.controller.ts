@@ -3,11 +3,14 @@ import AdminSvc from "../services/admin.service";
 import LawSvc, { parseLawCategory } from "../services/law.service";
 import TenantSettingSvc from "../services/tenant-setting.service";
 import BulkApprovalRunner from "../queues/bulk-approval.runner";
+import SecurityAuditSvc from "../services/security-audit.service";
 import HttpError from "../utils/http-error";
+import { sendExportZip, exportAuditPayload } from "../utils/export-response";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
 import {
   listUsersSchema,
   listAuditEventsSchema,
+  exportUserDataSchema,
   denyUserSchema,
   lawSearchSchema,
   listLawsSchema,
@@ -56,6 +59,27 @@ export default class AdminCtrl {
       limit,
       totalPages: Math.max(1, Math.ceil(total / limit)),
     });
+  }
+
+  /** POST /api/admin/users/:id/export — the same ZIP the user can download for themselves, produced
+   * by an admin who has verified the requester's identity (for requests that arrive by email, or
+   * from someone who can't sign in). Recorded separately from a self-service export, with the
+   * admin as the actor and the person whose data it was in the payload. */
+  static async exportUserData(req: Request, res: Response) {
+    const { error } = exportUserDataSchema.validate({ identityVerified: req.body?.identityVerified });
+    if (error) throw new HttpError(error.message, 400);
+    await AdminSvc.assertExportable(req.params.id);
+
+    const result = await sendExportZip(res, req.params.id);
+    if (result) {
+      await SecurityAuditSvc.record({
+        action: "export.user_data",
+        actorId: req.user.userId,
+        targetType: "user",
+        targetId: req.params.id,
+        payload: exportAuditPayload(result),
+      });
+    }
   }
 
   static async approveUser(req: Request, res: Response) {
