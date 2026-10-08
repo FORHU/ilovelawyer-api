@@ -115,10 +115,11 @@ export default class ChatSvc {
   }
 
   /** With a caseId, every Consultation on that Case — shared with everyone who can open the Case,
-   * not just the ones this user started (see CONTEXT.md's Consultation entry). */
+   * not just the ones this user started (see CONTEXT.md's Consultation entry). Without one, only
+   * this user's own standalone Consultations — those are never shared. */
   static async listConsultations(organizationId: string, userId: string, caseId?: string, status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE") {
     if (caseId) await CaseAccess.loadAccessibleCase(caseId, userId);
-    return ChatRepo.listConsultations(organizationId, caseId, status);
+    return ChatRepo.listConsultations(organizationId, caseId, status, caseId ? undefined : userId);
   }
 
   /**
@@ -138,7 +139,8 @@ export default class ChatSvc {
     const decision = notificationFor(triage, consultation.title);
     if (!decision) return;
 
-    const participants = await ParticipantRepo.list(consultation.id);
+    // A standalone Consultation is private to its creator — leftover participant rows don't count.
+    const participants = consultation.caseId ? await ParticipantRepo.list(consultation.id) : [];
     const recipients = new Set<string>([consultation.userId, ...participants.map((p) => p.userId)]);
     recipients.delete(senderUserId);
     if (recipients.size === 0) return;
@@ -175,7 +177,7 @@ export default class ChatSvc {
     return ChatRepo.updateConsultation(consultationId, title);
   }
 
-  static async assertConsultationOwned(organizationId: string, consultationId: string) {
+  private static async assertConsultationOwned(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
     if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
@@ -183,21 +185,25 @@ export default class ChatSvc {
     return consultation;
   }
 
-  /** assertConsultationOwned plus, for a case-linked Consultation, that this user may use it: its
-   * creator, an invited participant, or anyone who can open the Case. A standalone (case-less)
-   * Consultation keeps the organization-only check it always had. 404 either way, so a
-   * Consultation on a Case the user can't see is indistinguishable from one that doesn't exist. */
+  /** assertConsultationOwned plus that this user may use it. A standalone (case-less)
+   * Consultation is private to its creator — no one else in the organization, whatever their
+   * role, can see it. A case-linked one is shared: its creator, an invited participant, or anyone
+   * who can open the Case. 404 either way, so a Consultation the user can't see is
+   * indistinguishable from one that doesn't exist. */
   static async assertConsultationAccess(organizationId: string, userId: string, consultationId: string) {
     const consultation = await this.assertConsultationOwned(organizationId, consultationId);
-    await this.assertCaseLinkedAccess(consultation, userId);
+    await this.assertUserAccess(consultation, userId);
     return consultation;
   }
 
-  private static async assertCaseLinkedAccess(
+  private static async assertUserAccess(
     consultation: { id: string; userId: string; caseId: string | null },
     userId: string,
   ) {
-    if (!consultation.caseId || consultation.userId === userId) return;
+    if (consultation.userId === userId) return;
+    // Only a Case's Consultations can be shared — participant rows left on a standalone one
+    // (from before sharing was limited to Case chats) grant nothing.
+    if (!consultation.caseId) throw new HttpError("Consultation not found", 404);
     if (await ParticipantRepo.exists(consultation.id, userId)) return;
     try {
       await CaseAccess.loadAccessibleCase(consultation.caseId, userId);
@@ -367,11 +373,8 @@ export default class ChatSvc {
     return sanitizeDecisionRecords(payload, refs, { texts });
   }
 
-  static async deleteMessage(organizationId: string, consultationId: string, messageId: string) {
-    const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
-      throw new HttpError("Consultation not found", 404);
-    }
+  static async deleteMessage(organizationId: string, userId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
@@ -413,7 +416,7 @@ export default class ChatSvc {
     if (!consultation || consultation.organizationId !== organizationId) {
       throw new HttpError("Consultation not found", 404);
     }
-    await ChatSvc.assertCaseLinkedAccess(consultation, userId);
+    await ChatSvc.assertUserAccess(consultation, userId);
     // Archived (or on its way to deletion) means set aside: nothing new lands in it until it's restored.
     if (consultation.status !== "ACTIVE") {
       throw new HttpError("This consultation is archived — restore it to continue", 409);
@@ -538,10 +541,7 @@ export default class ChatSvc {
     consultationId: string,
     messageId: string,
   ): Promise<{ messageId: string; replyStatus: string | null; assistantMessageId?: string }> {
-    const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
-      throw new HttpError("Consultation not found", 404);
-    }
+    await ChatSvc.assertConsultationAccess(organizationId, requesterUserId, consultationId);
     const message = await ChatRepo.findReplyState(messageId);
     if (!message || message.consultationId !== consultationId || message.role !== "user") {
       throw new HttpError("Message not found", 404);
@@ -1676,11 +1676,8 @@ export default class ChatSvc {
     return doc.id;
   }
 
-  static async getRelatedCases(organizationId: string, tenantCode: TenantCode, consultationId: string) {
-    const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
-      throw new HttpError("Consultation not found", 404);
-    }
+  static async getRelatedCases(organizationId: string, userId: string, tenantCode: TenantCode, consultationId: string) {
+    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
 
     const message = await ChatRepo.findLatestAssistantMessage(consultationId);
     const items = await enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
@@ -1694,8 +1691,8 @@ export default class ChatSvc {
    * (see sendMessage's audioOverview handling above) — the separate, explicit "Generate
    * Audio" action from the grilling session's plan, never auto-triggered from script
    * generation. Enqueues onto AudioOverviewQueue and returns immediately. */
-  static async startAudioOverviewAudio(organizationId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationOwned(organizationId, consultationId);
+  static async startAudioOverviewAudio(organizationId: string, userId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
@@ -1726,8 +1723,8 @@ export default class ChatSvc {
     });
   }
 
-  static async pollAudioOverviewAudio(organizationId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationOwned(organizationId, consultationId);
+  static async pollAudioOverviewAudio(organizationId: string, userId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
     const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
     if (!row) throw new HttpError("No Audio Overview script for this message", 404);
 

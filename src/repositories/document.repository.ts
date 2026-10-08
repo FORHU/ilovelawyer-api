@@ -51,9 +51,15 @@ export default class DocumentRepo {
     });
   }
 
-  static async list(organizationId: string, status: DocumentStatus = "ACTIVE") {
+  /** With viewerUserId, leaves out files that live only in someone else's standalone
+   * Consultation — that Consultation is private to its creator, and so are its files. */
+  static async list(organizationId: string, status: DocumentStatus = "ACTIVE", viewerUserId?: string) {
     return prisma.document.findMany({
-      where: { organizationId, status },
+      where: {
+        organizationId,
+        status,
+        ...(viewerUserId ? { NOT: { caseId: null, consultation: { is: { userId: { not: viewerUserId } } } } } : {}),
+      },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });

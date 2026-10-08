@@ -136,8 +136,8 @@ export default class DocumentSvc {
     );
   }
 
-  static async list(organizationId: string, status?: DocumentStatus) {
-    const docs = await DocumentRepo.list(organizationId, status);
+  static async list(organizationId: string, userId: string, status?: DocumentStatus) {
+    const docs = await DocumentRepo.list(organizationId, status, userId);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
