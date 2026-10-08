@@ -3,7 +3,7 @@ import AdminSvc from "../services/admin.service";
 import LawSvc, { parseLawCategory } from "../services/law.service";
 import TenantSettingSvc from "../services/tenant-setting.service";
 import BulkApprovalRunner from "../queues/bulk-approval.runner";
-import AuditSvc, { AuditAction } from "../services/audit.service";
+import SecurityAuditSvc from "../services/security-audit.service";
 import HttpError from "../utils/http-error";
 import { sendExportZip, exportAuditPayload } from "../utils/export-response";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
@@ -72,10 +72,12 @@ export default class AdminCtrl {
 
     const result = await sendExportZip(res, req.params.id);
     if (result) {
-      await AuditSvc.record({
-        action: AuditAction.AccountDataExportedByAdmin,
+      await SecurityAuditSvc.record({
+        action: "export.user_data",
         actorId: req.user.userId,
-        payload: { userId: req.params.id, ...exportAuditPayload(result) },
+        targetType: "user",
+        targetId: req.params.id,
+        payload: exportAuditPayload(result),
       });
     }
   }

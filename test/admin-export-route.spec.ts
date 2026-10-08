@@ -8,6 +8,7 @@ import request from "supertest";
 import JSZip from "jszip";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
+import SecurityAuditRepo from "../src/repositories/security-audit.repository";
 import loginToken from "../src/utils/loginToken";
 
 const binary = (res: request.Response, cb: (err: Error | null, body: Buffer) => void) => {
@@ -33,8 +34,22 @@ describe("POST /api/admin/users/:id/export", () => {
     await prisma.user.create({ data: { id: strangerId, email: `stranger-${strangerId}@example.com`, username: `stranger-${strangerId}` } });
   });
 
+  // The security audit table is append-only (a test row could never be removed), so the write is
+  // captured here instead of stored. Specs run with test/support/security-audit-test-double.ts, which
+  // stubs the repo; this stash/restore puts that double back afterwards.
+  const auditRepo = SecurityAuditRepo as unknown as { create: (row: Record<string, unknown>) => Promise<unknown> };
+  const originalCreate = auditRepo.create;
+  const auditRows: Array<Record<string, unknown>> = [];
+
+  before(() => {
+    auditRepo.create = async (row) => {
+      auditRows.push(row);
+      return { id: "captured", createdAt: new Date(), ...row };
+    };
+  });
+
   after(async () => {
-    await prisma.auditEvent.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { payload: { path: ["userId"], equals: targetId } }] } });
+    auditRepo.create = originalCreate;
     await prisma.user.deleteMany({ where: { id: { in: ids } } });
   });
 
@@ -69,8 +84,9 @@ describe("POST /api/admin/users/:id/export", () => {
     expect(JSON.stringify(doc)).to.not.include(`adm-${adminId}@example.com`);
 
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const event = await prisma.auditEvent.findFirst({ where: { action: "account.data_export_by_admin", actorId: adminId } });
-    expect(event, "the admin export must be in the audit trail").to.not.equal(null);
-    expect(event!.payload).to.include({ userId: targetId });
+    const event = auditRows.find((row) => row.action === "export.user_data");
+    expect(event, "the admin export must be in the security audit log").to.not.equal(undefined);
+    expect(event!.actorId, "the admin is the actor").to.equal(adminId);
+    expect(event!.targetId, "the event names whose data it was").to.equal(targetId);
   });
 });

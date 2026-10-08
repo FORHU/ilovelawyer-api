@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import UsersSvc from "../services/users.service";
 import { sendExportZip, exportAuditPayload } from "../utils/export-response";
-import AuditSvc, { AuditAction } from "../services/audit.service";
+import SecurityAuditSvc from "../services/security-audit.service";
 import AvatarSvc from "../services/avatar.service";
 import GoogleCalendarSvc from "../services/google-calendar.service";
 import ProductTourSvc from "../services/product-tour.service";
@@ -56,7 +56,13 @@ export default class UsersCtrl {
 
     const result = await sendExportZip(res, req.user.userId);
     if (result) {
-      await AuditSvc.record({ action: AuditAction.AccountDataExported, actorId: req.user.userId, payload: exportAuditPayload(result) });
+      await SecurityAuditSvc.record({
+        action: "export.my_data",
+        actorId: req.user.userId,
+        targetType: "user",
+        targetId: req.user.userId,
+        payload: exportAuditPayload(result),
+      });
     }
   }
 
