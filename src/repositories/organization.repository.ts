@@ -134,6 +134,12 @@ export default class OrganizationRepo {
     });
   }
 
+  /** True when a grant was removed, false when there was none. */
+  static async revokeCaseAccess(caseId: string, userId: string) {
+    const result = await prisma.caseAccess.deleteMany({ where: { caseId, userId } });
+    return result.count > 0;
+  }
+
   static async listCaseAccess(caseId: string) {
     return prisma.caseAccess.findMany({
       where: { caseId },
