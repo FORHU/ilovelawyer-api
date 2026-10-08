@@ -9,6 +9,7 @@ import TenantSettingSvc from "./tenant-setting.service";
 import loginToken from "../utils/loginToken";
 import AvatarSvc from "./avatar.service";
 import AccountDeletionSvc from "./account-deletion.service";
+import AuditSvc, { AuditAction } from "./audit.service";
 import GoogleCalendarSvc from "./google-calendar.service";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
@@ -174,6 +175,9 @@ export default class AuthSvc {
 
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) {
+      // Only for an account that exists; an unknown email has no actor to attribute it to, and
+      // recording the typed address would store a stranger's personal data.
+      await AuditSvc.record({ action: AuditAction.LoginFailed, actorId: user.id, payload: { reason: "wrong_password" } });
       throw new HttpError("Invalid email or password", 401);
     }
 
@@ -201,6 +205,7 @@ export default class AuthSvc {
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
     await AuthRepo.updateLastLogin(user.id);
+    await AuditSvc.record({ action: AuditAction.LoginSucceeded, actorId: user.id, payload: { method: "password" } });
 
     return {
       user: await AuthRepo.findById(user.id),
