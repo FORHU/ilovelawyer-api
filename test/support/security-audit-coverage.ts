@@ -79,6 +79,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /users/me/change-password": ["auth.password_changed"],
   "DELETE /users/me": ["account.deletion_requested"],
   "POST /users/me/cancel-deletion": ["account.deletion_cancelled"],
+  "PUT /consents/:purpose": ["consent.changed"],
   "PUT /users/me/avatar": PROFILE_COSMETIC,
   "DELETE /users/me/avatar": PROFILE_COSMETIC,
   "POST /users/me/google-calendar": ["integration.connected"],

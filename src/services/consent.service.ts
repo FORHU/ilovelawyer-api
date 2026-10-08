@@ -1,6 +1,7 @@
 import { ConsentPurpose } from "@prisma/client";
 import ConsentRepo from "../repositories/consent.repository";
 import HttpError from "../utils/http-error";
+import SecurityAuditSvc from "./security-audit.service";
 import { CONSENT_VERSIONS, SELF_SERVICE_CONSENT_PURPOSES } from "../constants/consent.constants";
 
 export type ConsentStatus = "granted" | "withdrawn" | "not_set";
@@ -61,6 +62,14 @@ export default class ConsentSvc {
       throw new HttpError(`${purpose} can't be changed here`, 400);
     }
     await ConsentRepo.set(userId, purpose, granted, CONSENT_VERSIONS[purpose], "settings");
+    // The consent table keeps only the latest answer per purpose; this is the history of changes.
+    await SecurityAuditSvc.record({
+      action: "consent.changed",
+      actorId: userId,
+      targetType: "user",
+      targetId: userId,
+      payload: { purpose, granted, version: CONSENT_VERSIONS[purpose] },
+    });
     return ConsentSvc.list(userId);
   }
 }
