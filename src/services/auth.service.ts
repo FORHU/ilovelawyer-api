@@ -9,6 +9,7 @@ import TenantSettingSvc from "./tenant-setting.service";
 import loginToken from "../utils/loginToken";
 import AvatarSvc from "./avatar.service";
 import AccountDeletionSvc from "./account-deletion.service";
+import SecurityAuditSvc from "./security-audit.service";
 import GoogleCalendarSvc from "./google-calendar.service";
 import verifyGoogleToken from "../utils/googleToken";
 import HttpError from "../utils/http-error";
@@ -91,6 +92,7 @@ export default class AuthSvc {
       await AuthSvc.sendSignupPendingEmail(user);
     }
 
+    await SecurityAuditSvc.record({ action: "auth.signup", actorId: user.id, payload: { method: "password" } });
     return user;
   }
 
@@ -129,7 +131,15 @@ export default class AuthSvc {
    * AuthRepo.deleteUnverifiedPendingUser is scoped so a verified or admin-approved/denied
    * account is never touched, no matter what email is passed in. */
   static async cancelSignup(email: string): Promise<{ message: string }> {
-    await AuthRepo.deleteUnverifiedPendingUser(email);
+    const { count } = await AuthRepo.deleteUnverifiedPendingUser(email);
+    if (count > 0) {
+      await SecurityAuditSvc.record({
+        action: "auth.signup_cancelled",
+        actorId: null,
+        organizationId: null,
+        payload: { email: normalizeEmail(email) },
+      });
+    }
     return { message: "If a pending signup exists for this email, it has been cancelled" };
   }
 
@@ -163,7 +173,36 @@ export default class AuthSvc {
     return AccountDeletionSvc.restoreOnSignIn(user);
   }
 
+  /** Runs one sign-in path and writes its auth.login security audit row: SUCCESS naming the
+   * signed-in user, or FAILURE with the refusal's reason and the email that was tried (so a firm
+   * sees failed attempts against its members). `method` says which path it was. */
+  private static async auditSignIn<T>(
+    method: string,
+    attemptedEmail: string | undefined,
+    run: () => Promise<T>,
+    signedInUserId: (result: T) => string | null | undefined,
+  ): Promise<T> {
+    let result: T;
+    try {
+      result = await run();
+    } catch (err) {
+      await SecurityAuditSvc.recordFailure({ action: "auth.login", actorId: null, attemptedEmail, payload: { method } }, err);
+      throw err;
+    }
+    await SecurityAuditSvc.record({ action: "auth.login", actorId: signedInUserId(result) ?? null, payload: { method } });
+    return result;
+  }
+
   static async login(email: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
+    return AuthSvc.auditSignIn(
+      "password",
+      email,
+      () => AuthSvc.passwordLogin(email, password, remember, requestTenantCode),
+      (result) => result.user?.id,
+    );
+  }
+
+  private static async passwordLogin(email: string, password: string, remember: boolean, requestTenantCode: TenantCode | null) {
     const user = await AuthRepo.findByEmail(email);
     // A Google SSO account gets the same generic 401 as a wrong password, so this endpoint
     // can't be used to learn which emails are Google accounts. forgotPassword emails the
@@ -223,6 +262,21 @@ export default class AuthSvc {
     remember = false,
     requestTenantCode: TenantCode | null = null,
   ) {
+    return AuthSvc.auditSignIn(
+      "password_update",
+      email,
+      () => AuthSvc.applyRequiredPasswordUpdate(email, currentPassword, newPassword, remember, requestTenantCode),
+      (result) => result.user?.id,
+    );
+  }
+
+  private static async applyRequiredPasswordUpdate(
+    email: string,
+    currentPassword: string,
+    newPassword: string,
+    remember: boolean,
+    requestTenantCode: TenantCode | null,
+  ) {
     const user = await AuthRepo.findByEmail(email);
     if (!user || !user.password || isGoogleSsoAccount(user)) {
       throw new HttpError("Invalid email or password", 401);
@@ -241,6 +295,7 @@ export default class AuthSvc {
 
     const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
     await AuthRepo.updatePasswordAndClearMustChange(user.id, hashedPassword);
+    await SecurityAuditSvc.record({ action: "auth.password_changed", actorId: user.id, payload: { reason: "required_update" } });
     const deletionCancelled = await AuthSvc.restoreIfScheduled(user);
 
     const { accessToken, refreshToken } = loginToken(user.id, remember);
@@ -289,6 +344,10 @@ export default class AuthSvc {
   }
 
   static async verifyOtp(email: string, code: string) {
+    return AuthSvc.auditSignIn("email_verification", email, () => AuthSvc.verifyOtpAndSignIn(email, code), (result) => result.user?.id);
+  }
+
+  private static async verifyOtpAndSignIn(email: string, code: string) {
     const user = await AuthRepo.findByEmail(email);
     if (!user) {
       throw new HttpError("Invalid or expired code", 400);
@@ -313,6 +372,7 @@ export default class AuthSvc {
     }
 
     await AuthRepo.markEmailVerified(user.id);
+    await SecurityAuditSvc.record({ action: "auth.email_verified", actorId: user.id });
     await AuthSvc.autoApproveIfEnabled(user);
     await AuthRepo.updateLastLogin(user.id);
 
@@ -372,7 +432,9 @@ export default class AuthSvc {
   }
 
   static async logout(refreshToken: string) {
+    const session = await AuthRepo.findByRefreshToken(refreshToken);
     await AuthRepo.deleteByRefreshToken(refreshToken);
+    if (session) await SecurityAuditSvc.record({ action: "auth.logout", actorId: session.userId });
   }
 
   /** The 409 for a Google sign-in whose email already belongs to an account that isn't bound
@@ -407,6 +469,15 @@ export default class AuthSvc {
     requestTenantCode: TenantCode | null = null,
     acceptedTerms = false,
   ) {
+    return AuthSvc.auditSignIn(
+      "google",
+      undefined,
+      () => AuthSvc.googleSignIn(idToken, remember, requestTenantCode, acceptedTerms),
+      (result) => result.user?.id,
+    );
+  }
+
+  private static async googleSignIn(idToken: string, remember: boolean, requestTenantCode: TenantCode | null, acceptedTerms: boolean) {
     const { googleId, email: googleEmail, name, picture, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
@@ -457,6 +528,8 @@ export default class AuthSvc {
     }
 
     if (created) {
+      await SecurityAuditSvc.record({ action: "auth.signup", actorId: user.id, payload: { method: "google" } });
+
       // Google has already verified the email, so this is the verification moment — the
       // counterpart of verifyOtp's call for password signups.
       const autoApproved = await AuthSvc.autoApproveIfEnabled(user);
@@ -523,6 +596,15 @@ export default class AuthSvc {
    * the gates login() enforces (verification, forced password update, Tenant). On success
    * behaves like a completed login(). */
   static async linkGoogle(idToken: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
+    return AuthSvc.auditSignIn(
+      "google_link",
+      undefined,
+      () => AuthSvc.linkGoogleAndSignIn(idToken, password, remember, requestTenantCode),
+      (result) => result.user?.id,
+    );
+  }
+
+  private static async linkGoogleAndSignIn(idToken: string, password: string, remember: boolean, requestTenantCode: TenantCode | null) {
     const { googleId, email, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
@@ -568,6 +650,7 @@ export default class AuthSvc {
       if (!linked) {
         throw new HttpError("This Google account could not be connected to this account", 409, "GOOGLE_ACCOUNT_MISMATCH");
       }
+      await SecurityAuditSvc.record({ action: "auth.google_linked", actorId: user.id });
 
       try {
         const html = await renderTemplate("google-connected", { name: user.name || "there" });
@@ -603,6 +686,7 @@ export default class AuthSvc {
   static async forgotPassword(email: string, requestOrigin: string | null = null) {
     const user = await AuthRepo.findByEmail(email);
     const result = { message: "If the email exists, a reset link will be sent" };
+    await SecurityAuditSvc.record({ action: "auth.password_reset_requested", actorId: null, attemptedEmail: email });
 
     // The site the user asked from, if it belongs to their Tenant; otherwise their Tenant's own
     // subdomain (uk./ph.), not the bare CLIENT_URL[0] — see emailLinkOrigin. user.tenant is
@@ -643,6 +727,15 @@ export default class AuthSvc {
   }
 
   static async resetPassword(token: string, password: string, remember = true) {
+    return AuthSvc.auditSignIn(
+      "password_reset",
+      undefined,
+      () => AuthSvc.resetPasswordAndSignIn(token, password, remember),
+      (result) => result.userId,
+    );
+  }
+
+  private static async resetPasswordAndSignIn(token: string, password: string, remember: boolean) {
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
     const userId = await AuthRepo.consumeResetToken(token, hashedPassword);
     if (!userId) {
@@ -650,6 +743,7 @@ export default class AuthSvc {
     }
 
     await AuthRepo.deleteSessionsByUserId(userId);
+    await SecurityAuditSvc.record({ action: "auth.password_reset", actorId: userId });
     // Resetting the password signs the user in (below), so it restores a scheduled account too.
     const deletionCancelled = await AuthSvc.restoreIfScheduled(await AuthRepo.findById(userId));
 
@@ -657,13 +751,22 @@ export default class AuthSvc {
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(userId, refreshToken, expiresAt);
 
-    return { accessToken, refreshToken, deletionCancelled };
+    return { accessToken, refreshToken, deletionCancelled, userId };
   }
 
   /** Consumes the one-time "Login" link sent in the approval email (AdminSvc.transition) and
    * mints a brand-new session — the counterpart to resetPassword above, which does the same
    * consume-token-then-login shape for the password-reset flow. */
   static async consumeLoginLink(token: string, remember = true) {
+    return AuthSvc.auditSignIn(
+      "login_link",
+      undefined,
+      () => AuthSvc.consumeLoginLinkAndSignIn(token, remember),
+      (result) => result.user?.id,
+    );
+  }
+
+  private static async consumeLoginLinkAndSignIn(token: string, remember: boolean) {
     const userId = await AuthRepo.consumeLoginLinkToken(token);
     if (!userId) {
       throw new HttpError("Invalid or expired login link", 400);

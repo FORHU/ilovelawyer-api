@@ -10,7 +10,8 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import AdminSvc from "../src/services/admin.service";
 import AccountDeletionSvc from "../src/services/account-deletion.service";
 import AuthRepo from "../src/repositories/auth.repository";
-import OrganizationRepo from "../src/repositories/organization.repository";
+import SecurityAuditSvc from "../src/services/security-audit.service";
+import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 
 function stash<T extends object>(target: T, keys: (keyof T)[]) {
   const saved = keys.map((k) => [k, target[k]] as const);
@@ -32,22 +33,26 @@ describe("AdminSvc.deleteUser", () => {
   let restore: (() => void)[];
   let current: StubUser | null;
   let purged: string[];
-  let audits: { actorId?: string; action: string; payload?: object }[];
+  let audits: { actorId?: string | null; action: string; payload?: object }[];
+  let membershipOrgId: string | null;
 
   beforeEach(() => {
     current = { id: "user-1", email: "user@example.com", role: "USER", approvalStatus: "ACTIVE" };
     purged = [];
     audits = [];
+    membershipOrgId = null;
 
     restore = [
       stash(AuthRepo, ["findById"]),
       stash(AccountDeletionSvc, ["purge"]),
-      stash(OrganizationRepo, ["writeAudit"]),
+      stash(SecurityAuditSvc, ["record"]),
+      stash(OrganizationMemberRepo, ["findAnyForUser"]),
     ];
 
     (AuthRepo as any).findById = async (id: string) => (current && id === current.id ? { ...current } : null);
     (AccountDeletionSvc as any).purge = async (id: string) => void purged.push(id);
-    (OrganizationRepo as any).writeAudit = async (data: any) => void audits.push(data);
+    (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
+    (OrganizationMemberRepo as any).findAnyForUser = async () => (membershipOrgId ? { organizationId: membershipOrgId } : null);
   });
 
   afterEach(() => restore.forEach((r) => r()));
@@ -60,10 +65,25 @@ describe("AdminSvc.deleteUser", () => {
 
       expect(purged).to.deep.equal(["user-1"]);
       expect(audits).to.deep.equal([
-        { actorId: "admin-1", action: "users.deleted", payload: { userId: "user-1", email: "user@example.com" } },
+        {
+          action: "admin.user.deleted",
+          actorId: "admin-1",
+          organizationId: null,
+          targetType: "user",
+          targetId: "user-1",
+          payload: { email: "user@example.com" },
+        },
       ]);
     });
   }
+
+  it("names the deleted user's organization, read before the purge removes the membership", async () => {
+    membershipOrgId = "org-1";
+
+    await AdminSvc.deleteUser("user-1", "admin-1");
+
+    expect(audits[0]).to.include({ action: "admin.user.deleted", organizationId: "org-1" });
+  });
 
   it("refuses the caller's own account (403), without purging", async () => {
     current!.id = "admin-1";

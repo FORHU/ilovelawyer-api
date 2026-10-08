@@ -1,6 +1,6 @@
 import AdminSvc from "../services/admin.service";
 import AuthRepo from "../repositories/auth.repository";
-import OrganizationRepo from "../repositories/organization.repository";
+import SecurityAuditSvc from "../services/security-audit.service";
 import TenantRepo from "../repositories/tenant.repository";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -83,7 +83,7 @@ export default class BulkApprovalRunner {
     try {
       for (let i = 0; i < ids.length; i += BULK_APPROVE_CONCURRENCY) {
         const batch = ids.slice(i, i + BULK_APPROVE_CONCURRENCY);
-        const results = await Promise.allSettled(batch.map((id) => AdminSvc.approve(id)));
+        const results = await Promise.allSettled(batch.map((id) => AdminSvc.approve(id, progress.startedById)));
 
         results.forEach((result, idx) => {
           if (result.status === "fulfilled") {
@@ -109,17 +109,21 @@ export default class BulkApprovalRunner {
       await redis.set(progressKey(code), progress, BULK_APPROVE_PROGRESS_TTL_S);
       await redis.del(lockKey(code));
 
-      await OrganizationRepo.writeAudit({
+      // Each approval already wrote its own admin.user.approved row; this one sums up the run.
+      await SecurityAuditSvc.record({
+        action: "admin.user.approved",
         actorId: progress.startedById,
-        action: "users.bulk_approved",
+        organizationId: null,
+        targetType: "tenant",
+        targetId: code,
         payload: {
-          tenant: code,
+          bulk: true,
           total: progress.total,
           approved: progress.approved,
           skipped: progress.skipped,
           failed: progress.failed,
         },
-      }).catch((err) => logger.error("Bulk approval: failed to write audit event", { err, tenant: code }));
+      });
     }
   }
 }

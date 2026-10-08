@@ -15,6 +15,7 @@ import { slugify } from "../utils/slug";
 import { CLIENT_URL } from "../config";
 import { TenantCode } from "../types/tenant-code";
 import NotificationSvc from "./notification.service";
+import SecurityAuditSvc from "./security-audit.service";
 import logger from "../utils/logger";
 
 export default class OrganizationSvc {
@@ -50,7 +51,16 @@ export default class OrganizationSvc {
     }
 
     const slug = await OrganizationSvc.generateUniqueSlug(name);
-    return OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", tenantId, false, { parkCurrent: inPersonal });
+    const org = await OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", tenantId, false, { parkCurrent: inPersonal });
+    await SecurityAuditSvc.record({
+      action: "org.created",
+      actorId: userId,
+      organizationId: org.id,
+      targetType: "organization",
+      targetId: org.id,
+      payload: { packageSku: org.packageSku },
+    });
+    return org;
   }
 
   /** The caller's portfolio: their personal workspace, which holds the cases they made solo and
@@ -107,7 +117,15 @@ export default class OrganizationSvc {
       const existing = await OrganizationRepo.findBySlug(data.slug);
       if (existing && existing.id !== id) throw new HttpError("An organization with this slug already exists", 409);
     }
-    return OrganizationRepo.update(id, data);
+    const updated = await OrganizationRepo.update(id, data);
+    await SecurityAuditSvc.record({
+      action: "org.updated",
+      organizationId: id,
+      targetType: "organization",
+      targetId: id,
+      payload: { fields: Object.keys(data).filter((key) => data[key as keyof typeof data] !== undefined) },
+    });
+    return updated;
   }
 
   /** Members, then outstanding invites as PENDING rows (the shape the app's members list renders). */
@@ -181,6 +199,14 @@ export default class OrganizationSvc {
     }
 
     const invite = await OrganizationInviteRepo.create(organizationId, user.id, role);
+    await SecurityAuditSvc.record({
+      action: "org.member_invited",
+      actorId: actingUserId,
+      organizationId,
+      targetType: "user",
+      targetId: user.id,
+      payload: { role, email: user.email },
+    });
 
     const inviterName = inviter?.name || "A team member";
     const orgName = organization?.name ?? "";
@@ -228,7 +254,20 @@ export default class OrganizationSvc {
     }
 
     const current = await OrganizationMemberRepo.findAnyForUser(userId);
-    if (!current || current.organization.isPersonal) return OrganizationInviteRepo.accept(invite, current);
+    const recordAccepted = () =>
+      SecurityAuditSvc.record({
+        action: "org.invite_accepted",
+        actorId: userId,
+        organizationId,
+        targetType: "user",
+        targetId: userId,
+        payload: { role: invite.role },
+      });
+    if (!current || current.organization.isPersonal) {
+      const member = await OrganizationInviteRepo.accept(invite, current);
+      await recordAccepted();
+      return member;
+    }
 
     await this.assertCanLeave(current.organizationId, current.role);
     const portfolio = await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
@@ -241,6 +280,16 @@ export default class OrganizationSvc {
       }),
     );
     CaseCopyQueue.kick();
+    // Accepting left their previous organization — that firm's log says so too.
+    await SecurityAuditSvc.record({
+      action: "org.member_left",
+      actorId: userId,
+      organizationId: current.organizationId,
+      targetType: "user",
+      targetId: userId,
+      payload: { role: current.role, reason: "joined_another_organization" },
+    });
+    await recordAccepted();
     return member;
   }
 
@@ -251,6 +300,14 @@ export default class OrganizationSvc {
       throw new HttpError("No pending invite found for this organization", 404);
     }
     await OrganizationInviteRepo.delete(userId);
+    await SecurityAuditSvc.record({
+      action: "org.invite_declined",
+      actorId: userId,
+      organizationId,
+      targetType: "user",
+      targetId: userId,
+      payload: { role: invite.role },
+    });
     // Invites used to park a personal workspace when sent (before 20261007150000_organization_invites)
     // — someone declining one of those gets it back instead of being left with no workspace.
     if (await OrganizationMemberRepo.findAnyForUser(userId)) return;
@@ -271,7 +328,15 @@ export default class OrganizationSvc {
       await this.assertNotLastOwner(organizationId);
     }
 
-    return OrganizationMemberRepo.updateRole(organizationId, targetUserId, role);
+    const updated = await OrganizationMemberRepo.updateRole(organizationId, targetUserId, role);
+    await SecurityAuditSvc.record({
+      action: "org.member_role_changed",
+      organizationId,
+      targetType: "user",
+      targetId: targetUserId,
+      payload: { from: target.role, to: role },
+    });
+    return updated;
   }
 
   /** Removes a member. Only an OWNER may remove an ADMIN or another OWNER (an ADMIN may
@@ -293,6 +358,14 @@ export default class OrganizationSvc {
     }
 
     await OrganizationSvc.exit(organizationId, targetUserId);
+    await SecurityAuditSvc.record({
+      action: "org.member_removed",
+      actorId: actingUserId,
+      organizationId,
+      targetType: "user",
+      targetId: targetUserId,
+      payload: { role: target.role },
+    });
   }
 
   /** Self-service: a member removes their own membership. A sole-member OWNER may leave
@@ -311,6 +384,14 @@ export default class OrganizationSvc {
     await this.assertCanLeave(organizationId, membership.role);
 
     await OrganizationSvc.exit(organizationId, userId);
+    await SecurityAuditSvc.record({
+      action: "org.member_left",
+      actorId: userId,
+      organizationId,
+      targetType: "user",
+      targetId: userId,
+      payload: { role: membership.role },
+    });
   }
 
   /** How a member stops belonging to an organization, whether they left or were removed: the
@@ -360,11 +441,20 @@ export default class OrganizationSvc {
    * (ownership, a granted CaseAccess row, or OWNER/ADMIN membership in the case's *current*
    * org, if any) — not membership in the org being attached to. */
   static async attachCase(organizationId: string, caseId: string, userId: string) {
-    await CaseAccess.assertCanEdit(caseId, userId);
+    const caseRecord = await CaseAccess.assertCanEdit(caseId, userId);
     const org = await OrganizationRepo.findByIdForUser(organizationId, userId);
     if (!org) throw new HttpError("Organization not found", 404);
     const updated = await OrganizationRepo.attachCase(caseId, organizationId);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "org.attach_case", payload: { organizationId } });
+    await SecurityAuditSvc.record({
+      action: "org.case_attached",
+      actorId: userId,
+      organizationId,
+      targetType: "case",
+      targetId: caseId,
+      caseId,
+      payload: { fromOrganizationId: caseRecord.organizationId ?? null },
+    });
     return updated;
   }
 
@@ -372,6 +462,15 @@ export default class OrganizationSvc {
     const caseRecord = await CaseAccess.assertCanEdit(caseId, actorId);
     const access = await OrganizationRepo.grantCaseAccess(caseId, userId, permission);
     await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.grant_access", payload: { userId, permission } });
+    await SecurityAuditSvc.record({
+      action: "case.access_granted",
+      actorId,
+      organizationId: caseRecord.organizationId ?? null,
+      targetType: "user",
+      targetId: userId,
+      caseId,
+      payload: { permission },
+    });
 
     if (userId !== actorId) {
       await NotificationSvc.create({

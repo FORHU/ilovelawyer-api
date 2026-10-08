@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
 import { AWS_S3_BUCKET, AWS_S3_REGION, CLOUDFRONT_URL, FILE_TOKEN_SECRET } from "../config";
 import { awsCredentials } from "../lib/aws-client-config";
+import { getRequestContext } from "../lib/request-context";
 
 const client = new S3Client({
   region: AWS_S3_REGION,
@@ -87,11 +88,23 @@ export function getPresignedGetUrl(
 
 const FILE_TOKEN_EXPIRY_SECONDS = 3600;
 
+/** What a file link points at, for the security audit log's file.accessed row — a kind and ids,
+ * never the filename or key (rows outlive the case). A link without one (avatars) isn't logged. */
+export interface FileLinkAudit {
+  kind: "document" | "case_brief" | "generated_document" | "audio_overview";
+  id?: string;
+  caseId?: string | null;
+}
+
 export interface FileTokenPayload {
   s3Key: string;
   filename?: string;
   disposition: "attachment" | "inline";
   orgId?: string;
+  /** The signed-in user the link was handed to — the link is a bearer token, so this is who it
+   * was issued to, not proof of who opened it. Stamped from the request context at mint time. */
+  uid?: string;
+  audit?: FileLinkAudit;
 }
 
 /** Mints a same-origin `/files/<jwt>` path in place of a raw presigned S3 URL. The token carries
@@ -100,13 +113,16 @@ export interface FileTokenPayload {
  * browser this way. */
 export function getProxyFileUrl(
   key: string,
-  opts: { filename?: string; disposition?: "attachment" | "inline"; orgId?: string } = {},
+  opts: { filename?: string; disposition?: "attachment" | "inline"; orgId?: string; audit?: FileLinkAudit } = {},
 ): string {
+  const context = getRequestContext();
   const payload: FileTokenPayload = {
     s3Key: key,
     filename: opts.filename,
     disposition: opts.disposition ?? "attachment",
-    orgId: opts.orgId,
+    orgId: opts.orgId ?? context?.organizationId() ?? undefined,
+    uid: context?.userId() ?? undefined,
+    audit: opts.audit,
   };
   const token = jwt.sign(payload, FILE_TOKEN_SECRET, { expiresIn: FILE_TOKEN_EXPIRY_SECONDS });
   return `/files/${token}`;

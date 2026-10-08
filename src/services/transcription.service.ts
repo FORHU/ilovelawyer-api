@@ -10,6 +10,7 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { AWS_S3_BUCKET } from "../config";
 import { awsClientConfig } from "../lib/aws-client-config";
+import SecurityAuditSvc from "./security-audit.service";
 
 const SUPPORTED_FORMATS = ["mp3", "wav", "flac", "ogg", "webm", "weba", "m4a", "mp4", "amr"];
 
@@ -177,6 +178,13 @@ export default class TranscriptionSvc {
     const item = await TranscriptionRepo.findById(id, organizationId);
     if (!item) throw new HttpError("Transcription not found", 404);
     await TranscriptionRepo.delete(id, organizationId);
+    await SecurityAuditSvc.record({
+      action: "transcription.deleted",
+      organizationId,
+      targetType: "transcription",
+      targetId: id,
+      caseId: item.caseId ?? null,
+    });
   }
 
   /** Chunk → embed → store the transcript text (ADR 0013), same shared pipeline the Case

@@ -63,7 +63,7 @@ export default class CitationGroundSvc {
       claims: claims.map((c) => {
         // Claims found before sourceDocumentId was saved only have the document's name.
         const doc = (c.sourceDocumentId && docById.get(c.sourceDocumentId)) || (c.sourceLabel ? docByName.get(c.sourceLabel) : undefined);
-        const fileUrl = doc?.file?.s3Key ? documentFileUrl(doc.file.s3Key, doc.file.filename) : null;
+        const fileUrl = doc?.file?.s3Key ? documentFileUrl(doc.file.s3Key, doc.file.filename, doc) : null;
         return {
           id: c.id,
           title: c.title,

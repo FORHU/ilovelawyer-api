@@ -3,6 +3,7 @@ import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import requireAdmin from "../middleware/require-admin.middleware";
 import AdminCtrl from "../controllers/admin.controller";
+import SecurityAuditCtrl from "../controllers/security-audit.controller";
 
 const router = express.Router();
 
@@ -25,5 +26,8 @@ router.delete("/users/:id", asyncHandler(AdminCtrl.deleteUser));
 router.get("/settings", asyncHandler(AdminCtrl.getSettings));
 router.patch("/settings/tenants/:code", asyncHandler(AdminCtrl.updateTenantSettings));
 router.post("/tenants/:code/approve-pending", asyncHandler(AdminCtrl.approvePending));
+
+router.get("/audit-log", asyncHandler(SecurityAuditCtrl.listForAdmin));
+router.get("/audit-log/export", asyncHandler(SecurityAuditCtrl.exportForAdmin));
 
 export default router;

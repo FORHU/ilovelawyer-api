@@ -2,6 +2,8 @@ import AuthRepo from "../repositories/auth.repository";
 import AvatarSvc from "./avatar.service";
 import GoogleCalendarSvc from "./google-calendar.service";
 import NotificationSvc from "./notification.service";
+import SecurityAuditSvc from "./security-audit.service";
+import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
@@ -27,12 +29,25 @@ export default class AccountDeletionSvc {
   static async purgeIfStillDue(userId: string, cutoff: Date): Promise<boolean> {
     const requestedAt = await AuthRepo.findDeletionRequestedAt(userId);
     if (!requestedAt || requestedAt > cutoff) return false;
+    // Read while the row and its membership still exist — the audit row must name them after.
+    const [user, membership] = await Promise.all([AuthRepo.findById(userId), OrganizationMemberRepo.findAnyForUser(userId)]);
 
     await GoogleCalendarSvc.releaseForDeletedUser(userId);
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);
-    return AuthRepo.deleteUserIfDeletionDue(userId, cutoff);
+    const deleted = await AuthRepo.deleteUserIfDeletionDue(userId, cutoff);
+    if (deleted) {
+      await SecurityAuditSvc.record({
+        action: "account.purged",
+        actorId: null,
+        organizationId: membership?.organizationId ?? null,
+        targetType: "user",
+        targetId: userId,
+        payload: { email: user?.email ?? null, requestedAt: requestedAt.toISOString() },
+      });
+    }
+    return deleted;
   }
 
   /** Option A of the self-service deletion flow: a completed sign-in during the grace period
@@ -43,6 +58,13 @@ export default class AccountDeletionSvc {
   static async restoreOnSignIn(user: { id: string; email: string; name: string | null }): Promise<boolean> {
     const restored = await AuthRepo.clearDeletionRequestIfSet(user.id);
     if (!restored) return false;
+    await SecurityAuditSvc.record({
+      action: "account.deletion_cancelled",
+      actorId: user.id,
+      targetType: "user",
+      targetId: user.id,
+      payload: { via: "sign_in" },
+    });
 
     try {
       const html = await renderTemplate("account-deletion-restored", { name: user.name || "there" });

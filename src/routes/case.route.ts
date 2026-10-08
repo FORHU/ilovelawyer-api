@@ -2,6 +2,7 @@ import express from "express";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import resolveOrganization from "../middleware/resolve-organization.middleware";
+import recordCaseItemDeletions from "../middleware/record-case-item-deletions.middleware";
 import CaseCtrl from "../controllers/case.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
 import TraceCtrl from "../controllers/trace.controller";
@@ -11,6 +12,8 @@ import CaseMindMapCtrl from "../controllers/case-mind-map.controller";
 const router = express.Router();
 
 router.use(validSession, asyncHandler(resolveOrganization));
+// Every DELETE /:caseId/... below lands in the security audit log as case.item_deleted.
+router.use(recordCaseItemDeletions);
 
 router.post("/", asyncHandler(CaseCtrl.create));
 router.get("/", asyncHandler(CaseCtrl.list));

@@ -5,6 +5,7 @@ import validSession from "../middleware/valid-session.middleware";
 import { resolveOrganizationFromParam } from "../middleware/resolve-organization.middleware";
 import { requireOrgRole } from "../utils/org-role";
 import OrganizationCtrl from "../controllers/organization.controller";
+import SecurityAuditCtrl from "../controllers/security-audit.controller";
 
 const router = express.Router();
 
@@ -64,5 +65,19 @@ router.delete(
 // specific role — OrganizationSvc.attachCase itself checks edit access on the case
 // being attached, see CaseAccess.assertCanEdit), so no requireOrgRole here.
 router.post("/:id/cases", asyncHandler(resolveOrganizationFromParam()), asyncHandler(OrganizationCtrl.attachCase));
+
+// The firm's security audit log (docs/adr/0006-security-audit-log.md) — Owners and Admins only.
+router.get(
+  "/:id/audit-log",
+  asyncHandler(resolveOrganizationFromParam()),
+  requireOrgRole(OrganizationRole.ADMIN),
+  asyncHandler(SecurityAuditCtrl.listForOrganization),
+);
+router.get(
+  "/:id/audit-log/export",
+  asyncHandler(resolveOrganizationFromParam()),
+  requireOrgRole(OrganizationRole.ADMIN),
+  asyncHandler(SecurityAuditCtrl.exportForOrganization),
+);
 
 export default router;

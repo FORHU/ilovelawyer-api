@@ -10,6 +10,7 @@ import { s3UrlForKey } from "../utils/s3";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
 import { CaseStatus } from "@prisma/client";
+import SecurityAuditSvc from "./security-audit.service";
 
 export default class CaseSvc {
   static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {
@@ -73,6 +74,15 @@ export default class CaseSvc {
     }
 
     await CaseRepo.delete(id, organizationId);
+    await SecurityAuditSvc.record({
+      action: "case.deleted",
+      actorId,
+      organizationId,
+      targetType: "case",
+      targetId: id,
+      caseId: id,
+      payload: { documentsDeleted: docs.length },
+    });
   }
 
   /** Bulk delete from the case list — loops delete() (document cleanup included) over every
