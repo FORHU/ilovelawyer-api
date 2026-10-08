@@ -368,8 +368,16 @@ export default class OrganizationSvc {
     return updated;
   }
 
+  /** Sharing (#347): only someone who can manage the case's access may grant (see
+   * CaseAccess.assertCanManageAccess — an EDIT holder can't), and in v1 only to an accepted member
+   * of the case's own organization. Granting again changes the level (upsert). */
   static async grantAccess(caseId: string, actorId: string, userId: string, permission: CasePermission) {
-    const caseRecord = await CaseAccess.assertCanEdit(caseId, actorId);
+    const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
+    if (!caseRecord.organizationId) throw new HttpError("This case has no organization to share it within", 400);
+    const membership = await OrganizationMemberRepo.find(caseRecord.organizationId, userId);
+    if (membership?.status !== "ACCEPTED") {
+      throw new HttpError("A case can only be shared with an accepted member of its organization", 400);
+    }
     const access = await OrganizationRepo.grantCaseAccess(caseId, userId, permission);
     await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.grant_access", payload: { userId, permission } });
 
@@ -385,6 +393,56 @@ export default class OrganizationSvc {
     }
 
     return access;
+  }
+
+  /** Removes an explicit grant. Access someone has through their org role isn't a grant, so
+   * there's nothing to revoke for it — that 404s rather than looking like it worked. */
+  static async revokeAccess(caseId: string, actorId: string, userId: string) {
+    await CaseAccess.assertCanManageAccess(caseId, actorId);
+    const removed = await OrganizationRepo.revokeCaseAccess(caseId, userId);
+    if (!removed) throw new HttpError("This person has no access grant on the case", 404);
+    await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.revoke_access", payload: { userId } });
+  }
+
+  /** Who can reach the case and how, for the sharing panel: every accepted member of its
+   * organization (all of whom can read it today) with their org role and grant, plus any grant
+   * held by someone outside it. `canEdit`/`canManage` say what the caller may do — the app uses
+   * them rather than guessing from the org role, which misses per-case grants. */
+  static async listAccess(caseId: string, actorId: string) {
+    const caseRecord = await CaseAccess.loadAccessibleCase(caseId, actorId);
+    const [members, grants, canEdit, canManage] = await Promise.all([
+      caseRecord.organizationId ? OrganizationMemberRepo.list(caseRecord.organizationId) : [],
+      OrganizationRepo.listCaseAccess(caseId),
+      CaseAccess.canEdit(caseId, actorId),
+      CaseAccess.canManageAccess(caseId, actorId),
+    ]);
+    const grantByUser = new Map(grants.map((g) => [g.userId, g.permission]));
+
+    const people = members
+      .filter((m) => m.status === "ACCEPTED")
+      .map((m) => ({
+        userId: m.userId,
+        name: m.user.name,
+        email: m.user.email,
+        username: m.user.username,
+        avatarUrl: m.user.avatarUrl,
+        orgRole: m.role as OrganizationRole | null,
+        grant: grantByUser.get(m.userId) ?? null,
+      }));
+    const listed = new Set(people.map((p) => p.userId));
+    for (const g of grants) {
+      if (listed.has(g.userId)) continue;
+      people.push({
+        userId: g.userId,
+        name: g.user.name,
+        email: g.user.email,
+        username: g.user.username,
+        avatarUrl: null,
+        orgRole: null,
+        grant: g.permission,
+      });
+    }
+    return { canEdit, canManage, people };
   }
 
   static async teamAudit(caseId: string, userId: string) {
