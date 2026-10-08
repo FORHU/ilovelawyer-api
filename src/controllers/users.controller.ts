@@ -46,8 +46,9 @@ export default class UsersCtrl {
     return res.status(200).json(user);
   }
 
-  /** POST /api/users/me/export — everything we hold about the caller, as one JSON download.
-   * A POST (not a GET) so the password can travel in the body, not the URL. */
+  /** POST /api/users/me/export — everything we hold about the caller, as one ZIP download:
+   * data.json (the complete record), files/ (their uploaded files) and README.pdf (a readable
+   * summary). A POST (not a GET) so the password can travel in the body, not the URL. */
   static async exportMe(req: Request, res: Response) {
     const { error, value } = deleteMeSchema.validate({ password: req.body?.password });
     if (error) throw new HttpError(error.message, 400);
@@ -55,17 +56,24 @@ export default class UsersCtrl {
 
     const stamp = new Date().toISOString().slice(0, 10);
     res.status(200);
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="ilovelawyer-my-data-${stamp}.json"`);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="ilovelawyer-my-data-${stamp}.zip"`);
     res.setHeader("Cache-Control", "no-store");
 
     try {
-      const counts = await DataExportSvc.stream(req.user.userId, (chunk) => res.write(chunk));
+      // Waits for the client to catch up when its connection is slower than our database and storage.
+      const sink = (chunk: Buffer) => (res.write(chunk) ? undefined : new Promise<void>((resolve) => res.once("drain", resolve)));
+      const { counts, filesIncluded, filesSkipped } = await DataExportSvc.streamZip(req.user.userId, sink);
       res.end();
       await AuditSvc.record({
         action: AuditAction.AccountDataExported,
         actorId: req.user.userId,
-        payload: { tables: Object.keys(counts).length, rows: Object.values(counts).reduce((a, b) => a + b, 0) },
+        payload: {
+          tables: Object.keys(counts).length,
+          rows: Object.values(counts).reduce((a, b) => a + b, 0),
+          files: filesIncluded,
+          filesSkipped,
+        },
       });
     } catch (err) {
       // The download has already started, so an error page can't be sent: cut the connection so the

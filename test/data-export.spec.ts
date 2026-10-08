@@ -3,9 +3,11 @@
 import crypto from "crypto";
 import { expect } from "chai";
 import { describe, it, before, after } from "mocha";
+import { Readable } from "stream";
+import JSZip from "jszip";
 import { Prisma } from "@prisma/client";
 import prisma from "../src/lib/prisma";
-import DataExportSvc, { EXPORT_EXCLUDED_MODELS, planExport } from "../src/services/data-export.service";
+import DataExportSvc, { EXPORT_EXCLUDED_MODELS, planExport, type ExportFileSource } from "../src/services/data-export.service";
 import OrganizationSvc from "../src/services/organization.service";
 
 const models = Prisma.dmmf.datamodel.models;
@@ -101,5 +103,74 @@ describe("DataExportSvc.stream (real database)", () => {
     expect(output).to.not.include("bcrypt-hash-must-not-leak");
     expect(output).to.not.include(`refresh-${userId}`);
     expect(JSON.parse(output).data).to.not.have.property("Session");
+  });
+});
+
+describe("DataExportSvc.streamZip (real database, fake file storage)", () => {
+  const userId = crypto.randomUUID();
+  const email = `export-zip-${userId}@example.com`;
+  const goodKey = `export-test/${userId}/contract.txt`;
+  const brokenKey = `export-test/${userId}/missing.txt`;
+  const fileIds: string[] = [];
+  let archive: JSZip;
+  let result: { filesIncluded: number; filesSkipped: number };
+
+  const storage: ExportFileSource = {
+    open: async (key) => {
+      if (key === goodKey) return { body: Readable.from([Buffer.from("FICTIONAL contract text, "), Buffer.from("two chunks")]), contentLength: 35 };
+      throw new Error("NoSuchKey");
+    },
+  };
+
+  before(async () => {
+    const avatar = await prisma.file.create({ data: { filename: "contract.txt", s3Key: goodKey } });
+    const broken = await prisma.file.create({ data: { filename: "missing.txt", s3Key: brokenKey } });
+    fileIds.push(avatar.id, broken.id);
+    // The avatar link is the simplest way to make a File belong to this user without building a case.
+    await prisma.user.create({ data: { id: userId, email, username: `export-zip-${userId}`, name: "Zip Tester", avatarId: avatar.id } });
+    // A second file the user owns (a recording), whose bytes can't be read.
+    const org = await OrganizationSvc.create(userId, "Zip Export Firm", undefined, "PH");
+    await prisma.transcription.create({ data: { userId, organizationId: org.id, audioFileId: broken.id } });
+
+    const chunks: Buffer[] = [];
+    result = await DataExportSvc.streamZip(userId, (chunk) => void chunks.push(chunk), storage);
+    archive = await JSZip.loadAsync(Buffer.concat(chunks), { checkCRC32: true });
+  });
+
+  after(async () => {
+    await prisma.transcription.deleteMany({ where: { userId } });
+    await prisma.organizationMember.deleteMany({ where: { userId } });
+    await prisma.organization.deleteMany({ where: { createdById: userId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+    await prisma.file.deleteMany({ where: { id: { in: fileIds } } });
+  });
+
+  it("contains the data record, the readable report and the user's file", () => {
+    const names = Object.keys(archive.files);
+    expect(names).to.include("data.json");
+    expect(names).to.include("README.pdf");
+    expect(names.some((n) => n.startsWith("files/") && n.endsWith("-contract.txt"))).to.equal(true);
+  });
+
+  it("writes the file's bytes unchanged, even when storage hands them over in pieces", async () => {
+    const name = Object.keys(archive.files).find((n) => n.endsWith("-contract.txt"))!;
+    expect(await archive.file(name)!.async("string")).to.equal("FICTIONAL contract text, two chunks");
+  });
+
+  it("produces a real PDF report", async () => {
+    const pdf = await archive.file("README.pdf")!.async("nodebuffer");
+    expect(pdf.subarray(0, 5).toString()).to.equal("%PDF-");
+    expect(pdf.length).to.be.greaterThan(1000);
+  });
+
+  it("keeps data.json valid and about this user", async () => {
+    const doc = JSON.parse(await archive.file("data.json")!.async("string"));
+    expect(doc.user).to.include({ id: userId, email });
+  });
+
+  it("leaves out a file it cannot read, and still finishes", () => {
+    expect(result.filesIncluded).to.equal(1);
+    expect(result.filesSkipped, "the unreadable file must have been seen and skipped, not just never attached").to.equal(1);
+    expect(Object.keys(archive.files).some((n) => n.includes("missing.txt"))).to.equal(false);
   });
 });
