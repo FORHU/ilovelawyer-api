@@ -160,7 +160,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
     it("delete: an editor deletes the case's documents, then the case", async () => {
       await CaseSvc.delete("case-1", "org-1", EDITOR);
-      expect(writes).to.deep.equal(["doc.delete:doc-case", "case.delete:case-1"]);
+      expect(writes).to.deep.equal(["doc.delete:doc-case", "audit:document.delete", "case.delete:case-1"]);
     });
 
     it("archive: refuses a plain member before the status flip, the audit row or the cascade", async () => {
@@ -214,7 +214,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
     it("delete: lets an editor of the document's case through", async () => {
       await DocumentSvc.delete("doc-case", "org-1", EDITOR);
       expect(accessChecks).to.deep.include({ caseId: "case-1", userId: EDITOR });
-      expect(writes).to.deep.equal(["doc.delete:doc-case"]);
+      expect(writes).to.deep.equal(["doc.delete:doc-case", "audit:document.delete"]);
     });
 
     it("archive: refuses a plain member before the status flip", async () => {
@@ -279,7 +279,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
       await DocumentSvc.update("doc-loose", "org-1", MEMBER, { name: "Renamed.pdf" });
       await DocumentSvc.delete("doc-loose", "org-1", MEMBER);
       expect(accessChecks).to.deep.equal([]);
-      expect(writes).to.deep.equal(["doc.ARCHIVED:doc-loose", "audit:document.archive", "doc.update:doc-loose", "doc.delete:doc-loose"]);
+      expect(writes).to.deep.equal(["doc.ARCHIVED:doc-loose", "audit:document.archive", "doc.update:doc-loose", "doc.delete:doc-loose", "audit:document.delete"]);
     });
   });
 });
