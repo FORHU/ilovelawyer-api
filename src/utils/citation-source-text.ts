@@ -34,6 +34,15 @@ export interface FetchedOfficialText {
   pinpoint?: string | null;
   /** The authority as the lawyer would name it, for the citation's notes. */
   label: string;
+  /** For a UK Act section: whether it's in force, and where it extends to (#365). */
+  legislation?: LegislationStatus;
+}
+
+/** What legislation.gov.uk says about a section beyond its words. `inForce` is null when it
+ * doesn't say; `extent` is empty when it doesn't say. */
+export interface LegislationStatus {
+  inForce: boolean | null;
+  extent: string[];
 }
 
 type LawSummary = { id: string; title: string; category: string; jurisSourceId: string; jurisUrl: string };
@@ -42,7 +51,7 @@ type LawSummary = { id: string; title: string; category: string; jurisSourceId: 
 export interface OfficialTextSources {
   law(lawId: string): Promise<LawSummary | null>;
   phFullText(lawId: string): Promise<string | null>;
-  ukLegislationSection(args: { type: string; year: number; number: number; section: string }): Promise<string | null>;
+  ukLegislationSection(args: { type: string; year: number; number: number; section: string }): Promise<({ content: string } & LegislationStatus) | null>;
   ukGrep(slug: string, pattern: string, maxHits: number): Promise<{ eId: string }[]>;
   ukParagraph(slug: string, eId: string): Promise<string | null>;
 }
@@ -55,7 +64,10 @@ const realSources: OfficialTextSources = {
     const { default: LawSvc } = await import("../services/law.service");
     return LawSvc.fullTextFor(lawId);
   },
-  ukLegislationSection: async (args) => (await legislationGetSection(args)).content || null,
+  ukLegislationSection: async (args) => {
+    const section = await legislationGetSection(args);
+    return section.content ? { content: section.content, inForce: section.in_force, extent: section.extent ?? [] } : null;
+  },
   ukGrep: async (slug, pattern, maxHits) => (await grepJudgment(slug, pattern, maxHits, true)).hits,
   ukParagraph: async (slug, eId) => (await judgmentGetParagraph(slug, eId)).content || null,
 };
@@ -202,17 +214,103 @@ async function fetchUntimed(
     const act = legislationUrlParts(law.jurisSourceId);
     if (act) {
       if (!input.ukSection) return null;
-      const content = await sources.ukLegislationSection({ ...act, section: input.ukSection });
-      if (!content) return null;
+      const section = await sources.ukLegislationSection({ ...act, section: input.ukSection });
+      if (!section?.content) return null;
+      const { content } = section;
       const ref = `s. ${input.ukSection}`;
-      const text = content.length > MAX_PASSAGE_CHARS ? (locatePassage(content, input.quote) ?? content.slice(0, MAX_PASSAGE_CHARS)) : content;
-      return { text, source: "UK_LEGISLATION", ref, label: `${law.title}, ${ref}` };
+      // legislation.gov.uk often leaves in_force unset even for a repealed section, but prints a
+      // wholly repealed one as its heading and number followed by dots. That's not text to check a
+      // quote against, so it's offered as none — only the section's status is.
+      const repealed = isRepealedSectionText(content, input.ukSection);
+      const text = repealed
+        ? ""
+        : content.length > MAX_PASSAGE_CHARS
+          ? (locatePassage(content, input.quote) ?? content.slice(0, MAX_PASSAGE_CHARS))
+          : content;
+      return {
+        text,
+        source: "UK_LEGISLATION",
+        ref,
+        label: `${law.title}, ${ref}`,
+        legislation: { inForce: section.inForce ?? (repealed ? false : null), extent: section.extent },
+      };
     }
     const slug = extractCaseUri(law.jurisUrl);
     return slug ? ukJudgmentText(slug, input.quote, law.title, sources) : null;
   }
 
   return null;
+}
+
+// ── #365: is the cited section current law where the case is? ────────────────────────────
+
+type Territory = "E" | "W" | "S" | "NI";
+const TERRITORY_NAMES: Record<Territory, string> = { E: "England", W: "Wales", S: "Scotland", NI: "Northern Ireland" };
+const TERRITORY_ORDER: Territory[] = ["E", "W", "S", "NI"];
+const TERRITORY_ALIASES: Record<string, Territory> = {
+  e: "E", england: "E",
+  w: "W", wales: "W",
+  s: "S", scotland: "S",
+  "n.i.": "NI", ni: "NI", "northern ireland": "NI",
+};
+/** The territories each case legal system (Case.ukJurisdiction) is satisfied by. England and Wales
+ * is one legal system, so a section extending to either reaches it. */
+const JURISDICTION_TERRITORIES: Record<string, Territory[]> = {
+  "England and Wales": ["E", "W"],
+  Scotland: ["S"],
+  "Northern Ireland": ["NI"],
+};
+
+/** Extent as legislation.gov.uk gives it — names ("England", "Wales") or codes ("E+W+S+N.I."). */
+function territories(extent: string[]): Set<Territory> {
+  const out = new Set<Territory>();
+  for (const entry of extent) {
+    for (const part of entry.split("+")) {
+      const territory = TERRITORY_ALIASES[part.trim().toLowerCase()];
+      if (territory) out.add(territory);
+    }
+  }
+  return out;
+}
+
+function listNames(names: string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** True when a UK section's text is legislation.gov.uk's rendering of a wholly repealed section:
+ * its heading, its number, then only dot leaders ("Mode of forming incorporated company. 1 . . . .").
+ * Anchored on the cited section's number, so a section with just one repealed subsection — text,
+ * then "2 . . . ." — doesn't count. */
+export function isRepealedSectionText(content: string, section: string): boolean {
+  const match = content.trim().match(/^(.*?)\s*((?:\.\s*){3,})$/s);
+  if (!match) return false;
+  const beforeDots = match[1].trim();
+  const number = section.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\s)${number}$`, "i").test(beforeDots);
+}
+
+export type LegislationWarningCode = "NOT_IN_FORCE" | "OUTSIDE_EXTENT";
+
+/**
+ * What's wrong with relying on a UK Act section in this case, if anything: it isn't in force, or
+ * it doesn't extend to the case's legal system. Advisory — it says nothing about whether the quote
+ * matches the text. Silent whenever it doesn't know (in force unknown, no extent, no legal system
+ * set on the case), so a warning is only ever a positive finding.
+ */
+export function legislationWarnings(
+  status: LegislationStatus,
+  caseJurisdiction: string | null,
+): { code: LegislationWarningCode; message: string }[] {
+  const warnings: { code: LegislationWarningCode; message: string }[] = [];
+  if (status.inForce === false) warnings.push({ code: "NOT_IN_FORCE", message: "It isn't in force." });
+
+  const needed = caseJurisdiction ? JURISDICTION_TERRITORIES[caseJurisdiction] : undefined;
+  const reaches = territories(status.extent);
+  if (needed && reaches.size > 0 && !needed.some((t) => reaches.has(t))) {
+    const where = listNames(TERRITORY_ORDER.filter((t) => reaches.has(t)).map((t) => TERRITORY_NAMES[t]));
+    warnings.push({ code: "OUTSIDE_EXTENT", message: `It doesn't extend to ${caseJurisdiction} (it extends to ${where}).` });
+  }
+  return warnings;
 }
 
 /** The official text for a quote, from the authority it resolved to — or null when there's none

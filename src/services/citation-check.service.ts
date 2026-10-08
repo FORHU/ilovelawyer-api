@@ -11,8 +11,8 @@ import { resolveUkCitationToLaw } from "../utils/uk-citation-resolution";
 import { parseCitedReference } from "./citation-map.service";
 import { classifyProposition } from "../utils/citation-proposition";
 import { detectPinpoint } from "../utils/citation-pinpoint";
-import { fetchOfficialText, FetchedOfficialText } from "../utils/citation-source-text";
-import { OfficialTextSource } from "@prisma/client";
+import { fetchOfficialText, FetchedOfficialText, legislationWarnings } from "../utils/citation-source-text";
+import { CitationSourceWarning, OfficialTextSource } from "@prisma/client";
 import HttpError from "../utils/http-error";
 import { TenantCode } from "../types/tenant-code";
 import { ResolvedCitationAuthority } from "../types/citation-check.types";
@@ -67,6 +67,7 @@ export default class CitationCheckSvc {
         pinpoint: body.pinpoint,
       },
       tenantCode,
+      tenantCode === "UK" ? await CaseAccess.resolveUkJurisdiction(caseId) : null,
     );
 
     const row = await CitationCheckRepo.create(caseId, {
@@ -135,6 +136,7 @@ export default class CitationCheckSvc {
     const evaluated = await CitationCheckSvc.evaluate(
       { ...merged, officialTextSource, officialTextRef, pinpoint: body.pinpoint },
       tenantCode,
+      tenantCode === "UK" ? await CaseAccess.resolveUkJurisdiction(caseId) : null,
     );
 
     const row = await CitationCheckRepo.update(id, caseId, { ...merged, ...evaluated.fields });
@@ -174,6 +176,8 @@ export default class CitationCheckSvc {
       pinpoint?: string | null;
     },
     tenantCode: TenantCode,
+    /** The case's UK legal system (Case.ukJurisdiction), for #365's extent warning. */
+    ukJurisdiction: string | null = null,
   ) {
     const citedReference = input.citedReference ?? undefined;
     // Separate from the quote-vs-source text match below: does the cited authority itself
@@ -183,15 +187,22 @@ export default class CitationCheckSvc {
     const resolved = await CitationCheckSvc.resolveAuthority(citedReference, tenantCode);
 
     let { officialText, officialTextSource, officialTextRef } = input;
+    // Fetched when there's no text to check against — and, for a UK Act section, even when the
+    // lawyer pasted it: whether the section is in force and where it reaches (#365) don't depend
+    // on the words, so their text is kept and only the section's status is used.
+    const citesUkSection = tenantCode === "UK" && !!resolved.ukSection;
     let fetched: FetchedOfficialText | null = null;
-    if (!officialText && resolved.lawId) {
+    let usedFetchedText = false;
+    if (resolved.lawId && (!officialText || citesUkSection)) {
       fetched = await fetchOfficialText({ tenantCode, lawId: resolved.lawId, quote: input.quotedText, ukSection: resolved.ukSection });
-      if (fetched) {
+      if (fetched?.text && !officialText) {
         officialText = fetched.text;
         officialTextSource = fetched.source;
         officialTextRef = fetched.ref;
+        usedFetchedText = true;
       }
     }
+    const warnings = fetched?.legislation ? legislationWarnings(fetched.legislation, ukJurisdiction) : [];
 
     // A lawyer-typed pinpoint always wins; then the paragraph the fetch found; then, for a
     // resolved UK judgment, a search of its text.
@@ -210,10 +221,14 @@ export default class CitationCheckSvc {
     // Say where the text came from, or why there wasn't any — the lawyer should be able to see
     // what the check was (or wasn't) based on.
     let notes = result.notes;
-    if (fetched) notes = `Checked against ${fetched.label}. ${result.notes}`;
-    else if (!officialText && resolved.lawId) {
+    if (usedFetchedText) notes = `Checked against ${fetched!.label}. ${result.notes}`;
+    else if (!officialText && fetched?.legislation?.inForce === false) {
+      notes = "Its text is no longer published, so the quote couldn't be checked against it.";
+    } else if (!officialText && resolved.lawId) {
       notes = `Couldn't load the text of ${resolved.authority?.title ?? "the cited authority"} to check against. Paste the source passage under Add details to check it.`;
     }
+    // A warning about the law itself goes first: it matters whatever the quote's status.
+    if (warnings.length > 0) notes = `Warning: ${fetched!.label} — ${warnings.map((w) => w.message).join(" ")} ${notes}`;
 
     return {
       fields: {
@@ -226,6 +241,7 @@ export default class CitationCheckSvc {
         resolutionConfidence: resolved.confidence,
         pinpoint,
         propositionType: proposition?.type ?? null,
+        sourceWarnings: warnings.map((w) => w.code as CitationSourceWarning),
       },
       authority: resolved.authority,
     };
