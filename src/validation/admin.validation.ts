@@ -16,6 +16,15 @@ export const listAuditEventsSchema = Joi.object({
   actorId: Joi.string().uuid().optional(),
 });
 
+// An admin exporting someone's data can't re-enter that person's password, so they confirm
+// instead that they have checked who is asking. It has to be an explicit true, never defaulted.
+export const exportUserDataSchema = Joi.object({
+  identityVerified: Joi.boolean().strict().valid(true).required().messages({
+    "any.only": "Confirm that you have verified the requester's identity",
+    "any.required": "Confirm that you have verified the requester's identity",
+  }),
+});
+
 export const denyUserSchema =Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
 
 export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid("PH", "UK").required() });

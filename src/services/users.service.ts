@@ -114,6 +114,18 @@ export default class UsersSvc {
     return updated;
   }
 
+  /** Same check requestDeletion makes: a password account must re-enter its password before
+   * something this sensitive, so an open session alone isn't enough. Google SSO accounts have no
+   * password to check. A wrong password is a 400, not a 401, so the client doesn't treat it as an
+   * expired session. */
+  static async confirmPassword(userId: string, password: string | undefined) {
+    const credentials = await AuthRepo.findByIdWithPasswordHash(userId);
+    if (!credentials) throw new HttpError("User not found", 404);
+    if (!credentials.password || isGoogleSsoAccount(credentials)) return;
+    if (!password) throw new HttpError("Password is required to export your data", 400);
+    if (!(await bcrypt.compare(password, credentials.password))) throw new HttpError("Password is incorrect", 400);
+  }
+
   /** Undoes requestDeletion — only valid while the grace period is still running (the row still
    * exists to call this on otherwise). Signing in does the same (restoreOnSignIn); this endpoint
    * remains for a tab whose access token outlived the revoked sessions. */
