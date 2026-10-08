@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { CitationValidityStatus, CitationPropositionType } from "@prisma/client";
+import { CitationValidityStatus, CitationPropositionType, OfficialTextSource } from "@prisma/client";
 
 export default class CitationCheckRepo {
   static async list(caseId: string) {
@@ -13,6 +13,8 @@ export default class CitationCheckRepo {
       citedReference?: string | null;
       sourceUrl?: string | null;
       officialText?: string | null;
+      officialTextSource?: OfficialTextSource | null;
+      officialTextRef?: string | null;
       status: CitationValidityStatus;
       notes: string;
       resolvedLawId?: string | null;
@@ -37,6 +39,8 @@ export default class CitationCheckRepo {
       citedReference: string | null;
       sourceUrl: string | null;
       officialText: string | null;
+      officialTextSource: OfficialTextSource | null;
+      officialTextRef: string | null;
       status: CitationValidityStatus;
       notes: string;
       resolvedLawId: string | null;

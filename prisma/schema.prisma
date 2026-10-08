@@ -1803,6 +1803,13 @@ enum ContradictionNature {
   NOT_A_CONFLICT
 }
 
+enum OfficialTextSource {
+  LAWYER
+  PH_LAW
+  UK_LEGISLATION
+  UK_JUDGMENT
+}
+
 model CitationCheck {
   id             String                 @id @default(uuid())
   caseId         String
@@ -1810,6 +1817,11 @@ model CitationCheck {
   citedReference String?
   sourceUrl      String?
   officialText   String?                @db.Text
+  // Where officialText came from (#364): pasted by the lawyer, or fetched from the authority the
+  // citation resolved to — narrowed to the passage the quote is about. Null on rows from before.
+  officialTextSource OfficialTextSource?
+  // Where in that authority, when it has a finer address: "s. 13" (UK Act), "para_37" (UK judgment).
+  officialTextRef    String?
   status         CitationValidityStatus @default(UNVERIFIED)
   notes          String?                @db.Text
   checkedAt      DateTime               @default(now())

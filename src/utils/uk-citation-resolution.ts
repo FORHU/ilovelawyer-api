@@ -7,6 +7,9 @@ import { legislationTitleLookup, resolveUkCitation, UkResolvedCitation } from ".
 export interface UkCitationResolutionResult {
   lawId: string;
   confidence: number;
+  /** The section cited, for a legislation citation ("13" for "s.13 Equality Act 2010") — the Law
+   * row is the whole Act, so this is the only place it survives. Null otherwise. */
+  section?: string | null;
 }
 
 /** The TNA judgment slug a resolved case citation's URL implies (e.g. "uksc/2022/34"), or null
@@ -76,7 +79,7 @@ export async function resolveUkCitationToLaw(citation: string): Promise<UkCitati
   const jurisSourceId = isLegislation ? normalizeUkLegislationUrl(resolved.resolved_url) : resolved.resolved_url;
 
   const existing = await LawRepo.findByJurisSourceId(jurisSourceId);
-  if (existing) return { lawId: existing.id, confidence: resolved.confidence };
+  if (existing) return { lawId: existing.id, confidence: resolved.confidence, section: resolved.section ?? null };
 
   const tenantId = await LawRepo.resolveUkTenantId();
   const created = await LawRepo.create({
@@ -94,7 +97,7 @@ export async function resolveUkCitationToLaw(citation: string): Promise<UkCitati
     rawJson: resolved as unknown as object,
   });
 
-  return { lawId: created.id, confidence: resolved.confidence };
+  return { lawId: created.id, confidence: resolved.confidence, section: resolved.section ?? null };
 }
 
 // citations_resolve's grammar is fixed-order ("s.N Act YYYY") and rejects the reverse — the
