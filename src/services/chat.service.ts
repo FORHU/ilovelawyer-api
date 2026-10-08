@@ -395,7 +395,7 @@ export default class ChatSvc {
   }
 
   static async deleteMessage(organizationId: string, userId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
+    const consultation = await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);

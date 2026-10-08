@@ -1,4 +1,5 @@
 import { SendMailOptions, createTransport, getTestMessageUrl } from "nodemailer";
+import { LOGO_CID, LOGO_PATH } from "./template";
 import { MAILER_FROM, MAILER_TRANSPORT_HOST, MAILER_TRANSPORT_PORT, MAILER_TRANSPORT_SECURE, MAILER_EMAIL, MAILER_PASSWORD, isDev } from "../config";
 
 export async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }): Promise<string> {
@@ -25,6 +26,9 @@ export async function sendEmail({ to, subject, text, html }: { to: string; subje
 
   if (html) {
     mailOptions.html = html;
+    if (html.includes(`cid:${LOGO_CID}`)) {
+      mailOptions.attachments = [{ filename: "ilovelawyer-logo.png", path: LOGO_PATH, cid: LOGO_CID }];
+    }
   }
 
   try {

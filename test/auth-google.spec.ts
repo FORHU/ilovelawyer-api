@@ -14,6 +14,7 @@ import AuthSvc from "../src/services/auth.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
+import OrganizationEmailInviteRepo from "../src/repositories/organization-email-invite.repository";
 import * as googleTokenModule from "../src/utils/googleToken";
 import * as mailerModule from "../src/utils/mailer";
 import * as templateModule from "../src/utils/template";
@@ -92,6 +93,7 @@ describe("AuthSvc Google sign-in", () => {
     repo: Object.fromEntries(repoKeys.map((k) => [k, (AuthRepo as any)[k]])),
     findIdByCode: (TenantRepo as any).findIdByCode,
     findAnyForUser: (OrganizationMemberRepo as any).findAnyForUser,
+    claimEmailInvite: (OrganizationEmailInviteRepo as any).claim,
     verifyGoogleToken: (googleTokenModule as any).default,
     sendEmail: (mailerModule as any).sendEmail,
     renderTemplate: (templateModule as any).renderTemplate,
@@ -128,6 +130,7 @@ describe("AuthSvc Google sign-in", () => {
     (AuthRepo as any).findById = async (id: string) => ({ id });
     (TenantRepo as any).findIdByCode = async () => null;
     (OrganizationMemberRepo as any).findAnyForUser = async () => null;
+    (OrganizationEmailInviteRepo as any).claim = async () => false;
     (templateModule as any).renderTemplate = async (name: string) => name;
     (mailerModule as any).sendEmail = async ({ html }: { html: string }) => {
       sentEmails.push(html);
@@ -138,6 +141,7 @@ describe("AuthSvc Google sign-in", () => {
     for (const k of repoKeys) (AuthRepo as any)[k] = originals.repo[k];
     (TenantRepo as any).findIdByCode = originals.findIdByCode;
     (OrganizationMemberRepo as any).findAnyForUser = originals.findAnyForUser;
+    (OrganizationEmailInviteRepo as any).claim = originals.claimEmailInvite;
     (googleTokenModule as any).default = originals.verifyGoogleToken;
     (mailerModule as any).sendEmail = originals.sendEmail;
     (templateModule as any).renderTemplate = originals.renderTemplate;

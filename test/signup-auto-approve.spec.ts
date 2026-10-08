@@ -14,6 +14,7 @@ import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
 import TenantSettingRepo from "../src/repositories/tenant-setting.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
+import OrganizationEmailInviteRepo from "../src/repositories/organization-email-invite.repository";
 import BulkApprovalRunner from "../src/queues/bulk-approval.runner";
 import { redis } from "../src/lib/redis";
 import * as mailerModule from "../src/utils/mailer";
@@ -99,12 +100,17 @@ describe("AuthSvc — auto-approve at email verification", () => {
   let current: StubUser;
   let statusChanges: { id: string; status: string }[];
   let sentTemplates: string[];
+  // Addresses an organization invited before they had an account (OrganizationEmailInvite).
+  let invitedEmails: Set<string>;
+  let claims: { userId: string; email: string }[];
 
   beforeEach(() => {
     onTenants = new Set();
     current = pendingUser();
     statusChanges = [];
     sentTemplates = [];
+    invitedEmails = new Set();
+    claims = [];
 
     restore = [
       stash(TenantSettingSvc, ["isAutoApproveOn"]),
@@ -121,10 +127,18 @@ describe("AuthSvc — auto-approve at email verification", () => {
         "findById",
       ]),
       stash(TenantRepo, ["findIdByCode"]),
+      stash(OrganizationEmailInviteRepo, ["findByEmail", "claim"]),
       stash(mailerModule as any, ["sendEmail"]),
       stash(templateModule as any, ["renderTemplate"]),
       stash(googleTokenModule as any, ["default"]),
     ];
+
+    (OrganizationEmailInviteRepo as any).findByEmail = async (email: string) =>
+      invitedEmails.has(email) ? { id: "invite-1", organizationId: "org-1", email, role: "MEMBER" } : null;
+    (OrganizationEmailInviteRepo as any).claim = async (userId: string, email: string) => {
+      claims.push({ userId, email });
+      return invitedEmails.has(email);
+    };
 
     (TenantSettingSvc as any).isAutoApproveOn = async (tenantId: string | null) => !!tenantId && onTenants.has(tenantId);
     (AuthRepo as any).findByEmail = async (email: string) => (email === current.email ? current : null);
@@ -185,6 +199,21 @@ describe("AuthSvc — auto-approve at email verification", () => {
       await AuthSvc.verifyOtp(current.email, "123456");
       expect(statusChanges).to.have.length(0);
     });
+
+    it("claims an invite sent to the address and approves the account, switch off", async () => {
+      invitedEmails.add(current.email);
+      const result = await AuthSvc.verifyOtp(current.email, "123456");
+      expect(claims).to.deep.equal([{ userId: "user-1", email: current.email }]);
+      expect(result.user).to.include({ approvalStatus: "ACTIVE" });
+    });
+
+    it("still claims the invite for an account an admin moved out of PENDING, without approving it", async () => {
+      invitedEmails.add(current.email);
+      current = pendingUser({ approvalStatus: "DENIED" });
+      await AuthSvc.verifyOtp(current.email, "123456");
+      expect(claims).to.have.length(1);
+      expect(statusChanges).to.have.length(0);
+    });
   });
 
   describe("signup", () => {
@@ -197,6 +226,13 @@ describe("AuthSvc — auto-approve at email verification", () => {
     it("sends the pending-approval email when the switch is off", async () => {
       await AuthSvc.signup("jane", "jane@example.com", "Password123!", "Jane", "PH");
       expect(sentTemplates).to.deep.equal(["signup-pending"]);
+    });
+
+    it("skips the pending-approval email for an invited address — verifyOtp approves it", async () => {
+      invitedEmails.add("jane@example.com");
+      const user = await AuthSvc.signup("jane", "jane@example.com", "Password123!", "Jane", "PH");
+      expect(sentTemplates).to.have.length(0);
+      expect(user.approvalStatus).to.equal("PENDING");
     });
 
     it("skips the pending-approval email when the switch is on, and leaves approval to verifyOtp", async () => {
@@ -235,6 +271,14 @@ describe("AuthSvc — auto-approve at email verification", () => {
     it("returns the account ACTIVE with no pending email when the switch is on", async () => {
       onTenants.add(PH);
       const result = await AuthSvc.loginWithGoogle("token", true, "PH", true);
+      expect(result.user).to.include({ approvalStatus: "ACTIVE" });
+      expect(sentTemplates).to.have.length(0);
+    });
+
+    it("returns an invited account ACTIVE with no pending email, switch off", async () => {
+      invitedEmails.add("g@example.com");
+      const result = await AuthSvc.loginWithGoogle("token", true, "PH", true);
+      expect(claims).to.deep.equal([{ userId: "user-1", email: "g@example.com" }]);
       expect(result.user).to.include({ approvalStatus: "ACTIVE" });
       expect(sentTemplates).to.have.length(0);
     });

@@ -2,6 +2,7 @@ import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku 
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationInviteRepo from "../repositories/organization-invite.repository";
+import OrganizationEmailInviteRepo from "../repositories/organization-email-invite.repository";
 import CaseCopyRepo from "../repositories/case-copy.repository";
 import CaseRepo from "../repositories/case.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
@@ -13,7 +14,8 @@ import { hasOrgRole } from "../utils/org-role";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import { slugify } from "../utils/slug";
-import { CLIENT_URL } from "../config";
+import { emailLinkOrigin } from "../utils/tenant-host";
+import { normalizeEmail } from "../utils/auth.utils";
 import { TenantCode } from "../types/tenant-code";
 import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
@@ -130,18 +132,28 @@ export default class OrganizationSvc {
     return updated;
   }
 
-  /** Members, then outstanding invites as PENDING rows (the shape the app's members list renders). */
+  /** Members, then outstanding invites as PENDING rows (the shape the app's members list renders).
+   * An invite to an address with no account yet has no user: userId is null and `user` carries
+   * just the email. */
   static async listMembers(organizationId: string) {
-    const [members, invites] = await Promise.all([
+    const [members, invites, emailInvites] = await Promise.all([
       OrganizationMemberRepo.list(organizationId),
       OrganizationInviteRepo.list(organizationId),
+      OrganizationEmailInviteRepo.list(organizationId),
     ]);
     const pending = invites.map((invite) => ({
       ...invite,
       status: OrganizationMemberStatus.PENDING,
       updatedAt: invite.createdAt,
     }));
-    return [...members, ...pending];
+    const pendingSignup = emailInvites.map(({ email, ...invite }) => ({
+      ...invite,
+      userId: null,
+      status: OrganizationMemberStatus.PENDING,
+      updatedAt: invite.createdAt,
+      user: { id: null, name: null, email, username: null, avatarUrl: null },
+    }));
+    return [...members, ...pending, ...pendingSignup];
   }
 
   /** Resolves the caller's membership/role in an org, or throws 403 if they're not a member.
@@ -160,15 +172,17 @@ export default class OrganizationSvc {
     return membership;
   }
 
-  /** Invites an existing user by email — including one who already belongs to another
-   * organization, who then decides whether to leave it (acceptInvite) or stay (declineInvite).
-   * Only an OWNER can grant the OWNER role. */
+  /** Invites a user by email — including one who already belongs to another organization, who
+   * then decides whether to leave it (acceptInvite) or stay (declineInvite). An address with no
+   * account yet gets an email invite to sign up instead (see inviteByEmail). Only an OWNER can
+   * grant the OWNER role. */
   static async inviteMember(
     organizationId: string,
     actingRole: OrganizationRole,
     actingUserId: string,
     email: string,
     role: OrganizationRole,
+    requestOrigin: string | null = null,
   ) {
     if (role === OrganizationRole.OWNER && !hasOrgRole(actingRole, OrganizationRole.OWNER)) {
       throw new HttpError("Only an owner can grant the owner role", 403);
@@ -184,8 +198,15 @@ export default class OrganizationSvc {
       throw new HttpError("Create an organization before inviting teammates", 400);
     }
 
+    const inviterName = inviter?.name || "A team member";
+    const orgName = organization?.name ?? "";
+    // The inviting org's tenant site, not the bare CLIENT_URL[0]. See emailLinkOrigin.
+    const origin = emailLinkOrigin(organization?.tenant.code, requestOrigin);
+
     const user = await AuthRepo.findByEmail(email);
-    if (!user) throw new HttpError("No user found with this email", 404);
+    if (!user) {
+      return OrganizationSvc.inviteByEmail(organizationId, actingUserId, normalizeEmail(email), role, { inviterName, orgName, origin });
+    }
 
     if (await OrganizationMemberRepo.find(organizationId, user.id)) {
       throw new HttpError("User is already a member of this organization", 409);
@@ -215,13 +236,12 @@ export default class OrganizationSvc {
       payload: { organizationId, inviteeId: user.id, role },
     });
 
-    const inviterName = inviter?.name || "A team member";
-    const orgName = organization?.name ?? "";
     const html = await renderTemplate("org-invite", {
       inviterName,
       orgName,
       role,
-      loginLink: `${CLIENT_URL[0]}/login`,
+      // Straight to the accept/decline UI (a signed-out invitee is bounced through /login?next=).
+      loginLink: `${origin}/homepage/organization`,
     });
     // user.email, not the typed `email`: AuthRepo.findByEmail matched it case-insensitively,
     // so the stored address is the canonical one to send to.
@@ -240,6 +260,47 @@ export default class OrganizationSvc {
         : `${inviterName} invited you to join ${orgName} as ${role}.`,
       link: "/homepage/organization",
     }).catch((err) => logger.error("inviteMember: failed to create notification", { err, organizationId, userId: user.id }));
+
+    return invite;
+  }
+
+  /** inviteMember for an address with no account: the invite waits on the email, and the email
+   * asks them to sign up with it. Verifying that signup turns it into an ordinary invite and
+   * approves the account (AuthSvc.autoApproveIfEnabled), so they land on the Organization page
+   * ready to accept. No notification — there's no user to notify yet. */
+  private static async inviteByEmail(
+    organizationId: string,
+    actingUserId: string,
+    email: string,
+    role: OrganizationRole,
+    { inviterName, orgName, origin }: { inviterName: string; orgName: string; origin: string },
+  ) {
+    const outstanding = await OrganizationEmailInviteRepo.findByEmail(email);
+    if (outstanding) {
+      const message =
+        outstanding.organizationId === organizationId
+          ? "This email already has a pending invite to this organization"
+          : "This email already has a pending invite from another organization. They must sign up and accept or decline it first.";
+      throw new HttpError(message, 409);
+    }
+
+    const invite = await OrganizationEmailInviteRepo.create(organizationId, email, role);
+    await AuditSvc.record({
+      action: AuditAction.OrgInviteSent,
+      actorId: actingUserId,
+      payload: { organizationId, inviteeEmail: email, role },
+    });
+
+    // The sign-up tab with the address filled in; after verifying they continue to the
+    // Organization page to accept.
+    const params = new URLSearchParams({ tab: "signup", email, next: "/homepage/organization" });
+    const html = await renderTemplate("org-invite-signup", {
+      inviterName,
+      orgName,
+      role,
+      signupLink: `${origin}/login?${params}`,
+    });
+    await sendEmail({ to: email, subject: `You've been invited to join ${orgName}`, html });
 
     return invite;
   }
