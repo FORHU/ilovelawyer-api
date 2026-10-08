@@ -824,6 +824,10 @@ model Case {
   // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
   // param and CaseRepo.setStatus.
   status                CaseStatus @default(ACTIVE)
+  // A confidential matter (#346): reachable only by the organization's OWNER and people holding a
+  // CaseAccess grant — plain membership, org ADMIN included, no longer opens it, and it's left out
+  // of every listing for everyone else (see CaseAccess). Off by default.
+  confidential          Boolean    @default(false)
   // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
   // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
   // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
