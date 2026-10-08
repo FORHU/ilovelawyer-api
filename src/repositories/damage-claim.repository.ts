@@ -72,4 +72,15 @@ export default class DamageClaimRepo {
     const result = await prisma.damageClaim.deleteMany({ where: { id, caseId } });
     return result.count > 0;
   }
+
+  /** Records an AI suggestion the lawyer deleted or renamed (its damageHeadKey), so a later read
+   * of the documents doesn't propose it again. */
+  static async dismiss(caseId: string, key: string) {
+    await prisma.damageClaimDismissal.upsert({ where: { caseId_key: { caseId, key } }, create: { caseId, key }, update: {} });
+  }
+
+  static async listDismissedKeys(caseId: string): Promise<Set<string>> {
+    const rows = await prisma.damageClaimDismissal.findMany({ where: { caseId }, select: { key: true } });
+    return new Set(rows.map((r) => r.key));
+  }
 }

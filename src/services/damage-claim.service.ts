@@ -8,6 +8,7 @@ import CaseGraphSvc from "./case-graph.service";
 import ProceduralDeadlineRepo from "../repositories/procedural-deadline.repository";
 import { damageCloseReason } from "../utils/procedure-link";
 import { computeDamagesSummary } from "../utils/damages-compute";
+import { damageHeadKey } from "../utils/damages-extract-parse";
 import type { TenantCode } from "../types/tenant-code";
 
 /** The case's Damages & Remedies list as chat-wonder's `case_damages` field (see the_server.py's
@@ -56,6 +57,10 @@ export default class DamageClaimSvc {
       ...(amountChanged ? { amountBasis: null, amountNote: null } : {}),
     });
     if (!row) throw new HttpError("Damage claim not found", 404);
+    // A renamed AI entry would otherwise come back under its old name the next time the documents
+    // are read.
+    const oldKey = damageHeadKey(existing.kind, existing.title);
+    if (existing.source === "AI" && damageHeadKey(row.kind, row.title) !== oldKey) await DamageClaimRepo.dismiss(caseId, oldKey);
     await CaseGraphSvc.markStale(caseId, "DAMAGE_CLAIM", id, "Damage claim updated");
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "damage.update", payload: { id } });
     if (row.done && !existing.done) {
@@ -89,12 +94,15 @@ export default class DamageClaimSvc {
     return row;
   }
 
+  /** Deleting an AI entry also dismisses it: re-reading the documents never proposes it again. */
   static async delete(caseId: string, id: string, userId: string) {
     await CaseAccess.assertCanEdit(caseId, userId);
-    const before = await DamageClaimRepo.findById(id, caseId);
+    const existing = await DamageClaimRepo.findById(id, caseId);
+    if (!existing) throw new HttpError("Damage claim not found", 404);
+    if (existing.source === "AI") await DamageClaimRepo.dismiss(caseId, damageHeadKey(existing.kind, existing.title));
     const deleted = await DamageClaimRepo.delete(id, caseId);
     if (!deleted) throw new HttpError("Damage claim not found", 404);
-    if (before) await ManualEditLog.record(caseId, userId, { pane: "damages", kind: "damage", itemId: id, action: "removed", label: before.title });
+    await ManualEditLog.record(caseId, userId, { pane: "damages", kind: "damage", itemId: id, action: "removed", label: existing.title });
   }
 
   /** The case's accepted entries for a case-linked chat turn, or undefined when there are none. No
