@@ -48,4 +48,21 @@ describe("AuditEventRepo.list", () => {
     const byEmail = await AuditEventRepo.list({ page: 1, limit: 10, sortDir: "desc", q: email.toUpperCase() });
     expect(byEmail.total).to.equal(3);
   });
+
+  it("turns ids in the payload into names, and leaves out an id that no longer exists", async () => {
+    const goneOrganizationId = crypto.randomUUID();
+    await prisma.auditEvent.create({
+      data: {
+        actorId: userId,
+        action: "org.member_removed",
+        payload: { tag, targetUserId: userId, organizationId: goneOrganizationId },
+        createdAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    const { data, resolved } = await AuditEventRepo.list({ page: 1, limit: 10, sortDir: "desc", actorId: userId });
+    expect(data[0]!.action).to.equal("org.member_removed");
+    expect(resolved.users[userId]).to.deep.include({ email });
+    expect(resolved.organizations).to.not.have.property(goneOrganizationId);
+  });
 });

@@ -46,10 +46,11 @@ export default class AdminCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     const { page, limit, sortDir, q, actorId } = value;
-    const { data, total } = await AdminSvc.listAuditEvents({ page, limit, sortDir, q, actorId });
+    const { data, total, resolved } = await AdminSvc.listAuditEvents({ page, limit, sortDir, q, actorId });
 
     return res.status(200).json({
       data,
+      resolved,
       total,
       page,
       limit,
