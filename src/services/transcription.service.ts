@@ -187,7 +187,7 @@ export default class TranscriptionSvc {
   }
 
   static async delete(id: string, organizationId: string, userId: string) {
-    await TranscriptionSvc.loadVisible(id, organizationId, userId);
+    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
     await TranscriptionRepo.delete(id, organizationId);
     await SecurityAuditSvc.record({
       action: "transcription.deleted",

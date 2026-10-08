@@ -20,8 +20,8 @@ function validate<T>(schema: Joi.ObjectSchema, query: unknown): T {
 type QueryFilter = Omit<SecurityAuditFilter, "organizationId"> & { organizationId?: string; page?: number; limit?: number };
 
 function toFilter(query: QueryFilter, organizationId: SecurityAuditFilter["organizationId"]): SecurityAuditFilter {
-  const { actorId, caseId, action, outcome, from, to } = query;
-  return { organizationId, actorId, caseId, action, outcome, from, to };
+  const { actorId, caseId, action, outcome, from, to, sort, order } = query;
+  return { organizationId, actorId, caseId, action, outcome, from, to, sort, order };
 }
 
 function sendPdf(res: Response, pdf: Buffer, name: string) {

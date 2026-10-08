@@ -11,7 +11,13 @@ export interface SecurityAuditFilter {
   outcome?: SecurityAuditOutcome;
   from?: Date;
   to?: Date;
+  /** Column to order by (default time, newest first) — sorted here so the order holds across
+   * pages and in the PDF export. */
+  sort?: SecurityAuditSortField;
+  order?: "asc" | "desc";
 }
+
+export type SecurityAuditSortField = "time" | "action" | "actor";
 
 function toWhere(filter: SecurityAuditFilter): Prisma.SecurityAuditEventWhereInput {
   const where: Prisma.SecurityAuditEventWhereInput = {};
@@ -56,8 +62,21 @@ export interface AuditNames {
   integrations: Map<string, string>;
 }
 
-/** Newest first; the id breaks ties between rows written in the same millisecond. */
-const ORDER: Prisma.SecurityAuditEventOrderByWithRelationInput[] = [{ createdAt: "desc" }, { id: "desc" }];
+/** Newest first by default; within any other column, newest first too, and the id breaks ties
+ * between rows written in the same millisecond. The actor sorts by the email snapshotted on the
+ * row (the row holds no name), with "nobody signed in" last. */
+function toOrderBy(filter: SecurityAuditFilter): Prisma.SecurityAuditEventOrderByWithRelationInput[] {
+  const order = filter.order ?? (filter.sort && filter.sort !== "time" ? "asc" : "desc");
+  const newestFirst: Prisma.SecurityAuditEventOrderByWithRelationInput[] = [{ createdAt: "desc" }, { id: "desc" }];
+  switch (filter.sort) {
+    case "action":
+      return [{ action: order }, ...newestFirst];
+    case "actor":
+      return [{ actorEmail: { sort: order, nulls: "last" } }, ...newestFirst];
+    default:
+      return [{ createdAt: order }, { id: order }];
+  }
+}
 
 export default class SecurityAuditRepo {
   static async create(data: Prisma.SecurityAuditEventUncheckedCreateInput) {
@@ -85,9 +104,9 @@ export default class SecurityAuditRepo {
     return org?.tenant.code ?? null;
   }
 
-  /** Up to `take` rows, newest first, after skipping the first `skip`. */
+  /** Up to `take` rows in the filter's order (newest first by default), after skipping the first `skip`. */
   static async list(filter: SecurityAuditFilter, take: number, skip = 0) {
-    return prisma.securityAuditEvent.findMany({ where: toWhere(filter), orderBy: ORDER, take, skip });
+    return prisma.securityAuditEvent.findMany({ where: toWhere(filter), orderBy: toOrderBy(filter), take, skip });
   }
 
   static async count(filter: SecurityAuditFilter) {

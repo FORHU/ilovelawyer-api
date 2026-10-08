@@ -182,7 +182,8 @@ export default class SecurityAuditSvc {
 function describeFilter(filter: SecurityAuditFilter): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(filter)) {
-    if (value === undefined || value === null || key === "organizationId") continue;
+    // sort/order arrange the rows rather than narrow them, so they aren't listed as filters.
+    if (value === undefined || value === null || ["organizationId", "sort", "order"].includes(key)) continue;
     out[key] = value instanceof Date ? value.toISOString() : String(value);
   }
   return out;
