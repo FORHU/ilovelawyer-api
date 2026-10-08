@@ -6,6 +6,7 @@ import logger from "../utils/logger";
 export const AuditAction = {
   LoginSucceeded: "auth.login",
   LoginFailed: "auth.login_failed",
+  LoggedOut: "auth.logout",
   PasswordChanged: "auth.password_changed",
   AccountDeletionRequested: "account.deletion_requested",
   AccountDeletionCancelled: "account.deletion_cancelled",
@@ -14,6 +15,13 @@ export const AuditAction = {
   FileDownloaded: "file.download",
   DocumentDeleted: "document.delete",
   CaseBriefExported: "case.brief_export",
+  GeneratedDocumentExported: "document.generated_export",
+  OrgInviteSent: "org.invite",
+  OrgInviteAccepted: "org.invite_accepted",
+  OrgInviteDeclined: "org.invite_declined",
+  OrgMemberRoleChanged: "org.member_role_changed",
+  OrgMemberRemoved: "org.member_removed",
+  OrgMemberLeft: "org.member_left",
 } as const;
 
 export type AuditActionName = (typeof AuditAction)[keyof typeof AuditAction];

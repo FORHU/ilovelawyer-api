@@ -253,6 +253,8 @@ export default class AuthSvc {
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
     await AuthRepo.updateLastLogin(user.id);
+    await AuditSvc.record({ action: AuditAction.PasswordChanged, actorId: user.id, payload: { via: "required_update" } });
+    await AuditSvc.record({ action: AuditAction.LoginSucceeded, actorId: user.id, payload: { method: "password_required_update" } });
 
     return {
       user: await AuthRepo.findById(user.id),
@@ -327,6 +329,7 @@ export default class AuthSvc {
     const { accessToken, refreshToken } = loginToken(user.id, true);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
+    await AuditSvc.record({ action: AuditAction.LoginSucceeded, actorId: user.id, payload: { method: "email_otp" } });
 
     return {
       user: await AuthRepo.findById(user.id),
@@ -377,7 +380,11 @@ export default class AuthSvc {
   }
 
   static async logout(refreshToken: string) {
+    // The token is only decoded, not verified: an expired or forged one still ends the session
+    // below, and the event just attributes it when the claim is present.
+    const userId = (jwt.decode(refreshToken) as { userId?: string } | null)?.userId;
     await AuthRepo.deleteByRefreshToken(refreshToken);
+    if (userId) await AuditSvc.record({ action: AuditAction.LoggedOut, actorId: userId });
   }
 
   /** The 409 for a Google sign-in whose email already belongs to an account that isn't bound
@@ -490,6 +497,7 @@ export default class AuthSvc {
     const { accessToken, refreshToken } = loginToken(user.id, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
+    await AuditSvc.record({ action: AuditAction.LoginSucceeded, actorId: user.id, payload: { method: "google" } });
 
     return {
       user: await AuthRepo.findById(user.id),
@@ -589,6 +597,7 @@ export default class AuthSvc {
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(user.id, refreshToken, expiresAt);
     await AuthRepo.updateLastLogin(user.id);
+    await AuditSvc.record({ action: AuditAction.LoginSucceeded, actorId: user.id, payload: { method: "google_link" } });
 
     return {
       user: await AuthRepo.findById(user.id),
@@ -661,6 +670,8 @@ export default class AuthSvc {
     const { accessToken, refreshToken } = loginToken(userId, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(userId, refreshToken, expiresAt);
+    await AuditSvc.record({ action: AuditAction.PasswordChanged, actorId: userId, payload: { via: "reset_link" } });
+    await AuditSvc.record({ action: AuditAction.LoginSucceeded, actorId: userId, payload: { method: "password_reset" } });
 
     return { accessToken, refreshToken, deletionCancelled };
   }
@@ -683,6 +694,7 @@ export default class AuthSvc {
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(userId, refreshToken, expiresAt);
     await AuthRepo.updateLastLogin(userId);
+    await AuditSvc.record({ action: AuditAction.LoginSucceeded, actorId: userId, payload: { method: "login_link" } });
 
     return {
       user: await AuthRepo.findById(userId),
