@@ -72,6 +72,7 @@ describe("OrganizationSvc — case sharing", () => {
   const originals = {
     assertCanManageAccess: CaseAccess.assertCanManageAccess,
     canManageAccess: CaseAccess.canManageAccess,
+    canEdit: CaseAccess.canEdit,
     loadAccessibleCase: CaseAccess.loadAccessibleCase,
     findMember: OrganizationMemberRepo.find,
     listMembers: OrganizationMemberRepo.list,
@@ -104,6 +105,7 @@ describe("OrganizationSvc — case sharing", () => {
       return { id: caseId, caseName: "Santos v. Reyes", organizationId: "org-1" };
     };
     (CaseAccess as any).canManageAccess = async (_caseId: string, userId: string) => managers.has(userId);
+    (CaseAccess as any).canEdit = async (_caseId: string, userId: string) => managers.has(userId) || userId === "editor-1";
     (CaseAccess as any).loadAccessibleCase = async (caseId: string) => ({ id: caseId, organizationId: "org-1" });
     (OrganizationMemberRepo as any).find = async (organizationId: string, userId: string) =>
       organizationId === "org-1" && members[userId] ? { userId, organizationId, ...members[userId] } : null;
@@ -133,6 +135,7 @@ describe("OrganizationSvc — case sharing", () => {
   afterEach(() => {
     (CaseAccess as any).assertCanManageAccess = originals.assertCanManageAccess;
     (CaseAccess as any).canManageAccess = originals.canManageAccess;
+    (CaseAccess as any).canEdit = originals.canEdit;
     (CaseAccess as any).loadAccessibleCase = originals.loadAccessibleCase;
     (OrganizationMemberRepo as any).find = originals.findMember;
     (OrganizationMemberRepo as any).list = originals.listMembers;
@@ -218,6 +221,12 @@ describe("OrganizationSvc — case sharing", () => {
     it("tells a viewer who can't manage that they can't", async () => {
       const result = await OrganizationSvc.listAccess("case-1", "member-1");
       expect(result.canManage).to.equal(false);
+      expect(result.canEdit).to.equal(false);
+    });
+
+    it("tells a member holding an EDIT grant they can edit but not manage", async () => {
+      const result = await OrganizationSvc.listAccess("case-1", "editor-1");
+      expect(result).to.include({ canEdit: true, canManage: false });
     });
 
     it("needs view access to the case", async () => {

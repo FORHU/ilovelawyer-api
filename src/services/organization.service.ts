@@ -406,12 +406,14 @@ export default class OrganizationSvc {
 
   /** Who can reach the case and how, for the sharing panel: every accepted member of its
    * organization (all of whom can read it today) with their org role and grant, plus any grant
-   * held by someone outside it. `canManage` says whether the caller may change grants. */
+   * held by someone outside it. `canEdit`/`canManage` say what the caller may do — the app uses
+   * them rather than guessing from the org role, which misses per-case grants. */
   static async listAccess(caseId: string, actorId: string) {
     const caseRecord = await CaseAccess.loadAccessibleCase(caseId, actorId);
-    const [members, grants, canManage] = await Promise.all([
+    const [members, grants, canEdit, canManage] = await Promise.all([
       caseRecord.organizationId ? OrganizationMemberRepo.list(caseRecord.organizationId) : [],
       OrganizationRepo.listCaseAccess(caseId),
+      CaseAccess.canEdit(caseId, actorId),
       CaseAccess.canManageAccess(caseId, actorId),
     ]);
     const grantByUser = new Map(grants.map((g) => [g.userId, g.permission]));
@@ -440,7 +442,7 @@ export default class OrganizationSvc {
         grant: g.permission,
       });
     }
-    return { canManage, people };
+    return { canEdit, canManage, people };
   }
 
   static async teamAudit(caseId: string, userId: string) {
