@@ -20,12 +20,18 @@ export default class ChatRepo {
    * Case Workspace's Consultation switcher. */
   /** ACTIVE lists by latest activity. ARCHIVED is the archive as shown — those scheduled for
    * deletion (FOR_DELETION) included, since they can still be restored — by when each was
-   * archived, newest first. */
-  static async listConsultations(organizationId: string, caseId?: string, status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE") {
+   * archived, newest first. With userId, only that user's own. */
+  static async listConsultations(
+    organizationId: string,
+    caseId?: string,
+    status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE",
+    userId?: string,
+  ) {
     const rows = await prisma.consultation.findMany({
       where: {
         organizationId,
         caseId: caseId ?? null,
+        ...(userId ? { userId } : {}),
         status: status === "ARCHIVED" ? { in: ["ARCHIVED", "FOR_DELETION"] } : status,
       },
       orderBy: { createdAt: "desc" },

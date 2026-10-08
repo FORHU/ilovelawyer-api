@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import TranscriptionSvc from "../services/transcription.service";
+import ChatSvc from "../services/chat.service";
 import HttpError from "../utils/http-error";
 import { createTranscriptionSchema, updateTranscriptionSchema } from "../validation/transcription.validation";
 
@@ -24,6 +25,9 @@ export default class TranscriptionCtrl {
   static async create(req: Request, res: Response) {
     const { error, value } = createTranscriptionSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+    if (value.consultationId) {
+      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+    }
     const item = await TranscriptionSvc.create(req.organization!.id, req.user.userId, value);
     return res.status(201).json(item);
   }
@@ -41,6 +45,9 @@ export default class TranscriptionCtrl {
   static async update(req: Request, res: Response) {
     const { error, value } = updateTranscriptionSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
+    if (value.consultationId) {
+      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+    }
     const item = await TranscriptionSvc.update(req.params.id, req.organization!.id, req.user.userId, value);
     return res.status(200).json(item);
   }

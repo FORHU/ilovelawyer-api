@@ -70,7 +70,7 @@ export default class ChatCtrl {
 
   static async getRelatedCases(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const relatedCases = await ChatSvc.getRelatedCases(req.organization!.id, req.organization!.tenantCode, consultationId);
+    const relatedCases = await ChatSvc.getRelatedCases(req.organization!.id, req.user.userId, req.organization!.tenantCode, consultationId);
     return res.status(200).json({ relatedCases });
   }
 
@@ -79,8 +79,8 @@ export default class ChatCtrl {
     const { error, value } = relevantChunksSchema.validate(req.body, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    // Ownership check — throws 404 if missing / not owned.
-    await ChatSvc.assertConsultationOwned(req.organization!.id, req.params.consultationId);
+    // Access check — throws 404 if missing or this user can't use it.
+    await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, req.params.consultationId);
 
     const result = await DocumentChunkSvc.relevantChunksForConsultation(
       req.params.consultationId,
@@ -91,13 +91,14 @@ export default class ChatCtrl {
   }
 
   static async deleteMessage(req: Request, res: Response) {
-    await ChatSvc.deleteMessage(req.organization!.id, req.params.consultationId, req.params.messageId);
+    await ChatSvc.deleteMessage(req.organization!.id, req.user.userId, req.params.consultationId, req.params.messageId);
     return res.status(204).send();
   }
 
   static async generateAudioOverviewAudio(req: Request, res: Response) {
     const result = await ChatSvc.startAudioOverviewAudio(
       req.organization!.id,
+      req.user.userId,
       req.params.consultationId,
       req.params.messageId,
     );
@@ -107,6 +108,7 @@ export default class ChatCtrl {
   static async pollAudioOverviewAudio(req: Request, res: Response) {
     const result = await ChatSvc.pollAudioOverviewAudio(
       req.organization!.id,
+      req.user.userId,
       req.params.consultationId,
       req.params.messageId,
     );
