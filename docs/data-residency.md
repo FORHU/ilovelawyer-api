@@ -42,7 +42,7 @@ code, not customer data.
 | Database | `UK_DATABASE_URL` secret | eu-west-2 (London) | per the team; not verifiable from the repo |
 | Redis | `UK_REDIS_HOST` variable | eu-west-2 (London) | per the team; not verifiable from the repo |
 | Chat Wonder service | `UK_CHAT_WONDER_API_URL` variable | eu-west-2 (London) | per the team; runs the LLM calls |
-| LLM provider (OpenAI) | OpenAI API | **TO CONFIRM** | retention/training terms tracked in FORHU/chat-wonder-v2-api#116 |
+| LLM provider (OpenAI) | OpenAI API | Global (no regional residency) | per the account owner: global residency, standard retention. Content sent to the model is therefore processed outside the UK. Training terms and `store` handling tracked in FORHU/chat-wonder-v2-api#116 |
 | Jev pilots | TypeSafe (`@typesafe-ai/sdk`) | **TO CONFIRM** | only when a `USE_JEV_*` flag is on |
 | Email | SMTP via nodemailer (`src/utils/mailer.ts`) | **TO CONFIRM** | |
 | Google sign-in / Calendar | Google | **TO CONFIRM** | |
