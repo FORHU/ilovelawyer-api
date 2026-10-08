@@ -26,6 +26,20 @@ function viaMembership(userId: string, roles?: OrganizationRole[]): Prisma.CaseW
 }
 
 export default class CaseAccess {
+  /** The cases `userId` owns, which is narrower than the ones they can open: their own portfolio,
+   * a case with no organization they created, and every case (confidential or not) of an
+   * organization they are the OWNER of. A plain member, an org ADMIN, a creator who has left, or
+   * someone holding only a per-case grant can open a case but does not own it. This is what the
+   * personal data export may hand over: the rest belongs to the organization or to someone else. */
+  static ownedWhere(userId: string): Prisma.CaseWhereInput {
+    return { OR: [...ownedByUser(userId), { organization: { members: { some: { userId, status: "ACCEPTED", role: "OWNER" } } } }] };
+  }
+
+  /** The organizations `userId` owns: their personal workspace, or any they are the OWNER of. */
+  static ownedOrganizationWhere(userId: string): Prisma.OrganizationWhereInput {
+    return { OR: [{ isPersonal: true, createdById: userId }, { members: { some: { userId, status: "ACCEPTED", role: "OWNER" } } }] };
+  }
+
   /** Every case `userId` can open — as a filter, for listings (the case list, documents,
    * transcriptions) so a confidential case is left out for anyone it's walled off from (D4). */
   static visibleWhere(userId: string): Prisma.CaseWhereInput {

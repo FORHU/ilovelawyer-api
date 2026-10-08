@@ -2,6 +2,7 @@ import type { Readable } from "stream";
 import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { getObjectStream } from "../utils/s3";
+import CaseAccess from "../utils/case-access";
 import { ZipWriter, type ZipSink } from "../utils/zip-stream";
 import { renderDataExportReport, toWinAnsi, type ExportReportListing } from "../utils/data-export-report";
 
@@ -16,6 +17,14 @@ const ONLY_DIRECT: ReadonlySet<string> = new Set(["AuditEvent", "CaseAccess"]);
 
 /** Any column whose name looks like a credential is dropped from the export. */
 const SECRET_KEY = /pass(word)?|secret|token|api[-_]?key|authorization|cookie/i;
+
+/** Tables that hold client-matter content, which a user may take away only from an organization
+ * they own (their personal workspace counts). */
+const CLIENT_MATTER_MODELS: ReadonlySet<string> = new Set(["Document", "Transcription", "Consultation"]);
+
+/** Said in data.json and in the PDF, so a user who is missing something knows why. */
+export const EXPORT_SCOPE_NOTICE =
+  "Cases, documents, recordings and chats that belong to an organization you do not own, and cases you do not own, are not included here, even if you created or worked on them. They belong to the organization, whose owner can request them.";
 
 const BATCH_SIZE = 500;
 
@@ -55,39 +64,91 @@ function relationsTo(model: DmmfModel, target: string): DmmfField[] {
  * own) is included without anyone remembering to add it. */
 export function planExport(userId: string): ExportSection[] {
   const sections: ExportSection[] = [];
+  const modelsByName = new Map(Prisma.dmmf.datamodel.models.map((m) => [m.name, m]));
+
+  /** The ownership rules a row must pass, on top of belonging to the user. A user's export is not
+   * a way around who can open what: a case, and everything on it, is handed over only if the user
+   * owns it (CaseAccess.ownedWhere), and client-matter records (documents, recordings, chats) only
+   * if they own the organization they sit in. A row with no case, or no consultation, is
+   * unaffected by that rule. Called again for a consultation, so a chat message inherits the
+   * rules of the consultation it belongs to. */
+  function ownershipGates(model: DmmfModel, depth = 0): Array<Record<string, unknown>> {
+    const gates: Array<Record<string, unknown>> = [];
+
+    if (model.name !== "Case") {
+      for (const rel of relationsTo(model, "Case")) {
+        const owned = { [rel.name]: CaseAccess.ownedWhere(userId) };
+        gates.push(rel.isRequired ? owned : { OR: [{ [rel.name]: null }, owned] });
+      }
+    }
+
+    if (CLIENT_MATTER_MODELS.has(model.name)) {
+      for (const rel of relationsTo(model, "Organization")) {
+        const owned = { [rel.name]: CaseAccess.ownedOrganizationWhere(userId) };
+        gates.push(rel.isRequired ? owned : { OR: [{ [rel.name]: null }, owned] });
+      }
+    }
+
+    // One level is enough: a consultation's own gates (its case and organization) are the last ones.
+    if (model.name !== "Consultation" && depth === 0) {
+      const consultation = modelsByName.get("Consultation");
+      for (const rel of relationsTo(model, "Consultation")) {
+        const inner = consultation ? ownershipGates(consultation, depth + 1) : [];
+        const owned = { [rel.name]: { AND: inner } };
+        gates.push(rel.isRequired ? owned : { OR: [{ [rel.name]: null }, owned] });
+      }
+    }
+
+    return gates;
+  }
 
   for (const model of Prisma.dmmf.datamodel.models) {
     if (model.name === "User" || EXPORT_EXCLUDED_MODELS.has(model.name)) continue;
 
-    const conditions: Array<Record<string, unknown>> = [];
     const via: ExportSection["via"] = [];
-
+    const direct: Array<Record<string, unknown>> = [];
     for (const rel of relationsTo(model, "User")) {
-      for (const fk of rel.relationFromFields ?? []) conditions.push({ [fk]: userId });
+      for (const fk of rel.relationFromFields ?? []) direct.push({ [fk]: userId });
       if (!via.includes("user")) via.push("user");
     }
 
-    if (!ONLY_DIRECT.has(model.name)) {
-      if (model.name !== "Case") {
-        for (const rel of relationsTo(model, "Case")) {
-          conditions.push({ [rel.name]: { userId } });
-          if (!via.includes("case")) via.push("case");
-        }
-      }
-      if (model.name !== "Consultation") {
-        for (const rel of relationsTo(model, "Consultation")) {
-          conditions.push({ [rel.name]: { userId } });
-          if (!via.includes("consultation")) via.push("consultation");
-        }
-      }
-    }
+    const ownedByCase = !ONLY_DIRECT.has(model.name) && model.name !== "Case" && relationsTo(model, "Case").length > 0;
+    const ownedByConsultation =
+      !ONLY_DIRECT.has(model.name) && model.name !== "Consultation" && relationsTo(model, "Consultation").length > 0;
+    if (ownedByCase) via.push("case");
+    if (ownedByConsultation) via.push("consultation");
 
-    if (conditions.length === 0) continue;
+    let where: Record<string, unknown>;
+    if (model.name === "Case") {
+      // A case is not exported for having created it: only for owning it.
+      where = CaseAccess.ownedWhere(userId) as Record<string, unknown>;
+      via.push("case");
+    } else {
+      const gates = ONLY_DIRECT.has(model.name) ? [] : ownershipGates(model);
+      // Rows that sit on something the user owns (a case or a consultation) belong to them even
+      // when someone else wrote them; those that merely reference the user are theirs only if the
+      // gates above let them through.
+      const owners: Array<Record<string, unknown>> = [...direct];
+      if (ownedByCase) {
+        for (const rel of relationsTo(model, "Case")) owners.push({ [rel.name]: CaseAccess.ownedWhere(userId) });
+      }
+      if (ownedByConsultation) {
+        const consultation = modelsByName.get("Consultation");
+        for (const rel of relationsTo(model, "Consultation")) {
+          owners.push({ [rel.name]: { AND: [{ userId }, ...(consultation ? ownershipGates(consultation, 1) : [])] } });
+        }
+      }
+      if (owners.length === 0) continue;
+      const base = owners.length === 1 ? owners[0]! : { OR: owners };
+      // A table that sits only on a case already passes the case rule by being found through it.
+      const extra = owners.length === 1 ? gates.filter((g) => JSON.stringify(g) !== JSON.stringify(base)) : gates;
+      where = extra.length === 0 ? base : { AND: [base, ...extra] };
+    }
 
     sections.push({
       model: model.name,
       delegate: lowerFirst(model.name),
-      where: conditions.length === 1 ? conditions[0]! : { OR: conditions },
+      where,
       orderBy: primaryKeyFields(model).map((field) => ({ [field]: "asc" as const })),
       via,
     });
@@ -209,7 +270,9 @@ export default class DataExportSvc {
     if (!user) return {};
 
     const counts: Record<string, number> = {};
-    await write(`{"exportedAt":${JSON.stringify(new Date().toISOString())},"user":${JSON.stringify(redact(user), replacer)},"data":{`);
+    await write(
+      `{"exportedAt":${JSON.stringify(new Date().toISOString())},"user":${JSON.stringify(redact(user), replacer)},"notice":${JSON.stringify(EXPORT_SCOPE_NOTICE)},"data":{`,
+    );
 
     const sections = planExport(userId);
     for (const [index, section] of sections.entries()) {
@@ -235,9 +298,14 @@ export default class DataExportSvc {
     return counts;
   }
 
-  /** The files this user is the owner of: their uploaded documents, brief exports, recordings and
-   * avatar. Deleted files and files with no stored object are skipped. */
+  /** The files that go in the zip: the user's avatar, and the files of documents, brief exports
+   * and recordings that pass the same ownership rules as their rows in data.json. A file is
+   * therefore never handed over when the document it belongs to was left out. Deleted files and
+   * files with no stored object are skipped. */
   private static async *userFiles(userId: string) {
+    const sections = new Map(planExport(userId).map((s) => [s.model, s.where]));
+    const attached = (relation: string, model: string) => (sections.has(model) ? [{ [relation]: { some: sections.get(model) } }] : []);
+
     let cursor: string | undefined;
     for (;;) {
       const files = await prisma.file.findMany({
@@ -246,9 +314,9 @@ export default class DataExportSvc {
           s3Key: { not: null },
           OR: [
             { users: { some: { id: userId } } },
-            { caseDocuments: { some: { userId } } },
-            { caseBriefExports: { some: { userId } } },
-            { transcriptions: { some: { userId } } },
+            ...attached("caseDocuments", "Document"),
+            ...attached("caseBriefExports", "CaseBriefExport"),
+            ...attached("transcriptions", "Transcription"),
           ],
         },
         orderBy: { id: "asc" },
@@ -309,6 +377,7 @@ export default class DataExportSvc {
       counts: nonEmpty,
       listings: collector.result(),
       files: { included, skipped },
+      notice: EXPORT_SCOPE_NOTICE,
     });
     await zip.addBuffer("README.pdf", report);
     await zip.finish();

@@ -16,6 +16,8 @@ export interface ExportReportInput {
     included: Array<{ path: string }>;
     skipped: Array<{ name: string; reason: string }>;
   };
+  /** What the export deliberately leaves out, and why. */
+  notice: string;
 }
 
 const MARGIN = 54;
@@ -97,6 +99,9 @@ export function renderDataExportReport(input: ExportReportInput): Promise<Buffer
         muted(`Not included: ${file.name} (${file.reason})`);
       }
     }
+
+    heading("What is not included");
+    line(input.notice);
 
     const pages = doc.bufferedPageRange();
     for (let i = 0; i < pages.count; i++) {

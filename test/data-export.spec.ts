@@ -9,6 +9,8 @@ import { Prisma } from "@prisma/client";
 import prisma from "../src/lib/prisma";
 import DataExportSvc, { EXPORT_EXCLUDED_MODELS, planExport, type ExportFileSource } from "../src/services/data-export.service";
 import OrganizationSvc from "../src/services/organization.service";
+import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
+import CaseAccess from "../src/utils/case-access";
 
 const models = Prisma.dmmf.datamodel.models;
 
@@ -35,7 +37,20 @@ describe("planExport (schema coverage)", () => {
 
   it("limits case tables to cases the user owns", () => {
     const claims = plan.find((s) => s.model === "CaseClaim");
-    expect(claims?.where).to.deep.equal({ case: { userId: "user-1" } });
+    expect(claims?.where).to.deep.equal({ case: CaseAccess.ownedWhere("user-1") });
+    expect(plan.find((s) => s.model === "Case")?.where).to.deep.equal(CaseAccess.ownedWhere("user-1"));
+  });
+
+  it("does not take a user's documents, recordings or chats out of an organization they don't own", () => {
+    for (const model of ["Document", "Transcription", "Consultation"]) {
+      const where = JSON.stringify(plan.find((s) => s.model === model)?.where);
+      expect(where, `${model} must be limited to owned organizations`).to.include(JSON.stringify(CaseAccess.ownedOrganizationWhere("user-1")));
+    }
+  });
+
+  it("limits a chat message to the consultation it sits in, so it can't leave through a case the user lost", () => {
+    const where = JSON.stringify(plan.find((s) => s.model === "Message")?.where);
+    expect(where).to.include(JSON.stringify(CaseAccess.ownedWhere("user-1")));
   });
 
   it("limits a user's audit events to the ones they caused", () => {
@@ -60,7 +75,10 @@ describe("DataExportSvc.stream (real database)", () => {
 
     const org = await OrganizationSvc.create(userId, "Export Firm", undefined, "PH");
     ownCaseId = (await prisma.case.create({ data: { id: crypto.randomUUID(), userId, organizationId: org.id, caseName: "My Own Case" } })).id;
-    strangerCaseId = (await prisma.case.create({ data: { id: crypto.randomUUID(), userId: strangerId, organizationId: org.id, caseName: "Someone Else's Case" } })).id;
+    // The stranger's case sits in the stranger's own organization, not one the user owns (an owner
+    // is entitled to every case in their organization, which the ownership block below covers).
+    const strangerOrg = await OrganizationSvc.create(strangerId, "Stranger Firm", undefined, "PH");
+    strangerCaseId = (await prisma.case.create({ data: { id: crypto.randomUUID(), userId: strangerId, organizationId: strangerOrg.id, caseName: "Someone Else's Case" } })).id;
 
     await prisma.consent.create({ data: { userId, purpose: "MARKETING", version: "2026-10", grantedAt: new Date(), source: "settings" } });
     await prisma.session.create({ data: { userId, refreshToken: `refresh-${userId}`, expiresAt: new Date(Date.now() + 3600_000) } });
@@ -82,7 +100,7 @@ describe("DataExportSvc.stream (real database)", () => {
 
   it("writes one valid JSON document", () => {
     const parsed = JSON.parse(output);
-    expect(parsed).to.have.keys(["exportedAt", "user", "data"]);
+    expect(parsed).to.have.keys(["exportedAt", "user", "notice", "data"]);
     expect(parsed.user).to.include({ id: userId, email });
   });
 
