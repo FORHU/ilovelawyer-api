@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import Joi from "joi";
 import SecurityAuditSvc from "../services/security-audit.service";
 import OrganizationRepo from "../repositories/organization.repository";
-import { SecurityAuditFilter } from "../repositories/security-audit.repository";
+import { SecurityAuditFilter, SecurityAuditSort } from "../repositories/security-audit.repository";
 import {
   adminSecurityAuditExportSchema,
   adminSecurityAuditListSchema,
@@ -17,11 +17,21 @@ function validate<T>(schema: Joi.ObjectSchema, query: unknown): T {
   return value as T;
 }
 
-type QueryFilter = Omit<SecurityAuditFilter, "organizationId"> & { organizationId?: string; page?: number; limit?: number };
+type QueryFilter = Omit<SecurityAuditFilter, "organizationId"> & {
+  organizationId?: string;
+  page?: number;
+  limit?: number;
+  sort?: SecurityAuditSort["field"];
+  order?: SecurityAuditSort["direction"];
+};
+
+function toSort(query: QueryFilter): SecurityAuditSort {
+  return { field: query.sort ?? "time", direction: query.order ?? "desc" };
+}
 
 function toFilter(query: QueryFilter, organizationId: SecurityAuditFilter["organizationId"]): SecurityAuditFilter {
-  const { actorId, caseId, action, outcome, from, to, sort, order } = query;
-  return { organizationId, actorId, caseId, action, outcome, from, to, sort, order };
+  const { actorId, caseId, action, outcome, from, to } = query;
+  return { organizationId, actorId, caseId, action, outcome, from, to };
 }
 
 function sendPdf(res: Response, pdf: Buffer, name: string) {
@@ -45,7 +55,7 @@ export default class SecurityAuditCtrl {
    * and Admins (requireOrgRole in the route). Scoped to req.organization, never a client value. */
   static async listForOrganization(req: Request, res: Response) {
     const query = validate<QueryFilter>(securityAuditListSchema, req.query);
-    const result = await SecurityAuditSvc.list(toFilter(query, req.organization!.id), query.page!, query.limit!);
+    const result = await SecurityAuditSvc.list(toFilter(query, req.organization!.id), query.page!, query.limit!, toSort(query));
     return res.status(200).json(result);
   }
 
@@ -53,7 +63,7 @@ export default class SecurityAuditCtrl {
   static async exportForOrganization(req: Request, res: Response) {
     const query = validate<QueryFilter>(securityAuditExportSchema, req.query);
     const organization = await OrganizationRepo.findById(req.organization!.id);
-    const { pdf } = await SecurityAuditSvc.exportPdf(toFilter(query, req.organization!.id), organization?.name ?? "Organization");
+    const { pdf } = await SecurityAuditSvc.exportPdf(toFilter(query, req.organization!.id), organization?.name ?? "Organization", toSort(query));
     return sendPdf(res, pdf, "audit-log");
   }
 
@@ -62,7 +72,7 @@ export default class SecurityAuditCtrl {
   static async listForAdmin(req: Request, res: Response) {
     const query = validate<QueryFilter>(adminSecurityAuditListSchema, req.query);
     const filter = toFilter(query, adminOrganizationFilter(query.organizationId));
-    const result = await SecurityAuditSvc.list(filter, query.page!, query.limit!);
+    const result = await SecurityAuditSvc.list(filter, query.page!, query.limit!, toSort(query));
     return res.status(200).json(result);
   }
 
@@ -75,7 +85,7 @@ export default class SecurityAuditCtrl {
         : organizationId === null
           ? "Events outside any organization"
           : ((await OrganizationRepo.findById(organizationId))?.name ?? `Organization ${organizationId}`);
-    const { pdf } = await SecurityAuditSvc.exportPdf(toFilter(query, organizationId), scope);
+    const { pdf } = await SecurityAuditSvc.exportPdf(toFilter(query, organizationId), scope, toSort(query));
     return sendPdf(res, pdf, "platform-audit-log");
   }
 }

@@ -1,5 +1,9 @@
 import { Prisma, SecurityAuditEvent, SecurityAuditOutcome } from "@prisma/client";
-import SecurityAuditRepo, { SecurityAuditFilter } from "../repositories/security-audit.repository";
+import SecurityAuditRepo, {
+  DEFAULT_SECURITY_AUDIT_SORT,
+  SecurityAuditFilter,
+  SecurityAuditSort,
+} from "../repositories/security-audit.repository";
 import { getRequestContext } from "../lib/request-context";
 import {
   SECURITY_AUDIT_EXPORT_MAX_ROWS,
@@ -7,7 +11,7 @@ import {
   SecurityAuditTargetType,
 } from "../constants/security-audit.constants";
 import { renderAuditLogPdf } from "../utils/audit-log-pdf-renderer";
-import { describeAuditEvent, loadNames } from "./security-audit-describe";
+import { describeAuditEvent, filterText, loadNames } from "./security-audit-describe";
 import { normalizeEmail } from "../utils/auth.utils";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -120,9 +124,9 @@ export default class SecurityAuditSvc {
   /** One page of the log, newest first (pages count from 1), with the totals the app's
    * pagination needs. Each event carries `display`: who, what was affected and the details, named
    * and in plain words (security-audit-describe.ts) — what the app shows instead of ids. */
-  static async list(filter: SecurityAuditFilter, page: number, pageSize: number) {
+  static async list(filter: SecurityAuditFilter, page: number, pageSize: number, sort: SecurityAuditSort = DEFAULT_SECURITY_AUDIT_SORT) {
     const [rows, total] = await Promise.all([
-      SecurityAuditRepo.list(filter, pageSize, (page - 1) * pageSize),
+      SecurityAuditRepo.list(filter, pageSize, (page - 1) * pageSize, sort),
       SecurityAuditRepo.count(filter),
     ]);
     const names = await loadNames(rows);
@@ -139,13 +143,17 @@ export default class SecurityAuditSvc {
 
   /** The filtered log as a PDF table, newest first, capped at SECURITY_AUDIT_EXPORT_MAX_ROWS. The
    * export itself is recorded (export.audit_log), after the rows it covers were read. */
-  static async exportPdf(filter: SecurityAuditFilter, scope: string): Promise<{ pdf: Buffer; rowCount: number; truncated: boolean }> {
+  static async exportPdf(
+    filter: SecurityAuditFilter,
+    scope: string,
+    sort: SecurityAuditSort = DEFAULT_SECURITY_AUDIT_SORT,
+  ): Promise<{ pdf: Buffer; rowCount: number; truncated: boolean }> {
     const total = await SecurityAuditRepo.count(filter);
     const wanted = Math.min(total, SECURITY_AUDIT_EXPORT_MAX_ROWS);
     const events: SecurityAuditEvent[] = [];
     while (events.length < wanted) {
       const take = Math.min(1000, wanted - events.length);
-      const rows = await SecurityAuditRepo.list(filter, take, events.length);
+      const rows = await SecurityAuditRepo.list(filter, take, events.length, sort);
       events.push(...rows);
       if (rows.length < take) break;
     }
@@ -160,7 +168,8 @@ export default class SecurityAuditSvc {
         scope,
         generatedAt: new Date(),
         generatedBy,
-        filters: Object.entries(describeFilter(filter)).map(([key, value]) => `${key}: ${value}`),
+        filterSummary: filterText(describeFilter(filter)),
+        sort: SORT_DESCRIPTIONS[`${sort.field}:${sort.direction}`],
         rowCount: total,
         truncated,
         maxRows: SECURITY_AUDIT_EXPORT_MAX_ROWS,
@@ -179,11 +188,19 @@ export default class SecurityAuditSvc {
   }
 }
 
+const SORT_DESCRIPTIONS: Record<string, string> = {
+  "time:desc": "newest first",
+  "time:asc": "oldest first",
+  "action:asc": "by action (A–Z)",
+  "action:desc": "by action (Z–A)",
+  "actor:asc": "by who did it (A–Z)",
+  "actor:desc": "by who did it (Z–A)",
+};
+
 function describeFilter(filter: SecurityAuditFilter): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(filter)) {
-    // sort/order arrange the rows rather than narrow them, so they aren't listed as filters.
-    if (value === undefined || value === null || ["organizationId", "sort", "order"].includes(key)) continue;
+    if (value === undefined || value === null || key === "organizationId") continue;
     out[key] = value instanceof Date ? value.toISOString() : String(value);
   }
   return out;

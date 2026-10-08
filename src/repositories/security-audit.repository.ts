@@ -11,13 +11,7 @@ export interface SecurityAuditFilter {
   outcome?: SecurityAuditOutcome;
   from?: Date;
   to?: Date;
-  /** Column to order by (default time, newest first) — sorted here so the order holds across
-   * pages and in the PDF export. */
-  sort?: SecurityAuditSortField;
-  order?: "asc" | "desc";
 }
-
-export type SecurityAuditSortField = "time" | "action" | "actor";
 
 function toWhere(filter: SecurityAuditFilter): Prisma.SecurityAuditEventWhereInput {
   const where: Prisma.SecurityAuditEventWhereInput = {};
@@ -62,20 +56,26 @@ export interface AuditNames {
   integrations: Map<string, string>;
 }
 
-/** Newest first by default; within any other column, newest first too, and the id breaks ties
- * between rows written in the same millisecond. The actor sorts by the email snapshotted on the
- * row (the row holds no name), with "nobody signed in" last. */
-function toOrderBy(filter: SecurityAuditFilter): Prisma.SecurityAuditEventOrderByWithRelationInput[] {
-  const order = filter.order ?? (filter.sort && filter.sort !== "time" ? "asc" : "desc");
-  const newestFirst: Prisma.SecurityAuditEventOrderByWithRelationInput[] = [{ createdAt: "desc" }, { id: "desc" }];
-  switch (filter.sort) {
-    case "action":
-      return [{ action: order }, ...newestFirst];
-    case "actor":
-      return [{ actorEmail: { sort: order, nulls: "last" } }, ...newestFirst];
-    default:
-      return [{ createdAt: order }, { id: order }];
-  }
+export type SecurityAuditSortField = "time" | "action" | "actor";
+export type SecurityAuditSortDirection = "asc" | "desc";
+
+export interface SecurityAuditSort {
+  field: SecurityAuditSortField;
+  direction: SecurityAuditSortDirection;
+}
+
+/** Newest first. */
+export const DEFAULT_SECURITY_AUDIT_SORT: SecurityAuditSort = { field: "time", direction: "desc" };
+
+/** Sorting by action or actor keeps rows newest first within each group; the id breaks ties
+ * between rows written in the same millisecond, so paging never skips or repeats a row. Rows with
+ * no actor (failed sign-ins, system sweeps) sort last either way. */
+export function securityAuditOrderBy(sort: SecurityAuditSort): Prisma.SecurityAuditEventOrderByWithRelationInput[] {
+  const { field, direction } = sort;
+  const tail: Prisma.SecurityAuditEventOrderByWithRelationInput[] = [{ createdAt: field === "time" ? direction : "desc" }, { id: "desc" }];
+  if (field === "action") return [{ action: direction }, ...tail];
+  if (field === "actor") return [{ actorEmail: { sort: direction, nulls: "last" } }, ...tail];
+  return tail;
 }
 
 export default class SecurityAuditRepo {
@@ -104,9 +104,9 @@ export default class SecurityAuditRepo {
     return org?.tenant.code ?? null;
   }
 
-  /** Up to `take` rows in the filter's order (newest first by default), after skipping the first `skip`. */
-  static async list(filter: SecurityAuditFilter, take: number, skip = 0) {
-    return prisma.securityAuditEvent.findMany({ where: toWhere(filter), orderBy: toOrderBy(filter), take, skip });
+  /** Up to `take` rows, newest first, after skipping the first `skip`. */
+  static async list(filter: SecurityAuditFilter, take: number, skip = 0, sort: SecurityAuditSort = DEFAULT_SECURITY_AUDIT_SORT) {
+    return prisma.securityAuditEvent.findMany({ where: toWhere(filter), orderBy: securityAuditOrderBy(sort), take, skip });
   }
 
   static async count(filter: SecurityAuditFilter) {

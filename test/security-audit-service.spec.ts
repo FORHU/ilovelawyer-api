@@ -7,7 +7,7 @@ import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import * as pdfRenderer from "../src/utils/audit-log-pdf-renderer";
-import SecurityAuditRepo from "../src/repositories/security-audit.repository";
+import SecurityAuditRepo, { DEFAULT_SECURITY_AUDIT_SORT, securityAuditOrderBy } from "../src/repositories/security-audit.repository";
 import { runWithRequestContext, RequestContext } from "../src/lib/request-context";
 import HttpError from "../src/utils/http-error";
 import logger from "../src/utils/logger";
@@ -195,7 +195,7 @@ describe("SecurityAuditSvc.list and exportPdf", () => {
     expect(result.events.map((e) => e.id)).to.deep.equal(["row-51", "row-52"]);
     // Only what the table shows goes out: no actor, target, case or organization ids.
     expect(Object.keys(result.events[0]!).sort()).to.deep.equal(["action", "createdAt", "display", "id", "outcome", "requestId"]);
-    expect(result.events[0]!.display).to.deep.equal({ actor: "lawyer@firm.test", target: "N/A", details: "With password", ip: "203.0.113.7" });
+    expect(result.events[0]!.display).to.deep.equal({ actor: "lawyer@firm.test", target: "N/A", details: "With password" });
   });
 
   it("reports one page for an empty log", async () => {
@@ -223,8 +223,8 @@ describe("SecurityAuditSvc.list and exportPdf", () => {
     ]);
     expect(rendered[0]!.events).to.have.length(1500);
     expect(rendered[0]!.events[0].display.details).to.equal("With password");
-    expect(rendered[0]!.header).to.include({ scope: "Audit QA Firm", rowCount: 1500, truncated: false });
-    expect(rendered[0]!.header.filters).to.deep.equal(["action: auth."]);
+    expect(rendered[0]!.header).to.include({ scope: "Audit QA Firm", rowCount: 1500, truncated: false, sort: "newest first" });
+    expect(rendered[0]!.header.filterSummary).to.equal("Sign-in");
     expect(recorded).to.deep.equal([
       {
         action: "export.audit_log",
@@ -246,6 +246,55 @@ describe("SecurityAuditSvc.list and exportPdf", () => {
     expect(rowCount).to.equal(5000);
     expect(truncated).to.equal(true);
     expect(rendered[0]!.header).to.include({ rowCount: 7000, truncated: true, maxRows: 5000 });
+  });
+});
+
+describe("securityAuditOrderBy", () => {
+  it("defaults to newest first, with the id as a tie-break so pages never overlap", () => {
+    expect(securityAuditOrderBy(DEFAULT_SECURITY_AUDIT_SORT)).to.deep.equal([{ createdAt: "desc" }, { id: "desc" }]);
+    expect(securityAuditOrderBy({ field: "time", direction: "asc" })).to.deep.equal([{ createdAt: "asc" }, { id: "desc" }]);
+  });
+
+  it("groups by action or by who did it, newest first within each group, with no-actor rows last", () => {
+    expect(securityAuditOrderBy({ field: "action", direction: "asc" })).to.deep.equal([{ action: "asc" }, { createdAt: "desc" }, { id: "desc" }]);
+    expect(securityAuditOrderBy({ field: "actor", direction: "desc" })).to.deep.equal([
+      { actorEmail: { sort: "desc", nulls: "last" } },
+      { createdAt: "desc" },
+      { id: "desc" },
+    ]);
+  });
+});
+
+describe("SecurityAuditSvc sorting", () => {
+  let restore: (() => void)[];
+  let sorts: unknown[];
+  let header: any;
+
+  beforeEach(() => {
+    sorts = [];
+    restore = [stash(SecurityAuditRepo, ["list", "count"]), stash(SecurityAuditSvc, ["record"]), stash(pdfRenderer, ["renderAuditLogPdf"])];
+    (SecurityAuditRepo as any).list = async (_f: unknown, _t: number, _s: number, sort: unknown) => {
+      sorts.push(sort);
+      return [];
+    };
+    (SecurityAuditRepo as any).count = async () => 1;
+    (SecurityAuditSvc as any).record = async () => {};
+    (pdfRenderer as any).renderAuditLogPdf = async (h: unknown) => {
+      header = h;
+      return Buffer.from("%PDF");
+    };
+  });
+
+  afterEach(() => restore.forEach((r) => r()));
+
+  it("passes the chosen order to the page query and the PDF, and names it in the PDF header", async () => {
+    await SecurityAuditSvc.list({}, 1, 20, { field: "action", direction: "asc" });
+    await SecurityAuditSvc.exportPdf({}, "Audit QA Firm", { field: "actor", direction: "asc" });
+    expect(sorts).to.deep.equal([
+      { field: "action", direction: "asc" },
+      { field: "actor", direction: "asc" },
+    ]);
+    expect(header.sort).to.equal("by who did it (A–Z)");
   });
 });
 
@@ -273,22 +322,40 @@ describe("renderAuditLogPdf", () => {
       ...overrides,
     }) as any;
 
-  const header = { scope: "Audit QA Firm", generatedAt: new Date(), generatedBy: "owner@firm.test", filters: [], truncated: false, maxRows: 5000 };
+  const header = {
+    scope: "Audit QA Firm",
+    generatedAt: new Date(),
+    generatedBy: "owner@firm.test",
+    filterSummary: "all activity",
+    sort: "newest first",
+    truncated: false,
+    maxRows: 5000,
+  };
 
-  const display = { actor: "Owner A", target: "Member B", details: "Member → Admin", ip: "203.0.113.7" };
+  const display = { actor: "Owner A", target: "Member B", details: "Member → Admin" };
   const item = (i: number, overrides: object = {}) => ({ event: event(i, overrides), display });
 
   it("lays an event out as one table row, using the display text rather than ids", () => {
     expect(pdfRenderer.auditLogPdfRow(item(1))).to.deep.equal([
-      "2026-10-08 09:30:00",
+      "8 Oct 2026\n09:30:00",
       "Member role changed",
-      "OK",
+      "Success",
       "Owner A",
       "Member B",
-      "Member → Admin",
-      "203.0.113.7",
+      // The PDF's built-in font has no arrow, so it's spelled out.
+      "Member to Admin",
     ]);
     expect(pdfRenderer.auditLogPdfRow(item(2, { outcome: "FAILURE" }))[2]).to.equal("Failed");
+  });
+
+  it("sums up the events for the summary tiles", () => {
+    const summary = pdfRenderer.auditLogSummary([
+      item(1),
+      item(2, { outcome: "FAILURE", actorId: null, createdAt: new Date(Date.UTC(2026, 9, 1)) }),
+      item(3, { actorId: "user-9" }),
+    ]);
+    expect(summary).to.deep.include({ failed: 1, people: 2 });
+    expect(summary.period!.from.toISOString()).to.equal("2026-10-01T00:00:00.000Z");
   });
 
   it("renders a valid multi-page PDF for a long log, and a one-page PDF for an empty one", async () => {

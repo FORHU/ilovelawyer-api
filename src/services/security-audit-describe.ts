@@ -6,10 +6,11 @@ import { normalizeIp } from "../lib/request-context";
 /** What the audit log shows for one row — names and plain words, never ids. The same text feeds
  * the app's table and the PDF export, so the two always agree. */
 export interface AuditEventDisplay {
+  /** Who did it. When nobody was signed in (a failed sign-in, a password reset request) the
+   * request's IP address is the only clue, so it's shown here; for a signed-in user it isn't. */
   actor: string;
   target: string;
   details: string;
-  ip: string;
 }
 
 const METHODS: Record<string, string> = {
@@ -240,7 +241,8 @@ function targetText(event: SecurityAuditEvent, names: AuditNames): string {
   }
 }
 
-function filterText(filter: unknown): string {
+/** A filter in words: "Sign-in, failed attempts only, 1 Oct 2026 – 8 Oct 2026", or "all activity". */
+export function filterText(filter: unknown): string {
   if (!filter || typeof filter !== "object") return "all activity";
   const f = filter as Record<string, string>;
   const parts: string[] = [];
@@ -304,11 +306,15 @@ function detailsText(event: SecurityAuditEvent, names: AuditNames): string {
 export const NOT_APPLICABLE = "N/A";
 
 export function describeAuditEvent(event: SecurityAuditEvent, names: AuditNames): AuditEventDisplay {
-  const actor = event.actorId ? (names.users.get(event.actorId) ?? event.actorEmail ?? "A former user") : "No signed-in user";
+  const ip = normalizeIp(event.ip);
+  const actor = event.actorId
+    ? (names.users.get(event.actorId) ?? event.actorEmail ?? "A former user")
+    : ip
+      ? `No signed-in user (IP ${ip})`
+      : "No signed-in user";
   return {
     actor,
     target: targetText(event, names) || NOT_APPLICABLE,
     details: detailsText(event, names) || NOT_APPLICABLE,
-    ip: normalizeIp(event.ip) ?? NOT_APPLICABLE,
   };
 }

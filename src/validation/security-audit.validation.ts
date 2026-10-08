@@ -14,8 +14,8 @@ const filterKeys = {
   from: Joi.date().iso().optional(),
   // Exclusive upper bound.
   to: Joi.date().iso().optional(),
-  sort: Joi.string().valid("time", "action", "actor").optional(),
-  order: Joi.string().valid("asc", "desc").optional(),
+  sort: Joi.string().valid("time", "action", "actor").default("time"),
+  order: Joi.string().valid("asc", "desc").default("desc"),
 };
 
 export const securityAuditListSchema = Joi.object({

@@ -66,7 +66,6 @@ describe("describeAuditEvent", () => {
       actor: "Felix Miguel Galpao",
       target: "Audit QA Firm",
       details: "PDF · 22 events · Showing all activity",
-      ip: "127.0.0.1",
     });
   });
 
@@ -86,6 +85,12 @@ describe("describeAuditEvent", () => {
     expect(display.details).to.equal("N/A");
   });
 
+  it("shows no IP address when a signed-in user took the action", () => {
+    const display = describeAuditEvent(event({ ip: "203.0.113.7" }), names());
+    expect(display.actor).to.equal("Felix Miguel Galpao");
+    expect(JSON.stringify(display)).to.not.include("203.0.113.7");
+  });
+
   it("names an Audio Overview download by its case, without file ids or link internals", () => {
     const display = describeAuditEvent(
       event({
@@ -101,7 +106,6 @@ describe("describeAuditEvent", () => {
       actor: "Felix Miguel Galpao",
       target: "Audio Overview of “Smith v Jones”",
       details: "N/A",
-      ip: "127.0.0.1",
     });
   });
 
@@ -155,7 +159,8 @@ describe("describeAuditEvent", () => {
       }),
       names(),
     );
-    expect(known).to.include({ actor: "No signed-in user", target: "Wipper", details: "With password · Invalid email or password" });
+    // Nobody was signed in, so the IP is the only clue to who tried — it's shown with them.
+    expect(known).to.include({ actor: "No signed-in user (IP 127.0.0.1)", target: "Wipper", details: "With password · Invalid email or password" });
 
     const unknown = describeAuditEvent(
       event({ action: "auth.login", outcome: "FAILURE", actorId: null, payload: { method: "password", email: "nobody@x.test", reason: "Invalid email or password" } }),
@@ -168,7 +173,7 @@ describe("describeAuditEvent", () => {
     const gone = describeAuditEvent(event({ actorId: "u-deleted", actorEmail: "old@firm.test", targetType: "case", targetId: "case-gone" }), names());
     expect(gone.actor).to.equal("old@firm.test");
     expect(gone.target).to.equal("A deleted case");
-    expect(describeAuditEvent(event({ ip: null }), names()).ip).to.equal("N/A");
+    expect(describeAuditEvent(event({ actorId: null, ip: null }), names()).actor).to.equal("No signed-in user");
   });
 
   it("collects every id a page needs named, by kind", () => {
