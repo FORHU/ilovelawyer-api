@@ -13,6 +13,9 @@ import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
 import CaseCopyQueue from "./queues/case-copy.queue";
 
 import { PORT } from "./config";
+import { verifyDocumentBucketRegion } from "./utils/s3";
+
+void verifyDocumentBucketRegion();
 
 DocumentExtractionQueue.start();
 AudioOverviewQueue.start();
