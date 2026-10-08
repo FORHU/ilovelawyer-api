@@ -4,6 +4,10 @@ import { planAiProcedureItems } from "../utils/procedure-item-reconcile";
 import type { ProcedureAutoCloseReason, ProcedureSourceKind } from "../utils/procedure-link";
 
 export default class ProceduralDeadlineRepo {
+  static async findProcedureItem(id: string, caseId: string) {
+    return prisma.procedureItem.findFirst({ where: { id, caseId } });
+  }
+
   static async list(caseId: string) {
     return prisma.proceduralDeadline.findMany({
       where: { caseId },

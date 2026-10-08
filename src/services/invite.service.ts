@@ -2,6 +2,7 @@ import InviteRepo from "../repositories/invite.repository";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatRepo from "../repositories/chat.repository";
 import HttpError from "../utils/http-error";
+import SecurityAuditSvc from "./security-audit.service";
 
 const INVITE_TTL_HOURS = 48;
 
@@ -13,7 +14,16 @@ export default class InviteSvc {
     }
 
     const expiresAt = new Date(Date.now() + INVITE_TTL_HOURS * 60 * 60 * 1000);
-    return InviteRepo.create(consultationId, userId, expiresAt);
+    const invite = await InviteRepo.create(consultationId, userId, expiresAt);
+    await SecurityAuditSvc.record({
+      action: "consultation.invite_created",
+      actorId: userId,
+      organizationId: consultation.organizationId ?? undefined,
+      targetType: "invite",
+      targetId: invite.id,
+      payload: { consultationId, expiresAt: expiresAt.toISOString() },
+    });
+    return invite;
   }
 
   static async getById(id: string) {
@@ -36,6 +46,13 @@ export default class InviteSvc {
     if (invite.expiresAt < new Date()) throw new HttpError("Invite has expired", 410);
 
     await ParticipantRepo.add(invite.consultationId, userId);
+    await SecurityAuditSvc.record({
+      action: "consultation.invite_accepted",
+      actorId: userId,
+      targetType: "invite",
+      targetId: inviteId,
+      payload: { consultationId: invite.consultationId, invitedBy: invite.createdBy },
+    });
     return { consultationId: invite.consultationId };
   }
 
@@ -43,6 +60,14 @@ export default class InviteSvc {
     const invite = await InviteRepo.findById(inviteId);
     if (!invite) throw new HttpError("Invite not found", 404);
     if (invite.createdBy !== userId) throw new HttpError("Forbidden", 403);
-    return InviteRepo.delete(inviteId);
+    const deleted = await InviteRepo.delete(inviteId);
+    await SecurityAuditSvc.record({
+      action: "consultation.invite_deleted",
+      actorId: userId,
+      targetType: "invite",
+      targetId: inviteId,
+      payload: { consultationId: invite.consultationId },
+    });
+    return deleted;
   }
 }

@@ -1,3 +1,25 @@
+import ManualEditLog from "../services/manual-edit-log.service";
+import CaseChangeReads from "../services/case-change-reads";
+import type { MindMapItem } from "../utils/response-parser";
+
+/** The label of the case map's node `nodeId`, or null — read before an edit changes it. Never
+ * throws: it only names the point in the change log. */
+async function mapPointLabel(caseId: string, nodeId: string): Promise<string | null> {
+  try {
+    const find = (node: MindMapItem | null | undefined): MindMapItem | null => {
+      if (!node) return null;
+      if (node.id === nodeId) return node;
+      for (const child of node.children ?? []) {
+        const hit = find(child);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return find(await CaseChangeReads.mindMap(caseId))?.label ?? null;
+  } catch {
+    return null;
+  }
+}
 import { Request, Response } from "express";
 import CaseMindMapSvc from "../services/case-mind-map.service";
 import MindMapSvc from "../services/mind-map.service";
@@ -30,11 +52,19 @@ export default class CaseMindMapCtrl {
   static async expand(req: Request, res: Response) {
     const { error, value } = expandCaseMindMapNodeSchema.validate(req.body, { convert: true });
     if (error) throw new HttpError(error.message, 400);
+    const label = await mapPointLabel(req.params.caseId, value.nodeId);
     const result = await MindMapSvc.expandCaseNode({
       userId: req.user.userId,
       caseId: req.params.caseId,
       nodeId: value.nodeId,
       count: value.count,
+    });
+    await ManualEditLog.record(req.params.caseId, req.user.userId, {
+      pane: "mindMap",
+      kind: "mapPoint",
+      itemId: value.nodeId,
+      action: "expanded",
+      label: label ?? "Map point",
     });
     return res.status(200).json(result);
   }
@@ -43,7 +73,17 @@ export default class CaseMindMapCtrl {
   static async edit(req: Request, res: Response) {
     const { error, value } = editCaseMindMapNodeSchema.validate(req.body, { convert: true });
     if (error) throw new HttpError(error.message, 400);
+    const before = await mapPointLabel(req.params.caseId, value.nodeId);
     const result = await MindMapSvc.editCaseNode({ userId: req.user.userId, caseId: req.params.caseId, edit: value });
+    // "add" names the parent node; the new point is the label sent.
+    await ManualEditLog.record(req.params.caseId, req.user.userId, {
+      pane: "mindMap",
+      kind: "mapPoint",
+      itemId: value.nodeId,
+      action: value.op === "add" ? "added" : value.op === "delete" ? "removed" : "edited",
+      label: value.op === "delete" ? (before ?? "Map point") : value.label,
+      changes: value.op === "rename" ? [{ field: "label", from: before ?? null, to: value.label }] : undefined,
+    });
     return res.status(200).json(result);
   }
 
@@ -54,6 +94,12 @@ export default class CaseMindMapCtrl {
       userId: req.user.userId,
       caseId: req.params.caseId,
       expectedVersion: value.version,
+    });
+    await ManualEditLog.record(req.params.caseId, req.user.userId, {
+      pane: "mindMap",
+      kind: "mapPoint",
+      action: "reverted",
+      label: "Visual Strategy Map",
     });
     return res.status(200).json(result);
   }

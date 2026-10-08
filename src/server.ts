@@ -11,6 +11,7 @@ import AccountDeletionQueue from "./queues/account-deletion.queue";
 import ConsultationDeletionQueue from "./queues/consultation-deletion.queue";
 import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
 import CaseCopyQueue from "./queues/case-copy.queue";
+import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
 
 import { PORT } from "./config";
 import { verifyDocumentBucketRegion } from "./utils/s3";
@@ -28,6 +29,7 @@ AccountDeletionQueue.start();
 ConsultationDeletionQueue.start();
 GoogleCalendarSyncQueue.start();
 CaseCopyQueue.start();
+SecurityAuditRetentionQueue.start();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on http://0.0.0.0:${PORT}`);

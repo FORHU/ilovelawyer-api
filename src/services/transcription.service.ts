@@ -11,6 +11,7 @@ import CaseAccess from "../utils/case-access";
 import logger from "../utils/logger";
 import { AWS_S3_BUCKET } from "../config";
 import { awsClientConfig } from "../lib/aws-client-config";
+import SecurityAuditSvc from "./security-audit.service";
 
 const SUPPORTED_FORMATS = ["mp3", "wav", "flac", "ogg", "webm", "weba", "m4a", "mp4", "amr"];
 
@@ -186,8 +187,16 @@ export default class TranscriptionSvc {
   }
 
   static async delete(id: string, organizationId: string, userId: string) {
-    await TranscriptionSvc.loadVisible(id, organizationId, userId);
+    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
     await TranscriptionRepo.delete(id, organizationId);
+    await SecurityAuditSvc.record({
+      action: "transcription.deleted",
+      organizationId,
+      targetType: "transcription",
+      targetId: id,
+      targetName: item.title ?? null,
+      caseId: item.caseId ?? null,
+    });
   }
 
   /** Chunk → embed → store the transcript text (ADR 0013), same shared pipeline the Case

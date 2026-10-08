@@ -4,6 +4,7 @@ import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseRiskSvc from "../services/case-risk.service";
 import CaseRefreshSvc from "../services/case-refresh.service";
 import CaseChangeSvc from "../services/case-change.service";
+import CaseManualEditSvc from "../services/case-manual-edit.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import MissingEvidenceAiSvc from "../services/missing-evidence-ai.service";
 import CitationCheckSvc from "../services/citation-check.service";
@@ -134,6 +135,18 @@ export default class CaseTerminalCtrl {
       day: req.query.day,
       tz: req.query.tz,
     });
+    return res.status(200).json(result);
+  }
+
+  /** One day's editing sessions — lawyers' manual edits, grouped (`day` + the viewer's `tz`). */
+  static async listManualEdits(req: Request, res: Response) {
+    const result = await CaseManualEditSvc.sessionsOnDay(req.params.caseId, req.user.userId, req.query.day, req.query.tz);
+    return res.status(200).json(result);
+  }
+
+  /** The lawyers' edits made between the previous run and this one. */
+  static async listEditsBeforeRun(req: Request, res: Response) {
+    const result = await CaseManualEditSvc.beforeRun(req.params.caseId, req.user.userId, req.params.summaryId);
     return res.status(200).json(result);
   }
 

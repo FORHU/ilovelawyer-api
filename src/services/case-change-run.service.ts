@@ -22,6 +22,9 @@ type RunDocument = { id: string; name: string; ragStatus: string; status?: strin
  */
 export default class CaseChangeRun {
   readonly id = randomUUID();
+  /** When the run began — lawyers' edits after the previous run and before this are "edits since
+   * the previous run"; edits made while it worked aren't. */
+  readonly startedAt = new Date();
   private readonly deltas: CaseChangeDeltas = {};
   private readonly captured = new Map<CaseChangePane, unknown>();
 
@@ -167,7 +170,14 @@ export default class CaseChangeRun {
     firstAnalysis: boolean;
   }): Promise<{ id: string; totalChanges: number }> {
     const totalChanges = countChanges(this.deltas);
-    await CaseChangeSummaryRepo.create({ id: this.id, caseId: this.caseId, ...row, totalChanges, perPaneDeltas: this.deltas });
+    await CaseChangeSummaryRepo.create({
+      id: this.id,
+      caseId: this.caseId,
+      ...row,
+      totalChanges,
+      perPaneDeltas: this.deltas,
+      startedAt: this.startedAt,
+    });
     logger.info("Change summary saved", {
       caseId: this.caseId,
       id: this.id,

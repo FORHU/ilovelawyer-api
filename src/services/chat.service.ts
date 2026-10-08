@@ -46,6 +46,7 @@ import { emitToUser } from "../lib/socket";
 import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL, PROVISIONAL_UNCLEAR_TITLE, KEEP_TITLE_SENTINEL, SMALL_TALK_TITLE_SENTINEL, PROVISIONAL_GREETING_TITLE } from "../constants";
 import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
+import SecurityAuditSvc from "./security-audit.service";
 
 /** How a running chat turn is stopped — see ChatSvc.processChatGenerationJob/cancelChatGeneration. */
 interface GenerationControl {
@@ -261,7 +262,19 @@ export default class ChatSvc {
       throw new HttpError("Archive this consultation before deleting it permanently", 409);
     }
     const updated = await ChatRepo.requestConsultationDeletion(consultationId, new Date());
-    return { deletionScheduledFor: consultationDeletionDueAt(updated.deletionRequestedAt!) };
+    const deletionScheduledFor = consultationDeletionDueAt(updated.deletionRequestedAt!);
+    // Recorded when the user deletes it; ConsultationDeletionQueue purges it after the grace period.
+    await SecurityAuditSvc.record({
+      action: "consultation.deleted",
+      actorId: userId,
+      organizationId,
+      targetType: "consultation",
+      targetId: consultationId,
+      targetName: consultation.title ?? null,
+      caseId: consultation.caseId ?? null,
+      payload: { deletionScheduledFor: deletionScheduledFor.toISOString() },
+    });
+    return { deletionScheduledFor };
   }
 
   static async listMessages(organizationId: string, userId: string, consultationId: string) {
@@ -301,7 +314,10 @@ export default class ChatSvc {
         // inline as `[affidavit of loss](#download)`; if it didn't, a "Download …" line is appended.
         let content = m.content;
         if (file?.s3Key) {
-          const url = getProxyFileUrl(file.s3Key, { filename: file.filename ?? undefined });
+          const url = getProxyFileUrl(file.s3Key, {
+            filename: file.filename ?? undefined,
+            audit: { kind: "generated_document", id: file.id, caseId: consultation.caseId },
+          });
           content = content.includes(DOWNLOAD_PLACEHOLDER)
             ? content.split(DOWNLOAD_PLACEHOLDER).join(`(${url})`)
             : `${content}
@@ -379,7 +395,16 @@ export default class ChatSvc {
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
     }
-    return ChatRepo.deleteMessage(messageId);
+    const deleted = await ChatRepo.deleteMessage(messageId);
+    await SecurityAuditSvc.record({
+      action: "consultation.message_deleted",
+      organizationId,
+      targetType: "message",
+      targetId: messageId,
+      caseId: consultation.caseId ?? null,
+      payload: { consultationId, role: message.role },
+    });
+    return deleted;
   }
 
   /**
@@ -1739,7 +1764,10 @@ export default class ChatSvc {
         status: "COMPLETED" as const,
         audioFile: {
           id: row.audioFile.id,
-          fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }),
+          fileUrl: getProxyFileUrl(row.audioFile.s3Key, {
+            filename: audioOverviewFilename(row.createdAt),
+            audit: { kind: "audio_overview", id: row.id },
+          }),
         },
         turnTimings: (row.turnTimings as unknown as number[] | null) ?? null,
         sentenceTimings: (row.sentenceTimings as unknown as MarkTiming[][] | null) ?? null,

@@ -1,3 +1,4 @@
+import ManualEditLog from "./manual-edit-log.service";
 import { DecisionStatus, Prisma } from "@prisma/client";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import CaseAccess from "../utils/case-access";
@@ -53,6 +54,14 @@ export default class DecisionRecordSvc {
     const row = await DecisionRecordRepo.updateStatus(id, caseId, "DISPUTED", note ?? null);
     if (!row) throw new HttpError("Decision record not found", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "decision.dispute", payload: { id } });
+    await ManualEditLog.record(caseId, userId, {
+      pane: "decisions",
+      kind: "decision",
+      itemId: id,
+      action: "disputed",
+      label: row.anchor,
+      changes: note ? [{ field: "disputeNote" }] : undefined,
+    });
     await AnnotationRepo.create(caseId, {
       authorUserId: userId,
       targetType: "DECISION",
@@ -68,6 +77,7 @@ export default class DecisionRecordSvc {
     const row = await DecisionRecordRepo.updateStatus(id, caseId, "ACTIVE");
     if (!row) throw new HttpError("Decision record not found", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: userId, action: "decision.reactivate", payload: { id } });
+    await ManualEditLog.record(caseId, userId, { pane: "decisions", kind: "decision", itemId: id, action: "reactivated", label: row.anchor });
     return row;
   }
 

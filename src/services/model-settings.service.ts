@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma";
+import SecurityAuditSvc from "./security-audit.service";
 
 export interface ModelSettingDto {
   toolName: string;
@@ -38,6 +39,15 @@ export default class ModelSettingsSvc {
     const updated = await prisma.modelSetting.update({
       where: { toolName },
       data: { currentModel: model },
+    });
+    // Called with the service API key, not a user session — there is no actor to name.
+    await SecurityAuditSvc.record({
+      action: "admin.model_settings.updated",
+      actorId: null,
+      organizationId: null,
+      targetType: "model_setting",
+      targetId: toolName,
+      payload: { from: existing.currentModel, to: model, via: "api_key" },
     });
     return toDto(updated);
   }

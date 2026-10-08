@@ -12,7 +12,7 @@ import BulkApprovalRunner, { type BulkApprovalProgress } from "../src/queues/bul
 import AdminSvc from "../src/services/admin.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
-import OrganizationRepo from "../src/repositories/organization.repository";
+import SecurityAuditSvc from "../src/services/security-audit.service";
 import HttpError from "../src/utils/http-error";
 import { redis } from "../src/lib/redis";
 
@@ -28,6 +28,7 @@ describe("BulkApprovalRunner", () => {
   let pendingIds: string[];
   let approveOutcome: (id: string) => Promise<unknown>;
   let approvedIds: string[];
+  let approvedBy: (string | undefined)[];
   let audits: { actorId?: string; action: string; payload?: any }[];
   let finished: Promise<void>;
   let markFinished: () => void;
@@ -37,6 +38,7 @@ describe("BulkApprovalRunner", () => {
     redisDown = false;
     pendingIds = ["u1", "u2", "u3", "u4", "u5", "u6", "u7"];
     approvedIds = [];
+    approvedBy = [];
     audits = [];
     approveOutcome = async () => ({});
     finished = new Promise((resolve) => (markFinished = resolve));
@@ -46,7 +48,7 @@ describe("BulkApprovalRunner", () => {
       stash(AdminSvc, ["approve"]),
       stash(AuthRepo, ["findApprovablePendingIds"]),
       stash(TenantRepo, ["findByCode"]),
-      stash(OrganizationRepo, ["writeAudit"]),
+      stash(SecurityAuditSvc, ["record"]),
     ];
 
     (redis as any).get = async (key: string) => (store.has(key) ? structuredClone(store.get(key)) : null);
@@ -58,7 +60,8 @@ describe("BulkApprovalRunner", () => {
       store.set(key, value);
       return true;
     };
-    (AdminSvc as any).approve = async (id: string) => {
+    (AdminSvc as any).approve = async (id: string, adminId?: string) => {
+      approvedBy.push(adminId);
       const result = await approveOutcome(id);
       approvedIds.push(id);
       return result;
@@ -66,7 +69,7 @@ describe("BulkApprovalRunner", () => {
     (AuthRepo as any).findApprovablePendingIds = async (tenantId: string) => (tenantId === "tenant-ph" ? pendingIds : []);
     (TenantRepo as any).findByCode = async (code: string) =>
       code === "PH" ? { id: "tenant-ph", code: "PH", name: "Philippines" } : code === "UK" ? { id: "tenant-uk", code: "UK", name: "United Kingdom" } : null;
-    (OrganizationRepo as any).writeAudit = async (data: any) => {
+    (SecurityAuditSvc as any).record = async (data: any) => {
       audits.push(data);
       markFinished();
     };
@@ -85,8 +88,18 @@ describe("BulkApprovalRunner", () => {
     expect(progress).to.include({ status: "done", total: 7, done: 7, approved: 7, skipped: 0, failed: 0, startedById: "admin-1" });
     expect(progress.finishedAt).to.be.a("string");
     expect(store.has("bulk-approve:PH:lock")).to.equal(false);
+    // Each approval names the admin who started the run (it writes its own admin.user.approved row
+    // — stubbed out here), and the run ends with one summary row.
+    expect(approvedBy).to.deep.equal(pendingIds.map(() => "admin-1"));
     expect(audits).to.deep.equal([
-      { actorId: "admin-1", action: "users.bulk_approved", payload: { tenant: "PH", total: 7, approved: 7, skipped: 0, failed: 0 } },
+      {
+        action: "admin.user.approved",
+        actorId: "admin-1",
+        organizationId: null,
+        targetType: "tenant",
+        targetId: "PH",
+        payload: { bulk: true, total: 7, approved: 7, skipped: 0, failed: 0 },
+      },
     ]);
   });
 

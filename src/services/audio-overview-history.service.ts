@@ -23,7 +23,7 @@ export function audioOverviewView(row: AudioOverviewRow) {
     turnTimings: (row.turnTimings as unknown as number[] | null) ?? null,
     sentenceTimings: (row.sentenceTimings as unknown as MarkTiming[][] | null) ?? null,
     wordTimings: (row.wordTimings as unknown as MarkTiming[][] | null) ?? null,
-    audio: row.audioFile?.s3Key ? { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt) }) } : null,
+    audio: row.audioFile?.s3Key ? { id: row.audioFile.id, fileUrl: getProxyFileUrl(row.audioFile.s3Key, { filename: audioOverviewFilename(row.createdAt), audit: { kind: "audio_overview", id: row.id } }) } : null,
   };
 }
 

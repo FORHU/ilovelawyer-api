@@ -128,6 +128,8 @@ export interface TheoryDelta {
 /** The document-built case map. Branches are the root's children; points are every node below. */
 export interface MindMapDelta {
   status: PaneStatus;
+  /** No map before this run: `branchesAdded` lists every branch it built, and nothing counts. */
+  first: boolean;
   branchesAdded: string[];
   branchesRemoved: string[];
   pointsAdded: number;

@@ -1,4 +1,5 @@
 import AuthRepo from "../repositories/auth.repository";
+import SecurityAuditSvc from "./security-audit.service";
 import CalendarWatchChannelRepo from "../repositories/calendar-watch-channel.repository";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -63,6 +64,7 @@ export default class GoogleCalendarSvc {
       accessToken: data.access_token,
       encryptedRefreshToken: data.refresh_token ? encryptGoogleToken(data.refresh_token) : undefined,
     });
+    await SecurityAuditSvc.record({ action: "integration.connected", actorId: userId, targetType: "integration", payload: { type: "google_calendar" } });
     return AuthRepo.findById(userId);
   }
 
@@ -122,6 +124,7 @@ export default class GoogleCalendarSvc {
     }
 
     await AuthRepo.clearGoogleCalendarTokens(userId);
+    await SecurityAuditSvc.record({ action: "integration.disconnected", actorId: userId, targetType: "integration", payload: { type: "google_calendar" } });
     return AuthRepo.findById(userId);
   }
 

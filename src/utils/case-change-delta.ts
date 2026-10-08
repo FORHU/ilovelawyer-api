@@ -139,9 +139,9 @@ export function diffRedTeam(before: RedTeamLike | null, after: RedTeamLike | nul
   const prev = argumentsOf(before);
   const next = argumentsOf(after);
   const riskOfLoss = { from: prev?.riskOfLoss ?? null, to: next?.riskOfLoss ?? null };
-  if (!prev || !next) {
-    return { status: "unchanged", first: !prev, riskOfLoss, added: [], dropped: [], restrengthened: [] };
-  }
+  if (!next) return { status: "unchanged", first: !prev, riskOfLoss, added: [], dropped: [], restrengthened: [] };
+  // A first assessment: nothing to compare with, so it lists what it argues — shown, never counted.
+  if (!prev) return { status: "changed", first: true, riskOfLoss, added: next.arguments.map((a) => a.title), dropped: [], restrengthened: [] };
   const key = (a: RedTeamArgument) => normalizeForMatch(a.title);
   const prevByKey = new Map(prev.arguments.map((a) => [key(a), a]));
   const nextByKey = new Map(next.arguments.map((a) => [key(a), a]));
@@ -181,10 +181,12 @@ export function diffReconstruction(
   const norm = (gaps: string[] | undefined) => new Map((gaps ?? []).map((g) => [normalizeForMatch(g), g]));
   const prev = norm(before?.gaps);
   const next = norm(after?.gaps);
-  // A first narrative has nothing to compare against: its gaps aren't "opened" by new evidence.
-  const gapsOpened = before ? [...next].filter(([k]) => !prev.has(k)).map(([, g]) => g) : [];
+  // A first narrative has nothing to compare against: its gaps are listed as what it found (shown,
+  // never counted — see countChanges), not as gaps new evidence opened.
+  const gapsOpened = [...next].filter(([k]) => !before || !prev.has(k)).map(([, g]) => g);
   const gapsClosed = before ? [...prev].filter(([k]) => !next.has(k)).map(([, g]) => g) : [];
-  const status: PaneStatus = outcome === "skipped-edited" ? "skipped" : statusFor(gapsOpened.length + gapsClosed.length);
+  const status: PaneStatus =
+    outcome === "skipped-edited" ? "skipped" : !before && after ? "changed" : statusFor(gapsOpened.length + gapsClosed.length);
   return {
     status,
     outcome,
@@ -214,7 +216,9 @@ export function diffOutlook(before: OutlookLike | null, after: OutlookLike | nul
   const band = { from: before?.band ?? null, to: after?.band ?? null };
   const confidence = { from: before?.confidence ?? null, to: after?.confidence ?? null };
   const unchanged = { status: "unchanged" as const, first: !before, band, confidence, driversAdded: [], driversDropped: [] };
-  if (!after || !before || after.id === before.id) return unchanged;
+  if (!after || after.id === before?.id) return unchanged;
+  // A first outlook: nothing to compare with, so it lists its factors — shown, never counted.
+  if (!before) return { ...unchanged, status: "changed", first: true, driversAdded: driversOf(after) };
   const key = (d: OutlookDriverRef) => `${d.direction}\u0000${normalizeForMatch(d.label)}`;
   const prev = driversOf(before);
   const next = driversOf(after);
@@ -342,7 +346,9 @@ interface TheoryLike {
 export function diffTheory(before: TheoryLike | null, after: TheoryLike | null): TheoryDelta {
   const title = { from: before?.title ?? null, to: after?.title ?? null };
   const none = { first: !before, title, claimsAdded: [], claimsDropped: [], assumptionsChanged: 0, openQuestionsChanged: 0 };
-  if (!before || !after) return { status: "unchanged", ...none };
+  if (!after) return { status: "unchanged", ...none };
+  // A first AI draft: nothing to compare with, so it lists its claims — shown, never counted.
+  if (!before) return { status: "changed", ...none, claimsAdded: after.claims.map((c) => c.statement) };
   const claimKey = (c: { statement: string; stance: string }) => `${c.stance}\u0000${normalizeForMatch(c.statement)}`;
   const claims = addedRemoved(before.claims, after.claims, claimKey, (c) => c.statement);
   const changedCount = <T>(a: T[], b: T[], key: (item: T) => string) => {
@@ -379,18 +385,22 @@ function pointLabels(root: MindMapItem | null | undefined): string[] {
  * someone had expanded or edited the map, which the refresh never overwrites. */
 export function diffMindMap(before: MindMapItem | null, after: MindMapItem | null, keptUserChanges: boolean): MindMapDelta {
   if (keptUserChanges) {
-    return { status: "skipped", branchesAdded: [], branchesRemoved: [], pointsAdded: 0, pointsRemoved: 0, keptUserChanges: true };
+    return { status: "skipped", first: false, branchesAdded: [], branchesRemoved: [], pointsAdded: 0, pointsRemoved: 0, keptUserChanges: true };
   }
   const branches = (root: MindMapItem | null) => root?.children ?? [];
+  // A first map has nothing to compare with: it lists its branches — shown, never counted.
+  if (!before) {
+    const built = branches(after).map((b) => b.label);
+    return { status: after ? "changed" : "unchanged", first: true, branchesAdded: built, branchesRemoved: [], pointsAdded: 0, pointsRemoved: 0, keptUserChanges: false };
+  }
   const branch = addedRemoved(branches(before), branches(after), (b) => normalizeForMatch(b.label ?? ""), (b) => b.label);
-  // A first map has nothing to compare with: its branches aren't changes.
-  const first = !before;
   const points = addedRemoved(pointLabels(before), pointLabels(after), (l) => l, (l) => l);
   const delta = {
-    branchesAdded: first ? [] : branch.added,
-    branchesRemoved: first ? [] : branch.removed,
-    pointsAdded: first ? 0 : points.added.length,
-    pointsRemoved: first ? 0 : points.removed.length,
+    first: false,
+    branchesAdded: branch.added,
+    branchesRemoved: branch.removed,
+    pointsAdded: points.added.length,
+    pointsRemoved: points.removed.length,
     keptUserChanges: false,
   };
   const anything = delta.branchesAdded.length + delta.branchesRemoved.length + delta.pointsAdded + delta.pointsRemoved;
@@ -443,14 +453,15 @@ export function countChanges(deltas: CaseChangeDeltas): number {
     for (const c of Object.values(findings.byCategory)) total += c.added.length + c.removed.length + c.rerated.length;
   }
   if (ran(redTeam)) total += redTeamChanges(redTeam);
-  if (ran(reconstruction)) total += reconstruction.gapsOpened.length + reconstruction.gapsClosed.length;
+  // A first narrative's gaps are what it found, not gaps new evidence opened.
+  if (ran(reconstruction) && reconstruction.outcome !== "generated") total += reconstruction.gapsOpened.length + reconstruction.gapsClosed.length;
   if (ran(outlook)) total += outlookChanges(outlook);
   if (ran(strategy)) total += strategyChanges(strategy);
   if (ran(witnesses)) total += witnesses.added.length + witnesses.removed.length + witnesses.rescored.length;
   if (ran(damages)) total += damages.added.length + damages.removed.length + damages.amountChanged.length;
   if (ran(theory)) total += theoryChanges(theory);
   // Points moving below the branches are shown, not counted: a rebuild rewords many of them.
-  if (ran(mindMap)) total += mindMap.branchesAdded.length + mindMap.branchesRemoved.length;
+  if (ran(mindMap) && !mindMap.first) total += mindMap.branchesAdded.length + mindMap.branchesRemoved.length;
   return total;
 }
 

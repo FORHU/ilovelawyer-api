@@ -1,5 +1,5 @@
 import AuthRepo from "../repositories/auth.repository";
-import OrganizationRepo from "../repositories/organization.repository";
+import SecurityAuditSvc from "./security-audit.service";
 import TenantRepo from "../repositories/tenant.repository";
 import TenantSettingRepo from "../repositories/tenant-setting.repository";
 import BulkApprovalRunner from "../queues/bulk-approval.runner";
@@ -65,10 +65,13 @@ export default class TenantSettingSvc {
     await TenantSettingRepo.upsert(tenant.id, TENANT_SETTING_KEYS.signupAutoApprove, enabled, adminId);
     await redis.del(autoApproveCacheKey(tenant.id));
 
-    await OrganizationRepo.writeAudit({
+    await SecurityAuditSvc.record({
+      action: "admin.settings.signup_auto_approve_changed",
       actorId: adminId,
-      action: "settings.signup_auto_approve.changed",
-      payload: { tenant: code, from: before?.value === true, to: enabled },
+      organizationId: null,
+      targetType: "tenant",
+      targetId: code,
+      payload: { from: before?.value === true, to: enabled },
     });
 
     const all = await TenantSettingSvc.listForAdmin();

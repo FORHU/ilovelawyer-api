@@ -12,6 +12,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import { createServer } from "http";
 import { initSocket } from "./lib/socket";
+import { requestContextMiddleware } from "./lib/request-context";
 
 const app = express();
 
@@ -26,6 +27,8 @@ app.use(
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
+// After the body parsers, which can drop AsyncLocalStorage context across their callbacks.
+app.use(requestContextMiddleware);
 
 // Set up rate limiting middleware
 const limiter = rateLimit({

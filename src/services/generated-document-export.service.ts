@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import FilesRepo from "../repositories/files.repository";
 import { renderGeneratedDocx, renderGeneratedPdf } from "../utils/generated-document-renderer";
 import { uploadToS3, getProxyFileUrl } from "../utils/s3";
+import SecurityAuditSvc from "./security-audit.service";
 import AuditSvc, { AuditAction } from "./audit.service";
 
 export type GeneratedDocumentFormat = "docx" | "pdf";
@@ -30,9 +31,21 @@ export default class GeneratedDocumentExportSvc {
     const outputUri = await uploadToS3(key, buffer, CONTENT_TYPES[format]);
     const filename = `${sanitizeFilename(documentName)}.${format}`;
     const file = await FilesRepo.create(filename, outputUri, key, { source: "chat-wonder", documentName });
+    // Called by chat-wonder with the service API key, so there is no user here; the person who
+    // downloads it shows up as file.accessed when they open the link.
+    await SecurityAuditSvc.record({
+      action: "export.generated_document",
+      actorId: null,
+      organizationId: null,
+      targetType: "file",
+      targetId: file.id,
+      payload: { format, via: "api_key" },
+    });
     // Called server-to-server by Chat Wonder with an API key, so there is no user to attribute it to.
     await AuditSvc.record({ action: AuditAction.GeneratedDocumentExported, payload: { format, fileId: file.id } });
 
-    return { file: { id: file.id, fileUrl: getProxyFileUrl(key, { filename }), filename } };
+    return {
+      file: { id: file.id, fileUrl: getProxyFileUrl(key, { filename, audit: { kind: "generated_document", id: file.id } }), filename },
+    };
   }
 }

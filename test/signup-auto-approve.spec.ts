@@ -13,7 +13,7 @@ import TenantSettingSvc from "../src/services/tenant-setting.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
 import TenantSettingRepo from "../src/repositories/tenant-setting.repository";
-import OrganizationRepo from "../src/repositories/organization.repository";
+import SecurityAuditSvc from "../src/services/security-audit.service";
 import BulkApprovalRunner from "../src/queues/bulk-approval.runner";
 import { redis } from "../src/lib/redis";
 import * as mailerModule from "../src/utils/mailer";
@@ -245,7 +245,7 @@ describe("TenantSettingSvc.setAutoApprove", () => {
   let restore: (() => void)[];
   let upserts: { tenantId: string; key: string; value: unknown; updatedById: string }[];
   let deletedKeys: string[];
-  let audits: { actorId?: string; action: string; payload?: object }[];
+  let audits: { actorId?: string | null; action: string; payload?: object }[];
 
   beforeEach(() => {
     upserts = [];
@@ -256,7 +256,7 @@ describe("TenantSettingSvc.setAutoApprove", () => {
       stash(TenantSettingRepo, ["find", "findAllForKey", "upsert"]),
       stash(AuthRepo, ["countApprovablePending"]),
       stash(BulkApprovalRunner, ["getProgress"]),
-      stash(OrganizationRepo, ["writeAudit"]),
+      stash(SecurityAuditSvc, ["record"]),
       stash(redis, ["del"]),
     ];
 
@@ -273,7 +273,7 @@ describe("TenantSettingSvc.setAutoApprove", () => {
     };
     (AuthRepo as any).countApprovablePending = async () => 3;
     (BulkApprovalRunner as any).getProgress = async () => null;
-    (OrganizationRepo as any).writeAudit = async (data: any) => void audits.push(data);
+    (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
     (redis as any).del = async (key: string) => void deletedKeys.push(key);
   });
 
@@ -285,7 +285,14 @@ describe("TenantSettingSvc.setAutoApprove", () => {
     expect(upserts).to.deep.equal([{ tenantId: PH, key: "signup.autoApprove", value: true, updatedById: "admin-1" }]);
     expect(deletedKeys).to.deep.equal([`tenant-settings:${PH}:signup.autoApprove`]);
     expect(audits).to.deep.equal([
-      { actorId: "admin-1", action: "settings.signup_auto_approve.changed", payload: { tenant: "PH", from: false, to: true } },
+      {
+        action: "admin.settings.signup_auto_approve_changed",
+        actorId: "admin-1",
+        organizationId: null,
+        targetType: "tenant",
+        targetId: "PH",
+        payload: { from: false, to: true },
+      },
     ]);
     expect(entry).to.include({ code: "PH", autoApproveSignups: true, pendingCount: 3 });
   });

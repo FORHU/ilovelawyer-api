@@ -12,6 +12,10 @@ export interface AiMissingEvidenceRow {
 }
 
 export default class MissingEvidenceRepo {
+  static async find(id: string, caseId: string) {
+    return prisma.caseMissingEvidence.findFirst({ where: { id, caseId } });
+  }
+
   /** Open gaps first, then the most severe, so the panel leads with what still needs work. */
   static async list(caseId: string) {
     const rows = await prisma.caseMissingEvidence.findMany({ where: { caseId } });
