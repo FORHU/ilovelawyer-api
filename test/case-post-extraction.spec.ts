@@ -19,6 +19,7 @@ import CaseReconstructionRepo from "../src/repositories/case-reconstruction.repo
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import CaseRefreshSvc from "../src/services/case-refresh.service";
 import CaseReconstructionSvc from "../src/services/case-reconstruction.service";
+import ConsentSvc from "../src/services/consent.service";
 import WitnessExtractSvc from "../src/services/witness-extract.service";
 import DamagesExtractSvc from "../src/services/damages-extract.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
@@ -55,7 +56,9 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     mapChanged: CaseMindMapSvc.documentsChangedSinceBuild,
     mapNeedsFirst: CaseMindMapSvc.needsFirstMap,
     mapGenerate: CaseMindMapSvc.generateFromDocuments,
+    consentAllowed: ConsentSvc.isAllowed,
   };
+  let aiAllowed: boolean;
   let mapChanged: boolean;
   let mapMissing: boolean;
   let mapBuilds: { caseId: string; reason?: string }[];
@@ -72,6 +75,8 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
 
   beforeEach(() => {
     sent = [];
+    aiAllowed = true;
+    (ConsentSvc as any).isAllowed = async () => aiAllowed;
     witnessScheduled = [];
     (WitnessExtractSvc as any).schedule = (caseId: string) => {
       witnessScheduled.push(caseId);
@@ -130,6 +135,24 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     (CaseMindMapSvc as any).documentsChangedSinceBuild = originals.mapChanged;
     (CaseMindMapSvc as any).needsFirstMap = originals.mapNeedsFirst;
     (CaseMindMapSvc as any).generateFromDocuments = originals.mapGenerate;
+    (ConsentSvc as any).isAllowed = originals.consentAllowed;
+  });
+
+  it("starts no analysis for someone who has withdrawn AI processing consent", async () => {
+    aiAllowed = false;
+    let locked = false;
+    let refreshed = false;
+    (AiGenerationLockSvc as any).begin = async () => {
+      locked = true;
+    };
+    (CaseRefreshSvc as any).runQueued = async () => {
+      refreshed = true;
+    };
+    (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1"]);
+    await runCasePostExtraction("case-1", "user-1");
+    expect(locked).to.equal(false);
+    expect(refreshed).to.equal(false);
+    expect(sent).to.deep.equal([]);
   });
 
   // ── Stage 7: an archive/unarchive moves only the mind map's document set ─────────────────

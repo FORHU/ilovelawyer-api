@@ -11,6 +11,17 @@ export const CONSENT_VERSIONS: Record<ConsentPurpose, string> = {
   MARKETING: "2026-10",
 };
 
+/** What a purpose allows for someone who has never answered it. Only an explicit withdrawal ever
+ * blocks something the service depends on (AI), so existing accounts keep working. Purposes that
+ * are optional extras (analytics, marketing) are opt-in: nothing happens until a person grants them.
+ * Terms of Service has no answer to withdraw here, so it is always allowed. */
+export const CONSENT_WHEN_UNANSWERED: Record<ConsentPurpose, "allowed" | "blocked"> = {
+  TERMS_OF_SERVICE: "allowed",
+  AI_PROCESSING: "allowed",
+  ANALYTICS: "blocked",
+  MARKETING: "blocked",
+};
+
 /** Purposes a user may grant or withdraw through the consent endpoint. Terms of Service is
  * excluded: withdrawing it means closing the account, which has its own flow. */
 export const SELF_SERVICE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["AI_PROCESSING", "ANALYTICS", "MARKETING"];

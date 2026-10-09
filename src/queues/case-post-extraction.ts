@@ -5,6 +5,7 @@ import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import WitnessExtractSvc from "../services/witness-extract.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
+import ConsentSvc from "../services/consent.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
@@ -55,6 +56,14 @@ export function scheduleCasePostExtraction(caseId: string, userId: string): void
 export async function runCasePostExtraction(caseId: string, userId: string): Promise<void> {
   try {
     if (!(await CaseRepo.exists(caseId))) {
+      return;
+    }
+
+    // This runs without anyone pressing a button, on behalf of whoever uploaded or deleted the
+    // document. If they have switched AI processing off, the case is left as it is: no analysis
+    // is started (and no lock was taken yet, so nothing is left half-done).
+    if (!(await ConsentSvc.isAllowed(userId, "AI_PROCESSING"))) {
+      logger.info("Case post-extraction: skipped, AI processing consent is withdrawn", { caseId, userId });
       return;
     }
 

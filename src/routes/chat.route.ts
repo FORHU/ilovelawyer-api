@@ -1,5 +1,6 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
+import requireConsent from "../middleware/require-consent.middleware";
 import validSession from "../middleware/valid-session.middleware";
 import resolveOrganization from "../middleware/resolve-organization.middleware";
 import ChatCtrl from "../controllers/chat.controller";
@@ -20,7 +21,7 @@ router.delete("/consultations/:consultationId", asyncHandler(ChatCtrl.deleteCons
 router.get("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.listMessages));
 router.get("/consultations/:consultationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
 router.post("/consultations/:consultationId/relevant-chunks", asyncHandler(ChatCtrl.relevantChunks));
-router.post("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.sendMessage));
+router.post("/consultations/:consultationId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ChatCtrl.sendMessage));
 router.post("/consultations/:consultationId/messages/:messageId/cancel", asyncHandler(ChatCtrl.cancelMessage));
 router.delete("/consultations/:consultationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
 router.post(

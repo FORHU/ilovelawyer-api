@@ -1,5 +1,6 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
+import requireConsent from "../middleware/require-consent.middleware";
 import validSession from "../middleware/valid-session.middleware";
 import resolveOrganization from "../middleware/resolve-organization.middleware";
 import recordCaseItemDeletions from "../middleware/record-case-item-deletions.middleware";
@@ -41,7 +42,7 @@ router.post("/:caseId/documents", asyncHandler(CaseCtrl.handleCreateCaseWithDocu
 router.post("/:caseId/relevant-chunks", asyncHandler(CaseCtrl.relevantChunks));
 
 router.get("/:caseId/snapshot", asyncHandler(CaseTerminalCtrl.snapshot));
-router.post("/:caseId/refresh", asyncHandler(CaseTerminalCtrl.refresh));
+router.post("/:caseId/refresh", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.refresh));
 router.get("/:caseId/ai-jobs/:kind", asyncHandler(CaseTerminalCtrl.getAiJobStatus));
 router.get("/:caseId/change-summaries", asyncHandler(CaseTerminalCtrl.listChangeSummaries));
 router.get("/:caseId/change-summaries/days", asyncHandler(CaseTerminalCtrl.listChangeSummaryDays));
@@ -50,10 +51,10 @@ router.get("/:caseId/manual-edits", asyncHandler(CaseTerminalCtrl.listManualEdit
 
 router.get("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.listTimeline));
 router.post("/:caseId/timeline", asyncHandler(CaseTerminalCtrl.createTimeline));
-router.post("/:caseId/timeline/generate", asyncHandler(CaseTerminalCtrl.generateTimeline));
+router.post("/:caseId/timeline/generate", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateTimeline));
 router.get("/:caseId/mind-map", asyncHandler(CaseMindMapCtrl.get));
 router.patch("/:caseId/mind-map", asyncHandler(CaseMindMapCtrl.edit));
-router.post("/:caseId/mind-map/generate", asyncHandler(CaseMindMapCtrl.generate));
+router.post("/:caseId/mind-map/generate", requireConsent("AI_PROCESSING"), asyncHandler(CaseMindMapCtrl.generate));
 router.post("/:caseId/mind-map/expand", asyncHandler(CaseMindMapCtrl.expand));
 router.post("/:caseId/mind-map/revert", asyncHandler(CaseMindMapCtrl.revert));
 router.patch("/:caseId/timeline/:id", asyncHandler(CaseTerminalCtrl.updateTimeline));
@@ -70,9 +71,9 @@ router.get("/:caseId/evidence", asyncHandler(CaseTerminalCtrl.evidence));
 router.put("/:caseId/evidence/matrix/:documentId", asyncHandler(CaseTerminalCtrl.upsertMatrix));
 router.post("/:caseId/evidence/matrix/:documentId/custody", asyncHandler(CaseTerminalCtrl.addCustodyEvent));
 router.delete("/:caseId/evidence/matrix/:documentId/custody/:eventId", asyncHandler(CaseTerminalCtrl.deleteCustodyEvent));
-router.post("/:caseId/evidence/contradictions/scan", asyncHandler(CaseTerminalCtrl.scanContradictions));
+router.post("/:caseId/evidence/contradictions/scan", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.scanContradictions));
 router.patch("/:caseId/evidence/contradictions/:id", asyncHandler(CaseTerminalCtrl.updateContradiction));
-router.post("/:caseId/evidence/missing/regenerate", asyncHandler(CaseTerminalCtrl.regenerateMissingEvidence));
+router.post("/:caseId/evidence/missing/regenerate", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.regenerateMissingEvidence));
 router.patch("/:caseId/evidence/missing/:id", asyncHandler(CaseTerminalCtrl.updateMissingEvidence));
 router.get("/:caseId/evidence/traces/:documentId", asyncHandler(CaseTerminalCtrl.traces));
 
@@ -81,8 +82,8 @@ router.post("/:caseId/citations", asyncHandler(CaseTerminalCtrl.checkCitation));
 router.patch("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.updateCitation));
 router.delete("/:caseId/citations/:id", asyncHandler(CaseTerminalCtrl.deleteCitation));
 router.get("/:caseId/citation-map", asyncHandler(CaseTerminalCtrl.citationMap));
-router.post("/:caseId/citation-grounds/map", asyncHandler(CaseTerminalCtrl.mapCitationGrounds));
-router.post("/:caseId/citation-map/sweep", asyncHandler(CaseTerminalCtrl.sweepAdverseCitations));
+router.post("/:caseId/citation-grounds/map", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.mapCitationGrounds));
+router.post("/:caseId/citation-map/sweep", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.sweepAdverseCitations));
 router.post("/:caseId/citation-map/adverse/:id/accept", asyncHandler(CaseTerminalCtrl.acceptAdverseHit));
 router.post("/:caseId/citation-map/adverse/:id/dismiss", asyncHandler(CaseTerminalCtrl.dismissAdverseHit));
 router.post("/:caseId/citation-grounds", asyncHandler(CaseTerminalCtrl.createCitationGround));
@@ -99,7 +100,7 @@ router.post("/:caseId/edges", asyncHandler(CaseEdgeCtrl.create));
 router.delete("/:caseId/edges/:id", asyncHandler(CaseEdgeCtrl.delete));
 
 router.get("/:caseId/procedure", asyncHandler(CaseTerminalCtrl.procedure));
-router.post("/:caseId/strategy/refresh", asyncHandler(CaseTerminalCtrl.refreshStrategy));
+router.post("/:caseId/strategy/refresh", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.refreshStrategy));
 router.post("/:caseId/procedure/deadlines", asyncHandler(CaseTerminalCtrl.createDeadline));
 router.post("/:caseId/procedure/deadlines/recompute-stale", asyncHandler(CaseTerminalCtrl.recomputeStaleDeadlines));
 router.post("/:caseId/procedure/deadlines/:deadlineId/confirm", asyncHandler(CaseTerminalCtrl.confirmDeadline));
@@ -115,16 +116,16 @@ router.patch("/:caseId/confidential", asyncHandler(CaseTerminalCtrl.setConfident
 
 router.get("/:caseId/findings", asyncHandler(CaseTerminalCtrl.listFindings));
 router.post("/:caseId/findings", asyncHandler(CaseTerminalCtrl.createFinding));
-router.post("/:caseId/findings/regenerate", asyncHandler(CaseTerminalCtrl.regenerateFindings));
-router.post("/:caseId/outlook/generate", asyncHandler(CaseTerminalCtrl.generateOutlook));
+router.post("/:caseId/findings/regenerate", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.regenerateFindings));
+router.post("/:caseId/outlook/generate", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateOutlook));
 router.patch("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.updateFinding));
 router.delete("/:caseId/findings/:id", asyncHandler(CaseTerminalCtrl.deleteFinding));
 router.post("/:caseId/findings/:id/jev-check", asyncHandler(CaseTerminalCtrl.jevCheckFinding));
 
 router.get("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.listWitnesses));
 router.post("/:caseId/witnesses", asyncHandler(CaseTerminalCtrl.createWitness));
-router.post("/:caseId/witnesses/score", asyncHandler(CaseTerminalCtrl.scoreWitnesses));
-router.post("/:caseId/witnesses/refresh", asyncHandler(CaseTerminalCtrl.refreshWitnesses));
+router.post("/:caseId/witnesses/score", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.scoreWitnesses));
+router.post("/:caseId/witnesses/refresh", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.refreshWitnesses));
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
 router.patch("/:caseId/witnesses/:id/factors/:factor", asyncHandler(CaseTerminalCtrl.setWitnessFactor));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
@@ -132,31 +133,31 @@ router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitn
 router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
 router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
 router.post("/:caseId/damages/propose", asyncHandler(CaseTerminalCtrl.proposeDamages));
-router.post("/:caseId/damages/refresh", asyncHandler(CaseTerminalCtrl.refreshDamages));
+router.post("/:caseId/damages/refresh", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.refreshDamages));
 router.patch("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.updateDamage));
 router.post("/:caseId/damages/:id/accept", asyncHandler(CaseTerminalCtrl.acceptDamage));
 router.delete("/:caseId/damages/:id", asyncHandler(CaseTerminalCtrl.deleteDamage));
 
 router.get("/:caseId/claims", asyncHandler(CaseTerminalCtrl.listClaims));
-router.post("/:caseId/claims/extract", asyncHandler(CaseTerminalCtrl.extractClaims));
+router.post("/:caseId/claims/extract", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.extractClaims));
 router.post("/:caseId/claims", asyncHandler(CaseTerminalCtrl.createClaim));
 router.patch("/:caseId/claims/:id", asyncHandler(CaseTerminalCtrl.updateClaim));
 router.delete("/:caseId/claims/:id", asyncHandler(CaseTerminalCtrl.deleteClaim));
 
 router.get("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.getReconstruction));
-router.post("/:caseId/reconstruction/generate", asyncHandler(CaseTerminalCtrl.generateReconstruction));
+router.post("/:caseId/reconstruction/generate", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateReconstruction));
 router.patch("/:caseId/reconstruction", asyncHandler(CaseTerminalCtrl.updateReconstruction));
-router.post("/:caseId/reconstruction/scenes", asyncHandler(CaseTerminalCtrl.generateReconstructionScenes));
-router.post("/:caseId/reconstruction/events", asyncHandler(CaseTerminalCtrl.generateReconstructionEvents));
+router.post("/:caseId/reconstruction/scenes", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateReconstructionScenes));
+router.post("/:caseId/reconstruction/events", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateReconstructionEvents));
 
 router.get("/:caseId/red-team", asyncHandler(CaseTerminalCtrl.getRedTeam));
-router.post("/:caseId/red-team/generate", asyncHandler(CaseTerminalCtrl.generateRedTeam));
+router.post("/:caseId/red-team/generate", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateRedTeam));
 
 router.get("/:caseId/export", asyncHandler(CaseTerminalCtrl.exportBrief));
 router.get("/:caseId/export/history", asyncHandler(CaseTerminalCtrl.exportBriefHistory));
 router.get("/:caseId/audio-overview/history", asyncHandler(CaseTerminalCtrl.audioOverviewHistory));
 router.get("/:caseId/audio-overview/latest", asyncHandler(CaseTerminalCtrl.latestAudioOverview));
-router.post("/:caseId/audio-overview/generate", asyncHandler(CaseTerminalCtrl.generateAudioOverview));
+router.post("/:caseId/audio-overview/generate", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateAudioOverview));
 router.post("/:caseId/audio-overview/:overviewId/recording", asyncHandler(CaseTerminalCtrl.retryAudioOverviewRecording));
 router.get("/:caseId/decisions", asyncHandler(CaseTerminalCtrl.listDecisions));
 // Explanation (XAI) trace — what the AI did to answer each turn, for the Terminal trace pane
@@ -167,9 +168,9 @@ router.post("/:caseId/decisions/:id/reactivate", asyncHandler(CaseTerminalCtrl.r
 
 router.get("/:caseId/theories", asyncHandler(CaseTerminalCtrl.listTheories));
 router.post("/:caseId/theories", asyncHandler(CaseTerminalCtrl.createTheory));
-router.post("/:caseId/theories/propose", asyncHandler(CaseTerminalCtrl.proposeTheory));
+router.post("/:caseId/theories/propose", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.proposeTheory));
 router.get("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.getTheoryDiff));
-router.post("/:caseId/theories/diff", asyncHandler(CaseTerminalCtrl.generateTheoryDiff));
+router.post("/:caseId/theories/diff", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.generateTheoryDiff));
 router.patch("/:caseId/theories/:id", asyncHandler(CaseTerminalCtrl.updateTheory));
 router.delete("/:caseId/theories/:id", asyncHandler(CaseTerminalCtrl.deleteTheory));
 router.post("/:caseId/theories/:id/publish", asyncHandler(CaseTerminalCtrl.publishTheory));
