@@ -24,8 +24,9 @@ describe("Case document embedding isolation", () => {
     await prisma.user.create({
       data: { id: userId, email: `iso-${userId}@example.com`, username: `iso-${userId}` },
     });
+    const tenant = await prisma.tenant.upsert({ where: { code: "PH" }, update: {}, create: { code: "PH", name: "Philippines" } });
     await prisma.organization.create({
-      data: { id: orgId, name: "Isolation Org", slug: `iso-org-${orgId}`, createdById: userId },
+      data: { id: orgId, name: "Isolation Org", slug: `iso-org-${orgId}`, createdById: userId, tenantId: tenant.id },
     });
     await prisma.case.createMany({
       data: [

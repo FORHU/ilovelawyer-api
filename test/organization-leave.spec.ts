@@ -83,7 +83,7 @@ describe("Leaving an organization", () => {
 
     const listed = await CaseSvc.list(firm.id, memberId, 1, 50);
     expect(listed.data.map((c) => c.id)).to.include(firmCase.id);
-    expect((await CaseSvc.getById(firmCase.id, firm.id)).id).to.equal(firmCase.id);
+    expect((await CaseSvc.getById(firmCase.id, firm.id, memberId)).id).to.equal(firmCase.id);
     expect((await CaseAccess.loadAccessibleCase(firmCase.id, memberId)).id).to.equal(firmCase.id);
     expect((await CaseAccess.assertCanEdit(firmCase.id, ownerId)).id).to.equal(firmCase.id);
   });

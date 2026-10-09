@@ -52,7 +52,7 @@ describe("ConsentSvc", () => {
     const tos = (await ConsentSvc.list("u1")).find((c) => c.purpose === "TERMS_OF_SERVICE")!;
     expect(tos).to.deep.include({ status: "granted", version: "2025-01", outdated: true });
 
-    terms = { termsAcceptedAt: new Date("2026-10-01T00:00:00Z"), termsVersion: CONSENT_VERSIONS.TERMS_OF_SERVICE };
+    terms = { termsAcceptedAt: new Date("2026-10-01T00:00:00Z"), termsVersion: CONSENT_VERSIONS.TERMS_OF_SERVICE! };
     const current = (await ConsentSvc.list("u1")).find((c) => c.purpose === "TERMS_OF_SERVICE")!;
     expect(current.outdated).to.equal(false);
   });
