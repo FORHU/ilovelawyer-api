@@ -22,6 +22,8 @@ export const AuditAction = {
   OrgMemberRoleChanged: "org.member_role_changed",
   OrgMemberRemoved: "org.member_removed",
   OrgMemberLeft: "org.member_left",
+  OrgArchived: "org.archived",
+  OrgDeleted: "org.deleted",
 } as const;
 
 export type AuditActionName = (typeof AuditAction)[keyof typeof AuditAction];

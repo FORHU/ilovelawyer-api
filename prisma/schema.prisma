@@ -2599,6 +2599,13 @@ model Organization {
   isPersonal  Boolean    @default(false)
   createdById String
   tenantId    String
+  // An organization its last member left (see OrganizationSvc.exit): nobody can open, join or be
+  // invited to it any more, and OrganizationDeletionQueue deletes it once deletionScheduledAt
+  // passes. archivedById is who left last — kept for customer support, who restore by hand.
+  status              OrganizationStatus @default(ACTIVE)
+  archivedAt          DateTime?
+  archivedById        String?
+  deletionScheduledAt DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -2621,6 +2628,12 @@ model Organization {
 
   @@index([createdById])
   @@index([tenantId])
+  @@index([status, deletionScheduledAt])
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  PENDING_DELETION
 }
 
 model Tenant {

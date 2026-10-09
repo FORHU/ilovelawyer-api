@@ -29,12 +29,12 @@ const INTEGRATION_DRAFT: Exempt = { exempt: "Creates a disconnected connector re
 
 export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditAction[] | Exempt> = {
   "POST /organizations/": ["org.created"],
-  "POST /organizations/invites/:id/accept": ["org.invite_accepted", "org.member_left"],
+  "POST /organizations/invites/:id/accept": ["org.invite_accepted", "org.member_left", "org.archived"],
   "POST /organizations/invites/:id/decline": ["org.invite_declined"],
   "PATCH /organizations/:id": ["org.updated"],
   "POST /organizations/:id/members": ["org.member_invited"],
   "PATCH /organizations/:id/members/:userId": ["org.member_role_changed"],
-  "DELETE /organizations/:id/members/me": ["org.member_left"],
+  "DELETE /organizations/:id/members/me": ["org.member_left", "org.archived"],
   "DELETE /organizations/:id/members/:userId": ["org.member_removed"],
   "POST /organizations/:id/cases": ["org.case_attached"],
   "GET /organizations/:id/audit-log/export": ["export.audit_log"],

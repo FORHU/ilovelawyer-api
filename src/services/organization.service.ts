@@ -1,4 +1,4 @@
-import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, OrganizationStatus, PackageSku } from "@prisma/client";
 import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationInviteRepo from "../repositories/organization-invite.repository";
@@ -214,7 +214,13 @@ export default class OrganizationSvc {
       throw new HttpError("User is already a member of this organization", 409);
     }
 
-    const outstanding = await OrganizationInviteRepo.findForUser(user.id);
+    let outstanding = await OrganizationInviteRepo.findForUser(user.id);
+    // An invite to an organization that's being deleted can't be accepted any more, so it mustn't
+    // hold the invitee's one invite slot either.
+    if (outstanding && outstanding.organization.status !== OrganizationStatus.ACTIVE) {
+      await OrganizationInviteRepo.delete(user.id);
+      outstanding = null;
+    }
     if (outstanding) {
       const message =
         outstanding.organizationId === organizationId
@@ -277,7 +283,12 @@ export default class OrganizationSvc {
     role: OrganizationRole,
     { inviterName, orgName, origin }: { inviterName: string; orgName: string; origin: string },
   ) {
-    const outstanding = await OrganizationEmailInviteRepo.findByEmail(email);
+    let outstanding = await OrganizationEmailInviteRepo.findByEmail(email);
+    // Same as inviteMember: a dead organization's invite doesn't hold the address's one slot.
+    if (outstanding && outstanding.organization.status !== OrganizationStatus.ACTIVE) {
+      await OrganizationEmailInviteRepo.delete(outstanding.id);
+      outstanding = null;
+    }
     if (outstanding) {
       const message =
         outstanding.organizationId === organizationId
@@ -307,10 +318,12 @@ export default class OrganizationSvc {
     return invite;
   }
 
-  /** The caller's own pending invite, if any (a user can have at most one). */
+  /** The caller's own pending invite, if any (a user can have at most one). An invite to an
+   * organization that's being deleted isn't one any more — accepting it would fail. */
   static async getPendingInviteForUser(userId: string) {
     const invite = await OrganizationInviteRepo.findForUser(userId);
-    return invite ? { ...invite, status: OrganizationMemberStatus.PENDING } : null;
+    if (!invite || invite.organization.status !== OrganizationStatus.ACTIVE) return null;
+    return { ...invite, status: OrganizationMemberStatus.PENDING };
   }
 
   /** Joins the inviting organization. Someone already in a real organization leaves it as part
@@ -321,6 +334,11 @@ export default class OrganizationSvc {
     const invite = await OrganizationInviteRepo.findForUser(userId);
     if (!invite || invite.organizationId !== organizationId) {
       throw new HttpError("No pending invite found for this organization", 404);
+    }
+    // Its last member left, so it's archived for deletion and nobody can join it.
+    if (invite.organization.status !== OrganizationStatus.ACTIVE) {
+      await OrganizationInviteRepo.delete(userId);
+      throw new HttpError("This invitation is no longer valid.", 410);
     }
 
     const audit = () =>
@@ -345,14 +363,16 @@ export default class OrganizationSvc {
 
     await this.assertCanLeave(current.organizationId, current.role);
     const portfolio = await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
-    const member = await OrganizationInviteRepo.accept(invite, current, (tx) =>
-      CaseCopyRepo.carryOverIn(tx, {
+    let archived = false;
+    const member = await OrganizationInviteRepo.accept(invite, current, async (tx) => {
+      await CaseCopyRepo.carryOverIn(tx, {
         sourceOrganizationId: current.organizationId,
         sourceOrganizationName: current.organization.name,
         userId,
         targetOrganizationId: portfolio.id,
-      }),
-    );
+      });
+      archived = await OrganizationRepo.archiveIfEmptyIn(tx, current.organizationId, userId);
+    });
     CaseCopyQueue.kick();
     // Accepting left their previous organization — that firm's log says so too.
     await SecurityAuditSvc.record({
@@ -363,6 +383,7 @@ export default class OrganizationSvc {
       targetId: userId,
       payload: { role: current.role, reason: "joined_another_organization" },
     });
+    if (archived) await OrganizationSvc.recordArchived(current.organizationId, userId);
     await recordAccepted();
     await audit();
     return member;
@@ -456,11 +477,11 @@ export default class OrganizationSvc {
     await AuditSvc.record({ action: AuditAction.OrgMemberRemoved, actorId: actingUserId, payload: { organizationId, targetUserId } });
   }
 
-  /** Self-service: a member removes their own membership. A sole-member OWNER may leave
-   * freely (the Organization row is preserved, just ownerless — never cascade-deleted by
-   * this action). An OWNER who isn't the sole member can only leave once another OWNER
-   * exists (this app allows multiple OWNERs per org, same as changeMemberRole/removeMember
-   * — see assertNotLastOwner) — otherwise they must promote a teammate to OWNER first. */
+  /** Self-service: a member removes their own membership. An OWNER who isn't the sole member
+   * can only leave once another OWNER exists (this app allows multiple OWNERs per org, same as
+   * changeMemberRole/removeMember — see assertNotLastOwner) — otherwise they must promote a
+   * teammate to OWNER first. A sole-member OWNER may leave: the organization is then archived
+   * for deletion (see OrganizationRepo.archiveIfEmptyIn) and deleted after the grace period. */
   static async leave(organizationId: string, userId: string) {
     const membership = await OrganizationMemberRepo.find(organizationId, userId);
     if (!membership) throw new HttpError("Not a member of this organization", 404);
@@ -471,7 +492,7 @@ export default class OrganizationSvc {
 
     await this.assertCanLeave(organizationId, membership.role);
 
-    await OrganizationSvc.exit(organizationId, userId);
+    const { archived } = await OrganizationSvc.exit(organizationId, userId);
     await SecurityAuditSvc.record({
       action: "org.member_left",
       actorId: userId,
@@ -481,6 +502,20 @@ export default class OrganizationSvc {
       payload: { role: membership.role },
     });
     await AuditSvc.record({ action: AuditAction.OrgMemberLeft, actorId: userId, payload: { organizationId } });
+    if (archived) await OrganizationSvc.recordArchived(organizationId, userId);
+  }
+
+  /** Audit trail for an organization its last member just left (see archiveIfEmptyIn). */
+  private static async recordArchived(organizationId: string, userId: string) {
+    await SecurityAuditSvc.record({
+      action: "org.archived",
+      actorId: userId,
+      organizationId,
+      targetType: "organization",
+      targetId: organizationId,
+      payload: { reason: "last_member_left" },
+    });
+    await AuditSvc.record({ action: AuditAction.OrgArchived, actorId: userId, payload: { organizationId } });
   }
 
   /** How a member stops belonging to an organization, whether they left or were removed: the
@@ -488,21 +523,25 @@ export default class OrganizationSvc {
    * (copies queued of the cases they created and the standalone consultations they started, their
    * own calendar moved — see CaseCopyRepo.carryOverIn), and they land in that portfolio — their
    * personal workspace, in this organization's tenant, made if they had none. The organization
-   * keeps its originals. */
+   * keeps its originals — and if they were its last member, it's archived for deletion in that
+   * same transaction (`archived`). */
   private static async exit(organizationId: string, userId: string) {
     const organization = await OrganizationRepo.findById(organizationId);
     if (!organization) throw new HttpError("Organization not found", 404);
     const portfolio = await OrganizationSvc.ensurePersonal(userId, organization.tenantId);
-    await OrganizationMemberRepo.remove(organizationId, userId, (tx) =>
-      CaseCopyRepo.carryOverIn(tx, {
+    let archived = false;
+    await OrganizationMemberRepo.remove(organizationId, userId, async (tx) => {
+      await CaseCopyRepo.carryOverIn(tx, {
         sourceOrganizationId: organizationId,
         sourceOrganizationName: organization.name,
         userId,
         targetOrganizationId: portfolio.id,
-      }),
-    );
+      });
+      archived = await OrganizationRepo.archiveIfEmptyIn(tx, organizationId, userId);
+    });
     await OrganizationRepo.activatePersonal(portfolio.id, userId, { addMember: true });
     CaseCopyQueue.kick();
+    return { archived };
   }
 
   /** Shared by leave() and acceptInvite(): an OWNER can walk away from an org they're alone
