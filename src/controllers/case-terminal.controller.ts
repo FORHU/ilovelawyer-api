@@ -19,7 +19,6 @@ import CaseFindingSvc from "../services/case-finding.service";
 import FindingJevSvc from "../services/finding-jev.service";
 import ClaimExtractSvc from "../services/claim-extract.service";
 import CitationGroundSvc from "../services/citation-ground.service";
-import AdverseSweepSvc from "../services/adverse-sweep.service";
 import WitnessSvc from "../services/witness.service";
 import DamageClaimSvc from "../services/damage-claim.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
@@ -361,13 +360,9 @@ export default class CaseTerminalCtrl {
       tenantCode === "UK"
         ? await UkCitationMapSvc.getSeed(req.params.caseId, req.user.userId)
         : await CitationMapSvc.getSeed(req.params.caseId, req.user.userId);
-    // getSeed has already checked case access. Claims, their authority links and the adverse sweep
-    // feed the list view.
-    const [grounds, sweep] = await Promise.all([
-      CitationGroundSvc.forSeed(req.params.caseId),
-      AdverseSweepSvc.forSeed(req.params.caseId),
-    ]);
-    return res.status(200).json({ ...seed, ...grounds, ...sweep });
+    // getSeed has already checked case access. Claims and their authority links feed the list view.
+    const grounds = await CitationGroundSvc.forSeed(req.params.caseId);
+    return res.status(200).json({ ...seed, ...grounds });
   }
 
   /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
@@ -388,26 +383,6 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "citationGrounds", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "citationGrounds");
     return res.status(202).json(status);
-  }
-
-  /** Queued via AiGenerationQueue (SQS) — see refresh() above for why. */
-  static async sweepAdverseCitations(req: Request, res: Response) {
-    const { caseId } = req.params;
-    const userId = req.user.userId;
-    await AdverseSweepSvc.beginQueued(caseId, userId);
-    AiGenerationQueue.enqueue({ kind: "adverseSweep", caseId, userId });
-    const status = await AiGenerationLockSvc.getStatus(caseId, "adverseSweep");
-    return res.status(202).json(status);
-  }
-
-  static async acceptAdverseHit(req: Request, res: Response) {
-    const result = await AdverseSweepSvc.accept(req.params.caseId, req.params.id, req.user.userId);
-    return res.status(200).json(result);
-  }
-
-  static async dismissAdverseHit(req: Request, res: Response) {
-    const result = await AdverseSweepSvc.dismiss(req.params.caseId, req.params.id, req.user.userId);
-    return res.status(200).json(result);
   }
 
   static async createCitationGround(req: Request, res: Response) {

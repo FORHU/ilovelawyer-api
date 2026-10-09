@@ -837,9 +837,6 @@ model Case {
   // a delete immediately followed by a re-add that nets out to the same set). Null until the
   // first refresh runs.
   readySetFingerprint   String?
-  // When the Citation Map's adverse-citation sweep last finished (AdverseSweepSvc). Null until
-  // the first sweep — the library badge reads "Pending" until then.
-  adverseSweptAt        DateTime?
   // Which FINDINGS_FORMAT_VERSION (case-finding.constants.ts) the case's AI findings were last
   // generated with. Null for cases whose findings predate the stamp. Opening the Terminal on an
   // older one queues a findings-only regeneration (CaseFindingAiSvc.scheduleIfOutdated).
@@ -876,7 +873,6 @@ model Case {
   damageClaimDismissals DamageClaimDismissal[]
   claims               CaseClaim[]
   citationGrounds      CitationGround[]
-  adverseHits          AdverseCitationHit[]
   reconstruction       CaseReconstruction?
   reconstructionEvents CaseReconstructionEvents?
   redTeamAssessment    RedTeamAssessment?
@@ -1875,7 +1871,6 @@ model CitationCheck {
   case        Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
   resolvedLaw Law?                 @relation("ResolvedLaw", fields: [resolvedLawId], references: [id], onDelete: SetNull)
   grounds     CitationGround[]
-  adverseHits AdverseCitationHit[]
 
   @@index([caseId])
   @@index([resolvedLawId])
@@ -2236,49 +2231,6 @@ enum AuthoringSource {
 enum GroundRole {
   SUBSTANTIVE
   PROCEDURAL
-}
-
-enum AdverseHitKind {
-  // The case's own citation check found the authority's text undermines what it's cited for.
-  OWN_STATUS
-  // A later decision in the corpus overruled, abandoned or distinguished the authority.
-  NEGATIVE_TREATMENT
-}
-
-enum SuggestionStatus {
-  PENDING
-  ACCEPTED
-  DISMISSED
-}
-
-// One adverse signal against a case's cited authority, found by the Citation Map's sweep
-// (AdverseSweepSvc). Rebuilt on each sweep; suggestionStatus/weaknessId carry over to the same
-// hit (citationCheckId + edgeId) so a lawyer's accept/dismiss survives a re-run. A hit is only
-// ever suggested as a Weakness — the lawyer accepts it (creating the CaseFinding) or dismisses it.
-model AdverseCitationHit {
-  id               String             @id @default(uuid())
-  caseId           String
-  citationCheckId  String
-  kind             AdverseHitKind
-  // The CitationEdge behind a NEGATIVE_TREATMENT hit, and what it recorded. Not a foreign key —
-  // the hit keeps its record if the corpus edge is later re-extracted.
-  edgeId           String?
-  treatment        CitationTreatment?
-  citingTitle      String?
-  excerpt          String?            @db.Text
-  // Jev's read of whether the treatment defeats what the case cites the authority for
-  // (adverse-citation-jev.ts). Null for OWN_STATUS hits, or when Jev wasn't run or failed.
-  jev              Json?
-  jevCheckedAt     DateTime?
-  suggestionStatus SuggestionStatus   @default(PENDING)
-  // The Weakness created when the lawyer accepted the suggestion.
-  weaknessId       String?
-  createdAt        DateTime           @default(now())
-
-  case          Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  citationCheck CitationCheck @relation(fields: [citationCheckId], references: [id], onDelete: Cascade)
-
-  @@index([caseId])
 }
 
 // One authority (a CitationCheck) attached to one pleaded ground (a CaseClaim) — the Citation

@@ -35,7 +35,6 @@ export const AI_GENERATION_KINDS = [
   "damagesExtract",
   "claimExtract",
   "citationGrounds",
-  "adverseSweep",
   "missingEvidence",
 ] as const;
 
