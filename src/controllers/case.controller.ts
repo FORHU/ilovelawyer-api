@@ -44,6 +44,8 @@ export default class CaseCtrl {
       value.search,
       value.status,
       value.createdBy,
+      value.sort,
+      value.order,
     );
     return res.status(200).json(result);
   }

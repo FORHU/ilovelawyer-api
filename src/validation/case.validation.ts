@@ -53,6 +53,9 @@ export const listCasesSchema = Joi.object({
   search: Joi.string().trim().allow("").optional(),
   status: Joi.string().valid("ACTIVE", "ARCHIVED").default("ACTIVE"),
   createdBy: Joi.string().uuid().optional(),
+  // CaseListSort/CaseListOrder in case.repository.ts — Created, Last updated or Last opened.
+  sort: Joi.string().valid("created", "updated", "opened").default("updated"),
+  order: Joi.string().valid("asc", "desc").default("desc"),
 });
 
 export const updateCaseSchema = Joi.object({
