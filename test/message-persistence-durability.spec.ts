@@ -40,6 +40,7 @@ const payload: AssistantTurnPayload = {
   parentMessageId: "m1",
   effectiveCaseId: null,
   userId: "u1",
+  tenantCode: "PH",
   fullResponse: "The answer.",
   relatedCases: [],
 };

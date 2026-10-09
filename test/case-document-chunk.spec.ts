@@ -16,8 +16,9 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
     await prisma.user.create({
       data: { id: userId, email: `test-${userId}@example.com`, username: `test-${userId}` },
     });
+    const tenant = await prisma.tenant.upsert({ where: { code: "PH" }, update: {}, create: { code: "PH", name: "Philippines" } });
     await prisma.organization.create({
-      data: { id: organizationId, name: "Test Org", slug: `test-org-${organizationId}`, createdById: userId },
+      data: { id: organizationId, name: "Test Org", slug: `test-org-${organizationId}`, createdById: userId, tenantId: tenant.id },
     });
     await prisma.document.create({
       data: { id: caseDocumentId, userId, organizationId, name: "Test Document" },

@@ -54,7 +54,7 @@ describe("evidence notes encryption", () => {
         let item = items.find((i) => i.caseId === k.caseId && i.documentId === k.documentId);
         if (item) Object.assign(item, update);
         else {
-          item = { id: `item-${++seq}`, notes: null, privilegeStatus: "NONE", createdAt: new Date(), ...create };
+          item = { id: `item-${++seq}`, notes: null, privilegeStatus: "NONE", createdAt: new Date(), ...create } as Item;
           items.push(item);
         }
         return withEvents(item);
