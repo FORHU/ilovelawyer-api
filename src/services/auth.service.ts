@@ -91,7 +91,7 @@ export default class AuthSvc {
     // Skipped when the Tenant auto-approves signups, or when an organization invited this
     // address: there's no wait, and verifyOtp flips the account to ACTIVE (see
     // autoApproveIfEnabled).
-    if (!(await TenantSettingSvc.isAutoApproveOn(tenantId)) && !(await OrganizationEmailInviteRepo.findByEmail(email))) {
+    if (!(await TenantSettingSvc.isAutoApproveOn(tenantId)) && !(await OrganizationEmailInviteRepo.hasLiveInvite(email))) {
       await AuthSvc.sendSignupPendingEmail(user);
     }
 

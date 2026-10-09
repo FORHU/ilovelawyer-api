@@ -1,5 +1,7 @@
 import prisma from "../lib/prisma";
-import { CasePermission, OrganizationRole, OrganizationMemberStatus, PackageSku } from "@prisma/client";
+import { CasePermission, OrganizationRole, OrganizationMemberStatus, OrganizationStatus, PackageSku, Prisma } from "@prisma/client";
+import ChatRepo from "./chat.repository";
+import { organizationDeletionDueAt } from "../constants/organization-deletion.constants";
 
 export default class OrganizationRepo {
   /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically.
@@ -127,6 +129,99 @@ export default class OrganizationRepo {
         members: { where: { userId, status: OrganizationMemberStatus.ACCEPTED }, select: { role: true } },
         tenant: { select: { code: true } },
       },
+    });
+  }
+
+  /** Runs in the transaction that just took a membership away (a leave, or a switch to another
+   * organization through an invite). An organization with no member left is archived for
+   * deletion: nobody can open, join or be invited to it any more, its outstanding invites stop
+   * working, and OrganizationDeletionQueue deletes it after the grace period. A personal
+   * workspace with no member is just parked (see findDormantPersonal), so it's left alone.
+   * Returns whether it archived. */
+  static async archiveIfEmptyIn(tx: Prisma.TransactionClient, organizationId: string, archivedById: string) {
+    const org = await tx.organization.findUnique({ where: { id: organizationId }, select: { isPersonal: true, status: true } });
+    if (!org || org.isPersonal || org.status !== OrganizationStatus.ACTIVE) return false;
+    if ((await tx.organizationMember.count({ where: { organizationId } })) > 0) return false;
+    const archivedAt = new Date();
+    await tx.organization.update({
+      where: { id: organizationId },
+      data: {
+        status: OrganizationStatus.PENDING_DELETION,
+        archivedAt,
+        archivedById,
+        deletionScheduledAt: organizationDeletionDueAt(archivedAt),
+      },
+    });
+    return true;
+  }
+
+  /** Archived organizations whose grace period is over, a page at a time (by id, like
+   * ChatRepo.findConsultationsDueForDeletion). */
+  static async findDueForDeletion(now: Date, { afterId, take }: { afterId?: string; take: number }) {
+    return prisma.organization.findMany({
+      where: {
+        status: OrganizationStatus.PENDING_DELETION,
+        deletionScheduledAt: { lte: now },
+        ...(afterId ? { id: { gt: afterId } } : {}),
+      },
+      orderBy: { id: "asc" },
+      take,
+      select: { id: true, name: true },
+    });
+  }
+
+  /** Deletes an archived organization for good — OrganizationDeletionQueue's job once the grace
+   * period is over. Its consultations go first, one at a time, through the same purge as a
+   * deleted consultation (which marks their files). Then its cases are deleted explicitly
+   * (Case.organization is SetNull, so deleting the organization alone would leave them behind),
+   * and the organization itself, which cascades to its documents, transcriptions, notes, events,
+   * invites and the rest. Files nothing references any more are marked FOR_DELETION for the
+   * cleanup sweep, as DocumentSvc.delete does. Returns null, deleting nothing, when the
+   * organization is gone or no longer PENDING_DELETION (support restored it meanwhile). */
+  static async deletePermanently(organizationId: string) {
+    const stillDue = () =>
+      prisma.organization.findFirst({ where: { id: organizationId, status: OrganizationStatus.PENDING_DELETION }, select: { id: true } });
+    if (!(await stillDue())) return null;
+
+    const consultations = await prisma.consultation.findMany({ where: { organizationId }, select: { id: true } });
+    let filesMarkedForDeletion = 0;
+    for (const { id } of consultations) {
+      filesMarkedForDeletion += (await ChatRepo.deleteConsultationPermanently(id)).filesMarkedForDeletion;
+    }
+
+    return prisma.$transaction(async (tx) => {
+      const org = await tx.organization.findFirst({
+        where: { id: organizationId, status: OrganizationStatus.PENDING_DELETION },
+        select: { id: true },
+      });
+      if (!org) return null;
+
+      const [documents, transcriptions] = await Promise.all([
+        tx.document.findMany({ where: { organizationId, fileId: { not: null } }, select: { fileId: true } }),
+        tx.transcription.findMany({ where: { organizationId, audioFileId: { not: null } }, select: { audioFileId: true } }),
+      ]);
+      const fileIds = new Set<string>([
+        ...documents.flatMap((d) => (d.fileId ? [d.fileId] : [])),
+        ...transcriptions.flatMap((t) => (t.audioFileId ? [t.audioFileId] : [])),
+      ]);
+
+      const { count: casesDeleted } = await tx.case.deleteMany({ where: { organizationId } });
+      await tx.organization.delete({ where: { id: organizationId } });
+
+      if (fileIds.size > 0) {
+        const [stillDocuments, stillTranscriptions] = await Promise.all([
+          tx.document.findMany({ where: { fileId: { in: [...fileIds] } }, select: { fileId: true } }),
+          tx.transcription.findMany({ where: { audioFileId: { in: [...fileIds] } }, select: { audioFileId: true } }),
+        ]);
+        for (const { fileId } of stillDocuments) if (fileId) fileIds.delete(fileId);
+        for (const { audioFileId } of stillTranscriptions) if (audioFileId) fileIds.delete(audioFileId);
+        const { count } = await tx.file.updateMany({
+          where: { id: { in: [...fileIds] } },
+          data: { fileStatus: "FOR_DELETION", deletedAt: new Date() },
+        });
+        filesMarkedForDeletion += count;
+      }
+      return { casesDeleted, consultationsDeleted: consultations.length, filesMarkedForDeletion };
     });
   }
 
