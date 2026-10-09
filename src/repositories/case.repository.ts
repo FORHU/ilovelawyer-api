@@ -297,6 +297,15 @@ export default class CaseRepo {
     return !!row;
   }
 
+  /** A case's organizationId, for scoping a caseId-only lookup down to documents/chunks that
+   * actually belong to it (#373) — null for a case that no longer exists, same as a case that was
+   * never scoped to an organization (Case.organizationId is itself nullable, see ownedByUser). The
+   * caller treats both the same way: nothing to match against, so the caseId-only filter stands. */
+  static async findOrganizationId(id: string): Promise<string | null> {
+    const row = await prisma.case.findUnique({ where: { id }, select: { organizationId: true } });
+    return row?.organizationId ?? null;
+  }
+
   /** Used by the post-extraction auto-trigger (case-post-extraction.ts) to skip a redundant
    * caseRefresh run when the case's READY document set hasn't actually changed since the last
    * one. Not scoped by organizationId — same reasoning as markRefreshed above. */

@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 import { redis } from "../lib/redis";
 import DocumentChunkRepo, { DocumentChunkRow } from "../repositories/document-chunk.repository";
+import CaseRepo from "../repositories/case.repository";
 import HttpError from "../utils/http-error";
 import { embedText } from "../utils/embedding";
 import { rank as bm25Rank } from "../utils/bm25";
@@ -170,10 +171,18 @@ export default class DocumentChunkSvc {
     // deliberately opt out of that rule (see the "Archived Documents in Chat" plan, Option A: full
     // exclusion). This only closes the auto-selection door — an explicit reference is blocked
     // separately in ChatSvc.scopedCaseDocumentId.
-    const where =
-      "caseId" in scope
-        ? { caseId: scope.caseId, ragStatus: "READY" as const, status: "ACTIVE" as const }
-        : { consultationId: scope.consultationId, ragStatus: "READY" as const, status: "ACTIVE" as const };
+    //
+    // For a case scope, also require the document's own org to match the case's (#373) — second
+    // line of defence behind #371's upload-time check, same null-org exception (see
+    // DocumentRepo.listAllByCase). A consultation's documents are already scoped to its own
+    // organization at creation and by ChatSvc.assertConsultationAccess, so no equivalent lookup here.
+    let where: { caseId: string; organizationId?: string; ragStatus: "READY"; status: "ACTIVE" } | { consultationId: string; ragStatus: "READY"; status: "ACTIVE" };
+    if ("caseId" in scope) {
+      const organizationId = await CaseRepo.findOrganizationId(scope.caseId);
+      where = { caseId: scope.caseId, ...(organizationId ? { organizationId } : {}), ragStatus: "READY", status: "ACTIVE" };
+    } else {
+      where = { consultationId: scope.consultationId, ragStatus: "READY", status: "ACTIVE" };
+    }
 
     // Every READY document in scope must end up in caseDocumentIds regardless of whether the
     // relevance ranking below picked any of its chunks — the ranking governs what's pre-filled

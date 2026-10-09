@@ -226,6 +226,10 @@ export default class DocumentChunkRepo {
   ): Promise<{ id: string; caseDocumentId: string; similarity: number }[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
     const endRank = startRank + perDocumentFloor - 1;
+    // Joined to Case and, #373, required to share its organization — same null-org exception as
+    // DocumentRepo.listAllByCase/relevantChunksForScope (a case with no organization has nothing to
+    // match against, so every document reached by caseId stands) — so a chunk from a document
+    // planted in, or left behind in, another org's case is never ranked into this case's grounding.
     return client.$queryRaw<{ id: string; caseDocumentId: string; similarity: number }[]>`
       WITH ranked AS (
         SELECT c.id, c."caseDocumentId",
@@ -236,9 +240,11 @@ export default class DocumentChunkRepo {
                ) AS doc_rank
         FROM "CaseDocumentChunk" c
         INNER JOIN "Document" d ON d.id = c."caseDocumentId"
+        INNER JOIN "Case" cs ON cs.id = d."caseId"
         WHERE d."caseId" = ${caseId}
           AND d."ragStatus" = 'READY'
           AND c.embedding IS NOT NULL
+          AND (cs."organizationId" IS NULL OR d."organizationId" = cs."organizationId")
       )
       SELECT id, "caseDocumentId", similarity
       FROM ranked
