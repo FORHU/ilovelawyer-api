@@ -17,6 +17,7 @@ import TheoryDiffSvc from "../services/theory-diff.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseMindMapSvc from "../services/case-mind-map.service";
 import CaseStrategySvc from "../services/case-strategy.service";
+import ConsentSvc from "../services/consent.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
 import logger from "../utils/logger";
@@ -262,9 +263,22 @@ export default class AiGenerationQueue {
   private static runOne(item: WaitItem): void {
     this.active += 1;
     const startedAt = Date.now();
-    void withVisibilityHeartbeat(AI_GENERATION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
-      RUNNERS[item.job.kind](item.job),
-    )
+    void withVisibilityHeartbeat(AI_GENERATION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, async () => {
+      // Every AI job passes through here, whichever route or service queued it - including the
+      // ones no button starts (automatic analysis, witness/damages extraction, map resync) and
+      // jobs queued before the person withdrew. The routes refuse up front; this is the backstop.
+      // A lock a controller already claimed for this job is left to expire through the usual
+      // stale-job rule (utils/ai-generation-lock.utils).
+      if (!(await ConsentSvc.isAllowed(item.job.userId, "AI_PROCESSING"))) {
+        logger.info("AI generation queue: job skipped, AI processing consent is withdrawn", {
+          kind: item.job.kind,
+          caseId: item.job.caseId,
+          userId: item.job.userId,
+        });
+        return;
+      }
+      return RUNNERS[item.job.kind](item.job);
+    })
       // The runner already records FAILED on the AiGenerationJob row (AiGenerationLockSvc
       // .finishWith) — this catch only stops the rejection from going unhandled.
       .catch((err) => {
