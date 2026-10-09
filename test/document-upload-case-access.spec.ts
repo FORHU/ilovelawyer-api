@@ -87,6 +87,7 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
       return `https://s3.example/${key}`;
     });
     stub(s3, "s3UrlForKey", (key: string) => `https://s3.example/${key}`);
+    stub(s3, "getObjectSize", async () => 1024);
     stub(FilesRepo, "create", async () => {
       writes.push("file:create");
       return { id: "file-1" };

@@ -1,5 +1,5 @@
 import Joi from "joi";
-import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX, BULK_ACTION_MAX } from "../constants";
+import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX, BULK_ACTION_MAX, DOCUMENT_MAX_BYTES } from "../constants";
 
 const UNSUPPORTED_FILE_TYPE_MESSAGE = `Unsupported file type. Supported formats: ${ALLOWED_DOCUMENT_EXTENSIONS.join(", ").toUpperCase()}.`;
 
@@ -36,7 +36,7 @@ export const createDocumentSchema = Joi.alternatives().try(
     key: Joi.string().required(),
     name: allowedFilename,
     contentType: Joi.string().optional(),
-    fileSize: Joi.number().integer().min(0).optional(),
+    fileSize: Joi.number().integer().min(0).max(DOCUMENT_MAX_BYTES).optional(),
     caseId: Joi.string().optional(),
     consultationId: Joi.string().optional(),
   }),
@@ -47,7 +47,7 @@ export const createDocumentSchema = Joi.alternatives().try(
           key: Joi.string().required(),
           name: allowedFilename,
           contentType: Joi.string().optional(),
-          fileSize: Joi.number().integer().min(0).optional(),
+          fileSize: Joi.number().integer().min(0).max(DOCUMENT_MAX_BYTES).optional(),
         }),
       )
       .min(1)

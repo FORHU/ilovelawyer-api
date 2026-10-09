@@ -1,4 +1,12 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  CopyObjectCommand,
+  HeadBucketCommand,
+  HeadObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
@@ -16,7 +24,7 @@ const client = new S3Client({
   responseChecksumValidation: "WHEN_REQUIRED",
 });
 
-const PRESIGN_EXPIRY_SECONDS = 300;
+const PRESIGN_EXPIRY_SECONDS = 900;
 
 export function s3UrlForKey(key: string): string {
   if (CLOUDFRONT_URL) {
@@ -55,6 +63,22 @@ export async function copyS3Object(sourceKey: string, destinationKey: string): P
       CopySource: `${AWS_S3_BUCKET}/${sourceKey.split("/").map(encodeURIComponent).join("/")}`,
     }),
   );
+}
+
+/** The stored object's size in bytes, as S3 reports it, or null when there is no object at `key`.
+ * A presigned PUT can't cap the upload's size, so the confirm step reads it back from here. */
+export async function getObjectSize(key: string): Promise<number | null> {
+  try {
+    const res = await client.send(new HeadObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
+    return res.ContentLength ?? null;
+  } catch (err) {
+    if ((err as { name?: string }).name === "NotFound") return null;
+    throw err;
+  }
+}
+
+export async function deleteS3Object(key: string): Promise<void> {
+  await client.send(new DeleteObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
 }
 
 /** Short-expiry presigned PUT the client uploads its file bytes to directly, bypassing the API. */

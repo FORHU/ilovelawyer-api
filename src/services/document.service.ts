@@ -17,6 +17,7 @@ import CaseAccess from "../utils/case-access";
 import ChatSvc from "./chat.service";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { DocumentStatus } from "@prisma/client";
+import { assertUploadedSizesAllowed } from "../utils/document-size";
 import SecurityAuditSvc from "./security-audit.service";
 
 /** Flattens the related File row's fileUrl onto the Document, matching the Swagger `UserDocument`
@@ -138,6 +139,7 @@ export default class DocumentSvc {
     data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string; fileSize?: number },
   ) {
     await DocumentSvc.assertCanUploadTo(organizationId, userId, data.caseId, data.consultationId);
+    const [fileSize] = await assertUploadedSizesAllowed([{ key: data.key, name: data.name }]);
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
     const doc = await DocumentRepo.create(organizationId, userId, {
@@ -146,7 +148,7 @@ export default class DocumentSvc {
       caseId: data.caseId,
       consultationId: data.consultationId,
       mimeType: data.contentType,
-      fileSize: data.fileSize,
+      fileSize,
     });
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(doc.id);
     return doc;
@@ -162,6 +164,7 @@ export default class DocumentSvc {
     consultationId?: string,
   ) {
     await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
+    const fileSizes = await assertUploadedSizesAllowed(items);
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({
       filename: item.name,
       fileUrl: s3UrlForKey(item.key),
@@ -179,7 +182,7 @@ export default class DocumentSvc {
         name: items[i].name,
         fileId: file.id,
         mimeType: items[i].contentType,
-        fileSize: items[i].fileSize,
+        fileSize: fileSizes[i],
       }));
 
       const createdDocuments = await DocumentRepo.createManyAndReturn(userDocumentData, tx);

@@ -1,5 +1,5 @@
 import Joi from "joi";
-import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX, BULK_ACTION_MAX } from "../constants";
+import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX, BULK_ACTION_MAX, DOCUMENT_MAX_BYTES } from "../constants";
 
 const UNSUPPORTED_FILE_TYPE_MESSAGE = `Unsupported file type. Supported formats: ${ALLOWED_DOCUMENT_EXTENSIONS.join(", ").toUpperCase()}.`;
 
@@ -90,7 +90,7 @@ export const createCaseWithDocumentSchema = Joi.object({
         s3Key: Joi.string().required(),
         metaData: Joi.object({
           documentType: Joi.string().optional(),
-          fileSize: Joi.number().integer().min(0).required(),
+          fileSize: Joi.number().integer().min(0).max(DOCUMENT_MAX_BYTES).required(),
           mimeType: Joi.string().required(),
           category: Joi.string().trim().max(200).optional(),
         }).required(),
