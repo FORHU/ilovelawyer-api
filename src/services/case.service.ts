@@ -11,6 +11,7 @@ import { s3UrlForKey } from "../utils/s3";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
 import { CaseStatus } from "@prisma/client";
+import { assertUploadedSizesAllowed } from "../utils/document-size";
 import SecurityAuditSvc from "./security-audit.service";
 
 export default class CaseSvc {
@@ -197,6 +198,7 @@ export default class CaseSvc {
     // In this organization and a case the uploader can open — not a confidential one walled off
     // from them (#346).
     await this.getById(caseData.caseId, caseData.organizationId, caseData.userId);
+    const fileSizes = await assertUploadedSizesAllowed(documentData.map((doc) => ({ key: doc.s3Key, name: doc.filename })));
 
     // fileUrl is derived from s3Key server-side, never accepted from the client (spoofing risk:
     // a client-supplied fileUrl could point a row at an S3 object it doesn't own).
@@ -217,7 +219,7 @@ export default class CaseSvc {
         name: file.filename ?? "",
         fileId: file.id,
         documentType: documentData[i].metaData.documentType,
-        fileSize: documentData[i].metaData.fileSize,
+        fileSize: fileSizes[i],
         mimeType: documentData[i].metaData.mimeType,
         category: documentData[i].metaData.category,
       }));
