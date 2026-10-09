@@ -43,9 +43,17 @@ function currentKey(cfg: FieldCryptoConfig): Buffer | null {
   return parseKey(cfg.key);
 }
 
+// Opening a document means opening thousands of chunks, so the parsed keys are kept until the
+// configuration changes instead of being parsed and hashed for every value.
+let keyCache: { signature: string; keys: Map<string, Buffer> } | null = null;
+
 function keysById(cfg: FieldCryptoConfig): Map<string, Buffer> {
+  const signature = `${cfg.key ?? ""}|${cfg.oldKeys ?? ""}`;
+  if (keyCache?.signature === signature) return keyCache.keys;
   const all = [cfg.key, ...(cfg.oldKeys ?? "").split(",")].map(parseKey).filter((k): k is Buffer => k !== null);
-  return new Map(all.map((k) => [keyIdOf(k), k]));
+  const keys = new Map(all.map((k) => [keyIdOf(k), k]));
+  keyCache = { signature, keys };
+  return keys;
 }
 
 export function isEncryptedField(value: unknown): value is string {
