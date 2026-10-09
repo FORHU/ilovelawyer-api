@@ -6,6 +6,10 @@ export default class ConsentRepo {
     return prisma.consent.findMany({ where: { userId } });
   }
 
+  static async find(userId: string, purpose: ConsentPurpose) {
+    return prisma.consent.findUnique({ where: { userId_purpose: { userId, purpose } } });
+  }
+
   /** Terms of Service lives on the user row, not in Consent — see ConsentSvc.list. */
   static async findTerms(userId: string) {
     return prisma.user.findUnique({ where: { id: userId }, select: { termsAcceptedAt: true, termsVersion: true } });

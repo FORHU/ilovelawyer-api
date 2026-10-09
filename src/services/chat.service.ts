@@ -1,5 +1,6 @@
 import type { ConsultationStatus } from "@prisma/client";
 import ChatRepo from "../repositories/chat.repository";
+import ConsentSvc from "./consent.service";
 import { consultationDeletionDueAt } from "../constants/consultation-deletion.constants";
 import AuthRepo from "../repositories/auth.repository";
 import DocumentRepo from "../repositories/document.repository";
@@ -551,6 +552,27 @@ export default class ChatSvc {
    * still gets durably persisted either way (see persistAssistantTurnWithRetry below).
    */
   static async processChatGenerationJob(job: ChatGenerationJob): Promise<void> {
+    // The route refuses a new message when AI processing is off. This catches a turn that was
+    // already queued when the person switched it off: fail it the way an AI failure is failed, so
+    // the page stops waiting, and never call Chat Wonder.
+    if (!(await ConsentSvc.isAllowed(job.userId, "AI_PROCESSING"))) {
+      logger.info("Chat generation: skipped, AI processing consent is withdrawn", {
+        jobId: job.jobId,
+        consultationId: job.consultationId,
+        userId: job.userId,
+      });
+      await ChatRepo.setReplyStatus(job.jobId, "FAILED").catch(() => {});
+      try {
+        emitToUser(job.userId, "chat:error", {
+          consultationId: job.consultationId,
+          messageId: job.jobId,
+          message: "AI processing is switched off for your account.",
+        });
+      } catch (err) {
+        logger.warn("Chat generation: emitToUser failed, continuing without it", { err, jobId: job.jobId });
+      }
+      return;
+    }
     // Stop support: ChatSvc.cancelChatGeneration flips replyStatus to CANCELLED (the durable,
     // cross-instance signal — this job may run on a different instance than the one that got
     // the cancel request) and, when it happens to be on this same instance, aborts `abort`

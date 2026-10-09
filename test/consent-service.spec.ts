@@ -41,9 +41,9 @@ describe("ConsentSvc", () => {
     ConsentRepo.set = original.set;
   });
 
-  it("lists every purpose, and a purpose never answered is not_set rather than withdrawn", async () => {
+  it("lists the purposes the product uses (not analytics or marketing, which it does not), and a purpose never answered is not_set rather than withdrawn", async () => {
     const list = await ConsentSvc.list("u1");
-    expect(list.map((c) => c.purpose)).to.deep.equal(["TERMS_OF_SERVICE", "AI_PROCESSING", "ANALYTICS", "MARKETING"]);
+    expect(list.map((c) => c.purpose)).to.deep.equal(["TERMS_OF_SERVICE", "AI_PROCESSING"]);
     expect(list.every((c) => c.status === "not_set" && c.version === null)).to.equal(true);
   });
 
@@ -59,7 +59,7 @@ describe("ConsentSvc", () => {
 
   it("grants a purpose at the current version and records where it came from", async () => {
     const list = await ConsentSvc.set("u1", "AI_PROCESSING", true);
-    expect(sets).to.deep.equal([{ purpose: "AI_PROCESSING", granted: true, version: CONSENT_VERSIONS.AI_PROCESSING, source: "settings" }]);
+    expect(sets).to.deep.equal([{ purpose: "AI_PROCESSING", granted: true, version: CONSENT_VERSIONS.AI_PROCESSING!, source: "settings" }]);
     expect(list.find((c) => c.purpose === "AI_PROCESSING")).to.deep.include({ status: "granted", withdrawnAt: null });
   });
 
@@ -70,30 +70,41 @@ describe("ConsentSvc", () => {
       recorded.push(input);
     }) as unknown as typeof SecurityAuditSvc.record;
     try {
-      await ConsentSvc.set("u1", "MARKETING", true);
-      await ConsentSvc.set("u1", "MARKETING", false);
+      await ConsentSvc.set("u1", "AI_PROCESSING", true, "first_login");
+      await ConsentSvc.set("u1", "AI_PROCESSING", false);
     } finally {
       SecurityAuditSvc.record = original;
     }
-    expect(recorded.map((r) => [r.action, r.actorId, r.targetId, (r.payload as { granted: boolean }).granted])).to.deep.equal([
-      ["consent.changed", "u1", "u1", true],
-      ["consent.changed", "u1", "u1", false],
+    expect(recorded.map((r) => [r.action, r.actorId, r.targetId, (r.payload as { granted: boolean }).granted, (r.payload as { source: string }).source])).to.deep.equal([
+      ["consent.changed", "u1", "u1", true, "first_login"],
+      ["consent.changed", "u1", "u1", false, "settings"],
     ]);
   });
 
   it("withdraws a purpose and keeps when it was first granted", async () => {
-    rows = [{ purpose: "MARKETING", version: CONSENT_VERSIONS.MARKETING, grantedAt: new Date("2026-09-01T00:00:00Z"), withdrawnAt: null }];
-    const list = await ConsentSvc.set("u1", "MARKETING", false);
-    const marketing = list.find((c) => c.purpose === "MARKETING")!;
-    expect(marketing.status).to.equal("withdrawn");
-    expect(marketing.grantedAt).to.be.instanceOf(Date);
-    expect(marketing.outdated).to.equal(false);
+    rows = [{ purpose: "AI_PROCESSING", version: CONSENT_VERSIONS.AI_PROCESSING!, grantedAt: new Date("2026-09-01T00:00:00Z"), withdrawnAt: null }];
+    const list = await ConsentSvc.set("u1", "AI_PROCESSING", false);
+    const ai = list.find((c) => c.purpose === "AI_PROCESSING")!;
+    expect(ai.status).to.equal("withdrawn");
+    expect(ai.grantedAt).to.be.instanceOf(Date);
+    expect(ai.outdated).to.equal(false);
   });
 
   it("flags a granted answer given to an older text as outdated", async () => {
-    rows = [{ purpose: "ANALYTICS", version: "2025-01", grantedAt: new Date("2025-01-01T00:00:00Z"), withdrawnAt: null }];
-    const analytics = (await ConsentSvc.list("u1")).find((c) => c.purpose === "ANALYTICS")!;
-    expect(analytics).to.deep.include({ status: "granted", outdated: true });
+    rows = [{ purpose: "AI_PROCESSING", version: "2025-01", grantedAt: new Date("2025-01-01T00:00:00Z"), withdrawnAt: null }];
+    const ai = (await ConsentSvc.list("u1")).find((c) => c.purpose === "AI_PROCESSING")!;
+    expect(ai).to.deep.include({ status: "granted", outdated: true });
+  });
+
+  it("refuses to change a purpose the product does not use", async () => {
+    let status = 0;
+    try {
+      await ConsentSvc.set("u1", "MARKETING", true);
+    } catch (err) {
+      status = (err as { statusCode?: number }).statusCode ?? 0;
+    }
+    expect(status).to.equal(400);
+    expect(sets).to.have.length(0);
   });
 
   it("refuses to change Terms of Service here", async () => {
