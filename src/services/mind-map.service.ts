@@ -97,7 +97,9 @@ export default class MindMapSvc {
       throw new HttpError("Consultation not found", 404);
     }
     if (!consultation.caseId) throw new HttpError("Mind maps are only available on case consultations", 400);
-    await CaseAccess.loadAccessibleCase(consultation.caseId, t.userId);
+    // Only ever loaded to change the map (expand, edit, revert): read-only for a view-only person
+    // on a confidential case.
+    await CaseAccess.assertCanContribute(consultation.caseId, t.userId);
 
     const row = t.messageId
       ? await MindMapRepo.findByMessage(t.consultationId, t.messageId)
@@ -106,9 +108,11 @@ export default class MindMapSvc {
     return { kind: "message", id: row.id, data: row.data, version: row.version, caseId: consultation.caseId, messageId: row.messageId };
   }
 
-  /** The case's document-built map (CaseMindMapSvc). Anyone who can open the case. */
+  /** The case's document-built map (CaseMindMapSvc), for changing it — expand, edit, revert.
+   * Anyone who can open the case, except a view-only person on a confidential one
+   * (CaseAccess.assertCanContribute). Reading it goes through CaseMindMapSvc.get instead. */
   private static async loadCaseMap(t: CaseTarget): Promise<MapRef> {
-    await CaseAccess.loadAccessibleCase(t.caseId, t.userId);
+    await CaseAccess.assertCanContribute(t.caseId, t.userId);
     const row = await MindMapRepo.findCaseMap(t.caseId);
     if (!row) throw new HttpError("Mind map not found", 404);
     // Retired: every document it was built from is gone (CaseMindMapSvc) — nothing to change

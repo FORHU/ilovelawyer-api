@@ -55,6 +55,19 @@ export default class CaseAccess {
     return record;
   }
 
+  /** For changes anyone who can open an ordinary case may make — uploading a document, adding a
+   * transcription, regenerating or editing the case mind map. On a confidential case "Can view"
+   * is a level someone chose for this person, so there it means read-only: these take edit access
+   * like any other change. 404 when the case can't be opened (loadAccessibleCase); 403 for a
+   * view-only person, who can already see it. */
+  static async assertCanContribute(caseId: string, userId: string) {
+    const record = await CaseAccess.loadAccessibleCase(caseId, userId);
+    if (record.confidential && !(await CaseAccess.canEdit(caseId, userId))) {
+      throw new HttpError("You have view-only access to this confidential case", 403);
+    }
+    return record;
+  }
+
   static async isConfidential(caseId: string): Promise<boolean> {
     const record = await prisma.case.findUnique({ where: { id: caseId }, select: { confidential: true } });
     return !!record?.confidential;
