@@ -24,7 +24,7 @@ const client = new S3Client({
   responseChecksumValidation: "WHEN_REQUIRED",
 });
 
-const PRESIGN_EXPIRY_SECONDS = 300;
+const PRESIGN_EXPIRY_SECONDS = 900;
 
 export function s3UrlForKey(key: string): string {
   if (CLOUDFRONT_URL) {

@@ -86,7 +86,7 @@ describe("#91 — document upload size cap", () => {
         ]),
       );
       expect(err.statusCode).to.equal(413);
-      expect(err.message).to.contain("bundle.pdf (limit 25 MB)").and.to.contain("scan.png (limit 5 MB)");
+      expect(err.message).to.contain("bundle.pdf (limit 100 MB)").and.to.contain("scan.png (limit 5 MB)");
       expect(deleted).to.have.members(["big", "photo"]);
     });
 

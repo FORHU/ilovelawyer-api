@@ -20,7 +20,7 @@ export const MEDIA_DOCUMENT_MIME_TYPES = ["audio/mpeg", "audio/mp3", "video/mp4"
 /** Per-file cap for an uploaded Case Document (#91). Raising it is bounded by extraction: a
  * non-media document is read into memory whole (getObjectBuffer) and DocumentExtractionQueue runs
  * 3 at once. ilovelawyer-app mirrors this in lib/cases/upload-batch.ts, so change both together. */
-export const DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
+export const DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
 
 /** Images are OCR'd by Textract's synchronous call, which takes at most 5 MB (see ocr.ts); a
  * larger image would upload fine and then extract to nothing, so it's refused up front instead. */
