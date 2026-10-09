@@ -269,7 +269,7 @@ describe("#346 — Can view on a confidential case is read-only", () => {
     });
 
     it("refuses expanding, editing or undoing on it for a view-only person on a confidential case", async () => {
-      const t = { organizationId: ORG, userId: USER, caseId: "confidential-view" };
+      const t = { userId: USER, caseId: "confidential-view" };
       const expand = await rejection(MindMapSvc.expandCaseNode({ ...t, nodeId: "n1" }));
       expect(expand.statusCode).to.equal(403);
       const edit = await rejection(MindMapSvc.editCaseNode({ ...t, edit: { op: "delete", nodeId: "n1" } }));
@@ -279,7 +279,7 @@ describe("#346 — Can view on a confidential case is read-only", () => {
     });
 
     it("gets past the access check on an ordinary case (undo then finds nothing to undo)", async () => {
-      const err = await rejection(MindMapSvc.revertCaseMap({ organizationId: ORG, userId: USER, caseId: "ordinary" }));
+      const err = await rejection(MindMapSvc.revertCaseMap({ userId: USER, caseId: "ordinary" }));
       expect(err.statusCode).to.equal(409);
     });
   });
