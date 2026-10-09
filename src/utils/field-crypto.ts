@@ -52,6 +52,14 @@ export function isEncryptedField(value: unknown): value is string {
   return typeof value === "string" && value.startsWith(`${PREFIX}:`);
 }
 
+/** What the startup log says, so nobody has to guess whether sealing is on: the switch, whether a
+ * usable key is set, and how many earlier keys are still accepted for reading. */
+export function fieldEncryptionStatus(cfg: FieldCryptoConfig = fromEnv()): { enabled: boolean; keyConfigured: boolean; previousKeys: number } {
+  const current = currentKey(cfg);
+  const previous = [...keysById(cfg).values()].filter((k) => !current || !k.equals(current)).length;
+  return { enabled: cfg.enabled, keyConfigured: current !== null, previousKeys: previous };
+}
+
 /** True when new privileged values should be written sealed. */
 export function fieldEncryptionEnabled(cfg: FieldCryptoConfig = fromEnv()): boolean {
   return cfg.enabled;

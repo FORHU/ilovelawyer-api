@@ -14,6 +14,8 @@ import CaseCopyQueue from "./queues/case-copy.queue";
 import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
 
 import { PORT } from "./config";
+import logger from "./utils/logger";
+import { fieldEncryptionStatus } from "./utils/field-crypto";
 import { verifyDocumentBucketRegion } from "./utils/s3";
 
 void verifyDocumentBucketRegion();
@@ -33,4 +35,7 @@ SecurityAuditRetentionQueue.start();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on http://0.0.0.0:${PORT}`);
+  const encryption = fieldEncryptionStatus();
+  const state = encryption.enabled && encryption.keyConfigured ? "ON" : encryption.enabled ? "ENABLED BUT NO VALID KEY (privileged notes cannot be saved)" : "OFF";
+  logger.info(`Privileged notes encryption: ${state}`, encryption);
 });
