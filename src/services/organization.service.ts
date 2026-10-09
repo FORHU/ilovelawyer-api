@@ -628,10 +628,18 @@ export default class OrganizationSvc {
    * there's nothing to revoke for it — that 404s rather than looking like it worked. */
   static async revokeAccess(caseId: string, actorId: string, userId: string) {
     if (await CaseShareRepo.findPortfolioCase(caseId)) return CaseShareSvc.revoke(caseId, actorId, userId);
-    await CaseAccess.assertCanManageAccess(caseId, actorId);
+    const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
     const removed = await OrganizationRepo.revokeCaseAccess(caseId, userId);
     if (!removed) throw new HttpError("This person has no access grant on the case", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.revoke_access", payload: { userId } });
+    await SecurityAuditSvc.record({
+      action: "case.access_revoked",
+      actorId,
+      organizationId: caseRecord.organizationId ?? null,
+      targetType: "user",
+      targetId: userId,
+      caseId,
+    });
   }
 
   /** Who can reach the case and how, for the sharing panel: every accepted member of its
@@ -733,6 +741,16 @@ export default class OrganizationSvc {
       caseId,
       actorId,
       action: confidential ? "case.confidential_set" : "case.confidential_unset",
+    });
+    await SecurityAuditSvc.record({
+      action: "case.confidential_changed",
+      actorId,
+      organizationId: caseRecord.organizationId ?? null,
+      targetType: "case",
+      targetId: caseId,
+      targetName: caseRecord.caseName,
+      caseId,
+      payload: { from: !confidential, to: confidential },
     });
     return { confidential };
   }

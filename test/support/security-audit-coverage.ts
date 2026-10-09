@@ -148,6 +148,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /my-cases/:caseId/procedure/items": CASE_FEED,
   "PATCH /my-cases/:caseId/procedure/items/:id": CASE_FEED,
   "POST /my-cases/:caseId/access": ["case.access_granted"],
+  "DELETE /my-cases/:caseId/access/:userId": ["case.access_revoked"],
+  "PATCH /my-cases/:caseId/confidential": ["case.confidential_changed"],
   "DELETE /shared-cases/:caseId": { exempt: "A recipient giving up their own read-only share — it narrows access; the case activity feed records it" },
   "POST /my-cases/:caseId/findings": CASE_FEED,
   "POST /my-cases/:caseId/findings/regenerate": AI_RUN,

@@ -97,6 +97,15 @@ export default class CaseShareSvc {
     const removed = await CaseShareRepo.removeShare(caseId, userId);
     if (!removed) throw new HttpError("This case isn't shared with that person", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId: ownerId, action: "case.revoke_access", payload: { userId, portfolio: true } });
+    await SecurityAuditSvc.record({
+      action: "case.access_revoked",
+      actorId: ownerId,
+      organizationId: record.organizationId ?? null,
+      targetType: "user",
+      targetId: userId,
+      caseId,
+      payload: { portfolio: true },
+    });
     shareEnded(caseId, userId);
     await NotificationSvc.create({
       userId,
