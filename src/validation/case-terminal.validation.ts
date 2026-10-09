@@ -216,6 +216,10 @@ export const grantAccessSchema = Joi.object({
   permission: Joi.string().valid("VIEW", "EDIT", "ADMIN").required(),
 });
 
+export const shareLookupSchema = Joi.object({
+  email: Joi.string().trim().email().max(254).required(),
+});
+
 export const regenerateFindingsSchema = Joi.object({
   category: Joi.string().valid("LEGAL_ISSUE", "WEAKNESS", "STRENGTH", "ATTACK_STRATEGY", "DEFENSE_STRATEGY").required(),
 });

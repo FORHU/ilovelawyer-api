@@ -18,6 +18,13 @@ function ownedByUser(userId: string): Prisma.CaseWhereInput[] {
 /** Org membership that reaches a case: any accepted member, or only `roles` when given. A
  * confidential case (#346) is the exception — membership alone no longer reaches it, org ADMIN
  * included (D6); only the organization's OWNER keeps it (D5). Everyone else needs a grant. */
+/** A per-case grant that can change the case (EDIT, or ADMIN to share it on). A portfolio case is
+ * only ever shared to read (see OrganizationSvc.grantAccess), so a grant there never counts here
+ * even if one were stored. */
+function changingGrant(userId: string, permissions: CasePermission[]): Prisma.CaseWhereInput {
+  return { accesses: { some: { userId, permission: { in: permissions } } }, NOT: { organization: { isPersonal: true } } };
+}
+
 function viaMembership(userId: string, roles?: OrganizationRole[]): Prisma.CaseWhereInput[] {
   return [
     { confidential: false, organization: { members: { some: { userId, status: "ACCEPTED", ...(roles ? { role: { in: roles } } : {}) } } } },
@@ -62,10 +69,29 @@ export default class CaseAccess {
    * view-only person, who can already see it. */
   static async assertCanContribute(caseId: string, userId: string) {
     const record = await CaseAccess.loadAccessibleCase(caseId, userId);
+    if (await CaseAccess.isPortfolioShare(caseId, userId)) {
+      throw new HttpError("This case was shared with you to read only", 403, "SHARE_READ_ONLY");
+    }
     if (record.confidential && !(await CaseAccess.canEdit(caseId, userId))) {
       throw new HttpError("You have view-only access to this confidential case", 403);
     }
     return record;
+  }
+
+  /** Whether `userId` reaches this case through a share of someone else's portfolio case — which
+   * is read-only. False for the owner, and for any organization case. */
+  static async isPortfolioShare(caseId: string, userId: string): Promise<boolean> {
+    const record = await prisma.case.findFirst({
+      where: { id: caseId, organization: { isPersonal: true, createdById: { not: userId } } },
+      select: { id: true },
+    });
+    return !!record;
+  }
+
+  /** assertCanContribute's rule as a boolean — for telling the app what to offer. */
+  static async canContribute(caseId: string, userId: string): Promise<boolean> {
+    if (await CaseAccess.isPortfolioShare(caseId, userId)) return false;
+    return !(await CaseAccess.isConfidential(caseId)) || (await CaseAccess.canEdit(caseId, userId));
   }
 
   static async isConfidential(caseId: string): Promise<boolean> {
@@ -78,7 +104,7 @@ export default class CaseAccess {
       id: caseId,
       OR: [
         ...ownedByUser(userId),
-        { accesses: { some: { userId, permission: { in: EDIT_PERMS } } } },
+        changingGrant(userId, EDIT_PERMS),
         ...viaMembership(userId, ORG_EDITORS),
       ],
     };
@@ -108,7 +134,7 @@ export default class CaseAccess {
       id: caseId,
       OR: [
         ...ownedByUser(userId),
-        { accesses: { some: { userId, permission: "ADMIN" } } },
+        changingGrant(userId, ["ADMIN"]),
         ...viaMembership(userId, ORG_EDITORS),
       ],
     };

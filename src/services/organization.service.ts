@@ -5,6 +5,8 @@ import OrganizationInviteRepo from "../repositories/organization-invite.reposito
 import OrganizationEmailInviteRepo from "../repositories/organization-email-invite.repository";
 import CaseCopyRepo from "../repositories/case-copy.repository";
 import CaseRepo from "../repositories/case.repository";
+import CaseShareRepo from "../repositories/case-share.repository";
+import CaseShareSvc from "./case-share.service";
 import CaseCopyQueue from "../queues/case-copy.queue";
 import AuthRepo from "../repositories/auth.repository";
 import TenantRepo from "../repositories/tenant.repository";
@@ -549,6 +551,8 @@ export default class OrganizationSvc {
    * CaseAccess.assertCanManageAccess — an EDIT holder can't), and in v1 only to an accepted member
    * of the case's own organization. Granting again changes the level (upsert). */
   static async grantAccess(caseId: string, actorId: string, userId: string, permission: CasePermission) {
+    // A portfolio case is shared with individual people, read-only — its own rules.
+    if (await CaseShareRepo.findPortfolioCase(caseId)) return CaseShareSvc.grant(caseId, actorId, userId, permission);
     const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
     if (!caseRecord.organizationId) throw new HttpError("This case has no organization to share it within", 400);
     const membership = await OrganizationMemberRepo.find(caseRecord.organizationId, userId);
@@ -584,6 +588,7 @@ export default class OrganizationSvc {
   /** Removes an explicit grant. Access someone has through their org role isn't a grant, so
    * there's nothing to revoke for it — that 404s rather than looking like it worked. */
   static async revokeAccess(caseId: string, actorId: string, userId: string) {
+    if (await CaseShareRepo.findPortfolioCase(caseId)) return CaseShareSvc.revoke(caseId, actorId, userId);
     await CaseAccess.assertCanManageAccess(caseId, actorId);
     const removed = await OrganizationRepo.revokeCaseAccess(caseId, userId);
     if (!removed) throw new HttpError("This person has no access grant on the case", 404);
@@ -596,6 +601,8 @@ export default class OrganizationSvc {
    * them rather than guessing from the org role, which misses per-case grants. */
   static async listAccess(caseId: string, actorId: string) {
     const caseRecord = await CaseAccess.loadAccessibleCase(caseId, actorId);
+    const portfolio = await CaseShareRepo.findPortfolioCase(caseId);
+    if (portfolio) return OrganizationSvc.listPortfolioAccess(caseId, actorId, portfolio, caseRecord.confidential);
     const [members, grants, canEdit, canManage] = await Promise.all([
       caseRecord.organizationId ? OrganizationMemberRepo.list(caseRecord.organizationId) : [],
       OrganizationRepo.listCaseAccess(caseId),
@@ -628,13 +635,57 @@ export default class OrganizationSvc {
         grant: g.permission,
       });
     }
-    return { confidential: caseRecord.confidential, canEdit, canManage, people };
+    return { portfolio: false, shareable: canManage, confidential: caseRecord.confidential, canEdit, canManage, canContribute: await CaseAccess.canContribute(caseId, actorId), people };
+  }
+
+  /** listAccess for a portfolio case: the owner manages it and everyone else can only read. Only
+   * the owner sees who it's shared with; a recipient just learns that it's read-only for them. */
+  private static async listPortfolioAccess(
+    caseId: string,
+    actorId: string,
+    portfolio: { copiedFromCaseId: string | null; organization: { createdById: string } | null },
+    confidential: boolean,
+  ) {
+    const isOwner = portfolio.organization?.createdById === actorId;
+    const shares = isOwner ? await CaseShareSvc.listShares(caseId) : [];
+    const people = shares
+      .filter((share) => share.user.id !== actorId)
+      .map((share) => ({
+        userId: share.user.id,
+        name: share.user.name,
+        email: share.user.email,
+        username: share.user.username,
+        avatarUrl: share.user.avatarUrl,
+        orgRole: null,
+        grant: share.permission,
+        sharedAt: share.createdAt,
+      }));
+    return {
+      portfolio: true,
+      // A copy of an organization's case stays private to its holder.
+      shareable: isOwner && !portfolio.copiedFromCaseId,
+      confidential,
+      canEdit: isOwner,
+      canManage: isOwner,
+      canContribute: isOwner,
+      people,
+    };
+  }
+
+  /** The owner looks up the one registered user with this exact email before sharing a portfolio
+   * case with them. */
+  static async lookupShareRecipient(caseId: string, actorId: string, email: string) {
+    return CaseShareSvc.lookup(caseId, actorId, email);
   }
 
   /** Marks a case confidential or ordinary (#346). Whoever can manage its access may (D7). Marking
    * it first gives the marker an ADMIN grant (D8) — an org ADMIN would otherwise wall themselves
    * off the moment it took effect. Unmarking leaves grants as they are. Audited either way. */
   static async setConfidential(caseId: string, actorId: string, confidential: boolean) {
+    // A portfolio case is already private to its owner and the people they share it with.
+    if (await CaseShareRepo.findPortfolioCase(caseId)) {
+      throw new HttpError("A case in your portfolio is already private to you", 400);
+    }
     const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
     if (caseRecord.confidential === confidential) return { confidential };
     if (confidential) await OrganizationRepo.grantCaseAccess(caseId, actorId, "ADMIN");

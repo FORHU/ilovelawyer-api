@@ -2,17 +2,22 @@ import express from "express";
 import asyncHandler from "../utils/async-handler";
 import requireConsent from "../middleware/require-consent.middleware";
 import validSession from "../middleware/valid-session.middleware";
-import resolveOrganization from "../middleware/resolve-organization.middleware";
+import { resolveOrganizationAllowingGuests } from "../middleware/resolve-organization.middleware";
+import { consultationCaseOf, guestItemNeedsCase, guestListNeedsCase, guestRefused } from "../middleware/guest-case-items.middleware";
 import ChatCtrl from "../controllers/chat.controller";
 import InviteCtrl from "../controllers/invite.controller";
 import ParticipantCtrl from "../controllers/participant.controller";
 
 const router = express.Router();
 
-router.use(validSession, asyncHandler(resolveOrganization));
+// Allows guests: someone a portfolio case was shared with reads its consultations (never a
+// standalone one, and never writes — see the middleware).
+router.use(validSession, asyncHandler(resolveOrganizationAllowingGuests));
+router.param("consultationId", guestItemNeedsCase(consultationCaseOf));
+router.use("/invites", guestRefused);
 
 router.get("/session", asyncHandler(ChatCtrl.getSession));
-router.get("/consultations", asyncHandler(ChatCtrl.listConsultations));
+router.get("/consultations", guestListNeedsCase, asyncHandler(ChatCtrl.listConsultations));
 router.post("/consultations", asyncHandler(ChatCtrl.createConsultation));
 router.patch("/consultations/:consultationId", asyncHandler(ChatCtrl.renameConsultation));
 router.post("/consultations/:consultationId/archive", asyncHandler(ChatCtrl.archiveConsultation));
