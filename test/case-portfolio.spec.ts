@@ -516,4 +516,50 @@ describe("Case portfolio", () => {
       expect(mine.data[0].createdBy).to.include({ id: memberId, name: "Mia", isMember: true });
     });
   });
+
+  describe("list sort", () => {
+    it("sorts by created, last updated, or the user's last opened, either way — never-opened last — across pages", async () => {
+      const firm = await makeOrg("Nyx Firm");
+      const userId = firm.ownerId;
+      const at = (day: number) => new Date(Date.UTC(2026, 0, day));
+      // Created order A < B < C < D; updated order is the reverse of that, so the two sorts disagree.
+      const ids: Record<string, string> = {};
+      for (const [i, name] of ["A", "B", "C", "D"].entries()) {
+        const created = await CaseRepo.create(firm.organizationId, userId, { caseName: name });
+        ids[name] = created.id;
+        await prisma.case.update({ where: { id: created.id }, data: { createdAt: at(i + 1), updatedAt: at(10 - i) } });
+      }
+      // Opened B (most recently) and C; A and D never opened.
+      await prisma.caseView.create({ data: { caseId: ids.C, userId, lastOpenedAt: at(20) } });
+      await prisma.caseView.create({ data: { caseId: ids.B, userId, lastOpenedAt: at(21) } });
+      // Someone else's open doesn't count for this user.
+      const otherId = await memberOf(firm.organizationId, "Ola");
+      await prisma.caseView.create({ data: { caseId: ids.D, userId: otherId, lastOpenedAt: at(22) } });
+
+      const names = async (sort: "created" | "updated" | "opened", page: number, limit: number, order: "asc" | "desc" = "desc") =>
+        (await CaseRepo.list(firm.organizationId, userId, page, limit, undefined, "ACTIVE", undefined, sort, order)).data.map(
+          (c) => c.caseName,
+        );
+
+      expect(await names("created", 1, 10)).to.deep.equal(["D", "C", "B", "A"]);
+      expect(await names("updated", 1, 10)).to.deep.equal(["A", "B", "C", "D"]);
+      expect(await names("opened", 1, 10)).to.deep.equal(["B", "C", "A", "D"]);
+      // Page 2 of 3 straddles the opened run (B, C) and the never-opened one (A, D).
+      expect(await names("opened", 1, 3)).to.deep.equal(["B", "C", "A"]);
+      expect(await names("opened", 2, 3)).to.deep.equal(["D"]);
+      expect(await names("opened", 2, 1)).to.deep.equal(["C"]);
+      expect(await names("opened", 3, 1)).to.deep.equal(["A"]);
+
+      // Ascending flips each order; never-opened cases stay at the end.
+      expect(await names("created", 1, 10, "asc")).to.deep.equal(["A", "B", "C", "D"]);
+      expect(await names("updated", 1, 10, "asc")).to.deep.equal(["D", "C", "B", "A"]);
+      expect(await names("opened", 1, 10, "asc")).to.deep.equal(["C", "B", "A", "D"]);
+      expect(await names("opened", 2, 3, "asc")).to.deep.equal(["D"]);
+
+      const opened = await CaseRepo.list(firm.organizationId, userId, 1, 10, undefined, "ACTIVE", undefined, "opened");
+      expect(opened.total).to.equal(4);
+      expect(opened.data[0].lastOpenedAt?.toISOString()).to.equal(at(21).toISOString());
+      expect(opened.data[3].lastOpenedAt).to.equal(null);
+    });
+  });
 });

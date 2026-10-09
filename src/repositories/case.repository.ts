@@ -1,7 +1,11 @@
 import prisma from "../lib/prisma";
 import CaseAccess from "../utils/case-access";
-import { CaseStatus, ClientSide } from "@prisma/client";
+import { CaseStatus, ClientSide, Prisma } from "@prisma/client";
 import { getStableProxyFileUrl } from "../utils/s3";
+
+/** Case Portfolio's sort: Created, Last updated or Last opened (by the requesting user). */
+export type CaseListSort = "created" | "updated" | "opened";
+export type CaseListOrder = "asc" | "desc";
 
 /** The creator, for "Created by" — with whether they're still in the case's organization. */
 function creatorSelect(organizationId: string) {
@@ -90,11 +94,13 @@ export default class CaseRepo {
     search?: string,
     status: CaseStatus = "ACTIVE",
     createdBy?: string,
+    sort: CaseListSort = "updated",
+    order: CaseListOrder = "desc",
   ) {
     const skip = (page - 1) * limit;
 
     // A confidential case (#346) is left out for anyone walled off from it (D4).
-    const where = {
+    const where: Prisma.CaseWhereInput = {
       organizationId,
       status,
       AND: [CaseAccess.visibleWhere(userId)],
@@ -109,23 +115,78 @@ export default class CaseRepo {
         : {}),
     };
 
-    const [total, rows] = await prisma.$transaction([
-      prisma.case.count({ where }),
-      prisma.case.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { updatedAt: "desc" },
-        include: {
-          parties: true,
-          views: { where: { userId }, select: { lastOpenedAt: true } },
-          user: creatorSelect(organizationId),
-        },
-      }),
-    ]);
+    const include = {
+      parties: true,
+      views: { where: { userId }, select: { lastOpenedAt: true } },
+      user: creatorSelect(organizationId),
+    };
+
+    let total: number;
+    let rows: Prisma.CaseGetPayload<{ include: typeof include }>[];
+    if (sort === "opened") {
+      ({ total, rows } = await CaseRepo.pageByLastOpened(where, userId, skip, limit, order, include));
+    } else {
+      [total, rows] = await prisma.$transaction([
+        prisma.case.count({ where }),
+        prisma.case.findMany({
+          where,
+          skip,
+          take: limit,
+          // id as a tiebreaker so rows with the same timestamp can't swap between pages.
+          orderBy: [sort === "created" ? { createdAt: order } : { updatedAt: order }, { id: order }],
+          include,
+        }),
+      ]);
+    }
 
     const data = rows.map(({ views, ...row }) => ({ ...withCreator(row), lastOpenedAt: views[0]?.lastOpenedAt ?? null }));
     return { total, data };
+  }
+
+  /** "Last opened" is per user (CaseView), so it can't be a plain orderBy on Case: the cases this
+   * user has opened come first, by when they last opened them (in `order`), then the ones they've
+   * never opened — last in either direction, newest update first — so flipping the order never
+   * buries the opened cases under a run of never-opened ones. One page can straddle the two runs,
+   * so the never-opened query picks up from wherever the opened run ends. */
+  private static async pageByLastOpened<I extends Prisma.CaseInclude>(
+    where: Prisma.CaseWhereInput,
+    userId: string,
+    skip: number,
+    limit: number,
+    order: CaseListOrder,
+    include: I,
+  ) {
+    const openedWhere = { userId, case: where };
+    const neverOpenedWhere: Prisma.CaseWhereInput = { AND: [where, { views: { none: { userId } } }] };
+
+    const [total, openedTotal, opened] = await prisma.$transaction([
+      prisma.case.count({ where }),
+      prisma.caseView.count({ where: openedWhere }),
+      prisma.caseView.findMany({
+        where: openedWhere,
+        orderBy: [{ lastOpenedAt: order }, { caseId: order }],
+        skip,
+        take: limit,
+        select: { caseId: true },
+      }),
+    ]);
+
+    const remaining = limit - opened.length;
+    const [openedRows, neverOpenedRows] = await prisma.$transaction([
+      prisma.case.findMany({ where: { id: { in: opened.map((v) => v.caseId) } }, include }),
+      prisma.case.findMany({
+        where: neverOpenedWhere,
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        skip: Math.max(0, skip - openedTotal),
+        take: Math.max(0, remaining),
+        include,
+      }),
+    ]);
+
+    // findMany by id doesn't keep the lastOpenedAt order — put it back.
+    const byId = new Map(openedRows.map((row) => [row.id, row]));
+    const orderedOpened = opened.flatMap((v) => byId.get(v.caseId) ?? []);
+    return { total, rows: [...orderedOpened, ...neverOpenedRows] };
   }
 
   /** Records that `userId` just opened the case. Upsert on the (case, user) key. The caller has

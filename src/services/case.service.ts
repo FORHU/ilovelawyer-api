@@ -1,4 +1,4 @@
-import CaseRepo, { CaseData } from "../repositories/case.repository";
+import CaseRepo, { CaseData, CaseListOrder, CaseListSort } from "../repositories/case.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import HttpError from "../utils/http-error";
 import CaseAccess from "../utils/case-access";
@@ -26,8 +26,10 @@ export default class CaseSvc {
     search?: string,
     status?: CaseStatus,
     createdBy?: string,
+    sort?: CaseListSort,
+    order?: CaseListOrder,
   ) {
-    const result = await CaseRepo.list(organizationId, userId, page, limit, search, status, createdBy);
+    const result = await CaseRepo.list(organizationId, userId, page, limit, search, status, createdBy, sort, order);
     return { ...result, data: await CaseRepo.withCopyContext(result.data, userId) };
   }
 
