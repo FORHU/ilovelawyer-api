@@ -7,6 +7,7 @@ import OrganizationRepo from "../src/repositories/organization.repository";
 import CaseShareRepo from "../src/repositories/case-share.repository";
 import CaseShareSvc from "../src/services/case-share.service";
 import NotificationSvc from "../src/services/notification.service";
+import SecurityAuditSvc from "../src/services/security-audit.service";
 import HttpError from "../src/utils/http-error";
 import * as socket from "../src/lib/socket";
 
@@ -22,6 +23,7 @@ const stash = {
   findRecipient: CaseShareRepo.findRecipient,
   removeShare: CaseShareRepo.removeShare,
   notify: NotificationSvc.create,
+  record: SecurityAuditSvc.record,
   emitToUser: socket.emitToUser,
   removeUserFromCase: socket.removeUserFromCase,
 };
@@ -30,6 +32,7 @@ const restore = () => {
   Object.assign(OrganizationRepo, { findSharedPortfolio: stash.findSharedPortfolio, grantCaseAccess: stash.grantCaseAccess, writeAudit: stash.writeAudit });
   Object.assign(CaseShareRepo, { findOwnedPortfolioCase: stash.findOwnedPortfolioCase, findRecipient: stash.findRecipient, removeShare: stash.removeShare });
   Object.assign(NotificationSvc, { create: stash.notify });
+  Object.assign(SecurityAuditSvc, { record: stash.record });
   Object.assign(socket, { emitToUser: stash.emitToUser, removeUserFromCase: stash.removeUserFromCase });
 };
 
@@ -149,12 +152,17 @@ describe("CaseShareSvc", () => {
   let notified: unknown[];
   let pushed: unknown[];
   let leftRoom: unknown[];
+  let audits: unknown[];
 
   beforeEach(() => {
     granted = [];
     notified = [];
     pushed = [];
     leftRoom = [];
+    audits = [];
+    (SecurityAuditSvc as any).record = async (entry: unknown) => {
+      audits.push(entry);
+    };
     (socket as any).emitToUser = (...args: unknown[]) => pushed.push(args);
     (socket as any).removeUserFromCase = (...args: unknown[]) => leftRoom.push(args);
     (CaseShareRepo as any).findOwnedPortfolioCase = async () => ownCase();
@@ -233,6 +241,23 @@ describe("CaseShareSvc", () => {
     expect(await statusOf(() => CaseShareSvc.revoke("c1", "alice", "bob"))).to.equal(404);
     expect(leftRoom).to.deep.equal([]);
     expect(pushed).to.deep.equal([]);
+    expect(audits).to.deep.equal([]);
+  });
+
+  it("records the owner taking a share back in the security audit log (#391)", async () => {
+    (CaseShareRepo as any).removeShare = async () => true;
+    await CaseShareSvc.revoke("c1", "alice", "bob");
+    expect(audits).to.deep.equal([
+      {
+        action: "case.access_revoked",
+        actorId: "alice",
+        organizationId: "alice-portfolio",
+        targetType: "user",
+        targetId: "bob",
+        caseId: "c1",
+        payload: { portfolio: true },
+      },
+    ]);
   });
 
   it("lets a recipient drop a share", async () => {
