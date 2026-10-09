@@ -50,7 +50,7 @@ export interface RubricResult {
   factors: Record<FactorKey, FactorPoints>;
   earned: number;
   assessable: number;
-  /** Null = "Insufficient information" — see `insufficientReason`. */
+  /** Provisional when `insufficientReason` is set; null only when no factor could be assessed. */
   score: number | null;
   band: CredibilityBand | null;
   insufficientReason: string | null;
@@ -94,8 +94,11 @@ export function scoreWitness(answers: FactorAnswers, statementReceived: boolean)
     insufficientReason = `Only ${assessable} of 100 points could be assessed (minimum ${MIN_ASSESSABLE_POINTS}).`;
   }
 
-  const score = insufficientReason ? null : Math.round((earned / assessable) * 100);
-  const band = score === null ? null : bandFor(score);
+  // A thin record still gets a number — what the assessable factors show — but it stays provisional:
+  // `insufficientReason` is kept, and no band is given, so the suggested status doesn't lean on it.
+  // Null only when not a single factor could be assessed.
+  const score = assessable > 0 ? Math.round((earned / assessable) * 100) : null;
+  const band = score === null || insufficientReason ? null : bandFor(score);
 
   const flags: WitnessFlag[] = [];
   if (answers.F === "CENTRAL") flags.push("CENTRAL_CONTRADICTION");
@@ -107,7 +110,7 @@ export function scoreWitness(answers: FactorAnswers, statementReceived: boolean)
   // OUTSTANDING means something is missing (statement or information); a scored witness is
   // READY when credible and otherwise ADVERSE, so a Low band is not left in limbo.
   if (flags.includes("CENTRAL_CONTRADICTION") || band === "WEAK" || band === "LOW") suggestedStatus = "ADVERSE";
-  else if (!statementReceived || score === null) suggestedStatus = "OUTSTANDING";
+  else if (!statementReceived || score === null || insufficientReason) suggestedStatus = "OUTSTANDING";
   else suggestedStatus = "READY";
 
   return { version: RUBRIC_VERSION, factors, earned, assessable, score, band, insufficientReason, flags, suggestedStatus };

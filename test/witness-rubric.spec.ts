@@ -29,19 +29,28 @@ describe("witness rubric", () => {
     expect(r.score).to.equal(100);
   });
 
-  it("gives no score when factor A or D is not assessable", () => {
+  it("gives a provisional score, with no band, when factor A or D is not assessable", () => {
     const r = scoreWitness({ ...best, A: null }, true);
-    expect(r.score).to.equal(null);
+    expect(r.score).to.equal(100);
     expect(r.band).to.equal(null);
     expect(r.insufficientReason).to.contain("Basis of knowledge");
     expect(r.suggestedStatus).to.equal("OUTSTANDING");
   });
 
-  it("gives no score under 60 assessable points", () => {
+  it("gives a provisional score under 60 assessable points", () => {
     // A 20 + D 15 + B 10 + C 10 = 55
     const r = scoreWitness({ A: "OWN", D: "NONE", B: "SPECIFIC", C: "WEEKS" }, true);
     expect(r.assessable).to.equal(55);
+    expect(r.score).to.equal(100);
+    expect(r.band).to.equal(null);
+    expect(r.insufficientReason).to.contain("Only 55 of 100");
+    expect(r.suggestedStatus).to.equal("OUTSTANDING");
+  });
+
+  it("gives no score when no factor is assessable", () => {
+    const r = scoreWitness({}, true);
     expect(r.score).to.equal(null);
+    expect(r.band).to.equal(null);
   });
 
   it("treats an unknown option as not assessable", () => {
