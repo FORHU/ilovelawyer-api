@@ -47,13 +47,48 @@ export function documentFileUrl(s3Key: string, filename: string | null, ref: { i
 }
 
 export default class DocumentSvc {
+  /**
+   * An upload may only name a case the uploader can actually open, in the organization they're
+   * uploading under (#371). Before this, any caseId was taken on trust: every reader of a case's
+   * documents finds them by caseId alone (DocumentRepo.listAllByCase, chat retrieval), so a
+   * document attached to another firm's case — or to a confidential one the uploader is walled off
+   * from (#346) — would be read into that case's AI analysis and chat answers.
+   *
+   * Uploading isn't editing: a plain member who can view a case may add documents to it. Changing,
+   * archiving or deleting them still takes edit access (#345, loadForChange).
+   *
+   * 404 either way, so a refusal never reveals whether the case exists. A case with no
+   * organization is only reachable by its creator (see CaseAccess.ownedByUser), so there's no
+   * organization to match it against.
+   */
+  private static async assertCanUploadToCase(caseId: string, organizationId: string, userId: string) {
+    const caseRecord = await CaseAccess.loadAccessibleCase(caseId, userId);
+    if (caseRecord.organizationId && caseRecord.organizationId !== organizationId) {
+      throw new HttpError("Case not found", 404);
+    }
+  }
+
   /** Key branches on whether caseId is known at presign time (ADR 0011): case-scoped when it is,
    * consultation-scoped when only a consultationId (Consultation.id) is known, user-scoped
    * otherwise (e.g. Document Analysis's "No Case" upload). consultationId is only used to build
    * the S3 key here — it isn't persisted on the Document row. The random shortId guards against
    * same-millisecond collisions when multiple files are presigned concurrently for the same
    * case/user (Create Case uploads pending files in a concurrency pool, then confirms in batches). */
-  static async presign(userId: string, filename: string, contentType: string, caseId?: string, consultationId?: string) {
+  static async presign(
+    organizationId: string,
+    userId: string,
+    filename: string,
+    contentType: string,
+    caseId?: string,
+    consultationId?: string,
+  ) {
+    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
+    return DocumentSvc.presignKey(userId, filename, contentType, caseId, consultationId);
+  }
+
+  /** presign's key-building half, without the case check — so presignMany can check the batch's
+   * shared caseId once instead of once per file. */
+  private static async presignKey(userId: string, filename: string, contentType: string, caseId?: string, consultationId?: string) {
     const ext = path.extname(filename);
     const shortId = crypto.randomUUID().slice(0, 8);
     const key = caseId
@@ -66,13 +101,16 @@ export default class DocumentSvc {
   }
 
   static async presignMany(
+    organizationId: string,
     userId: string,
     files: { filename: string; contentType: string }[],
     caseId?: string,
     consultationId?: string,
   ) {
+    // Checked once for the batch's shared caseId, not per file.
+    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
     return Promise.all(
-      files.map((file) => this.presign(userId, file.filename, file.contentType, caseId, consultationId)),
+      files.map((file) => DocumentSvc.presignKey(userId, file.filename, file.contentType, caseId, consultationId)),
     );
   }
 
@@ -85,6 +123,7 @@ export default class DocumentSvc {
     userId: string,
     data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string; fileSize?: number },
   ) {
+    if (data.caseId) await DocumentSvc.assertCanUploadToCase(data.caseId, organizationId, userId);
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
     const doc = await DocumentRepo.create(organizationId, userId, {
@@ -108,6 +147,7 @@ export default class DocumentSvc {
     caseId?: string,
     consultationId?: string,
   ) {
+    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({
       filename: item.name,
       fileUrl: s3UrlForKey(item.key),

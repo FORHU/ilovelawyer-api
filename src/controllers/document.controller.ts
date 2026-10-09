@@ -20,6 +20,7 @@ export default class DocumentCtrl {
 
     if (value.files) {
       const items = await DocumentSvc.presignMany(
+        req.organization!.id,
         req.user.userId,
         value.files,
         value.caseId,
@@ -29,6 +30,7 @@ export default class DocumentCtrl {
     }
 
     const result = await DocumentSvc.presign(
+      req.organization!.id,
       req.user.userId,
       value.filename,
       value.contentType,
