@@ -41,6 +41,13 @@ export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
  * base64 or 64 hex chars. Optional at boot so environments without Google Calendar still start;
  * connecting Google Calendar is refused while it's unset. */
 export const GOOGLE_TOKEN_ENC_KEY = process.env.GOOGLE_TOKEN_ENC_KEY as string | undefined;
+/** Field-level encryption of privileged text (src/utils/field-crypto.ts, issue #343). Off unless
+ * FIELD_ENCRYPTION_ENABLED is "true". FIELD_ENCRYPTION_KEY is 32 bytes (base64 or 64 hex chars);
+ * FIELD_ENCRYPTION_OLD_KEYS lists earlier keys, comma-separated, so values sealed with them still
+ * open after a rotation. */
+export const FIELD_ENCRYPTION_ENABLED = process.env.FIELD_ENCRYPTION_ENABLED === "true";
+export const FIELD_ENCRYPTION_KEY = process.env.FIELD_ENCRYPTION_KEY as string | undefined;
+export const FIELD_ENCRYPTION_OLD_KEYS = process.env.FIELD_ENCRYPTION_OLD_KEYS as string | undefined;
 export const CHAT_WONDER_API_URL = (process.env.CHAT_WONDER_API_URL || "").replace(/\/+$/, "");
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
 /** juris.ph public API root (no version/segment). juris-ph.ts appends `/v1/...` for the

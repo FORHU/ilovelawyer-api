@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import { redis } from "../lib/redis";
-import DocumentChunkRepo, { DocumentChunkRow } from "../repositories/document-chunk.repository";
+import DocumentChunkRepo, { CHUNK_TEXT, DocumentChunkRow } from "../repositories/document-chunk.repository";
 import CaseRepo from "../repositories/case.repository";
 import HttpError from "../utils/http-error";
 import { embedText } from "../utils/embedding";
@@ -8,8 +8,20 @@ import { rank as bm25Rank } from "../utils/bm25";
 import { RagStatus } from "@prisma/client";
 import { OMIT_EMBEDDING_RANKING } from "../constants";
 import logger from "../utils/logger";
+import { openField, sealField } from "../utils/field-crypto";
 
 const CACHE_TTL_S = 300; // 5 minutes
+
+/** The cached copy of a document's chunks keeps its text sealed while field encryption is on, so
+ * readable document text is not left in Redis for the cache lifetime. */
+const sealedForCache = <T extends { chunks: DocumentChunkRow[] }>(doc: T): T => ({
+  ...doc,
+  chunks: doc.chunks.map((chunk) => ({ ...chunk, chunkText: sealField(chunk.chunkText, CHUNK_TEXT, true) })),
+});
+const openedFromCache = <T extends { chunks: DocumentChunkRow[] }>(doc: T): T => ({
+  ...doc,
+  chunks: doc.chunks.map((chunk) => ({ ...chunk, chunkText: openField(chunk.chunkText, CHUNK_TEXT) ?? "" })),
+});
 // Per-document chunk floor, not a case-wide chunk count — see findRelevantByCase's docstring.
 // A flat case-wide count (the old DEFAULT_CASE_CHUNK_LIMIT = 20) let a case with many documents
 // silently exclude whole documents whose chunks didn't win a case-wide top-K slot.
@@ -58,6 +70,7 @@ export default class DocumentChunkSvc {
 
     let result = await redis.get<DocumentWithChunks>(key);
     if (result) {
+      result = openedFromCache(result);
       logger.info("Case document: cache hit", { caseDocumentId, chunks: result.chunks.length });
     } else {
       logger.info("Case document: cache miss, fetching from DB", { caseDocumentId });
@@ -88,7 +101,7 @@ export default class DocumentChunkSvc {
         chunks,
       };
       logger.info("Case document: fetched from DB", { caseDocumentId, chunks: chunks.length, ragStatus: doc.ragStatus });
-      await redis.set(key, result, CACHE_TTL_S);
+      await redis.set(key, sealedForCache(result), CACHE_TTL_S);
     }
 
     const { chunks } = result;
@@ -113,7 +126,7 @@ export default class DocumentChunkSvc {
     const key = filterCacheKey(filter);
 
     const cached = await redis.get<DocumentWithChunks[]>(key);
-    if (cached) return cached;
+    if (cached) return cached.map(openedFromCache);
 
     // status: "ACTIVE" — same Option A exclusion as listByDocument/relevantChunksForScope, kept
     // consistent across every document-selection entry point chat-wonder can reach.
@@ -135,7 +148,7 @@ export default class DocumentChunkSvc {
       })),
     );
 
-    await redis.set(key, result, CACHE_TTL_S);
+    await redis.set(key, result.map(sealedForCache), CACHE_TTL_S);
     return result;
   }
 

@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
+import { openField, sealField } from "../utils/field-crypto";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -21,6 +22,12 @@ export interface DocumentChunkRow {
   charCount: number;
   createdAt: Date;
 }
+
+/** The text of every chunk is stored sealed (utils/field-crypto.ts) while field encryption is on, and
+ * opened here, so nothing outside this repository (BM25, chat, Chat Wonder's document fetch) ever
+ * sees a sealed value. A chunk that cannot be opened (its key is gone) reads as empty text. */
+export const CHUNK_TEXT = "CaseDocumentChunk.chunkText";
+const openText = (stored: string): string => openField(stored, CHUNK_TEXT) ?? "";
 
 // Rows per INSERT statement. A document can produce tens of thousands of chunks (e.g. a 50MB
 // PDF) — one round-trip per row blows past Prisma's interactive-transaction timeout, so rows are
@@ -58,7 +65,7 @@ export default class DocumentChunkRepo {
           crypto.randomUUID(),
           chunk.caseDocumentId,
           chunk.chunkIndex,
-          chunk.chunkText,
+          sealField(chunk.chunkText, CHUNK_TEXT, true),
           chunk.charCount,
           `[${chunk.embedding.join(",")}]`,
           chunk.pageNumber ?? null,
@@ -97,7 +104,7 @@ export default class DocumentChunkRepo {
       FROM "CaseDocumentChunk"
       WHERE id IN (${Prisma.join(ids)})
     `;
-    const byId = new Map(rows.map((r) => [r.id, r]));
+    const byId = new Map(rows.map((r) => [r.id, { ...r, chunkText: openText(r.chunkText) }]));
     return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
   }
 
@@ -115,7 +122,7 @@ export default class DocumentChunkRepo {
       WHERE "caseDocumentId" = ${caseDocumentId} AND "pageNumber" = ${pageNumber}
       ORDER BY "chunkIndex" ASC
     `;
-    return rows.map((row) => row.chunkText);
+    return rows.map((row) => openText(row.chunkText));
   }
 
   /** Chunk ids ranked by embedding similarity (pgvector cosine distance, `<=>`) against a
@@ -286,7 +293,7 @@ export default class DocumentChunkRepo {
     const parts = new Map<string, string[]>();
     for (const r of rows) {
       const list = parts.get(r.caseDocumentId) ?? [];
-      list.push(r.chunkText);
+      list.push(openText(r.chunkText));
       parts.set(r.caseDocumentId, list);
     }
     for (const [id, list] of parts) out.set(id, list.join("\n"));
@@ -305,7 +312,7 @@ export default class DocumentChunkRepo {
         ORDER BY "chunkIndex" ASC
         LIMIT ${SELECT_BATCH_SIZE} OFFSET ${offset}
       `;
-      rows.push(...batch);
+      rows.push(...batch.map((row) => ({ ...row, chunkText: openText(row.chunkText) })));
       if (batch.length < SELECT_BATCH_SIZE) break;
       offset += SELECT_BATCH_SIZE;
     }
