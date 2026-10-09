@@ -10,6 +10,13 @@ export const CLIENT_SIDES = ["CLAIMANT", "RESPONDENT"];
 // Mirrored by the web app's case-field limits (lib/cases/limits.ts) — keep the two in step.
 export const CASE_NAME_MAX_LENGTH = 150;
 export const PARTY_NAME_MAX_LENGTH = 80;
+export const CASE_NOTES_MAX_LENGTH = 5000;
+
+const notes = Joi.string()
+  .allow("")
+  .max(CASE_NOTES_MAX_LENGTH)
+  .optional()
+  .messages({ "string.max": `Notes must be ${CASE_NOTES_MAX_LENGTH} characters or fewer.` });
 
 const caseName = Joi.string()
   .trim()
@@ -43,7 +50,7 @@ export const createCaseSchema = Joi.object({
     .valid(...CLIENT_SIDES)
     .allow(null)
     .optional(),
-  notes: Joi.string().allow("").optional(),
+  notes,
   parties: Joi.array().items(partySchema).optional(),
 });
 
@@ -72,7 +79,7 @@ export const updateCaseSchema = Joi.object({
     .valid(...CLIENT_SIDES)
     .allow(null)
     .optional(),
-  notes: Joi.string().allow("").optional(),
+  notes,
   parties: Joi.array().items(partySchema).optional(),
 }).min(1);
 
