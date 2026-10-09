@@ -107,10 +107,10 @@ describe("evaluateCitation — which results Jev double-checks", () => {
     else process.env.USE_JEV_VALIDITY = original;
   });
 
-  it("an exact match is decided by the heuristic alone", async () => {
+  it("an exact match still goes to Jev (#366) — a verbatim quote can still be out of context", async () => {
     const result = await evaluateCitation({ quotedText: "the employer may terminate the employee", officialText: OFFICIAL }, fakeJev);
-    expect(result.status).to.equal("VALID");
-    expect(jevCalls).to.have.length(0);
+    expect(jevCalls).to.have.length(1);
+    expect(result.status).to.equal("ADVERSE");
   });
 
   it("a fuzzy VALID goes to Jev, and Jev's answer wins", async () => {

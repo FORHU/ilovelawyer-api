@@ -202,9 +202,10 @@ export default class CaseMindMapSvc {
 
   /** Fast, synchronous half of a Studio "Regenerate" on the case map — same beginQueued/
    * runQueued split as CaseTimelineSvc.beginQueuedGenerate. Anyone who can open the case, the
-   * same rule as regenerating a chat map. */
+   * same rule as regenerating a chat map — except a view-only person on a confidential case
+   * (CaseAccess.assertCanContribute). */
   static async beginQueuedGenerate(caseId: string, userId: string): Promise<void> {
-    await CaseAccess.loadAccessibleCase(caseId, userId);
+    await CaseAccess.assertCanContribute(caseId, userId);
     await AiGenerationLockSvc.assertAnalysisIdle(caseId);
     await AiGenerationLockSvc.begin(caseId, "caseMindMap");
   }

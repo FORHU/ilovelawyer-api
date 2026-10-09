@@ -8,6 +8,7 @@ import TranscriptionRepo from "../repositories/transcription.repository";
 import TranscriptionExtractionSvc from "./transcription-extraction.service";
 import HttpError from "../utils/http-error";
 import CaseAccess from "../utils/case-access";
+import ChatSvc from "./chat.service";
 import logger from "../utils/logger";
 import { AWS_S3_BUCKET } from "../config";
 import { awsClientConfig } from "../lib/aws-client-config";
@@ -108,6 +109,15 @@ export default class TranscriptionSvc {
     return TranscriptionSvc.loadVisible(id, organizationId, userId);
   }
 
+  /** loadVisible for changing a transcription. One on a case is the case's, so it takes what any
+   * change to the case's material does — read-only for a view-only person on a confidential case
+   * (CaseAccess.assertCanContribute). */
+  private static async loadForChange(id: string, organizationId: string, userId: string) {
+    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
+    if (item.caseId) await CaseAccess.assertCanContribute(item.caseId, userId);
+    return item;
+  }
+
   static async create(organizationId: string, userId: string, data: {
     title?: string;
     audioFileId?: string;
@@ -118,6 +128,10 @@ export default class TranscriptionSvc {
     caseId?: string | null;
     consultationId?: string | null;
   }) {
+    // Adding a transcription to a case adds to the case's material, like uploading a document.
+    if (data.caseId) await CaseAccess.assertCanContribute(data.caseId, userId);
+    // Same for filing it on a consultation, which reads it into that chat's answers.
+    if (data.consultationId) await ChatSvc.assertConsultationWritable(organizationId, userId, data.consultationId);
     return TranscriptionRepo.create(organizationId, userId, {
       title: data.title ?? "Untitled Transcription",
       ...data,
@@ -125,7 +139,7 @@ export default class TranscriptionSvc {
   }
 
   static async startBatchJob(id: string, organizationId: string, userId: string) {
-    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
+    const item = await TranscriptionSvc.loadForChange(id, organizationId, userId);
 
     const s3Key = item.audioFile?.s3Key;
     if (!s3Key) throw new HttpError("No audio file or S3 key linked to this transcription", 400);
@@ -179,15 +193,18 @@ export default class TranscriptionSvc {
     caseId?: string | null;
     consultationId?: string | null;
   }) {
-    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
-    // Moving it onto a case needs that case to be one the user can open too.
-    if (data.caseId && data.caseId !== item.caseId) await CaseAccess.loadAccessibleCase(data.caseId, userId);
+    const item = await TranscriptionSvc.loadForChange(id, organizationId, userId);
+    // Moving it onto a case adds to that case's material too.
+    if (data.caseId && data.caseId !== item.caseId) await CaseAccess.assertCanContribute(data.caseId, userId);
+    if (data.consultationId && data.consultationId !== item.consultationId) {
+      await ChatSvc.assertConsultationWritable(organizationId, userId, data.consultationId);
+    }
     await TranscriptionRepo.update(id, organizationId, data);
     return TranscriptionRepo.findById(id, organizationId);
   }
 
   static async delete(id: string, organizationId: string, userId: string) {
-    const item = await TranscriptionSvc.loadVisible(id, organizationId, userId);
+    const item = await TranscriptionSvc.loadForChange(id, organizationId, userId);
     await TranscriptionRepo.delete(id, organizationId);
     await SecurityAuditSvc.record({
       action: "transcription.deleted",
@@ -203,7 +220,7 @@ export default class TranscriptionSvc {
    * Document RAG pipeline uses. Idempotent: re-running deletes and re-inserts fresh chunks.
    * Ownership is checked here (org-scoped findById); the pipeline itself operates unscoped. */
   static async chunk(id: string, organizationId: string, userId: string) {
-    await TranscriptionSvc.loadVisible(id, organizationId, userId);
+    await TranscriptionSvc.loadForChange(id, organizationId, userId);
     return TranscriptionExtractionSvc.process(id);
   }
 }

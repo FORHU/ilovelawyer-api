@@ -131,9 +131,17 @@ export default class DocumentRepo {
     await prisma.document.updateMany({ where: { caseId }, data: { damagesExtractedAt: null } });
   }
 
+  /** Every reader of a case's documents goes through this — the snapshot, findings, refresh, mind
+   * map, outlook, reconstruction, graph view, and the case-delete cascade. Scoped to the case's own
+   * organization (#373), not just its id: a document can only be read as part of a case when its
+   * organizationId matches the case's, so one planted in — or left behind in — another org's case
+   * (upload should have refused it, see #371; this is the second line of defence) is never surfaced
+   * through it. A case with no organization (legacy/creator-owned, see CaseAccess.ownedByUser) has
+   * nothing to match against, so the caseId-only filter stands, same as before this. */
   static async listAllByCase(caseId: string) {
+    const organizationId = await CaseRepo.findOrganizationId(caseId);
     return prisma.document.findMany({
-      where: { caseId },
+      where: { caseId, ...(organizationId ? { organizationId } : {}) },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });

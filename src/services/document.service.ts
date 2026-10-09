@@ -12,6 +12,9 @@ import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } 
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
 import CaseAccess from "../utils/case-access";
+// Cycle with chat.service (it imports mapDocumentToDto from here) — safe, both are only used
+// inside function bodies.
+import ChatSvc from "./chat.service";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { DocumentStatus } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
@@ -55,14 +58,25 @@ export default class DocumentSvc {
    * from (#346) — would be read into that case's AI analysis and chat answers.
    *
    * Uploading isn't editing: a plain member who can view a case may add documents to it. Changing,
-   * archiving or deleting them still takes edit access (#345, loadForChange).
+   * archiving or deleting them still takes edit access (#345, loadForChange). A confidential case
+   * is the exception (CaseAccess.assertCanContribute): there "Can view" is read-only, and an
+   * upload re-runs the case's analysis.
    *
-   * 404 either way, so a refusal never reveals whether the case exists. A case with no
-   * organization is only reachable by its creator (see CaseAccess.ownedByUser), so there's no
+   * 404 when the case can't be opened, so a refusal never reveals whether it exists. A case with
+   * no organization is only reachable by its creator (see CaseAccess.ownedByUser), so there's no
    * organization to match it against.
    */
+  /** The case and/or consultation an upload names. A consultation's attachments are read into
+   * its chat answers just as a case's documents are, so naming one takes what sending a message
+   * in it does (ChatSvc.assertConsultationWritable) — before this, any consultationId was taken
+   * on trust. */
+  private static async assertCanUploadTo(organizationId: string, userId: string, caseId?: string, consultationId?: string) {
+    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
+    if (consultationId) await ChatSvc.assertConsultationWritable(organizationId, userId, consultationId);
+  }
+
   private static async assertCanUploadToCase(caseId: string, organizationId: string, userId: string) {
-    const caseRecord = await CaseAccess.loadAccessibleCase(caseId, userId);
+    const caseRecord = await CaseAccess.assertCanContribute(caseId, userId);
     if (caseRecord.organizationId && caseRecord.organizationId !== organizationId) {
       throw new HttpError("Case not found", 404);
     }
@@ -82,7 +96,7 @@ export default class DocumentSvc {
     caseId?: string,
     consultationId?: string,
   ) {
-    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
+    await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
     return DocumentSvc.presignKey(userId, filename, contentType, caseId, consultationId);
   }
 
@@ -107,8 +121,8 @@ export default class DocumentSvc {
     caseId?: string,
     consultationId?: string,
   ) {
-    // Checked once for the batch's shared caseId, not per file.
-    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
+    // Checked once for the batch's shared caseId/consultationId, not per file.
+    await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
     return Promise.all(
       files.map((file) => DocumentSvc.presignKey(userId, file.filename, file.contentType, caseId, consultationId)),
     );
@@ -123,7 +137,7 @@ export default class DocumentSvc {
     userId: string,
     data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string; fileSize?: number },
   ) {
-    if (data.caseId) await DocumentSvc.assertCanUploadToCase(data.caseId, organizationId, userId);
+    await DocumentSvc.assertCanUploadTo(organizationId, userId, data.caseId, data.consultationId);
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
     const doc = await DocumentRepo.create(organizationId, userId, {
@@ -147,7 +161,7 @@ export default class DocumentSvc {
     caseId?: string,
     consultationId?: string,
   ) {
-    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
+    await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({
       filename: item.name,
       fileUrl: s3UrlForKey(item.key),

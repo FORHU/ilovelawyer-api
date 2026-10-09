@@ -2,6 +2,7 @@ import InviteRepo from "../repositories/invite.repository";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatRepo from "../repositories/chat.repository";
 import HttpError from "../utils/http-error";
+import ChatSvc from "./chat.service";
 import SecurityAuditSvc from "./security-audit.service";
 
 const INVITE_TTL_HOURS = 48;
@@ -15,6 +16,9 @@ export default class InviteSvc {
     }
     // A standalone Consultation is private to its creator — only a Case's can be shared.
     if (!consultation.caseId) throw new HttpError(SHARE_CASE_ONLY_MESSAGE, 400);
+    // Sharing it is a change to the Case's Consultation: not for a view-only person on a
+    // confidential Case.
+    await ChatSvc.assertCanChangeOnCase(consultation, userId);
 
     const expiresAt = new Date(Date.now() + INVITE_TTL_HOURS * 60 * 60 * 1000);
     const invite = await InviteRepo.create(consultationId, userId, expiresAt);
