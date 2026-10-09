@@ -166,9 +166,18 @@ export default class WitnessScoringSvc {
     const docNameById = new Map(snapshot.documents.map((d) => [d.id, d.name]));
     const contradictions = snapshot.evidence.contradictions;
 
-    const sponsoredDocIds = [
-      ...new Set(snapshot.evidence.matrix.filter((m) => m.sponsoringWitnessId).map((m) => m.documentId)),
-    ];
+    // The documents each witness speaks to: those they sponsor in the evidence matrix, plus the one
+    // an AI-found witness was extracted from. Without the latter, a witness WitnessExtractSvc found
+    // in (say) their own interview had no text to score until a lawyer linked it by hand, so every
+    // factor came back unanswered and the score was "not enough data".
+    const docIdsByWitness = new Map(
+      snapshot.witnesses.map((w) => {
+        const ids = snapshot.evidence.matrix.filter((m) => m.sponsoringWitnessId === w.id).map((m) => m.documentId);
+        if (w.sourceDocumentId && docNameById.has(w.sourceDocumentId)) ids.push(w.sourceDocumentId);
+        return [w.id, [...new Set(ids)]];
+      }),
+    );
+    const sponsoredDocIds = [...new Set([...docIdsByWitness.values()].flat())];
     const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(sponsoredDocIds);
     const perDocChars = Math.max(
       500,
@@ -181,16 +190,17 @@ export default class WitnessScoringSvc {
       role: w.role,
       summary: w.summary,
       statementReceived: w.statementReceived,
-      sponsoredEvidence: snapshot.evidence.matrix
-        .filter((item) => item.sponsoringWitnessId === w.id)
-        .map((item) => ({
-          name: docNameById.get(item.documentId) ?? "Unnamed document",
-          hearsay: item.hearsayCategory,
-          excerpt: fullTexts.get(item.documentId)?.slice(0, perDocChars),
-          contradictions: contradictions
-            .filter((c) => c.leftDocumentId === item.documentId || c.rightDocumentId === item.documentId)
-            .map((c) => `"${clip(c.leftExcerpt)}" vs "${clip(c.rightExcerpt)}"`),
-        })),
+      sponsoredEvidence: (docIdsByWitness.get(w.id) ?? []).map((documentId) => ({
+        name: docNameById.get(documentId) ?? "Unnamed document",
+        // The source document has no matrix row, so no hearsay category yet — same as an unclassified row.
+        hearsay:
+          snapshot.evidence.matrix.find((m) => m.sponsoringWitnessId === w.id && m.documentId === documentId)?.hearsayCategory ??
+          "NOT_APPLICABLE",
+        excerpt: fullTexts.get(documentId)?.slice(0, perDocChars),
+        contradictions: contradictions
+          .filter((c) => c.leftDocumentId === documentId || c.rightDocumentId === documentId)
+          .map((c) => `"${clip(c.leftExcerpt)}" vs "${clip(c.rightExcerpt)}"`),
+      })),
     }));
 
     const buildPrompt = getWitnessScoringPromptBuilder(tenantCode);
