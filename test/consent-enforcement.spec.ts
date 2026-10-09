@@ -5,7 +5,6 @@ import fs from "fs";
 import path from "path";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
-import { ConsentPurpose } from "@prisma/client";
 import ConsentSvc from "../src/services/consent.service";
 import ConsentRepo from "../src/repositories/consent.repository";
 import requireConsent from "../src/middleware/require-consent.middleware";
@@ -27,16 +26,14 @@ describe("ConsentSvc.isAllowed", () => {
     expect(await ConsentSvc.isAllowed("u1", "AI_PROCESSING")).to.equal(true);
   });
 
-  it("holds the optional extras back until someone opts in", async () => {
+  it("blocks a purpose the product does not use, so nothing can start on one by accident", async () => {
     expect(await ConsentSvc.isAllowed("u1", "ANALYTICS")).to.equal(false);
     expect(await ConsentSvc.isAllowed("u1", "MARKETING")).to.equal(false);
   });
 
-  it("allows what was granted, for every purpose", async () => {
+  it("allows what was granted", async () => {
     row = { withdrawnAt: null };
-    for (const purpose of ["AI_PROCESSING", "ANALYTICS", "MARKETING"] as ConsentPurpose[]) {
-      expect(await ConsentSvc.isAllowed("u1", purpose), purpose).to.equal(true);
-    }
+    expect(await ConsentSvc.isAllowed("u1", "AI_PROCESSING")).to.equal(true);
   });
 
   it("blocks what was withdrawn, including AI work that is otherwise allowed by default", async () => {

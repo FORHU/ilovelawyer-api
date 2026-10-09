@@ -2,7 +2,13 @@ import { ConsentPurpose } from "@prisma/client";
 import ConsentRepo from "../repositories/consent.repository";
 import HttpError from "../utils/http-error";
 import SecurityAuditSvc from "./security-audit.service";
-import { CONSENT_VERSIONS, CONSENT_WHEN_UNANSWERED, SELF_SERVICE_CONSENT_PURPOSES } from "../constants/consent.constants";
+import {
+  ACTIVE_CONSENT_PURPOSES,
+  CONSENT_VERSIONS,
+  CONSENT_WHEN_UNANSWERED,
+  ConsentSource,
+  SELF_SERVICE_CONSENT_PURPOSES,
+} from "../constants/consent.constants";
 
 export type ConsentStatus = "granted" | "withdrawn" | "not_set";
 
@@ -49,7 +55,7 @@ export default class ConsentSvc {
     const [rows, terms] = await Promise.all([ConsentRepo.findByUser(userId), ConsentRepo.findTerms(userId)]);
     const byPurpose = new Map(rows.map((row) => [row.purpose, row]));
 
-    return (Object.keys(CONSENT_VERSIONS) as ConsentPurpose[]).map((purpose) => {
+    return ACTIVE_CONSENT_PURPOSES.map((purpose) => {
       const current = CONSENT_VERSIONS[purpose];
 
       if (purpose === "TERMS_OF_SERVICE") {
@@ -79,18 +85,19 @@ export default class ConsentSvc {
 
   /** Grants or withdraws one purpose and returns the new state of the whole list. Terms of
    * Service can't be changed here. */
-  static async set(userId: string, purpose: ConsentPurpose, granted: boolean) {
+  static async set(userId: string, purpose: ConsentPurpose, granted: boolean, source: ConsentSource = "settings") {
     if (!SELF_SERVICE_CONSENT_PURPOSES.includes(purpose)) {
       throw new HttpError(`${purpose} can't be changed here`, 400);
     }
-    await ConsentRepo.set(userId, purpose, granted, CONSENT_VERSIONS[purpose], "settings");
+    const version = CONSENT_VERSIONS[purpose]!;
+    await ConsentRepo.set(userId, purpose, granted, version, source);
     // The consent table keeps only the latest answer per purpose; this is the history of changes.
     await SecurityAuditSvc.record({
       action: "consent.changed",
       actorId: userId,
       targetType: "user",
       targetId: userId,
-      payload: { purpose, granted, version: CONSENT_VERSIONS[purpose] },
+      payload: { purpose, granted, version, source },
     });
     return ConsentSvc.list(userId);
   }

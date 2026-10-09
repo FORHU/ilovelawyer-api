@@ -15,7 +15,7 @@ export default class ConsentCtrl {
     const { error, value } = setConsentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await ConsentSvc.set(req.user.userId, purposeCheck.value as ConsentPurpose, value.granted);
+    const result = await ConsentSvc.set(req.user.userId, purposeCheck.value as ConsentPurpose, value.granted, value.source);
     return res.status(200).json(result);
   }
 }
