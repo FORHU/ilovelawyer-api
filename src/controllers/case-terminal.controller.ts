@@ -60,6 +60,7 @@ import {
   createProcedureItemSchema,
   updateProcedureItemSchema,
   grantAccessSchema,
+  shareLookupSchema,
   setConfidentialSchema,
   listFindingsSchema,
   createFindingSchema,
@@ -522,6 +523,13 @@ export default class CaseTerminalCtrl {
 
   static async listAccess(req: Request, res: Response) {
     const result = await OrganizationSvc.listAccess(req.params.caseId, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  static async lookupShareRecipient(req: Request, res: Response) {
+    const { error, value } = shareLookupSchema.validate(req.query);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await OrganizationSvc.lookupShareRecipient(req.params.caseId, req.user.userId, value.email);
     return res.status(200).json(result);
   }
 

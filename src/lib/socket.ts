@@ -191,3 +191,17 @@ export function emitToCase(caseId: string, event: string, payload: unknown): voi
   logger.info("Socket.IO: emitToCase", { event, caseId, room, recipients });
   io.to(room).emit(event, payload);
 }
+
+/** Takes every open connection of `userId` out of `caseId`'s room — for when they lose access to
+ * the case (a share taken back). Joining is access-checked only once, at case:subscribe, so
+ * without this a socket already in the room would keep receiving the case's live events. A
+ * reconnect re-subscribes through that same check, which then refuses. Same never-throws,
+ * no-op-if-uninitialized contract as emitToUser. */
+export function removeUserFromCase(userId: string, caseId: string): void {
+  if (!io) {
+    logger.warn("removeUserFromCase: socket.io not initialized, skipping", { userId, caseId });
+    return;
+  }
+  io.in(roomForUser(userId)).socketsLeave(roomForCase(caseId));
+  logger.info("Socket.IO: removeUserFromCase", { userId, caseId, room: roomForCase(caseId) });
+}

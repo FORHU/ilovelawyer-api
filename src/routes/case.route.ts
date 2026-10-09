@@ -2,7 +2,7 @@ import express from "express";
 import asyncHandler from "../utils/async-handler";
 import requireConsent from "../middleware/require-consent.middleware";
 import validSession from "../middleware/valid-session.middleware";
-import resolveOrganization from "../middleware/resolve-organization.middleware";
+import { resolveOrganizationAllowingGuests } from "../middleware/resolve-organization.middleware";
 import recordCaseItemDeletions from "../middleware/record-case-item-deletions.middleware";
 import CaseCtrl from "../controllers/case.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
@@ -12,7 +12,8 @@ import CaseMindMapCtrl from "../controllers/case-mind-map.controller";
 
 const router = express.Router();
 
-router.use(validSession, asyncHandler(resolveOrganization));
+// Allows guests: a read-only share of a portfolio case reaches it here (see the middleware).
+router.use(validSession, asyncHandler(resolveOrganizationAllowingGuests));
 // Every DELETE /:caseId/... below lands in the security audit log as case.item_deleted.
 router.use(recordCaseItemDeletions);
 
@@ -110,6 +111,7 @@ router.patch("/:caseId/procedure/items/:id", asyncHandler(CaseTerminalCtrl.updat
 
 router.get("/:caseId/team", asyncHandler(CaseTerminalCtrl.teamAudit));
 router.get("/:caseId/access", asyncHandler(CaseTerminalCtrl.listAccess));
+router.get("/:caseId/access/lookup", asyncHandler(CaseTerminalCtrl.lookupShareRecipient));
 router.post("/:caseId/access", asyncHandler(CaseTerminalCtrl.grantAccess));
 router.delete("/:caseId/access/:userId", asyncHandler(CaseTerminalCtrl.revokeAccess));
 router.patch("/:caseId/confidential", asyncHandler(CaseTerminalCtrl.setConfidential));

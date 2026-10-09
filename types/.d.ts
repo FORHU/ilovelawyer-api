@@ -20,6 +20,10 @@ declare global {
         id: string;
         role: OrganizationRole;
         tenantCode: "PH" | "UK";
+        /** Set when the caller isn't a member but was let in by resolveOrganizationAllowingGuests:
+         * someone else's portfolio, reached through a read-only share of one of its cases.
+         * `role` is then MEMBER, the lowest rank, so no role check passes on it alone. */
+        guest?: boolean;
       };
     }
 

@@ -1,8 +1,10 @@
 import { expect } from "chai";
-import { afterEach, describe, it } from "mocha";
+import { afterEach, beforeEach, describe, it } from "mocha";
 import { dropUnknownPanelsFromLayout, regroupLayoutOnce, tabsToColumns } from "../src/utils/terminal-layout";
 import TerminalWorkspaceSvc from "../src/services/terminal-workspace.service";
 import TerminalWorkspaceRepo from "../src/repositories/terminal-workspace.repository";
+import CaseAccess from "../src/utils/case-access";
+import HttpError from "../src/utils/http-error";
 
 // ADR 0016 retired these four panes. normalizeLayout only runs when a workspace is SAVED, so a workspace saved before then is
 // returned with the old ids, and the Terminal crashed rendering one that was visible ("undefined is not iterable" in PaneCode).
@@ -67,17 +69,30 @@ describe("dropUnknownPanelsFromLayout", () => {
   });
 });
 
+const originalRepo = {
+  list: TerminalWorkspaceRepo.list,
+  findRow: TerminalWorkspaceRepo.findRow,
+  findById: TerminalWorkspaceRepo.findById,
+  markLastUsed: TerminalWorkspaceRepo.markLastUsed,
+  update: TerminalWorkspaceRepo.update,
+  delete: TerminalWorkspaceRepo.delete,
+};
+const originalAccess = { loadAccessibleCase: CaseAccess.loadAccessibleCase, assertCanContribute: CaseAccess.assertCanContribute };
+const restore = () => {
+  Object.assign(TerminalWorkspaceRepo, originalRepo);
+  Object.assign(CaseAccess, originalAccess);
+};
+
 describe("TerminalWorkspaceSvc returns cleaned layouts", () => {
-  const original = {
-    list: TerminalWorkspaceRepo.list,
-    findById: TerminalWorkspaceRepo.findById,
-    markLastUsed: TerminalWorkspaceRepo.markLastUsed,
-    update: TerminalWorkspaceRepo.update,
-  };
-  afterEach(() => Object.assign(TerminalWorkspaceRepo, original));
+  beforeEach(() => {
+    (CaseAccess as any).loadAccessibleCase = async () => ({});
+    (CaseAccess as any).assertCanContribute = async () => ({});
+    (TerminalWorkspaceRepo as any).findRow = async () => ({ id: "w1", caseId: "c1", userId: "u1" });
+  });
+  afterEach(restore);
 
   const stale = () => ({ id: "w1", name: "Mine", isLastUsed: true, layoutJson: { panels: [panel("command"), panel("contradictions", true, 1)] } });
-  const stub = (method: keyof typeof original, value: unknown) => ((TerminalWorkspaceRepo as any)[method] = async () => value);
+  const stub = (method: keyof typeof originalRepo, value: unknown) => ((TerminalWorkspaceRepo as any)[method] = async () => value);
 
   it("list", async () => {
     stub("list", [stale()]);
@@ -155,5 +170,69 @@ describe("regroupLayoutOnce", () => {
     const free = { arrangement: "free", panels: [panel("chat", true, 0, { x: 0.5, y: 0.5 }), panel("command", true, 1, { x: 0, y: 0 })] };
     expect((regroupLayoutOnce(free) as any).panels).to.deep.equal(free.panels);
     expect(regroupLayoutOnce(null)).to.equal(null);
+  });
+});
+
+// Layouts are shared by everyone on the case (a member's rename is what the others see), so access
+// follows the case rather than who created the layout.
+describe("TerminalWorkspaceSvc reaches layouts through their case", () => {
+  const calls: string[] = [];
+  beforeEach(() => {
+    calls.length = 0;
+    (CaseAccess as any).loadAccessibleCase = async (caseId: string, userId: string) => calls.push(`view ${caseId} ${userId}`);
+    (CaseAccess as any).assertCanContribute = async (caseId: string, userId: string) => calls.push(`change ${caseId} ${userId}`);
+    (TerminalWorkspaceRepo as any).findRow = async () => ({ id: "w1", caseId: "c1", userId: "creator" });
+    (TerminalWorkspaceRepo as any).list = async () => [];
+    (TerminalWorkspaceRepo as any).update = async () => ({ id: "w1", layoutJson: { layoutVersion: 1, panels: [] } });
+    (TerminalWorkspaceRepo as any).markLastUsed = async () => ({ id: "w1", layoutJson: { layoutVersion: 1, panels: [] } });
+    (TerminalWorkspaceRepo as any).delete = async () => true;
+  });
+  afterEach(restore);
+
+  it("lists a case's layouts for anyone who can open it", async () => {
+    await TerminalWorkspaceSvc.list("member", "c1");
+    expect(calls).to.deep.equal(["view c1 member"]);
+  });
+
+  it("lets another member rename a layout they didn't create, if they can contribute to the case", async () => {
+    await TerminalWorkspaceSvc.update("w1", "member", "SOLO", { name: "TEST" });
+    expect(calls).to.deep.equal(["change c1 member"]);
+  });
+
+  it("only needs view access to pick a tab", async () => {
+    await TerminalWorkspaceSvc.apply("w1", "member");
+    expect(calls).to.deep.equal(["view c1 member"]);
+  });
+
+  it("needs contribute access to delete", async () => {
+    await TerminalWorkspaceSvc.delete("w1", "member");
+    expect(calls).to.deep.equal(["change c1 member"]);
+  });
+
+  it("refuses a change from someone the case refuses", async () => {
+    (CaseAccess as any).assertCanContribute = async () => {
+      throw new HttpError("You have view-only access to this confidential case", 403);
+    };
+    let updated = false;
+    (TerminalWorkspaceRepo as any).update = async () => ((updated = true), { id: "w1", layoutJson: {} });
+    try {
+      await TerminalWorkspaceSvc.update("w1", "viewer", "SOLO", { name: "TEST" });
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect((error as HttpError).statusCode).to.equal(403);
+    }
+    expect(updated).to.equal(false);
+  });
+
+  it("keeps a layout saved before case-scoping to its creator", async () => {
+    (TerminalWorkspaceRepo as any).findRow = async () => ({ id: "w1", caseId: null, userId: "creator" });
+    try {
+      await TerminalWorkspaceSvc.update("w1", "someone-else", "SOLO", { name: "TEST" });
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect((error as HttpError).statusCode).to.equal(404);
+    }
+    await TerminalWorkspaceSvc.update("w1", "creator", "SOLO", { name: "TEST" });
+    expect(calls).to.deep.equal([]);
   });
 });

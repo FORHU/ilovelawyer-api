@@ -5,6 +5,7 @@ import CaseRiskRepo from "../repositories/case-risk.repository";
 import { PANEL_CATALOG, skuAllowsPanel, defaultPresetForSku } from "../constants";
 import { buildDefaultLayout, dropUnknownPanelsFromLayout, normalizeLayout, regroupLayoutOnce, tabsToColumns } from "../utils/terminal-layout";
 import HttpError from "../utils/http-error";
+import CaseAccess from "../utils/case-access";
 import prisma from "../lib/prisma";
 
 export default class TerminalWorkspaceSvc {
@@ -27,17 +28,35 @@ export default class TerminalWorkspaceSvc {
     };
   }
 
+  /** A layout is reached through its case: anyone who can open the case may see it, and anyone
+   * who may add to the case (CaseAccess.assertCanContribute) may change it — so a member's rename
+   * is what everyone else on the case sees. A layout saved before case-scoping has no case and
+   * stays its creator's alone. 404 either way, so an id doesn't reveal a case. */
+  private static async assertCan(action: "view" | "change", id: string, userId: string) {
+    const row = await TerminalWorkspaceRepo.findRow(id);
+    if (!row) throw new HttpError("Workspace not found", 404);
+    if (!row.caseId) {
+      if (row.userId !== userId) throw new HttpError("Workspace not found", 404);
+      return;
+    }
+    if (action === "view") await CaseAccess.loadAccessibleCase(row.caseId, userId);
+    else await CaseAccess.assertCanContribute(row.caseId, userId);
+  }
+
   static async list(userId: string, caseId: string) {
+    await CaseAccess.loadAccessibleCase(caseId, userId);
     return (await TerminalWorkspaceRepo.list(userId, caseId)).map((row) => TerminalWorkspaceSvc.clean(row));
   }
 
   static async getById(id: string, userId: string) {
+    await TerminalWorkspaceSvc.assertCan("view", id, userId);
     const row = await TerminalWorkspaceRepo.findById(id, userId);
     if (!row) throw new HttpError("Workspace not found", 404);
     return TerminalWorkspaceSvc.clean(row);
   }
 
   static async create(userId: string, sku: string, body: { caseId: string; name: string; preset?: WorkspacePreset; layoutJson?: unknown }) {
+    await CaseAccess.assertCanContribute(body.caseId, userId);
     const preset = body.preset ?? defaultPresetForSku(sku);
     const layoutJson = normalizeLayout(body.layoutJson ?? buildDefaultLayout(preset, sku), sku) as unknown as Prisma.InputJsonValue;
     return TerminalWorkspaceRepo.create(userId, {
@@ -54,23 +73,28 @@ export default class TerminalWorkspaceSvc {
     sku: string,
     body: { name?: string; preset?: WorkspacePreset; layoutJson?: unknown; isLastUsed?: boolean },
   ) {
-    const data: { name?: string; preset?: WorkspacePreset; layoutJson?: Prisma.InputJsonValue; isLastUsed?: boolean } = {};
+    await TerminalWorkspaceSvc.assertCan("change", id, userId);
+    const data: { name?: string; preset?: WorkspacePreset; layoutJson?: Prisma.InputJsonValue } = {};
     if (body.name !== undefined) data.name = body.name;
     if (body.preset !== undefined) data.preset = body.preset;
     if (body.layoutJson !== undefined) data.layoutJson = normalizeLayout(body.layoutJson, sku) as unknown as Prisma.InputJsonValue;
-    if (body.isLastUsed !== undefined) data.isLastUsed = body.isLastUsed;
+    // isLastUsed is the caller's own pick, not part of the shared layout. Only setting it means
+    // anything: the last-used tab is replaced by choosing another, never cleared.
     const updated = await TerminalWorkspaceRepo.update(id, userId, data);
-    if (!updated) throw new HttpError("Workspace not found", 404);
-    return TerminalWorkspaceSvc.clean(updated);
+    if (body.isLastUsed) await TerminalWorkspaceRepo.markLastUsed(id, userId);
+    return TerminalWorkspaceSvc.clean(body.isLastUsed ? { ...updated, isLastUsed: true } : updated);
   }
 
+  /** Picking a tab only changes the caller's own last-used layout, so viewing the case is enough. */
   static async apply(id: string, userId: string) {
+    await TerminalWorkspaceSvc.assertCan("view", id, userId);
     const updated = await TerminalWorkspaceRepo.markLastUsed(id, userId);
     if (!updated) throw new HttpError("Workspace not found", 404);
     return TerminalWorkspaceSvc.clean(updated);
   }
 
   static async resetToPreset(userId: string, sku: string, caseId: string, preset?: WorkspacePreset) {
+    await CaseAccess.assertCanContribute(caseId, userId);
     const resolved = preset ?? defaultPresetForSku(sku);
     return TerminalWorkspaceRepo.create(userId, {
       caseId,
@@ -81,7 +105,8 @@ export default class TerminalWorkspaceSvc {
   }
 
   static async delete(id: string, userId: string) {
-    const deleted = await TerminalWorkspaceRepo.delete(id, userId);
+    await TerminalWorkspaceSvc.assertCan("change", id, userId);
+    const deleted = await TerminalWorkspaceRepo.delete(id);
     if (!deleted) throw new HttpError("Workspace not found", 404);
   }
 

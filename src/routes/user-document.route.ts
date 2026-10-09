@@ -1,14 +1,17 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
-import resolveOrganization from "../middleware/resolve-organization.middleware";
+import { resolveOrganizationAllowingGuests } from "../middleware/resolve-organization.middleware";
+import { documentCaseOf, guestItemNeedsCase, guestListNeedsCase } from "../middleware/guest-case-items.middleware";
 import DocumentCtrl from "../controllers/document.controller";
 
 const router = express.Router();
 
-router.use(validSession, asyncHandler(resolveOrganization));
+// Allows guests: a read-only share of a portfolio case reaches it here (see the middleware).
+router.use(validSession, asyncHandler(resolveOrganizationAllowingGuests));
+router.param("id", guestItemNeedsCase(documentCaseOf));
 
-router.get("/", asyncHandler(DocumentCtrl.list));
+router.get("/", guestListNeedsCase, asyncHandler(DocumentCtrl.list));
 router.get("/:id", asyncHandler(DocumentCtrl.getById));
 router.get("/:id/text-preview", asyncHandler(DocumentCtrl.getTextPreview));
 router.post("/presign", asyncHandler(DocumentCtrl.presign));

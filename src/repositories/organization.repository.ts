@@ -85,6 +85,20 @@ export default class OrganizationRepo {
     });
   }
 
+  /** Someone else's portfolio that `userId` holds a share of one of its cases in (copies of an
+   * organization's case can't be shared, so a grant on one doesn't count). */
+  static async findSharedPortfolio(id: string, userId: string) {
+    return prisma.organization.findFirst({
+      where: {
+        id,
+        isPersonal: true,
+        createdById: { not: userId },
+        cases: { some: { copiedFromCaseId: null, accesses: { some: { userId } } } },
+      },
+      select: { id: true, tenant: { select: { code: true } } },
+    });
+  }
+
   static async findBySlug(slug: string) {
     return prisma.organization.findUnique({ where: { slug } });
   }

@@ -117,6 +117,7 @@ model User {
   notes                   Note[]
   notifications           Notification[]
   terminalWorkspaces      TerminalWorkspace[]
+  terminalWorkspaceSelections TerminalWorkspaceSelection[]
   screenPresets           ScreenPreset[]
   organizationMemberships OrganizationMember[]
   organizationInvites     OrganizationInvite[]
@@ -889,6 +890,7 @@ model Case {
   briefExports         CaseBriefExport[]
   views                CaseView[]
   terminalWorkspaces   TerminalWorkspace[]
+  terminalWorkspaceSelections TerminalWorkspaceSelection[]
   annotations          Annotation[]
   outlooks             CaseOutlook[]
   mindMap              CaseMindMap?
@@ -1548,6 +1550,9 @@ enum ConnectorStatus {
   ERROR
 }
 
+// A Terminal layout tab. It belongs to its case: everyone who can open the case sees the same
+// tabs, and a rename or pane change made by one member is what the others get. `userId` records
+// who created it.
 model TerminalWorkspace {
   id         String          @id @default(uuid())
   userId     String
@@ -1558,15 +1563,31 @@ model TerminalWorkspace {
   name       String
   preset     WorkspacePreset
   layoutJson Json
-  isLastUsed Boolean         @default(false)
   createdAt  DateTime        @default(now())
   updatedAt  DateTime        @updatedAt
 
-  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case Case? @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user       User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case       Case?                        @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  selections TerminalWorkspaceSelection[]
 
   @@index([userId])
   @@index([caseId])
+}
+
+// Which of a case's shared Terminal layouts each person last had open, so reopening the case
+// restores their own tab rather than whichever one another member picked last.
+model TerminalWorkspaceSelection {
+  userId      String
+  caseId      String
+  workspaceId String
+  updatedAt   DateTime @updatedAt
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case      Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  workspace TerminalWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([userId, caseId])
+  @@index([workspaceId])
 }
 
 // A named multi-screen workspace template (which panel lives on which physical screen, and that
