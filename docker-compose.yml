@@ -39,7 +39,7 @@ services:
     container_name: ilovelawyer-localstack
     environment:
       - SERVICES=sqs
-      - DEFAULT_REGION=ap-southeast-1
+       DEFAULT_REGION=${AWS_REGION:-ap-southeast-1}
     ports:
       - "4566:4566"
     volumes:
@@ -63,7 +63,7 @@ services:
     environment:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
-      AWS_DEFAULT_REGION: ap-southeast-1
+      AWS_DEFAULT_REGION: ${AWS_REGION:-ap-southeast-1}
     entrypoint: ["/bin/sh", "/init/create-queues.sh"]
     volumes:
       - ./docker/localstack-init:/init:ro
