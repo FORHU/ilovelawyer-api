@@ -156,9 +156,9 @@ export function evaluateCitationHeuristic(input: CitationCheckInput): CitationCh
   };
 }
 
-/** Only meaningful when the quote isn't in the official text word for word — no match, or only a
- * near one (see matchQuote). An exact match is decided by the heuristic alone; this double-checks
- * what the heuristic would otherwise call INVALID, or a VALID it reached on a near match. */
+/** Double-checks the heuristic's answer, including an exact word-for-word match (#366) — a quote
+ * can sit verbatim in a passage that doesn't actually support it, e.g. taken from a dissent or
+ * from a sentence the official text later contradicts. */
 export async function evaluateCitationWithJev(quote: string, official: string): Promise<CitationCheckResult> {
   const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "citation-validity", question: "validity", officialText: official, quotedText: quote });
@@ -166,7 +166,7 @@ export async function evaluateCitationWithJev(quote: string, official: string): 
     state: { officialText: official, quotedText: quote },
     questions: {
       validity: choice(
-        "A lawyer cited quotedText as coming from officialText, but it does not appear there word for word. Classify the citation: VALID if officialText actually supports the same claim as quotedText, even if worded very differently; INVALID if officialText does not support quotedText and there is no real connection between them; ADVERSE if officialText actually contradicts or undermines what quotedText claims.",
+        "A lawyer cited quotedText as coming from officialText. Classify the citation: VALID if officialText actually supports the same claim as quotedText, even if worded very differently, and the surrounding context doesn't undercut it; INVALID if officialText does not support quotedText and there is no real connection between them; ADVERSE if officialText actually contradicts or undermines what quotedText claims.",
         { VALID: null, INVALID: null, ADVERSE: null },
       ),
     },
@@ -195,17 +195,18 @@ function jevValidityEnabled(): boolean {
   return process.env.USE_JEV_VALIDITY === "true";
 }
 
-/** The heuristic decides an exact match and a missing official text by itself. Anything it can
- * only judge from words — no match (INVALID) or a near match (fuzzy VALID) — goes to Jev when the
- * flag is on, since that's where a paraphrase, a contradiction or a reversed quote hides (#363).
- * `jev` is the Jev call, a parameter so tests needn't make a live one. */
+/** Every citation with official text to check against goes to Jev when the flag is on — including
+ * an exact word-for-word match, since the benchmark alone couldn't rule out a verbatim quote
+ * pulled from a dissent or otherwise out of context (#366 — decided to route all of them rather
+ * than only what the heuristic can't confirm from words: INVALID, or a near match). With no
+ * official text (UNVERIFIED) there's nothing to send. `jev` is the Jev call, a parameter so tests
+ * needn't make a live one. */
 export async function evaluateCitation(
   input: CitationCheckInput,
   jev: (quote: string, official: string) => Promise<CitationCheckResult> = evaluateCitationWithJev,
 ): Promise<CitationCheckResult> {
   const heuristic = evaluateCitationHeuristic(input);
-  const judgedFromWords = heuristic.status === "INVALID" || (heuristic.status === "VALID" && heuristic.match === "fuzzy");
-  if (!jevValidityEnabled() || !judgedFromWords) return heuristic;
+  if (!jevValidityEnabled() || heuristic.status === "UNVERIFIED") return heuristic;
 
   try {
     return await jev(input.quotedText.trim(), input.officialText!.trim());
