@@ -96,7 +96,7 @@ ${wrapExtractedText("Use only these excerpts and the attached case documents.", 
     const tCallStart = Date.now();
     let usedSessionRetry = false;
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { skipLegalVerify: true, trace });
     } catch (err) {
       logger.warn("Chat Wonder case strategy: first call failed, retrying with a new session", {
         err,
@@ -105,7 +105,7 @@ ${wrapExtractedText("Use only these excerpts and the attached case documents.", 
       });
       usedSessionRetry = true;
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { skipLegalVerify: true, trace });
     }
     const callMs = Date.now() - tCallStart;
     logger.info("Chat Wonder case strategy: main call done", { caseId, durationMs: callMs, usedSessionRetry, packMs });
@@ -124,7 +124,7 @@ ${wrapExtractedText("Use only these excerpts and the attached case documents.", 
       const tRetryStart = Date.now();
       try {
         const retrySessionId = await getChatWonderSessionId();
-        const retryResult = await streamChatWonderMessage(retrySessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { trace });
+        const retryResult = await streamChatWonderMessage(retrySessionId, prompt, () => {}, undefined, grounding, undefined, tenantCode, undefined, undefined, undefined, { skipLegalVerify: true, trace });
         const retryParsed = extractCaseStrategy(retryResult.content);
         if (retryParsed?.dates !== undefined) parsed = { ...parsed, dates: retryParsed.dates };
       } catch (err) {

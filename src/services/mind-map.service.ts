@@ -256,7 +256,7 @@ export default class MindMapSvc {
           undefined,
           undefined,
           undefined,
-          { resolveOnAnswerEnd: true, trace },
+          { resolveOnAnswerEnd: true, skipLegalVerify: true, trace },
         );
       let result;
       try {
