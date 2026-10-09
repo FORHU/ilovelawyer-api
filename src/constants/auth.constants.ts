@@ -16,7 +16,7 @@ export const LOGIN_LINK_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // Terms of Service. Bump this whenever the Terms text in ilovelawyer-app's
 // locales/*/term.json materially changes, so a later re-acceptance prompt can tell which
 // version each account agreed to.
-export const TERMS_VERSION = "2026-09";
+export const TERMS_VERSION = "2026-10";
 
 // How many times createGoogleUser retries a username collision (Prisma P2002 on `username`)
 // with a fresh numeric suffix before giving up.
