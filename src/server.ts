@@ -37,5 +37,5 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on http://0.0.0.0:${PORT}`);
   const encryption = fieldEncryptionStatus();
   const state = encryption.enabled && encryption.keyConfigured ? "ON" : encryption.enabled ? "ENABLED BUT NO VALID KEY (privileged notes cannot be saved)" : "OFF";
-  logger.info(`Privileged notes encryption: ${state}`, encryption);
+  logger.info(`Field encryption (privileged notes, document text): ${state}`, encryption);
 });
