@@ -110,6 +110,8 @@ export default class ChatSvc {
       // Throws 404 if the case doesn't exist, isn't in this organization, or this user can't open
       // it — a Case's Consultations belong to the people on the Case.
       await CaseSvc.getById(caseId, organizationId, userId);
+      // Starting one adds to the Case: read-only for a view-only person on a confidential Case.
+      await CaseAccess.assertCanContribute(caseId, userId);
     }
     return ChatRepo.createConsultation(organizationId, userId, title, caseId);
   }
@@ -173,7 +175,7 @@ export default class ChatSvc {
   }
 
   static async renameConsultation(organizationId: string, userId: string, consultationId: string, title: string) {
-    await this.assertConsultationAccess(organizationId, userId, consultationId);
+    await this.assertConsultationWritable(organizationId, userId, consultationId);
     return ChatRepo.updateConsultation(consultationId, title);
   }
 
@@ -194,6 +196,23 @@ export default class ChatSvc {
     const consultation = await this.assertConsultationOwned(organizationId, consultationId);
     await this.assertUserAccess(consultation, userId);
     return consultation;
+  }
+
+  /** assertConsultationAccess for changing a Consultation — sending in it, renaming, archiving,
+   * deleting a message. */
+  static async assertConsultationWritable(organizationId: string, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationAccess(organizationId, userId, consultationId);
+    await this.assertCanChangeOnCase(consultation, userId);
+    return consultation;
+  }
+
+  /** On a confidential Case a view-only person can read its Consultations but not change them,
+   * their own included (CaseAccess.assertCanContribute). Only there: on an ordinary Case its
+   * creator and participants keep their Consultation without being on the Case (assertUserAccess),
+   * and that stays so. */
+  static async assertCanChangeOnCase(consultation: { caseId: string | null }, userId: string) {
+    if (!consultation.caseId || !(await CaseAccess.isConfidential(consultation.caseId))) return;
+    await CaseAccess.assertCanContribute(consultation.caseId, userId);
   }
 
   private static async assertUserAccess(
@@ -222,7 +241,7 @@ export default class ChatSvc {
    * the Case can see a colleague's Consultation, but only these people can archive, restore or
    * delete it. */
   private static async assertCanRemove(organizationId: string, userId: string, consultationId: string) {
-    const consultation = await this.assertConsultationAccess(organizationId, userId, consultationId);
+    const consultation = await this.assertConsultationWritable(organizationId, userId, consultationId);
     if (consultation.caseId && consultation.userId !== userId) {
       try {
         await CaseAccess.assertCanEdit(consultation.caseId, userId);
@@ -395,7 +414,7 @@ export default class ChatSvc {
   }
 
   static async deleteMessage(organizationId: string, userId: string, consultationId: string, messageId: string) {
-    const consultation = await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
+    const consultation = await ChatSvc.assertConsultationWritable(organizationId, userId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
@@ -447,6 +466,8 @@ export default class ChatSvc {
       throw new HttpError("Consultation not found", 404);
     }
     await ChatSvc.assertUserAccess(consultation, userId);
+    // Asking in a case's Consultation is read-only for a view-only person on a confidential Case.
+    await ChatSvc.assertCanChangeOnCase(consultation, userId);
     // Archived (or on its way to deletion) means set aside: nothing new lands in it until it's restored.
     if (consultation.status !== "ACTIVE") {
       throw new HttpError("This consultation is archived — restore it to continue", 409);
@@ -571,7 +592,7 @@ export default class ChatSvc {
     consultationId: string,
     messageId: string,
   ): Promise<{ messageId: string; replyStatus: string | null; assistantMessageId?: string }> {
-    await ChatSvc.assertConsultationAccess(organizationId, requesterUserId, consultationId);
+    await ChatSvc.assertConsultationWritable(organizationId, requesterUserId, consultationId);
     const message = await ChatRepo.findReplyState(messageId);
     if (!message || message.consultationId !== consultationId || message.role !== "user") {
       throw new HttpError("Message not found", 404);
@@ -1722,7 +1743,7 @@ export default class ChatSvc {
    * Audio" action from the grilling session's plan, never auto-triggered from script
    * generation. Enqueues onto AudioOverviewQueue and returns immediately. */
   static async startAudioOverviewAudio(organizationId: string, userId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
+    await ChatSvc.assertConsultationWritable(organizationId, userId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);

@@ -29,12 +29,18 @@ const OTHER_ORG = "org-2";
 const UPLOADER = "member-1";
 
 /** caseId -> what CaseAccess.loadAccessibleCase would return for UPLOADER. */
-const CASES: Record<string, { id: string; organizationId: string | null } | "walled"> = {
+const CASES: Record<string, { id: string; organizationId: string | null; confidential?: boolean } | "walled"> = {
   "case-mine": { id: "case-mine", organizationId: ORG },
   "case-other-org": { id: "case-other-org", organizationId: OTHER_ORG },
   "case-confidential": "walled",
   "case-no-org": { id: "case-no-org", organizationId: null },
+  // Confidential cases UPLOADER holds a grant on — VIEW on the first, EDIT on the second.
+  "case-confidential-view": { id: "case-confidential-view", organizationId: ORG, confidential: true },
+  "case-confidential-edit": { id: "case-confidential-edit", organizationId: ORG, confidential: true },
 };
+
+/** caseId -> what CaseAccess.canEdit would answer for UPLOADER. */
+const EDITABLE = new Set(["case-confidential-edit"]);
 
 const restore: (() => void)[] = [];
 function stub(target: any, key: string, value: unknown) {
@@ -58,10 +64,17 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
   /** Every write and queue push that got through. */
   let writes: string[];
   let accessChecks: { caseId: string; userId: string }[];
+  let editChecks: string[];
 
   beforeEach(() => {
     writes = [];
     accessChecks = [];
+    editChecks = [];
+
+    stub(CaseAccess, "canEdit", async (caseId: string) => {
+      editChecks.push(caseId);
+      return EDITABLE.has(caseId);
+    });
 
     stub(CaseAccess, "loadAccessibleCase", async (caseId: string, userId: string) => {
       accessChecks.push({ caseId, userId });
@@ -185,6 +198,33 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
       await DocumentSvc.createMany(ORG, UPLOADER, items, "case-mine");
       expect(accessChecks).to.have.length(1);
       expect(writes).to.include("doc:createMany:case-mine");
+    });
+  });
+
+  describe("a confidential case the uploader holds a grant on", () => {
+    it("refuses a view-only grant with a 403, issuing no upload URL", async () => {
+      const err = await rejection(DocumentSvc.presign(ORG, UPLOADER, "brief.pdf", "application/pdf", "case-confidential-view"));
+      expect(err.statusCode).to.equal(403);
+      expect(writes).to.deep.equal([]);
+    });
+
+    it("refuses a view-only grant on create and createMany before writing anything", async () => {
+      const single = await rejection(DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-confidential-view" }));
+      expect(single.statusCode).to.equal(403);
+      const batch = await rejection(DocumentSvc.createMany(ORG, UPLOADER, [{ key: "k1", name: "a.pdf" }], "case-confidential-view"));
+      expect(batch.statusCode).to.equal(403);
+      expect(writes).to.deep.equal([]);
+    });
+
+    it("lets an edit grant upload, and still queues extraction", async () => {
+      await DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-confidential-edit" });
+      expect(writes).to.deep.equal(["file:create", "doc:create:case-confidential-edit", "queue:enqueue"]);
+    });
+
+    it("leaves an ordinary case alone: a viewer may still upload, with no edit check", async () => {
+      await DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-mine" });
+      expect(editChecks).to.deep.equal([]);
+      expect(writes).to.include("doc:create:case-mine");
     });
   });
 
