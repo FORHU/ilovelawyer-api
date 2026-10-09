@@ -5,7 +5,6 @@ import WitnessExtractSvc from "../services/witness-extract.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
 import ClaimExtractSvc from "../services/claim-extract.service";
 import CitationGroundSvc from "../services/citation-ground.service";
-import AdverseSweepSvc from "../services/adverse-sweep.service";
 import MissingEvidenceAiSvc from "../services/missing-evidence-ai.service";
 import CaseFindingAiSvc from "../services/case-finding-ai.service";
 import CaseOutlookAiSvc from "../services/case-outlook-ai.service";
@@ -39,7 +38,6 @@ export type QueuedAiGenerationKind =
   | "damagesExtractPropose"
   | "claimExtract"
   | "citationGrounds"
-  | "adverseSweep"
   | "caseFinding"
   | "weaknessRegenerate"
   | "strengthRegenerate"
@@ -105,7 +103,6 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   damagesExtractPropose: (job) => DamagesExtractSvc.runQueuedPropose(job.caseId, job.userId),
   claimExtract: (job) => ClaimExtractSvc.runQueued(job.caseId, job.userId),
   citationGrounds: (job) => CitationGroundSvc.runQueuedMap(job.caseId, job.userId),
-  adverseSweep: (job) => AdverseSweepSvc.runQueued(job.caseId, job.userId),
   // The Missing Evidence pane's own Regenerate: the controller already claimed the lock
   // (MissingEvidenceAiSvc.beginQueued).
   missingEvidence: (job) => MissingEvidenceAiSvc.runQueued(job.caseId),
