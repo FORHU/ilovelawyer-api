@@ -5,6 +5,7 @@ import { getObjectStream } from "../utils/s3";
 import CaseAccess from "../utils/case-access";
 import { ZipWriter, type ZipSink } from "../utils/zip-stream";
 import { renderDataExportReport, toWinAnsi, type ExportReportListing } from "../utils/data-export-report";
+import { openRow } from "../utils/field-crypto";
 
 /** Tables left out of a user's export on purpose.
  * - Session: refresh tokens, which are credentials, not the user's data.
@@ -281,7 +282,8 @@ export default class DataExportSvc {
 
       let written = 0;
       for (let skip = 0; ; skip += BATCH_SIZE) {
-        const rows = await delegate.findMany({ where: section.where, orderBy: section.orderBy, skip, take: BATCH_SIZE });
+        // Sealed columns (privileged notes) are opened: the export is the person's own data, in readable form.
+        const rows = (await delegate.findMany({ where: section.where, orderBy: section.orderBy, skip, take: BATCH_SIZE })).map((row) => openRow(section.model, row as Row));
         for (const row of rows) {
           await write(`${written === 0 ? "" : ","}${JSON.stringify(redact(row), replacer)}`);
           onRow?.(section.model, row as Row);

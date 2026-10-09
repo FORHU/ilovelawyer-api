@@ -11,6 +11,8 @@ import DataExportSvc, { EXPORT_EXCLUDED_MODELS, planExport, type ExportFileSourc
 import OrganizationSvc from "../src/services/organization.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import CaseAccess from "../src/utils/case-access";
+import EvidenceRepo from "../src/repositories/evidence.repository";
+import * as config from "../src/config";
 
 const models = Prisma.dmmf.datamodel.models;
 
@@ -68,6 +70,9 @@ describe("DataExportSvc.stream (real database)", () => {
   let strangerCaseId = "";
   let output = "";
   let counts: Record<string, number> = {};
+  const cfg = config as unknown as Record<string, unknown>;
+  const savedEncryption = { enabled: cfg.FIELD_ENCRYPTION_ENABLED, key: cfg.FIELD_ENCRYPTION_KEY };
+  const PRIVILEGED_NOTE = "Client admitted the transfer was a gift";
 
   before(async () => {
     await prisma.user.create({ data: { id: userId, email, username: `export-${userId}`, password: "bcrypt-hash-must-not-leak" } });
@@ -80,6 +85,11 @@ describe("DataExportSvc.stream (real database)", () => {
     const strangerOrg = await OrganizationSvc.create(strangerId, "Stranger Firm", undefined, "PH");
     strangerCaseId = (await prisma.case.create({ data: { id: crypto.randomUUID(), userId: strangerId, organizationId: strangerOrg.id, caseName: "Someone Else's Case" } })).id;
 
+    // A privileged evidence note is stored sealed; the export must hand the person the readable text.
+    cfg.FIELD_ENCRYPTION_ENABLED = true;
+    cfg.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64");
+    await EvidenceRepo.upsertMatrix(ownCaseId, crypto.randomUUID(), { privilegeStatus: "ATTORNEY_CLIENT", notes: PRIVILEGED_NOTE });
+
     await prisma.consent.create({ data: { userId, purpose: "MARKETING", version: "2026-10", grantedAt: new Date(), source: "settings" } });
     await prisma.session.create({ data: { userId, refreshToken: `refresh-${userId}`, expiresAt: new Date(Date.now() + 3600_000) } });
     await prisma.auditEvent.create({ data: { actorId: userId, action: "auth.login", payload: { method: "password" } } });
@@ -91,11 +101,21 @@ describe("DataExportSvc.stream (real database)", () => {
   });
 
   after(async () => {
+    cfg.FIELD_ENCRYPTION_ENABLED = savedEncryption.enabled;
+    cfg.FIELD_ENCRYPTION_KEY = savedEncryption.key;
     await prisma.auditEvent.deleteMany({ where: { actorId: { in: createdUserIds } } });
     await prisma.case.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.organizationMember.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.organization.deleteMany({ where: { createdById: { in: createdUserIds } } });
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+  });
+
+  it("hands over privileged evidence notes as readable text, though they are stored sealed", async () => {
+    const row = await prisma.evidenceMatrixItem.findFirst({ where: { caseId: ownCaseId } });
+    expect(row?.notes?.startsWith("enc1:")).to.equal(true);
+    const exported = JSON.parse(output).data.EvidenceMatrixItem as { notes: string }[];
+    expect(exported.map((r) => r.notes)).to.deep.equal([PRIVILEGED_NOTE]);
+    expect(output).to.not.include("enc1:");
   });
 
   it("writes one valid JSON document", () => {
