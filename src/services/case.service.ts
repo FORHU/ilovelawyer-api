@@ -72,8 +72,9 @@ export default class CaseSvc {
    * case's documents automatically when the Case row goes, so each is deleted explicitly first,
    * through the same path DocumentSvc.delete's single-document endpoint uses (drops its RAG
    * chunks via cascade, marks its File FOR_DELETION for the cleanup sweep). Existence/ownership
-   * is checked up front so a caseId from another organization can't reach DocumentRepo's
-   * unscoped listAllByCase. */
+   * is checked up front so a caseId from another organization can't reach listAllByCase at all;
+   * listAllByCase itself is also scoped to the case's own organization (#373), so a document
+   * mis-attached to this case from elsewhere is left out of the cascade rather than failing it. */
   static async delete(id: string, organizationId: string, actorId: string) {
     await CaseAccess.assertCanEdit(id, actorId);
     const caseRecord = await CaseRepo.findById(id, organizationId);
