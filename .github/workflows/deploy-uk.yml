@@ -41,6 +41,11 @@ env:
   INSTANCE_ID: i-0c21e7d8c1aae968c
   APP_DIR: /opt/ilovelawyer
   ENV_PARAM: /ilovelawyer-uk/api-env
+  # Customer-managed KMS key encrypting the parameter above. Must exist in
+  # AWS_REGION before the first run: the alias is resolved at put-parameter
+  # time, and a missing one fails the deploy rather than silently falling back
+  # to the account default.
+  ENV_KMS_KEY: alias/ilovelawyer-uk-env
   NODE_ENV: production
   PORT: "3001"
 
@@ -244,82 +249,108 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+
+          # Fixed for this deployment — always written.
+          #
+          # AWS_S3_BUCKET / AWS_S3_REGION are UK-local on purpose: compute runs
+          # in eu-west-2, so the documents must too (#319). Never let these fall
+          # back to AWS_REGION.
           cat > env.tmp << EOF
-          DATABASE_URL=${DATABASE_URL}
-          SECRET_KEY=${SECRET_KEY}
-          MAILER_TRANSPORT_HOST=${MAILER_TRANSPORT_HOST}
-          MAILER_TRANSPORT_PORT=${MAILER_TRANSPORT_PORT}
-          MAILER_TRANSPORT_SECURE=${MAILER_TRANSPORT_SECURE}
-          MAILER_EMAIL=${MAILER_EMAIL}
-          MAILER_PASSWORD=${MAILER_PASSWORD}
-          ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
-          REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET}
-          ACCESS_TOKEN_EXPIRY=${ACCESS_TOKEN_EXPIRY}
-          REFRESH_TOKEN_EXPIRY_DAYS=${REFRESH_TOKEN_EXPIRY_DAYS}
-          REDIS_URL=${REDIS_URL}
-          REDIS_HOST=${REDIS_HOST}
-          REDIS_PORT=${REDIS_PORT}
-          REDIS_PASSWORD=${REDIS_PASSWORD}
-          SERVICE_ACCOUNT=${SERVICE_ACCOUNT}
-          CLIENT_URL=${CLIENT_URL}
-          GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-          GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-          GOOGLE_TOKEN_ENC_KEY=${GOOGLE_TOKEN_ENC_KEY}
-          FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
-          FIELD_ENCRYPTION_ENABLED=${FIELD_ENCRYPTION_ENABLED}
-          CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
-          CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}
-          CHAT_WONDER_API_KEY=${CHAT_WONDER_API_KEY}
-          TRACE_STREAM_API_KEY=${TRACE_STREAM_API_KEY}
+          NODE_ENV=${{ env.NODE_ENV }}
+          PORT=${{ env.PORT }}
+          AWS_REGION=${{ env.AWS_REGION }}
           AWS_S3_BUCKET=ilovelawyer-uk
+          AWS_S3_REGION=eu-west-2
           DOCUMENT_EXTRACTION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/document-extraction
           CITATION_EXTRACTION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/citation-extraction
           AUDIO_OVERVIEW_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/audio-overview
           CASE_RECONSTRUCTION_AUDIO_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/case-reconstruction-audio
           AI_GENERATION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/ai_generate
           MESSAGE_PERSISTENCE_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/message-queue
-          CASE_GRAPH_PROMOTION_QUEUE_URL=
-          AWS_REGION=${{ env.AWS_REGION }}
-          AWS_S3_REGION=eu-west-2
-          CLOUDFRONT_URL=${CLOUDFRONT_URL}
-          FILE_TOKEN_SECRET=${FILE_TOKEN_SECRET}
-          OPENAI_API_KEY=${OPENAI_API_KEY}
-          TYPESAFE_API_KEY=${TYPESAFE_API_KEY}
-          USE_JEV_PROPOSITION=${USE_JEV_PROPOSITION}
-          USE_JEV_VALIDITY=${USE_JEV_VALIDITY}
-          USE_JEV_MESSAGE_TRIAGE=${USE_JEV_MESSAGE_TRIAGE}
-          USE_JEV_REDTEAM=${USE_JEV_REDTEAM}
-          USE_JEV_DAMAGES=${USE_JEV_DAMAGES}
-          USE_JEV_CONTRADICTIONS=${USE_JEV_CONTRADICTIONS}
-          USE_JEV_MINDMAP=${USE_JEV_MINDMAP}
-          USE_JEV_AUDIO_OVERVIEW=${USE_JEV_AUDIO_OVERVIEW}
-          USE_JEV_WITNESS=${USE_JEV_WITNESS}
-          USE_JEV_AUTHORITY=${USE_JEV_AUTHORITY}
-          USE_JEV_CITATION_GROUNDS=${USE_JEV_CITATION_GROUNDS}
-          USE_JEV_LEGAL_ISSUES=${USE_JEV_LEGAL_ISSUES}
-          USE_JEV_STRENGTHS=${USE_JEV_STRENGTHS}
-          USE_JEV_WEAKNESSES=${USE_JEV_WEAKNESSES}
-          USE_JEV_RECONSTRUCTION=${USE_JEV_RECONSTRUCTION}
-          USE_JEV_RECONSTRUCTION_AUDIO=${USE_JEV_RECONSTRUCTION_AUDIO}
-          USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL=${USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL}
-          USE_JEV_CASE_STRATEGY=${USE_JEV_CASE_STRATEGY}
-          USE_FULL_CONTRADICTION_SCAN=${USE_FULL_CONTRADICTION_SCAN}
-          USE_GROUNDING_VERIFIER=${USE_GROUNDING_VERIFIER}
-          GROUNDING_MAX_ASSERTIONS=${GROUNDING_MAX_ASSERTIONS}
-          JURIS_PH_API_URL=${JURIS_PH_API_URL}
-          UK_CASELAW_BASE_URL=${UK_CASELAW_BASE_URL}
-          UK_LEGISLATION_BASE_URL=${UK_LEGISLATION_BASE_URL}
-          NODE_ENV=${{ env.NODE_ENV }}
-          PORT=${{ env.PORT }}
           EOF
+
+          # CASE_GRAPH_PROMOTION_QUEUE_URL is deliberately absent. It was written
+          # here as an empty string, and the app treats empty as "configured":
+          # both UK and PH log 'not set, refusing to start' on every boot. The
+          # queue exists in neither region. Restore the line only together with a
+          # real queue URL.
+          #
+          # Everything below comes from GitHub and is written only when it has a
+          # value, so an unset secret means the variable is absent rather than
+          # blank. `add` ends in `return 0` because under `set -e` a bare
+          # `[ -n "$x" ] && printf ...` aborts the step the first time a value is
+          # empty.
+          add() { [ -n "${2:-}" ] && printf '%s=%s\n' "$1" "$2" >> env.tmp; return 0; }
+
+          add DATABASE_URL                             "${DATABASE_URL:-}"
+          add SECRET_KEY                               "${SECRET_KEY:-}"
+          add MAILER_TRANSPORT_HOST                    "${MAILER_TRANSPORT_HOST:-}"
+          add MAILER_TRANSPORT_PORT                    "${MAILER_TRANSPORT_PORT:-}"
+          add MAILER_TRANSPORT_SECURE                  "${MAILER_TRANSPORT_SECURE:-}"
+          add MAILER_EMAIL                             "${MAILER_EMAIL:-}"
+          add MAILER_PASSWORD                          "${MAILER_PASSWORD:-}"
+          add ACCESS_TOKEN_SECRET                      "${ACCESS_TOKEN_SECRET:-}"
+          add REFRESH_TOKEN_SECRET                     "${REFRESH_TOKEN_SECRET:-}"
+          add ACCESS_TOKEN_EXPIRY                      "${ACCESS_TOKEN_EXPIRY:-}"
+          add REFRESH_TOKEN_EXPIRY_DAYS                "${REFRESH_TOKEN_EXPIRY_DAYS:-}"
+          add REDIS_URL                                "${REDIS_URL:-}"
+          add REDIS_HOST                               "${REDIS_HOST:-}"
+          add REDIS_PORT                               "${REDIS_PORT:-}"
+          add REDIS_PASSWORD                           "${REDIS_PASSWORD:-}"
+          add SERVICE_ACCOUNT                          "${SERVICE_ACCOUNT:-}"
+          add CLIENT_URL                               "${CLIENT_URL:-}"
+          add GOOGLE_CLIENT_ID                         "${GOOGLE_CLIENT_ID:-}"
+          add GOOGLE_CLIENT_SECRET                     "${GOOGLE_CLIENT_SECRET:-}"
+          add GOOGLE_TOKEN_ENC_KEY                     "${GOOGLE_TOKEN_ENC_KEY:-}"
+          add FIELD_ENCRYPTION_KEY                     "${FIELD_ENCRYPTION_KEY:-}"
+          add FIELD_ENCRYPTION_ENABLED                 "${FIELD_ENCRYPTION_ENABLED:-}"
+          add CHAT_WONDER_API_URL                      "${CHAT_WONDER_API_URL:-}"
+          add CHAT_WONDER_WS_URL                       "${CHAT_WONDER_WS_URL:-}"
+          add CHAT_WONDER_API_KEY                      "${CHAT_WONDER_API_KEY:-}"
+          add TRACE_STREAM_API_KEY                     "${TRACE_STREAM_API_KEY:-}"
+          add CLOUDFRONT_URL                           "${CLOUDFRONT_URL:-}"
+          add FILE_TOKEN_SECRET                        "${FILE_TOKEN_SECRET:-}"
+          add OPENAI_API_KEY                           "${OPENAI_API_KEY:-}"
+          add TYPESAFE_API_KEY                         "${TYPESAFE_API_KEY:-}"
+          add USE_JEV_PROPOSITION                      "${USE_JEV_PROPOSITION:-}"
+          add USE_JEV_VALIDITY                         "${USE_JEV_VALIDITY:-}"
+          add USE_JEV_MESSAGE_TRIAGE                   "${USE_JEV_MESSAGE_TRIAGE:-}"
+          add USE_JEV_REDTEAM                          "${USE_JEV_REDTEAM:-}"
+          add USE_JEV_DAMAGES                          "${USE_JEV_DAMAGES:-}"
+          add USE_JEV_CONTRADICTIONS                   "${USE_JEV_CONTRADICTIONS:-}"
+          add USE_JEV_MINDMAP                          "${USE_JEV_MINDMAP:-}"
+          add USE_JEV_AUDIO_OVERVIEW                   "${USE_JEV_AUDIO_OVERVIEW:-}"
+          add USE_JEV_WITNESS                          "${USE_JEV_WITNESS:-}"
+          add USE_JEV_AUTHORITY                        "${USE_JEV_AUTHORITY:-}"
+          add USE_JEV_CITATION_GROUNDS                 "${USE_JEV_CITATION_GROUNDS:-}"
+          add USE_JEV_LEGAL_ISSUES                     "${USE_JEV_LEGAL_ISSUES:-}"
+          add USE_JEV_STRENGTHS                        "${USE_JEV_STRENGTHS:-}"
+          add USE_JEV_WEAKNESSES                       "${USE_JEV_WEAKNESSES:-}"
+          add USE_JEV_RECONSTRUCTION                   "${USE_JEV_RECONSTRUCTION:-}"
+          add USE_JEV_RECONSTRUCTION_AUDIO             "${USE_JEV_RECONSTRUCTION_AUDIO:-}"
+          add USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL   "${USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL:-}"
+          add USE_JEV_CASE_STRATEGY                    "${USE_JEV_CASE_STRATEGY:-}"
+          add USE_FULL_CONTRADICTION_SCAN              "${USE_FULL_CONTRADICTION_SCAN:-}"
+          add USE_GROUNDING_VERIFIER                   "${USE_GROUNDING_VERIFIER:-}"
+          add GROUNDING_MAX_ASSERTIONS                 "${GROUNDING_MAX_ASSERTIONS:-}"
+          add JURIS_PH_API_URL                         "${JURIS_PH_API_URL:-}"
+          add UK_CASELAW_BASE_URL                      "${UK_CASELAW_BASE_URL:-}"
+          add UK_LEGISLATION_BASE_URL                  "${UK_LEGISLATION_BASE_URL:-}"
 
           # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the UK instance role grants
           # S3, SQS, Polly, Textract and Transcribe. An empty value here would
           # break the SDK's credential chain.
 
+          # --key-id names a customer-managed key instead of the account's
+          # default aws/ssm key. Both encrypt; the difference is control. With a
+          # CMK the key policy decides who may decrypt, so holding
+          # ssm:GetParameter is no longer sufficient on its own, and CloudTrail
+          # attributes every Decrypt to this key — which matters for a parameter
+          # holding UK personal-data connection strings.
           aws ssm put-parameter \
             --name "${{ env.ENV_PARAM }}" \
             --type SecureString --overwrite \
+            --key-id "${{ env.ENV_KMS_KEY }}" \
             --value "file://env.tmp" \
             --region "${{ env.AWS_REGION }}" > /dev/null
 
