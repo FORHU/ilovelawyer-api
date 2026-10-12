@@ -4,6 +4,7 @@ import { getRequestContext } from "../lib/request-context";
 import { getLlmUsageScope, LlmUsageScope, runInLlmUsageScope } from "../lib/llm-usage-scope";
 import { estimateCostUsd } from "../constants/llm-pricing.constants";
 import logger from "../utils/logger";
+import { JevUsageEntry, setJevUsageRecorder } from "../utils/typesafeClient";
 
 export interface LlmUsageEntry {
   provider: LlmProvider;
@@ -41,6 +42,31 @@ export default class LlmUsageSvc {
     } catch (err) {
       logger.warn("LLM usage: could not build row", { err, feature: entry?.feature });
     }
+  }
+
+  /** Records one Jev call, as reported by jevAsk's usage hook (#403, #407). Rows are named
+   * `jev:<feature>` so a Jev check never shares a feature name with a Chat Wonder generation
+   * (`mind-map` vs `mindMap`) in the admin breakdown. Attribution comes from the usage scope and
+   * request context, like every other row. */
+  static recordJev(entry: JevUsageEntry): void {
+    LlmUsageSvc.record({
+      provider: LlmProvider.TYPESAFE,
+      via: "direct",
+      source: LlmUsageSource.REPORTED,
+      feature: `jev:${entry.feature || "unknown"}`,
+      model: entry.model,
+      inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens,
+      durationMs: entry.durationMs,
+      success: entry.success,
+    });
+  }
+
+  /** Plugs the ledger into jevAsk, so every Jev call records exactly one row. jevAsk is the only
+   * way to call Jev (test/jev-ask-guard.spec.ts), so nothing else records Jev usage. Called once
+   * at startup (src/server.ts). */
+  static registerJevRecorder(): void {
+    setJevUsageRecorder(LlmUsageSvc.recordJev);
   }
 
   private static buildRow(entry: LlmUsageEntry): Prisma.LlmUsageUncheckedCreateInput {
