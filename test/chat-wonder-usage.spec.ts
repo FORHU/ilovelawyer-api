@@ -10,7 +10,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import * as config from "../src/config";
 import LlmUsageRepo from "../src/repositories/llm-usage.repository";
 import { callChatWonderRest, categorizeDocument, generateTitleViaWs, streamChatWonderMessage } from "../src/utils/chatWonder";
-import { recordChatWonderUsage } from "../src/utils/chat-wonder-usage";
+import { parseReportedUsage, recordChatWonderUsage } from "../src/utils/chat-wonder-usage";
 import { newTraceRun } from "../src/services/trace-collector.service";
 import { runWithRequestContext } from "../src/lib/request-context";
 
@@ -216,6 +216,121 @@ describe("Chat Wonder LlmUsage rows", () => {
       await generateTitleViaWs("Title this").catch(() => {});
       expect(rows).to.have.length(1);
       expect(rows[0]).to.include({ feature: "title", outputTokens: 0 });
+    });
+  });
+
+  describe("Chat Wonder's reported usage (#404)", () => {
+    const block = { prompt_tokens: 5000, cached_input_tokens: 3000, completion_tokens: 400, total_tokens: 5400, call_count: 3, pass_count: 2, model: "gpt-x", by_model: [] };
+    const frame = (data: unknown) => JSON.stringify({ type: "usage", session_id: "sess-1", data });
+    const usage = { feature: "chat", userId: "user-1" };
+
+    it("records one REPORTED row from the usage frame, with the model, cached tokens and passes", async () => {
+      script = ["Answer.", "__END__", frame(block), "[DONE]"];
+      const result = await streamChatWonderMessage("sess-1", "Q", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, { usage });
+      expect(result.content).to.equal("Answer.");
+      expect(rows).to.have.length(1);
+      expect(rows[0]).to.include({
+        source: "REPORTED",
+        via: "chat-wonder",
+        model: "gpt-x",
+        inputTokens: 5000,
+        cachedInputTokens: 3000,
+        outputTokens: 400,
+        totalTokens: 5400,
+        passCount: 2,
+        feature: "chat",
+        userId: "user-1",
+        success: true,
+      });
+    });
+
+    it("falls back to the estimate when the stream carries no usage frame", async () => {
+      script = ["Answer.", "__END__", "[DONE]"];
+      await streamChatWonderMessage("sess-1", "Q", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, { usage });
+      expect(rows).to.have.length(1);
+      expect(rows[0]).to.include({ source: "ESTIMATED", model: null, cachedInputTokens: null });
+    });
+
+    it("falls back to the estimate for a malformed usage frame, without throwing", async () => {
+      script = ["Answer.", "__END__", frame({ prompt_tokens: "lots", completion_tokens: -1 }), "[DONE]"];
+      await streamChatWonderMessage("sess-1", "Q", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, { usage });
+      expect(rows).to.have.length(1);
+      expect(rows[0].source).to.equal("ESTIMATED");
+    });
+
+    it("records a REPORTED row for a resolveOnAnswerEnd call when the usage frame arrives before __END__ (the answer-phase frame)", async () => {
+      const answerPhase = { prompt_tokens: 4000, cached_input_tokens: 1000, completion_tokens: 250, pass_count: 2, model: "gpt-5.6-luna" };
+      script = [frame(answerPhase), "Answer.", "__END__", frame(block), "[DONE]"];
+      const result = await streamChatWonderMessage("sess-1", "Q", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, { resolveOnAnswerEnd: true, usage });
+      expect(result.content).to.equal("Answer.");
+      expect(rows).to.have.length(1);
+      // The socket closed at __END__, so only the frame before it was seen.
+      expect(rows[0]).to.include({ source: "REPORTED", model: "gpt-5.6-luna", inputTokens: 4000, cachedInputTokens: 1000, outputTokens: 250, passCount: 2 });
+    });
+
+    it("keeps the later usage frame when a turn sends one for the answer and one for the whole turn", async () => {
+      const answerPhase = { prompt_tokens: 4000, cached_input_tokens: 1000, completion_tokens: 250, pass_count: 2, model: "gpt-5.6-luna" };
+      script = [frame(answerPhase), "Answer.", "__END__", frame(block), "[DONE]"];
+      await streamChatWonderMessage("sess-1", "Q", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, { usage });
+      expect(rows).to.have.length(1);
+      expect(rows[0]).to.include({ source: "REPORTED", inputTokens: 5000, cachedInputTokens: 3000, outputTokens: 400, passCount: 2 });
+    });
+
+    it("stays ESTIMATED for a resolveOnAnswerEnd call against a Chat Wonder that sends usage only after __END__ (older builds)", async () => {
+      script = ["Answer.", "__END__", frame(block), "[DONE]"];
+      await streamChatWonderMessage("sess-1", "Q", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, { resolveOnAnswerEnd: true, usage });
+      expect(rows).to.have.length(1);
+      expect(rows[0].source).to.equal("ESTIMATED");
+    });
+
+    it("records a REPORTED row from a REST reply's usage key and leaves the reply untouched", async () => {
+      const reply = { response: "Hello.", usage: block };
+      (axios as any).post = async () => ({ data: reply });
+      const data = await callChatWonderRest("Q", "sess-1", undefined, "PH", { usage: { feature: "caseOutlook" } });
+      expect(data).to.equal(reply);
+      expect(rows).to.have.length(1);
+      expect(rows[0]).to.include({ source: "REPORTED", model: "gpt-x", inputTokens: 5000, cachedInputTokens: 3000, outputTokens: 400, passCount: 2, feature: "caseOutlook" });
+    });
+
+    it("records an ESTIMATED row from a REST reply with a malformed usage key", async () => {
+      (axios as any).post = async () => ({ data: { response: "Hello.", usage: "n/a" } });
+      await callChatWonderRest("Q", "sess-1", undefined, "PH", { usage: { feature: "caseOutlook" } });
+      expect(rows).to.have.length(1);
+      expect(rows[0].source).to.equal("ESTIMATED");
+    });
+
+    it("records a REPORTED row for categorizeDocument when the response carries usage", async () => {
+      (axios as any).post = async () => ({ data: { category: "Contract", usage: { prompt_tokens: 120, completion_tokens: 4, model: "gpt-y" } } });
+      expect(await categorizeDocument("text", "a.pdf")).to.equal("Contract");
+      expect(rows[0]).to.include({ source: "REPORTED", model: "gpt-y", inputTokens: 120, outputTokens: 4, cachedInputTokens: null, passCount: null });
+    });
+
+    it("never lets a usage frame that arrives before __END__ into a generated title, and records its numbers", async () => {
+      script = [frame({ prompt_tokens: 300, cached_input_tokens: 0, completion_tokens: 12, pass_count: 1, model: "gpt-4o-mini" }), "Employment: Dismissal", "__END__"];
+      const title = await generateTitleViaWs("Title this", { userId: "user-1", consultationId: "c-1" });
+      expect(title).to.equal("Employment: Dismissal");
+      expect(rows).to.have.length(1);
+      expect(rows[0]).to.include({ feature: "title", source: "REPORTED", model: "gpt-4o-mini", inputTokens: 300, outputTokens: 12, userId: "user-1" });
+    });
+
+    describe("parseReportedUsage", () => {
+      it("reads the contract block", () => {
+        expect(parseReportedUsage(block)).to.deep.equal({ model: "gpt-x", inputTokens: 5000, cachedInputTokens: 3000, outputTokens: 400, passCount: 2 });
+      });
+
+      it("treats missing optional fields as null", () => {
+        expect(parseReportedUsage({ prompt_tokens: 10, completion_tokens: 2 })).to.deep.equal({ model: null, inputTokens: 10, cachedInputTokens: null, outputTokens: 2, passCount: null });
+      });
+
+      it("drops a cached count larger than the input rather than recording it", () => {
+        expect(parseReportedUsage({ prompt_tokens: 10, completion_tokens: 2, cached_input_tokens: 99 })?.cachedInputTokens).to.equal(null);
+      });
+
+      it("returns undefined for anything that is not a usable block", () => {
+        for (const bad of [undefined, null, "x", 5, [], {}, { prompt_tokens: 10 }, { prompt_tokens: NaN, completion_tokens: 1 }, { prompt_tokens: -1, completion_tokens: 1 }]) {
+          expect(parseReportedUsage(bad), JSON.stringify(bad)).to.equal(undefined);
+        }
+      });
     });
   });
 

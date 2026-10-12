@@ -5,7 +5,7 @@ import HttpError from "./http-error";
 import logger from "./logger";
 import TraceCollectorSvc, { TraceRun } from "../services/trace-collector.service";
 import { TenantCode } from "../types/tenant-code";
-import { ChatWonderUsageOptions, ChatWonderUsageProbe, recordChatWonderUsage } from "./chat-wonder-usage";
+import { ChatWonderUsageOptions, ChatWonderUsageProbe, ReportedUsage, parseReportedUsage, recordChatWonderUsage } from "./chat-wonder-usage";
 import {
   SESSION_RETRIES,
   RETRY_DELAY_MS,
@@ -175,6 +175,7 @@ export async function callChatWonderRest(
   const startedAt = Date.now();
   let success = false;
   let reply = "";
+  let reported: ReportedUsage | undefined;
   try {
     const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload, {
       timeout: CHAT_WONDER_REST_TIMEOUT_MS,
@@ -183,6 +184,7 @@ export async function callChatWonderRest(
     reasoning = data?.reasoning ?? undefined;
     success = true;
     reply = String(data?.response ?? data?.intermediate_response ?? "");
+    reported = parseReportedUsage(data?.usage);
     return data;
   } finally {
     // The one usage row for this call (LlmUsage). REST turns report no [TRACE] frames, so no passes.
@@ -193,6 +195,7 @@ export async function callChatWonderRest(
       inputChars: prompt.length + (payload.case_document_manifest ? JSON.stringify(payload.case_document_manifest).length : 0),
       outputChars: reply.length,
       traceStarts: null,
+      reported,
       success,
     });
     await collector?.stop(reasoning);
@@ -232,6 +235,7 @@ export async function categorizeDocument(
   const startedAt = Date.now();
   let category = "";
   let success = false;
+  let reported: ReportedUsage | undefined;
   try {
     const { data } = await axios.post(`${CHAT_WONDER_API_URL}/api/legal/categorize-document`, {
       text,
@@ -239,6 +243,7 @@ export async function categorizeDocument(
     });
     category = typeof data?.category === "string" ? data.category.trim() : "";
     success = true;
+    reported = parseReportedUsage(data?.usage);
     return category || null;
   } catch (err) {
     logger.warn("Chat Wonder document categorization failed", { err, filename });
@@ -250,6 +255,7 @@ export async function categorizeDocument(
       inputChars: text.length + filename.length,
       outputChars: category.length,
       traceStarts: null,
+      reported,
       success,
     });
   }
@@ -299,9 +305,11 @@ export async function generateTitleViaWs(
 ): Promise<string> {
   const sessionId = await getChatWonderSessionId();
   const startedAt = Date.now();
+  // Chat Wonder's own numbers, from the usage frame it sends just before __END__.
+  let reported: ReportedUsage | undefined;
   // Called from the two places this call settles (both behind `settled`), so exactly once.
   const recordUsage = (reply: string, success: boolean) =>
-    recordChatWonderUsage({ usage: { ...usage, feature: "title" }, startedAt, inputChars: prompt.length, outputChars: reply.length, traceStarts: null, success });
+    recordChatWonderUsage({ usage: { ...usage, feature: "title" }, startedAt, inputChars: prompt.length, outputChars: reply.length, traceStarts: null, reported, success });
 
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
@@ -338,6 +346,19 @@ export async function generateTitleViaWs(
     ws.onmessage = (event) => {
       if (settled) return;
       const msg = typeof event.data === "string" ? event.data : String(event.data);
+      // A typed frame is data, never title text: Chat Wonder sends its usage report just before
+      // __END__, and appending it would put JSON in the title.
+      if (msg.startsWith("{")) {
+        try {
+          const envelope = JSON.parse(msg);
+          if (envelope && typeof envelope.type === "string") {
+            if (envelope.type === "usage") reported = parseReportedUsage(envelope.data) ?? reported;
+            return;
+          }
+        } catch {
+          // not JSON after all: it is title text
+        }
+      }
       if (msg === "__END__" || msg.endsWith("__END__")) {
         const content = msg.endsWith("__END__") ? msg.slice(0, -"__END__".length) : "";
         if (content) accumulated += content;
@@ -435,6 +456,7 @@ export async function streamChatWonderMessage(...args: Parameters<typeof streamC
       inputChars: probe.inputChars,
       outputChars: probe.outputChars,
       traceStarts: probe.traceStarts,
+      reported: probe.reported,
       success,
     });
   }
@@ -785,6 +807,8 @@ function streamChatWonderMessageOnce(
       }
       if (typedEnvelope && typedEnvelope.type === "usage") {
         logger.info("Chat Wonder usage", typedEnvelope.data);
+        const reported = parseReportedUsage(typedEnvelope.data);
+        if (reported && opts?.usageProbe) opts.usageProbe.reported = reported;
         return;
       }
 
