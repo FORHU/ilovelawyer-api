@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { FIELD_ENCRYPTION_ENABLED, FIELD_ENCRYPTION_KEY, FIELD_ENCRYPTION_OLD_KEYS } from "../config";
+import { FIELD_ENCRYPTION_ENABLED, FIELD_ENCRYPTION_KEY, FIELD_ENCRYPTION_OLD_KEYS, FIELD_ENCRYPTION_TENANT_KEYS } from "../config";
 import logger from "./logger";
 
 /** Field-level encryption for privileged text stored in ordinary columns (issue #343).
@@ -19,12 +19,14 @@ export interface FieldCryptoConfig {
   enabled: boolean;
   key?: string;
   oldKeys?: string;
+  /** Keys for tenants that have their own, by tenant code ("PH", "UK"). */
+  tenantKeys?: Record<string, string | undefined>;
 }
 
 const PREFIX = "enc1";
 
 function fromEnv(): FieldCryptoConfig {
-  return { enabled: FIELD_ENCRYPTION_ENABLED, key: FIELD_ENCRYPTION_KEY, oldKeys: FIELD_ENCRYPTION_OLD_KEYS };
+  return { enabled: FIELD_ENCRYPTION_ENABLED, key: FIELD_ENCRYPTION_KEY, oldKeys: FIELD_ENCRYPTION_OLD_KEYS, tenantKeys: FIELD_ENCRYPTION_TENANT_KEYS };
 }
 
 /** A 32-byte key given as 64 hex chars or base64; null for anything else. */
@@ -39,8 +41,16 @@ function keyIdOf(key: Buffer): string {
   return crypto.createHash("sha256").update(key).digest("hex").slice(0, 8);
 }
 
-function currentKey(cfg: FieldCryptoConfig): Buffer | null {
-  return parseKey(cfg.key);
+const tenantKeySetting = (cfg: FieldCryptoConfig, tenant?: string): string | undefined => {
+  const raw = tenant ? cfg.tenantKeys?.[tenant] : undefined;
+  return raw && raw.trim() ? raw : undefined;
+};
+
+/** The key new values are sealed with: the tenant's own key when it has one, otherwise the default.
+ * A tenant key that is set but not a valid key gives null, never a quiet fall back to the default. */
+function currentKey(cfg: FieldCryptoConfig, tenant?: string): Buffer | null {
+  const own = tenantKeySetting(cfg, tenant);
+  return parseKey(own ?? cfg.key);
 }
 
 // Opening a document means opening thousands of chunks, so the parsed keys are kept until the
@@ -48,9 +58,11 @@ function currentKey(cfg: FieldCryptoConfig): Buffer | null {
 let keyCache: { signature: string; keys: Map<string, Buffer> } | null = null;
 
 function keysById(cfg: FieldCryptoConfig): Map<string, Buffer> {
-  const signature = `${cfg.key ?? ""}|${cfg.oldKeys ?? ""}`;
+  const tenantKeys = Object.entries(cfg.tenantKeys ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v ?? "");
+  const signature = `${cfg.key ?? ""}|${cfg.oldKeys ?? ""}|${tenantKeys.join(",")}`;
   if (keyCache?.signature === signature) return keyCache.keys;
-  const all = [cfg.key, ...(cfg.oldKeys ?? "").split(",")].map(parseKey).filter((k): k is Buffer => k !== null);
+  // Every configured key can open what it sealed: the default, each tenant's, and earlier ones.
+  const all = [cfg.key, ...tenantKeys, ...(cfg.oldKeys ?? "").split(",")].map(parseKey).filter((k): k is Buffer => k !== null);
   const keys = new Map(all.map((k) => [keyIdOf(k), k]));
   keyCache = { signature, keys };
   return keys;
@@ -60,12 +72,34 @@ export function isEncryptedField(value: unknown): value is string {
   return typeof value === "string" && value.startsWith(`${PREFIX}:`);
 }
 
+/** True when some tenant has its own key, so the tenant that owns a value has to be looked up before
+ * sealing it. False (and no lookup is made) everywhere that uses one key, which is every server today
+ * except the Singapore one. */
+export function usesTenantKeys(cfg: FieldCryptoConfig = fromEnv()): boolean {
+  return cfg.enabled && Object.keys(cfg.tenantKeys ?? {}).some((tenant) => tenantKeySetting(cfg, tenant) !== undefined);
+}
+
 /** What the startup log says, so nobody has to guess whether sealing is on: the switch, whether a
- * usable key is set, and how many earlier keys are still accepted for reading. */
-export function fieldEncryptionStatus(cfg: FieldCryptoConfig = fromEnv()): { enabled: boolean; keyConfigured: boolean; previousKeys: number } {
+ * usable key is set, which tenants have their own key (and which of those are not valid), and how
+ * many earlier keys are still accepted for reading. */
+export function fieldEncryptionStatus(cfg: FieldCryptoConfig = fromEnv()): {
+  enabled: boolean;
+  keyConfigured: boolean;
+  tenantKeys: string[];
+  invalidTenantKeys: string[];
+  previousKeys: number;
+} {
   const current = currentKey(cfg);
   const previous = [...keysById(cfg).values()].filter((k) => !current || !k.equals(current)).length;
-  return { enabled: cfg.enabled, keyConfigured: current !== null, previousKeys: previous };
+  const withOwnKey = Object.keys(cfg.tenantKeys ?? {}).filter((tenant) => tenantKeySetting(cfg, tenant) !== undefined).sort();
+  const invalid = withOwnKey.filter((tenant) => currentKey(cfg, tenant) === null);
+  return {
+    enabled: cfg.enabled,
+    keyConfigured: current !== null,
+    tenantKeys: withOwnKey.filter((tenant) => !invalid.includes(tenant)),
+    invalidTenantKeys: invalid,
+    previousKeys: Math.max(0, previous - withOwnKey.length + invalid.length),
+  };
 }
 
 /** True when new privileged values should be written sealed. */
@@ -75,9 +109,12 @@ export function fieldEncryptionEnabled(cfg: FieldCryptoConfig = fromEnv()): bool
 
 /** Seals `plain`. Throws when no valid key is configured: it never falls back to storing the text
  * as it is when the caller asked for it to be protected. */
-export function encryptField(plain: string, label: string, cfg: FieldCryptoConfig = fromEnv()): string {
-  const key = currentKey(cfg);
-  if (!key) throw new Error("FIELD_ENCRYPTION_KEY is not configured (32 bytes, base64 or 64 hex chars)");
+export function encryptField(plain: string, label: string, cfg: FieldCryptoConfig = fromEnv(), tenant?: string): string {
+  const key = currentKey(cfg, tenant);
+  if (!key) {
+    const setting = tenantKeySetting(cfg, tenant) !== undefined ? `FIELD_ENCRYPTION_KEY_${tenant}` : "FIELD_ENCRYPTION_KEY";
+    throw new Error(`${setting} is not configured (32 bytes, base64 or 64 hex chars)`);
+  }
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(Buffer.from(label, "utf8"));
@@ -104,10 +141,10 @@ export function decryptField(stored: string, label: string, cfg: FieldCryptoConf
 }
 
 /** What to store for `plain`: sealed when `protect` is true and the switch is on, otherwise as it is.
- * null and undefined pass through. */
-export function sealField<T extends string | null | undefined>(plain: T, label: string, protect: boolean, cfg: FieldCryptoConfig = fromEnv()): T | string {
+ * null and undefined pass through. `tenant` picks the tenant's own key when it has one. */
+export function sealField<T extends string | null | undefined>(plain: T, label: string, protect: boolean, cfg: FieldCryptoConfig = fromEnv(), tenant?: string): T | string {
   if (typeof plain !== "string" || plain === "") return plain;
-  return protect && cfg.enabled ? encryptField(plain, label, cfg) : plain;
+  return protect && cfg.enabled ? encryptField(plain, label, cfg, tenant) : plain;
 }
 
 /** What to show for a stored value: the opened text, the value itself when it was never sealed, or
