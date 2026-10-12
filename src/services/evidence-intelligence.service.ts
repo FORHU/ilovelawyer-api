@@ -333,18 +333,24 @@ async function classifyNatures(hits: ContradictionHit[], docName: Map<string, st
   return out;
 }
 
+/** Bounds on the regex fallback, which pairs every differing value across documents (left ×
+ * right): a real case document states a few dozen dates/amounts, but a large upload can hold tens
+ * of thousands, and two such documents made ~2.4 billion hits and ran the API out of memory. */
+const MAX_REGEX_FACTS_PER_DOCUMENT = 300;
+const MAX_REGEX_HITS = 500;
+
 async function scanWithRegex(ready: ReadyDoc[]): Promise<ContradictionHit[]> {
   const perDoc: { documentId: string; facts: ReturnType<typeof extractFacts> }[] = [];
   for (const doc of ready) {
     const chunks = await DocumentChunkRepo.findTextsByIds(await DocumentChunkRepo.findIdsByDocument(doc.id));
     const text = chunks.map((c) => c.chunkText).join("\n");
-    perDoc.push({ documentId: doc.id, facts: extractFacts(text) });
+    perDoc.push({ documentId: doc.id, facts: extractFacts(text).slice(0, MAX_REGEX_FACTS_PER_DOCUMENT) });
   }
 
   const hits: ContradictionHit[] = [];
-  for (let i = 0; i < perDoc.length; i++) {
-    for (let j = i + 1; j < perDoc.length; j++) {
-      hits.push(...findContradictions(perDoc[i], perDoc[j]));
+  for (let i = 0; i < perDoc.length && hits.length < MAX_REGEX_HITS; i++) {
+    for (let j = i + 1; j < perDoc.length && hits.length < MAX_REGEX_HITS; j++) {
+      for (const hit of findContradictions(perDoc[i], perDoc[j], MAX_REGEX_HITS - hits.length)) hits.push(hit);
     }
   }
   return hits;

@@ -178,11 +178,11 @@ export default class WitnessScoringSvc {
       }),
     );
     const sponsoredDocIds = [...new Set([...docIdsByWitness.values()].flat())];
-    const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(sponsoredDocIds);
     const perDocChars = Math.max(
       500,
       Math.min(MAX_DOC_CHARS, Math.floor(MAX_TOTAL_DOC_CHARS / Math.max(1, sponsoredDocIds.length))),
     );
+    const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(sponsoredDocIds, { maxCharsPerDocument: perDocChars });
 
     const witnesses = snapshot.witnesses.map((w) => ({
       id: w.id,

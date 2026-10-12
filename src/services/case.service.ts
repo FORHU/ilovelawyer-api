@@ -8,6 +8,7 @@ import DocumentRepo from "../repositories/document.repository";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
+import { assertBatchWithinLimit } from "../utils/upload-batch-limit";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
 import { CaseStatus } from "@prisma/client";
@@ -194,6 +195,7 @@ export default class CaseSvc {
     caseData: { caseId: string; organizationId: string; userId: string },
     documentData: IncomingCaseDocument[],
   ) {
+    assertBatchWithinLimit(documentData.map((doc) => doc.metaData.fileSize));
     // In this organization and a case the uploader can open — not a confidential one walled off
     // from them (#346).
     await this.getById(caseData.caseId, caseData.organizationId, caseData.userId);

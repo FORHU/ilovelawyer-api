@@ -35,7 +35,8 @@ export default class DocumentCtrl {
       value.filename,
       value.contentType,
       value.caseId,
-      value.consultationId
+      value.consultationId,
+      value.fileSize,
     );
     return res.status(200).json(result);
   }

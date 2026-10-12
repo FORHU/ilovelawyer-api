@@ -2,7 +2,11 @@ import { AWS_REGION, AWS_S3_BUCKET, AWS_S3_REGION } from "../config";
 import { awsCredentials } from "../lib/aws-client-config";
 import logger from "./logger";
 
-const TEXTRACT_SYNC_MAX_BYTES = 5 * 1024 * 1024;
+/** Textract's cap on raw bytes sent inline (`Document.Bytes`). */
+export const TEXTRACT_SYNC_MAX_BYTES = 5 * 1024 * 1024;
+/** Textract's cap on a JPEG/PNG read from S3, sync or async alike — there is no larger path for
+ * images (https://docs.aws.amazon.com/textract/latest/dg/limits-document.html). */
+export const TEXTRACT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 type TextractBlock = { BlockType?: string; Text?: string; Page?: number };
 
@@ -45,6 +49,43 @@ export async function ocrDocument(buffer: Buffer): Promise<string> {
     return lines.join("\n");
   } catch (err) {
     logger.warn("OCR via Textract failed", { err });
+    return "";
+  }
+}
+
+/** OCRs a JPEG/PNG already in S3 with synchronous DetectDocumentText — for images over
+ * TEXTRACT_SYNC_MAX_BYTES, which ocrDocument can't send inline. Textract reads images from S3 up
+ * to TEXTRACT_IMAGE_MAX_BYTES; a larger image can't be OCR'd by Textract at all, so it returns ""
+ * (the document then resolves FAILED, as for any image with no recognizable text). */
+export async function ocrImageFromS3(s3Key: string, bytes: number): Promise<string> {
+  if (bytes > TEXTRACT_IMAGE_MAX_BYTES) {
+    logger.warn("OCR skipped: image exceeds Textract's 10MB image limit", { s3Key, bytes });
+    return "";
+  }
+  if (!AWS_S3_BUCKET || !AWS_S3_REGION) {
+    logger.warn("OCR skipped: AWS_S3_BUCKET / AWS_S3_REGION not configured");
+    return "";
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const textract = require("@aws-sdk/client-textract") as {
+      TextractClient: new (cfg: object) => { send: (cmd: unknown) => Promise<{ Blocks?: TextractBlock[] }> };
+      DetectDocumentTextCommand: new (input: object) => unknown;
+    };
+    // Same region rule as ocrPdfFromS3: Textract only reads from a bucket in its own region.
+    const client = new textract.TextractClient({ region: AWS_S3_REGION, ...awsCredentials });
+    const result = await client.send(
+      new textract.DetectDocumentTextCommand({
+        Document: { S3Object: { Bucket: AWS_S3_BUCKET, Name: s3Key } },
+      }),
+    );
+    return (result.Blocks ?? [])
+      .filter((block: TextractBlock) => block.BlockType === "LINE" && block.Text)
+      .map((block: TextractBlock) => block.Text as string)
+      .join("\n");
+  } catch (err) {
+    logger.warn("OCR via Textract (S3 image) failed", { err, s3Key });
     return "";
   }
 }

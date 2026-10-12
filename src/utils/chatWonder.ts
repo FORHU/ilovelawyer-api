@@ -83,7 +83,10 @@ export async function fullTextsFor(
 ): Promise<{ id: string; name: string; text: string }[]> {
   if (!caseDocumentIds.length) return [];
   try {
-    const texts = await DocumentChunkRepo.findFullTextsByDocuments(caseDocumentIds);
+    // One character past the inline limit is enough to tell a document is too big to inline.
+    const texts = await DocumentChunkRepo.findFullTextsByDocuments(caseDocumentIds, {
+      maxCharsPerDocument: CASE_FULL_TEXT_INLINE_CHARS + 1,
+    });
     let total = 0;
     for (const t of texts.values()) total += t.length;
     if (total === 0 || total > CASE_FULL_TEXT_INLINE_CHARS) {
