@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { OPENAI_API_KEY } from "../config";
 import { EMBEDDING_CHAR_CAP } from "./chunking";
 import logger from "./logger";
+import LlmUsageSvc from "../services/llm-usage.service";
 
 let _client: OpenAI | null = null;
 
@@ -49,10 +50,23 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   const maxAttempts = 8;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const startedAt = Date.now();
     try {
       const res = await getClient().embeddings.create({
         model: "text-embedding-3-small",
         input,
+      });
+      // Real numbers from OpenAI (LlmUsage, epic #399). Only the call that succeeded is recorded;
+      // the 429s that were retried above never ran. Embeddings have no output tokens.
+      LlmUsageSvc.record({
+        provider: "OPENAI",
+        via: "direct",
+        model: "text-embedding-3-small",
+        feature: "embedding",
+        source: "REPORTED",
+        inputTokens: res.usage?.total_tokens ?? 0,
+        outputTokens: 0,
+        durationMs: Date.now() - startedAt,
       });
       return res.data.map((d) => d.embedding);
     } catch (err) {

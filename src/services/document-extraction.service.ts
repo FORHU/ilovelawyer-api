@@ -12,6 +12,7 @@ import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
 import { embedTexts, isRateLimit } from "../utils/embedding";
 import { categorizeDocument } from "../utils/chatWonder";
 import logger from "../utils/logger";
+import LlmUsageSvc from "./llm-usage.service";
 
 /** mp3/mp4 evidence — transcribed via AWS Transcribe rather than text-extracted. */
 function isMediaDocument(mimeType?: string | null, filename?: string): boolean {
@@ -75,6 +76,12 @@ export default class DocumentExtractionSvc {
    * always resolves ragStatus to READY or FAILED.
    */
   static async process(documentId: string): Promise<void> {
+    // Embeddings and categorization made below are attributed, in the usage ledger, to the user and
+    // organization that own the document — a queue worker has no request to say so.
+    return LlmUsageSvc.runInDocumentScope(documentId, () => DocumentExtractionSvc.processDocument(documentId));
+  }
+
+  private static async processDocument(documentId: string): Promise<void> {
     try {
       const doc = await DocumentRepo.findByIdWithFile(documentId);
       if (!doc?.file?.s3Key) {
@@ -151,6 +158,7 @@ export default class DocumentExtractionSvc {
         categoryPromise = categorizeDocument(
           trimmedPages.map((p) => p.text).join("\n\n").slice(0, 3000),
           doc.name,
+          { userId: doc.userId, caseId: doc.caseId, consultationId: doc.consultationId },
         );
       }
 

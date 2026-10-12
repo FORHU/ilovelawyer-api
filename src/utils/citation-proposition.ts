@@ -40,7 +40,7 @@ export async function classifyPropositionWithChatWonder(
 ): Promise<ParsedProposition | null> {
   const sessionId = await getChatWonderSessionId();
   const prompt = buildCitationPropositionPrompt(quote, official);
-  const payload = await callChatWonderRest(prompt, sessionId, undefined, tenantCode);
+  const payload = await callChatWonderRest(prompt, sessionId, undefined, tenantCode, { usage: { feature: "citationProposition" } });
   const text = String(payload.response || payload.intermediate_response || "");
   return extractProposition(text);
 }
