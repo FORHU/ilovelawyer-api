@@ -47,7 +47,7 @@ describe("CaseAccess.assertCanManageAccess — who may share a case", () => {
 
     expect(where.id).to.equal("case-1");
     const grantClause = where.OR.find((c: any) => c.accesses);
-    expect(grantClause.accesses.some).to.deep.equal({ userId: "user-1", permission: "ADMIN" });
+    expect(grantClause.accesses.some).to.deep.equal({ userId: "user-1", permission: { in: ["ADMIN"] } });
     const orgClause = where.OR.find((c: any) => c.organization?.members);
     expect(orgClause.organization.members.some).to.deep.equal({
       userId: "user-1",
@@ -74,12 +74,14 @@ describe("OrganizationSvc — case sharing", () => {
   const originals = {
     assertCanManageAccess: CaseAccess.assertCanManageAccess,
     canManageAccess: CaseAccess.canManageAccess,
+    canManageFully: CaseAccess.canManageFully,
     canEdit: CaseAccess.canEdit,
     loadAccessibleCase: CaseAccess.loadAccessibleCase,
     findMember: OrganizationMemberRepo.find,
     listMembers: OrganizationMemberRepo.list,
     grantCaseAccess: OrganizationRepo.grantCaseAccess,
     revokeCaseAccess: OrganizationRepo.revokeCaseAccess,
+    findCaseAccess: OrganizationRepo.findCaseAccess,
     listCaseAccess: OrganizationRepo.listCaseAccess,
     writeAudit: OrganizationRepo.writeAudit,
     notify: NotificationSvc.create,
@@ -117,6 +119,10 @@ describe("OrganizationSvc — case sharing", () => {
       return { id: caseId, caseName: "Santos v. Reyes", organizationId: "org-1", confidential };
     };
     (CaseAccess as any).canManageAccess = async (_caseId: string, userId: string) => managers.has(userId);
+    // MANAGER here is an org ADMIN: no limits on what they grant (see case-access-limits.spec.ts).
+    (CaseAccess as any).canManageFully = async (_caseId: string, userId: string) => managers.has(userId);
+    (OrganizationRepo as any).findCaseAccess = async (_caseId: string, userId: string) =>
+      grants.find((g) => g.userId === userId)?.permission ?? null;
     (CaseAccess as any).canEdit = async (_caseId: string, userId: string) => managers.has(userId) || userId === "editor-1";
     (CaseAccess as any).loadAccessibleCase = async (caseId: string) => ({ id: caseId, organizationId: "org-1", confidential });
     (OrganizationMemberRepo as any).find = async (organizationId: string, userId: string) =>
@@ -152,12 +158,14 @@ describe("OrganizationSvc — case sharing", () => {
   afterEach(() => {
     (CaseAccess as any).assertCanManageAccess = originals.assertCanManageAccess;
     (CaseAccess as any).canManageAccess = originals.canManageAccess;
+    (CaseAccess as any).canManageFully = originals.canManageFully;
     (CaseAccess as any).canEdit = originals.canEdit;
     (CaseAccess as any).loadAccessibleCase = originals.loadAccessibleCase;
     (OrganizationMemberRepo as any).find = originals.findMember;
     (OrganizationMemberRepo as any).list = originals.listMembers;
     (OrganizationRepo as any).grantCaseAccess = originals.grantCaseAccess;
     (OrganizationRepo as any).revokeCaseAccess = originals.revokeCaseAccess;
+    (OrganizationRepo as any).findCaseAccess = originals.findCaseAccess;
     (OrganizationRepo as any).listCaseAccess = originals.listCaseAccess;
     (OrganizationRepo as any).writeAudit = originals.writeAudit;
     (NotificationSvc as any).create = originals.notify;

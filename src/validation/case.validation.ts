@@ -52,6 +52,8 @@ export const createCaseSchema = Joi.object({
     .optional(),
   notes,
   parties: Joi.array().items(partySchema).optional(),
+  // Behind a wall from the start — see CaseSvc.create.
+  confidential: Joi.boolean().optional(),
 });
 
 export const listCasesSchema = Joi.object({

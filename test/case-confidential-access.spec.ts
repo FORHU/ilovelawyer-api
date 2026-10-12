@@ -3,7 +3,7 @@
  * ordinary case keeps today's rules exactly.
  *
  * No live Postgres. CaseAccess's real where-clauses are run against in-memory cases by a small
- * evaluator for the Prisma filter subset they use (OR, relation filters, `some`, `in`), so this
+ * evaluator for the Prisma filter subset they use (OR, AND, NOT, relation filters, `some`, `in`), so this
  * checks the rule itself rather than the shape of the query.
  */
 import { expect } from "chai";
@@ -27,6 +27,7 @@ function matches(record: any, where: any): boolean {
   return Object.entries(where).every(([key, cond]: [string, any]) => {
     if (key === "OR") return (cond as any[]).some((w) => matches(record, w));
     if (key === "AND") return (cond as any[]).every((w) => matches(record, w));
+    if (key === "NOT") return !matches(record, cond);
     const value = record[key];
     if (cond !== null && typeof cond === "object" && !Array.isArray(cond)) {
       if ("some" in cond) return Array.isArray(value) && value.some((item: any) => matches(item, cond.some));
@@ -41,6 +42,7 @@ function matches(record: any, where: any): boolean {
 const OWNER = "owner";
 const ADMIN = "admin";
 const MEMBER = "member";
+const MANAGER = "manager";
 
 function orgCase(confidential: boolean, grants: Grant[] = []): FakeCase {
   return {
@@ -55,6 +57,7 @@ function orgCase(confidential: boolean, grants: Grant[] = []): FakeCase {
         { userId: OWNER, status: "ACCEPTED", role: "OWNER" },
         { userId: ADMIN, status: "ACCEPTED", role: "ADMIN" },
         { userId: MEMBER, status: "ACCEPTED", role: "MEMBER" },
+        { userId: MANAGER, status: "ACCEPTED", role: "MANAGER" },
         { userId: "pending", status: "PENDING", role: "MEMBER" },
       ],
     },
@@ -125,6 +128,41 @@ describe("CaseAccess — confidential cases", () => {
     });
     it("someone else's grant opens nothing for this user", async () => {
       expect(await rights(orgCase(true, [{ userId: ADMIN, permission: "ADMIN" }]), MEMBER)).to.deep.equal(NONE);
+    });
+  });
+
+  describe("a MANAGER", () => {
+    it("manages access on an ordinary case without editing it", async () => {
+      expect(await rights(orgCase(false), MANAGER)).to.deep.equal({ view: true, edit: false, manage: true, listed: true });
+    });
+    it("is walled off a confidential case like any member", async () => {
+      expect(await rights(orgCase(true), MANAGER)).to.deep.equal(NONE);
+    });
+    it("doesn't manage fully — that stays with the org OWNER/ADMIN", async () => {
+      current = orgCase(false);
+      expect(await CaseAccess.canManageFully(current.id, MANAGER)).to.equal(false);
+      expect(await CaseAccess.canManageFully(current.id, ADMIN)).to.equal(true);
+      expect(await CaseAccess.canManageFully(current.id, OWNER)).to.equal(true);
+    });
+  });
+
+  describe("deleting a case", () => {
+    const canDelete = async (c: FakeCase, userId: string) => {
+      current = c;
+      return CaseAccess.assertCanDelete(c.id, userId).then(() => true, () => false);
+    };
+    it("the org OWNER and ADMIN can", async () => {
+      expect(await canDelete(orgCase(false), OWNER)).to.equal(true);
+      expect(await canDelete(orgCase(false), ADMIN)).to.equal(true);
+    });
+    it("an EDIT or ADMIN grant alone can't — a creator's included", async () => {
+      expect(await canDelete(orgCase(false, [{ userId: MEMBER, permission: "EDIT" }]), MEMBER)).to.equal(false);
+      expect(await canDelete(orgCase(false, [{ userId: MEMBER, permission: "ADMIN" }]), MEMBER)).to.equal(false);
+      expect(await canDelete(orgCase(false, [{ userId: MANAGER, permission: "EDIT" }]), MANAGER)).to.equal(false);
+    });
+    it("an org ADMIN walled off a confidential case can't, and can once granted", async () => {
+      expect(await canDelete(orgCase(true), ADMIN)).to.equal(false);
+      expect(await canDelete(orgCase(true, [{ userId: ADMIN, permission: "EDIT" }]), ADMIN)).to.equal(true);
     });
   });
 

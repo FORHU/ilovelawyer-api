@@ -32,6 +32,7 @@ const CASE_ORGS: Record<string, string> = { "case-1": "org-1", "case-2": "org-1"
 describe("#345 — destructive case and case-document operations require CaseAccess.assertCanEdit", () => {
   const originals = {
     assertCanEdit: CaseAccess.assertCanEdit,
+    assertCanDelete: CaseAccess.assertCanDelete,
     caseFindById: CaseRepo.findById,
     caseUpdate: CaseRepo.update,
     caseDelete: CaseRepo.delete,
@@ -51,6 +52,8 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
   /** Who may edit which case — `${caseId}:${userId}`. */
   let editable: Set<string>;
+  /** Who may delete which case: edit access plus org OWNER/ADMIN (CaseAccess.assertCanDelete). */
+  let deletable: Set<string>;
   let accessChecks: { caseId: string; userId: string }[];
   /** Every write that reached a repository, in order. */
   let writes: string[];
@@ -78,6 +81,12 @@ describe("#345 — destructive case and case-document operations require CaseAcc
       accessChecks.push({ caseId, userId });
       if (!editable.has(`${caseId}:${userId}`)) throw new HttpError("Case not found or not editable", 404);
       return { id: caseId, userId: "creator", caseName: "Case", organizationId: CASE_ORGS[caseId] ?? null };
+    };
+    deletable = new Set(editable);
+    (CaseAccess as any).assertCanDelete = async (caseId: string, userId: string) => {
+      accessChecks.push({ caseId, userId });
+      if (!deletable.has(`${caseId}:${userId}`)) throw new HttpError("Only an owner or admin can delete a case", 404);
+      return { id: caseId };
     };
 
     (CaseRepo as any).findById = async (id: string, organizationId: string) =>
@@ -122,6 +131,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
   afterEach(() => {
     (CaseAccess as any).assertCanEdit = originals.assertCanEdit;
+    (CaseAccess as any).assertCanDelete = originals.assertCanDelete;
     (CaseRepo as any).findById = originals.caseFindById;
     (CaseRepo as any).update = originals.caseUpdate;
     (CaseRepo as any).delete = originals.caseDelete;
@@ -158,6 +168,13 @@ describe("#345 — destructive case and case-document operations require CaseAcc
       expect(writes).to.deep.equal([]);
     });
 
+    it("delete: refuses an EDIT grant holder who isn't an org owner/admin — editing isn't destroying", async () => {
+      editable.add("case-1:grantee-1");
+      const err = await rejection(CaseSvc.delete("case-1", "org-1", "grantee-1"));
+      expect(err.statusCode).to.equal(404);
+      expect(writes).to.deep.equal([]);
+    });
+
     it("delete: an editor deletes the case's documents, then the case", async () => {
       await CaseSvc.delete("case-1", "org-1", EDITOR);
       expect(writes).to.deep.equal(["doc.delete:doc-case", "audit:document.delete", "case.delete:case-1"]);
@@ -182,9 +199,10 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
     it("deleteMany: authorizes per id — the editable case goes, the other lands in failed", async () => {
       editable.delete("case-2:" + EDITOR);
+      deletable.delete("case-2:" + EDITOR);
       const result = await CaseSvc.deleteMany(["case-1", "case-2"], "org-1", EDITOR);
       expect(result.succeeded).to.deep.equal(["case-1"]);
-      expect(result.failed).to.deep.equal([{ id: "case-2", error: "Case not found or not editable" }]);
+      expect(result.failed).to.deep.equal([{ id: "case-2", error: "Only an owner or admin can delete a case" }]);
       expect(writes).to.not.include("case.delete:case-2");
     });
 
