@@ -7,3 +7,7 @@ import LlmUsageRepo from "../../src/repositories/llm-usage.repository";
 
 const repo = LlmUsageRepo as any;
 repo.create = async (data: object) => ({ id: "test-llm-usage-row", createdAt: new Date(), ...data });
+// Owner lookups run at the start of every pane generation and document extraction; no spec has a
+// database behind them, so they find no owner and the work runs unscoped.
+repo.findCaseOwner = async () => null;
+repo.findDocumentOwner = async () => null;

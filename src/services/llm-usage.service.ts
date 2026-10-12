@@ -1,6 +1,7 @@
 import { LlmProvider, LlmUsageSource, Prisma } from "@prisma/client";
 import LlmUsageRepo from "../repositories/llm-usage.repository";
 import { getRequestContext } from "../lib/request-context";
+import { getLlmUsageScope, LlmUsageScope, runInLlmUsageScope } from "../lib/llm-usage-scope";
 import { estimateCostUsd } from "../constants/llm-pricing.constants";
 import logger from "../utils/logger";
 
@@ -44,6 +45,7 @@ export default class LlmUsageSvc {
 
   private static buildRow(entry: LlmUsageEntry): Prisma.LlmUsageUncheckedCreateInput {
     const context = getRequestContext();
+    const scope = getLlmUsageScope();
     const inputTokens = Math.max(0, Math.round(entry.inputTokens));
     const outputTokens = Math.max(0, Math.round(entry.outputTokens));
     const cachedInputTokens = entry.cachedInputTokens == null ? null : Math.max(0, Math.round(entry.cachedInputTokens));
@@ -60,13 +62,45 @@ export default class LlmUsageSvc {
       totalTokens: inputTokens + outputTokens,
       passCount: entry.passCount ?? null,
       estimatedCostUsd: estimateCostUsd(entry.model, { inputTokens, outputTokens, cachedInputTokens }),
-      // An id the call names wins, then the HTTP request's own user and organization.
-      userId: entry.userId !== undefined ? entry.userId : (context?.userId() ?? null),
-      organizationId: entry.organizationId !== undefined ? entry.organizationId : (context?.organizationId() ?? null),
-      caseId: entry.caseId ?? null,
-      consultationId: entry.consultationId ?? null,
+      // An id the call names wins, then the scope an entry point set (queue, cron, pane run), then
+      // the HTTP request's own user and organization.
+      userId: entry.userId !== undefined ? entry.userId : (scope?.userId ?? context?.userId() ?? null),
+      organizationId: entry.organizationId !== undefined ? entry.organizationId : (scope?.organizationId ?? context?.organizationId() ?? null),
+      caseId: entry.caseId ?? scope?.caseId ?? null,
+      consultationId: entry.consultationId ?? scope?.consultationId ?? null,
       durationMs: entry.durationMs ?? null,
       success: entry.success ?? true,
     };
+  }
+
+  /** Runs `fn` (a pane generation, say) with its case's user and organization as the usage scope, so
+   * every LLM call under it, Jev and embeddings included, is attributed. A request's own user wins
+   * over the case owner (the person who clicked is who used it); a queue run has only the owner.
+   * Never throws and never delays `fn` on a failed lookup: an id that is not a case (a Law id) or a
+   * lookup error just runs `fn` with no scope. */
+  static async runInCaseScope<T>(caseId: string, fn: () => Promise<T>): Promise<T> {
+    let scope: LlmUsageScope | undefined;
+    try {
+      const owner = await LlmUsageRepo.findCaseOwner(caseId);
+      if (owner) {
+        const context = getRequestContext();
+        scope = { caseId, userId: context?.userId() ?? owner.userId, organizationId: context?.organizationId() ?? owner.organizationId };
+      }
+    } catch (err) {
+      logger.warn("LLM usage: could not look up the case owner", { err, caseId });
+    }
+    return scope ? runInLlmUsageScope(scope, fn) : fn();
+  }
+
+  /** The same for a document's extraction, whose owner the document row already names. */
+  static async runInDocumentScope<T>(documentId: string, fn: () => Promise<T>): Promise<T> {
+    let scope: LlmUsageScope | undefined;
+    try {
+      const doc = await LlmUsageRepo.findDocumentOwner(documentId);
+      if (doc) scope = { userId: doc.userId, organizationId: doc.organizationId, caseId: doc.caseId, consultationId: doc.consultationId };
+    } catch (err) {
+      logger.warn("LLM usage: could not look up the document owner", { err, documentId });
+    }
+    return scope ? runInLlmUsageScope(scope, fn) : fn();
   }
 }

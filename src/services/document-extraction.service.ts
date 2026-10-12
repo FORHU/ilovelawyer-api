@@ -12,6 +12,7 @@ import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
 import { embedTexts, isRateLimit } from "../utils/embedding";
 import { categorizeDocument } from "../utils/chatWonder";
 import logger from "../utils/logger";
+import LlmUsageSvc from "./llm-usage.service";
 
 /** mp3/mp4 evidence — transcribed via AWS Transcribe rather than text-extracted. */
 function isMediaDocument(mimeType?: string | null, filename?: string): boolean {
@@ -96,6 +97,12 @@ export default class DocumentExtractionSvc {
    * always resolves ragStatus to READY or FAILED.
    */
   static async process(documentId: string, options: ProcessOptions = {}): Promise<void> {
+    // Embeddings and categorization made below are attributed, in the usage ledger, to the user and
+    // organization that own the document — a queue worker has no request to say so.
+    return LlmUsageSvc.runInDocumentScope(documentId, () => DocumentExtractionSvc.processDocument(documentId, options));
+  }
+
+  private static async processDocument(documentId: string, options: ProcessOptions = {}): Promise<void> {
     // Set once a multi-round document starts writing chunks outside a transaction — a failure
     // after that must not leave a partial set behind (see the catch).
     let partialChunksWritten = false;
