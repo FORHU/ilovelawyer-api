@@ -11,8 +11,10 @@ export default class CaseCopyRepo {
    *   consultations and calendar events along;
    * - their own calendar — appointments and day notes — comes with them (carryCalendarIn). */
   static async carryOverIn(tx: Prisma.TransactionClient, input: CarryOver) {
-    await CaseCopyRepo.enqueueForCreatorIn(tx, input);
-    await CaseCopyRepo.carryCalendarIn(tx, input);
+    return Promise.allSettled([
+      CaseCopyRepo.enqueueForCreatorIn(tx, input),
+      CaseCopyRepo.carryCalendarIn(tx, input),
+    ]);
   }
 
   /** Queues a portfolio copy of every case `userId` created in the organization they're leaving
