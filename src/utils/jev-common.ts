@@ -9,6 +9,12 @@
  * rather than presenting it as settled. Provisional — set per pilot from its benchmark. */
 export const UNCERTAIN_SCORE_CONFIDENCE = 0.5;
 
+/** A Choice's options in the given order. Jev leans toward the first option listed, so the order
+ * is part of the question; this lets a benchmark ask the same question with it reversed (#410). */
+export function optionsInOrder<T extends string>(order: readonly T[]): Record<T, null> {
+  return Object.fromEntries(order.map((option) => [option, null])) as Record<T, null>;
+}
+
 /** Jev's Choice answer as one of `allowed`, or `fallback` when it answered something else. */
 export function readChoice<T extends string>(choice: unknown, allowed: readonly T[], fallback: T): T {
   return (allowed as readonly unknown[]).includes(choice) ? (choice as T) : fallback;

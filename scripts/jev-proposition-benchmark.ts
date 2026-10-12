@@ -19,7 +19,7 @@ import CaseAccess from "../src/utils/case-access";
 import { classifyPropositionWithChatWonder, classifyPropositionWithJev } from "../src/utils/citation-proposition";
 import { TenantCode } from "../src/types/tenant-code";
 
-interface Case {
+export interface Case {
   label: string;
   quotedText: string;
   officialText: string;
@@ -27,7 +27,7 @@ interface Case {
   expected?: "PARAPHRASED" | "INFERRED";
 }
 
-const HAND_WRITTEN: Case[] = [
+export const HAND_WRITTEN: Case[] = [
   {
     label: "clear paraphrase (damages clause)",
     officialText:
@@ -251,9 +251,11 @@ async function main() {
   console.log(`\n${summary}\n\nWritten to ${outFile}`);
 }
 
-main()
-  .catch((err) => {
-    console.error(err);
-    process.exitCode = 1;
-  })
-  .finally(() => prisma.$disconnect());
+if (require.main === module) {
+  main()
+    .catch((err) => {
+      console.error(err);
+      process.exitCode = 1;
+    })
+    .finally(() => prisma.$disconnect());
+}
