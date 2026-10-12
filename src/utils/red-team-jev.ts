@@ -1,5 +1,5 @@
 import { choice, score } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { applyFloor, isUncertain, normalizeScore, readChoice } from "./jev-common";
 import { caseDataState, CaseJevContext } from "./case-jev-context";
@@ -94,7 +94,6 @@ export function impactFromRatings(likelihood: number, severity: number, support:
 
 /** Throws on a Jev failure — verifyRedTeamArgumentsWithJev decides what that means. */
 export async function rateArgumentWithJev(arg: RedTeamArgument, context: RedTeamJevContext): Promise<RedTeamJevRating> {
-  const client = getTypeSafeClient();
   const state = {
     opponent: context.opponent ?? "the opposing party",
     argument: { title: arg.title, gist: arg.gist ?? "", reasoning: arg.reasoning ?? "" },
@@ -103,7 +102,7 @@ export async function rateArgumentWithJev(arg: RedTeamArgument, context: RedTeam
   };
   logger.info("Jev request", { feature: "red-team", title: arg.title, sourceKind: arg.source.kind });
 
-  const response = await client.systemOne({
+  const response = await jevAsk("red-team", {
     state,
     questions: {
       support: choice(

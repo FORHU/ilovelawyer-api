@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { isUncertain, readChoice } from "./jev-common";
 import { caseDataState, CaseJevContext } from "./case-jev-context";
@@ -45,10 +45,9 @@ export async function checkDefenseStrategyWithJev(
   defense: DefenseStrategyJevInput,
   context: CaseJevContext,
 ): Promise<DefenseStrategyJevCheck> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "defense-strategy", label: defense.label });
 
-  const response = await client.systemOne({
+  const response = await jevAsk("defense-strategy", {
     state: {
       defense: { claim: defense.label, answer: defense.detail ?? "", source: defense.sourceLabel ?? "" },
       caseData: caseDataState(context),

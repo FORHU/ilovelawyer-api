@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { applyFloor, readChoice } from "./jev-common";
 
@@ -41,10 +41,9 @@ export interface CitationGroundJevInput {
 
 /** Throws on a Jev failure — the caller keeps the link unchecked rather than guess. */
 export async function checkCitationGroundWithJev(input: CitationGroundJevInput): Promise<CitationGroundJevCheck> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "citation-ground", reference: input.authority.reference, claim: input.claim.title });
 
-  const response = await client.systemOne({
+  const response = await jevAsk("citation-ground", {
     state: {
       authority: {
         reference: input.authority.reference,

@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 /**
@@ -39,9 +39,8 @@ export async function checkProofWithJev(input: ProofCheckInput): Promise<{ verdi
     return { verdict: "CANNOT_TELL", confidence: 1 };
   }
   try {
-    const client = getTypeSafeClient();
     logger.info("Jev request", { feature: "witness-need-proof", document: input.document.name });
-    const response = await client.systemOne({
+    const response = await jevAsk("witness-need-proof", {
       state: {
         requirement: input.requirement,
         document: {

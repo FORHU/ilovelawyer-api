@@ -1,7 +1,7 @@
 import { choice } from "@typesafe-ai/sdk";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import DocumentChunkSvc from "../services/document-chunk.service";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import { MindMapItem, MindMapNodeCheck, normalizeMindMap } from "./response-parser";
 import logger from "./logger";
 
@@ -115,7 +115,6 @@ export async function judgeMindMapPoint(
   context: MindMapJevContext,
   cited?: { document: string; text: string },
 ): Promise<MindMapPointJudgement> {
-  const client = getTypeSafeClient();
   const state = {
     point,
     ...(cited ? { citedPassage: cited } : {}),
@@ -131,7 +130,7 @@ export async function judgeMindMapPoint(
     },
   };
   const sources = cited ? "`caseData` and `citedPassage`" : "`caseData`";
-  const response = await client.systemOne({
+  const response = await jevAsk("mind-map", {
     state,
     questions: {
       support: choice(
