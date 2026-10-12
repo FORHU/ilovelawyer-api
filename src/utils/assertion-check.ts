@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 /**
@@ -64,9 +64,8 @@ function isEvidenceKind(v: unknown): v is EvidenceKind {
  * nothing.
  */
 export async function checkAssertionWithJev(assertion: string, passage: string, citation?: string): Promise<AssertionCheck> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "assertion-check", citation, assertionChars: assertion.length, passageChars: passage.length });
-  const response = await client.systemOne({
+  const response = await jevAsk("assertion-check", {
     state: { assertion, citedPassage: passage, citation: citation ?? "" },
     questions: {
       support: choice(

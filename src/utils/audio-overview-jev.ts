@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import type { AudioOverviewTurn } from "./response-parser";
 import { CONTRADICTION_MIN_CONFIDENCE, SUPPORT_VERDICTS, type MindMapJevContext, type SupportVerdict } from "./mind-map-jev";
 import logger from "./logger";
@@ -44,7 +44,7 @@ export async function judgeAudioOverviewTurn(
   text: string,
   context: MindMapJevContext,
 ): Promise<{ verdict: SupportVerdict; confidence: number } | null> {
-  const response = await getTypeSafeClient().systemOne({
+  const response = await jevAsk("audio-overview", {
     state: {
       turn: text,
       caseData: {

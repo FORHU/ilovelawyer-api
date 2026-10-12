@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 /**
@@ -55,7 +55,7 @@ export async function checkQuotedFigure(head: QuotedHead): Promise<QuotedFigureC
   if (!quotedFigure) return null;
   try {
     logger.info("Jev request", { feature: "damages-quote", kind: head.kind, quotedFigure });
-    const response = await getTypeSafeClient().systemOne({
+    const response = await jevAsk("damages-quote", {
       state: { head: { kind: head.kind, title: head.title }, quote: head.quote, quotedFigure },
       questions: {
         support: choice(
