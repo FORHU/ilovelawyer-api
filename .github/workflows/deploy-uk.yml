@@ -195,19 +195,31 @@ jobs:
           FIELD_ENCRYPTION_KEY: ${{ secrets.UK_FIELD_ENCRYPTION_KEY }}
           FIELD_ENCRYPTION_ENABLED: ${{ vars.UK_FIELD_ENCRYPTION_ENABLED }}
         run: |
-          # Switch on with no usable key makes uploads and privileged notes fail on the server, so stop
-          # here, before anything is copied, and leave the running container as it is.
-          if [ "$FIELD_ENCRYPTION_ENABLED" = "true" ]; then
-            key="$(printf '%s' "$FIELD_ENCRYPTION_KEY" | tr -d '[:space:]')"
-            if printf '%s' "$key" | grep -Eq '^[0-9a-fA-F]{64}$'; then ok=1
-            elif [ "$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c)" -eq 32 ]; then ok=1
-            else ok=0; fi
-            if [ "$ok" != 1 ]; then
-              echo "::error::UK_FIELD_ENCRYPTION_ENABLED is true but the secret UK_FIELD_ENCRYPTION_KEY is missing, empty or not a 32-byte key (base64 or 64 hex). Add or fix the secret, or set UK_FIELD_ENCRYPTION_ENABLED to false, then run the deploy again. Nothing was deployed."
-              exit 1
+          # With the switch on, a missing or invalid key makes uploads and privileged notes fail, so stop
+          # here, before anything is stored, and leave the running container as it is.
+          SWITCH=UK_FIELD_ENCRYPTION_ENABLED
+          check_key() {
+            # $1 = the secret's name, $2 = its value. Returns if it is a usable key; otherwise stops the
+            # deploy and says why, without ever printing the value.
+            name="$1"
+            key="$(printf '%s' "$2" | tr -d '[:space:]')"
+            if printf '%s' "$key" | grep -Eq '^[0-9a-fA-F]{64}$'; then return 0; fi
+            if [ "$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c)" -eq 32 ]; then return 0; fi
+            if [ -z "$key" ]; then
+              why="it is empty. This job cannot see a secret with exactly that name: check the spelling, and that it is a repository secret or is in the 'production' environment."
+            elif printf '%s' "$key" | grep -Eq '^[A-Z][A-Z0-9]*_[A-Z0-9_]*='; then
+              why="its value starts with a NAME= prefix (${#key} characters). Paste only the key itself."
+            elif printf '%s' "$key" | grep -Eq "^[\"']|[\"']$"; then
+              why="its value is wrapped in quotes (${#key} characters). Paste only the key, without quotes."
+            else
+              why="its value has ${#key} characters and decodes to $(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c) bytes, but a key is 32 bytes: 44 characters of base64 or 64 hex characters (for example from: openssl rand -base64 32)."
             fi
+            echo "::error::$SWITCH is true but the secret $name is not a usable key: $why Fix the secret, or set $SWITCH to false, then run the deploy again. Nothing was deployed."
+            exit 1
+          }
+          if [ "$FIELD_ENCRYPTION_ENABLED" = "true" ]; then
+            check_key UK_FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
           fi
-
       - name: Store env file in Parameter Store
         env:
           DATABASE_URL: ${{ secrets.UK_DATABASE_URL }}
