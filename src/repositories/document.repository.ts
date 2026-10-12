@@ -5,8 +5,14 @@ import CaseRepo from "./case.repository";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
+/** The documents reachable from the workspace (`organizationId`) a request came in through. A
+ * file attached to a main consultation has no organization and belongs to its uploader, so with
+ * `userId` it is reachable from every workspace that user opens — and only by them. */
+const inWorkspace = (organizationId: string, userId?: string): Prisma.DocumentWhereInput =>
+  userId ? { OR: [{ organizationId }, { organizationId: null, userId }] } : { organizationId };
+
 interface NewUserDocument {
-  organizationId: string;
+  organizationId: string | null;
   userId: string;
   caseId?: string;
   consultationId?: string;
@@ -21,7 +27,7 @@ interface NewUserDocument {
 export default class DocumentRepo {
   /** userId is stamped for "created by" audit purposes only — reads/updates/deletes below scope by organizationId. */
   static async create(
-    organizationId: string,
+    organizationId: string | null,
     userId: string,
     data: { name: string; fileId: string; caseId?: string; consultationId?: string; mimeType?: string; fileSize?: number },
   ) {
@@ -58,9 +64,8 @@ export default class DocumentRepo {
   static async list(organizationId: string, status: DocumentStatus = "ACTIVE", userId: string) {
     return prisma.document.findMany({
       where: {
-        organizationId,
+        AND: [inWorkspace(organizationId, userId), { OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] }],
         status,
-        OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }],
         NOT: { caseId: null, consultation: { is: { userId: { not: userId } } } },
       },
       orderBy: { createdAt: "desc" },
@@ -76,9 +81,9 @@ export default class DocumentRepo {
     });
   }
 
-  static async listByConsultation(organizationId: string, consultationId: string, status: DocumentStatus = "ACTIVE") {
+  static async listByConsultation(organizationId: string, consultationId: string, status: DocumentStatus = "ACTIVE", userId?: string) {
     return prisma.document.findMany({
-      where: { organizationId, consultationId, status },
+      where: { ...inWorkspace(organizationId, userId), consultationId, status },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
@@ -88,12 +93,16 @@ export default class DocumentRepo {
    * archived document can still be cited by an older answer). Scoped to the organization. Used to
    * turn the file ids an AI answer or Decision Record may carry into names - see
    * utils/document-references.ts. */
-  static async listRefsForScope(organizationId: string, scope: { consultationId?: string | null; caseId?: string | null }) {
+  static async listRefsForScope(
+    organizationId: string,
+    scope: { consultationId?: string | null; caseId?: string | null },
+    userId?: string,
+  ) {
     const or: Array<{ consultationId: string } | { caseId: string }> = [];
     if (scope.consultationId) or.push({ consultationId: scope.consultationId });
     if (scope.caseId) or.push({ caseId: scope.caseId });
     if (!or.length) return [];
-    return prisma.document.findMany({ where: { organizationId, OR: or }, select: { id: true, name: true } });
+    return prisma.document.findMany({ where: { AND: [inWorkspace(organizationId, userId), { OR: or }] }, select: { id: true, name: true } });
   }
 
   /** Unscoped by organizationId — used internally by case-level services (refresh, strategy,
@@ -178,8 +187,8 @@ export default class DocumentRepo {
     });
   }
 
-  static async findById(id: string, organizationId: string) {
-    return prisma.document.findFirst({ where: { id, organizationId }, include: { file: true } });
+  static async findById(id: string, organizationId: string, userId?: string) {
+    return prisma.document.findFirst({ where: { id, ...inWorkspace(organizationId, userId) }, include: { file: true } });
   }
 
   /** Links documents already uploaded (via presign + confirm) to the message they were sent
@@ -191,8 +200,11 @@ export default class DocumentRepo {
     return prisma.document.count({ where: { messageId } });
   }
 
-  static async linkToMessage(ids: string[], messageId: string, organizationId: string, consultationId: string) {
-    await prisma.document.updateMany({ where: { id: { in: ids }, organizationId, consultationId }, data: { messageId } });
+  static async linkToMessage(ids: string[], messageId: string, organizationId: string, consultationId: string, userId?: string) {
+    await prisma.document.updateMany({
+      where: { id: { in: ids }, ...inWorkspace(organizationId, userId), consultationId },
+      data: { messageId },
+    });
   }
 
   /** Count of a message's attachments still being extracted/indexed (see ChatSvc's attachment wait). */
@@ -217,8 +229,13 @@ export default class DocumentRepo {
     return prisma.document.findFirst({ where: { consultationId }, orderBy: { createdAt: "desc" } });
   }
 
-  static async update(id: string, organizationId: string, data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean }) {
-    const result = await prisma.document.updateMany({ where: { id, organizationId }, data });
+  static async update(
+    id: string,
+    organizationId: string,
+    data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean },
+    userId?: string,
+  ) {
+    const result = await prisma.document.updateMany({ where: { id, ...inWorkspace(organizationId, userId) }, data });
     return result.count > 0;
   }
 
@@ -239,16 +256,16 @@ export default class DocumentRepo {
     return prisma.document.update({ where: { id }, data: { category } });
   }
 
-  static async delete(id: string, organizationId: string) {
-    const result = await prisma.document.deleteMany({ where: { id, organizationId } });
+  static async delete(id: string, organizationId: string, userId?: string) {
+    const result = await prisma.document.deleteMany({ where: { id, ...inWorkspace(organizationId, userId) } });
     return result.count > 0;
   }
 
   /** Archiving is a pure visibility flag (see DocumentStatus on the schema) — this is the one
    * place that flips it. Find-then-update (not updateMany) since this is a genuine
    * user-initiated action with a real 404 to report. */
-  static async setStatus(id: string, organizationId: string, status: DocumentStatus) {
-    const existing = await prisma.document.findFirst({ where: { id, organizationId }, select: { id: true } });
+  static async setStatus(id: string, organizationId: string, status: DocumentStatus, userId?: string) {
+    const existing = await prisma.document.findFirst({ where: { id, ...inWorkspace(organizationId, userId) }, select: { id: true } });
     if (!existing) return null;
     return prisma.document.update({ where: { id }, data: { status }, include: { file: true } });
   }

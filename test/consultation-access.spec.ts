@@ -89,7 +89,13 @@ describe("Consultation access", () => {
       listedWith = args;
       return [];
     };
-    (ChatRepo as any).createConsultation = async (_o: string, userId: string, title?: string, caseId?: string) => ({ id: "new", userId, title, caseId });
+    (ChatRepo as any).createConsultation = async (organizationId: string | null, userId: string, title?: string, caseId?: string) => ({
+      id: "new",
+      organizationId,
+      userId,
+      title,
+      caseId,
+    });
     (ParticipantRepo as any).exists = async (_c: string, userId: string) => participants.has(userId);
     (ParticipantRepo as any).add = async (_c: string, userId: string) => participants.add(userId);
     (InviteRepo as any).create = async (consultationId: string, createdBy: string, expiresAt: Date) => {
@@ -162,6 +168,37 @@ describe("Consultation access", () => {
     it("lets the creator read and rename it", async () => {
       expect(await statusOf(ChatSvc.listMessages("org-1", "creator", "c1"))).to.equal("ok");
       expect(await statusOf(ChatSvc.renameConsultation("org-1", "creator", "c1", "Remedies"))).to.equal("ok");
+    });
+
+    it("stays reachable by its creator from any workspace — joining an organization doesn't hide it", async () => {
+      // Started in a personal workspace (or before it had no organization at all), read from the
+      // organization the user has since joined, and from a different one.
+      for (const stored of ["personal-ws", null]) {
+        consultation = { ...STANDALONE_CONSULTATION, organizationId: stored };
+        for (const workspace of ["org-1", "org-2", "joined-org"]) {
+          expect(await statusOf(ChatSvc.listMessages(workspace, "creator", "c1"))).to.equal("ok");
+          expect(await statusOf(ChatSvc.renameConsultation(workspace, "creator", "c1", "Remedies"))).to.equal("ok");
+          expect(await statusOf(ChatSvc.archiveConsultation(workspace, "creator", "c1"))).to.equal("ok");
+        }
+      }
+    });
+
+    it("is still 404 for someone else, whichever workspace they open it from", async () => {
+      consultation = { ...STANDALONE_CONSULTATION, organizationId: null };
+      for (const workspace of ["org-1", "org-2"]) {
+        expect(await statusOf(ChatSvc.listMessages(workspace, "colleague", "c1"))).to.equal(404);
+      }
+    });
+
+    it("is created with no organization, whichever workspace is active", async () => {
+      const created: any = await ChatSvc.createConsultation("org-1", "creator", "Remedies");
+      expect(created.organizationId).to.equal(null);
+      expect(created.caseId).to.equal(undefined);
+    });
+
+    it("lists by user alone, so the same chats show in every workspace", async () => {
+      await ChatSvc.listConsultations("joined-org", "creator");
+      expect(listedWith).to.deep.equal(["joined-org", undefined, "ACTIVE", "creator"]);
     });
 
     it("404s for every other org member — whatever their role — on every action", async () => {
@@ -322,7 +359,8 @@ describe("Consultation access", () => {
 
     it("creates on a Case only for someone who can open it, and passes the draft's title through", async () => {
       const created: any = await ChatSvc.createConsultation("org-1", "colleague", "Remedies", "case-1");
-      expect(created).to.include({ userId: "colleague", title: "Remedies", caseId: "case-1" });
+      // A case's consultation lives with the case's organization.
+      expect(created).to.include({ userId: "colleague", title: "Remedies", caseId: "case-1", organizationId: "org-1" });
       expect(await statusOf(ChatSvc.createConsultation("org-1", "outsider", undefined, "case-1"))).to.equal(404);
     });
   });

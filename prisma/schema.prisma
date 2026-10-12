@@ -194,7 +194,10 @@ model Consultation {
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
   userId         String
-  organizationId String
+  // Null for a main (standalone) consultation: those belong to the user alone, so joining,
+  // switching or leaving an organization never hides, moves or copies them. Set only for a
+  // consultation on a case, which lives with the case's organization.
+  organizationId String?
   caseId         String?
   title          String?
   // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
@@ -219,7 +222,7 @@ model Consultation {
   deletionRequestedAt DateTime?
 
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization?             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case           Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
   messages       Message[]
   messageGroups  MessageGroup[]
@@ -233,6 +236,7 @@ model Consultation {
   @@index([organizationId])
   @@index([caseId])
   @@index([organizationId, caseId, status])
+  @@index([userId, caseId, status])
   @@index([deletionRequestedAt])
 }
 
@@ -924,7 +928,9 @@ model Document {
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
   userId           String
-  organizationId   String
+  // Null for a file attached to a main (standalone) consultation, which belongs to its user and
+  // not to any organization (see Consultation.organizationId).
+  organizationId   String?
   caseId           String?
   consultationId   String?
   messageId        String?
@@ -957,7 +963,7 @@ model Document {
   createdAt DateTime       @default(now())
 
   user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization       Organization?       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case               Case?               @relation(fields: [caseId], references: [id])
   consultation       Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   message            Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)

@@ -7,7 +7,7 @@ import { consultationDeletionDueAt } from "../constants/consultation-deletion.co
 
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
-  static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
+  static async createConsultation(organizationId: string | null, userId: string, title?: string, caseId?: string) {
     return prisma.consultation.create({ data: { organizationId, userId, title, caseId, titleSource: title ? "USER" : null } });
   }
 
@@ -20,7 +20,8 @@ export default class ChatRepo {
    * Case Workspace's Consultation switcher. */
   /** ACTIVE lists by latest activity. ARCHIVED is the archive as shown — those scheduled for
    * deletion (FOR_DELETION) included, since they can still be restored — by when each was
-   * archived, newest first. With userId, only that user's own. */
+   * archived, newest first. With userId and no case, the user's own main consultations — found
+   * by user, never by organization, so they read the same from every workspace. */
   static async listConsultations(
     organizationId: string,
     caseId?: string,
@@ -29,9 +30,8 @@ export default class ChatRepo {
   ) {
     const rows = await prisma.consultation.findMany({
       where: {
-        organizationId,
         caseId: caseId ?? null,
-        ...(userId ? { userId } : {}),
+        ...(!caseId && userId ? { userId } : { organizationId, ...(userId ? { userId } : {}) }),
         status: status === "ARCHIVED" ? { in: ["ARCHIVED", "FOR_DELETION"] } : status,
       },
       orderBy: { createdAt: "desc" },

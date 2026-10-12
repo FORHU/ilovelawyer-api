@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { CaseCopyStatus, ConsultationStatus, Prisma } from "@prisma/client";
+import { CaseCopyStatus, Prisma } from "@prisma/client";
 
 type CarryOver = { sourceOrganizationId: string; sourceOrganizationName: string; userId: string; targetOrganizationId: string };
 
@@ -9,11 +9,9 @@ export default class CaseCopyRepo {
    * leaving and the carry-over commit together:
    * - every case they created is queued for a copy (enqueueForCreatorIn), which brings that case's
    *   consultations and calendar events along;
-   * - every standalone consultation they started is queued for a copy (enqueueConsultationsIn);
    * - their own calendar — appointments and day notes — comes with them (carryCalendarIn). */
   static async carryOverIn(tx: Prisma.TransactionClient, input: CarryOver) {
     await CaseCopyRepo.enqueueForCreatorIn(tx, input);
-    await CaseCopyRepo.enqueueConsultationsIn(tx, input);
     await CaseCopyRepo.carryCalendarIn(tx, input);
   }
 
@@ -38,31 +36,6 @@ export default class CaseCopyRepo {
       })),
     });
     return cases.length;
-  }
-
-  /** Queues a portfolio copy of every standalone consultation (not on a case) `userId` started in
-   * the organization they're leaving — archived ones too, not those already marked for deletion.
-   * The organization keeps the originals: a consultation is shared with the whole organization.
-   * Returns how many were queued. */
-  static async enqueueConsultationsIn(tx: Prisma.TransactionClient, input: CarryOver) {
-    const consultations = await tx.consultation.findMany({
-      where: {
-        organizationId: input.sourceOrganizationId,
-        userId: input.userId,
-        caseId: null,
-        status: { not: ConsultationStatus.FOR_DELETION },
-      },
-      select: { id: true },
-    });
-    if (consultations.length === 0) return 0;
-    await tx.consultationCopy.createMany({
-      data: consultations.map((c) => ({
-        sourceConsultationId: c.id,
-        userId: input.userId,
-        targetOrganizationId: input.targetOrganizationId,
-      })),
-    });
-    return consultations.length;
   }
 
   /** A member's appointments and day notes are theirs — nobody else in the organization sees
