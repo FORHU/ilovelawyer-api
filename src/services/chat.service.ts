@@ -1679,15 +1679,20 @@ export default class ChatSvc {
     },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
-    const opts =
-      extras?.mindMapRequested || extras?.caseDamages || extras?.onStage || extras?.trace
-        ? {
-            ...(extras.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
-            ...(extras.caseDamages ? { caseDamages: extras.caseDamages } : {}),
-            ...(extras.onStage ? { onStage: extras.onStage } : {}),
-            ...(extras.trace ? { traceTurnId: extras.trace.turnId } : {}),
-          }
-        : undefined;
+    const opts = {
+      ...(extras?.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
+      ...(extras?.caseDamages ? { caseDamages: extras.caseDamages } : {}),
+      ...(extras?.onStage ? { onStage: extras.onStage } : {}),
+      ...(extras?.trace ? { traceTurnId: extras.trace.turnId } : {}),
+      // The turn's LlmUsage row (epic #399). A real user turn names its user, organization and case
+      // through its trace; the mind map and audio overview triggers are recorded under their own names.
+      usage: {
+        feature: extras?.trace?.source ?? "chat",
+        consultationId,
+        caseId: extras?.trace?.caseId ?? caseId ?? null,
+        ...(extras?.trace ? { userId: extras.trace.userId, organizationId: extras.trace.organizationId } : {}),
+      },
+    };
     // Subscribed before the turn is sent (chat-wonder fans events out live, with no replay), and
     // never allowed to fail the turn — see TraceCollectorSvc.
     const collector = extras?.trace ? await TraceCollectorSvc.start(extras.trace, sessionId) : undefined;
@@ -1898,7 +1903,7 @@ export default class ChatSvc {
     if (title) {
       logger.info("Chat title: cache hit", { consultationId, tenantCode });
     } else {
-      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode, context));
+      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode, context), { userId, consultationId });
       if (!raw) {
         logger.info("Chat title: model returned no content", {
           consultationId,
@@ -1994,6 +1999,7 @@ export default class ChatSvc {
           userMessages,
           attachmentNames: p.attachmentNames,
         }),
+        { userId: p.userId, consultationId: p.consultationId },
       );
       const title = raw ? ChatSvc.parseTitle(raw) : "";
       if (!title || title.toUpperCase().includes(KEEP_TITLE_SENTINEL) || ChatSvc.isUnclearTitle(title)) return;
