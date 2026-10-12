@@ -28,6 +28,10 @@ export function isFullContradictionScanEnabled(): boolean {
 
 // Tuned on the Brackenmoor bundle (745 chunks, 365 facts → 37 candidates). Provisional: re-set
 // from the benchmark.
+/** Facts per document fed to the pairing. The tuning bundle above had 365 across all documents;
+ * a large upload can state tens of thousands, and pairing those (facts × similar chunks × facts)
+ * ran the API out of memory. */
+const MAX_FACTS_PER_DOCUMENT = 1_000;
 const MIN_CHUNK_SIMILARITY = 0.45;
 const SIMILAR_CHUNKS_PER_CHUNK = 8;
 /** A candidate is shown only if Jev calls it DIRECT or INFERENTIAL with at least this confidence.
@@ -90,7 +94,10 @@ export default class FullContradictionScanSvc {
       const chunks = await DocumentChunkRepo.findTextsByIds(await DocumentChunkRepo.findIdsByDocument(doc.id));
       chunkCount += chunks.length;
       // UK bundles write 03/04/2024 as 3 April; PH (and US-style) documents as March 4.
-      facts.push(...extractBundleFacts(chunks, { numericDayFirst: tenantCode === "UK" }));
+      // A loop, not push(...facts): a large document yields more facts than a call's argument limit.
+      // First MAX_FACTS_PER_DOCUMENT in reading order — see that constant.
+      const docFacts = extractBundleFacts(chunks, { numericDayFirst: tenantCode === "UK" });
+      for (const fact of docFacts.slice(0, MAX_FACTS_PER_DOCUMENT)) facts.push(fact);
     }
 
     const factChunkIds = [...new Set(facts.map((f) => f.chunkId))];

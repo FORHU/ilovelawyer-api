@@ -39,6 +39,14 @@ const COLUMNS_PER_ROW = 7;
 // be paged rather than a single query.
 const SELECT_BATCH_SIZE = 200;
 
+/** Most text findFullTextsByDocuments returns per document unless a caller asks for less — about
+ * 2,000+ pages, past any real filing, so quote checks (case reconstruction, decision records,
+ * grounding) still see whole documents; only a pathological upload is cut, where a quote beyond
+ * this point goes unverified instead of the API running out of memory. */
+export const FULL_TEXT_MAX_CHARS_PER_DOCUMENT = 5_000_000;
+// Chunks per page while reading full text (each chunk is at most ~8,000 characters).
+const FULL_TEXT_PAGE_SIZE = 200;
+
 /** Cosine similarity floor (`1 - <=>`). Matches ADR 0010's minSimilarity 0.3 so weak
  * neighbors do not consume the 12k inlined-context budget. */
 const MIN_CHUNK_SIMILARITY = 0.3;
@@ -81,12 +89,25 @@ export default class DocumentChunkRepo {
   }
 
   /** Ordered chunk ids for a document — for callers (e.g. the Chat Wonder request payload)
-   * that only need to reference chunks, not their content. */
-  static async findIdsByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<string[]> {
+   * that only need to reference chunks, not their content. Only the chunks covering the first
+   * `maxChars` characters (default FULL_TEXT_MAX_CHARS_PER_DOCUMENT): callers load these ids'
+   * text next, and a huge upload's every chunk (17k+ for a 100MB TXT) in several case-analysis
+   * jobs at once ran the API out of heap. */
+  static async findIdsByDocument(
+    caseDocumentId: string,
+    options: { maxChars?: number } = {},
+    client: DbClient = prisma,
+  ): Promise<string[]> {
+    const maxChars = options.maxChars ?? FULL_TEXT_MAX_CHARS_PER_DOCUMENT;
     const rows = await client.$queryRaw<{ id: string }[]>`
       SELECT id
-      FROM "CaseDocumentChunk"
-      WHERE "caseDocumentId" = ${caseDocumentId}
+      FROM (
+        SELECT id, "chunkIndex",
+               SUM("charCount") OVER (ORDER BY "chunkIndex") - "charCount" AS chars_before
+        FROM "CaseDocumentChunk"
+        WHERE "caseDocumentId" = ${caseDocumentId}
+      ) ranked
+      WHERE chars_before < ${maxChars}
       ORDER BY "chunkIndex" ASC
     `;
     return rows.map((row) => row.id);
@@ -279,32 +300,57 @@ export default class DocumentChunkRepo {
    * Brackenmoor benchmark showed the model treating a relevance-filtered fetch as the entire
    * exhibit, so for bundles that fit the budget we hand it every document in full up front.
    */
+  /** Each document's chunk text in order, joined with "\n" — at most `maxCharsPerDocument`
+   * characters of it (default FULL_TEXT_MAX_CHARS_PER_DOCUMENT). Chunks are read a page at a time
+   * and reading stops once a document has enough, so a huge upload (a 45MB spreadsheet is ~112M
+   * characters) never lands in memory whole; several case-analysis jobs call this at once, and
+   * loading everything ran the API out of heap. Callers that only use a fixed budget per document
+   * pass it here. A document with no chunks is absent from the map, as before. */
   static async findFullTextsByDocuments(
     caseDocumentIds: string[],
+    options: { maxCharsPerDocument?: number } = {},
     client: DbClient = prisma,
   ): Promise<Map<string, string>> {
     const out = new Map<string, string>();
-    if (!caseDocumentIds.length) return out;
-    const rows = await client.caseDocumentChunk.findMany({
-      where: { caseDocumentId: { in: caseDocumentIds } },
-      select: { caseDocumentId: true, chunkIndex: true, chunkText: true },
-      orderBy: [{ caseDocumentId: "asc" }, { chunkIndex: "asc" }],
-    });
-    const parts = new Map<string, string[]>();
-    for (const r of rows) {
-      const list = parts.get(r.caseDocumentId) ?? [];
-      list.push(openText(r.chunkText));
-      parts.set(r.caseDocumentId, list);
+    const maxChars = options.maxCharsPerDocument ?? FULL_TEXT_MAX_CHARS_PER_DOCUMENT;
+    for (const caseDocumentId of new Set(caseDocumentIds)) {
+      const parts: string[] = [];
+      let chars = 0;
+      let afterIndex = -1;
+      while (chars < maxChars) {
+        const rows = await client.caseDocumentChunk.findMany({
+          where: { caseDocumentId, chunkIndex: { gt: afterIndex } },
+          select: { chunkIndex: true, chunkText: true },
+          orderBy: { chunkIndex: "asc" },
+          take: FULL_TEXT_PAGE_SIZE,
+        });
+        for (const r of rows) {
+          const text = openText(r.chunkText);
+          parts.push(text);
+          chars += text.length + 1;
+          if (chars >= maxChars) break;
+        }
+        if (rows.length < FULL_TEXT_PAGE_SIZE) break;
+        afterIndex = rows[rows.length - 1].chunkIndex;
+      }
+      if (parts.length) out.set(caseDocumentId, parts.join("\n").slice(0, maxChars));
     }
-    for (const [id, list] of parts) out.set(id, list.join("\n"));
     return out;
   }
 
-  static async findByDocument(caseDocumentId: string, client: DbClient = prisma): Promise<DocumentChunkRow[]> {
+  /** A document's chunks in order, paged — up to the chunk that reaches `maxChars` characters
+   * (default FULL_TEXT_MAX_CHARS_PER_DOCUMENT), for the same reason as findIdsByDocument. */
+  static async findByDocument(
+    caseDocumentId: string,
+    options: { maxChars?: number } = {},
+    client: DbClient = prisma,
+  ): Promise<DocumentChunkRow[]> {
+    const maxChars = options.maxChars ?? FULL_TEXT_MAX_CHARS_PER_DOCUMENT;
     const rows: DocumentChunkRow[] = [];
     let offset = 0;
+    let chars = 0;
 
-    for (;;) {
+    while (chars < maxChars) {
       const batch = await client.$queryRaw<DocumentChunkRow[]>`
         SELECT id, "caseDocumentId", "chunkIndex", "chunkText", "charCount", "createdAt"
         FROM "CaseDocumentChunk"
@@ -312,7 +358,11 @@ export default class DocumentChunkRepo {
         ORDER BY "chunkIndex" ASC
         LIMIT ${SELECT_BATCH_SIZE} OFFSET ${offset}
       `;
-      rows.push(...batch.map((row) => ({ ...row, chunkText: openText(row.chunkText) })));
+      for (const row of batch) {
+        rows.push({ ...row, chunkText: openText(row.chunkText) });
+        chars += row.charCount;
+        if (chars >= maxChars) break;
+      }
       if (batch.length < SELECT_BATCH_SIZE) break;
       offset += SELECT_BATCH_SIZE;
     }

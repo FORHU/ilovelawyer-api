@@ -9,6 +9,8 @@
     "test": "NODE_ENV=development mocha --require ts-node/register --require test/support/security-audit-test-double.ts 'test/**/*.spec.ts'",
     "build": "tsc && copyfiles -u 1 \"src/templates/**/*.mjml\" \"src/templates/assets/*\" dist",
     "start": "cross-env NODE_OPTIONS=--use-system-ca node ./dist/server.js",
+    "dev:extraction-worker": "cross-env NODE_OPTIONS=--use-system-ca ts-node --files ./src/extraction-worker.ts",
+    "start:extraction-worker": "cross-env NODE_OPTIONS=--use-system-ca node ./dist/extraction-worker.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "ts-node prisma/seed.ts"

@@ -2,6 +2,11 @@ import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBu
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
+import { pipeline } from "stream/promises";
+import { createWriteStream } from "fs";
+import { mkdtemp, rm, stat } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
 import { AWS_S3_BUCKET, AWS_S3_REGION, CLOUDFRONT_URL, FILE_TOKEN_SECRET } from "../config";
 import { awsCredentials } from "../lib/aws-client-config";
 import { getRequestContext } from "../lib/request-context";
@@ -16,7 +21,10 @@ const client = new S3Client({
   responseChecksumValidation: "WHEN_REQUIRED",
 });
 
-const PRESIGN_EXPIRY_SECONDS = 300;
+// An hour, not minutes: a batch presigns up to DOCUMENT_UPLOAD_BATCH_MAX URLs at once but the
+// browser PUTs only a few at a time, so with large files (up to 1 GB each) the last PUTs in a
+// batch can start well after the first. S3 checks expiry when a PUT starts, not when it ends.
+const PRESIGN_EXPIRY_SECONDS = 3600;
 
 export function s3UrlForKey(key: string): string {
   if (CLOUDFRONT_URL) {
@@ -57,10 +65,21 @@ export async function copyS3Object(sourceKey: string, destinationKey: string): P
   );
 }
 
-/** Short-expiry presigned PUT the client uploads its file bytes to directly, bypassing the API. */
-export async function getPresignedUploadUrl(key: string, contentType: string): Promise<string> {
-  const command = new PutObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key, ContentType: contentType });
-  return getSignedUrl(client, command, { expiresIn: PRESIGN_EXPIRY_SECONDS });
+/** Presigned PUT the client uploads its file bytes to directly, bypassing the API. With
+ * `contentLength`, the size is signed into the URL (as the content-length header), so S3 rejects
+ * a PUT of any other size with a 403 — the declared size the batch limit was checked against
+ * can't be swapped for a bigger file. Without it (older clients), any size is accepted. */
+export async function getPresignedUploadUrl(key: string, contentType: string, contentLength?: number): Promise<string> {
+  const command = new PutObjectCommand({
+    Bucket: AWS_S3_BUCKET,
+    Key: key,
+    ContentType: contentType,
+    ...(contentLength !== undefined ? { ContentLength: contentLength } : {}),
+  });
+  return getSignedUrl(client, command, {
+    expiresIn: PRESIGN_EXPIRY_SECONDS,
+    ...(contentLength !== undefined ? { signableHeaders: new Set(["content-length"]) } : {}),
+  });
 }
 
 const GET_PRESIGN_EXPIRY_SECONDS = 3600;
@@ -149,8 +168,26 @@ export async function getObjectStream(key: string): Promise<{ body: Readable; co
   return { body: res.Body as Readable, contentLength: res.ContentLength };
 }
 
-/** Downloads an object's full contents into memory — used by document extraction to read an
- * uploaded Case Document's bytes back out of S3 for text extraction. */
+/** Streams an object to a temp file — document extraction reads uploads (up to 1 GB) this way
+ * instead of getObjectBuffer, which holds every chunk plus the joined copy (about 2x the file) at
+ * once. Call `cleanup` when done; it never throws. */
+export async function downloadObjectToTempFile(key: string): Promise<{ path: string; bytes: number; cleanup: () => Promise<void> }> {
+  const res = await client.send(new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
+  const dir = await mkdtemp(join(tmpdir(), "doc-extract-"));
+  const path = join(dir, "object");
+  const cleanup = () => rm(dir, { recursive: true, force: true }).catch(() => {});
+  try {
+    await pipeline(res.Body as Readable, createWriteStream(path));
+    const { size } = await stat(path);
+    return { path, bytes: size, cleanup };
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
+}
+
+/** Downloads an object's full contents into memory — used by the text preview to read an
+ * uploaded Case Document's bytes back out of S3. Extraction uses downloadObjectToTempFile. */
 export async function getObjectBuffer(key: string): Promise<Buffer> {
   const res = await client.send(new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
   const stream = res.Body as Readable;

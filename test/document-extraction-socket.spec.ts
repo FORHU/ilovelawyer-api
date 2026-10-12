@@ -19,7 +19,7 @@ import * as chatWonder from "../src/utils/chatWonder";
 import prisma from "../src/lib/prisma";
 import DocumentRepo from "../src/repositories/document.repository";
 import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
-import DocumentExtractionSvc from "../src/services/document-extraction.service";
+import DocumentExtractionSvc, { EMBED_ROUND_CHUNKS } from "../src/services/document-extraction.service";
 
 interface Emitted {
   userId: string;
@@ -47,8 +47,8 @@ describe("DocumentExtractionSvc socket events", () => {
     updateRagStatus: DocumentRepo.updateRagStatus,
     updateExtractionMeta: DocumentRepo.updateExtractionMeta,
     updateCategory: DocumentRepo.updateCategory,
-    getObjectBuffer: (s3 as any).getObjectBuffer,
-    extractPages: (textExtraction as any).extractPages,
+    downloadObjectToTempFile: (s3 as any).downloadObjectToTempFile,
+    extractPagesFromFile: (textExtraction as any).extractPagesFromFile,
     embedTexts: (embedding as any).embedTexts,
     categorizeDocument: (chatWonder as any).categorizeDocument,
     transaction: (prisma as any).$transaction,
@@ -62,6 +62,10 @@ describe("DocumentExtractionSvc socket events", () => {
   let doc: typeof baseDoc | null;
   let pages: { pageNumber: number; text: string }[];
   let insertedCount: number;
+  let cleanups: number;
+  let storageCalls: string[];
+  let insertedIndexes: number[];
+  const downloadedBytes = 5678;
 
   beforeEach(() => {
     emitted = [];
@@ -80,14 +84,31 @@ describe("DocumentExtractionSvc socket events", () => {
     }) as any;
     DocumentRepo.updateExtractionMeta = (async () => ({})) as any;
     DocumentRepo.updateCategory = (async () => ({})) as any;
-    (s3 as any).getObjectBuffer = async () => Buffer.from("x");
-    (textExtraction as any).extractPages = async () => ({ pages, method: "text", ocrAttempted: false });
+    cleanups = 0;
+    (s3 as any).downloadObjectToTempFile = async () => ({
+      path: "/tmp/doc1",
+      bytes: downloadedBytes,
+      cleanup: async () => {
+        cleanups += 1;
+      },
+    });
+    (textExtraction as any).extractPagesFromFile = async () => ({ pages, method: "text", ocrAttempted: false });
     (embedding as any).embedTexts = async (texts: string[]) => texts.map(() => [0.1, 0.2]);
     (chatWonder as any).categorizeDocument = async () => "Contract";
-    (prisma as any).$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn({});
-    DocumentChunkRepo.deleteByDocument = (async () => {}) as any;
-    DocumentChunkRepo.insertMany = (async (rows: unknown[]) => {
-      insertedCount = rows.length;
+    storageCalls = [];
+    insertedIndexes = [];
+    (prisma as any).$transaction = async (fn: (tx: unknown) => Promise<unknown>) => {
+      storageCalls.push("transaction");
+      return fn({});
+    };
+    DocumentChunkRepo.deleteByDocument = (async () => {
+      storageCalls.push("delete");
+      insertedCount = 0;
+    }) as any;
+    DocumentChunkRepo.insertMany = (async (rows: { chunkIndex: number }[]) => {
+      storageCalls.push(`insert:${rows.length}`);
+      insertedCount += rows.length;
+      insertedIndexes.push(...rows.map((r) => r.chunkIndex));
     }) as any;
     DocumentChunkRepo.verify = (async () => ({ chunkCount: insertedCount, embeddedCount: insertedCount })) as any;
   });
@@ -98,8 +119,8 @@ describe("DocumentExtractionSvc socket events", () => {
     DocumentRepo.updateRagStatus = originals.updateRagStatus;
     DocumentRepo.updateExtractionMeta = originals.updateExtractionMeta;
     DocumentRepo.updateCategory = originals.updateCategory;
-    (s3 as any).getObjectBuffer = originals.getObjectBuffer;
-    (textExtraction as any).extractPages = originals.extractPages;
+    (s3 as any).downloadObjectToTempFile = originals.downloadObjectToTempFile;
+    (textExtraction as any).extractPagesFromFile = originals.extractPagesFromFile;
     (embedding as any).embedTexts = originals.embedTexts;
     (chatWonder as any).categorizeDocument = originals.categorizeDocument;
     (prisma as any).$transaction = originals.transaction;
@@ -170,6 +191,57 @@ describe("DocumentExtractionSvc socket events", () => {
 
     expect(statusWrites).to.include("READY");
     expect(statusWrites).to.not.include("FAILED");
+  });
+
+  it("reports the file size (row, then actual download) and removes the temp file", async () => {
+    const sizes: number[] = [];
+    await DocumentExtractionSvc.process("doc1", { onFileSize: (bytes) => sizes.push(bytes) });
+
+    expect(sizes).to.deep.equal([1234, downloadedBytes]);
+    expect(cleanups).to.equal(1);
+  });
+
+  it("removes the temp file even when extraction throws", async () => {
+    (textExtraction as any).extractPagesFromFile = async () => {
+      throw new Error("corrupt file");
+    };
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(cleanups).to.equal(1);
+    expect(statusWrites).to.deep.equal(["FAILED"]);
+  });
+
+  it("replaces a small document's chunks in one transaction, as before", async () => {
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(storageCalls).to.deep.equal(["transaction", "delete", "insert:1"]);
+  });
+
+  /** One page with `count` paragraphs → `count` chunks. */
+  const manyChunks = (count: number) => [
+    { pageNumber: 1, text: Array.from({ length: count }, (_, i) => `Paragraph ${i}.`).join("\n\n") },
+  ];
+
+  it("stores a document over EMBED_ROUND_CHUNKS round by round, with continuous chunk indexes", async () => {
+    pages = manyChunks(EMBED_ROUND_CHUNKS + 100);
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(storageCalls).to.deep.equal(["delete", `insert:${EMBED_ROUND_CHUNKS}`, "insert:100"]);
+    expect(insertedIndexes).to.deep.equal(Array.from({ length: EMBED_ROUND_CHUNKS + 100 }, (_, i) => i));
+    expect(statusWrites).to.include("READY");
+  });
+
+  it("deletes the partial chunks when a later round fails", async () => {
+    pages = manyChunks(EMBED_ROUND_CHUNKS + 100);
+    // Fails on the first chunk of round 2.
+    (embedding as any).embedTexts = async (texts: string[]) => {
+      if (texts.includes(`Paragraph ${EMBED_ROUND_CHUNKS}.`)) throw new Error("embedding outage");
+      return texts.map(() => [0.1, 0.2]);
+    };
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(storageCalls).to.deep.equal(["delete", `insert:${EMBED_ROUND_CHUNKS}`, "delete"]);
+    expect(statusWrites).to.deep.equal(["FAILED"]);
   });
 
   it("emits nothing when the document was deleted mid-extraction (P2025)", async () => {

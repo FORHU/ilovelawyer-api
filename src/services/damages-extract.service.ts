@@ -178,8 +178,8 @@ export default class DamagesExtractSvc {
 
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const header = await CaseRepo.findPromptHeader(caseId);
-    const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(batch.map((d) => d.id));
     const perDocChars = Math.max(1000, Math.min(MAX_DOC_CHARS, Math.floor(MAX_TOTAL_DOC_CHARS / batch.length)));
+    const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(batch.map((d) => d.id), { maxCharsPerDocument: perDocChars });
     const criminal = isCriminalCase(header ?? {});
     const ukCriminal = tenantCode === "UK" && criminal;
     // Suggestions still waiting for the lawyer that a UK criminal case can't carry — proposed before
