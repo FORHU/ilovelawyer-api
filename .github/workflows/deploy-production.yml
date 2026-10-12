@@ -68,6 +68,24 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
 
+      - name: Check field encryption settings
+        env:
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          FIELD_ENCRYPTION_ENABLED: ${{ vars.PH_FIELD_ENCRYPTION_ENABLED }}
+        run: |
+          # Switch on with no usable key makes uploads and privileged notes fail on the server, so stop
+          # here, before anything is copied, and leave the running container as it is.
+          if [ "$FIELD_ENCRYPTION_ENABLED" = "true" ]; then
+            key="$(printf '%s' "$FIELD_ENCRYPTION_KEY" | tr -d '[:space:]')"
+            if printf '%s' "$key" | grep -Eq '^[0-9a-fA-F]{64}$'; then ok=1
+            elif [ "$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c)" -eq 32 ]; then ok=1
+            else ok=0; fi
+            if [ "$ok" != 1 ]; then
+              echo "::error::PH_FIELD_ENCRYPTION_ENABLED is true but the secret FIELD_ENCRYPTION_KEY is missing, empty or not a 32-byte key (base64 or 64 hex). Add or fix the secret, or set PH_FIELD_ENCRYPTION_ENABLED to false, then run the deploy again. Nothing was deployed."
+              exit 1
+            fi
+          fi
+
       - name: Write env file
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -90,7 +108,7 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.DEV_GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.DEV_GOOGLE_CLIENT_SECRET }}
           GOOGLE_TOKEN_ENC_KEY: ${{ secrets.GOOGLE_TOKEN_ENC_KEY }}
-          FIELD_ENCRYPTION_KEY: ${{ secrets.PH_FIELD_ENCRYPTION_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
           FIELD_ENCRYPTION_ENABLED: ${{ vars.PH_FIELD_ENCRYPTION_ENABLED }}
           CHAT_WONDER_API_URL: ${{ vars.CHAT_WONDER_API_URL }}
           CHAT_WONDER_WS_URL: ${{ vars.CHAT_WONDER_WS_URL }}
