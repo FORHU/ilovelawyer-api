@@ -5,6 +5,7 @@ import { describe, it, before, after } from "mocha";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
 import { CHAT_WONDER_API_KEY } from "../src/config";
+import { registerTurnDocuments } from "../src/services/case-document-callback-scope.service";
 
 describe("GET /api/v1/case-document/:caseDocumentId", () => {
   const userId = crypto.randomUUID();
@@ -29,6 +30,9 @@ describe("GET /api/v1/case-document/:caseDocumentId", () => {
         (${chunkIds[0]}, ${caseDocumentId}, 0, 'First chunk of text', 20, now()),
         (${chunkIds[1]}, ${caseDocumentId}, 1, 'Second chunk of text', 21, now())
     `;
+    // Chat Wonder may only read back documents it was handed for a recent turn
+    // (case-document-callback-scope.service); hand it this one, as a real turn does.
+    await registerTurnDocuments([caseDocumentId]);
   });
 
   after(async () => {
