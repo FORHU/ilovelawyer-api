@@ -70,14 +70,12 @@ jobs:
 
       - name: Check field encryption settings
         env:
-          FIELD_ENCRYPTION_KEY: ${{ secrets.PH_FIELD_ENCRYPTION_KEY || secrets.FIELD_ENCRYPTION_KEY }}
-          FIELD_ENCRYPTION_KEY_UK: ${{ secrets.UK_FIELD_ENCRYPTION_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
           FIELD_ENCRYPTION_ENABLED: ${{ vars.PH_FIELD_ENCRYPTION_ENABLED }}
         run: |
-          # This server holds PH, ph-dev and uk-dev. With the switch on, a missing or invalid key makes
-          # uploads and privileged notes fail, so stop here, before anything is copied, and leave the
-          # running container as it is. PH data is sealed with FIELD_ENCRYPTION_KEY and UK data with
-          # UK_FIELD_ENCRYPTION_KEY.
+          # With the switch on, a missing or invalid key makes uploads and privileged notes fail, so stop
+          # here, before anything is copied, and leave the running container as it is. One key,
+          # FIELD_ENCRYPTION_KEY, seals everything on this server (PH, ph-dev and uk-dev).
           SWITCH=PH_FIELD_ENCRYPTION_ENABLED
           check_key() {
             # $1 = the secret's name, $2 = its value. Returns if it is a usable key; otherwise stops the
@@ -99,8 +97,7 @@ jobs:
             exit 1
           }
           if [ "$FIELD_ENCRYPTION_ENABLED" = "true" ]; then
-            check_key "PH_FIELD_ENCRYPTION_KEY (or FIELD_ENCRYPTION_KEY)" "$FIELD_ENCRYPTION_KEY"
-            check_key UK_FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY_UK"
+            check_key FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
           fi
       - name: Write env file
         env:
@@ -124,8 +121,7 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.DEV_GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.DEV_GOOGLE_CLIENT_SECRET }}
           GOOGLE_TOKEN_ENC_KEY: ${{ secrets.GOOGLE_TOKEN_ENC_KEY }}
-          FIELD_ENCRYPTION_KEY: ${{ secrets.PH_FIELD_ENCRYPTION_KEY || secrets.FIELD_ENCRYPTION_KEY }}
-          FIELD_ENCRYPTION_KEY_UK: ${{ secrets.UK_FIELD_ENCRYPTION_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
           FIELD_ENCRYPTION_ENABLED: ${{ vars.PH_FIELD_ENCRYPTION_ENABLED }}
           CHAT_WONDER_API_URL: ${{ vars.CHAT_WONDER_API_URL }}
           CHAT_WONDER_WS_URL: ${{ vars.CHAT_WONDER_WS_URL }}
@@ -193,7 +189,6 @@ jobs:
           GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
           GOOGLE_TOKEN_ENC_KEY=${GOOGLE_TOKEN_ENC_KEY}
           FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
-          FIELD_ENCRYPTION_KEY_UK=${FIELD_ENCRYPTION_KEY_UK}
           FIELD_ENCRYPTION_ENABLED=${FIELD_ENCRYPTION_ENABLED}
           CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
           CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}

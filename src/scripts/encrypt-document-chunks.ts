@@ -30,7 +30,6 @@ import prisma from "../lib/prisma";
 import { FIELD_ENCRYPTION_ENABLED, FIELD_ENCRYPTION_KEY, FIELD_ENCRYPTION_OLD_KEYS } from "../config";
 import { openField, sealField } from "../utils/field-crypto";
 import { CHUNK_TEXT } from "../repositories/document-chunk.repository";
-import { tenantOfDocument } from "../utils/field-encryption-tenant";
 
 // Kept small: a chunk can be large, and Prisma fails on very large single results.
 const BATCH = 200;
@@ -69,24 +68,18 @@ export async function backfillChunks(options: ChunkBackfillOptions, log: (line: 
 
   const documentId = options.documentId ?? null;
   let lastId = "";
-  // A chunk is sealed with the key of the tenant that owns its document, looked up once per document.
-  const tenantByDocument = new Map<string, string | undefined>();
-  const tenantOf = async (id: string) => {
-    if (!tenantByDocument.has(id)) tenantByDocument.set(id, await tenantOfDocument(id));
-    return tenantByDocument.get(id);
-  };
   const result: ChunkBackfillResult = { matched: 0, changed: 0, unreadable: 0 };
 
   for (;;) {
     // Sealed or not sealed, depending on the direction. The LIKE is the whole definition of "sealed".
     const rows = reverse
-      ? await prisma.$queryRaw<{ id: string; caseDocumentId: string; chunkText: string }[]>`
-          SELECT id, "caseDocumentId", "chunkText" FROM "CaseDocumentChunk"
+      ? await prisma.$queryRaw<{ id: string; chunkText: string }[]>`
+          SELECT id, "chunkText" FROM "CaseDocumentChunk"
           WHERE id > ${lastId} AND "chunkText" LIKE 'enc1:%'
             AND (${documentId}::text IS NULL OR "caseDocumentId" = ${documentId})
           ORDER BY id ASC LIMIT ${BATCH}`
-      : await prisma.$queryRaw<{ id: string; caseDocumentId: string; chunkText: string }[]>`
-          SELECT id, "caseDocumentId", "chunkText" FROM "CaseDocumentChunk"
+      : await prisma.$queryRaw<{ id: string; chunkText: string }[]>`
+          SELECT id, "chunkText" FROM "CaseDocumentChunk"
           WHERE id > ${lastId} AND "chunkText" NOT LIKE 'enc1:%'
             AND (${documentId}::text IS NULL OR "caseDocumentId" = ${documentId})
           ORDER BY id ASC LIMIT ${BATCH}`;
@@ -100,7 +93,7 @@ export async function backfillChunks(options: ChunkBackfillOptions, log: (line: 
         if (plain === null) result.unreadable += 1;
         else updates.push({ id: row.id, text: plain });
       } else {
-        updates.push({ id: row.id, text: sealField(row.chunkText, CHUNK_TEXT, true, undefined, await tenantOf(row.caseDocumentId)) });
+        updates.push({ id: row.id, text: sealField(row.chunkText, CHUNK_TEXT, true) });
       }
     }
     result.matched += updates.length;
