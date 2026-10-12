@@ -38,9 +38,21 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
     (prisma.procedureItem as any).updateMany = originals.procedureUpdateMany;
   });
 
-  // The stale-AI-row lookup selects id/category/label; list() (called at the end) reads whole rows.
-  const stubFindMany = (staleIds: string[], listed: any[], stale: any[] = staleIds.map((id) => ({ id, category: "WEAKNESS", label: `stale ${id}` }))) => {
-    (prisma.caseFinding as any).findMany = async (args: any) => (args?.select?.id ? stale : listed);
+  // replaceAiFindings makes two lookups before list(): the stale AI rows to replace (selects id,
+  // category, label) and the lawyer-edited AI rows to keep (selects category and label, no id).
+  // list(), called at the end, reads whole rows. The stale lookup's where-clause is recorded: it is
+  // what decides which rows get deleted.
+  let staleWhere: any;
+  const stubFindMany = (staleIds: string[], listed: any[], stale: any[] = staleIds.map((id) => ({ id, category: "WEAKNESS", label: `stale ${id}` })), kept: any[] = []) => {
+    staleWhere = undefined;
+    (prisma.caseFinding as any).findMany = async (args: any) => {
+      if (args?.select?.id) {
+        staleWhere = args.where;
+        return stale;
+      }
+      if (args?.select) return kept;
+      return listed;
+    };
   };
   // Records the to-do re-pointing a refresh does (Case Strategy links follow a regenerated finding).
   const stubProcedureItems = () => {
@@ -87,9 +99,11 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
       { category: "WEAKNESS", label: "New AI-found weakness", sourceLabel: "D01" },
     ]);
 
-    // The scoping guarantee: the delete's own where-clause structurally can't ever match a
-    // manually-authored row (whose notes is never AI_FINDING_NOTE, e.g. a client note or null).
-    expect(deleteWhere).to.deep.equal({ caseId: "case-1", notes: AI_FINDING_NOTE });
+    // The scoping guarantee: only rows the stale lookup returned are deleted, and that lookup
+    // structurally can't match a manually-authored row (whose notes is never AI_FINDING_NOTE, e.g.
+    // a client note or null) or an AI row a lawyer has edited.
+    expect(staleWhere).to.deep.equal({ caseId: "case-1", notes: AI_FINDING_NOTE, lawyerEditedAt: null });
+    expect(deleteWhere).to.deep.equal({ id: { in: ["ai-old"] } });
     expect(created).to.have.length(1);
     expect(created[0]).to.deep.include({ caseId: "case-1", notes: AI_FINDING_NOTE, label: "New AI-found weakness" });
     // list() (called at the end) still returns both the surviving manual row and the fresh AI row.
@@ -135,7 +149,8 @@ describe("CaseFindingRepo.replaceAiFindings", () => {
 
     await CaseFindingRepo.replaceAiFindings("case-1", []);
 
-    expect(deleteWhere).to.deep.equal({ caseId: "case-1", notes: AI_FINDING_NOTE });
+    expect(staleWhere).to.deep.equal({ caseId: "case-1", notes: AI_FINDING_NOTE, lawyerEditedAt: null });
+    expect(deleteWhere).to.deep.equal({ id: { in: ["ai-old"] } });
     expect(createCalled).to.equal(false);
     expect(nodes.deleted).to.deep.equal({ nodeType: "FINDING", refId: { in: ["ai-old"] } });
     expect(nodes.created).to.deep.equal([]);

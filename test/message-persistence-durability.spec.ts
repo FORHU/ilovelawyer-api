@@ -374,7 +374,11 @@ describe("streamChatWonderMessage and [Error] frames", () => {
       } catch (e) {
         err = e as Error;
       }
-      expect(err?.message).to.equal("Chat Wonder connection error");
+      // A raw socket dropped mid-turn surfaces as either the socket's error event or an abnormal
+      // close (code 1006), depending on how the drop reaches the client. Either way the turn must
+      // fail with a 503 rather than resolve with an empty reply.
+      expect(err?.message).to.be.oneOf(["Chat Wonder connection error", "Chat Wonder closed the stream before completing the reply"]);
+      expect((err as unknown as { statusCode?: number })?.statusCode).to.equal(503);
     } finally {
       onConnectionOverride = null;
     }
@@ -414,6 +418,9 @@ describe("streamChatWonderMessage and [Error] frames", () => {
       "The answer. ",
       '[TRACE]{"id":"t1","phase":"result","count":5}[/TRACE]',
       "Second part.__END__",
+      // Chat Wonder always ends a turn with [DONE]; without it the client waits for structured
+      // data (STRUCTURED_DATA_WAIT_MS, 60s) and the test times out.
+      "[DONE]",
     ];
     const chunks: string[] = [];
     const result = await streamChatWonderMessage("s5", "hello", (c) => chunks.push(c));

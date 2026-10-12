@@ -14,6 +14,7 @@ import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import { AddressInfo } from "net";
 import WebSocket, { WebSocketServer } from "ws";
+import axios from "axios";
 
 import * as sqs from "../src/lib/sqs";
 import * as socketLib from "../src/lib/socket";
@@ -132,7 +133,7 @@ describe("ChatSvc.enqueueChatGeneration", () => {
   });
 
   it("creates the PENDING user message, enqueues the job, and returns immediately without running RAG/AI/persistence", async () => {
-    ChatRepo.findConsultationWithCase = async () => ({ id: "c1", organizationId: "org1", caseId: null, case: null, title: "Existing" }) as any;
+    ChatRepo.findConsultationWithCase = async () => ({ id: "c1", organizationId: "org1", userId: "user1", status: "ACTIVE", caseId: null, case: null, title: "Existing" }) as any;
     ChatRepo.createMessage = async (_c, role, _content, _userId, _p, _g, _go, _gt, replyStatus) => {
       expect(role).to.equal("user");
       expect(replyStatus).to.equal("PENDING");
@@ -155,7 +156,7 @@ describe("ChatSvc.enqueueChatGeneration", () => {
   });
 
   it("404s immediately on a bad/foreign caseId — before ever reaching the queue", async () => {
-    ChatRepo.findConsultationWithCase = async () => ({ id: "c1", organizationId: "org1", caseId: null, case: null, title: "Existing" }) as any;
+    ChatRepo.findConsultationWithCase = async () => ({ id: "c1", organizationId: "org1", userId: "user1", status: "ACTIVE", caseId: null, case: null, title: "Existing" }) as any;
     CaseSvc.getById = async () => {
       throw Object.assign(new Error("Case not found"), { statusCode: 404 });
     };
@@ -353,6 +354,14 @@ describe("ChatSvc.processChatGenerationJob", () => {
     // give it a session id to rotate to, and let the SECOND attempt fail too so the whole
     // job ultimately fails (rather than testing the retry-succeeds path, covered elsewhere).
     redis.get = async () => null;
+    // The rotation asks Chat Wonder for a fresh session over HTTP (getChatWonderSessionId). Fake
+    // it, so the test never depends on a real or unreachable Chat Wonder (an unreachable one
+    // retries with sleeps and overruns mocha's 2s timeout).
+    const originalAxiosGet = axios.get;
+    (axios as any).get = async (url: string) => {
+      if (String(url).endsWith("/session-id")) return { data: { session_id: "sess-rotated" } };
+      return originalAxiosGet(url);
+    };
     let created = false;
     ChatRepo.createMessage = async () => {
       created = true;
@@ -369,6 +378,8 @@ describe("ChatSvc.processChatGenerationJob", () => {
       await ChatSvc.processChatGenerationJob(baseJob);
     } catch (e) {
       err = e as Error;
+    } finally {
+      (axios as any).get = originalAxiosGet;
     }
 
     expect(err).to.not.equal(undefined);
@@ -595,7 +606,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
       updateDecisionRecords: (ChatRepo as any).updateDecisionRecords,
     };
     let updated: any;
-    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", caseId: null }) as any;
+    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", userId: "u1", caseId: null }) as any;
     DocumentRepo.listRefsForScope = async () => [{ id: DOC_ID, name: DOC_NAME }] as any;
     (DocumentChunkRepo as any).findFullTextsByDocuments = async () => new Map();
     (ChatRepo as any).updateDecisionRecords = async (_id: string, data: any) => {
@@ -656,7 +667,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
       lookups++;
       return [];
     };
-    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", caseId: null }) as any;
+    ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "org1", userId: "u1", caseId: null }) as any;
     (ChatRepo as any).listMessagesByConsultation = async () => [
       { id: "u1", role: "user", content: "hello", documents: [], decisionRecords: null, generatedDocument: null },
       { id: "a1", role: "assistant", content: "A clean answer.", documents: [], decisionRecords: null, generatedDocument: null },
