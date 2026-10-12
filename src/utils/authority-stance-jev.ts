@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 export type AuthorityStanceValue = "STATUTE" | "ON_POINT" | "ADVERSE";
@@ -55,7 +55,7 @@ export async function suggestAuthorityStance(
   try {
     const state = buildAuthorityState(input);
     logger.info("Jev request", { feature: "authority-stance", question: "stance", state });
-    const call = getTypeSafeClient().systemOne({
+    const response = await jevAsk("authority-stance", {
       state,
       questions: {
         stance: choice(
@@ -63,11 +63,7 @@ export async function suggestAuthorityStance(
           { STATUTE: null, ON_POINT: null, ADVERSE: null },
         ),
       },
-    });
-    const response = await Promise.race([
-      call,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Jev timeout")), JEV_TIMEOUT_MS)),
-    ]);
+    }, { timeoutMs: JEV_TIMEOUT_MS });
     const answer = response.answers.stance;
     logger.info("Jev response", {
       feature: "authority-stance",

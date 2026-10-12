@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { JevRating, JevVerdict, Level, RankableAuthority } from "./citation-rank";
 
@@ -94,11 +94,7 @@ export function parseBatch(batch: RankableAuthority[], answers: Record<string, u
 async function rankBatch(userMessage: string, caseContext: string | null | undefined, batch: RankableAuthority[]): Promise<Map<string, JevRating>> {
   const { state, questions } = buildBatch(userMessage, caseContext, batch);
   logger.info("Jev request", { feature: "citation-rank", authorities: batch.length, questions: Object.keys(questions).length });
-  const call = getTypeSafeClient().systemOne({ state, questions });
-  const response: any = await Promise.race([
-    call,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Jev timeout")), JEV_TIMEOUT_MS)),
-  ]);
+  const response: any = await jevAsk("citation-rank", { state, questions }, { timeoutMs: JEV_TIMEOUT_MS });
   const parsed = parseBatch(batch, response.answers);
   logger.info("Jev response", {
     feature: "citation-rank",

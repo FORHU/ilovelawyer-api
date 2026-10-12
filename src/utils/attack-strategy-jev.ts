@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { isUncertain, readChoice } from "./jev-common";
 import { caseDataState, CaseJevContext } from "./case-jev-context";
@@ -41,10 +41,9 @@ export function tagFromCheck(check: Pick<AttackStrategyJevCheck, "readiness">): 
 
 /** Throws on a Jev failure — the caller keeps the model's rating rather than a guess. */
 export async function checkAttackStrategyWithJev(move: AttackStrategyJevInput, context: CaseJevContext): Promise<AttackStrategyJevCheck> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "attack-strategy", label: move.label });
 
-  const response = await client.systemOne({
+  const response = await jevAsk("attack-strategy", {
     state: {
       move: { step: move.label, note: move.detail ?? "", source: move.sourceLabel ?? "" },
       caseData: caseDataState(context),

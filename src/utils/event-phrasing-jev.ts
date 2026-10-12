@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 /**
@@ -39,9 +39,8 @@ export interface EventPhrasingCheck {
 }
 
 export async function classifyEventPhrasingWithJev(proposition: string): Promise<EventPhrasingCheck> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "event-phrasing", chars: proposition.length });
-  const response = await client.systemOne({
+  const response = await jevAsk("event-phrasing", {
     state: { proposition },
     questions: {
       phrasing: choice(
