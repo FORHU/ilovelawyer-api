@@ -2,7 +2,6 @@ import crypto from "crypto";
 import prisma from "../lib/prisma";
 import { Prisma } from "@prisma/client";
 import { openField, sealField } from "../utils/field-crypto";
-import { tenantOfDocument } from "../utils/field-encryption-tenant";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -52,12 +51,6 @@ export default class DocumentChunkRepo {
   }
 
   static async insertMany(chunks: NewChunk[], client: DbClient = prisma): Promise<void> {
-    // A chunk is sealed with the key of the tenant that owns its document (one lookup per document, and
-    // none at all on a server that uses a single key).
-    const tenantByDocument = new Map<string, string | undefined>();
-    for (const documentId of new Set(chunks.map((chunk) => chunk.caseDocumentId))) {
-      tenantByDocument.set(documentId, await tenantOfDocument(documentId, client));
-    }
     for (let i = 0; i < chunks.length; i += INSERT_BATCH_SIZE) {
       const batch = chunks.slice(i, i + INSERT_BATCH_SIZE);
       const placeholders: string[] = [];
@@ -72,7 +65,7 @@ export default class DocumentChunkRepo {
           crypto.randomUUID(),
           chunk.caseDocumentId,
           chunk.chunkIndex,
-          sealField(chunk.chunkText, CHUNK_TEXT, true, undefined, tenantByDocument.get(chunk.caseDocumentId)),
+          sealField(chunk.chunkText, CHUNK_TEXT, true),
           chunk.charCount,
           `[${chunk.embedding.join(",")}]`,
           chunk.pageNumber ?? null,

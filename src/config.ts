@@ -48,14 +48,6 @@ export const GOOGLE_TOKEN_ENC_KEY = process.env.GOOGLE_TOKEN_ENC_KEY as string |
 export const FIELD_ENCRYPTION_ENABLED = process.env.FIELD_ENCRYPTION_ENABLED === "true";
 export const FIELD_ENCRYPTION_KEY = process.env.FIELD_ENCRYPTION_KEY as string | undefined;
 export const FIELD_ENCRYPTION_OLD_KEYS = process.env.FIELD_ENCRYPTION_OLD_KEYS as string | undefined;
-/** Per-tenant keys (FIELD_ENCRYPTION_KEY_PH, FIELD_ENCRYPTION_KEY_UK) for a server that holds more than one
- * tenant's data, such as the Singapore server (PH, ph-dev and uk-dev). New values are sealed with the key
- * of the tenant that owns them; a tenant without its own key uses FIELD_ENCRYPTION_KEY. Any of these keys
- * can open a value it sealed. */
-export const FIELD_ENCRYPTION_TENANT_KEYS: Record<string, string | undefined> = {
-  PH: process.env.FIELD_ENCRYPTION_KEY_PH,
-  UK: process.env.FIELD_ENCRYPTION_KEY_UK,
-};
 export const CHAT_WONDER_API_URL = (process.env.CHAT_WONDER_API_URL || "").replace(/\/+$/, "");
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
 /** juris.ph public API root (no version/segment). juris-ph.ts appends `/v1/...` for the

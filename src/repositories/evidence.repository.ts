@@ -1,7 +1,6 @@
 import prisma from "../lib/prisma";
 import { PrivilegeStatus, HearsayCategory, ContradictionStatus, ContradictionNature } from "@prisma/client";
 import { fieldEncryptionEnabled, isEncryptedField, openField, sealField } from "../utils/field-crypto";
-import { tenantOfCase } from "../utils/field-encryption-tenant";
 
 const MATRIX_NOTES = "EvidenceMatrixItem.notes";
 const CUSTODY_NOTES = "EvidenceCustodyEvent.notes";
@@ -25,13 +24,13 @@ function revealCustodyEvent<T extends { notes: string | null }>(event: T): T {
 /** The stored value to write so `stored` matches the wanted form (sealed for a privileged item
  * while encryption is on, plain otherwise), or undefined when it already does, is empty, or is
  * sealed and cannot be opened (left as it is rather than lost). */
-function resealed(stored: string | null, label: string, protect: boolean, tenant?: string): string | undefined {
+function resealed(stored: string | null, label: string, protect: boolean): string | undefined {
   if (!stored) return undefined;
   const wantSealed = protect && fieldEncryptionEnabled();
   if (isEncryptedField(stored) === wantSealed) return undefined;
   const plain = openField(stored, label);
   if (plain === null) return undefined;
-  return sealField(plain, label, protect, undefined, tenant);
+  return sealField(plain, label, protect);
 }
 
 export default class EvidenceRepo {
@@ -74,12 +73,11 @@ export default class EvidenceRepo {
       // Privileged items keep their notes sealed; a change of status (or of the encryption setting)
       // moves the notes, and the custody notes below, into the form the item now needs.
       const protect = isPrivileged(data.privilegeStatus ?? existing?.privilegeStatus);
-      const tenant = protect ? await tenantOfCase(caseId, tx) : undefined; // whose key seals them
       const stored = { ...data };
       if (data.notes !== undefined) {
-        stored.notes = sealField(data.notes, MATRIX_NOTES, protect, undefined, tenant);
+        stored.notes = sealField(data.notes, MATRIX_NOTES, protect);
       } else if (existing) {
-        const next = resealed(existing.notes, MATRIX_NOTES, protect, tenant);
+        const next = resealed(existing.notes, MATRIX_NOTES, protect);
         if (next !== undefined) stored.notes = next;
       }
       const item = await tx.evidenceMatrixItem.upsert({
@@ -89,7 +87,7 @@ export default class EvidenceRepo {
         include: { custodyEvents: { orderBy: { occurredAt: "desc" } } },
       });
       for (const event of item.custodyEvents) {
-        const next = resealed(event.notes, CUSTODY_NOTES, protect, tenant);
+        const next = resealed(event.notes, CUSTODY_NOTES, protect);
         if (next === undefined) continue;
         await tx.evidenceCustodyEvent.update({ where: { id: event.id }, data: { notes: next } });
         event.notes = next;
@@ -107,11 +105,9 @@ export default class EvidenceRepo {
     evidenceMatrixItemId: string,
     data: { custodianName: string; action: string; occurredAt: Date; notes?: string | null },
   ) {
-    const parent = await prisma.evidenceMatrixItem.findUnique({ where: { id: evidenceMatrixItemId }, select: { privilegeStatus: true, caseId: true } });
-    const protect = isPrivileged(parent?.privilegeStatus);
-    const tenant = protect && parent ? await tenantOfCase(parent.caseId) : undefined;
+    const parent = await prisma.evidenceMatrixItem.findUnique({ where: { id: evidenceMatrixItemId }, select: { privilegeStatus: true } });
     const created = await prisma.evidenceCustodyEvent.create({
-      data: { evidenceMatrixItemId, ...data, notes: sealField(data.notes, CUSTODY_NOTES, protect, undefined, tenant) },
+      data: { evidenceMatrixItemId, ...data, notes: sealField(data.notes, CUSTODY_NOTES, isPrivileged(parent?.privilegeStatus)) },
     });
     return revealCustodyEvent(created);
   }
