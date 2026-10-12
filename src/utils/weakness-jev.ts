@@ -1,5 +1,5 @@
 import { choice, score } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { applyFloor, isUncertain, normalizeScore, readChoice } from "./jev-common";
 import { caseDataState, CaseJevContext } from "./case-jev-context";
@@ -112,14 +112,13 @@ export function compareBySurfacing(
 
 /** Throws on a Jev failure — the caller keeps the model's rating rather than a guess. */
 export async function checkWeaknessWithJev(weakness: WeaknessJevInput, context: CaseJevContext): Promise<WeaknessJevCheck> {
-  const client = getTypeSafeClient();
   const passages = weakness.passages ?? [];
   const sourceRead = passages.length > 0;
   logger.info("Jev request", { feature: "weakness", label: weakness.label, sourceRead });
 
   // Without the cited document's text, a weakness drawn from a document's body read as
   // UNSUPPORTED: `caseData` is only parties, claims, timeline, contradictions and witnesses.
-  const response = await client.systemOne({
+  const response = await jevAsk("weakness", {
     state: {
       weakness: { point: weakness.label, whatWouldCloseIt: weakness.detail ?? "", source: weakness.sourceLabel ?? "" },
       ...(sourceRead ? { sourcePassages: passages } : {}),

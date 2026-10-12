@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { applyFloor, isUncertain, readChoice } from "./jev-common";
 import { caseDataState, CaseJevContext } from "./case-jev-context";
@@ -84,10 +84,9 @@ export function flagsFor(
 
 /** Throws on a Jev failure — the caller stores null rather than a guess. */
 export async function checkLegalIssueWithJev(issue: LegalIssueJevInput, context: CaseJevContext): Promise<LegalIssueJevCheck> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "legal-issue", label: issue.label });
 
-  const response = await client.systemOne({
+  const response = await jevAsk("legal-issue", {
     state: {
       issue: { question: issue.label, burdenNote: issue.detail ?? "", source: issue.sourceLabel ?? "" },
       caseData: caseDataState(context),

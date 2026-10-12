@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { FACTOR_DEFINITIONS, FACTOR_KEYS, RUBRIC, type FactorKey } from "./witness-rubric";
 
@@ -62,7 +62,6 @@ export function normalizeJevAnswer(key: FactorKey, raw: unknown, confidence: num
 
 /** Throws on a Jev failure — the caller falls back to Chat Wonder's answers and says so. */
 export async function classifyWitnessWithJev(input: WitnessJevInput): Promise<JevFactors> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "witness-rubric", witness: input.witness.name });
 
   const questions = Object.fromEntries(
@@ -75,7 +74,7 @@ export async function classifyWitnessWithJev(input: WitnessJevInput): Promise<Je
     ]),
   );
 
-  const response = await client.systemOne({ state: input, questions });
+  const response = await jevAsk("witness-rubric", { state: input, questions });
 
   const answers = {} as JevFactors;
   for (const key of FACTOR_KEYS) {

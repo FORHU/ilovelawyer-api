@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 export type CitationValidityStatus = "VALID" | "INVALID" | "UNVERIFIED" | "ADVERSE";
@@ -160,9 +160,8 @@ export function evaluateCitationHeuristic(input: CitationCheckInput): CitationCh
  * can sit verbatim in a passage that doesn't actually support it, e.g. taken from a dissent or
  * from a sentence the official text later contradicts. */
 export async function evaluateCitationWithJev(quote: string, official: string): Promise<CitationCheckResult> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "citation-validity", question: "validity", officialText: official, quotedText: quote });
-  const response = await client.systemOne({
+  const response = await jevAsk("citation-validity", {
     state: { officialText: official, quotedText: quote },
     questions: {
       validity: choice(

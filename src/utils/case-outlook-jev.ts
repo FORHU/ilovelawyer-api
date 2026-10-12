@@ -1,6 +1,6 @@
 import { ConfidenceLevel, OutlookBand } from "@prisma/client";
 import { choice, score } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 /** Pilot for the Case Outlook Task Board's Jev question (see conversation, not yet a benchmark
@@ -63,11 +63,10 @@ function formatState(input: OutlookJevInput) {
 }
 
 export async function classifyOutlookWithJev(input: OutlookJevInput): Promise<OutlookJevResult> {
-  const client = getTypeSafeClient();
   const state = formatState(input);
   logger.info("Jev request", { feature: "case-outlook", state });
 
-  const response = await client.systemOne({
+  const response = await jevAsk("case-outlook", {
     state,
     questions: {
       band: choice(
