@@ -99,15 +99,45 @@ export default class CaseAccess {
     return !!record?.confidential;
   }
 
+  /** Who can change a case. A MANAGER/MEMBER who creates one is given an EDIT grant on it (see
+   * CaseSvc.create), so creators are covered by the grant clause — and lose it if it's revoked. */
+  private static editableBy(userId: string): Prisma.CaseWhereInput[] {
+    return [...ownedByUser(userId), changingGrant(userId, EDIT_PERMS), ...viaMembership(userId, ORG_EDITORS)];
+  }
+
   private static editWhere(caseId: string, userId: string): Prisma.CaseWhereInput {
+    return { id: caseId, OR: CaseAccess.editableBy(userId) };
+  }
+
+  /** Of `caseIds`, the ones `userId` can change — for the case list's per-row actions. */
+  static async editableIds(caseIds: string[], userId: string): Promise<Set<string>> {
+    if (caseIds.length === 0) return new Set();
+    const rows = await prisma.case.findMany({
+      where: { id: { in: caseIds }, OR: CaseAccess.editableBy(userId) },
+      select: { id: true },
+    });
+    return new Set(rows.map((r) => r.id));
+  }
+
+  /** The org OWNER/ADMIN (or the owner of a portfolio case) — the people who control a case fully:
+   * delete it, give manage access, and lift a confidential wall. Doesn't check the case is
+   * reachable; pair it with the edit or manage check. */
+  private static firmAdminWhere(userId: string): Prisma.CaseWhereInput {
     return {
-      id: caseId,
-      OR: [
-        ...ownedByUser(userId),
-        changingGrant(userId, EDIT_PERMS),
-        ...viaMembership(userId, ORG_EDITORS),
-      ],
+      OR: [...ownedByUser(userId), { organization: { members: { some: { userId, status: "ACCEPTED", role: { in: ORG_EDITORS } } } } }],
     };
+  }
+
+  /** Deleting a case removes it and its documents for good, so it takes edit access *and* being
+   * the org OWNER/ADMIN (or the portfolio's owner). An EDIT/ADMIN grant alone lets someone work on
+   * a matter, archive it included, but not destroy it. */
+  static async assertCanDelete(caseId: string, userId: string) {
+    const record = await prisma.case.findFirst({
+      where: { AND: [CaseAccess.editWhere(caseId, userId), CaseAccess.firmAdminWhere(userId)] },
+      select: { id: true },
+    });
+    if (!record) throw new HttpError("Only an owner or admin can delete a case", 404);
+    return record;
   }
 
   static async assertCanEdit(caseId: string, userId: string) {
@@ -128,7 +158,9 @@ export default class CaseAccess {
   /** Who may grant and revoke per-case access (#347, decision D3 on #331): org OWNER/ADMIN, or an
    * ADMIN grant on the case — a level no one is above, so "never above your own level" needs no
    * further check. An EDIT grant can change the case but not share it. On a confidential case an
-   * org ADMIN needs that grant too, like everyone but the OWNER. */
+   * org ADMIN needs that grant too, like everyone but the OWNER. A MANAGER also manages access on
+   * an ordinary case, to assign work — but, like an ADMIN grant holder, only within the limits of
+   * canManageFully. */
   private static manageAccessWhere(caseId: string, userId: string): Prisma.CaseWhereInput {
     return {
       id: caseId,
@@ -136,8 +168,21 @@ export default class CaseAccess {
         ...ownedByUser(userId),
         changingGrant(userId, ["ADMIN"]),
         ...viaMembership(userId, ORG_EDITORS),
+        { confidential: false, organization: { members: { some: { userId, status: "ACCEPTED", role: "MANAGER" } } } },
       ],
     };
+  }
+
+  /** Whether `userId`, who can manage this case's access, does so without limits: only an org
+   * OWNER/ADMIN (or the portfolio's owner) may give or change manage (ADMIN) access, change their
+   * own access, or make a confidential case ordinary again. A MANAGER or an ADMIN grant holder
+   * gives View/Edit and can put up a confidential wall, but never widens access past that. */
+  static async canManageFully(caseId: string, userId: string): Promise<boolean> {
+    const record = await prisma.case.findFirst({
+      where: { AND: [{ id: caseId }, CaseAccess.firmAdminWhere(userId)] },
+      select: { id: true },
+    });
+    return !!record;
   }
 
   static async assertCanManageAccess(caseId: string, userId: string) {

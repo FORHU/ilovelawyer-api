@@ -20,7 +20,7 @@ export default class CaseCtrl {
     const { error, value } = createCaseSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.create(req.organization!.id, req.user.userId, normalizeCaseBody(value) as {
+    const result = await CaseSvc.create(req.organization!.id, req.user.userId, req.organization!.role, normalizeCaseBody(value) as {
       caseName: string;
       actionType?: string;
       jurisdiction?: string;
@@ -28,6 +28,7 @@ export default class CaseCtrl {
       clientSide?: ClientSide | null;
       notes?: string;
       parties?: PartyInput[];
+      confidential?: boolean;
     });
     return res.status(201).json(result);
   }

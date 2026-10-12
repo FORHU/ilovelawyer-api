@@ -10,12 +10,55 @@ import prisma from "../lib/prisma";
 import { s3UrlForKey } from "../utils/s3";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
-import { CaseStatus } from "@prisma/client";
+import { CasePermission, CaseStatus, OrganizationRole } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
 
 export default class CaseSvc {
-  static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {
-    return CaseRepo.create(organizationId, userId, data);
+  /** Creating a case gives the creator the access their role doesn't: a MANAGER/MEMBER gets an
+   * EDIT grant, so they can work on their own matter (an owner, admin or manager can lower or
+   * remove it later). `confidential` puts the case behind a wall from the start, never visible to
+   * the rest of the firm; like marking one later (OrganizationSvc.setConfidential), the creator
+   * gets an ADMIN grant so they keep it and can bring teammates in. Both are audited. */
+  static async create(
+    organizationId: string,
+    userId: string,
+    role: OrganizationRole,
+    data: CaseData & { caseName: string; confidential?: boolean },
+  ) {
+    const { confidential = false, ...fields } = data;
+    if (confidential && (await OrganizationRepo.isPersonal(organizationId))) {
+      throw new HttpError("A case in your portfolio is already private to you", 400);
+    }
+
+    const created = await CaseRepo.create(organizationId, userId, { ...fields, confidential });
+    const permission: CasePermission | null = confidential ? "ADMIN" : role === "MANAGER" || role === "MEMBER" ? "EDIT" : null;
+    if (permission) {
+      await OrganizationRepo.grantCaseAccess(created.id, userId, permission);
+      await OrganizationRepo.writeAudit({ caseId: created.id, actorId: userId, action: "case.grant_access", payload: { userId, permission, reason: "creator" } });
+      await SecurityAuditSvc.record({
+        action: "case.access_granted",
+        actorId: userId,
+        organizationId,
+        targetType: "user",
+        targetId: userId,
+        caseId: created.id,
+        payload: { permission, reason: "creator" },
+      });
+    }
+    if (confidential) {
+      await OrganizationRepo.writeAudit({ caseId: created.id, actorId: userId, action: "case.confidential_set" });
+      await SecurityAuditSvc.record({
+        action: "case.confidential_changed",
+        actorId: userId,
+        organizationId,
+        targetType: "case",
+        targetId: created.id,
+        targetName: created.caseName,
+        caseId: created.id,
+        payload: { from: false, to: true },
+      });
+    }
+    return created;
   }
 
   static async list(
@@ -30,7 +73,12 @@ export default class CaseSvc {
     order?: CaseListOrder,
   ) {
     const result = await CaseRepo.list(organizationId, userId, page, limit, search, status, createdBy, sort, order);
-    return { ...result, data: await CaseRepo.withCopyContext(result.data, userId) };
+    // Per row, since a grant (a creator's included) lets someone change one case and not the next.
+    const [data, editable] = await Promise.all([
+      CaseRepo.withCopyContext(result.data, userId),
+      CaseAccess.editableIds(result.data.map((c) => c.id), userId),
+    ]);
+    return { ...result, data: data.map((c) => ({ ...c, canEdit: editable.has(c.id) })) };
   }
 
   /** "Last opened" for the requesting user. Org-scoped existence check first so a caseId from
@@ -53,9 +101,10 @@ export default class CaseSvc {
     return withContext;
   }
 
-  /** update/delete/archive/unarchive (and their bulk forms, which loop these) take the same bar
-   * as editing anything inside the case — CaseAccess.assertCanEdit: org OWNER/ADMIN, or an
-   * explicit EDIT/ADMIN grant. Before #345 they scoped by organizationId alone, so a plain
+  /** update/archive/unarchive (and their bulk forms, which loop these) take the same bar as
+   * editing anything inside the case — CaseAccess.assertCanEdit: org OWNER/ADMIN, or an explicit
+   * EDIT/ADMIN grant (which a MANAGER/MEMBER gets on the cases they create). delete takes more:
+   * see CaseAccess.assertCanDelete. Before #345 they scoped by organizationId alone, so a plain
    * member could delete a whole case while unable to edit one finding in it. The
    * organizationId scoping below still applies on top: a grant on a case in another
    * organization doesn't reach it through this one. */
@@ -78,7 +127,8 @@ export default class CaseSvc {
    * listAllByCase itself is also scoped to the case's own organization (#373), so a document
    * mis-attached to this case from elsewhere is left out of the cascade rather than failing it. */
   static async delete(id: string, organizationId: string, actorId: string) {
-    await CaseAccess.assertCanEdit(id, actorId);
+    // Stricter than archive: an EDIT/ADMIN grant doesn't reach it (CaseAccess.assertCanDelete).
+    await CaseAccess.assertCanDelete(id, actorId);
     const caseRecord = await CaseRepo.findById(id, organizationId);
     if (!caseRecord) throw new HttpError("Case not found", 404);
 

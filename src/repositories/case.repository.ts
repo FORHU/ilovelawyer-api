@@ -66,7 +66,7 @@ export default class CaseRepo {
    * below scopes by organizationId, since a Case is a shared org resource once created.
    * createdByName keeps the creator's name for after their account is gone.
    */
-  static async create(organizationId: string, userId: string, data: CaseData & { caseName: string }) {
+  static async create(organizationId: string, userId: string, data: CaseData & { caseName: string; confidential?: boolean }) {
     const { parties, ...caseFields } = data;
     const creator = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, username: true } });
 

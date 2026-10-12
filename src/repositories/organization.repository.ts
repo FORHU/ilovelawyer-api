@@ -235,6 +235,17 @@ export default class OrganizationRepo {
     return prisma.case.update({ where: { id: caseId }, data: { organizationId } });
   }
 
+  static async isPersonal(organizationId: string): Promise<boolean> {
+    const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { isPersonal: true } });
+    return !!org?.isPersonal;
+  }
+
+  /** The level of `userId`'s grant on the case, or null when they hold none. */
+  static async findCaseAccess(caseId: string, userId: string): Promise<CasePermission | null> {
+    const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId } }, select: { permission: true } });
+    return access?.permission ?? null;
+  }
+
   static async grantCaseAccess(caseId: string, userId: string, permission: CasePermission) {
     return prisma.caseAccess.upsert({
       where: { caseId_userId: { caseId, userId } },

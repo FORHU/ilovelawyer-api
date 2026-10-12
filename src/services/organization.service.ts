@@ -587,12 +587,14 @@ export default class OrganizationSvc {
   }
 
   /** Sharing (#347): only someone who can manage the case's access may grant (see
-   * CaseAccess.assertCanManageAccess — an EDIT holder can't), and in v1 only to an accepted member
-   * of the case's own organization. Granting again changes the level (upsert). */
+   * CaseAccess.assertCanManageAccess — an EDIT holder can't), within assertWithinAccessLimits, and
+   * in v1 only to an accepted member of the case's own organization. Granting again changes the
+   * level (upsert). */
   static async grantAccess(caseId: string, actorId: string, userId: string, permission: CasePermission) {
     // A portfolio case is shared with individual people, read-only — its own rules.
     if (await CaseShareRepo.findPortfolioCase(caseId)) return CaseShareSvc.grant(caseId, actorId, userId, permission);
     const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
+    await OrganizationSvc.assertWithinAccessLimits(caseId, actorId, userId, permission);
     if (!caseRecord.organizationId) throw new HttpError("This case has no organization to share it within", 400);
     const membership = await OrganizationMemberRepo.find(caseRecord.organizationId, userId);
     if (membership?.status !== "ACCEPTED") {
@@ -624,11 +626,26 @@ export default class OrganizationSvc {
     return access;
   }
 
+  /** Someone who manages a case's access without being its organization's OWNER/ADMIN — a
+   * MANAGER, or an ADMIN grant holder (the creator of a confidential case included) — brings
+   * people in at View or Edit and takes that back. Manage (ADMIN) access, and their own access,
+   * stay with the OWNER/ADMIN, so access can't be widened past what the firm decided. 403: they
+   * can already see the case. `permission` is null for a revoke. */
+  private static async assertWithinAccessLimits(caseId: string, actorId: string, userId: string, permission: CasePermission | null) {
+    if (await CaseAccess.canManageFully(caseId, actorId)) return;
+    if (userId === actorId) throw new HttpError("You can't change your own access to this case", 403);
+    if (permission === "ADMIN") throw new HttpError("Only an owner or admin can give manage access", 403);
+    if ((await OrganizationRepo.findCaseAccess(caseId, userId)) === "ADMIN") {
+      throw new HttpError("Only an owner or admin can change someone's manage access", 403);
+    }
+  }
+
   /** Removes an explicit grant. Access someone has through their org role isn't a grant, so
    * there's nothing to revoke for it — that 404s rather than looking like it worked. */
   static async revokeAccess(caseId: string, actorId: string, userId: string) {
     if (await CaseShareRepo.findPortfolioCase(caseId)) return CaseShareSvc.revoke(caseId, actorId, userId);
     const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
+    await OrganizationSvc.assertWithinAccessLimits(caseId, actorId, userId, null);
     const removed = await OrganizationRepo.revokeCaseAccess(caseId, userId);
     if (!removed) throw new HttpError("This person has no access grant on the case", 404);
     await OrganizationRepo.writeAudit({ caseId, actorId, action: "case.revoke_access", payload: { userId } });
@@ -650,13 +667,19 @@ export default class OrganizationSvc {
     const caseRecord = await CaseAccess.loadAccessibleCase(caseId, actorId);
     const portfolio = await CaseShareRepo.findPortfolioCase(caseId);
     if (portfolio) return OrganizationSvc.listPortfolioAccess(caseId, actorId, portfolio, caseRecord.confidential);
-    const [members, grants, canEdit, canManage] = await Promise.all([
+    const [members, grants, canEdit, canManage, canManageFully] = await Promise.all([
       caseRecord.organizationId ? OrganizationMemberRepo.list(caseRecord.organizationId) : [],
       OrganizationRepo.listCaseAccess(caseId),
       CaseAccess.canEdit(caseId, actorId),
       CaseAccess.canManageAccess(caseId, actorId),
+      CaseAccess.canManageFully(caseId, actorId),
     ]);
     const grantByUser = new Map(grants.map((g) => [g.userId, g.permission]));
+    // See assertWithinAccessLimits and setConfidential: what a MANAGER or ADMIN grant holder can't do.
+    const limits = {
+      canManageFully: canManage && canManageFully,
+      canMarkConfidential: canManage && (canManageFully || grantByUser.get(actorId) === "ADMIN"),
+    };
 
     const people = members
       .filter((m) => m.status === "ACCEPTED")
@@ -682,7 +705,16 @@ export default class OrganizationSvc {
         grant: g.permission,
       });
     }
-    return { portfolio: false, shareable: canManage, confidential: caseRecord.confidential, canEdit, canManage, canContribute: await CaseAccess.canContribute(caseId, actorId), people };
+    return {
+      portfolio: false,
+      shareable: canManage,
+      confidential: caseRecord.confidential,
+      canEdit,
+      canManage,
+      ...limits,
+      canContribute: await CaseAccess.canContribute(caseId, actorId),
+      people,
+    };
   }
 
   /** listAccess for a portfolio case: the owner manages it and everyone else can only read. Only
@@ -714,6 +746,8 @@ export default class OrganizationSvc {
       confidential,
       canEdit: isOwner,
       canManage: isOwner,
+      canManageFully: isOwner,
+      canMarkConfidential: false,
       canContribute: isOwner,
       people,
     };
@@ -725,15 +759,23 @@ export default class OrganizationSvc {
     return CaseShareSvc.lookup(caseId, actorId, email);
   }
 
-  /** Marks a case confidential or ordinary (#346). Whoever can manage its access may (D7). Marking
-   * it first gives the marker an ADMIN grant (D8) — an org ADMIN would otherwise wall themselves
-   * off the moment it took effect. Unmarking leaves grants as they are. Audited either way. */
+  /** Marks a case confidential or ordinary (#346). Marking it takes the org OWNER/ADMIN or an
+   * ADMIN grant on the case — a MANAGER, who otherwise manages an ordinary case's access, can't
+   * wall one off. Unmarking widens access, so it takes the org OWNER/ADMIN. Marking it first gives
+   * the marker an ADMIN grant (D8) — an org ADMIN would otherwise wall themselves off the moment it
+   * took effect. Unmarking leaves grants as they are. Audited either way. */
   static async setConfidential(caseId: string, actorId: string, confidential: boolean) {
     // A portfolio case is already private to its owner and the people they share it with.
     if (await CaseShareRepo.findPortfolioCase(caseId)) {
       throw new HttpError("A case in your portfolio is already private to you", 400);
     }
     const caseRecord = await CaseAccess.assertCanManageAccess(caseId, actorId);
+    if (!(await CaseAccess.canManageFully(caseId, actorId))) {
+      if (!confidential) throw new HttpError("Only an owner or admin can make a confidential case ordinary again", 403);
+      if ((await OrganizationRepo.findCaseAccess(caseId, actorId)) !== "ADMIN") {
+        throw new HttpError("Only an owner, an admin or someone who manages this case can make it confidential", 403);
+      }
+    }
     if (caseRecord.confidential === confidential) return { confidential };
     if (confidential) await OrganizationRepo.grantCaseAccess(caseId, actorId, "ADMIN");
     await CaseRepo.setConfidential(caseId, confidential);
