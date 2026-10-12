@@ -48,10 +48,14 @@ export default class CitationExtractionSvc {
     let sessionId = await getChatWonderSessionId();
     let result: { content: string };
     try {
-      result = await streamChatWonderMessage(sessionId, prompt, () => {});
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+        usage: { feature: "citationExtraction" },
+      });
     } catch {
       sessionId = await getChatWonderSessionId();
-      result = await streamChatWonderMessage(sessionId, prompt, () => {});
+      result = await streamChatWonderMessage(sessionId, prompt, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+        usage: { feature: "citationExtraction" },
+      });
     }
 
     const extracted = extractCitations(result.content) ?? [];

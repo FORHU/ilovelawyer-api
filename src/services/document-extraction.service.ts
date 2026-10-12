@@ -191,7 +191,11 @@ export default class DocumentExtractionSvc {
         });
         categoryPromise = Promise.resolve(null);
       } else {
-        categoryPromise = categorizeDocument(leadingText(trimmedPages, 3000), doc.name);
+        categoryPromise = categorizeDocument(leadingText(trimmedPages, 3000), doc.name, {
+          userId: doc.userId,
+          caseId: doc.caseId,
+          consultationId: doc.consultationId,
+        });
       }
 
       const totalChars = trimmedPages.reduce((sum, page) => sum + page.text.length, 0);
