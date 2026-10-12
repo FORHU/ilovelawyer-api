@@ -196,7 +196,8 @@ model Consultation {
   userId         String
   organizationId String
   caseId         String?
-  title          String?
+  // Max 60 chars — keep in step with TITLE_MAX_CHARS (chat.constants.ts).
+  title          String?                  @db.VarChar(60)
   // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
   // Null while untitled.
   titleSource    ConsultationTitleSource?
