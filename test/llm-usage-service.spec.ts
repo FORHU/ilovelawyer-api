@@ -7,6 +7,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import LlmUsageSvc from "../src/services/llm-usage.service";
 import LlmUsageRepo from "../src/repositories/llm-usage.repository";
 import { runWithRequestContext, RequestContext } from "../src/lib/request-context";
+import { runInLlmUsageScope } from "../src/lib/llm-usage-scope";
 import { estimateTokens } from "../src/utils/token-estimate";
 import { estimateCostUsd, LLM_PRICES, ModelPrice } from "../src/constants/llm-pricing.constants";
 import logger from "../src/utils/logger";
@@ -120,6 +121,94 @@ describe("LlmUsageSvc.record", () => {
     (LlmUsageRepo as any).create = () => new Promise((resolve) => setTimeout(() => ((finished = true), resolve(undefined)), 20));
     LlmUsageSvc.record(base);
     expect(finished).to.equal(false);
+  });
+});
+
+describe("LlmUsageSvc attribution scope", () => {
+  let restore: (() => void)[];
+  let rows: any[];
+  let owners: Record<string, { userId: string | null; organizationId: string | null }>;
+
+  beforeEach(() => {
+    rows = [];
+    owners = { "case-1": { userId: "owner-1", organizationId: "org-1" } };
+    restore = [stash(LlmUsageRepo as any, ["create", "findCaseOwner", "findDocumentOwner"]), stash(logger as any, ["warn"])];
+    (LlmUsageRepo as any).create = async (data: object) => {
+      rows.push(data);
+      return data;
+    };
+    (LlmUsageRepo as any).findCaseOwner = async (id: string) => owners[id] ?? null;
+    (LlmUsageRepo as any).findDocumentOwner = async () => ({ userId: "doc-user", organizationId: "doc-org", caseId: "doc-case", consultationId: "doc-consultation" });
+    (logger as any).warn = () => {};
+  });
+
+  afterEach(() => restore.forEach((fn) => fn()));
+
+  it("attributes a row written under a case scope to the case owner, with no ids on the call", async () => {
+    await LlmUsageSvc.runInCaseScope("case-1", async () => LlmUsageSvc.record(base));
+    expect(rows[0]).to.include({ userId: "owner-1", organizationId: "org-1", caseId: "case-1" });
+  });
+
+  it("reaches a row written deep in an async chain, as a Jev or embedding call would", async () => {
+    await LlmUsageSvc.runInCaseScope("case-1", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await Promise.all([1, 2].map(async () => LlmUsageSvc.record({ ...base, feature: "jev:strength" })));
+    });
+    expect(rows).to.have.length(2);
+    expect(rows.every((r) => r.organizationId === "org-1" && r.userId === "owner-1")).to.equal(true);
+  });
+
+  it("lets the signed-in requester win over the case owner for the user, and keeps the case organization", async () => {
+    const ctx = { requestId: "r", ip: null, userAgent: null, userId: () => "requester", organizationId: () => null, tenantCode: () => null } as RequestContext;
+    await runWithRequestContext(ctx, () => LlmUsageSvc.runInCaseScope("case-1", async () => LlmUsageSvc.record(base)));
+    expect(rows[0]).to.include({ userId: "requester", organizationId: "org-1" });
+  });
+
+  it("lets an id on the call win over the scope", async () => {
+    await LlmUsageSvc.runInCaseScope("case-1", async () => LlmUsageSvc.record({ ...base, userId: "explicit", organizationId: null, caseId: "other" }));
+    expect(rows[0]).to.include({ userId: "explicit", organizationId: null, caseId: "other" });
+  });
+
+  it("runs the work unscoped, once, when the id is not a case", async () => {
+    let ran = 0;
+    await LlmUsageSvc.runInCaseScope("a-law-id", async () => {
+      ran++;
+      LlmUsageSvc.record(base);
+    });
+    expect(ran).to.equal(1);
+    expect(rows[0]).to.include({ userId: null, organizationId: null, caseId: null });
+  });
+
+  it("runs the work, once, and still returns its result and its error, when the owner lookup fails", async () => {
+    (LlmUsageRepo as any).findCaseOwner = async () => {
+      throw new Error("db down");
+    };
+    expect(await LlmUsageSvc.runInCaseScope("case-1", async () => "result")).to.equal("result");
+    let thrown: unknown;
+    try {
+      await LlmUsageSvc.runInCaseScope("case-1", async () => {
+        throw new Error("the work failed");
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as Error).message).to.equal("the work failed");
+  });
+
+  it("attributes a document's extraction to the document's own user, organization and case", async () => {
+    await LlmUsageSvc.runInDocumentScope("doc-1", async () => LlmUsageSvc.record(base));
+    expect(rows[0]).to.include({ userId: "doc-user", organizationId: "doc-org", caseId: "doc-case", consultationId: "doc-consultation" });
+  });
+
+  it("keeps the outer scope's values when an inner scope leaves them out", () => {
+    runInLlmUsageScope({ userId: "u", organizationId: "o" }, () => runInLlmUsageScope({ caseId: "c" }, () => LlmUsageSvc.record(base)));
+    expect(rows[0]).to.include({ userId: "u", organizationId: "o", caseId: "c" });
+  });
+
+  it("does not leak a scope past the work it wrapped", async () => {
+    await LlmUsageSvc.runInCaseScope("case-1", async () => {});
+    LlmUsageSvc.record(base);
+    expect(rows[0]).to.include({ userId: null, organizationId: null });
   });
 });
 

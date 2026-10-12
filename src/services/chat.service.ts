@@ -16,6 +16,7 @@ import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import { runInLlmUsageScope } from "../lib/llm-usage-scope";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import { DocumentRef, redactDocumentIds, sanitizeDecisionRecords, decisionRecordsNeedSanitizing } from "../utils/document-references";
 import DecisionRecordSvc from "./decision-record.service";
@@ -588,7 +589,12 @@ export default class ChatSvc {
         .catch(() => {});
     }, CANCEL_POLL_INTERVAL_MS);
     try {
-      await ChatSvc.runChatGenerationJob(job, control);
+      // Every LLM call under the turn (Chat Wonder, Jev, the embeddings that rank its documents) is
+      // recorded against the turn's user, organization and consultation: a queue worker has no request.
+      await runInLlmUsageScope(
+        { userId: job.userId, organizationId: job.organizationId, caseId: job.effectiveCaseId ?? undefined, consultationId: job.consultationId },
+        () => ChatSvc.runChatGenerationJob(job, control),
+      );
     } finally {
       clearInterval(cancelPoll);
       ChatSvc.activeGenerations.delete(job.jobId);
