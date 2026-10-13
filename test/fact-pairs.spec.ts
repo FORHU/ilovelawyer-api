@@ -2,6 +2,7 @@ import { expect } from "chai";
 import { describe, it } from "mocha";
 import { buildFactCandidates, chunkPairKey, contentWords, DEFAULT_CANDIDATE_OPTIONS } from "../src/utils/fact-pairs";
 import type { BundleFact } from "../src/utils/bundle-facts";
+import { findContradictions } from "../src/utils/fact-extract";
 
 const fact = (chunkId: string, locator: string, kind: BundleFact["kind"], value: string, sentence: string): BundleFact => ({
   chunkId,
@@ -75,5 +76,36 @@ describe("buildFactCandidates", () => {
     const out = buildFactCandidates([cameras13, ...many], sims([["a", "b", 0.8]]), { ...DEFAULT_CANDIDATE_OPTIONS, maxCandidates: 3 });
     expect(out).to.have.length(3);
     expect(new Set(out.map((x) => x.pairKey)).size).to.equal(3);
+  });
+});
+
+describe("buildFactCandidates on a large bundle", () => {
+  it("keeps memory bounded without changing the top candidates", () => {
+    // 100 chunks, one date each, every pair similar: 4,950 candidates — past the pruning threshold
+    // (maxCandidates × 50) at the default 80, and never pruned at a huge maxCandidates.
+    const extra = ["scaffold", "crane", "delivery", "inspection", "payment", "invoice", "contract"];
+    const facts = Array.from({ length: 100 }, (_, i) => {
+      const day = new Date(Date.UTC(2023, 0, 1 + i)).toISOString().slice(0, 10);
+      const words = `NVR fault cameras recording ${extra[i % 7]} ${extra[(i * 3) % 7]}`;
+      return fact(`c${i}`, `D${i} p.1`, "date", day, `${words} noted on ${day}.`);
+    });
+    const pairs: [string, string, number][] = [];
+    for (let i = 0; i < 100; i++) for (let j = i + 1; j < 100; j++) pairs.push([`c${i}`, `c${j}`, 0.5 + ((i * 131 + j * 17) % 997) / 2000]);
+
+    const pruned = buildFactCandidates(facts, sims(pairs));
+    const reference = buildFactCandidates(facts, sims(pairs), { ...DEFAULT_CANDIDATE_OPTIONS, maxCandidates: 1_000_000 }).slice(0, 80);
+
+    expect(pruned).to.have.length(80);
+    expect(pruned.map((c) => [c.pairKey, c.score])).to.deep.equal(reference.map((c) => [c.pairKey, c.score]));
+  });
+});
+
+describe("findContradictions", () => {
+  it("stops at maxHits", () => {
+    const facts = (n: number) => Array.from({ length: n }, (_, i) => ({ kind: "amount" as const, key: "amount", value: String(i), excerpt: "" }));
+    const left = { documentId: "a", facts: facts(1_000) };
+    const right = { documentId: "b", facts: facts(1_000) };
+    expect(findContradictions(left, right, 500)).to.have.length(500);
+    expect(findContradictions({ documentId: "a", facts: facts(3) }, { documentId: "b", facts: facts(3) })).to.have.length(6);
   });
 });

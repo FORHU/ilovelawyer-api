@@ -1,5 +1,5 @@
 import { choice } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { applyFloor, readChoice } from "./jev-common";
 
@@ -51,9 +51,8 @@ export interface ContradictionNatureResult {
 
 /** Throws on a Jev failure — the caller stores null rather than a guess. */
 export async function classifyContradictionWithJev(input: ContradictionNatureInput): Promise<ContradictionNatureResult> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "contradiction-nature", factKey: input.factKey });
-  const response = await client.systemOne({
+  const response = await jevAsk("contradiction-nature", {
     state: {
       fact: input.factKey.replace(/_/g, " "),
       passageA: { document: input.left.document, text: input.left.excerpt, valueFound: input.left.value },

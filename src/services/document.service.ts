@@ -11,6 +11,7 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
+import { assertBatchWithinLimit } from "../utils/upload-batch-limit";
 import CaseAccess from "../utils/case-access";
 // Cycle with chat.service (it imports mapDocumentToDto from here) — safe, both are only used
 // inside function bodies.
@@ -105,14 +106,22 @@ export default class DocumentSvc {
     contentType: string,
     caseId?: string,
     consultationId?: string,
+    fileSize?: number,
   ) {
     await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
-    return DocumentSvc.presignKey(userId, filename, contentType, caseId, consultationId);
+    return DocumentSvc.presignKey(userId, filename, contentType, caseId, consultationId, fileSize);
   }
 
   /** presign's key-building half, without the case check — so presignMany can check the batch's
    * shared caseId once instead of once per file. */
-  private static async presignKey(userId: string, filename: string, contentType: string, caseId?: string, consultationId?: string) {
+  private static async presignKey(
+    userId: string,
+    filename: string,
+    contentType: string,
+    caseId?: string,
+    consultationId?: string,
+    fileSize?: number,
+  ) {
     const ext = path.extname(filename);
     const shortId = crypto.randomUUID().slice(0, 8);
     const key = caseId
@@ -120,21 +129,24 @@ export default class DocumentSvc {
       : consultationId
         ? `documents/consultations/${consultationId}/${Date.now()}-${shortId}${ext}`
         : `documents/users/${userId}/${Date.now()}-${shortId}${ext}`;
-    const uploadUrl = await getPresignedUploadUrl(key, contentType);
+    const uploadUrl = await getPresignedUploadUrl(key, contentType, fileSize);
     return { uploadUrl, key };
   }
 
   static async presignMany(
     organizationId: string,
     userId: string,
-    files: { filename: string; contentType: string }[],
+    files: { filename: string; contentType: string; fileSize?: number }[],
     caseId?: string,
     consultationId?: string,
   ) {
+    assertBatchWithinLimit(files.map((file) => file.fileSize));
     // Checked once for the batch's shared caseId/consultationId, not per file.
     await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
     return Promise.all(
-      files.map((file) => DocumentSvc.presignKey(userId, file.filename, file.contentType, caseId, consultationId)),
+      files.map((file) =>
+        DocumentSvc.presignKey(userId, file.filename, file.contentType, caseId, consultationId, file.fileSize),
+      ),
     );
   }
 
@@ -171,6 +183,7 @@ export default class DocumentSvc {
     caseId?: string,
     consultationId?: string,
   ) {
+    assertBatchWithinLimit(items.map((item) => item.fileSize));
     await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
     const documentOrganizationId = await DocumentSvc.organizationFor(organizationId, caseId, consultationId);
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({

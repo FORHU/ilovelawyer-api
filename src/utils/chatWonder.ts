@@ -5,6 +5,7 @@ import HttpError from "./http-error";
 import logger from "./logger";
 import TraceCollectorSvc, { TraceRun } from "../services/trace-collector.service";
 import { TenantCode } from "../types/tenant-code";
+import { ChatWonderUsageOptions, ChatWonderUsageProbe, ReportedUsage, parseReportedUsage, recordChatWonderUsage } from "./chat-wonder-usage";
 import {
   SESSION_RETRIES,
   RETRY_DELAY_MS,
@@ -83,7 +84,10 @@ export async function fullTextsFor(
 ): Promise<{ id: string; name: string; text: string }[]> {
   if (!caseDocumentIds.length) return [];
   try {
-    const texts = await DocumentChunkRepo.findFullTextsByDocuments(caseDocumentIds);
+    // One character past the inline limit is enough to tell a document is too big to inline.
+    const texts = await DocumentChunkRepo.findFullTextsByDocuments(caseDocumentIds, {
+      maxCharsPerDocument: CASE_FULL_TEXT_INLINE_CHARS + 1,
+    });
     let total = 0;
     for (const t of texts.values()) total += t.length;
     if (total === 0 || total > CASE_FULL_TEXT_INLINE_CHARS) {
@@ -120,7 +124,12 @@ export async function callChatWonderRest(
   tenantCode?: TenantCode,
   /** `trace` records this call for the AI Reasoning pane (see TraceCollectorSvc), the same as
    * streamChatWonderMessage's opts.trace, and closes it with the reply's "why this answer". */
-  opts?: { trace?: TraceRun },
+  opts?: {
+    trace?: TraceRun;
+    /** Who the usage row for this call is for (LlmUsage, epic #399). Defaults to `trace`'s source,
+     * case and user, then "unknown". */
+    usage?: ChatWonderUsageOptions;
+  },
 ): Promise<{ response?: string; intermediate_response?: string; source_metadata?: unknown; reasoning?: ReasoningExplanation }> {
   const resolved = normalizeGrounding(grounding);
   const payload: {
@@ -163,14 +172,32 @@ export async function callChatWonderRest(
   // Subscribed before the call goes out (chat-wonder fans trace events out live, with no replay).
   const collector = opts?.trace ? await TraceCollectorSvc.startRun(opts.trace, sessionId) : undefined;
   let reasoning: ReasoningExplanation | undefined;
+  const startedAt = Date.now();
+  let success = false;
+  let reply = "";
+  let reported: ReportedUsage | undefined;
   try {
     const { data } = await axios.post(`${CHAT_WONDER_API_URL}/chat`, payload, {
       timeout: CHAT_WONDER_REST_TIMEOUT_MS,
     });
     if (data?.usage) logger.info("Chat Wonder usage", data.usage);
     reasoning = data?.reasoning ?? undefined;
+    success = true;
+    reply = String(data?.response ?? data?.intermediate_response ?? "");
+    reported = parseReportedUsage(data?.usage);
     return data;
   } finally {
+    // The one usage row for this call (LlmUsage). REST turns report no [TRACE] frames, so no passes.
+    recordChatWonderUsage({
+      usage: opts?.usage,
+      trace: opts?.trace,
+      startedAt,
+      inputChars: prompt.length + (payload.case_document_manifest ? JSON.stringify(payload.case_document_manifest).length : 0),
+      outputChars: reply.length,
+      traceStarts: null,
+      reported,
+      success,
+    });
     await collector?.stop(reasoning);
   }
 }
@@ -199,17 +226,38 @@ export async function getChatWonderSessionId(): Promise<string> {
  * Wonder picks itself (no fixed taxonomy, never user-supplied). Best-effort: any failure
  * (Chat Wonder unreachable, malformed response) returns null rather than throwing, so a
  * categorization miss never fails the extraction pipeline that calls this alongside it. */
-export async function categorizeDocument(text: string, filename: string): Promise<string | null> {
+export async function categorizeDocument(
+  text: string,
+  filename: string,
+  /** Who the usage row is for; its feature is always "documentCategorize". */
+  usage?: Omit<ChatWonderUsageOptions, "feature">,
+): Promise<string | null> {
+  const startedAt = Date.now();
+  let category = "";
+  let success = false;
+  let reported: ReportedUsage | undefined;
   try {
     const { data } = await axios.post(`${CHAT_WONDER_API_URL}/api/legal/categorize-document`, {
       text,
       filename,
     });
-    const category = typeof data?.category === "string" ? data.category.trim() : "";
+    category = typeof data?.category === "string" ? data.category.trim() : "";
+    success = true;
+    reported = parseReportedUsage(data?.usage);
     return category || null;
   } catch (err) {
     logger.warn("Chat Wonder document categorization failed", { err, filename });
     return null;
+  } finally {
+    recordChatWonderUsage({
+      usage: { ...usage, feature: "documentCategorize" },
+      startedAt,
+      inputChars: text.length + filename.length,
+      outputChars: category.length,
+      traceStarts: null,
+      reported,
+      success,
+    });
   }
 }
 
@@ -250,8 +298,18 @@ export class TitleGenerationError extends Error {
   }
 }
 
-export async function generateTitleViaWs(prompt: string): Promise<string> {
+export async function generateTitleViaWs(
+  prompt: string,
+  /** Who the usage row is for; its feature is always "title". */
+  usage?: Omit<ChatWonderUsageOptions, "feature">,
+): Promise<string> {
   const sessionId = await getChatWonderSessionId();
+  const startedAt = Date.now();
+  // Chat Wonder's own numbers, from the usage frame it sends just before __END__.
+  let reported: ReportedUsage | undefined;
+  // Called from the two places this call settles (both behind `settled`), so exactly once.
+  const recordUsage = (reply: string, success: boolean) =>
+    recordChatWonderUsage({ usage: { ...usage, feature: "title" }, startedAt, inputChars: prompt.length, outputChars: reply.length, traceStarts: null, reported, success });
 
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(CHAT_WONDER_WS_URL);
@@ -262,6 +320,7 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
       if (settled) return;
       settled = true;
       try { ws.close(); } catch { /* ignore */ }
+      recordUsage(value, true);
       resolve(value);
     };
 
@@ -269,6 +328,7 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
       if (settled) return;
       settled = true;
       try { ws.close(); } catch { /* ignore */ }
+      recordUsage("", false);
       reject(new TitleGenerationError(reason, message));
     };
 
@@ -286,6 +346,19 @@ export async function generateTitleViaWs(prompt: string): Promise<string> {
     ws.onmessage = (event) => {
       if (settled) return;
       const msg = typeof event.data === "string" ? event.data : String(event.data);
+      // A typed frame is data, never title text: Chat Wonder sends its usage report just before
+      // __END__, and appending it would put JSON in the title.
+      if (msg.startsWith("{")) {
+        try {
+          const envelope = JSON.parse(msg);
+          if (envelope && typeof envelope.type === "string") {
+            if (envelope.type === "usage") reported = parseReportedUsage(envelope.data) ?? reported;
+            return;
+          }
+        } catch {
+          // not JSON after all: it is title text
+        }
+      }
       if (msg === "__END__" || msg.endsWith("__END__")) {
         const content = msg.endsWith("__END__") ? msg.slice(0, -"__END__".length) : "";
         if (content) accumulated += content;
@@ -366,6 +439,36 @@ export class GenerationCancelledError extends Error {
  * tracing is best-effort and never changes the result or delays it beyond connecting.
  */
 export async function streamChatWonderMessage(...args: Parameters<typeof streamChatWonderMessageOnce>): ReturnType<typeof streamChatWonderMessageOnce> {
+  // One usage row per call, written however it ends (LlmUsage, epic #399). A retry on a fresh
+  // session is a second call to this function and gets its own row.
+  const probe: ChatWonderUsageProbe = { inputChars: 0, outputChars: 0, traceStarts: 0 };
+  const startedAt = Date.now();
+  let success = false;
+  try {
+    const result = await streamChatWonderMessageTraced(...(withUsageProbe(args, probe) as typeof args));
+    success = true;
+    return result;
+  } finally {
+    recordChatWonderUsage({
+      usage: args[10]?.usage,
+      trace: args[10]?.trace,
+      startedAt,
+      inputChars: probe.inputChars,
+      outputChars: probe.outputChars,
+      traceStarts: probe.traceStarts,
+      reported: probe.reported,
+      success,
+    });
+  }
+}
+
+function withUsageProbe(args: Parameters<typeof streamChatWonderMessageOnce>, usageProbe: ChatWonderUsageProbe) {
+  const withProbe = [...args] as typeof args;
+  withProbe[10] = { ...args[10], usageProbe };
+  return withProbe;
+}
+
+async function streamChatWonderMessageTraced(...args: Parameters<typeof streamChatWonderMessageOnce>): ReturnType<typeof streamChatWonderMessageOnce> {
   const sessionId = args[0];
   const opts = args[10];
   const run = opts?.trace;
@@ -454,6 +557,11 @@ function streamChatWonderMessageOnce(
      * (the second model call that writes the timeline/mind map/audio overview script). For a
      * progress indicator only — never throws into the stream. */
     onStage?: (stage: ChatWonderStage) => void;
+    /** Who the usage row for this call is for (LlmUsage, epic #399). Defaults to `trace`'s source,
+     * case and user, then "unknown". */
+    usage?: ChatWonderUsageOptions;
+    /** Internal: set by streamChatWonderMessage, filled in here as the call runs. */
+    usageProbe?: ChatWonderUsageProbe;
   },
 ): Promise<ChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new GenerationCancelledError());
@@ -524,6 +632,7 @@ function streamChatWonderMessageOnce(
         structuredDataWaitMs: endFrameAt ? Date.now() - endFrameAt : undefined,
         contentChars: accumulated.length,
       });
+      if (opts?.usageProbe) opts.usageProbe.outputChars = accumulated.length;
       resolve({
         content: accumulated,
         relatedCases,
@@ -642,6 +751,16 @@ function streamChatWonderMessageOnce(
             payload.case_document_manifest = manifest;
             if (fullTexts.length) payload.case_document_texts = fullTexts;
           }
+          // What this call sent the model, for its usage row (LlmUsage): the text fields, not the ids.
+          if (opts?.usageProbe) {
+            opts.usageProbe.inputChars =
+              payload.user_input.length +
+              (payload.document_context?.length ?? 0) +
+              (payload.case_mind_map_context?.length ?? 0) +
+              (payload.case_document_manifest ? JSON.stringify(payload.case_document_manifest).length : 0) +
+              (payload.case_document_texts?.reduce((n, d) => n + d.text.length, 0) ?? 0) +
+              (payload.case_damages ? JSON.stringify(payload.case_damages).length : 0);
+          }
           // document_context / case_document_texts can be the full text of the whole case —
           // logged as lengths, not inline, so one chatty turn doesn't blow up combined.log.
           payloadSentAt = Date.now();
@@ -688,6 +807,8 @@ function streamChatWonderMessageOnce(
       }
       if (typedEnvelope && typedEnvelope.type === "usage") {
         logger.info("Chat Wonder usage", typedEnvelope.data);
+        const reported = parseReportedUsage(typedEnvelope.data);
+        if (reported && opts?.usageProbe) opts.usageProbe.reported = reported;
         return;
       }
 
@@ -809,6 +930,7 @@ function streamChatWonderMessageOnce(
         if (frame) {
           const existing = researchSteps.get(frame.id);
           if (frame.phase === "start") {
+            if (!existing && opts?.usageProbe) opts.usageProbe.traceStarts += 1;
             researchSteps.set(frame.id, {
               id: frame.id,
               tool: frame.tool ?? existing?.tool ?? "",

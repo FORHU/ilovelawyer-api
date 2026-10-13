@@ -199,7 +199,8 @@ model Consultation {
   // consultation on a case, which lives with the case's organization.
   organizationId String?
   caseId         String?
-  title          String?
+  // Max 60 chars — keep in step with TITLE_MAX_CHARS (chat.constants.ts).
+  title          String?                  @db.VarChar(60)
   // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
   // Null while untitled.
   titleSource    ConsultationTitleSource?
@@ -2814,6 +2815,62 @@ model SecurityAuditEvent {
   @@index([actorId, createdAt])
   @@index([caseId])
   @@index([createdAt])
+}
+
+enum LlmProvider {
+  OPENAI
+  TYPESAFE
+}
+
+enum LlmUsageSource {
+  /// Counted locally (characters / 4) — Chat Wonder until chat-wonder-v2-api#104 makes it report.
+  ESTIMATED
+  /// The provider's own numbers.
+  REPORTED
+}
+
+// One row per LLM call (epic #399): what we spent, on which model, for which feature. Chat Wonder
+// calls are ESTIMATED until Chat Wonder reports real usage (chat-wonder-v2-api#104), then
+// REPORTED; embeddings and TypeSafe (Jev) calls are REPORTED from the start.
+//
+// No foreign keys on purpose, like SecurityAuditEvent: deleting a user, organization or case must
+// never delete their usage history, so the ids are plain strings. Unlike SecurityAuditEvent this
+// table is not append-only — it holds counts, not a legal record — so there are no triggers.
+model LlmUsage {
+  id                String         @id @default(uuid())
+  createdAt         DateTime       @default(now())
+
+  provider          LlmProvider
+  /// "chat-wonder" | "direct"
+  via               String?
+  /// Null when unknown (Chat Wonder doesn't say until #104).
+  model             String?
+  /// An AiGenerationKind, "chat", "embedding", "jev:citation-validity", ...
+  feature           String
+  source            LlmUsageSource
+
+  inputTokens       Int
+  outputTokens      Int
+  /// When the provider reports it.
+  cachedInputTokens Int?
+  totalTokens       Int
+  /// Chat Wonder research-loop passes, when known.
+  passCount         Int?
+  /// From the price table (#401); null when the model is unknown, never 0.
+  estimatedCostUsd  Float?
+
+  userId            String?
+  organizationId    String?
+  caseId            String?
+  consultationId    String?
+  durationMs        Int?
+  success           Boolean        @default(true)
+
+  @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@index([provider, model])
+  @@index([feature])
 }
 
 model JurisdictionModule {

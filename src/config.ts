@@ -97,6 +97,12 @@ export const AWS_SQS_ENDPOINT = process.env.AWS_SQS_ENDPOINT || undefined;
 // SQS queue URLs — one per background job type, provisioned externally (same convention as
 // AWS_S3_BUCKET above: this app never creates its own AWS infra, only references it).
 export const DOCUMENT_EXTRACTION_QUEUE_URL = process.env.DOCUMENT_EXTRACTION_QUEUE_URL as string;
+/** Whether the API process also consumes DOCUMENT_EXTRACTION_QUEUE_URL (the default, as before).
+ * Set to "false" when a separate extraction worker runs (src/extraction-worker.ts), so a large
+ * upload's extraction memory can't take the API down. Trade-off: document:* socket events are
+ * emitted from whichever process extracts, and socket.io rooms live only in the API process, so
+ * with a separate worker the web app picks up status changes by polling instead of instantly. */
+export const DOCUMENT_EXTRACTION_IN_API = process.env.DOCUMENT_EXTRACTION_IN_API !== "false";
 export const CITATION_EXTRACTION_QUEUE_URL = process.env.CITATION_EXTRACTION_QUEUE_URL as string;
 export const AUDIO_OVERVIEW_QUEUE_URL = process.env.AUDIO_OVERVIEW_QUEUE_URL as string;
 export const CASE_RECONSTRUCTION_AUDIO_QUEUE_URL = process.env.CASE_RECONSTRUCTION_AUDIO_QUEUE_URL as string;

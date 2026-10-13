@@ -1,5 +1,5 @@
 import { choice, noul } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 /** Pilot flag — see benchmarks/jev-report-2026-09-21.md. Unset/false: no triage call at all.
@@ -209,10 +209,9 @@ export async function triageMessage(userInput: string): Promise<MessageTriage | 
   if (!message) return null;
 
   try {
-    const client = getTypeSafeClient();
     logger.info("Jev request", { feature: "message-triage", questions: ["urgency", "intent", "attachment", "replyLanguage"], content: message });
     const intentOptions = Object.fromEntries(MESSAGE_INTENTS.map((k) => [k, null])) as Record<MessageIntent, null>;
-    const response = await client.systemOne({
+    const response = await jevAsk("message-triage", {
       state: { message },
       questions: {
         urgency: noul(

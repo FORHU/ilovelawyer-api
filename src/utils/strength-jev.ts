@@ -1,5 +1,5 @@
 import { choice, score } from "@typesafe-ai/sdk";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 import { applyFloor, isUncertain, normalizeScore, readChoice } from "./jev-common";
 import { caseDataState, CaseJevContext } from "./case-jev-context";
@@ -103,11 +103,10 @@ export function compareByWeight(a: Pick<StrengthJevCheck, "support" | "weight">,
 
 /** Throws on a Jev failure — the caller keeps the model's rating rather than a guess. */
 export async function checkStrengthWithJev(strength: StrengthJevInput, context: CaseJevContext): Promise<StrengthJevCheck> {
-  const client = getTypeSafeClient();
   const sourceRead = strength.passages.length > 0;
   logger.info("Jev request", { feature: "strength", label: strength.label, sourceRead });
 
-  const response = await client.systemOne({
+  const response = await jevAsk("strength", {
     state: {
       strength: { point: strength.label, reference: strength.detail ?? "", source: strength.sourceLabel ?? "" },
       sourcePassages: strength.passages,

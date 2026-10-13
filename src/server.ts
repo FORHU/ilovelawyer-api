@@ -14,14 +14,19 @@ import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
 import CaseCopyQueue from "./queues/case-copy.queue";
 import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
 
-import { PORT } from "./config";
+import { DOCUMENT_EXTRACTION_IN_API, PORT } from "./config";
 import logger from "./utils/logger";
 import { fieldEncryptionStatus } from "./utils/field-crypto";
 import { verifyDocumentBucketRegion } from "./utils/s3";
+import LlmUsageSvc from "./services/llm-usage.service";
 
 void verifyDocumentBucketRegion();
 
-DocumentExtractionQueue.start();
+// Every Jev call (jevAsk) records its token usage in the LLM usage ledger (#403).
+LlmUsageSvc.registerJevRecorder();
+
+// Off when a separate extraction worker consumes the queue instead (see DOCUMENT_EXTRACTION_IN_API).
+if (DOCUMENT_EXTRACTION_IN_API) DocumentExtractionQueue.start();
 AudioOverviewQueue.start();
 CitationExtractionQueue.start();
 AiGenerationQueue.start();

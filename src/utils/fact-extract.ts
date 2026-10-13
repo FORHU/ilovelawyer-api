@@ -92,9 +92,12 @@ export interface ContradictionHit {
   confidence: number;
 }
 
+/** Every same-kind pair of differing values between two documents is a hit, so the count is up to
+ * left × right — `maxHits` stops early (a large synthetic upload had ~49k amounts per document). */
 export function findContradictions(
   left: { documentId: string; facts: ExtractedFact[] },
   right: { documentId: string; facts: ExtractedFact[] },
+  maxHits = Infinity,
 ): ContradictionHit[] {
   if (left.documentId === right.documentId) return [];
   const hits: ContradictionHit[] = [];
@@ -109,6 +112,7 @@ export function findContradictions(
   for (const lf of left.facts) {
     const candidates = rightByKind.get(lf.kind) ?? [];
     for (const rf of candidates) {
+      if (hits.length >= maxHits) return hits;
       if (lf.value === rf.value) continue;
       const kind = lf.kind === "amount" ? "amount_mismatch" : "date_mismatch";
       hits.push({

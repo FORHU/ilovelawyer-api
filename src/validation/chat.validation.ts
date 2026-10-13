@@ -1,4 +1,5 @@
 import Joi from "joi";
+import { TITLE_MAX_CHARS } from "../constants/chat.constants";
 import { MIND_MAP_LIMITS } from "../constants/mind-map-limits.constants";
 
 export const listConsultationsSchema = Joi.object({
@@ -7,11 +8,11 @@ export const listConsultationsSchema = Joi.object({
 });
 
 export const createConsultationSchema = Joi.object({
-  title: Joi.string().optional(),
+  title: Joi.string().max(TITLE_MAX_CHARS).optional(),
   caseId: Joi.string().guid().optional(),
 });
 
-export const renameConsultationSchema = Joi.object({ title: Joi.string().required() });
+export const renameConsultationSchema = Joi.object({ title: Joi.string().max(TITLE_MAX_CHARS).required() });
 
 export const relevantChunksSchema = Joi.object({
   query: Joi.string().trim().min(1).required(),

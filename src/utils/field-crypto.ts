@@ -43,6 +43,13 @@ function currentKey(cfg: FieldCryptoConfig): Buffer | null {
   return parseKey(cfg.key);
 }
 
+/** The id stamped into every value sealed with the current key, or null when no valid key is set. A
+ * sealed value whose id differs was sealed with an earlier key (see the --rekey scripts). */
+export function currentKeyId(cfg: FieldCryptoConfig = fromEnv()): string | null {
+  const key = currentKey(cfg);
+  return key ? keyIdOf(key) : null;
+}
+
 // Opening a document means opening thousands of chunks, so the parsed keys are kept until the
 // configuration changes instead of being parsed and hashed for every value.
 let keyCache: { signature: string; keys: Map<string, Buffer> } | null = null;

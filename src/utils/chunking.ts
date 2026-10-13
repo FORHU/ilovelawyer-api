@@ -9,6 +9,10 @@ export type ChunkingProfile = {
   overlap: number;
   embeddingBatchSize: number;
   embeddingConcurrency: number;
+  /** Join consecutive paragraphs on a page into chunks of up to chunkSize, instead of one chunk
+   * per paragraph. Bulk tier only: a 100MB transcript of short paragraphs was ~300k chunks one per
+   * paragraph (an hour of embedding, ~1.8GB of vectors) vs ~17.5k packed. */
+  packParagraphs?: boolean;
 };
 
 export type ChunkingInput = {
@@ -65,6 +69,7 @@ export function resolveChunkingProfile(input: ChunkingInput): ChunkingProfile {
     overlap: 500,
     embeddingBatchSize: 32,
     embeddingConcurrency: 2,
+    packParagraphs: true,
   };
 }
 
@@ -80,7 +85,7 @@ export function chunkText(
 
 export function chunkPages(
   pages: { pageNumber: number; text: string }[],
-  profile?: Pick<ChunkingProfile, "chunkSize" | "overlap">,
+  profile?: Pick<ChunkingProfile, "chunkSize" | "overlap" | "packParagraphs">,
 ): TextChunk[] {
   const totalChars = pages.reduce((sum, page) => sum + page.text.length, 0);
   const resolved =
@@ -88,10 +93,27 @@ export function chunkPages(
   const chunks: TextChunk[] = [];
   for (const page of pages) {
     chunks.push(
-      ...chunkParagraphs(page.text, page.pageNumber, resolved.chunkSize, resolved.overlap),
+      ...chunkParagraphs(page.text, page.pageNumber, resolved.chunkSize, resolved.overlap, resolved.packParagraphs),
     );
   }
   return chunks;
+}
+
+/** Joins consecutive pieces (lines, or paragraphs) with `separator` into blocks of at most `size`
+ * characters. A piece longer than `size` stays on its own; chunkParagraphs hard-cuts it like any
+ * oversize paragraph. */
+function packBlocks(pieces: string[], size: number, separator: string): string[] {
+  const blocks: string[] = [];
+  let current = "";
+  for (const piece of pieces) {
+    if (current && current.length + separator.length + piece.length > size) {
+      blocks.push(current);
+      current = "";
+    }
+    current = current ? `${current}${separator}${piece}` : piece;
+  }
+  if (current) blocks.push(current);
+  return blocks;
 }
 
 function chunkParagraphs(
@@ -99,6 +121,7 @@ function chunkParagraphs(
   pageNumber: number | null,
   chunkSize: number,
   overlap: number,
+  packParagraphs = false,
 ): TextChunk[] {
   const size = Math.min(Math.max(chunkSize, 400), EMBEDDING_CHAR_CAP);
   const stepOverlap = Math.min(Math.max(overlap, 0), Math.floor(size / 2));
@@ -108,11 +131,20 @@ function chunkParagraphs(
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
 
+  // No blank lines to split on (a plain-text log, a spreadsheet's rows): fall back to lines, but
+  // packed up to `size` per chunk — one chunk per line turned a 30MB TXT into 420k tiny chunks.
   if (paragraphs.length <= 1 && text.length > size) {
-    paragraphs = text
-      .split(/\n/)
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
+    paragraphs = packBlocks(
+      text
+        .split(/\n/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0),
+      size,
+      "\n",
+    );
+  } else if (packParagraphs) {
+    // Bulk tier (see ChunkingProfile.packParagraphs): consecutive paragraphs share a chunk.
+    paragraphs = packBlocks(paragraphs, size, "\n\n");
   }
 
   const chunks: TextChunk[] = [];

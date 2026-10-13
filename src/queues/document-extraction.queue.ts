@@ -19,6 +19,20 @@ const VISIBILITY_TIMEOUT_SECONDS = 600;
 // MAX_POLL_ATTEMPTS * TEXTRACT_ASYNC_POLL_INTERVAL_MS) so a legitimately slow scanned PDF is
 // never mistaken for a hang.
 const JOB_HARD_TIMEOUT_MS = 15 * 60_000;
+// That ceiling was sized for uploads of at most 25 MB; uploads now go up to 1 GB, and download,
+// extraction, embedding and storage all grow with size. Each MB past 25 adds this much, so a
+// 1 GB file gets ~2.8 hours. A file's size is reported by DocumentExtractionSvc.process once
+// known (see jobHardTimeoutMs / runOne). Note PENDING_SWEEP_MIN_AGE_MS below: the sweep skips
+// documents this process is running, but another instance's sweep can't see them.
+const JOB_TIMEOUT_BASE_BYTES = 25 * 1024 * 1024;
+const JOB_TIMEOUT_MS_PER_EXTRA_MB = 10_000;
+
+/** Hard ceiling for one extraction job on a file of `fileSizeBytes` — JOB_HARD_TIMEOUT_MS up to
+ * 25 MB, plus JOB_TIMEOUT_MS_PER_EXTRA_MB for each MB beyond. */
+export function jobHardTimeoutMs(fileSizeBytes: number | null | undefined): number {
+  const extraMb = Math.max(0, (fileSizeBytes ?? 0) - JOB_TIMEOUT_BASE_BYTES) / (1024 * 1024);
+  return JOB_HARD_TIMEOUT_MS + Math.ceil(extraMb) * JOB_TIMEOUT_MS_PER_EXTRA_MB;
+}
 // How often to re-scan the DB for PENDING/FAILED documents nobody's actively working on.
 // Without this, the only time a stuck document (enqueue silently lost, process restarted
 // mid-batch, etc. — see JOB_HARD_TIMEOUT_MS's own note on this queue's single points of
@@ -174,8 +188,16 @@ export default class DocumentExtractionQueue {
       this.pump();
     };
 
+    // Starts at the small-file ceiling; process() reports the file's size once it knows it, which
+    // can only push the deadline later (see jobHardTimeoutMs).
+    const startedAt = Date.now();
+    let deadline = startedAt + JOB_HARD_TIMEOUT_MS;
+    const onFileSize = (bytes: number) => {
+      deadline = Math.max(deadline, startedAt + jobHardTimeoutMs(bytes));
+    };
+
     const job = withVisibilityHeartbeat(DOCUMENT_EXTRACTION_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
-      DocumentExtractionSvc.process(item.documentId),
+      DocumentExtractionSvc.process(item.documentId, { onFileSize }),
     );
 
     // Races the real job against a hard ceiling — see JOB_HARD_TIMEOUT_MS. This can't cancel a
@@ -185,7 +207,15 @@ export default class DocumentExtractionQueue {
     // never settles, the SQS message was never deleted, so its own visibility timeout expiring
     // naturally hands it to a fresh attempt later — this is purely about not letting one stuck
     // job block every other document in every other case in the meantime.
-    const timedOut = new Promise<true>((resolve) => setTimeout(() => resolve(true), JOB_HARD_TIMEOUT_MS));
+    // Re-arms until `deadline` (which onFileSize may have moved) has actually passed.
+    const timedOut = new Promise<true>((resolve) => {
+      const check = () => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) resolve(true);
+        else setTimeout(check, remaining);
+      };
+      setTimeout(check, JOB_HARD_TIMEOUT_MS);
+    });
     // Both branches of .then() resolve to false (not just the fulfilled one) so a rejection
     // from `job` can never make this race itself reject — that path is already fully handled
     // below via job.catch(), this is purely "did the real job settle in time, one way or another".
@@ -193,7 +223,7 @@ export default class DocumentExtractionQueue {
       if (!didTimeOut) return;
       logger.error("Document extraction queue: job exceeded hard timeout, releasing worker slot", {
         documentId: item.documentId,
-        timeoutMs: JOB_HARD_TIMEOUT_MS,
+        timeoutMs: deadline - startedAt,
       });
       release();
     });

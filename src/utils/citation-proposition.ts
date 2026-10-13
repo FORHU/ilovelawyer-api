@@ -4,7 +4,7 @@ import { buildCitationPropositionPrompt } from "../legal/prompts";
 import { extractProposition, ParsedProposition } from "./citation-proposition-parse";
 import { TenantCode } from "../types/tenant-code";
 import { containsQuote } from "./citation-validity";
-import { getTypeSafeClient } from "./typesafeClient";
+import { jevAsk } from "./typesafeClient";
 import logger from "./logger";
 
 /** Pilot flag for the Jev-based path below — see benchmarks/jev-report-2026-09-21.md. Unset/false keeps the
@@ -12,9 +12,8 @@ import logger from "./logger";
 const USE_JEV_PROPOSITION = process.env.USE_JEV_PROPOSITION === "true";
 
 export async function classifyPropositionWithJev(quote: string, official: string): Promise<ParsedProposition | null> {
-  const client = getTypeSafeClient();
   logger.info("Jev request", { feature: "citation-proposition", question: "propositionType", officialText: official, quotedText: quote });
-  const response = await client.systemOne({
+  const response = await jevAsk("citation-proposition", {
     state: { officialText: official, quotedText: quote },
     questions: {
       propositionType: choice(
@@ -41,7 +40,7 @@ export async function classifyPropositionWithChatWonder(
 ): Promise<ParsedProposition | null> {
   const sessionId = await getChatWonderSessionId();
   const prompt = buildCitationPropositionPrompt(quote, official);
-  const payload = await callChatWonderRest(prompt, sessionId, undefined, tenantCode);
+  const payload = await callChatWonderRest(prompt, sessionId, undefined, tenantCode, { usage: { feature: "citationProposition" } });
   const text = String(payload.response || payload.intermediate_response || "");
   return extractProposition(text);
 }
