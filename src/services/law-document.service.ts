@@ -4,6 +4,7 @@ import { gunzip as gunzipCb, gzip as gzipCb } from "zlib";
 import type { Law, LawDocumentCopy } from "@prisma/client";
 import LawDocumentCopyRepo, { type LawDocumentCopyMeta } from "../repositories/law-document-copy.repository";
 import { legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
+import { UK_EU_LEGISLATION_TYPES } from "../legal/law-source/uk/uk-law-vocab";
 import { UK_LEGISLATION_BASE_URL } from "../config";
 import { OUTBOUND_FETCH_HEADERS } from "../utils/law-fulltext";
 import logger from "../utils/logger";
@@ -16,8 +17,8 @@ import logger from "../utils/logger";
 //
 //   - a copy younger than COPY_TTL_MS is served as is, without asking legislation.gov.uk;
 //   - an older one is refetched, and stands in only if legislation.gov.uk can't be reached;
-//   - only HTML is kept — a PDF (judgments, or a legislation.gov.uk PDF that got through) is served
-//     live and never saved.
+//   - UK legislation is only ever legislation.gov.uk's HTML; judgments' PDFs are served live and
+//     never saved.
 
 /** How long a saved copy is served before legislation.gov.uk is asked again. */
 export const COPY_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -109,35 +110,30 @@ export default class LawDocumentSvc {
     return null;
   }
 
-  /** The live fetch the proxy has always done. UK legislation stores no pdfUrl (see
-   * legislationHitToCreateInput) — its PDF only exists at a derived legislation.gov.uk path; every
-   * other document (PH jurisprudence, PH republic-acts, UK case law) has its direct PDF url in pdfUrl. */
+  /** The live fetch. UK legislation is always legislation.gov.uk's HTML rendition (`data.html`) —
+   * its PDF is never asked for (its AWS WAF refuses server-side `data.pdf` requests anyway). Every
+   * other document (PH jurisprudence, PH republic-acts, UK case law) is its PDF, from pdfUrl. */
   static async fetchLive(law: Law, section: string | null): Promise<LawDocumentBody | null> {
     const parts = legislationUrlParts(law.jurisUrl);
-    const ukLegislationPath = parts
-      ? `${UK_LEGISLATION_BASE_URL}/${parts.type}/${parts.year}/${parts.number}${section ? `/section/${section}` : ""}`
-      : null;
-    const pdfUrl = ukLegislationPath ? `${ukLegislationPath}/data.pdf` : law.pdfUrl;
-    if (!pdfUrl) return null;
-
-    const pdfRes = await fetchUpstream(pdfUrl, "application/pdf,*/*", law.id);
-    if (pdfRes && contentTypeOf(pdfRes).includes("pdf")) {
-      return { body: Buffer.from(await pdfRes.arrayBuffer()), format: "pdf", sourceUrl: pdfUrl };
-    }
-    if (pdfRes) {
-      logger.warn("Law PDF proxy: upstream returned non-PDF response", { lawId: law.id, upstream: pdfUrl, contentType: contentTypeOf(pdfRes) });
-    }
-
-    // legislation.gov.uk's AWS WAF answers every server-side `data.pdf` request with a JS
-    // challenge (202, `x-amzn-waf-action: challenge`, empty body) — whatever the User-Agent —
-    // while still serving the same Act's `data.html` rendition. Frame that instead of a blank.
-    if (ukLegislationPath) {
-      const htmlUrl = `${ukLegislationPath}/data.html`;
+    if (parts) {
+      // Retained EU law numbers its provisions as articles: "art 6 UK GDPR" is …/eur/2016/679/article/6.
+      const provision = (UK_EU_LEGISLATION_TYPES as readonly string[]).includes(parts.type) ? "article" : "section";
+      const htmlUrl = `${UK_LEGISLATION_BASE_URL}/${parts.type}/${parts.year}/${parts.number}${section ? `/${provision}/${section}` : ""}/data.html`;
       // legislation.gov.uk answers a bare `Accept: text/html` on data.html with 406 — it needs the `*/*`.
       const htmlRes = await fetchUpstream(htmlUrl, "text/html,*/*", law.id);
       if (htmlRes && contentTypeOf(htmlRes).includes("html")) {
         return { body: Buffer.from(await htmlRes.arrayBuffer()), format: "html", sourceUrl: htmlUrl };
       }
+      return null;
+    }
+
+    if (!law.pdfUrl) return null;
+    const pdfRes = await fetchUpstream(law.pdfUrl, "application/pdf,*/*", law.id);
+    if (pdfRes && contentTypeOf(pdfRes).includes("pdf")) {
+      return { body: Buffer.from(await pdfRes.arrayBuffer()), format: "pdf", sourceUrl: law.pdfUrl };
+    }
+    if (pdfRes) {
+      logger.warn("Law PDF proxy: upstream returned non-PDF response", { lawId: law.id, upstream: law.pdfUrl, contentType: contentTypeOf(pdfRes) });
     }
     return null;
   }

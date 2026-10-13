@@ -370,18 +370,19 @@ describe("UK Library source (LawSourceProvider)", () => {
     expect(res.body.edges[0].toRawReference).to.equal("[2000] UKSC 9");
   });
 
-  it("pdf proxy: streams a legislation PDF from our origin without X-Frame-Options, no auth", async () => {
-    // seed a UK legislation row
-    const legUrl = "https://www.legislation.gov.uk/ukpga/2018/12";
-    await prisma.law.deleteMany({ where: { jurisSourceId: legUrl } });
+  it("pdf proxy: streams a judgment PDF from our origin without X-Frame-Options, no auth", async () => {
+    // A made-up judgment, so the test never deletes a real stored row.
+    const caseUrl = "https://caselaw.nationalarchives.gov.uk/ewhc/kb/2099/9999";
+    await prisma.law.deleteMany({ where: { jurisSourceId: caseUrl } });
     const ukTenant = await prisma.tenant.findUnique({ where: { code: "UK" } });
     const leg = await prisma.law.create({
       data: {
-        jurisSourceId: legUrl,
-        category: "REPUBLIC_ACT",
+        jurisSourceId: caseUrl,
+        category: "JURISPRUDENCE",
         tenantId: ukTenant!.id,
-        title: "Data Protection Act 2018",
-        jurisUrl: legUrl,
+        title: "Test v Proxy",
+        jurisUrl: caseUrl,
+        pdfUrl: "https://assets.caselaw.nationalarchives.gov.uk/ewhc/kb/2099/9999/data.pdf",
         rawJson: {},
       },
     });
@@ -406,8 +407,9 @@ describe("UK Library source (LawSourceProvider)", () => {
     await prisma.law.deleteMany({ where: { id: leg.id } });
   });
 
-  it("pdf proxy: frames legislation.gov.uk's HTML rendition when the WAF challenges the PDF", async () => {
-    const legUrl = "https://www.legislation.gov.uk/ukpga/1998/42";
+  it("pdf proxy: frames legislation.gov.uk's HTML rendition, never asking for its PDF", async () => {
+    // A made-up Act number, so the test never deletes a real stored row.
+    const legUrl = "https://www.legislation.gov.uk/ukpga/2099/9999";
     await prisma.law.deleteMany({ where: { jurisSourceId: legUrl } });
     const ukTenant = await prisma.tenant.findUnique({ where: { code: "UK" } });
     const leg = await prisma.law.create({
@@ -440,7 +442,8 @@ describe("UK Library source (LawSourceProvider)", () => {
 
     const res = await request(app).get(`/api/law/${leg.id}/pdf?section=1`);
 
-    expect(requested).to.deep.equal([`${legUrl}/section/1/data.pdf`, `${legUrl}/section/1/data.html`]);
+    // Straight to the HTML — the PDF is never asked for.
+    expect(requested).to.deep.equal([`${legUrl}/section/1/data.html`]);
     expect(res.status).to.equal(200);
     expect(res.headers["content-type"]).to.match(/text\/html/);
     expect(res.headers["x-frame-options"]).to.be.undefined;

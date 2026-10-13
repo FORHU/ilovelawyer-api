@@ -137,10 +137,7 @@ describe("LawDocumentSvc.get", () => {
     const doc = await LawDocumentSvc.get(ACT, "29");
     expect(doc?.body.toString()).to.equal("<html>live</html>");
     expect(doc?.copy).to.equal(undefined);
-    expect(calls).to.deep.equal([
-      "https://www.legislation.gov.uk/ukpga/2010/15/section/29/data.pdf",
-      "https://www.legislation.gov.uk/ukpga/2010/15/section/29/data.html",
-    ]);
+    expect(calls).to.deep.equal(["https://www.legislation.gov.uk/ukpga/2010/15/section/29/data.html"]);
     expect(saves).to.deep.equal([{ lawId: ACT.id, part: "section/29", format: "html", previous: null }]);
   });
 
@@ -173,16 +170,20 @@ describe("LawDocumentSvc.get", () => {
     expect(doc?.body.toString()).to.equal("<html>live</html>");
   });
 
-  it("never saves a PDF, even one legislation.gov.uk lets through", async () => {
+  it("never asks legislation.gov.uk for a PDF, and never takes one as the Act", async () => {
+    const calls: string[] = [];
     patch([
       [
         globalThis,
         "fetch",
-        async () => new Response("%PDF-1.7", { status: 200, headers: { "content-type": "application/pdf" } }),
+        async (url: string) => {
+          calls.push(url);
+          return new Response("%PDF-1.7", { status: 200, headers: { "content-type": "application/pdf" } });
+        },
       ],
     ]);
-    const doc = await LawDocumentSvc.get(ACT, null);
-    expect(doc?.format).to.equal("pdf");
+    expect(await LawDocumentSvc.get(ACT, null)).to.equal(null);
+    expect(calls).to.deep.equal(["https://www.legislation.gov.uk/ukpga/2010/15/data.html"]);
     expect(saves).to.deep.equal([]);
   });
 
@@ -256,5 +257,34 @@ describe("LawDocumentSvc.save", () => {
   it("names parts the way the viewer asks for them", () => {
     expect(copyPart(null)).to.equal("");
     expect(copyPart("29A")).to.equal("section/29A");
+  });
+});
+
+describe("LawDocumentSvc — retained EU law", () => {
+  const UK_GDPR = { id: "law-3", jurisUrl: "https://www.legislation.gov.uk/eur/2016/679", pdfUrl: null } as Law;
+  let saves: { lawId: string; part: string }[];
+
+  beforeEach(() => {
+    saves = [];
+    patch([
+      [LawDocumentCopyRepo, "findLatest", async () => null],
+      [LawDocumentSvc, "save", async (lawId: string, part: string) => saves.push({ lawId, part })],
+    ]);
+  });
+
+  afterEach(restoreAll);
+
+  it("opens an EU regulation instead of answering 'No PDF available', and keeps a copy", async () => {
+    const calls = upstreamUp();
+    const doc = await LawDocumentSvc.get(UK_GDPR, null);
+    expect(doc?.format).to.equal("html");
+    expect(calls).to.deep.equal(["https://www.legislation.gov.uk/eur/2016/679/data.html"]);
+    expect(saves).to.deep.equal([{ lawId: "law-3", part: "" }]);
+  });
+
+  it("asks for an article, not a section, when one is cited", async () => {
+    const calls = upstreamUp();
+    await LawDocumentSvc.get(UK_GDPR, "6");
+    expect(calls).to.deep.equal(["https://www.legislation.gov.uk/eur/2016/679/article/6/data.html"]);
   });
 });
