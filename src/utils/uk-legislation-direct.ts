@@ -197,6 +197,26 @@ export function parseSection(xml: string, maxChars = 10_000): UkLegislationSecti
   };
 }
 
+// ── HTML rendition, for framing ─────────────────────────────────────────────
+
+/**
+ * legislation.gov.uk's `data.html` (a standalone, script-free HTML5 rendition of an Act or one section) made fit
+ * to serve from our origin inside the Library's <iframe>:
+ *  - its stylesheet and crest image are root-relative, so they are pointed back at legislation.gov.uk;
+ *  - every link opens in a new tab — legislation.gov.uk refuses framing, so following one inside the frame would
+ *    blank it — except in-page `#…` links (commentary footnotes), which keep scrolling the frame.
+ * Served with a `sandbox` CSP (see LawCtrl.pdf), so nothing in it runs as our origin.
+ */
+export function frameableLegislationHtml(html: string, base: string = BASE): string {
+  const withAbsoluteAssets = html
+    .replace(/\b(href|src)="\/(?!\/)/gi, `$1="${base}/`)
+    .replace(/<a\b(?=[^>]*\bhref="#)/gi, '<a target="_self"');
+  const baseTag = '<base target="_blank">';
+  return /<head\b[^>]*>/i.test(withAbsoluteAssets)
+    ? withAbsoluteAssets.replace(/<head\b[^>]*>/i, (head) => `${head}${baseTag}`)
+    : `${baseTag}${withAbsoluteAssets}`;
+}
+
 export async function getLegislationSectionDirect(
   args: { type: string; year: number; number: number; section: string; maxChars?: number },
   fetchImpl: FetchLike = fetch,

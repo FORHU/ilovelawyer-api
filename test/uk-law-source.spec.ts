@@ -406,6 +406,52 @@ describe("UK Library source (LawSourceProvider)", () => {
     await prisma.law.deleteMany({ where: { id: leg.id } });
   });
 
+  it("pdf proxy: frames legislation.gov.uk's HTML rendition when the WAF challenges the PDF", async () => {
+    const legUrl = "https://www.legislation.gov.uk/ukpga/1998/42";
+    await prisma.law.deleteMany({ where: { jurisSourceId: legUrl } });
+    const ukTenant = await prisma.tenant.findUnique({ where: { code: "UK" } });
+    const leg = await prisma.law.create({
+      data: {
+        jurisSourceId: legUrl,
+        category: "REPUBLIC_ACT",
+        tenantId: ukTenant!.id,
+        title: "Human Rights Act 1998",
+        jurisUrl: legUrl,
+        rawJson: {},
+      },
+    });
+
+    // What legislation.gov.uk actually answers a server today: the PDF is challenged, the HTML is not.
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith("/data.pdf")) {
+        return new Response("", {
+          status: 202,
+          headers: { "content-type": "text/html; charset=UTF-8", "x-amzn-waf-action": "challenge" },
+        });
+      }
+      return new Response(
+        '<html><head><link rel="stylesheet" href="/styles/HTML5_styles/primary.css"></head><body><h1>Human Rights Act 1998</h1></body></html>',
+        { status: 200, headers: { "content-type": "text/html;charset=utf-8" } },
+      );
+    }) as typeof fetch;
+
+    const res = await request(app).get(`/api/law/${leg.id}/pdf?section=1`);
+
+    expect(requested).to.deep.equal([`${legUrl}/section/1/data.pdf`, `${legUrl}/section/1/data.html`]);
+    expect(res.status).to.equal(200);
+    expect(res.headers["content-type"]).to.match(/text\/html/);
+    expect(res.headers["x-frame-options"]).to.be.undefined;
+    expect(res.headers["content-security-policy"]).to.match(/^sandbox allow-popups allow-popups-to-escape-sandbox;/);
+    expect(res.headers["content-security-policy"]).not.to.contain("allow-scripts");
+    expect(res.text).to.contain("Human Rights Act 1998");
+    expect(res.text).to.contain('href="https://www.legislation.gov.uk/styles/HTML5_styles/primary.css"');
+
+    await prisma.law.deleteMany({ where: { id: leg.id } });
+  });
+
   it("browse: uk-case-law paginates via an opaque cursor and caches the page", async () => {
     stubFetch(() => mcpResponse({ ...caseLawSearchResult, has_more: true }));
 
