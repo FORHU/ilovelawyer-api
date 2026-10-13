@@ -15,6 +15,7 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Ge
 import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
+import { consultationInWorkspace } from "../utils/consultation-scope";
 import logger from "../utils/logger";
 import { runInLlmUsageScope } from "../lib/llm-usage-scope";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
@@ -115,7 +116,8 @@ export default class ChatSvc {
       // Starting one adds to the Case: read-only for a view-only person on a confidential Case.
       await CaseAccess.assertCanContribute(caseId, userId);
     }
-    return ChatRepo.createConsultation(organizationId, userId, title, caseId);
+    // A main consultation belongs to the user, not to the workspace it was started in.
+    return ChatRepo.createConsultation(caseId ? organizationId : null, userId, title, caseId);
   }
 
   /** With a caseId, every Consultation on that Case — shared with everyone who can open the Case,
@@ -134,7 +136,7 @@ export default class ChatSvc {
    * can grow without touching this. Called fire-and-forget from processChatGenerationJob.
    */
   static async notifyTriagedMessage(
-    consultation: { id: string; userId: string; organizationId: string; title: string | null; caseId: string | null },
+    consultation: { id: string; userId: string; organizationId: string | null; title: string | null; caseId: string | null },
     senderUserId: string,
     userInput: string,
     triage: MessageTriage,
@@ -158,7 +160,7 @@ export default class ChatSvc {
       Array.from(recipients).map((recipientId) =>
         NotificationSvc.create({
           userId: recipientId,
-          organizationId: consultation.organizationId,
+          organizationId: consultation.organizationId ?? undefined,
           type: "CASE_UPDATE",
           title: decision.title,
           message,
@@ -183,7 +185,7 @@ export default class ChatSvc {
 
   private static async assertConsultationOwned(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
+    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
       throw new HttpError("Consultation not found", 404);
     }
     return consultation;
@@ -317,7 +319,7 @@ export default class ChatSvc {
       Boolean(m.decisionRecords && decisionRecordsNeedSanitizing({ records: m.decisionRecords.records })) ||
       (m.role === "assistant" && /\(\s*id:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i.test(m.content));
     const scopeDocs = messages.some(looksLeaky)
-      ? await ChatSvc.scopeDocumentRefs(organizationId, consultationId, consultation.caseId)
+      ? await ChatSvc.scopeDocumentRefs(organizationId, consultationId, consultation.caseId, userId)
       : [];
 
     return Promise.all(
@@ -369,10 +371,11 @@ export default class ChatSvc {
     organizationId: string | null | undefined,
     consultationId: string,
     caseId?: string | null,
+    userId?: string,
   ): Promise<DocumentRef[]> {
     if (!organizationId) return [];
     try {
-      const rows = await DocumentRepo.listRefsForScope(organizationId, { consultationId, caseId });
+      const rows = await DocumentRepo.listRefsForScope(organizationId, { consultationId, caseId }, userId);
       return rows.map((d) => ({ id: d.id, name: d.name }));
     } catch (err) {
       logger.warn("Chat: could not load scope documents for id redaction", { err, consultationId });
@@ -464,7 +467,7 @@ export default class ChatSvc {
     logger.info("Chat: enqueueChatGeneration started", { consultationId });
 
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
+    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
       throw new HttpError("Consultation not found", 404);
     }
     await ChatSvc.assertUserAccess(consultation, userId);
@@ -515,7 +518,7 @@ export default class ChatSvc {
     logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
 
     if (documentIds?.length) {
-      await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
+      await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId, userId);
     }
 
     ChatGenerationQueue.enqueue({
@@ -669,7 +672,7 @@ export default class ChatSvc {
     const effectiveCaseId = job.effectiveCaseId ?? undefined;
 
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
+    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
       // The consultation was deleted between enqueue and this job running — nothing left to
       // reply into. Not retryable (see ChatGenerationQueue's doc comment on why it always
       // acks): re-running the same job against a gone consultation would never succeed.
@@ -691,7 +694,7 @@ export default class ChatSvc {
 
     // The documents in scope for this turn, as (id, name): every id that reaches a user (live
     // chunks, the saved answer, Decision Records) is turned into a name first. One light query.
-    const scopeDocs = await ChatSvc.scopeDocumentRefs(organizationId, consultationId, effectiveCaseId ?? consultation.caseId);
+    const scopeDocs = await ChatSvc.scopeDocumentRefs(organizationId, consultationId, effectiveCaseId ?? consultation.caseId, userId);
 
     // emitToUser is documented as never throwing (lib/socket.ts), but this is called
     // synchronously from inside streamChatWonderMessage's ws.onmessage handler on every
@@ -1753,7 +1756,7 @@ export default class ChatSvc {
     // findById is scoped by ORGANIZATION. This used to pass the user id here, which never matches
     // an organization id, so an explicitly attached document was silently never used for grounding.
     // documentBelongsToScope below still requires the uploading user, the consultation or the case.
-    const doc = await DocumentRepo.findById(caseDocumentId, organizationId);
+    const doc = await DocumentRepo.findById(caseDocumentId, organizationId, userId);
     if (!doc) return undefined;
     if (doc.status === "ARCHIVED") return undefined;
     if (!documentBelongsToScope(doc, { userId, consultationId, caseId })) return undefined;
