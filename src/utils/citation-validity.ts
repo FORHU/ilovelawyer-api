@@ -1,5 +1,6 @@
 import { choice } from "@typesafe-ai/sdk";
 import { jevAsk } from "./typesafeClient";
+import { optionsInOrder } from "./jev-common";
 import logger from "./logger";
 
 export type CitationValidityStatus = "VALID" | "INVALID" | "UNVERIFIED" | "ADVERSE";
@@ -159,17 +160,25 @@ export function evaluateCitationHeuristic(input: CitationCheckInput): CitationCh
 /** Double-checks the heuristic's answer, including an exact word-for-word match (#366) — a quote
  * can sit verbatim in a passage that doesn't actually support it, e.g. taken from a dissent or
  * from a sentence the official text later contradicts. */
-export async function evaluateCitationWithJev(quote: string, official: string): Promise<CitationCheckResult> {
-  logger.info("Jev request", { feature: "citation-validity", question: "validity", officialText: official, quotedText: quote });
-  const response = await jevAsk("citation-validity", {
+export const JEV_VALIDITY_VERDICTS = ["VALID", "INVALID", "ADVERSE"] as const;
+
+/** The exact request evaluateCitationWithJev sends. `order` only exists so the option-order
+ * benchmark (#410) can ask the identical question with the options rearranged. */
+export function validityRequest(quote: string, official: string, order: readonly (typeof JEV_VALIDITY_VERDICTS)[number][] = JEV_VALIDITY_VERDICTS) {
+  return {
     state: { officialText: official, quotedText: quote },
     questions: {
       validity: choice(
         "A lawyer cited quotedText as coming from officialText. Classify the citation: VALID if officialText actually supports the same claim as quotedText, even if worded very differently, and the surrounding context doesn't undercut it; INVALID if officialText does not support quotedText and there is no real connection between them; ADVERSE if officialText actually contradicts or undermines what quotedText claims.",
-        { VALID: null, INVALID: null, ADVERSE: null },
+        optionsInOrder(order),
       ),
     },
-  });
+  };
+}
+
+export async function evaluateCitationWithJev(quote: string, official: string): Promise<CitationCheckResult> {
+  logger.info("Jev request", { feature: "citation-validity", question: "validity", officialText: official, quotedText: quote });
+  const response = await jevAsk("citation-validity", validityRequest(quote, official));
   const answer = response.answers.validity;
   logger.info("Jev response", {
     feature: "citation-validity",

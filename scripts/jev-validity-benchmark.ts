@@ -19,14 +19,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { evaluateCitationHeuristic, evaluateCitationWithJev } from "../src/utils/citation-validity";
 
-interface Case {
+export interface Case {
   label: string;
   quotedText: string;
   officialText: string;
   expected: "VALID" | "INVALID" | "ADVERSE";
 }
 
-const CASES: Case[] = [
+export const CASES: Case[] = [
   // VALID — heavily paraphrased but actually supported; the heuristic's 85% word-overlap match
   // has no way to see this and always calls it INVALID.
   {
@@ -241,7 +241,9 @@ async function main() {
   console.log(`\n${summary}\n\nWritten to ${outFile}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
