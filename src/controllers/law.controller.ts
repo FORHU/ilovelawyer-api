@@ -112,8 +112,8 @@ export default class LawCtrl {
    * an <iframe src> comes back blank because of X-Frame-Options / CSP frame-ancestors. Re-serving
    * the bytes from our own origin sidesteps that for every source, not just UK's.
    * UK legislation falls back to legislation.gov.uk's HTML rendition when its PDF is refused, so
-   * this route can answer with text/html as well as a PDF, and can be served from our own S3 copy
-   * (see LawDocumentSvc / UK_LEGISLATION_COPIES).
+   * this route can answer with text/html as well as a PDF, and UK legislation's HTML is served from
+   * our own saved copy while it is fresh (see LawDocumentSvc).
    * Returns 502 when the upstream is unreachable or answers with neither, and no copy can stand
    * in — the client falls back to a "View source" link.
    */
@@ -128,7 +128,7 @@ export default class LawCtrl {
     // first page. Strictly "<digits><letters>" so it can't steer the upstream path anywhere else.
     const section = typeof req.query.section === "string" && /^[0-9]+[A-Z]*$/i.test(req.query.section) ? req.query.section : null;
 
-    // Live from upstream, or (UK legislation, UK_LEGISLATION_COPIES=serve) our saved S3 copy.
+    // Live from upstream, or (UK legislation) our saved copy of its HTML.
     const doc = await LawDocumentSvc.get(law, section);
     if (!doc) throw new HttpError("The official document source is unavailable right now", 502);
 

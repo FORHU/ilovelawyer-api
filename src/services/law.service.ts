@@ -215,16 +215,6 @@ function toDetailInput(detail: JurisPhDetail): Prisma.LawUpdateInput {
   };
 }
 
-export interface LawDocumentCopyInfo {
-  /** "" for the whole document, "section/29" for one section. */
-  part: string;
-  /** When legislation.gov.uk last served the bytes we hold. */
-  checked_at: string;
-  /** Within the TTL, so the viewer shows it instead of a live fetch. When false the viewer shows
-   * the live document, and this copy only if legislation.gov.uk can't be reached. */
-  fresh: boolean;
-}
-
 export interface DocumentResult {
   item: {
     id: string;
@@ -269,9 +259,6 @@ export interface DocumentResult {
     cited_gr_numbers: string[];
     cited_ra_numbers: string[];
   };
-  /** UK legislation with UK_LEGISLATION_COPIES=serve only: the saved copy the viewer may show,
-   * per part, so the page can say so (see LawDocumentSvc.copiesFor). Absent or empty otherwise. */
-  copies?: LawDocumentCopyInfo[];
   source: string;
   notice: string;
 }

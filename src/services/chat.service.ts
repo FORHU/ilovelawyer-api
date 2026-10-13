@@ -1839,7 +1839,7 @@ export default class ChatSvc {
   }
 
   static parseTitle(raw: string): string {
-    return raw
+    const title = raw
       .split("\n")[0]
       // Double quotes never belong in a title; single quotes only as apostrophes inside a word
       // ("Driver's"). Quotes the model puts around a word ('Hi') are dropped as a pair instead of
@@ -1848,8 +1848,12 @@ export default class ChatSvc {
       // (\u2026except a plural possessive: "Parents' Custody" keeps its apostrophe.)
       .replace(/(^|[\s(])['\u2018\u2019]|['\u2018\u2019](?=[),:;.!?]|$)|(?<![sS])['\u2018\u2019](?=\s)/g, "$1")
       .replace(/\.$/, "")
-      .trim()
-      .slice(0, TITLE_MAX_CHARS);
+      .trim();
+    if (title.length <= TITLE_MAX_CHARS) return title;
+    // Over-long model output is cut at the last whole word, never mid-word ("Document Analy").
+    const cut = title.slice(0, TITLE_MAX_CHARS + 1);
+    const space = cut.lastIndexOf(" ");
+    return (space > 20 ? cut.slice(0, space) : cut.slice(0, TITLE_MAX_CHARS)).replace(/[\s,:;–—-]+$/, "");
   }
 
   /** The title prompts' "only a greeting / small talk" answer (see SMALL_TALK_TITLE_SENTINEL). */

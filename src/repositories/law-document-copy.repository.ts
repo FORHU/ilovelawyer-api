@@ -6,7 +6,6 @@ const meta = {
   id: true,
   lawId: true,
   part: true,
-  format: true,
   sha256: true,
   sourceUrl: true,
   bytes: true,
@@ -22,16 +21,6 @@ export default class LawDocumentCopyRepo {
   /** The most recently confirmed copy of one part ("" = whole document, "section/29"), without its bytes. */
   static async findLatest(lawId: string, part: string): Promise<LawDocumentCopyMeta | null> {
     return prisma.lawDocumentCopy.findFirst({ where: { lawId, part }, orderBy: { checkedAt: "desc" }, select: meta });
-  }
-
-  /** The most recently confirmed copy of every part of one law, without their bytes. */
-  static async listLatestByLaw(lawId: string): Promise<LawDocumentCopyMeta[]> {
-    return prisma.lawDocumentCopy.findMany({
-      where: { lawId },
-      distinct: ["part"],
-      orderBy: [{ part: "asc" }, { checkedAt: "desc" }],
-      select: meta,
-    });
   }
 
   /** One copy's gzip-compressed bytes. */

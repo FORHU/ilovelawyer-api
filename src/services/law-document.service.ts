@@ -7,39 +7,23 @@ import { legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
 import { UK_LEGISLATION_BASE_URL } from "../config";
 import { OUTBOUND_FETCH_HEADERS } from "../utils/law-fulltext";
 import logger from "../utils/logger";
-import type { LawDocumentCopyInfo } from "./law.service";
 
 // ── Our own copies of UK legislation ─────────────────────────────────────────
 // The Library's document viewer (LawCtrl.pdf) re-serves a law's official document from our origin.
-// For UK legislation it can also keep a copy in Postgres (LawDocumentCopy.content, gzip-compressed —
-// a large Act's 2–5 MB of HTML is 0.3–0.5 MB), so a viewed Act still opens when legislation.gov.uk is
-// down or its AWS WAF refuses us. UK_LEGISLATION_COPIES picks how far:
+// For UK legislation it also keeps legislation.gov.uk's HTML in Postgres (LawDocumentCopy.content,
+// gzip-compressed — a large Act's 2–5 MB of HTML is 0.3–0.5 MB), so a viewed Act opens from our copy
+// and still opens when legislation.gov.uk is down or its AWS WAF refuses us:
 //
-//   off    (default) fetch live every time, keep nothing — the behaviour before copies existed
-//   store  fetch live every time, and save a copy (at most once per TTL); never serve the copy
-//   serve  serve the saved copy while it is fresh; refetch once it is older than the TTL; serve the
-//          last copy when legislation.gov.uk can't be reached
-//
-// "serve" redistributes Crown copyright text from our own storage. Keep it off in production until
-// the Open Government Licence conditions have been reviewed. Read on every call, like
-// UK_LEGISLATION_DIRECT_FALLBACK, so tests and a restart-free env change both take effect.
+//   - a copy younger than COPY_TTL_MS is served as is, without asking legislation.gov.uk;
+//   - an older one is refetched, and stands in only if legislation.gov.uk can't be reached;
+//   - only HTML is kept — a PDF (judgments, or a legislation.gov.uk PDF that got through) is served
+//     live and never saved.
 
-export type LawCopiesMode = "off" | "store" | "serve";
-
-export function copiesMode(): LawCopiesMode {
-  const raw = (process.env.UK_LEGISLATION_COPIES ?? "").trim().toLowerCase();
-  return raw === "store" || raw === "serve" ? raw : "off";
-}
-
-const DEFAULT_TTL_DAYS = 90;
-
-export function copyTtlMs(): number {
-  const days = Number(process.env.UK_LEGISLATION_COPY_TTL_DAYS);
-  return (Number.isFinite(days) && days > 0 ? days : DEFAULT_TTL_DAYS) * 24 * 60 * 60 * 1000;
-}
+/** How long a saved copy is served before legislation.gov.uk is asked again. */
+export const COPY_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 function isFresh(copy: Pick<LawDocumentCopy, "checkedAt">, now = Date.now()): boolean {
-  return now - copy.checkedAt.getTime() < copyTtlMs();
+  return now - copy.checkedAt.getTime() < COPY_TTL_MS;
 }
 
 /** A whole Act's HTML can be large; past this we serve it but don't keep it. */
@@ -54,8 +38,8 @@ export interface LawDocumentBody {
   format: "pdf" | "html";
   /** Where the bytes came from upstream. */
   sourceUrl: string;
-  /** Set when the bytes are our saved copy rather than a live fetch. `stale` means the copy is past
-   * its TTL and is being served only because legislation.gov.uk could not be reached. */
+  /** Set when the bytes are our saved copy (always HTML) rather than a live fetch. `stale` means the
+   * copy is past its TTL and is being served only because legislation.gov.uk could not be reached. */
   copy?: { checkedAt: Date; stale: boolean };
 }
 
@@ -100,20 +84,20 @@ export default class LawDocumentSvc {
   /** The law's official document for the viewer, or null when there is none to serve (the caller
    * 502s). `section` is pre-validated by the caller and only applies to UK legislation. */
   static async get(law: Law, section: string | null): Promise<LawDocumentBody | null> {
-    const isUkLegislation = !!legislationUrlParts(law.jurisUrl);
-    const mode = isUkLegislation ? copiesMode() : "off";
-    const part = copyPart(section);
-    const saved = mode === "off" ? null : await LawDocumentCopyRepo.findLatest(law.id, part);
+    // Only UK legislation is copied; everything else is always fetched live.
+    if (!legislationUrlParts(law.jurisUrl)) return LawDocumentSvc.fetchLive(law, section);
 
-    if (mode === "serve" && saved && isFresh(saved)) {
+    const part = copyPart(section);
+    const saved = await LawDocumentCopyRepo.findLatest(law.id, part);
+
+    if (saved && isFresh(saved)) {
       const copy = await LawDocumentSvc.readCopy(saved, false);
       if (copy) return copy;
     }
 
     const live = await LawDocumentSvc.fetchLive(law, section);
     if (live) {
-      // "store" saves at most once per TTL, so a popular Act isn't rewritten on every view.
-      if (mode !== "off" && !(saved && isFresh(saved))) {
+      if (live.format === "html") {
         void LawDocumentSvc.save(law.id, part, live, saved).catch((err) =>
           logger.warn("Law document copy: save failed", { lawId: law.id, part, err }),
         );
@@ -121,7 +105,7 @@ export default class LawDocumentSvc {
       return live;
     }
 
-    if (mode === "serve" && saved) return LawDocumentSvc.readCopy(saved, !isFresh(saved));
+    if (saved) return LawDocumentSvc.readCopy(saved, !isFresh(saved));
     return null;
   }
 
@@ -158,28 +142,24 @@ export default class LawDocumentSvc {
     return null;
   }
 
-  /** Keeps `doc` as the latest copy of `part`. Same bytes as `previous` only moves its checkedAt;
-   * different bytes add a row with the document gzip-compressed. Nothing is overwritten. */
-  static async save(
-    lawId: string,
-    part: string,
-    doc: LawDocumentBody,
-    previous: Pick<LawDocumentCopy, "id" | "sha256" | "format"> | null,
-  ): Promise<void> {
+  /** Keeps legislation.gov.uk's HTML `doc` as the latest copy of `part`. Same bytes as `previous` only
+   * moves its checkedAt; different bytes add a row with the HTML gzip-compressed. Nothing is
+   * overwritten. A PDF is never kept. */
+  static async save(lawId: string, part: string, doc: LawDocumentBody, previous: Pick<LawDocumentCopy, "id" | "sha256"> | null): Promise<void> {
+    if (doc.format !== "html") return;
     if (doc.body.length > MAX_COPY_BYTES) {
       logger.warn("Law document copy: too large to keep", { lawId, part, bytes: doc.body.length });
       return;
     }
     const now = new Date();
     const sha256 = createHash("sha256").update(doc.body).digest("hex");
-    if (previous && previous.sha256 === sha256 && previous.format === doc.format) {
+    if (previous && previous.sha256 === sha256) {
       await LawDocumentCopyRepo.markChecked(previous.id, now);
       return;
     }
     await LawDocumentCopyRepo.create({
       lawId,
       part,
-      format: doc.format,
       sha256,
       sourceUrl: doc.sourceUrl,
       content: await gzip(doc.body),
@@ -189,26 +169,16 @@ export default class LawDocumentSvc {
     });
   }
 
-  /** A saved copy's bytes, or null (logged) when they can't be read back. */
+  /** A saved copy's HTML, or null (logged) when it can't be read back. */
   static async readCopy(copy: LawDocumentCopyMeta, stale: boolean): Promise<LawDocumentBody | null> {
-    if (copy.format !== "pdf" && copy.format !== "html") return null;
     try {
       const content = await LawDocumentCopyRepo.findContent(copy.id);
       if (!content) return null;
       const body = await gunzip(content);
-      return { body, format: copy.format, sourceUrl: copy.sourceUrl, copy: { checkedAt: copy.checkedAt, stale } };
+      return { body, format: "html", sourceUrl: copy.sourceUrl, copy: { checkedAt: copy.checkedAt, stale } };
     } catch (err) {
       logger.warn("Law document copy: read failed", { lawId: copy.lawId, copyId: copy.id, err });
       return null;
     }
-  }
-
-  /** What the detail page needs to label the viewer: the latest copy of each part, but only in
-   * "serve" mode — in "off" and "store" the viewer always shows the live document. */
-  static async copiesFor(law: Pick<Law, "id" | "jurisUrl">): Promise<LawDocumentCopyInfo[]> {
-    if (copiesMode() !== "serve" || !legislationUrlParts(law.jurisUrl)) return [];
-    const now = Date.now();
-    const rows = await LawDocumentCopyRepo.listLatestByLaw(law.id);
-    return rows.map((r) => ({ part: r.part, checked_at: r.checkedAt.toISOString(), fresh: isFresh(r, now) }));
   }
 }
