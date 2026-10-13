@@ -9,8 +9,8 @@ import logger from "./logger";
  * as another. Every repository call that writes or returns Message.content or
  * Message.pendingReplyContent goes through these. */
 
-const CONTENT = "Message.content";
-const PENDING_REPLY = "Message.pendingReplyContent";
+export const CONTENT = "Message.content";
+export const PENDING_REPLY = "Message.pendingReplyContent";
 
 export const sealMessageContent = (plain: string): string => sealField(plain, CONTENT, true);
 
