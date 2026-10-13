@@ -15,6 +15,7 @@ import {
   type UkLegislationSectionResult,
 } from "../../../utils/uk-legal-mcp";
 import { extractCaseUri } from "../../../utils/uk-citation-resolution";
+import LawDocumentSvc from "../../../services/law-document.service";
 import {
   SEARCH_NOTICE,
   type SearchResult,
@@ -365,6 +366,12 @@ export class UkLawSourceProvider implements LawSourceProvider {
   // ── document (lazy detail) ────────────────────────────────────────────────
 
   async getDocument(params: { category: LawCategory; id: string }): Promise<DocumentResult> {
+    const result = await this.loadDocument(params);
+    const copies = await LawDocumentSvc.copiesFor({ id: result.item.stored_id, jurisUrl: result.item.juris_url });
+    return copies.length ? { ...result, copies } : result;
+  }
+
+  private async loadDocument(params: { category: LawCategory; id: string }): Promise<DocumentResult> {
     const wire = UK_WIRE_BY_CATEGORY[params.category];
     const existing = await LawRepo.findById(params.id);
     if (!existing || existing.category !== params.category) {

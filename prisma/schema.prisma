@@ -1163,9 +1163,27 @@ model Law {
   citedTo        CitationEdge[]  @relation("CitedTo")
   citationChecks CitationCheck[] @relation("ResolvedLaw")
   authorities    CaseAuthority[]
+  documentCopies LawDocumentCopy[]
 
   @@index([category, tenantId])
   @@index([year])
+}
+
+model LawDocumentCopy {
+  id        String   @id @default(uuid())
+  lawId     String
+  part      String   @default("")
+  format    String
+  sha256    String
+  sourceUrl String
+  content   Bytes
+  bytes     Int
+  fetchedAt DateTime @default(now())
+  checkedAt DateTime @default(now())
+
+  law Law @relation(fields: [lawId], references: [id], onDelete: Cascade)
+
+  @@index([lawId, part, checkedAt])
 }
 
 // ── Citation Map ──────────────────────────────────────────────────────────────

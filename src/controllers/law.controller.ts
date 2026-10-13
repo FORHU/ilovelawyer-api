@@ -4,6 +4,7 @@ import CitationEdgeRepo from "../repositories/citation-edge.repository";
 import CitationExtractionQueue from "../queues/citation-extraction.queue";
 import UkCitationNetworkSvc from "../services/uk-citation-network.service";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
+import LawDocumentSvc from "../services/law-document.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
 import { assertCitationsAvailable } from "../utils/law.utils";
@@ -11,8 +12,7 @@ import { getLawSourceProvider } from "../legal/law-source/law-source.registry";
 import { legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
 import { UK_LEGISLATION_BASE_URL } from "../config";
 import { lawSearchSchema, lawDocumentSchema, lawBrowseSchema } from "../validation/law.validation";
-import logger from "../utils/logger";
-import { OUTBOUND_FETCH_HEADERS } from "../utils/law-fulltext";
+import { frameableLegislationHtml } from "../utils/uk-legislation-direct";
 
 export default class LawCtrl {
   /**
@@ -111,60 +111,56 @@ export default class LawCtrl {
    * direct top-level navigation (our "open in a new tab" link) renders fine, but the same URL as
    * an <iframe src> comes back blank because of X-Frame-Options / CSP frame-ancestors. Re-serving
    * the bytes from our own origin sidesteps that for every source, not just UK's.
-   * Returns 502 when the upstream is unreachable or answers with anything other than a PDF (e.g.
-   * legislation.gov.uk's AWS-WAF challenge page) — the client falls back to a "View source" link.
+   * UK legislation falls back to legislation.gov.uk's HTML rendition when its PDF is refused, so
+   * this route can answer with text/html as well as a PDF, and can be served from our own S3 copy
+   * (see LawDocumentSvc / UK_LEGISLATION_COPIES).
+   * Returns 502 when the upstream is unreachable or answers with neither, and no copy can stand
+   * in — the client falls back to a "View source" link.
    */
   static async pdf(req: Request, res: Response) {
     const law = await LawRepo.findById(req.params.lawId);
     if (!law) throw new HttpError("Law not found", 404);
+    // UK legislation's document lives at a derived legislation.gov.uk path; everything else needs a pdfUrl.
+    if (!legislationUrlParts(law.jurisUrl) && !law.pdfUrl) throw new HttpError("No PDF available for this document", 404);
 
-    // UK legislation stores no pdfUrl (see legislationHitToCreateInput) — its PDF only exists at
-    // this derived legislation.gov.uk path. Every other document (PH jurisprudence, PH
-    // republic-acts, UK case law) already has its direct PDF url in pdfUrl.
-    const ukLegislationParts = legislationUrlParts(law.jurisUrl);
     // `?section=49` (UK legislation only) serves just that section — legislation.gov.uk publishes
     // one at `/section/<n>/data.pdf` — so a chat citation to "s 49" opens on s 49, not the Act's
     // first page. Strictly "<digits><letters>" so it can't steer the upstream path anywhere else.
     const section = typeof req.query.section === "string" && /^[0-9]+[A-Z]*$/i.test(req.query.section) ? req.query.section : null;
-    const upstream = ukLegislationParts
-      ? `${UK_LEGISLATION_BASE_URL}/${ukLegislationParts.type}/${ukLegislationParts.year}/${ukLegislationParts.number}${section ? `/section/${section}` : ""}/data.pdf`
-      : law.pdfUrl;
-    if (!upstream) throw new HttpError("No PDF available for this document", 404);
 
-    let upstreamRes: globalThis.Response;
-    try {
-      upstreamRes = await fetch(upstream, {
-        signal: AbortSignal.timeout(20_000),
-        headers: { ...OUTBOUND_FETCH_HEADERS, accept: "application/pdf,*/*" },
-      });
-    } catch (err) {
-      logger.warn("Law PDF proxy: upstream fetch failed", { lawId: law.id, upstream, err });
-      throw new HttpError("The official document source is unavailable right now", 502);
-    }
+    // Live from upstream, or (UK legislation, UK_LEGISLATION_COPIES=serve) our saved S3 copy.
+    const doc = await LawDocumentSvc.get(law, section);
+    if (!doc) throw new HttpError("The official document source is unavailable right now", 502);
 
-    const contentType = (upstreamRes.headers.get("content-type") ?? "").toLowerCase();
-    if (!upstreamRes.ok || !contentType.includes("pdf")) {
-      logger.warn("Law PDF proxy: upstream returned non-PDF response", {
-        lawId: law.id,
-        upstream,
-        status: upstreamRes.status,
-        contentType,
-      });
-      throw new HttpError("The official document source is unavailable right now", 502);
-    }
-
-    const body = Buffer.from(await upstreamRes.arrayBuffer());
     // helmet() set these on the way in — drop them so the frontend (a different origin) can
-    // embed this PDF in an <iframe>. Safe here: the body is a public primary-law PDF, nothing
+    // embed the document in an <iframe>. Safe here: the body is public primary law, nothing
     // an attacker gains by framing.
     res.removeHeader("X-Frame-Options");
     res.removeHeader("Content-Security-Policy");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline");
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    // A stale copy stands in only while legislation.gov.uk is unreachable — don't let the browser keep it.
+    res.setHeader("Cache-Control", doc.copy?.stale ? "no-store" : "public, max-age=86400");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    return res.send(body);
+    if (doc.copy) res.setHeader("X-Law-Copy-Checked-At", doc.copy.checkedAt.toISOString());
+
+    if (doc.format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", "inline");
+      return res.send(doc.body);
+    }
+
+    // Live or saved, the HTML is legislation.gov.uk's raw rendition — made frameable here, on the way out.
+    const html = frameableLegislationHtml(doc.body.toString("utf8"), UK_LEGISLATION_BASE_URL);
+    const legislationOrigin = new URL(UK_LEGISLATION_BASE_URL).origin;
+    // Third-party HTML on our API origin: `sandbox` (no allow-scripts, no allow-same-origin)
+    // gives it an opaque origin with nothing able to run; popups are allowed so its links
+    // (all `target="_blank"`) still open legislation.gov.uk in a new tab.
+    res.setHeader(
+      "Content-Security-Policy",
+      `sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline' ${legislationOrigin}; img-src ${legislationOrigin} data:; font-src ${legislationOrigin}`,
+    );
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(html);
   }
 
   /**
