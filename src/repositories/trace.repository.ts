@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma";
+import { openMessages } from "../utils/message-content";
 
 export interface TraceEventInsert {
   /** Null for a run that belongs to a pane, not a chat. */
@@ -73,7 +74,7 @@ export default class TraceRepo {
       where: { id: { in: messageIds } },
       select: { id: true, content: true },
     });
-    return new Map(rows.map((r) => [r.id, r.content]));
+    return new Map(openMessages(rows).map((r) => [r.id, r.content]));
   }
 
   /** The organization a case belongs to, for tagging a pane run's trace: null for a personal case,

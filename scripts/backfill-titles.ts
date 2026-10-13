@@ -8,6 +8,7 @@ dotenv.config();
 import prisma from "../src/lib/prisma";
 import { generateTitleViaWs } from "../src/utils/chatWonder";
 import ChatSvc from "../src/services/chat.service";
+import { openMessages } from "../src/utils/message-content";
 
 const DELAY_MS = 1500;
 
@@ -28,11 +29,14 @@ async function main() {
   let failed = 0;
 
   for (const { id, title } of consultations) {
-    const messages = await prisma.message.findMany({
-      where: { consultationId: id },
-      orderBy: { createdAt: "asc" },
-      take: 4,
-    });
+    // Opened: a sealed message would otherwise reach the title prompt as ciphertext.
+    const messages = openMessages(
+      await prisma.message.findMany({
+        where: { consultationId: id },
+        orderBy: { createdAt: "asc" },
+        take: 4,
+      }),
+    );
 
     const userMsg = messages.find((m) => m.role === "user");
     const assistantMsg = messages.find((m) => m.role === "assistant");
