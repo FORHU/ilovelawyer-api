@@ -111,11 +111,10 @@ export default class LawCtrl {
    * direct top-level navigation (our "open in a new tab" link) renders fine, but the same URL as
    * an <iframe src> comes back blank because of X-Frame-Options / CSP frame-ancestors. Re-serving
    * the bytes from our own origin sidesteps that for every source, not just UK's.
-   * UK legislation falls back to legislation.gov.uk's HTML rendition when its PDF is refused, so
-   * this route can answer with text/html as well as a PDF, and UK legislation's HTML is served from
-   * our own saved copy while it is fresh (see LawDocumentSvc).
-   * Returns 502 when the upstream is unreachable or answers with neither, and no copy can stand
-   * in — the client falls back to a "View source" link.
+   * UK legislation is always legislation.gov.uk's HTML rendition (never its PDF), served from our own
+   * saved copy while it is fresh (see LawDocumentSvc), so this route answers with text/html as well as
+   * a PDF. Returns 502 when the upstream is unreachable and no copy can stand in — the client falls
+   * back to a "View source" link.
    */
   static async pdf(req: Request, res: Response) {
     const law = await LawRepo.findById(req.params.lawId);
@@ -124,8 +123,8 @@ export default class LawCtrl {
     if (!legislationUrlParts(law.jurisUrl) && !law.pdfUrl) throw new HttpError("No PDF available for this document", 404);
 
     // `?section=49` (UK legislation only) serves just that section — legislation.gov.uk publishes
-    // one at `/section/<n>/data.pdf` — so a chat citation to "s 49" opens on s 49, not the Act's
-    // first page. Strictly "<digits><letters>" so it can't steer the upstream path anywhere else.
+    // one at `/section/<n>/data.html` (`/article/<n>` for retained EU law) — so a chat citation to
+    // "s 49" opens on s 49, not the Act's first page. Strictly "<digits><letters>" so it can't steer the upstream path anywhere else.
     const section = typeof req.query.section === "string" && /^[0-9]+[A-Z]*$/i.test(req.query.section) ? req.query.section : null;
 
     // Live from upstream, or (UK legislation) our saved copy of its HTML.
