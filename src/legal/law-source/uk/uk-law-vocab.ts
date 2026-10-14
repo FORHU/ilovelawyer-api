@@ -53,31 +53,54 @@ export const UK_COURTS = [
 ] as const;
 export type UkCourt = (typeof UK_COURTS)[number];
 
-/** legislation.gov.uk's codes for EU legislation retained after Brexit: regulations, decisions and
- * directives. Their provisions are articles (`…/eur/2016/679/article/6`), not sections. */
-export const UK_EU_LEGISLATION_TYPES = ["eur", "eudn", "eudr"] as const;
+/** legislation.gov.uk's codes for EU legislation retained after Brexit: regulations, decisions,
+ * directives and treaties. Their provisions are articles (`…/eur/2016/679/article/6`), not sections. */
+export const UK_EU_LEGISLATION_TYPES = ["eur", "eudn", "eudr", "eut"] as const;
 
 /**
- * legislation.gov.uk type codes. Used for the `legislation_search` `type` filter and to parse a
- * legislation URL back into `{ type, year, number }` for `legislation_get_toc` / `_get_section`.
+ * legislation.gov.uk type codes — every document type it publishes, since legislation_search can
+ * return any of them (a "taxation" search brings back Acts of the English Parliament from 1697).
+ * Used to parse a stored legislation URL back into `{ type, year, number }`; a code missing here
+ * makes the row's URL unparseable and the Library viewer answers "No PDF available".
  */
 export const UK_LEGISLATION_TYPES = [
+  // UK Parliament: public general, local and private/personal Acts; Church Measures
   "ukpga",
   "ukla",
-  "uksi",
+  "ukppa",
+  "ukcm",
+  // Scotland, Wales, Northern Ireland: Acts and Measures
   "asp",
-  "ssi",
   "asc",
   "anaw",
-  "wsi",
   "mwa",
   "nia",
-  "nisr",
   "apni",
-  "ukcm",
+  "mnia",
+  // Historical: English Parliament (to 1707), Old Scottish and Irish Parliaments, Great Britain
+  "aep",
+  "aosp",
+  "aip",
+  "apgb",
+  "gbla",
+  "gbppa",
+  // Secondary legislation: SIs, rules and orders, instruments, directions
+  "uksi",
+  "ssi",
+  "wsi",
+  "nisr",
+  "nisi",
+  "nisro",
+  "uksro",
+  "ukci",
   "ukmd",
-  // Retained EU law — legislation_search returns these too (the UK GDPR is eur/2016/679). Without them
-  // a stored row's URL doesn't parse, and the Library viewer answers "No PDF available".
+  "ukmo",
+  // Draft SIs (numbered by ISBN)
+  "ukdsi",
+  "sdsi",
+  "wdsi",
+  "nidsr",
+  // Retained EU law (the UK GDPR is eur/2016/679)
   ...UK_EU_LEGISLATION_TYPES,
 ] as const;
 export type UkLegislationType = (typeof UK_LEGISLATION_TYPES)[number];
