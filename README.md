@@ -1,5 +1,7 @@
 # Restful API Template
 
+#author: Joel Ralph Balignasay
+
 This is a Node.js TypeScript project that implements a RESTful API using Express.js, MongoDB native driver, and follows Domain-Driven Design (DDD) principles. It also utilizes `express-session`, `express-rate-limit`, and `helmet` for enhanced security.
 
 ## Project Structure
