@@ -174,7 +174,15 @@ jobs:
           CHAT_WONDER_API_KEY: ${{ secrets.CHAT_WONDER_API_KEY }}
           TRACE_STREAM_API_KEY: ${{ secrets.TRACE_STREAM_API_KEY }}
           AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Deliberately NOT named AWS_SECRET_ACCESS_KEY here. This step calls the
+          # AWS CLI, which is authenticated by the OIDC session — and a step-level
+          # AWS_SECRET_ACCESS_KEY overrides that session's secret while leaving its
+          # AWS_ACCESS_KEY_ID and AWS_SESSION_TOKEN in place. The halves no longer
+          # match and every CLI call fails with InvalidSignatureException, which
+          # reads like a broken role rather than a variable collision.
+          #
+          # It is written to the env file under its real name below.
+          APP_AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           DOCUMENT_EXTRACTION_QUEUE_URL: ${{ secrets.DOCUMENT_EXTRACTION_QUEUE_URL }}
           CITATION_EXTRACTION_QUEUE_URL: ${{ secrets.CITATION_EXTRACTION_QUEUE_URL }}
@@ -238,7 +246,7 @@ jobs:
             FIELD_ENCRYPTION_KEY FIELD_ENCRYPTION_ENABLED \
             CHAT_WONDER_API_URL CHAT_WONDER_WS_URL CHAT_WONDER_API_KEY \
             TRACE_STREAM_API_KEY \
-            AWS_ACCESS_KEY AWS_SECRET_ACCESS_KEY AWS_S3_BUCKET \
+            AWS_ACCESS_KEY AWS_S3_BUCKET \
             DOCUMENT_EXTRACTION_QUEUE_URL CITATION_EXTRACTION_QUEUE_URL \
             AUDIO_OVERVIEW_QUEUE_URL CASE_RECONSTRUCTION_AUDIO_QUEUE_URL \
             AI_GENERATION_QUEUE_URL MESSAGE_PERSISTENCE_QUEUE_URL \
@@ -257,6 +265,10 @@ jobs:
           do
             add "$name" "$(printenv "$name" || true)"
           done
+
+          # Under its real name, from the alias above. The application reads
+          # AWS_SECRET_ACCESS_KEY; only this workflow step had to avoid it.
+          add AWS_SECRET_ACCESS_KEY "${APP_AWS_SECRET_ACCESS_KEY:-}"
 
           # Refuse to deploy pointing at the old database. DATABASE_URL is the one
           # value that decides which instance takes production writes, and getting
