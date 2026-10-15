@@ -141,6 +141,12 @@ jobs:
 
       - name: Publish env to Parameter Store
         env:
+          # Shared with the OLD workflow, deliberately — one value, no drift.
+          #
+          # The consequence: once this points at 10.50.1.250, a push to main makes
+          # the old workflow redeploy the old box with a database that box cannot
+          # reach (different VPC, no peering), and production drops. Disable
+          # "Deploy Production" in the Actions tab before changing this.
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           MAILER_TRANSPORT_HOST: ${{ secrets.MAILER_TRANSPORT_HOST }}
