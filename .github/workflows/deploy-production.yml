@@ -9,8 +9,10 @@ name: Deploy Production (dev host)
 #     did on 2026-10-14, taking production down until DNS was repointed.
 #   - The env file lands in SSM Parameter Store and is assembled on the host,
 #     rather than being scp'd. Nothing is written to a runner's disk.
-#   - Container name and port are prefixed `prod`. The SAME host already runs the
-#     dev instances on 4030/4031/4032; a collision here would stop dev, not fail.
+#   - Container `ilovelawyer-api` on 4034, matching the Cloudflare naming where
+#     production is the plain name and dev carries the -dev suffix. The SAME host
+#     runs the dev trio on 4030/4031/4032 as ilovelawyer-*-dev; two containers
+#     cannot share a name, so one side had to differ and DNS decides which.
 #
 # WHAT DOES NOT CHANGE
 #   - Still arm64, still the same ECR repository and image tags.
@@ -51,7 +53,7 @@ env:
   ACCOUNT_ID: "617163942417"
   INSTANCE_ID: i-0f95a93145ea25e7a
   ECR_REPOSITORY: ilovelawyer-api
-  CONTAINER: ilovelawyer-prod-api
+  CONTAINER: ilovelawyer-api
   NETWORK: forhu-dev
   HOST_PORT: "4034"
   APP_PORT: "3001"
