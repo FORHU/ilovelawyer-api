@@ -19,6 +19,12 @@ name: Deploy Dev
 #      RABBITMQ_URL come from the host — do NOT set them here.
 
 on:
+  # Dev tracks main. Without this the dev container only changes when somebody
+  # remembers to dispatch, and it silently falls behind: on 2026-10-16 ilovelawyer
+  # dev was 24h and several merges stale while production deployed on every merge,
+  # which read as "changes not propagating" rather than as a missing trigger.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
@@ -27,9 +33,6 @@ on:
         # before anything is built. Blank falls back to github.ref_name.
         description: "Branch, tag or SHA to deploy (blank = the branch you ran this from)"
         required: false
-  # Uncomment once a dev branch exists and the team wants push-to-deploy.
-  # push:
-  #   branches: [dev]
 
 concurrency:
   group: forhu-dev-ilovelawyer
@@ -133,8 +136,6 @@ jobs:
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
-          TRIAL_MESSAGE_LIMIT: ${{ vars.TRIAL_MESSAGE_LIMIT }}
-          TRIAL_DURATION_HOURS: ${{ vars.TRIAL_DURATION_HOURS }}
         run: |
           set -euo pipefail
           umask 077
@@ -197,8 +198,7 @@ jobs:
           add JURIS_PH_API_URL          "${JURIS_PH_API_URL:-}"
           add UK_CASELAW_BASE_URL       "${UK_CASELAW_BASE_URL:-}"
           add UK_LEGISLATION_BASE_URL   "${UK_LEGISLATION_BASE_URL:-}"
-          add TRIAL_MESSAGE_LIMIT       "${TRIAL_MESSAGE_LIMIT:-}"
-          add TRIAL_DURATION_HOURS      "${TRIAL_DURATION_HOURS:-}"
+
           # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the host's instance role
           # grants S3 and SQS. An empty pair here makes the SDK skip its
           # provider chain and fail with "Resolved credential object is not
