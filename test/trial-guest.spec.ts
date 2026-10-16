@@ -6,6 +6,10 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../src/repositories/auth.repository";
 import TrialSvc from "../src/services/trial.service";
+import ChatSvc from "../src/services/chat.service";
+import ChatRepo from "../src/repositories/chat.repository";
+import { redis } from "../src/lib/redis";
+import { trialSampleKey } from "../src/utils/chat.utils";
 import { blockTrialWrites, trialMessageLimit } from "../src/middleware/trial.middleware";
 import { ACCESS_TOKEN_SECRET } from "../src/config";
 
@@ -63,5 +67,51 @@ describe("Trial guest", () => {
         expect(err.statusCode).to.equal(404);
       }
     }
+  });
+});
+
+describe("Sample chat session recap", () => {
+  // The model's memory is a Chat Wonder session, so a guest's first send in a new one has to carry
+  // the sample answer or a follow-up is answered as if the chat were new. Only the seeded sample.
+  const ChatSvcAny = ChatSvc as any;
+  let saved: Record<string, any>;
+  let isSample: boolean;
+  let primed: string | null;
+  let messages: any[];
+
+  beforeEach(() => {
+    saved = { list: ChatRepo.listMessagesByConsultation, get: redis.get };
+    isSample = true;
+    primed = null;
+    messages = [
+      { id: "q1", role: "user", content: "What are her remedies?", replyStatus: "DONE" },
+      { id: "a1", role: "assistant", content: "Damages under s.2(1), or rescission.", replyStatus: null },
+      { id: "q2", role: "user", content: "And if there is an entire agreement clause?", replyStatus: "PENDING" },
+    ];
+    (ChatRepo as any).listMessagesByConsultation = async () => messages;
+    (redis as any).get = async (key: string) => (key === trialSampleKey("c1") ? (isSample ? "1" : null) : primed);
+  });
+  afterEach(() => {
+    (ChatRepo as any).listMessagesByConsultation = saved.list;
+    (redis as any).get = saved.get;
+  });
+
+  const recap = () => ChatSvcAny.trialSessionRecap("c1", "s1", "q2") as Promise<string | undefined>;
+
+  it("carries the sample question and answer, not the message being sent", async () => {
+    const text = await recap();
+    expect(text).to.include("Question: What are her remedies?");
+    expect(text).to.include("Answer: Damages under s.2(1), or rescission.");
+    expect(text).to.not.include("entire agreement");
+  });
+
+  it("is sent once per session", async () => {
+    primed = "1";
+    expect(await recap()).to.equal(undefined);
+  });
+
+  it("is only for the sample chat: any other consultation is left alone", async () => {
+    isSample = false;
+    expect(await recap()).to.equal(undefined);
   });
 });
