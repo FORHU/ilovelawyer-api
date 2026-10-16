@@ -6,6 +6,18 @@ export function chatWonderSessionKey(consultationId: string): string {
   return `chatwonder:session:${consultationId}`;
 }
 
+/** Marks a trial guest's seeded sample consultation (TrialSvc.seedSampleConsultation): the only
+ * consultation whose earlier turns ChatSvc.trialSessionRecap hands to the model. */
+export function trialSampleKey(consultationId: string): string {
+  return `trial:sample:${consultationId}`;
+}
+
+/** Set once a Chat Wonder session has been given the consultation's earlier turns (see
+ * ChatSvc.trialSessionRecap). Keyed by session, not consultation: a new session starts without them. */
+export function chatWonderRecapKey(sessionId: string): string {
+  return `chatwonder:recap:${sessionId}`;
+}
+
 export function messageHash(text: string): string {
   return createHash("md5").update(text.trim().toLowerCase()).digest("hex");
 }
