@@ -4,6 +4,7 @@ import { redis } from "../lib/redis";
 import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
 import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 import { getStableProxyFileUrl } from "../utils/s3";
+import { TRIAL_MESSAGE_LIMIT } from "../config";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -44,11 +45,14 @@ function toPublicUser<
     provider: string | null;
     avatar?: { s3Key: string | null } | null;
     googleRefreshToken?: string | null;
+    trialExpiresAt?: Date | null;
+    trialMessagesUsed?: number;
   },
 >(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken"> & {
   hasPassword: boolean;
   avatarUrl: string | null;
   googleCalendarConnected: boolean;
+  trialMessagesLeft: number | null;
 } {
   const { password, avatar, googleRefreshToken, ...rest } = user;
   return {
@@ -56,6 +60,9 @@ function toPublicUser<
     hasPassword: password !== null && !isGoogleSsoAccount(user),
     avatarUrl: avatar?.s3Key ? getStableProxyFileUrl(avatar.s3Key) : null,
     googleCalendarConnected: !!googleRefreshToken,
+    // Only a trial guest has one: what is left of their TRIAL_MESSAGE_LIMIT, so the app never has
+    // to know the limit itself.
+    trialMessagesLeft: user.trialExpiresAt ? Math.max(0, TRIAL_MESSAGE_LIMIT - (user.trialMessagesUsed ?? 0)) : null,
   };
 }
 

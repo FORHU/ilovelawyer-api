@@ -34,9 +34,14 @@ import lawRoute from "./law.route";
 
 const router = express.Router();
 
-// A trial guest (see TrialSvc) can read around the app but not write through these.
+// A trial guest (see TrialSvc) can read around the app but not write through these. That includes
+// the routers whose POSTs call a paid model or the speech service (legal-rag, tts, law's citation
+// expansion, source analysis); a guest's only AI is the capped chat send (trialMessageLimit).
 router.use(
-  ["/organizations", "/case-document", "/generated-document", "/my-cases", "/shared-cases", "/documents", "/transcriptions", "/send-email", "/terminal"],
+  [
+    "/organizations", "/case-document", "/generated-document", "/my-cases", "/shared-cases", "/documents",
+    "/transcriptions", "/send-email", "/terminal", "/legal-rag", "/tts", "/law", "/legal-source-analysis", "/model-settings",
+  ],
   blockTrialWrites,
 );
 

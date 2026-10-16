@@ -8,9 +8,8 @@ import ConsentSvc from "./consent.service";
 import SecurityAuditSvc from "./security-audit.service";
 import HttpError from "../utils/http-error";
 import loginToken from "../utils/loginToken";
-import { ACCESS_TOKEN_SECRET } from "../config";
+import { ACCESS_TOKEN_SECRET, TRIAL_DURATION_MS } from "../config";
 import type { TenantCode } from "../types/tenant-code";
-import { TRIAL_DURATION_MS } from "../constants/trial.constants";
 import { TRIAL_SAMPLE_ANSWER, TRIAL_SAMPLE_QUESTION, TRIAL_SAMPLE_RELATED_CASES, TRIAL_SAMPLE_TITLE } from "../constants/trial-sample.constants";
 
 export default class TrialSvc {

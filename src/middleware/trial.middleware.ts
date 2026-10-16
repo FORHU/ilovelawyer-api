@@ -2,8 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../repositories/auth.repository";
 import HttpError from "../utils/http-error";
-import { ACCESS_TOKEN_SECRET } from "../config";
-import { TRIAL_MESSAGE_LIMIT } from "../constants/trial.constants";
+import { ACCESS_TOKEN_SECRET, TRIAL_MESSAGE_LIMIT } from "../config";
 
 /** Spends one of a trial guest's AI answers before a message is sent; a no-op for real accounts.
  * Must run after validSession. 403 TRIAL_LIMIT_REACHED tells the app to ask for an account. */
