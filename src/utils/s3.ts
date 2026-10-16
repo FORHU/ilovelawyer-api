@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
@@ -48,6 +48,15 @@ export async function uploadToS3(key: string, body: Buffer, contentType: string)
   );
 
   return s3UrlForKey(key);
+}
+
+/** Deletes one object from the bucket (FileCleanupSvc's sweep). Deleting a key that is already
+ * gone succeeds, as S3 does. */
+export async function deleteS3Object(key: string): Promise<void> {
+  if (!AWS_S3_BUCKET) {
+    throw new Error("AWS_S3_BUCKET is not configured");
+  }
+  await client.send(new DeleteObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
 }
 
 /** Server-side copy within the bucket — the bytes never pass through the API. */

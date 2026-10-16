@@ -8,7 +8,16 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 /** Thrown for a copy that can never succeed (e.g. the original is gone) — not retried. */
 export class CaseCopyAbandoned extends Error {}
 
-type CopyRequest = { sourceCaseId: string; userId: string; targetOrganizationId: string; sourceOrganizationName: string };
+/** `reuseIndex` copies each READY document's chunks and embeddings instead of re-indexing it, so
+ * the copy is usable at once and costs nothing in AI (the trial's sample case, TrialSvc). Chunk
+ * text is sealed with the one field-encryption key, so it copies across organizations as is. */
+type CopyRequest = {
+  sourceCaseId: string;
+  userId: string;
+  targetOrganizationId: string;
+  sourceOrganizationName: string;
+  reuseIndex?: boolean;
+};
 type ConsultationCopyRequest = { sourceConsultationId: string; userId: string; targetOrganizationId: string };
 
 const CONSULTATION_INCLUDE = {
@@ -81,6 +90,10 @@ export default class CaseCopySvc {
       source.consultations,
       source.documents,
       (fileId, ext) => `documents/cases/${caseId}/${Date.now()}-${fileId.slice(0, 8)}${ext}`,
+      // A reuseIndex copy (a trial guest's sample case) shares the original's files rather than
+      // copying them to S3: nothing per guest to store or clean up, and deleting the copy never
+      // marks a file the original still uses (OrganizationRepo.deletePermanently checks).
+      !!request.reuseIndex,
     );
 
     await prisma.$transaction(
@@ -165,8 +178,61 @@ export default class CaseCopySvc {
       { timeout: 60_000 },
     );
 
-    DocumentExtractionQueue.enqueueMany([...ids.documents.values()]);
+    const reused = request.reuseIndex ? await CaseCopySvc.copyIndex(source.documents, ids.documents) : new Set<string>();
+    if (request.reuseIndex) await CaseCopySvc.copyDataTable(source.id, caseId, ids.documents);
+    DocumentExtractionQueue.enqueueMany([...ids.documents.values()].filter((id) => !reused.has(id)));
     return caseId;
+  }
+
+  /** The tables Studio's Data Table reads (findings, witnesses, damages, deadlines). With the index
+   * reused there is no analysis run to rebuild them, so they are copied as the original has them. */
+  private static readonly DATA_TABLE_SOURCES = ["CaseFinding", "Witness", "DamageClaim", "ProcedureItem"] as const;
+
+  /** Copies the Data Table's rows onto the copied case: new ids, the new caseId, and a source
+   * document pointed at its copy. Columns come from the live table, so a column added later is
+   * copied too rather than silently dropped. */
+  private static async copyDataTable(sourceCaseId: string, caseId: string, documentIds: Map<string, string>) {
+    const docMap = JSON.stringify(Object.fromEntries(documentIds));
+    for (const table of CaseCopySvc.DATA_TABLE_SOURCES) {
+      const columns = (
+        await prisma.$queryRaw<{ column_name: string }[]>`
+          SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ${table}`
+      ).map((c) => c.column_name);
+      const rest = columns.filter((c) => c !== "id" && c !== "caseId" && c !== "sourceDocumentId");
+      const hasDoc = columns.includes("sourceDocumentId");
+      const into = ['"id"', '"caseId"', ...(hasDoc ? ['"sourceDocumentId"'] : []), ...rest.map((c) => `"${c}"`)].join(", ");
+      const select = [
+        "gen_random_uuid()::text",
+        "$1",
+        ...(hasDoc ? ['($3::jsonb ->> "sourceDocumentId")'] : []),
+        ...rest.map((c) => `"${c}"`),
+      ].join(", ");
+      // Table and column names come from the fixed list above and the catalog; values are bound.
+      const sql = `INSERT INTO "${table}" (${into}) SELECT ${select} FROM "${table}" WHERE "caseId" = $2`;
+      await (hasDoc ? prisma.$executeRawUnsafe(sql, caseId, sourceCaseId, docMap) : prisma.$executeRawUnsafe(sql, caseId, sourceCaseId));
+    }
+  }
+
+  /** Copies the chunks (text and embedding) of every READY source document onto its copy and marks
+   * the copy READY. Returns the copies it covered; the rest are left PENDING for re-indexing. */
+  private static async copyIndex(sources: SourceDocument[], documentIds: Map<string, string>): Promise<Set<string>> {
+    const covered = new Set<string>();
+    for (const doc of sources) {
+      const copyId = documentIds.get(doc.id);
+      if (!copyId || doc.ragStatus !== "READY") continue;
+      await prisma.$transaction([
+        prisma.$executeRaw`
+          INSERT INTO "CaseDocumentChunk" ("id", "caseDocumentId", "chunkIndex", "chunkText", "charCount", "pageNumber", "embedding", "createdAt")
+          SELECT gen_random_uuid()::text, ${copyId}, "chunkIndex", "chunkText", "charCount", "pageNumber", "embedding", NOW()
+          FROM "CaseDocumentChunk" WHERE "caseDocumentId" = ${doc.id}`,
+        prisma.document.update({
+          where: { id: copyId },
+          data: { ragStatus: "READY", pageCount: doc.pageCount, extractionMethod: doc.extractionMethod, ocrAttempted: doc.ocrAttempted },
+        }),
+      ]);
+      covered.add(copyId);
+    }
+    return covered;
   }
 
   /** Returns the copy's consultation id. Reuses a copy that already holds as many messages as the
@@ -205,6 +271,7 @@ export default class CaseCopySvc {
     consultations: SourceConsultation[],
     ownDocuments: SourceDocument[],
     keyFor: (fileId: string, ext: string, ids: IdMaps) => string,
+    shareFiles = false,
   ) {
     const ids: IdMaps = {
       consultations: new Map(consultations.map((c) => [c.id, crypto.randomUUID()])),
@@ -223,6 +290,10 @@ export default class CaseCopySvc {
     for (const doc of documents.values()) {
       const file = doc.file;
       if (!file || ids.files.has(file.id)) continue;
+      if (shareFiles) {
+        ids.files.set(file.id, file.id); // the copy's document points at the same File
+        continue;
+      }
       const fileId = crypto.randomUUID();
       ids.files.set(file.id, fileId);
       let s3Key = file.s3Key;

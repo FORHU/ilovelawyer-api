@@ -76,6 +76,9 @@ model User {
   // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by scripts/purge-trial-users.
   trialExpiresAt    DateTime?
   trialMessagesUsed Int       @default(0)
+  // Uses of each capped Studio feature (mind map, audio overview, case brief...) by name, against
+  // TRIAL_FEATURE_LIMITS; spent atomically by blockTrialWrites (AuthRepo.spendTrialFeature).
+  trialFeatureUses  Json      @default("{}")
 
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
