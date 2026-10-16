@@ -26,6 +26,8 @@ const PUBLIC_USER_SELECT = {
   createdAt: true,
   updatedAt: true,
   deletionRequestedAt: true,
+  trialExpiresAt: true,
+  trialMessagesUsed: true,
   password: true,
   avatar: { select: { s3Key: true } },
   googleRefreshToken: true,
@@ -99,6 +101,32 @@ export default class AuthRepo {
         },
       })
     );
+  }
+
+  /** A trial guest (see TrialSvc): no password, a placeholder address nobody can receive mail at,
+   * and already verified and approved, since there is no inbox to verify and no admin to wait for. */
+  static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialExpiresAt: Date }) {
+    return bustUsersList(
+      await prisma.user.create({
+        data: { ...data, name: "Guest", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
+      }),
+    );
+  }
+
+  /** Null for a real account, which is what makes this the one check for "is this a trial guest". */
+  static async findTrialState(userId: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { trialExpiresAt: true, trialMessagesUsed: true } });
+    return user?.trialExpiresAt ? { expiresAt: user.trialExpiresAt, messagesUsed: user.trialMessagesUsed } : null;
+  }
+
+  /** Spends one of the guest's answers, or reports none left. Conditional, so two simultaneous
+   * sends can't both take the last one. */
+  static async spendTrialMessage(userId: string, limit: number) {
+    const { count } = await prisma.user.updateMany({
+      where: { id: userId, trialExpiresAt: { not: null }, trialMessagesUsed: { lt: limit } },
+      data: { trialMessagesUsed: { increment: 1 } },
+    });
+    return count === 1;
   }
 
   /** Includes the user's Tenant code/name — used to tell a duplicate-signup attempt whether
