@@ -274,6 +274,8 @@ jobs:
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
+          TRIAL_MESSAGE_LIMIT: ${{ vars.TRIAL_MESSAGE_LIMIT }}
+          TRIAL_DURATION_HOURS: ${{ vars.TRIAL_DURATION_HOURS }}
         run: |
           set -euo pipefail
           umask 077
@@ -362,6 +364,8 @@ jobs:
           add JURIS_PH_API_URL                         "${JURIS_PH_API_URL:-}"
           add UK_CASELAW_BASE_URL                      "${UK_CASELAW_BASE_URL:-}"
           add UK_LEGISLATION_BASE_URL                  "${UK_LEGISLATION_BASE_URL:-}"
+          add TRIAL_MESSAGE_LIMIT                      "${TRIAL_MESSAGE_LIMIT:-}"
+          add TRIAL_DURATION_HOURS                     "${TRIAL_DURATION_HOURS:-}"
 
           # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the UK instance role grants
           # S3, SQS, Polly, Textract and Transcribe. An empty value here would

@@ -4,6 +4,7 @@ import { redis } from "../lib/redis";
 import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
 import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 import { getStableProxyFileUrl } from "../utils/s3";
+import { TRIAL_MESSAGE_LIMIT } from "../config";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -26,6 +27,8 @@ const PUBLIC_USER_SELECT = {
   createdAt: true,
   updatedAt: true,
   deletionRequestedAt: true,
+  trialExpiresAt: true,
+  trialMessagesUsed: true,
   password: true,
   avatar: { select: { s3Key: true } },
   googleRefreshToken: true,
@@ -42,11 +45,14 @@ function toPublicUser<
     provider: string | null;
     avatar?: { s3Key: string | null } | null;
     googleRefreshToken?: string | null;
+    trialExpiresAt?: Date | null;
+    trialMessagesUsed?: number;
   },
 >(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken"> & {
   hasPassword: boolean;
   avatarUrl: string | null;
   googleCalendarConnected: boolean;
+  trialMessagesLeft: number | null;
 } {
   const { password, avatar, googleRefreshToken, ...rest } = user;
   return {
@@ -54,6 +60,9 @@ function toPublicUser<
     hasPassword: password !== null && !isGoogleSsoAccount(user),
     avatarUrl: avatar?.s3Key ? getStableProxyFileUrl(avatar.s3Key) : null,
     googleCalendarConnected: !!googleRefreshToken,
+    // Only a trial guest has one: what is left of their TRIAL_MESSAGE_LIMIT, so the app never has
+    // to know the limit itself.
+    trialMessagesLeft: user.trialExpiresAt ? Math.max(0, TRIAL_MESSAGE_LIMIT - (user.trialMessagesUsed ?? 0)) : null,
   };
 }
 
@@ -99,6 +108,32 @@ export default class AuthRepo {
         },
       })
     );
+  }
+
+  /** A trial guest (see TrialSvc): no password, a placeholder address nobody can receive mail at,
+   * and already verified and approved, since there is no inbox to verify and no admin to wait for. */
+  static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialExpiresAt: Date }) {
+    return bustUsersList(
+      await prisma.user.create({
+        data: { ...data, name: "Guest", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
+      }),
+    );
+  }
+
+  /** Null for a real account, which is what makes this the one check for "is this a trial guest". */
+  static async findTrialState(userId: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { trialExpiresAt: true, trialMessagesUsed: true } });
+    return user?.trialExpiresAt ? { expiresAt: user.trialExpiresAt, messagesUsed: user.trialMessagesUsed } : null;
+  }
+
+  /** Spends one of the guest's answers, or reports none left. Conditional, so two simultaneous
+   * sends can't both take the last one. */
+  static async spendTrialMessage(userId: string, limit: number) {
+    const { count } = await prisma.user.updateMany({
+      where: { id: userId, trialExpiresAt: { not: null }, trialMessagesUsed: { lt: limit } },
+      data: { trialMessagesUsed: { increment: 1 } },
+    });
+    return count === 1;
   }
 
   /** Includes the user's Tenant code/name — used to tell a duplicate-signup attempt whether

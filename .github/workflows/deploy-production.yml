@@ -219,6 +219,8 @@ jobs:
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
+          TRIAL_MESSAGE_LIMIT: ${{ vars.TRIAL_MESSAGE_LIMIT }}
+          TRIAL_DURATION_HOURS: ${{ vars.TRIAL_DURATION_HOURS }}
         run: |
           set -euo pipefail
           umask 077
@@ -263,7 +265,8 @@ jobs:
             USE_JEV_RECONSTRUCTION USE_JEV_CASE_STRATEGY \
             USE_FULL_CONTRADICTION_SCAN USE_GROUNDING_VERIFIER \
             GROUNDING_MAX_ASSERTIONS \
-            JURIS_PH_API_URL UK_CASELAW_BASE_URL UK_LEGISLATION_BASE_URL
+            JURIS_PH_API_URL UK_CASELAW_BASE_URL UK_LEGISLATION_BASE_URL \
+            TRIAL_MESSAGE_LIMIT TRIAL_DURATION_HOURS
           do
             add "$name" "$(printenv "$name" || true)"
           done

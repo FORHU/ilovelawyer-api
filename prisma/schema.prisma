@@ -70,6 +70,13 @@ model User {
   denialReason        String?
   onboardingCompleted Boolean        @default(false)
 
+  // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
+  // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
+  // session and access token stop working; `trialMessagesUsed` counts the AI answers it has
+  // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by scripts/purge-trial-users.
+  trialExpiresAt    DateTime?
+  trialMessagesUsed Int       @default(0)
+
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
   // ACCOUNT_DELETION_GRACE_PERIOD_DAYS has elapsed since this timestamp, unless the user
@@ -137,6 +144,7 @@ model User {
 
   @@index([tenantId])
   @@index([deletionRequestedAt])
+  @@index([trialExpiresAt])
   manualEdits        CaseManualEdit[]
 }
 

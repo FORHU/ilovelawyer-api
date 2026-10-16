@@ -437,9 +437,13 @@ export default class AuthSvc {
 
     await AuthRepo.deleteByRefreshToken(refreshToken);
 
+    // A trial guest's session ends with the trial, and so does what a refresh can renew it to.
+    const trial = await AuthRepo.findTrialState(payload.userId);
+    if (trial && trial.expiresAt <= new Date()) throw new HttpError("Invalid or expired refresh token", 401);
+
     const remember = !!payload.remember;
     const { accessToken, refreshToken: newRefreshToken } = loginToken(payload.userId, remember);
-    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    const expiresAt = trial?.expiresAt ?? new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(payload.userId, newRefreshToken, expiresAt);
 
     return { accessToken, refreshToken: newRefreshToken, remember };

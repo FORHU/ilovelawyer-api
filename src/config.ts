@@ -5,6 +5,14 @@ export const DATABASE_URL = process.env.DATABASE_URL as string;
 export const PORT = Number(process.env.PORT || 3001);
 export const SECRET_KEY = process.env.SECRET_KEY as string;
 export const isDev = process.env.NODE_ENV !== "production";
+/** AI answers a landing-page trial guest gets (TrialSvc). A missing or non-positive value uses 5. */
+const trialMessageLimit = Math.floor(Number(process.env.TRIAL_MESSAGE_LIMIT));
+export const TRIAL_MESSAGE_LIMIT = trialMessageLimit > 0 ? trialMessageLimit : 5;
+/** How long a trial guest's session lasts, in hours (decimals allowed). A missing or non-positive
+ * value uses 2: long enough for a demo at an event. */
+const trialDurationHours = Number(process.env.TRIAL_DURATION_HOURS);
+export const TRIAL_DURATION_HOURS = trialDurationHours > 0 ? trialDurationHours : 2;
+export const TRIAL_DURATION_MS = TRIAL_DURATION_HOURS * 60 * 60 * 1000;
 export const MAILER_FROM = (process.env.MAILER_FROM || process.env.MAILER_EMAIL) as string;
 export const MAILER_TRANSPORT_HOST = process.env.MAILER_TRANSPORT_HOST as string;
 export const MAILER_TRANSPORT_PORT = Number(process.env.MAILER_TRANSPORT_PORT || 587);
