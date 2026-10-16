@@ -16,6 +16,16 @@ export const listAuditEventsSchema = Joi.object({
   actorId: Joi.string().uuid().optional(),
 });
 
+export const listFeedbackSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+  sortDir: Joi.string().valid("asc", "desc").default("desc"),
+  // Matches the sender's email or name. The comment is sealed at rest, so it can't be searched.
+  q: Joi.string().trim().max(200).optional(),
+  source: Joi.string().valid("GENERAL", "CHAT_ANSWER", "TERMINAL_PANE").optional(),
+  rating: Joi.string().valid("UP", "DOWN").optional(),
+});
+
 // An admin exporting someone's data can't re-enter that person's password, so they confirm
 // instead that they have checked who is asking. It has to be an explicit true, never defaulted.
 export const exportUserDataSchema = Joi.object({
