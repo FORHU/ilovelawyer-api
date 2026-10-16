@@ -13,6 +13,8 @@ import OrganizationDeletionQueue from "./queues/organization-deletion.queue";
 import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
 import CaseCopyQueue from "./queues/case-copy.queue";
 import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
+import TrialGuestPurgeQueue from "./queues/trial-guest-purge.queue";
+import FileCleanupQueue from "./queues/file-cleanup.queue";
 
 import { DOCUMENT_EXTRACTION_IN_API, PORT } from "./config";
 import logger from "./utils/logger";
@@ -39,6 +41,8 @@ OrganizationDeletionQueue.start();
 GoogleCalendarSyncQueue.start();
 CaseCopyQueue.start();
 SecurityAuditRetentionQueue.start();
+TrialGuestPurgeQueue.start();
+FileCleanupQueue.start();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on http://0.0.0.0:${PORT}`);

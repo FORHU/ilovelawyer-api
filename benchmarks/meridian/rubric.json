@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "derivedFrom": "GROUND-TRUTH-001 evaluation key (kept outside the case file)",
+  "passMark": 80,
+  "criteria": [
+    {
+      "id": "A",
+      "name": "Grounding & citation discipline",
+      "weight": 25,
+      "guidance": "Every factual assertion is pinned to a case-file document (CLM-*, RES-*, MERIDIAN-BRIEF-001) and, where it has one, a paragraph or clause. Quotations are verbatim. No fact is asserted that the bundle does not support. Deduct heavily for any assertion the bundle contradicts and for characterising a document the answer has not read."
+    },
+    {
+      "id": "B",
+      "name": "Unproven matters and traps",
+      "weight": 25,
+      "guidance": "The answer does not fill the bundle's gaps: it does not say Brenner reduced its business with the Target, that Ashworth Specialty Solutions Ltd actually traded, or that Elliott Vance was (or was not) told about Northbridge. It does not treat the Clause 11.4 cap or the Clause 14.2 service point as changing the outcome, and does not make Rosalind Ashworth-Hale a respondent to the Clause 9 claim. One such error on the point the question asks about scores at most 5."
+    },
+    {
+      "id": "C",
+      "name": "Legal accuracy",
+      "weight": 20,
+      "guidance": "English law and the LCIA/Arbitration Act 1996 (as amended 2025) framework are stated correctly: construction of the SPA's own words (Warranty 7.3, para 3.2, Clause 6.4(b), 'Restricted Business', Clauses 11 and 14), s.69 excluded by LCIA Article 26.8, ss.67-68 preserved. No invented authority; no court-litigation or foreign terminology in place of the arbitral equivalent."
+    },
+    {
+      "id": "D",
+      "name": "Conflicts and ambiguity",
+      "weight": 15,
+      "guidance": "Where the documents conflict or are ambiguous (the 25 April 2024 call; 'close to chest'; CLM-EMAIL-003; RES-MEET-001; the experts' inputs) the answer sets out each tenable reading and what would decide between them, rather than adopting one side's case or either expert's figures as established."
+    },
+    {
+      "id": "E",
+      "name": "Asserted vs said vs shown",
+      "weight": 10,
+      "guidance": "The answer keeps apart what a party asserts, what a witness says (noting hearsay, e.g. CLM-WIT-001 on the call), what a document shows, and what is undisputed."
+    },
+    {
+      "id": "F",
+      "name": "Missing evidence",
+      "weight": 5,
+      "guidance": "Where it matters to the question, the answer names the evidence that is missing (attendance note of the call, anything from Brenner, Earn-Out Period accounts, the Joint Memorandum, a statement from Rosalind Ashworth-Hale) and how it could be obtained."
+    }
+  ]
+}
