@@ -10,6 +10,7 @@ import { asTenantCode, type TenantCode } from "../types/tenant-code";
 import {
   listUsersSchema,
   listAuditEventsSchema,
+  listFeedbackSchema,
   exportUserDataSchema,
   denyUserSchema,
   lawSearchSchema,
@@ -50,6 +51,24 @@ export default class AdminCtrl {
 
     const { page, limit, sortDir, q, actorId } = value;
     const { data, total, resolved } = await AdminSvc.listAuditEvents({ page, limit, sortDir, q, actorId });
+
+    return res.status(200).json({
+      data,
+      resolved,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  }
+
+  /** GET /api/admin/feedback — what testers sent from inside the app, newest first. */
+  static async listFeedback(req: Request, res: Response) {
+    const { error, value } = listFeedbackSchema.validate(req.query, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const { page, limit, sortDir, q, source, rating } = value;
+    const { data, total, resolved } = await AdminSvc.listFeedback({ page, limit, sortDir, q, source, rating });
 
     return res.status(200).json({
       data,

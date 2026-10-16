@@ -3,7 +3,9 @@ import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import AuditEventRepo, { type ListAuditEventsParams } from "../repositories/audit-event.repository";
+import type { ListFeedbackParams } from "../repositories/feedback.repository";
 import AccountDeletionSvc from "./account-deletion.service";
+import FeedbackSvc from "./feedback.service";
 import AuthSvc from "./auth.service";
 import SecurityAuditSvc from "./security-audit.service";
 import type { TenantCode } from "../types/tenant-code";
@@ -42,6 +44,10 @@ export default class AdminSvc {
   /** Not cached: the audit trail is read rarely and is expected to be current. */
   static async listAuditEvents(params: ListAuditEventsParams) {
     return AuditEventRepo.list(params);
+  }
+
+  static async listFeedback(params: ListFeedbackParams) {
+    return FeedbackSvc.list(params);
   }
 
   /** Throws 404 unless this is a regular user's account. Like the user list, the export tools

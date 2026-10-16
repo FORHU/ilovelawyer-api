@@ -12,6 +12,7 @@ router.use(validSession, requireAdmin);
 
 router.get("/users", asyncHandler(AdminCtrl.listUsers));
 router.get("/audit-events", asyncHandler(AdminCtrl.listAuditEvents));
+router.get("/feedback", asyncHandler(AdminCtrl.listFeedback));
 
 router.get("/law/search", asyncHandler(AdminCtrl.searchLaw));
 router.get("/law", asyncHandler(AdminCtrl.listLaw));
