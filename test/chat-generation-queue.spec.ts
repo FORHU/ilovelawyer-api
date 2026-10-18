@@ -205,7 +205,13 @@ describe("ChatSvc.processChatGenerationJob", () => {
     caseSvcGetById: CaseSvc.getById,
   };
 
+  // Message triage (a Jev network call) runs before streaming when a developer's .env switches it
+  // on; it would make these tests call TypeSafe for real and push them past mocha's timeout. Off
+  // here, and the original value is put back afterwards.
+  const originalTriageFlag = process.env.USE_JEV_MESSAGE_TRIAGE;
+
   before(async () => {
+    delete process.env.USE_JEV_MESSAGE_TRIAGE;
     server = new WebSocketServer({ port: 0 });
     server.on("connection", (socket: WebSocket) => {
       socket.on("message", () => {
@@ -218,6 +224,8 @@ describe("ChatSvc.processChatGenerationJob", () => {
   });
 
   after(() => {
+    if (originalTriageFlag === undefined) delete process.env.USE_JEV_MESSAGE_TRIAGE;
+    else process.env.USE_JEV_MESSAGE_TRIAGE = originalTriageFlag;
     (config as any).CHAT_WONDER_WS_URL = originalWsUrl;
     server.close();
   });
