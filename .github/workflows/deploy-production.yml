@@ -221,6 +221,7 @@ jobs:
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
           TRIAL_MESSAGE_LIMIT: ${{ vars.TRIAL_MESSAGE_LIMIT }}
           TRIAL_DURATION_HOURS: ${{ vars.TRIAL_DURATION_HOURS }}
+          TRIAL_BUDGET_USD: ${{ vars.TRIAL_BUDGET_USD }}
         run: |
           set -euo pipefail
           umask 077
@@ -266,7 +267,7 @@ jobs:
             USE_FULL_CONTRADICTION_SCAN USE_GROUNDING_VERIFIER \
             GROUNDING_MAX_ASSERTIONS \
             JURIS_PH_API_URL UK_CASELAW_BASE_URL UK_LEGISLATION_BASE_URL \
-            TRIAL_MESSAGE_LIMIT TRIAL_DURATION_HOURS
+            TRIAL_MESSAGE_LIMIT TRIAL_DURATION_HOURS TRIAL_BUDGET_USD
           do
             add "$name" "$(printenv "$name" || true)"
           done
