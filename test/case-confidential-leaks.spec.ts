@@ -113,8 +113,10 @@ describe("#346 — confidential cases don't leak", () => {
       let where: any;
       stub(prisma.document, "findMany", async (args: any) => ((where = args.where), []));
       await DocumentRepo.list("org-1", "ACTIVE", "user-1");
-      expect(where.organizationId).to.equal("org-1");
-      expect(where.OR).to.deep.equal([{ caseId: null }, { case: CaseAccess.visibleWhere("user-1") }]);
+      expect(where.AND).to.deep.equal([
+        { OR: [{ organizationId: "org-1" }, { organizationId: null, userId: "user-1" }] },
+        { OR: [{ caseId: null }, { case: CaseAccess.visibleWhere("user-1") }] },
+      ]);
     });
 
     it("listByCase 404s for a walled user before listing", async () => {

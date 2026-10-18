@@ -81,7 +81,13 @@ describe("Stopping a generation", () => {
   let statuses: string[];
   let replyStatus: string;
 
+  // Message triage (a Jev network call) runs before streaming when a developer's .env switches it
+  // on; it would make these tests call TypeSafe for real and push the stream past the Stop. Off
+  // here, and the original value is put back afterwards.
+  const originalTriageFlag = process.env.USE_JEV_MESSAGE_TRIAGE;
+
   beforeEach(() => {
+    delete process.env.USE_JEV_MESSAGE_TRIAGE;
     script = ["Part one. ", "Part two. "];
     sockets = [];
     emitted = [];
@@ -135,6 +141,8 @@ describe("Stopping a generation", () => {
     redis.set = originals.redisSet;
     (socketLib as any).emitToUser = originals.emitToUser;
     for (const s of sockets) s.terminate();
+    if (originalTriageFlag === undefined) delete process.env.USE_JEV_MESSAGE_TRIAGE;
+    else process.env.USE_JEV_MESSAGE_TRIAGE = originalTriageFlag;
   });
 
   it("a Stop mid-stream ends the job without chat:error/chat:done, saves ONLY the partial reply, never marks the turn FAILED or DONE, and closes the Chat Wonder socket", async () => {

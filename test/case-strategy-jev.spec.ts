@@ -27,6 +27,7 @@ describe("Case strategy Jev check", () => {
   let reply: (text: string) => { choice: string; confidence: number } | Error;
 
   beforeEach(() => {
+    delete process.env.USE_JEV_CASE_STRATEGY;
     process.env.TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || "test-key";
     asked = [];
     reply = () => ({ choice: "SUPPORTED", confidence: 0.9 });
@@ -37,12 +38,17 @@ describe("Case strategy Jev check", () => {
       return { answers: { support: answer } };
     };
   });
+  // A developer's .env may switch the check on; every test starts from "unset" and the original
+  // value is put back afterwards.
+  const originalFlag = process.env.USE_JEV_CASE_STRATEGY;
   afterEach(() => {
     TypeSafeClient.prototype.systemOne = original;
-    delete process.env.USE_JEV_CASE_STRATEGY;
+    if (originalFlag === undefined) delete process.env.USE_JEV_CASE_STRATEGY;
+    else process.env.USE_JEV_CASE_STRATEGY = originalFlag;
   });
 
   it("is off unless USE_JEV_CASE_STRATEGY=true", () => {
+    delete process.env.USE_JEV_CASE_STRATEGY;
     expect(isCaseStrategyJevEnabled()).to.equal(false);
     process.env.USE_JEV_CASE_STRATEGY = "true";
     expect(isCaseStrategyJevEnabled()).to.equal(true);

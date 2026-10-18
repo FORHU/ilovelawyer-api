@@ -28,7 +28,9 @@ describe("ChatSvc.listMessages — generated document download link", () => {
   beforeEach(() => {
     messages = [];
     proxyCalls = [];
-    (ChatRepo as any).findConsultationById = async () => ({ id: "c1", organizationId: "org-1" });
+    // A standalone Consultation owned by the caller ("u1"), so ChatSvc.assertConsultationAccess
+    // lets them read it (a standalone Consultation is private to its creator).
+    (ChatRepo as any).findConsultationById = async () => ({ id: "c1", organizationId: "org-1", userId: "u1", caseId: null });
     (ChatRepo as any).listMessagesByConsultation = async () => messages;
     (s3 as any).getProxyFileUrl = (key: string, opts?: { filename?: string }) => {
       proxyCalls.push({ key, filename: opts?.filename });
