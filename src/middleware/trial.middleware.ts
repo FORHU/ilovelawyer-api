@@ -1,15 +1,34 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../repositories/auth.repository";
+import LlmUsageSvc from "../services/llm-usage.service";
 import HttpError from "../utils/http-error";
-import { ACCESS_TOKEN_SECRET, TRIAL_FEATURE_LIMITS, TRIAL_MESSAGE_LIMIT, type TrialFeature } from "../config";
+import { ACCESS_TOKEN_SECRET, TRIAL_BUDGET_USD, TRIAL_FEATURE_LIMITS, TRIAL_MESSAGE_LIMIT, type TrialFeature } from "../config";
 
-/** Spends one of a trial guest's AI answers before a message is sent; a no-op for real accounts.
- * Must run after validSession. 403 TRIAL_LIMIT_REACHED tells the app to ask for an account. */
+/** True once a FULL guest's OpenAI spend through Chat Wonder has reached TRIAL_BUDGET_USD. With no
+ * budget configured any more, the guest is treated as spent: nothing pays for their AI. Spend is
+ * only known after a call ends, so the request that crosses the line still finishes. */
+async function trialBudgetSpent(userId: string): Promise<boolean> {
+  if (TRIAL_BUDGET_USD === null) return true;
+  return (await LlmUsageSvc.chatWonderSpendUsd(userId)) >= TRIAL_BUDGET_USD;
+}
+
+const budgetSpentError = () =>
+  new HttpError("You've used the AI included in your trial. Create an account to keep going.", 403, "TRIAL_BUDGET_SPENT");
+
+/** Before a message is sent: a CHAT guest spends one of its AI answers; a FULL guest is checked
+ * against its budget. A no-op for real accounts. Must run after validSession. 403
+ * TRIAL_LIMIT_REACHED / TRIAL_BUDGET_SPENT tell the app to ask for an account. */
 export async function trialMessageLimit(req: Request, _res: Response, next: NextFunction) {
   try {
-    if (!req.user?.userId || !(await AuthRepo.findTrialState(req.user.userId))) return next();
-    if (!(await AuthRepo.spendTrialMessage(req.user.userId, TRIAL_MESSAGE_LIMIT))) {
+    const userId = req.user?.userId;
+    const trial = userId ? await AuthRepo.findTrialState(userId) : null;
+    if (!userId || !trial) return next();
+    if (trial.kind === "FULL") {
+      if (await trialBudgetSpent(userId)) throw budgetSpentError();
+      return next();
+    }
+    if (!(await AuthRepo.spendTrialMessage(userId, TRIAL_MESSAGE_LIMIT))) {
       throw new HttpError("You've used your trial answers. Create an account to keep going.", 403, "TRIAL_LIMIT_REACHED");
     }
     next();
@@ -27,11 +46,13 @@ const TRIAL_FEATURE_ROUTES: { method: string; path: RegExp; feature: TrialFeatur
   { method: "GET", path: /^\/api(?:\/v1)?\/my-cases\/[^/]+\/export$/, feature: "caseBrief" },
 ];
 
-/** Refuses writes (uploads, sharing, new cases...) from a trial guest; reads still work, so the
- * pages around the chat load. The capped Studio features (TRIAL_FEATURE_ROUTES) are the exception:
- * each request spends one of the guest's uses, 403 TRIAL_FEATURE_LIMIT once they are gone. Mounted
- * ahead of a router, so it reads the token itself rather than relying on validSession; a request
- * without a valid one passes through for the router's own checks to deal with. */
+/** CHAT guests: refuses writes (uploads, sharing, new cases...); reads still work, so the pages
+ * around the chat load. The capped Studio features (TRIAL_FEATURE_ROUTES) are the exception: each
+ * request spends one of the guest's uses, 403 TRIAL_FEATURE_LIMIT once they are gone.
+ * FULL guests: nothing is refused while their budget lasts; once it is spent, every write (and the
+ * case brief) is 403 TRIAL_BUDGET_SPENT and reads still work, so what they made stays viewable.
+ * Mounted ahead of a router, so it reads the token itself rather than relying on validSession; a
+ * request without a valid one passes through for the router's own checks to deal with. */
 export async function blockTrialWrites(req: Request, _res: Response, next: NextFunction) {
   try {
     const path = `${req.baseUrl}${req.path}`.replace(/\/$/, "");
@@ -45,7 +66,10 @@ export async function blockTrialWrites(req: Request, _res: Response, next: NextF
     } catch {
       return next();
     }
-    if (userId && (await AuthRepo.findTrialState(userId))) {
+    const trial = userId ? await AuthRepo.findTrialState(userId) : null;
+    if (userId && trial?.kind === "FULL") {
+      if (await trialBudgetSpent(userId)) throw budgetSpentError();
+    } else if (userId && trial) {
       if (!capped) throw new HttpError("Create an account to use this.", 403, "TRIAL_RESTRICTED");
       if (!(await AuthRepo.spendTrialFeature(userId, capped.feature, TRIAL_FEATURE_LIMITS[capped.feature]))) {
         throw new HttpError("You've used this as many times as the trial allows. Create an account to keep going.", 403, "TRIAL_FEATURE_LIMIT");

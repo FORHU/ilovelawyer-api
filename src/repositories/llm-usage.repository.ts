@@ -162,6 +162,24 @@ export default class LlmUsageRepo {
     return rows.map((row) => ({ day: row.day, source: row.source, calls: Number(row.calls), totalTokens: Number(row.totalTokens ?? 0), costUsd: row.costUsd ?? 0 }));
   }
 
+  /** One user's OpenAI usage through Chat Wonder: the cost of the priced rows, and the token totals
+   * of the rows with no cost (no model reported, or a model with no price), for the caller to price. */
+  static async chatWonderSpend(userId: string) {
+    const where = { userId, provider: LlmProvider.OPENAI, via: "chat-wonder" };
+    const [priced, unpriced] = await Promise.all([
+      prisma.llmUsage.aggregate({ where: { ...where, estimatedCostUsd: { not: null } }, _sum: { estimatedCostUsd: true } }),
+      prisma.llmUsage.aggregate({ where: { ...where, estimatedCostUsd: null }, _sum: { inputTokens: true, cachedInputTokens: true, outputTokens: true } }),
+    ]);
+    return {
+      pricedUsd: priced._sum.estimatedCostUsd ?? 0,
+      unpriced: {
+        inputTokens: unpriced._sum.inputTokens ?? 0,
+        cachedInputTokens: unpriced._sum.cachedInputTokens ?? 0,
+        outputTokens: unpriced._sum.outputTokens ?? 0,
+      },
+    };
+  }
+
   /** Who owns a case, for attributing the LLM work done on it. Null for an id that is not a case. */
   static async findCaseOwner(caseId: string) {
     return prisma.case.findUnique({ where: { id: caseId }, select: { userId: true, organizationId: true } });

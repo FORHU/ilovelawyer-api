@@ -23,6 +23,13 @@ enum ApprovalStatus {
   BLOCKED
 }
 
+// Which landing-page trial a guest is on (User.trialKind): CHAT is the chat-only trial with an
+// answer count and a clock; FULL is the whole product, limited only by TRIAL_BUDGET_USD of spend.
+enum TrialKind {
+  CHAT
+  FULL
+}
+
 model User {
   id                 String    @id @default(uuid())
   // Always stored trimmed + lowercased (see normalizeEmail in src/utils/auth.utils.ts and the
@@ -71,9 +78,12 @@ model User {
   onboardingCompleted Boolean        @default(false)
 
   // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
-  // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
-  // session and access token stop working; `trialMessagesUsed` counts the AI answers it has
-  // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by scripts/purge-trial-users.
+  // email. `trialKind` is what marks one (null for every real account). A CHAT guest's session and
+  // access token stop working at `trialExpiresAt`, and `trialMessagesUsed` counts the AI answers it
+  // has spent against TRIAL_MESSAGE_LIMIT. A FULL guest has no expiry and no counts: it is limited
+  // only by its Chat Wonder spend in LlmUsage (TRIAL_BUDGET_USD). Expired CHAT rows can be deleted
+  // by hand with scripts/purge-trial-users.
+  trialKind         TrialKind?
   trialExpiresAt    DateTime?
   trialMessagesUsed Int       @default(0)
   // Uses of each capped Studio feature (mind map, audio overview, case brief...) by name, against

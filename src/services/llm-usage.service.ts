@@ -2,7 +2,7 @@ import { LlmProvider, LlmUsageSource, Prisma } from "@prisma/client";
 import LlmUsageRepo, { LlmUsageDayRow, LlmUsageFilter, LlmUsageGroup } from "../repositories/llm-usage.repository";
 import { getRequestContext } from "../lib/request-context";
 import { getLlmUsageScope, LlmUsageScope, runInLlmUsageScope } from "../lib/llm-usage-scope";
-import { estimateCostUsd } from "../constants/llm-pricing.constants";
+import { estimateCostUsd, TRIAL_UNPRICED_MODEL } from "../constants/llm-pricing.constants";
 import { LLM_USAGE_TOP_N } from "../constants/llm-usage.constants";
 import logger from "../utils/logger";
 import { JevUsageEntry, setJevUsageRecorder } from "../utils/typesafeClient";
@@ -174,6 +174,14 @@ export default class LlmUsageSvc {
       logger.warn("LLM usage: could not look up the document owner", { err, documentId });
     }
     return scope ? runInLlmUsageScope(scope, fn) : fn();
+  }
+
+  /** What one user has spent on OpenAI through Chat Wonder, in USD: the full trial's budget
+   * (trialBudgetSpent). A row with no cost still counts, priced at TRIAL_UNPRICED_MODEL's rate,
+   * so an estimate with no model reported is never free. */
+  static async chatWonderSpendUsd(userId: string): Promise<number> {
+    const { pricedUsd, unpriced } = await LlmUsageRepo.chatWonderSpend(userId);
+    return pricedUsd + (estimateCostUsd(TRIAL_UNPRICED_MODEL, unpriced) ?? 0);
   }
 
   /** The users and organizations the admin page can filter by, named. */
