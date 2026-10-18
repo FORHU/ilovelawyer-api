@@ -292,7 +292,8 @@ Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACT
     const readyDocIds = new Set(ready.map((d) => d.id));
     const corpusByDocId = new Map<string, string>();
     for (const doc of ready) {
-      const chunkIds = await DocumentChunkRepo.findIdsByDocument(doc.id);
+      // Only the chunks covering the 20,000 characters kept here.
+      const chunkIds = await DocumentChunkRepo.findIdsByDocument(doc.id, { maxChars: 20000 });
       const rows = await DocumentChunkRepo.findTextsByIds(chunkIds);
       corpusByDocId.set(doc.id, rows.map((r) => r.chunkText).join(" ").slice(0, 20000));
     }
@@ -371,7 +372,8 @@ Cap at 20 scenes. Every sourceRef's "quote" must be copied verbatim from EXTRACT
     for (const doc of ready) {
       const chunks = await DocumentChunkRepo.findTextsByIds(await DocumentChunkRepo.findIdsByDocument(doc.id));
       // UK bundles write 03/04/2024 as 3 April; PH (and US-style) documents as March 4.
-      facts.push(...extractBundleFacts(chunks, { numericDayFirst: tenantCode === "UK" }));
+      // A loop, not push(...facts): a large document yields more facts than a call's argument limit.
+      for (const fact of extractBundleFacts(chunks, { numericDayFirst: tenantCode === "UK" })) facts.push(fact);
     }
     const pack = await buildFactExcerptPack(ready);
     const prompt = buildCaseReconstructionEventsPrompt({

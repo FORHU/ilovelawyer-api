@@ -35,6 +35,7 @@ import { getChatWonderSessionId } from "../src/utils/chatWonder";
 import { ChatGenerationJob } from "../src/queues/chat-generation.queue";
 import { triageContextFor, MessageIntent } from "../src/utils/message-triage";
 import { TenantCode } from "../src/types/tenant-code";
+import { openMessages } from "../src/utils/message-content";
 
 const MODE = process.env.USE_JEV_MESSAGE_TRIAGE === "true" ? "on" : "off";
 // Faker-seeded staging org ("Voluptatum et impedi", PH tenant) and its owner — throwaway data.
@@ -177,11 +178,13 @@ async function runTurn(consultationId: string, c: Case): Promise<TurnResult> {
   // Every assistant row hanging off the user message, in groupOrder: a multi-topic answer is split
   // into one row per topic (MessageGroup in the schema), so findFirst returned an arbitrary
   // fragment and made long answers look short. Join them back into the document the user sees.
-  const replyParts = await prisma.message.findMany({
-    where: { parentMessageId: userMessage.id, role: "assistant" },
-    orderBy: [{ groupOrder: "asc" }, { createdAt: "asc" }],
-    select: { id: true, content: true },
-  });
+  const replyParts = openMessages(
+    await prisma.message.findMany({
+      where: { parentMessageId: userMessage.id, role: "assistant" },
+      orderBy: [{ groupOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, content: true },
+    }),
+  );
   const reply = replyParts.length
     ? { id: replyParts.map((r) => r.id).join(","), content: replyParts.map((r) => r.content).join("\n\n") }
     : null;

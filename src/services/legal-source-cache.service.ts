@@ -95,11 +95,11 @@ export default class LegalSourceCacheSvc {
     let chatPayload: { response?: string; intermediate_response?: string; source_metadata?: unknown };
 
     try {
-      chatPayload = await callChatWonderRest(prompt, sessionId);
+      chatPayload = await callChatWonderRest(prompt, sessionId, undefined, undefined, { usage: { feature: "citationExpand" } });
     } catch {
       sessionId = await getChatWonderSessionId();
       sharedSessionId = sessionId;
-      chatPayload = await callChatWonderRest(prompt, sessionId);
+      chatPayload = await callChatWonderRest(prompt, sessionId, undefined, undefined, { usage: { feature: "citationExpand" } });
     }
 
     const rawResponse = String(chatPayload.response || chatPayload.intermediate_response || "").trim();

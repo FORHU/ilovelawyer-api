@@ -11,10 +11,12 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } from "../utils/s3";
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
+import { assertBatchWithinLimit } from "../utils/upload-batch-limit";
 import CaseAccess from "../utils/case-access";
 // Cycle with chat.service (it imports mapDocumentToDto from here) — safe, both are only used
 // inside function bodies.
 import ChatSvc from "./chat.service";
+import ChatRepo from "../repositories/chat.repository";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { DocumentStatus } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
@@ -75,6 +77,15 @@ export default class DocumentSvc {
     if (consultationId) await ChatSvc.assertConsultationWritable(organizationId, userId, consultationId);
   }
 
+  /** The organization a new document is filed under. A file attached to a main (case-less)
+   * consultation has none — it follows its user, like the consultation does (see
+   * Consultation.organizationId) — so joining or leaving an organization can't hide or delete it. */
+  private static async organizationFor(organizationId: string, caseId?: string, consultationId?: string): Promise<string | null> {
+    if (caseId || !consultationId) return organizationId;
+    const consultation = await ChatRepo.findConsultationById(consultationId);
+    return consultation && !consultation.caseId ? null : organizationId;
+  }
+
   private static async assertCanUploadToCase(caseId: string, organizationId: string, userId: string) {
     const caseRecord = await CaseAccess.assertCanContribute(caseId, userId);
     if (caseRecord.organizationId && caseRecord.organizationId !== organizationId) {
@@ -95,14 +106,22 @@ export default class DocumentSvc {
     contentType: string,
     caseId?: string,
     consultationId?: string,
+    fileSize?: number,
   ) {
     await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
-    return DocumentSvc.presignKey(userId, filename, contentType, caseId, consultationId);
+    return DocumentSvc.presignKey(userId, filename, contentType, caseId, consultationId, fileSize);
   }
 
   /** presign's key-building half, without the case check — so presignMany can check the batch's
    * shared caseId once instead of once per file. */
-  private static async presignKey(userId: string, filename: string, contentType: string, caseId?: string, consultationId?: string) {
+  private static async presignKey(
+    userId: string,
+    filename: string,
+    contentType: string,
+    caseId?: string,
+    consultationId?: string,
+    fileSize?: number,
+  ) {
     const ext = path.extname(filename);
     const shortId = crypto.randomUUID().slice(0, 8);
     const key = caseId
@@ -110,21 +129,24 @@ export default class DocumentSvc {
       : consultationId
         ? `documents/consultations/${consultationId}/${Date.now()}-${shortId}${ext}`
         : `documents/users/${userId}/${Date.now()}-${shortId}${ext}`;
-    const uploadUrl = await getPresignedUploadUrl(key, contentType);
+    const uploadUrl = await getPresignedUploadUrl(key, contentType, fileSize);
     return { uploadUrl, key };
   }
 
   static async presignMany(
     organizationId: string,
     userId: string,
-    files: { filename: string; contentType: string }[],
+    files: { filename: string; contentType: string; fileSize?: number }[],
     caseId?: string,
     consultationId?: string,
   ) {
+    assertBatchWithinLimit(files.map((file) => file.fileSize));
     // Checked once for the batch's shared caseId/consultationId, not per file.
     await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
     return Promise.all(
-      files.map((file) => DocumentSvc.presignKey(userId, file.filename, file.contentType, caseId, consultationId)),
+      files.map((file) =>
+        DocumentSvc.presignKey(userId, file.filename, file.contentType, caseId, consultationId, file.fileSize),
+      ),
     );
   }
 
@@ -140,7 +162,7 @@ export default class DocumentSvc {
     await DocumentSvc.assertCanUploadTo(organizationId, userId, data.caseId, data.consultationId);
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
-    const doc = await DocumentRepo.create(organizationId, userId, {
+    const doc = await DocumentRepo.create(await DocumentSvc.organizationFor(organizationId, data.caseId, data.consultationId), userId, {
       name: data.name,
       fileId: file.id,
       caseId: data.caseId,
@@ -161,7 +183,9 @@ export default class DocumentSvc {
     caseId?: string,
     consultationId?: string,
   ) {
+    assertBatchWithinLimit(items.map((item) => item.fileSize));
     await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
+    const documentOrganizationId = await DocumentSvc.organizationFor(organizationId, caseId, consultationId);
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({
       filename: item.name,
       fileUrl: s3UrlForKey(item.key),
@@ -172,7 +196,7 @@ export default class DocumentSvc {
       const files = await FilesRepo.createFile(filesToCreate, tx);
 
       const userDocumentData = files.map((file, i) => ({
-        organizationId,
+        organizationId: documentOrganizationId,
         userId,
         caseId,
         consultationId,
@@ -213,8 +237,8 @@ export default class DocumentSvc {
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async listByConsultation(organizationId: string, consultationId: string, status?: DocumentStatus) {
-    const docs = await DocumentRepo.listByConsultation(organizationId, consultationId, status);
+  static async listByConsultation(organizationId: string, consultationId: string, status?: DocumentStatus, userId?: string) {
+    const docs = await DocumentRepo.listByConsultation(organizationId, consultationId, status, userId);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
@@ -225,7 +249,7 @@ export default class DocumentSvc {
 
   /** A document on a case the user can't open (a confidential one, #346) reads as not found. */
   private static async loadForRead(id: string, organizationId: string, userId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId);
+    const doc = await DocumentRepo.findById(id, organizationId, userId);
     if (!doc) throw new HttpError("Document not found", 404);
     if (doc.caseId) {
       await CaseAccess.loadAccessibleCase(doc.caseId, userId).catch(() => {
@@ -257,7 +281,7 @@ export default class DocumentSvc {
    * archive, unarchive) takes the same bar as editing the case itself — CaseAccess.assertCanEdit,
    * see CaseSvc.update (#345). One with no case stays organization-scoped. */
   private static async loadForChange(id: string, organizationId: string, actorId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId);
+    const doc = await DocumentRepo.findById(id, organizationId, actorId);
     if (!doc) throw new HttpError("Document not found", 404);
     if (doc.caseId) await CaseAccess.assertCanEdit(doc.caseId, actorId);
     return doc;
@@ -277,7 +301,7 @@ export default class DocumentSvc {
       const target = await CaseAccess.assertCanEdit(data.caseId, actorId);
       if (target.organizationId !== organizationId) throw new HttpError("Case not found or not editable", 404);
     }
-    const updated = await DocumentRepo.update(id, organizationId, data);
+    const updated = await DocumentRepo.update(id, organizationId, data, actorId);
     if (!updated) throw new HttpError("Document not found", 404);
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
   }
@@ -290,7 +314,7 @@ export default class DocumentSvc {
    * map when only the map's document set moved (see runCasePostExtraction). */
   static async archive(id: string, organizationId: string, actorId: string) {
     await DocumentSvc.loadForChange(id, organizationId, actorId);
-    const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED");
+    const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED", actorId);
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.archive", payload: { documentId: id } });
     // Without this, chat-wonder's listByDocument/listByCaseOrConsultation callbacks would keep
@@ -309,7 +333,7 @@ export default class DocumentSvc {
 
   static async unarchive(id: string, organizationId: string, actorId: string) {
     await DocumentSvc.loadForChange(id, organizationId, actorId);
-    const updated = await DocumentRepo.setStatus(id, organizationId, "ACTIVE");
+    const updated = await DocumentRepo.setStatus(id, organizationId, "ACTIVE", actorId);
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.unarchive", payload: { documentId: id } });
     // Same reasoning as archive() above, in reverse — listByCaseOrConsultation's cached array
@@ -391,7 +415,7 @@ export default class DocumentSvc {
   static async delete(id: string, organizationId: string, userId: string) {
     const doc = await DocumentSvc.loadForChange(id, organizationId, userId);
 
-    const deleted = await DocumentRepo.delete(id, organizationId);
+    const deleted = await DocumentRepo.delete(id, organizationId, userId);
     if (!deleted) throw new HttpError("Document not found", 404);
     await AuditSvc.record({
       action: AuditAction.DocumentDeleted,

@@ -1819,7 +1819,7 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Documents"],
         summary:
-          "Record a Document row for a file already uploaded to S3 via a presigned PUT (see POST /documents/presign). Accepts either a single-document body or a batch body ({ items: [...] }, max 50); the batch form records several Document rows in one transaction and returns an array.",
+          "Record a Document row for a file already uploaded to S3 via a presigned PUT (see POST /documents/presign). Accepts either a single-document body or a batch body ({ items: [...] }, max 50); the batch form records several Document rows in one transaction and returns an array. The items' fileSize values may total at most 1 GB per request (413 otherwise).",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
@@ -1833,6 +1833,8 @@ const swaggerSpec: OAS3Definition = {
                     properties: {
                       key: { type: "string", description: "The S3 key returned by POST /documents/presign" },
                       name: { type: "string", description: "Display name (typically the original filename)" },
+                      contentType: { type: "string" },
+                      fileSize: { type: "integer", minimum: 0, maximum: 1073741824, description: "File size in bytes" },
                       caseId: { type: "string", description: "Associate with a case (optional)" },
                     },
                   },
@@ -1850,6 +1852,8 @@ const swaggerSpec: OAS3Definition = {
                           properties: {
                             key: { type: "string", description: "The S3 key returned by POST /documents/presign" },
                             name: { type: "string", description: "Display name (typically the original filename)" },
+                            contentType: { type: "string" },
+                            fileSize: { type: "integer", minimum: 0, maximum: 1073741824, description: "File size in bytes" },
                           },
                         },
                       },
@@ -1877,6 +1881,7 @@ const swaggerSpec: OAS3Definition = {
             },
           },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          413: { description: "The files in this request total over 1 GB", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
@@ -1885,6 +1890,8 @@ const swaggerSpec: OAS3Definition = {
       post: {
         tags: ["Documents"],
         summary: "Get a presigned S3 PUT URL to upload a document's bytes directly, bypassing the API. Accepts a single file or a batch ({ files: [...] }, max 50).",
+        description:
+          "Upload limit: the files in one request may total at most 1 GB (413 otherwise); there is no separate per-file cap. When fileSize is sent it is signed into the URL, so S3 rejects (403) a PUT of any other size. Known limitation: the limit is checked per request only — a selection split across several presign requests is held to 1 GB in total by the web app, not by this endpoint. URLs expire after 1 hour.",
         security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
@@ -1898,6 +1905,12 @@ const swaggerSpec: OAS3Definition = {
                     properties: {
                       filename: { type: "string" },
                       contentType: { type: "string" },
+                      fileSize: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 1073741824,
+                        description: "File size in bytes. Optional for now (will become required); when sent, the URL only accepts a PUT of exactly this size.",
+                      },
                       caseId: {
                         type: "string",
                         description:
@@ -1924,6 +1937,7 @@ const swaggerSpec: OAS3Definition = {
                           properties: {
                             filename: { type: "string" },
                             contentType: { type: "string" },
+                            fileSize: { type: "integer", minimum: 0, maximum: 1073741824, description: "File size in bytes (see the single-file form)" },
                           },
                         },
                       },
@@ -1959,6 +1973,7 @@ const swaggerSpec: OAS3Definition = {
             },
           },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          413: { description: "The files in this request total over 1 GB", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },

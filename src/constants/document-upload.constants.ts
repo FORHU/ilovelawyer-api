@@ -1,6 +1,12 @@
 /** Max files per presign or confirm request. The client chunks larger sets into batches of this size. */
 export const DOCUMENT_UPLOAD_BATCH_MAX = 50;
 
+/** Max total bytes of one upload. There is no separate per-file cap, so this is also the largest
+ * single file. Known limitation: the server can only see one presign/confirm request (up to
+ * DOCUMENT_UPLOAD_BATCH_MAX files) at a time, so it enforces this per request — a selection the
+ * web app splits across several requests is held to 1 GB in total only by the web app itself. */
+export const DOCUMENT_UPLOAD_BATCH_MAX_BYTES = 1024 ** 3;
+
 /** Max ids per bulk archive-state request (documents or cases) — mass "Select All" restore/archive
  * from the UI is bounded by this, same as an upload batch, so one request can't ask for an
  * unbounded Promise.allSettled fan-out. */

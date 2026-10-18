@@ -53,6 +53,10 @@ export const UK_COURTS = [
 ] as const;
 export type UkCourt = (typeof UK_COURTS)[number];
 
+/** legislation.gov.uk's codes for EU legislation retained after Brexit: regulations, decisions and
+ * directives. Their provisions are articles (`…/eur/2016/679/article/6`), not sections. */
+export const UK_EU_LEGISLATION_TYPES = ["eur", "eudn", "eudr"] as const;
+
 /**
  * legislation.gov.uk type codes. Used for the `legislation_search` `type` filter and to parse a
  * legislation URL back into `{ type, year, number }` for `legislation_get_toc` / `_get_section`.
@@ -72,5 +76,8 @@ export const UK_LEGISLATION_TYPES = [
   "apni",
   "ukcm",
   "ukmd",
+  // Retained EU law — legislation_search returns these too (the UK GDPR is eur/2016/679). Without them
+  // a stored row's URL doesn't parse, and the Library viewer answers "No PDF available".
+  ...UK_EU_LEGISLATION_TYPES,
 ] as const;
 export type UkLegislationType = (typeof UK_LEGISLATION_TYPES)[number];

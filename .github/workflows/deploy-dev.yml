@@ -1,0 +1,277 @@
+name: Deploy Dev
+
+# FORHU/ilovelawyer-api → the shared dev host (ap-southeast-1).
+#
+# One EC2 instance runs every project's dev environment. This workflow owns
+# only its own container; it cannot touch another project's, and the deploy
+# role cannot reach any host but this one.
+#
+# BEFORE THE FIRST RUN
+#   1. Repository variable:
+#        AWS_DEV_DEPLOY_ROLE_ARN = arn:aws:iam::617163942417:role/forhu-deploy
+#      A new name on purpose: AWS_DEPLOY_ROLE_ARN already points at production
+#      in several repos, and in gate-closes-api it switches the deploy target.
+#   2. Check APP_PORT against this repo's Dockerfile — it is the port the
+#      process listens on inside the container. HOST_PORT is allocated per
+#      project and must not change; see /etc/caddy/sites/00-PORTS.md.
+#   3. Put this project's own secrets in the `dev` environment, and list them
+#      in the "Publish project env" step. DATABASE_URL, REDIS_URL and
+#      RABBITMQ_URL come from the host — do NOT set them here.
+
+on:
+  # Dev tracks main. Without this the dev container only changes when somebody
+  # remembers to dispatch, and it silently falls behind: on 2026-10-16 ilovelawyer
+  # dev was 24h and several merges stale while production deployed on every merge,
+  # which read as "changes not propagating" rather than as a missing trigger.
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        # No default: repos in this org disagree on a default branch name, and a
+        # hardcoded one fetches a branch that may not exist, failing in checkout
+        # before anything is built. Blank falls back to github.ref_name.
+        description: "Branch, tag or SHA to deploy (blank = the branch you ran this from)"
+        required: false
+
+concurrency:
+  group: forhu-dev-ilovelawyer
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  ACCOUNT_ID: "617163942417"
+  INSTANCE_ID: i-0f95a93145ea25e7a
+  ECR_REPOSITORY: ilovelawyer-api
+  CONTAINER: ilovelawyer-api-dev
+  NETWORK: forhu-dev
+  HOST_PORT: "4031"
+  APP_PORT: "3001"
+  ENV_PARAM: /forhu-dev/ilovelawyer-api/env
+  SHARED_ENV: /opt/forhu-dev/credentials/ilovelawyer.env
+  MERGED_ENV: /opt/forhu-dev/ilovelawyer-api.env
+
+jobs:
+  deploy:
+    name: Build and deploy (ilovelawyer dev)
+    # Native arm64: the host is Graviton. An image built on ubuntu-latest is
+    # amd64, pulls cleanly, then dies with "exec format error". Do not
+    # cross-build under QEMU — Node and Prisma builds take hours and look hung.
+    runs-on: ubuntu-24.04-arm
+    environment: staging
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref_name }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN || 'arn:aws:iam::617163942417:role/forhu-deploy' }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          # dev- prefix so a dev image can never be mistaken for, or overwrite,
+          # a production tag in the same ECR repository.
+          echo "tag=dev-$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "registry=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ steps.tag.outputs.registry }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/arm64
+          provenance: false
+          tags: ${{ steps.tag.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+
+      # This project's own secrets only. Anything unset is omitted rather than
+      # written empty: an empty value looks configured and silently disables
+      # whatever reads it, which is how three features were found dead on the
+      # UK stack.
+      - name: Publish project env to Parameter Store
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
+          REFRESH_TOKEN_SECRET: ${{ secrets.REFRESH_TOKEN_SECRET }}
+          FILE_TOKEN_SECRET: ${{ secrets.FILE_TOKEN_SECRET }}
+          ACCESS_TOKEN_EXPIRY: ${{ vars.ACCESS_TOKEN_EXPIRY }}
+          REFRESH_TOKEN_EXPIRY_DAYS: ${{ vars.REFRESH_TOKEN_EXPIRY_DAYS }}
+          MAILER_TRANSPORT_HOST: ${{ secrets.MAILER_TRANSPORT_HOST }}
+          MAILER_TRANSPORT_PORT: ${{ vars.MAILER_TRANSPORT_PORT }}
+          MAILER_TRANSPORT_SECURE: ${{ vars.MAILER_TRANSPORT_SECURE }}
+          MAILER_EMAIL: ${{ secrets.MAILER_EMAIL }}
+          MAILER_PASSWORD: ${{ secrets.MAILER_PASSWORD }}
+          SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+          CLIENT_URL: ${{ vars.DEV_CLIENT_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_TOKEN_ENC_KEY: ${{ secrets.DEV_GOOGLE_TOKEN_ENC_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.DEV_FIELD_ENCRYPTION_KEY }}
+          FIELD_ENCRYPTION_ENABLED: ${{ vars.DEV_FIELD_ENCRYPTION_ENABLED }}
+          CHAT_WONDER_API_URL: ${{ vars.DEV_CHAT_WONDER_API_URL }}
+          CHAT_WONDER_WS_URL: ${{ vars.DEV_CHAT_WONDER_WS_URL }}
+          CHAT_WONDER_API_KEY: ${{ secrets.CHAT_WONDER_API_KEY }}
+          TRACE_STREAM_API_KEY: ${{ secrets.TRACE_STREAM_API_KEY }}
+          CLOUDFRONT_URL: ${{ vars.DEV_CLOUDFRONT_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
+          TRIAL_MESSAGE_LIMIT: ${{vars.TRIAL_MESSAGE_LIMIT}}
+          TRIAL_DURATION_HOURS: ${{vars.TRIAL_DURATION_HOURS}}
+          UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
+          UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          # NODE_ENV=production because the image runs a built bundle. The S3
+          # bucket is dev-named on purpose: the host's IAM role only permits
+          # dev-*/*-dev buckets, so a wrong value fails loudly rather than
+          # writing somewhere it should not.
+          printf 'NODE_ENV=production\n'              > env.tmp
+          printf 'PORT=%s\n' '${{ env.APP_PORT }}'   >> env.tmp
+          printf 'AWS_REGION=%s\n' '${{ env.AWS_REGION }}' >> env.tmp
+          printf 'AWS_S3_BUCKET=ilovelawyer-dev\n'   >> env.tmp
+          printf 'AWS_S3_REGION=%s\n' '${{ env.AWS_REGION }}' >> env.tmp
+
+          # dev- prefixed queues. The UK stack can reuse the plain names because
+          # it lives in eu-west-2; this host shares ap-southeast-1 with PH
+          # production, so the unprefixed names ARE production's queues and a
+          # dev worker on them would eat real users' jobs.
+          Q=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}
+          printf 'DOCUMENT_EXTRACTION_QUEUE_URL=%s/dev-document-extraction\n'          "$Q" >> env.tmp
+          printf 'CITATION_EXTRACTION_QUEUE_URL=%s/dev-citation-extraction\n'          "$Q" >> env.tmp
+          printf 'AUDIO_OVERVIEW_QUEUE_URL=%s/dev-audio-overview\n'                    "$Q" >> env.tmp
+          printf 'CASE_RECONSTRUCTION_AUDIO_QUEUE_URL=%s/dev-case-reconstruction-audio\n' "$Q" >> env.tmp
+          printf 'AI_GENERATION_QUEUE_URL=%s/dev-ai_generate\n'                        "$Q" >> env.tmp
+          printf 'MESSAGE_PERSISTENCE_QUEUE_URL=%s/dev-message-queue\n'                "$Q" >> env.tmp
+
+          # CASE_GRAPH_PROMOTION_QUEUE_URL is deliberately absent: written empty
+          # it reads as configured and the worker logs "refusing to start".
+          #
+          # Written only when set. `add` returns 0 on purpose — under `set -e` a
+          # bare `[ -n "$x" ] && printf ...` aborts the step on the first empty
+          # value.
+          add() { [ -n "${2:-}" ] && printf '%s=%s\n' "$1" "$2" >> env.tmp; return 0; }
+
+          add SECRET_KEY                "${SECRET_KEY:-}"
+          add ACCESS_TOKEN_SECRET       "${ACCESS_TOKEN_SECRET:-}"
+          add REFRESH_TOKEN_SECRET      "${REFRESH_TOKEN_SECRET:-}"
+          add FILE_TOKEN_SECRET         "${FILE_TOKEN_SECRET:-}"
+          add ACCESS_TOKEN_EXPIRY       "${ACCESS_TOKEN_EXPIRY:-}"
+          add REFRESH_TOKEN_EXPIRY_DAYS "${REFRESH_TOKEN_EXPIRY_DAYS:-}"
+          add MAILER_TRANSPORT_HOST     "${MAILER_TRANSPORT_HOST:-}"
+          add MAILER_TRANSPORT_PORT     "${MAILER_TRANSPORT_PORT:-}"
+          add MAILER_TRANSPORT_SECURE   "${MAILER_TRANSPORT_SECURE:-}"
+          add MAILER_EMAIL              "${MAILER_EMAIL:-}"
+          add MAILER_PASSWORD           "${MAILER_PASSWORD:-}"
+          add SERVICE_ACCOUNT           "${SERVICE_ACCOUNT:-}"
+          add CLIENT_URL                "${CLIENT_URL:-}"
+          add GOOGLE_CLIENT_ID          "${GOOGLE_CLIENT_ID:-}"
+          add GOOGLE_CLIENT_SECRET      "${GOOGLE_CLIENT_SECRET:-}"
+          add GOOGLE_TOKEN_ENC_KEY      "${GOOGLE_TOKEN_ENC_KEY:-}"
+          add FIELD_ENCRYPTION_KEY      "${FIELD_ENCRYPTION_KEY:-}"
+          add FIELD_ENCRYPTION_ENABLED  "${FIELD_ENCRYPTION_ENABLED:-}"
+          add CHAT_WONDER_API_URL       "${CHAT_WONDER_API_URL:-}"
+          add CHAT_WONDER_WS_URL        "${CHAT_WONDER_WS_URL:-}"
+          add CHAT_WONDER_API_KEY       "${CHAT_WONDER_API_KEY:-}"
+          add TRACE_STREAM_API_KEY      "${TRACE_STREAM_API_KEY:-}"
+          add CLOUDFRONT_URL            "${CLOUDFRONT_URL:-}"
+          add OPENAI_API_KEY            "${OPENAI_API_KEY:-}"
+          add TYPESAFE_API_KEY          "${TYPESAFE_API_KEY:-}"
+          add JURIS_PH_API_URL          "${JURIS_PH_API_URL:-}"
+          add TRIAL_MESSAGE_LIMIT       "${TRIAL_MESSAGE_LIMIT:-}"
+          add TRIAL_DURATION_HOURS      "${TRIAL_DURATION_HOURS:-}"
+          add UK_CASELAW_BASE_URL       "${UK_CASELAW_BASE_URL:-}"
+          add UK_LEGISLATION_BASE_URL   "${UK_LEGISLATION_BASE_URL:-}"
+
+          # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the host's instance role
+          # grants S3 and SQS. An empty pair here makes the SDK skip its
+          # provider chain and fail with "Resolved credential object is not
+          # valid".
+
+          aws ssm put-parameter \
+            --name "${{ env.ENV_PARAM }}" \
+            --type SecureString --overwrite \
+            --value "file://env.tmp" \
+            --region "${{ env.AWS_REGION }}" > /dev/null
+          rm -f env.tmp
+
+      - name: Deploy via SSM
+        id: send
+        env:
+          REGISTRY: ${{ steps.tag.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${{ env.ECR_REPOSITORY }}:${TAG}"
+
+          COMMANDS=(
+            "set -euo pipefail"
+            "cat ${{ env.SHARED_ENV }} > ${{ env.MERGED_ENV }}"
+            "aws ssm get-parameter --name ${{ env.ENV_PARAM }} --with-decryption --region ${{ env.AWS_REGION }} --query Parameter.Value --output text >> ${{ env.MERGED_ENV }}"
+            "chmod 600 ${{ env.MERGED_ENV }}"
+            "aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${REGISTRY}"
+            "docker container prune -f || true"
+            "docker image prune -af || true"
+            "docker pull --platform linux/arm64 ${IMAGE}"
+            "docker run --rm --platform linux/arm64 --network ${{ env.NETWORK }} --env-file ${{ env.MERGED_ENV }} --entrypoint npx ${IMAGE} prisma migrate deploy"
+            "docker rm -f ${{ env.CONTAINER }} 2>/dev/null || true"
+            "docker run -d --name ${{ env.CONTAINER }} --restart unless-stopped --platform linux/arm64 --network ${{ env.NETWORK }} --env-file ${{ env.MERGED_ENV }} -p 127.0.0.1:${{ env.HOST_PORT }}:${{ env.APP_PORT }} ${IMAGE}"
+          )
+
+          # jq builds the JSON, so a quote inside any command cannot break it.
+          PARAMS=$(printf '%s\n' "${COMMANDS[@]}" | jq -R . | jq -sc '{commands: .}')
+
+          CMD_ID=$(aws ssm send-command \
+            --region "${{ env.AWS_REGION }}" \
+            --instance-ids "${{ env.INSTANCE_ID }}" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${{ env.CONTAINER }} ${TAG}" \
+            --timeout-seconds 900 \
+            --parameters "${PARAMS}" \
+            --query Command.CommandId --output text)
+
+          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
+          echo "SSM command: $CMD_ID"
+
+      - name: Wait for the deploy
+        run: |
+          set -uo pipefail
+          STATUS=Pending
+          for i in $(seq 1 90); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${{ env.AWS_REGION }}" \
+              --command-id "${{ steps.send.outputs.command_id }}" \
+              --instance-id "${{ env.INSTANCE_ID }}" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            echo "status: $STATUS"
+            case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 10
+          done
+
+          aws ssm get-command-invocation \
+            --region "${{ env.AWS_REGION }}" \
+            --command-id "${{ steps.send.outputs.command_id }}" \
+            --instance-id "${{ env.INSTANCE_ID }}" \
+            --query '[StandardOutputContent,StandardErrorContent]' --output text
+
+          [ "$STATUS" = "Success" ] || { echo "::error::deploy $STATUS"; exit 1; }

@@ -41,7 +41,9 @@ describe("Case portfolio", () => {
     await prisma.note.deleteMany({ where: { organizationId: { in: orgIds } } });
     await prisma.document.deleteMany({ where: { organizationId: { in: orgIds } } });
     await prisma.file.deleteMany({ where: { id: { in: docs.map((d) => d.fileId!).filter(Boolean) } } });
-    await prisma.consultation.deleteMany({ where: { organizationId: { in: orgIds } } });
+    await prisma.consultation.deleteMany({
+      where: { OR: [{ organizationId: { in: orgIds } }, { organizationId: null, userId: { in: createdUserIds } }] },
+    });
     await prisma.case.deleteMany({ where: { id: { in: caseIds } } });
     await prisma.caseCopy.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.consultationCopy.deleteMany({ where: { userId: { in: createdUserIds } } });
@@ -289,7 +291,7 @@ describe("Case portfolio", () => {
   });
 
   describe("the rest of a removed member's work comes with them", () => {
-    it("moves their own calendar, copies their appointments on others' cases, and queues their standalone consultations", async () => {
+    it("moves their own calendar and copies their appointments on others' cases, leaving their main consultations untouched", async () => {
       const firm = await makeOrg("Opal Firm");
       const removedId = await memberOf(firm.organizationId, "Rae");
       const theirCase = await CaseRepo.create(firm.organizationId, removedId, { caseName: "Theirs" });
@@ -305,13 +307,13 @@ describe("Case portfolio", () => {
       const note = await prisma.note.create({
         data: { userId: removedId, organizationId: firm.organizationId, date: new Date(), body: "Call client" },
       });
+      // A main consultation has no organization; one on a case lives with the case's.
       const consultation = (data: { title: string; userId?: string; caseId?: string; status?: "ARCHIVED" | "FOR_DELETION" }) =>
-        prisma.consultation.create({ data: { userId: removedId, organizationId: firm.organizationId, ...data } });
+        prisma.consultation.create({
+          data: { userId: removedId, organizationId: data.caseId ? firm.organizationId : null, ...data },
+        });
       const standalone = await consultation({ title: "Standalone" });
-      const archived = await consultation({ title: "Archived", status: "ARCHIVED" });
-      await consultation({ title: "Doomed", status: "FOR_DELETION" });
       await consultation({ title: "On owner's case", caseId: ownersCase.id });
-      await consultation({ title: "Owner's chat", userId: firm.ownerId });
 
       await OrganizationSvc.removeMember(firm.organizationId, "OWNER", firm.ownerId, removedId);
       const portfolio = (await personalOf(removedId))!;
@@ -331,17 +333,18 @@ describe("Case portfolio", () => {
       expect(copies.map((e) => e.copiedFromId)).to.deep.equal([onOwnersCase.id]);
       expect(copies[0]).to.include({ caseId: null, googleEventId: null, reminderLeadMinutes: null, title: "On owner's" });
 
-      // Their standalone consultations (archived too) are queued for copies; the rest stay behind.
-      const queued = await prisma.consultationCopy.findMany({ where: { userId: removedId } });
-      expect(queued.map((q) => q.sourceConsultationId).sort()).to.deep.equal([standalone.id, archived.id].sort());
-      expect(queued.every((q) => q.targetOrganizationId === portfolio.id)).to.equal(true);
+      // Their main consultation was never the organization's, so there is nothing to copy: it is
+      // the same row, still theirs. Case consultations stay behind with their cases.
+      expect(await prisma.consultationCopy.count({ where: { userId: removedId } })).to.equal(0);
+      const stillThere = await prisma.consultation.findUniqueOrThrow({ where: { id: standalone.id } });
+      expect(stillThere).to.include({ userId: removedId, organizationId: null });
     });
 
-    it("shows them their consultations and calendar in the workspace they log back into, once copies finish", async () => {
+    it("shows them their main consultations and calendar in the workspace they log back into", async () => {
       const firm = await makeOrg("Pia Firm");
       const removedId = await memberOf(firm.organizationId);
       const chat = await prisma.consultation.create({
-        data: { userId: removedId, organizationId: firm.organizationId, title: "Advice" },
+        data: { userId: removedId, organizationId: null, title: "Advice" },
       });
       await prisma.message.create({ data: { consultationId: chat.id, role: "user", content: "Help?" } });
       await prisma.event.create({
@@ -354,13 +357,17 @@ describe("Case portfolio", () => {
       // The workspace logging back in lands them in.
       const workspaceId = (await OrganizationMemberRepo.findAnyForUser(removedId))!.organizationId;
       expect(workspaceId).to.equal((await personalOf(removedId))!.id);
-      const consultations = await ChatRepo.listConsultations(workspaceId);
+      const consultations = await ChatRepo.listConsultations(workspaceId, undefined, "ACTIVE", removedId);
       expect(consultations.map((c) => c.title)).to.deep.equal(["Advice"]);
       expect(consultations[0].messageCount).to.equal(1);
       const events = await prisma.event.findMany({ where: { organizationId: workspaceId, userId: removedId } });
       expect(events.map((e) => e.title)).to.deep.equal(["Meeting"]);
-      // The organization keeps its original.
-      expect((await ChatRepo.listConsultations(firm.organizationId)).map((c) => c.id)).to.include(chat.id);
+      // The same chats show from the organization they left — they were never its.
+      const fromFirm = await ChatRepo.listConsultations(firm.organizationId, undefined, "ACTIVE", removedId);
+      expect(fromFirm.map((c) => c.id)).to.include(chat.id);
+      // And a colleague still doesn't see them.
+      const colleague = await ChatRepo.listConsultations(firm.organizationId, undefined, "ACTIVE", firm.ownerId);
+      expect(colleague.map((c) => c.id)).to.not.include(chat.id);
     });
 
     it("doesn't copy an unchanged appointment twice when they leave, rejoin and leave again", async () => {

@@ -1,6 +1,7 @@
 import express from "express";
 import asyncHandler from "../utils/async-handler";
 import requireConsent from "../middleware/require-consent.middleware";
+import { blockTrialWrites, trialMessageLimit } from "../middleware/trial.middleware";
 import validSession from "../middleware/valid-session.middleware";
 import { resolveOrganizationAllowingGuests } from "../middleware/resolve-organization.middleware";
 import { consultationCaseOf, guestItemNeedsCase, guestListNeedsCase, guestRefused } from "../middleware/guest-case-items.middleware";
@@ -25,24 +26,25 @@ router.post("/consultations/:consultationId/unarchive", asyncHandler(ChatCtrl.un
 router.delete("/consultations/:consultationId", asyncHandler(ChatCtrl.deleteConsultation));
 router.get("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.listMessages));
 router.get("/consultations/:consultationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
-router.post("/consultations/:consultationId/relevant-chunks", asyncHandler(ChatCtrl.relevantChunks));
-router.post("/consultations/:consultationId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ChatCtrl.sendMessage));
+router.post("/consultations/:consultationId/relevant-chunks", blockTrialWrites, asyncHandler(ChatCtrl.relevantChunks));
+router.post("/consultations/:consultationId/messages", trialMessageLimit, requireConsent("AI_PROCESSING"), asyncHandler(ChatCtrl.sendMessage));
 router.post("/consultations/:consultationId/messages/:messageId/cancel", asyncHandler(ChatCtrl.cancelMessage));
 router.delete("/consultations/:consultationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
 router.post(
   "/consultations/:consultationId/messages/:messageId/audio-overview/audio",
+  blockTrialWrites,
   asyncHandler(ChatCtrl.generateAudioOverviewAudio),
 );
 router.get(
   "/consultations/:consultationId/messages/:messageId/audio-overview/audio/poll",
   asyncHandler(ChatCtrl.pollAudioOverviewAudio),
 );
-router.post("/consultations/:consultationId/mind-map/expand", asyncHandler(ChatCtrl.expandMindMapNode));
+router.post("/consultations/:consultationId/mind-map/expand", blockTrialWrites, asyncHandler(ChatCtrl.expandMindMapNode));
 router.post("/consultations/:consultationId/mind-map/revert", asyncHandler(ChatCtrl.revertMindMap));
 router.patch("/consultations/:consultationId/mind-map", asyncHandler(ChatCtrl.editMindMapNode));
 
 // Invites
-router.post("/consultations/:consultationId/invites", asyncHandler(InviteCtrl.create));
+router.post("/consultations/:consultationId/invites", blockTrialWrites, asyncHandler(InviteCtrl.create));
 router.get("/consultations/:consultationId/invites", asyncHandler(InviteCtrl.listByConsultation));
 router.get("/invites/:id", asyncHandler(InviteCtrl.getById));
 router.post("/invites/:id/accept", asyncHandler(InviteCtrl.accept));

@@ -15,7 +15,9 @@ import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, Ge
 import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
+import { consultationInWorkspace } from "../utils/consultation-scope";
 import logger from "../utils/logger";
+import { runInLlmUsageScope } from "../lib/llm-usage-scope";
 import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
 import { DocumentRef, redactDocumentIds, sanitizeDecisionRecords, decisionRecordsNeedSanitizing } from "../utils/document-references";
 import DecisionRecordSvc from "./decision-record.service";
@@ -114,7 +116,8 @@ export default class ChatSvc {
       // Starting one adds to the Case: read-only for a view-only person on a confidential Case.
       await CaseAccess.assertCanContribute(caseId, userId);
     }
-    return ChatRepo.createConsultation(organizationId, userId, title, caseId);
+    // A main consultation belongs to the user, not to the workspace it was started in.
+    return ChatRepo.createConsultation(caseId ? organizationId : null, userId, title, caseId);
   }
 
   /** With a caseId, every Consultation on that Case — shared with everyone who can open the Case,
@@ -133,7 +136,7 @@ export default class ChatSvc {
    * can grow without touching this. Called fire-and-forget from processChatGenerationJob.
    */
   static async notifyTriagedMessage(
-    consultation: { id: string; userId: string; organizationId: string; title: string | null; caseId: string | null },
+    consultation: { id: string; userId: string; organizationId: string | null; title: string | null; caseId: string | null },
     senderUserId: string,
     userInput: string,
     triage: MessageTriage,
@@ -157,7 +160,7 @@ export default class ChatSvc {
       Array.from(recipients).map((recipientId) =>
         NotificationSvc.create({
           userId: recipientId,
-          organizationId: consultation.organizationId,
+          organizationId: consultation.organizationId ?? undefined,
           type: "CASE_UPDATE",
           title: decision.title,
           message,
@@ -182,7 +185,7 @@ export default class ChatSvc {
 
   private static async assertConsultationOwned(organizationId: string, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
+    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
       throw new HttpError("Consultation not found", 404);
     }
     return consultation;
@@ -316,7 +319,7 @@ export default class ChatSvc {
       Boolean(m.decisionRecords && decisionRecordsNeedSanitizing({ records: m.decisionRecords.records })) ||
       (m.role === "assistant" && /\(\s*id:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i.test(m.content));
     const scopeDocs = messages.some(looksLeaky)
-      ? await ChatSvc.scopeDocumentRefs(organizationId, consultationId, consultation.caseId)
+      ? await ChatSvc.scopeDocumentRefs(organizationId, consultationId, consultation.caseId, userId)
       : [];
 
     return Promise.all(
@@ -368,10 +371,11 @@ export default class ChatSvc {
     organizationId: string | null | undefined,
     consultationId: string,
     caseId?: string | null,
+    userId?: string,
   ): Promise<DocumentRef[]> {
     if (!organizationId) return [];
     try {
-      const rows = await DocumentRepo.listRefsForScope(organizationId, { consultationId, caseId });
+      const rows = await DocumentRepo.listRefsForScope(organizationId, { consultationId, caseId }, userId);
       return rows.map((d) => ({ id: d.id, name: d.name }));
     } catch (err) {
       logger.warn("Chat: could not load scope documents for id redaction", { err, consultationId });
@@ -463,7 +467,7 @@ export default class ChatSvc {
     logger.info("Chat: enqueueChatGeneration started", { consultationId });
 
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
+    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
       throw new HttpError("Consultation not found", 404);
     }
     await ChatSvc.assertUserAccess(consultation, userId);
@@ -514,7 +518,7 @@ export default class ChatSvc {
     logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
 
     if (documentIds?.length) {
-      await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId);
+      await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId, userId);
     }
 
     ChatGenerationQueue.enqueue({
@@ -588,7 +592,12 @@ export default class ChatSvc {
         .catch(() => {});
     }, CANCEL_POLL_INTERVAL_MS);
     try {
-      await ChatSvc.runChatGenerationJob(job, control);
+      // Every LLM call under the turn (Chat Wonder, Jev, the embeddings that rank its documents) is
+      // recorded against the turn's user, organization and consultation: a queue worker has no request.
+      await runInLlmUsageScope(
+        { userId: job.userId, organizationId: job.organizationId, caseId: job.effectiveCaseId ?? undefined, consultationId: job.consultationId },
+        () => ChatSvc.runChatGenerationJob(job, control),
+      );
     } finally {
       clearInterval(cancelPoll);
       ChatSvc.activeGenerations.delete(job.jobId);
@@ -663,7 +672,7 @@ export default class ChatSvc {
     const effectiveCaseId = job.effectiveCaseId ?? undefined;
 
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || consultation.organizationId !== organizationId) {
+    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
       // The consultation was deleted between enqueue and this job running — nothing left to
       // reply into. Not retryable (see ChatGenerationQueue's doc comment on why it always
       // acks): re-running the same job against a gone consultation would never succeed.
@@ -685,7 +694,7 @@ export default class ChatSvc {
 
     // The documents in scope for this turn, as (id, name): every id that reaches a user (live
     // chunks, the saved answer, Decision Records) is turned into a name first. One light query.
-    const scopeDocs = await ChatSvc.scopeDocumentRefs(organizationId, consultationId, effectiveCaseId ?? consultation.caseId);
+    const scopeDocs = await ChatSvc.scopeDocumentRefs(organizationId, consultationId, effectiveCaseId ?? consultation.caseId, userId);
 
     // emitToUser is documented as never throwing (lib/socket.ts), but this is called
     // synchronously from inside streamChatWonderMessage's ws.onmessage handler on every
@@ -1673,15 +1682,20 @@ export default class ChatSvc {
     },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
-    const opts =
-      extras?.mindMapRequested || extras?.caseDamages || extras?.onStage || extras?.trace
-        ? {
-            ...(extras.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
-            ...(extras.caseDamages ? { caseDamages: extras.caseDamages } : {}),
-            ...(extras.onStage ? { onStage: extras.onStage } : {}),
-            ...(extras.trace ? { traceTurnId: extras.trace.turnId } : {}),
-          }
-        : undefined;
+    const opts = {
+      ...(extras?.mindMapRequested ? { mindMapRequested: true, mindMapContext: extras.mindMapContext } : {}),
+      ...(extras?.caseDamages ? { caseDamages: extras.caseDamages } : {}),
+      ...(extras?.onStage ? { onStage: extras.onStage } : {}),
+      ...(extras?.trace ? { traceTurnId: extras.trace.turnId } : {}),
+      // The turn's LlmUsage row (epic #399). A real user turn names its user, organization and case
+      // through its trace; the mind map and audio overview triggers are recorded under their own names.
+      usage: {
+        feature: extras?.trace?.source ?? "chat",
+        consultationId,
+        caseId: extras?.trace?.caseId ?? caseId ?? null,
+        ...(extras?.trace ? { userId: extras.trace.userId, organizationId: extras.trace.organizationId } : {}),
+      },
+    };
     // Subscribed before the turn is sent (chat-wonder fans events out live, with no replay), and
     // never allowed to fail the turn — see TraceCollectorSvc.
     const collector = extras?.trace ? await TraceCollectorSvc.start(extras.trace, sessionId) : undefined;
@@ -1742,7 +1756,7 @@ export default class ChatSvc {
     // findById is scoped by ORGANIZATION. This used to pass the user id here, which never matches
     // an organization id, so an explicitly attached document was silently never used for grounding.
     // documentBelongsToScope below still requires the uploading user, the consultation or the case.
-    const doc = await DocumentRepo.findById(caseDocumentId, organizationId);
+    const doc = await DocumentRepo.findById(caseDocumentId, organizationId, userId);
     if (!doc) return undefined;
     if (doc.status === "ARCHIVED") return undefined;
     if (!documentBelongsToScope(doc, { userId, consultationId, caseId })) return undefined;
@@ -1828,7 +1842,7 @@ export default class ChatSvc {
   }
 
   static parseTitle(raw: string): string {
-    return raw
+    const title = raw
       .split("\n")[0]
       // Double quotes never belong in a title; single quotes only as apostrophes inside a word
       // ("Driver's"). Quotes the model puts around a word ('Hi') are dropped as a pair instead of
@@ -1837,8 +1851,12 @@ export default class ChatSvc {
       // (\u2026except a plural possessive: "Parents' Custody" keeps its apostrophe.)
       .replace(/(^|[\s(])['\u2018\u2019]|['\u2018\u2019](?=[),:;.!?]|$)|(?<![sS])['\u2018\u2019](?=\s)/g, "$1")
       .replace(/\.$/, "")
-      .trim()
-      .slice(0, TITLE_MAX_CHARS);
+      .trim();
+    if (title.length <= TITLE_MAX_CHARS) return title;
+    // Over-long model output is cut at the last whole word, never mid-word ("Document Analy").
+    const cut = title.slice(0, TITLE_MAX_CHARS + 1);
+    const space = cut.lastIndexOf(" ");
+    return (space > 20 ? cut.slice(0, space) : cut.slice(0, TITLE_MAX_CHARS)).replace(/[\s,:;–—-]+$/, "");
   }
 
   /** The title prompts' "only a greeting / small talk" answer (see SMALL_TALK_TITLE_SENTINEL). */
@@ -1892,7 +1910,7 @@ export default class ChatSvc {
     if (title) {
       logger.info("Chat title: cache hit", { consultationId, tenantCode });
     } else {
-      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode, context));
+      const raw = await generateTitleViaWs(ChatSvc.buildTitlePrompt(userMessage, tenantCode, context), { userId, consultationId });
       if (!raw) {
         logger.info("Chat title: model returned no content", {
           consultationId,
@@ -1988,6 +2006,7 @@ export default class ChatSvc {
           userMessages,
           attachmentNames: p.attachmentNames,
         }),
+        { userId: p.userId, consultationId: p.consultationId },
       );
       const title = raw ? ChatSvc.parseTitle(raw) : "";
       if (!title || title.toUpperCase().includes(KEEP_TITLE_SENTINEL) || ChatSvc.isUnclearTitle(title)) return;

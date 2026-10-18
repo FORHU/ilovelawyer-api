@@ -5,6 +5,14 @@ export const DATABASE_URL = process.env.DATABASE_URL as string;
 export const PORT = Number(process.env.PORT || 3001);
 export const SECRET_KEY = process.env.SECRET_KEY as string;
 export const isDev = process.env.NODE_ENV !== "production";
+/** AI answers a landing-page trial guest gets (TrialSvc). A missing or non-positive value uses 5. */
+const trialMessageLimit = Math.floor(Number(process.env.TRIAL_MESSAGE_LIMIT));
+export const TRIAL_MESSAGE_LIMIT = trialMessageLimit > 0 ? trialMessageLimit : 5;
+/** How long a trial guest's session lasts, in hours (decimals allowed). A missing or non-positive
+ * value uses 2: long enough for a demo at an event. */
+const trialDurationHours = Number(process.env.TRIAL_DURATION_HOURS);
+export const TRIAL_DURATION_HOURS = trialDurationHours > 0 ? trialDurationHours : 2;
+export const TRIAL_DURATION_MS = TRIAL_DURATION_HOURS * 60 * 60 * 1000;
 export const MAILER_FROM = (process.env.MAILER_FROM || process.env.MAILER_EMAIL) as string;
 export const MAILER_TRANSPORT_HOST = process.env.MAILER_TRANSPORT_HOST as string;
 export const MAILER_TRANSPORT_PORT = Number(process.env.MAILER_TRANSPORT_PORT || 587);
@@ -97,6 +105,12 @@ export const AWS_SQS_ENDPOINT = process.env.AWS_SQS_ENDPOINT || undefined;
 // SQS queue URLs — one per background job type, provisioned externally (same convention as
 // AWS_S3_BUCKET above: this app never creates its own AWS infra, only references it).
 export const DOCUMENT_EXTRACTION_QUEUE_URL = process.env.DOCUMENT_EXTRACTION_QUEUE_URL as string;
+/** Whether the API process also consumes DOCUMENT_EXTRACTION_QUEUE_URL (the default, as before).
+ * Set to "false" when a separate extraction worker runs (src/extraction-worker.ts), so a large
+ * upload's extraction memory can't take the API down. Trade-off: document:* socket events are
+ * emitted from whichever process extracts, and socket.io rooms live only in the API process, so
+ * with a separate worker the web app picks up status changes by polling instead of instantly. */
+export const DOCUMENT_EXTRACTION_IN_API = process.env.DOCUMENT_EXTRACTION_IN_API !== "false";
 export const CITATION_EXTRACTION_QUEUE_URL = process.env.CITATION_EXTRACTION_QUEUE_URL as string;
 export const AUDIO_OVERVIEW_QUEUE_URL = process.env.AUDIO_OVERVIEW_QUEUE_URL as string;
 export const CASE_RECONSTRUCTION_AUDIO_QUEUE_URL = process.env.CASE_RECONSTRUCTION_AUDIO_QUEUE_URL as string;

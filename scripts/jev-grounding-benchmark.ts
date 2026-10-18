@@ -28,7 +28,7 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-const BENCH_DIR = path.resolve(__dirname, "..", "benchmarks", "brackenmoor");
+export const BENCH_DIR = path.resolve(__dirname, "..", "benchmarks", "brackenmoor");
 const only = arg("only");
 
 interface AbsenceCase {
@@ -38,7 +38,7 @@ interface AbsenceCase {
   expected: AbsenceVerdict | "NOT_A_CLAIM";
   provenance: string;
 }
-interface AssertionCase {
+export interface AssertionCase {
   id: string;
   assertion: string;
   citation: string;
@@ -59,7 +59,7 @@ const BUNDLE_FILES = fs.existsSync(path.join(BENCH_DIR, "docs"))
  * benchmark reports how often it fell back, because a fallback makes the Jev verdict weaker
  * evidence than a hit.
  */
-function extractPassage(text: string, locator: string | undefined, budget = 3500): { passage: string; located: boolean } {
+export function extractPassage(text: string, locator: string | undefined, budget = 3500): { passage: string; located: boolean } {
   if (!text) return { passage: "", located: false };
   if (locator) {
     const num = locator.match(/\d+(?:\.\d+)*/)?.[0];
@@ -81,7 +81,7 @@ function extractPassage(text: string, locator: string | undefined, budget = 3500
   return { passage: text.slice(0, budget), located: false };
 }
 
-async function bundleTexts(): Promise<Map<string, string>> {
+export async function bundleTexts(): Promise<Map<string, string>> {
   const q = JSON.parse(fs.readFileSync(path.join(BENCH_DIR, "questions.json"), "utf-8"));
   const caseRow = await prisma.case.findFirst({ where: { caseName: q.caseName } });
   if (!caseRow) throw new Error(`Seeded case "${q.caseName}" not found — run scripts/seed-benchmark.ts`);
@@ -228,12 +228,14 @@ async function main() {
   console.log(`\n${gate.join("\n")}\n\nWritten to ${outFile}`);
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect().catch(() => {});
-    setTimeout(() => process.exit(process.exitCode ?? 0), 300).unref();
-  });
+if (require.main === module) {
+  main()
+    .catch((e) => {
+      console.error(e);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await prisma.$disconnect().catch(() => {});
+      setTimeout(() => process.exit(process.exitCode ?? 0), 300).unref();
+    });
+}

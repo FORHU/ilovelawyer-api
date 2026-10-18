@@ -36,6 +36,9 @@ export interface CandidateOptions {
   minSharedWords: number;
 }
 
+/** buildFactCandidates keeps this many × maxCandidates when it prunes its working set. */
+const PRUNE_FACTOR = 10;
+
 export const DEFAULT_CANDIDATE_OPTIONS: CandidateOptions = {
   maxCandidates: 80,
   maxDateGapDays: 730,
@@ -160,6 +163,14 @@ export function buildFactCandidates(
           best.set(pairKey, { left, right, similarity, overlap, score, pairKey });
         }
       }
+    }
+    // Keeps memory bounded on a huge bundle. Exact: what's dropped scored below every kept
+    // candidate, and the kept set is far larger than maxCandidates; a dropped pair that later
+    // scores higher is simply added again.
+    if (best.size > opts.maxCandidates * PRUNE_FACTOR * 5) {
+      const kept = [...best.values()].sort((x, y) => y.score - x.score).slice(0, opts.maxCandidates * PRUNE_FACTOR);
+      best.clear();
+      for (const c of kept) best.set(c.pairKey, c);
     }
   }
   return [...best.values()].sort((x, y) => y.score - x.score).slice(0, opts.maxCandidates);

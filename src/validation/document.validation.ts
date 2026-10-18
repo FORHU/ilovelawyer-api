@@ -1,5 +1,11 @@
 import Joi from "joi";
-import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX, BULK_ACTION_MAX } from "../constants";
+import {
+  ALLOWED_DOCUMENT_EXTENSIONS,
+  ALLOWED_DOCUMENT_FILENAME_PATTERN,
+  DOCUMENT_UPLOAD_BATCH_MAX,
+  DOCUMENT_UPLOAD_BATCH_MAX_BYTES,
+  BULK_ACTION_MAX,
+} from "../constants";
 
 const UNSUPPORTED_FILE_TYPE_MESSAGE = `Unsupported file type. Supported formats: ${ALLOWED_DOCUMENT_EXTENSIONS.join(", ").toUpperCase()}.`;
 
@@ -8,10 +14,18 @@ const allowedFilename = Joi.string()
   .pattern(ALLOWED_DOCUMENT_FILENAME_PATTERN)
   .messages({ "string.pattern.base": UNSUPPORTED_FILE_TYPE_MESSAGE });
 
+/** Bytes of one file. No per-file cap beyond the batch limit itself (one file can't exceed the
+ * whole upload); zero-byte files are allowed. Optional until every web client sends it — see
+ * the presign schema. */
+const fileSize = Joi.number().integer().min(0).max(DOCUMENT_UPLOAD_BATCH_MAX_BYTES);
+
 export const presignDocumentSchema = Joi.alternatives().try(
   Joi.object({
     filename: allowedFilename,
     contentType: Joi.string().required(),
+    // Signed into the upload URL when sent, so S3 rejects a PUT of any other size. Optional
+    // until the web release that sends it is deployed and verified; then make it required.
+    fileSize: fileSize.optional(),
     caseId: Joi.string().optional(),
     consultationId: Joi.string().optional(),
   }),
@@ -21,6 +35,7 @@ export const presignDocumentSchema = Joi.alternatives().try(
         Joi.object({
           filename: allowedFilename,
           contentType: Joi.string().required(),
+          fileSize: fileSize.optional(),
         }),
       )
       .min(1)
@@ -36,7 +51,7 @@ export const createDocumentSchema = Joi.alternatives().try(
     key: Joi.string().required(),
     name: allowedFilename,
     contentType: Joi.string().optional(),
-    fileSize: Joi.number().integer().min(0).optional(),
+    fileSize: fileSize.optional(),
     caseId: Joi.string().optional(),
     consultationId: Joi.string().optional(),
   }),
@@ -47,7 +62,7 @@ export const createDocumentSchema = Joi.alternatives().try(
           key: Joi.string().required(),
           name: allowedFilename,
           contentType: Joi.string().optional(),
-          fileSize: Joi.number().integer().min(0).optional(),
+          fileSize: fileSize.optional(),
         }),
       )
       .min(1)

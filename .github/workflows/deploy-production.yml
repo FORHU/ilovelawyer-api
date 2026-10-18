@@ -1,30 +1,72 @@
-name: Deploy Production
+name: Deploy Production (dev host)
+
+# ilovelawyer production on the shared host, replacing the SSH deploy to
+# i-09ee0651b89dbdca5.
+#
+# WHAT CHANGES FROM deploy-production.yml
+#   - SSM instead of SSH. That host takes no SSH, and SSM needs no key, no open
+#     port and no EC2_HOST secret that breaks when an address changes — which it
+#     did on 2026-10-14, taking production down until DNS was repointed.
+#   - The env file lands in SSM Parameter Store and is assembled on the host,
+#     rather than being scp'd. Nothing is written to a runner's disk.
+#   - Container `ilovelawyer-api` on 4034, matching the Cloudflare naming where
+#     production is the plain name and dev carries the -dev suffix. The SAME host
+#     runs the dev trio on 4030/4031/4032 as ilovelawyer-*-dev; two containers
+#     cannot share a name, so one side had to differ and DNS decides which.
+#
+# WHAT DOES NOT CHANGE
+#   - Still arm64, still the same ECR repository and image tags.
+#   - Still the production Redis (ElastiCache in vpc-054c2352d14a9d40c, reached
+#     over peering pcx-092ea3c5a64ee8d76) and the production SQS queues.
+#   - Still AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY. Those are deliberate here and
+#     must NOT be removed: the host's instance role is scoped to `dev-*` queues
+#     and buckets, so production would get AccessDenied on every queue. Giving the
+#     instance role production access instead would hand all eighteen dev
+#     containers the same reach.
+#
+# BEFORE THE FIRST RUN
+#   1. Repository variable AWS_DEV_DEPLOY_ROLE_ARN =
+#        arn:aws:iam::617163942417:role/forhu-deploy
+#   2. DATABASE_URL must point at the host's Postgres:
+#        postgresql://ilovelawyer_prod:<password>@10.50.1.250:5432/ilovelawyer_prod
+#      Change that secret only AT CUTOVER. Changing it earlier points the live
+#      box at a copy, and writes land somewhere nobody is reading.
+#   3. A Caddy vhost must exist for the production hostnames before DNS moves.
+#
+# Dispatch only, on purpose. The old workflow still deploys on push to main, and
+# two workflows racing to deploy the same commit to two different hosts is how a
+# brand ends up half-migrated.
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch, tag, or SHA to deploy"
-        required: true
-        default: main
+        description: "Branch, tag or SHA to deploy"
+        required: false
 
 concurrency:
-  group: ilovelawyer-api-deploy-production
-  cancel-in-progress: true
+  group: ilovelawyer-prod-api-dev-host
+  cancel-in-progress: false
 
 env:
-  ECR_REPOSITORY: ilovelawyer-api
   AWS_REGION: ap-southeast-1
-  NODE_ENV: production
-  IMAGE_TAG: ${{ github.sha }}
+  ACCOUNT_ID: "617163942417"
+  INSTANCE_ID: i-0f95a93145ea25e7a
+  ECR_REPOSITORY: ilovelawyer-api
+  CONTAINER: ilovelawyer-api
+  NETWORK: forhu-dev
+  HOST_PORT: "4034"
+  APP_PORT: "3001"
+  ENV_PARAM: /forhu-dev/ilovelawyer-prod-api/env
+  MERGED_ENV: /opt/forhu-dev/ilovelawyer-prod-api.env
+  # No SHARED_ENV. The host's per-project credentials file is for dev projects;
+  # production brings its own database, Redis and queues.
 
 jobs:
   deploy:
-    name: Build, Push & Deploy (production)
-    # Native arm64 — matches Graviton EC2. Do not build linux/arm64 via QEMU on
-    # ubuntu-latest; npm/prisma under emulation looks stuck and can take hours.
+    name: Build, push and deploy (ilovelawyer production)
+    # Native arm64 — the host is Graviton. Cross-building under QEMU makes
+    # npm and prisma look hung for hours.
     runs-on: ubuntu-24.04-arm
     environment: production
 
@@ -36,27 +78,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.sha }}
+          ref: ${{ github.event.inputs.ref || github.ref_name }}
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN || 'arn:aws:iam::617163942417:role/forhu-deploy' }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Get ECR auth token
-        id: ecr-token
+      - name: Resolve image tag
+        id: tag
         run: |
-          echo "password=$(aws ecr get-login-password --region ${{ env.AWS_REGION }})" >> $GITHUB_OUTPUT
+          echo "tag=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "registry=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ steps.tag.outputs.registry }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push Docker image
+      - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -64,22 +108,19 @@ jobs:
           push: true
           platforms: linux/arm64
           provenance: false
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          tags: ${{ steps.tag.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
 
+      # Before anything is published or pulled, so a bad key leaves the running
+      # container untouched. One key seals PH, ph-dev and uk-dev; with the switch
+      # on and the key wrong, uploads and privileged notes fail at runtime rather
+      # than at deploy. Ported unchanged from deploy-production.yml.
       - name: Check field encryption settings
         env:
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
           FIELD_ENCRYPTION_ENABLED: ${{ vars.FIELD_ENCRYPTION_ENABLED }}
         run: |
-          # With the switch on, a missing or invalid key makes uploads and privileged notes fail, so stop
-          # here, before anything is copied, and leave the running container as it is. One key,
-          # FIELD_ENCRYPTION_KEY, seals everything on this server (PH, ph-dev and uk-dev).
           SWITCH=FIELD_ENCRYPTION_ENABLED
           check_key() {
-            # $1 = the secret's name, $2 = its value. Returns if it is a usable key; otherwise stops the
-            # deploy and says why, without ever printing the value.
             name="$1"
             key="$(printf '%s' "$2" | tr -d '[:space:]')"
             if printf '%s' "$key" | grep -Eq '^[0-9a-fA-F]{64}$'; then return 0; fi
@@ -99,8 +140,15 @@ jobs:
           if [ "$FIELD_ENCRYPTION_ENABLED" = "true" ]; then
             check_key FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
           fi
-      - name: Write env file
+
+      - name: Publish env to Parameter Store
         env:
+          # Shared with the OLD workflow, deliberately — one value, no drift.
+          #
+          # The consequence: once this points at 10.50.1.250, a push to main makes
+          # the old workflow redeploy the old box with a database that box cannot
+          # reach (different VPC, no peering), and production drops. Disable
+          # "Deploy Production" in the Actions tab before changing this.
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           MAILER_TRANSPORT_HOST: ${{ secrets.MAILER_TRANSPORT_HOST }}
@@ -128,7 +176,15 @@ jobs:
           CHAT_WONDER_API_KEY: ${{ secrets.CHAT_WONDER_API_KEY }}
           TRACE_STREAM_API_KEY: ${{ secrets.TRACE_STREAM_API_KEY }}
           AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Deliberately NOT named AWS_SECRET_ACCESS_KEY here. This step calls the
+          # AWS CLI, which is authenticated by the OIDC session — and a step-level
+          # AWS_SECRET_ACCESS_KEY overrides that session's secret while leaving its
+          # AWS_ACCESS_KEY_ID and AWS_SESSION_TOKEN in place. The halves no longer
+          # match and every CLI call fails with InvalidSignatureException, which
+          # reads like a broken role rather than a variable collision.
+          #
+          # It is written to the env file under its real name below.
+          APP_AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           DOCUMENT_EXTRACTION_QUEUE_URL: ${{ secrets.DOCUMENT_EXTRACTION_QUEUE_URL }}
           CITATION_EXTRACTION_QUEUE_URL: ${{ secrets.CITATION_EXTRACTION_QUEUE_URL }}
@@ -150,15 +206,12 @@ jobs:
           USE_JEV_CONTRADICTIONS: ${{ vars.USE_JEV_CONTRADICTIONS }}
           USE_JEV_MINDMAP: ${{ vars.USE_JEV_MINDMAP }}
           USE_JEV_AUDIO_OVERVIEW: ${{ vars.USE_JEV_AUDIO_OVERVIEW }}
-          USE_JEV_WITNESS: ${{ vars.USE_JEV_WITNESS }}
           USE_JEV_AUTHORITY: ${{ vars.USE_JEV_AUTHORITY }}
           USE_JEV_CITATION_GROUNDS: ${{ vars.USE_JEV_CITATION_GROUNDS }}
           USE_JEV_LEGAL_ISSUES: ${{ vars.USE_JEV_LEGAL_ISSUES }}
           USE_JEV_STRENGTHS: ${{ vars.USE_JEV_STRENGTHS }}
           USE_JEV_WEAKNESSES: ${{ vars.USE_JEV_WEAKNESSES }}
           USE_JEV_RECONSTRUCTION: ${{ vars.USE_JEV_RECONSTRUCTION }}
-          USE_JEV_RECONSTRUCTION_AUDIO: ${{ vars.USE_JEV_RECONSTRUCTION_AUDIO }}
-          USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL: ${{ vars.USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL }}
           USE_JEV_CASE_STRATEGY: ${{ vars.USE_JEV_CASE_STRATEGY }}
           USE_FULL_CONTRADICTION_SCAN: ${{ vars.USE_FULL_CONTRADICTION_SCAN }}
           USE_GROUNDING_VERIFIER: ${{ vars.USE_GROUNDING_VERIFIER }}
@@ -166,123 +219,134 @@ jobs:
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
+          TRIAL_MESSAGE_LIMIT: ${{ vars.TRIAL_MESSAGE_LIMIT }}
+          TRIAL_DURATION_HOURS: ${{ vars.TRIAL_DURATION_HOURS }}
         run: |
-          cat > ${{ github.workspace }}/ilovelawyer-api.env << EOF
-          DATABASE_URL=${DATABASE_URL}
-          SECRET_KEY=${SECRET_KEY}
-          MAILER_TRANSPORT_HOST=${MAILER_TRANSPORT_HOST}
-          MAILER_TRANSPORT_PORT=${MAILER_TRANSPORT_PORT}
-          MAILER_TRANSPORT_SECURE=${MAILER_TRANSPORT_SECURE}
-          MAILER_EMAIL=${MAILER_EMAIL}
-          MAILER_PASSWORD=${MAILER_PASSWORD}
-          ACCESS_TOKEN_SECRET=${ACCESS_TOKEN_SECRET}
-          REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET}
-          ACCESS_TOKEN_EXPIRY=${ACCESS_TOKEN_EXPIRY}
-          REFRESH_TOKEN_EXPIRY_DAYS=${REFRESH_TOKEN_EXPIRY_DAYS}
-          REDIS_URL=${REDIS_URL}
-          REDIS_HOST=${REDIS_HOST}
-          REDIS_PORT=${REDIS_PORT}
-          REDIS_PASSWORD=${REDIS_PASSWORD}
-          SERVICE_ACCOUNT=${SERVICE_ACCOUNT}
-          CLIENT_URL=${CLIENT_URL}
-          GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-          GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-          GOOGLE_TOKEN_ENC_KEY=${GOOGLE_TOKEN_ENC_KEY}
-          FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
-          FIELD_ENCRYPTION_ENABLED=${FIELD_ENCRYPTION_ENABLED}
-          CHAT_WONDER_API_URL=${CHAT_WONDER_API_URL}
-          CHAT_WONDER_WS_URL=${CHAT_WONDER_WS_URL}
-          CHAT_WONDER_API_KEY=${CHAT_WONDER_API_KEY}
-          TRACE_STREAM_API_KEY=${TRACE_STREAM_API_KEY}
-          AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
-          AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-          AWS_S3_BUCKET=${AWS_S3_BUCKET}
-          DOCUMENT_EXTRACTION_QUEUE_URL=${DOCUMENT_EXTRACTION_QUEUE_URL}
-          CITATION_EXTRACTION_QUEUE_URL=${CITATION_EXTRACTION_QUEUE_URL}
-          AUDIO_OVERVIEW_QUEUE_URL=${AUDIO_OVERVIEW_QUEUE_URL}
-          CASE_RECONSTRUCTION_AUDIO_QUEUE_URL=${CASE_RECONSTRUCTION_AUDIO_QUEUE_URL}
-          AI_GENERATION_QUEUE_URL=${AI_GENERATION_QUEUE_URL}
-          MESSAGE_PERSISTENCE_QUEUE_URL=${MESSAGE_PERSISTENCE_QUEUE_URL}
-          CASE_GRAPH_PROMOTION_QUEUE_URL=${CASE_GRAPH_PROMOTION_QUEUE_URL}
-          AWS_REGION=${{ env.AWS_REGION }}
-          CLOUDFRONT_URL=${CLOUDFRONT_URL}
-          FILE_TOKEN_SECRET=${FILE_TOKEN_SECRET}
-          OPENAI_API_KEY=${OPENAI_API_KEY}
-          TYPESAFE_API_KEY=${TYPESAFE_API_KEY}
-          TYPESAFE_DEFAULT_MODEL=${TYPESAFE_DEFAULT_MODEL}
-          USE_JEV_PROPOSITION=${USE_JEV_PROPOSITION}
-          USE_JEV_VALIDITY=${USE_JEV_VALIDITY}
-          USE_JEV_MESSAGE_TRIAGE=${USE_JEV_MESSAGE_TRIAGE}
-          USE_JEV_REDTEAM=${USE_JEV_REDTEAM}
-          USE_JEV_DAMAGES=${USE_JEV_DAMAGES}
-          USE_JEV_CONTRADICTIONS=${USE_JEV_CONTRADICTIONS}
-          USE_JEV_MINDMAP=${USE_JEV_MINDMAP}
-          USE_JEV_AUDIO_OVERVIEW=${USE_JEV_AUDIO_OVERVIEW}
-          USE_JEV_WITNESS=${USE_JEV_WITNESS}
-          USE_JEV_AUTHORITY=${USE_JEV_AUTHORITY}
-          USE_JEV_CITATION_GROUNDS=${USE_JEV_CITATION_GROUNDS}
-          USE_JEV_LEGAL_ISSUES=${USE_JEV_LEGAL_ISSUES}
-          USE_JEV_STRENGTHS=${USE_JEV_STRENGTHS}
-          USE_JEV_WEAKNESSES=${USE_JEV_WEAKNESSES}
-          USE_JEV_RECONSTRUCTION=${USE_JEV_RECONSTRUCTION}
-          USE_JEV_RECONSTRUCTION_AUDIO=${USE_JEV_RECONSTRUCTION_AUDIO}
-          USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL=${USE_JEV_RECONSTRUCTION_AUDIO_QUEUE_URL}
-          USE_JEV_CASE_STRATEGY=${USE_JEV_CASE_STRATEGY}
-          USE_FULL_CONTRADICTION_SCAN=${USE_FULL_CONTRADICTION_SCAN}
-          USE_GROUNDING_VERIFIER=${USE_GROUNDING_VERIFIER}
-          GROUNDING_MAX_ASSERTIONS=${GROUNDING_MAX_ASSERTIONS}
-          JURIS_PH_API_URL=${JURIS_PH_API_URL}
-          UK_CASELAW_BASE_URL=${UK_CASELAW_BASE_URL}
-          UK_LEGISLATION_BASE_URL=${UK_LEGISLATION_BASE_URL}
-          NODE_ENV=${{ env.NODE_ENV }}
-          PORT=3001
-          EOF
+          set -euo pipefail
+          umask 077
 
-      - name: Copy env file to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: ilovelawyer-api.env
-          target: /home/ec2-user/
+          printf 'NODE_ENV=production\n'                    > env.tmp
+          printf 'PORT=%s\n' '${{ env.APP_PORT }}'         >> env.tmp
+          printf 'AWS_REGION=%s\n' '${{ env.AWS_REGION }}' >> env.tmp
 
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.0.3
+          # Written only when set. The old workflow wrote every name
+          # unconditionally, which is why CLOUDFRONT_URL and
+          # CASE_GRAPH_PROMOTION_QUEUE_URL sit empty in production today: an empty
+          # value looks configured and silently disables whatever reads it.
+          #
+          # `add` returns 0 deliberately — under `set -e` a bare
+          # `[ -n "$x" ] && printf ...` aborts the step on the first empty value.
+          add() { [ -n "${2:-}" ] && printf '%s=%s\n' "$1" "$2" >> env.tmp; return 0; }
+
+          for name in \
+            DATABASE_URL SECRET_KEY \
+            MAILER_TRANSPORT_HOST MAILER_TRANSPORT_PORT MAILER_TRANSPORT_SECURE \
+            MAILER_EMAIL MAILER_PASSWORD \
+            ACCESS_TOKEN_SECRET REFRESH_TOKEN_SECRET \
+            ACCESS_TOKEN_EXPIRY REFRESH_TOKEN_EXPIRY_DAYS \
+            REDIS_URL REDIS_HOST REDIS_PORT REDIS_PASSWORD \
+            SERVICE_ACCOUNT CLIENT_URL \
+            GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_TOKEN_ENC_KEY \
+            FIELD_ENCRYPTION_KEY FIELD_ENCRYPTION_ENABLED \
+            CHAT_WONDER_API_URL CHAT_WONDER_WS_URL CHAT_WONDER_API_KEY \
+            TRACE_STREAM_API_KEY \
+            AWS_ACCESS_KEY AWS_S3_BUCKET \
+            DOCUMENT_EXTRACTION_QUEUE_URL CITATION_EXTRACTION_QUEUE_URL \
+            AUDIO_OVERVIEW_QUEUE_URL CASE_RECONSTRUCTION_AUDIO_QUEUE_URL \
+            AI_GENERATION_QUEUE_URL MESSAGE_PERSISTENCE_QUEUE_URL \
+            CASE_GRAPH_PROMOTION_QUEUE_URL \
+            CLOUDFRONT_URL FILE_TOKEN_SECRET OPENAI_API_KEY \
+            TYPESAFE_API_KEY TYPESAFE_DEFAULT_MODEL \
+            USE_JEV_PROPOSITION USE_JEV_VALIDITY USE_JEV_MESSAGE_TRIAGE \
+            USE_JEV_REDTEAM USE_JEV_DAMAGES USE_JEV_CONTRADICTIONS \
+            USE_JEV_MINDMAP USE_JEV_AUDIO_OVERVIEW \
+            USE_JEV_AUTHORITY USE_JEV_CITATION_GROUNDS \
+            USE_JEV_LEGAL_ISSUES USE_JEV_STRENGTHS USE_JEV_WEAKNESSES \
+            USE_JEV_RECONSTRUCTION USE_JEV_CASE_STRATEGY \
+            USE_FULL_CONTRADICTION_SCAN USE_GROUNDING_VERIFIER \
+            GROUNDING_MAX_ASSERTIONS \
+            JURIS_PH_API_URL UK_CASELAW_BASE_URL UK_LEGISLATION_BASE_URL \
+            TRIAL_MESSAGE_LIMIT TRIAL_DURATION_HOURS
+          do
+            add "$name" "$(printenv "$name" || true)"
+          done
+
+          # Under its real name, from the alias above. The application reads
+          # AWS_SECRET_ACCESS_KEY; only this workflow step had to avoid it.
+          add AWS_SECRET_ACCESS_KEY "${APP_AWS_SECRET_ACCESS_KEY:-}"
+
+          # Refuse to deploy pointing at the old database. DATABASE_URL is the one
+          # value that decides which instance takes production writes, and getting
+          # it wrong is silent — the app starts and serves from the wrong copy.
+          if ! grep -q '^DATABASE_URL=.*10\.50\.1\.250' env.tmp; then
+            echo "::error::DATABASE_URL does not point at the host Postgres (10.50.1.250)."
+            echo "::error::Set it at cutover, not before. Refusing to deploy."
+            exit 1
+          fi
+
+          aws ssm put-parameter \
+            --name "${{ env.ENV_PARAM }}" \
+            --type SecureString --overwrite \
+            --value "file://env.tmp" \
+            --region "${{ env.AWS_REGION }}" > /dev/null
+          rm -f env.tmp
+
+      - name: Deploy via SSM
+        id: send
         env:
-          ECR_PASSWORD: ${{ steps.ecr-token.outputs.password }}
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          DEPLOY_IMAGE_TAG: ${{ env.IMAGE_TAG }}
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          command_timeout: 20m
-          envs: ECR_PASSWORD,ECR_REGISTRY,DEPLOY_IMAGE_TAG
-          script: |
-            set -e
-            chmod 600 /home/ec2-user/ilovelawyer-api.env
-            echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-            # Reclaim space BEFORE pulling. The prune at the end of this script ran AFTER
-            # the pull and omitted -a, so it only removed dangling images -- every image here
-            # is tagged :<sha>, so it freed nothing. 123 images reached 42GB and the pull
-            # died with "no space left on device" on 2026-10-01.
-            docker container prune -f || true
-            docker image prune -af || true
-            docker pull --platform linux/arm64 "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG"
+          REGISTRY: ${{ steps.tag.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${{ env.ECR_REPOSITORY }}:${TAG}"
 
-            docker run --rm \
-              --platform linux/arm64 \
-              --network host \
-              --entrypoint npx \
-              -v /home/ec2-user/ilovelawyer-api.env:/app/.env:ro \
-              "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG" \
-              prisma migrate deploy
+          COMMANDS=(
+            "set -euo pipefail"
+            "aws ssm get-parameter --name ${{ env.ENV_PARAM }} --with-decryption --region ${{ env.AWS_REGION }} --query Parameter.Value --output text > ${{ env.MERGED_ENV }}"
+            "chmod 600 ${{ env.MERGED_ENV }}"
+            "aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${REGISTRY}"
+            "docker container prune -f || true"
+            "docker image prune -af || true"
+            "docker pull --platform linux/arm64 ${IMAGE}"
+            "docker run --rm --platform linux/arm64 --network ${{ env.NETWORK }} --env-file ${{ env.MERGED_ENV }} --entrypoint npx ${IMAGE} prisma migrate deploy"
+            "docker rm -f ${{ env.CONTAINER }} 2>/dev/null || true"
+            "docker run -d --name ${{ env.CONTAINER }} --restart unless-stopped --platform linux/arm64 --network ${{ env.NETWORK }} --env-file ${{ env.MERGED_ENV }} -p 127.0.0.1:${{ env.HOST_PORT }}:${{ env.APP_PORT }} ${IMAGE}"
+          )
 
-            docker stop ilovelawyer-api 2>/dev/null || true
-            docker rm   ilovelawyer-api 2>/dev/null || true
-            docker run -d --name ilovelawyer-api --restart unless-stopped \
-              --platform linux/arm64 \
-              --env-file /home/ec2-user/ilovelawyer-api.env \
-              -p 127.0.0.1:3001:3001 \
-              "$ECR_REGISTRY/ilovelawyer-api:$DEPLOY_IMAGE_TAG"
+          # jq builds the JSON, so a quote inside any command cannot break it.
+          PARAMS=$(printf '%s\n' "${COMMANDS[@]}" | jq -R . | jq -sc '{commands: .}')
+
+          CMD_ID=$(aws ssm send-command \
+            --region "${{ env.AWS_REGION }}" \
+            --instance-ids "${{ env.INSTANCE_ID }}" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${{ env.CONTAINER }} ${TAG}" \
+            --timeout-seconds 1200 \
+            --parameters "${PARAMS}" \
+            --query Command.CommandId --output text)
+
+          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
+          echo "SSM command: $CMD_ID"
+
+      - name: Wait for the deploy
+        run: |
+          set -uo pipefail
+          STATUS=Pending
+          for i in $(seq 1 120); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${{ env.AWS_REGION }}" \
+              --command-id "${{ steps.send.outputs.command_id }}" \
+              --instance-id "${{ env.INSTANCE_ID }}" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            echo "status: $STATUS"
+            case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 10
+          done
+
+          aws ssm get-command-invocation \
+            --region "${{ env.AWS_REGION }}" \
+            --command-id "${{ steps.send.outputs.command_id }}" \
+            --instance-id "${{ env.INSTANCE_ID }}" \
+            --query '[StandardOutputContent,StandardErrorContent]' --output text
+
+          [ "$STATUS" = "Success" ] || { echo "::error::deploy $STATUS"; exit 1; }

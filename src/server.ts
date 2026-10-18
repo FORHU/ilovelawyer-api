@@ -14,14 +14,19 @@ import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
 import CaseCopyQueue from "./queues/case-copy.queue";
 import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
 
-import { PORT } from "./config";
+import { DOCUMENT_EXTRACTION_IN_API, PORT } from "./config";
 import logger from "./utils/logger";
 import { fieldEncryptionStatus } from "./utils/field-crypto";
 import { verifyDocumentBucketRegion } from "./utils/s3";
+import LlmUsageSvc from "./services/llm-usage.service";
 
 void verifyDocumentBucketRegion();
 
-DocumentExtractionQueue.start();
+// Every Jev call (jevAsk) records its token usage in the LLM usage ledger (#403).
+LlmUsageSvc.registerJevRecorder();
+
+// Off when a separate extraction worker consumes the queue instead (see DOCUMENT_EXTRACTION_IN_API).
+if (DOCUMENT_EXTRACTION_IN_API) DocumentExtractionQueue.start();
 AudioOverviewQueue.start();
 CitationExtractionQueue.start();
 AiGenerationQueue.start();
@@ -38,6 +43,6 @@ SecurityAuditRetentionQueue.start();
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server is running on http://0.0.0.0:${PORT}`);
   const encryption = fieldEncryptionStatus();
-  const state = encryption.enabled && encryption.keyConfigured ? "ON" : encryption.enabled ? "ENABLED BUT NO VALID KEY (privileged notes cannot be saved)" : "OFF";
-  logger.info(`Field encryption (privileged notes, document text): ${state}`, encryption);
+  const state = encryption.enabled && encryption.keyConfigured ? "ON" : encryption.enabled ? "ENABLED BUT NO VALID KEY (privileged notes and chat messages cannot be saved)" : "OFF";
+  logger.info(`Field encryption (privileged notes, document text, chat messages): ${state}`, encryption);
 });

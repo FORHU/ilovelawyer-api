@@ -48,8 +48,8 @@ export default class ClaimExtractSvc {
 
     const tenantCode = await CaseAccess.resolveTenantCode(caseId);
     const header = await CaseRepo.findPromptHeader(caseId);
-    const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(docs.map((d) => d.id));
     const perDocChars = Math.max(1000, Math.min(MAX_DOC_CHARS, Math.floor(MAX_TOTAL_DOC_CHARS / docs.length)));
+    const fullTexts = await DocumentChunkRepo.findFullTextsByDocuments(docs.map((d) => d.id), { maxCharsPerDocument: perDocChars });
     const existing = await CaseClaimRepo.list(caseId);
 
     const prompt = getClaimExtractPromptBuilder(tenantCode)({

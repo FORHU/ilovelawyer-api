@@ -35,7 +35,8 @@ export default class DocumentCtrl {
       value.filename,
       value.contentType,
       value.caseId,
-      value.consultationId
+      value.consultationId,
+      value.fileSize,
     );
     return res.status(200).json(result);
   }
@@ -76,7 +77,7 @@ export default class DocumentCtrl {
     if (consultationId) {
       // Same rule as opening the consultation itself — a case-linked one follows its case (#346).
       await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, consultationId);
-      const docs = await DocumentSvc.listByConsultation(req.organization!.id, consultationId, status);
+      const docs = await DocumentSvc.listByConsultation(req.organization!.id, consultationId, status, req.user.userId);
       return res.status(200).json(docs);
     }
 

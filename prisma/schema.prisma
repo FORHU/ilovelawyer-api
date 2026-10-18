@@ -70,6 +70,13 @@ model User {
   denialReason        String?
   onboardingCompleted Boolean        @default(false)
 
+  // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
+  // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
+  // session and access token stop working; `trialMessagesUsed` counts the AI answers it has
+  // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by scripts/purge-trial-users.
+  trialExpiresAt    DateTime?
+  trialMessagesUsed Int       @default(0)
+
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
   // ACCOUNT_DELETION_GRACE_PERIOD_DAYS has elapsed since this timestamp, unless the user
@@ -111,6 +118,7 @@ model User {
   documents               Document[]
   bookmarks               Bookmark[]
   consents                Consent[]
+  feedback                Feedback[]
   transcriptions          Transcription[]
   calendarWatchChannels   CalendarWatchChannel[]
   events                  Event[]
@@ -136,6 +144,7 @@ model User {
 
   @@index([tenantId])
   @@index([deletionRequestedAt])
+  @@index([trialExpiresAt])
   manualEdits        CaseManualEdit[]
 }
 
@@ -194,10 +203,13 @@ model Consultation {
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
   userId         String
-  organizationId String
+  // Null for a main (standalone) consultation: those belong to the user alone, so joining,
+  // switching or leaving an organization never hides, moves or copies them. Set only for a
+  // consultation on a case, which lives with the case's organization.
+  organizationId String?
   caseId         String?
-  // Max 60 chars — keep in step with TITLE_MAX_CHARS (chat.constants.ts).
-  title          String?                  @db.VarChar(60)
+  // Max 80 chars — keep in step with TITLE_MAX_CHARS (chat.constants.ts).
+  title          String?                  @db.VarChar(80)
   // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
   // Null while untitled.
   titleSource    ConsultationTitleSource?
@@ -220,7 +232,7 @@ model Consultation {
   deletionRequestedAt DateTime?
 
   user           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization?             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case           Case?                     @relation(fields: [caseId], references: [id], onDelete: SetNull)
   messages       Message[]
   messageGroups  MessageGroup[]
@@ -234,6 +246,7 @@ model Consultation {
   @@index([organizationId])
   @@index([caseId])
   @@index([organizationId, caseId, status])
+  @@index([userId, caseId, status])
   @@index([deletionRequestedAt])
 }
 
@@ -801,50 +814,23 @@ enum ClientSide {
 model Case {
   id                    String     @id @default(uuid())
   traceEvents           ConsultationTraceEvent[]
-  // Who created the case — attribution only, never access on its own (see CaseAccess). Nullable
-  // so deleting that account leaves the case with its organization; createdByName keeps the
-  // name to show after that.
   userId                String?
   createdByName         String?
   organizationId        String?
-  // Set on a creator's portfolio copy, made when they leave the organization the original
-  // stays in (see CaseCopySvc). No foreign key — the original may be deleted later.
   copiedFromCaseId      String?
   copiedFromOrgName     String?
   copiedAt              DateTime?
   caseName              String
   actionType            String?
   jurisdiction          String?
-  // Constrained (England and Wales / Scotland / Northern Ireland) selector for which UK legal
-  // system applies to this case — distinct from `jurisdiction` above (a free-text court/venue
-  // field) and from Tenant.code (the PH/UK deployment-region boundary, see CONTEXT.md). Only
-  // meaningful for UK-tenant organizations; left null for PH.
   ukJurisdiction        String?
   language              String     @default("en")
   notes                 String?    @db.Text
   lastRefreshedAt       DateTime?
-  // Archiving is a pure visibility flag — an ARCHIVED case behaves identically to an ACTIVE one
-  // everywhere else (documents, chat, auto-refresh, CaseAccess); it only changes which of the
-  // Case Portfolio's two tabs (Active/Archived) the case shows up in. See CaseRepo.list's status
-  // param and CaseRepo.setStatus.
   status                CaseStatus @default(ACTIVE)
-  // A confidential matter (#346): reachable only by the organization's OWNER and people holding a
-  // CaseAccess grant — plain membership, org ADMIN included, no longer opens it, and it's left out
-  // of every listing for everyone else (see CaseAccess). Off by default.
   confidential          Boolean    @default(false)
-  // Hash of the sorted READY document id set as of the last caseRefresh (manual or automatic) —
-  // lets the post-extraction auto-trigger (queues/case-post-extraction.ts) skip a redundant
-  // Chat Wonder run when the READY set hasn't actually changed (e.g. a same-file re-upload, or
-  // a delete immediately followed by a re-add that nets out to the same set). Null until the
-  // first refresh runs.
   readySetFingerprint   String?
-  // Which FINDINGS_FORMAT_VERSION (case-finding.constants.ts) the case's AI findings were last
-  // generated with. Null for cases whose findings predate the stamp. Opening the Terminal on an
-  // older one queues a findings-only regeneration (CaseFindingAiSvc.scheduleIfOutdated).
   findingsFormatVersion Int?
-  // Which side the lawyer acts for — "this case" in the findings prompt means this side's case.
-  // Null when the lawyer hasn't said; the prompt then keeps its claimant framing. Changing it
-  // clears findingsFormatVersion so the findings regenerate from the new side (CaseSvc.update).
   clientSide            ClientSide?
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
@@ -921,11 +907,9 @@ model Party {
 
 model Document {
   id               String    @id @default(uuid())
-  // On a portfolio copy (see CaseCopySvc): the document in the original case this was copied
-  // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
   userId           String
-  organizationId   String
+  organizationId   String?
   caseId           String?
   consultationId   String?
   messageId        String?
@@ -940,15 +924,8 @@ model Document {
   pageCount        Int?
   extractionMethod String?
   ocrAttempted     Boolean   @default(false)
-
-  // Lawyer-curated subset of a case's Documents shown in the Case Brief export's Exhibit list —
-  // not every uploaded document is an Exhibit just by being uploaded. See CONTEXT.md's Exhibit entry.
   isExhibit            Boolean   @default(false)
-  // Set once WitnessExtractSvc has read this document, so the automatic post-extraction witness
-  // pass only ever sends new documents to the model — a witness the lawyer deleted is never
-  // re-created from a document that was already read.
   witnessesExtractedAt DateTime?
-  // Same idea for the damages pass (DamagesExtractSvc): set once it has read this document.
   damagesExtractedAt   DateTime?
   // Archiving is a pure visibility flag, same as Case.status — an ARCHIVED document stays fully
   // intact (chunks, RAG grounding, metadata, relationships) and is only hidden from the active
@@ -958,7 +935,7 @@ model Document {
   createdAt DateTime       @default(now())
 
   user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization       Organization?       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case               Case?               @relation(fields: [caseId], references: [id])
   consultation       Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   message            Message?            @relation(fields: [messageId], references: [id], onDelete: SetNull)
@@ -1163,9 +1140,26 @@ model Law {
   citedTo        CitationEdge[]  @relation("CitedTo")
   citationChecks CitationCheck[] @relation("ResolvedLaw")
   authorities    CaseAuthority[]
+  documentCopies LawDocumentCopy[]
 
   @@index([category, tenantId])
   @@index([year])
+}
+
+model LawDocumentCopy {
+  id        String   @id @default(uuid())
+  lawId     String
+  part      String   @default("")
+  sha256    String
+  sourceUrl String
+  content   Bytes
+  bytes     Int
+  fetchedAt DateTime @default(now())
+  checkedAt DateTime @default(now())
+
+  law Law @relation(fields: [lawId], references: [id], onDelete: Cascade)
+
+  @@index([lawId, part, checkedAt])
 }
 
 // ── Citation Map ──────────────────────────────────────────────────────────────
@@ -2546,15 +2540,9 @@ model Organization {
   name        String
   slug        String     @unique
   packageSku  PackageSku @default(PROFESSIONAL)
-  // A user who skipped workspace onboarding still needs an org (every resource route is
-  // org-scoped), so they get a private one-member workspace that the app never presents as
-  // an organization. Creating a real org upgrades it in place — see OrganizationSvc.create.
   isPersonal  Boolean    @default(false)
   createdById String
   tenantId    String
-  // An organization its last member left (see OrganizationSvc.exit): nobody can open, join or be
-  // invited to it any more, and OrganizationDeletionQueue deletes it once deletionScheduledAt
-  // passes. archivedById is who left last — kept for customer support, who restore by hand.
   status              OrganizationStatus @default(ACTIVE)
   archivedAt          DateTime?
   archivedById        String?
@@ -2628,8 +2616,6 @@ model OrganizationMember {
   organizationId String
   userId         String                   @unique
   role           OrganizationRole         @default(OWNER)
-  // Always ACCEPTED now — invitations live in OrganizationInvite. PENDING is what invites used
-  // to be stored as here, before 20261007150000_organization_invites moved them out.
   status         OrganizationMemberStatus @default(ACCEPTED)
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
@@ -2639,11 +2625,6 @@ model OrganizationMember {
 
   @@index([organizationId])
 }
-
-// An invitation to join an organization. Kept apart from OrganizationMember (one row per
-// user) so that someone who already belongs to an organization can still be invited —
-// accepting moves their membership (see OrganizationSvc.acceptInvite), declining leaves it.
-// One outstanding invite per user.
 model OrganizationInvite {
   id             String           @id @default(uuid())
   organizationId String
@@ -2795,6 +2776,48 @@ model Consent {
 
   @@unique([userId, purpose])
   @@index([userId])
+}
+
+enum FeedbackSource {
+  GENERAL
+  CHAT_ANSWER
+  TERMINAL_PANE
+}
+
+enum FeedbackRating {
+  UP
+  DOWN
+}
+
+// What a tester sent from inside the app: the header's Feedback drawer (GENERAL), a thumb on a chat
+// answer (CHAT_ANSWER), or the flag on a Terminal pane (TERMINAL_PANE). Carries ids and the person's
+// own words, never answer or pane text. `comment` is sealed at rest (see FeedbackSvc), so it can be
+// read but not searched. No foreign keys on the case/organization/consultation/message ids, so a row
+// outlives them; the user link cascades, so deleting an account deletes what that person wrote.
+// `category` is a string rather than an enum so a new one never needs a migration (see
+// FEEDBACK_CATEGORIES). `rating` is set only for CHAT_ANSWER. `panelId` is the Terminal pane's id.
+model Feedback {
+  id             String          @id @default(uuid())
+  userId         String
+  source         FeedbackSource
+  rating         FeedbackRating?
+  category       String?
+  comment        String?         @db.Text
+  organizationId String?
+  caseId         String?
+  consultationId String?
+  messageId      String?
+  panelId        String?
+  pagePath       String?
+  userAgent      String?
+  viewport       String?
+  createdAt      DateTime        @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([source])
 }
 
 model AuditEvent {

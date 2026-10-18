@@ -37,6 +37,7 @@ import ChatRepo from "../src/repositories/chat.repository";
 import { getChatWonderSessionId } from "../src/utils/chatWonder";
 import { ChatGenerationJob } from "../src/queues/chat-generation.queue";
 import { TenantCode } from "../src/types/tenant-code";
+import { openMessages } from "../src/utils/message-content";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -54,11 +55,13 @@ function stripTraceFrames(text: string): string {
  * multi-topic answer is split into one row per topic — see MessageGroup in the schema), joined
  * back into one document. Also returns the ids so run.json can point at them. */
 async function assembleReply(userMessageId: string): Promise<{ content: string; parts: number; ids: string[] }> {
-  const rows = await prisma.message.findMany({
-    where: { parentMessageId: userMessageId, role: "assistant" },
-    orderBy: [{ groupOrder: "asc" }, { createdAt: "asc" }],
-    select: { id: true, content: true },
-  });
+  const rows = openMessages(
+    await prisma.message.findMany({
+      where: { parentMessageId: userMessageId, role: "assistant" },
+      orderBy: [{ groupOrder: "asc" }, { createdAt: "asc" }],
+      select: { id: true, content: true },
+    }),
+  );
   return { content: rows.map((r) => r.content).join("\n\n"), parts: rows.length, ids: rows.map((r) => r.id) };
 }
 

@@ -1,5 +1,6 @@
 import { choice } from "@typesafe-ai/sdk";
 import { jevAsk } from "./typesafeClient";
+import { optionsInOrder } from "./jev-common";
 import logger from "./logger";
 
 /**
@@ -63,14 +64,15 @@ function isEvidenceKind(v: unknown): v is EvidenceKind {
  * layer that silently reports "fine" when it could not check is worse than one that reports
  * nothing.
  */
-export async function checkAssertionWithJev(assertion: string, passage: string, citation?: string): Promise<AssertionCheck> {
-  logger.info("Jev request", { feature: "assertion-check", citation, assertionChars: assertion.length, passageChars: passage.length });
-  const response = await jevAsk("assertion-check", {
+/** The exact request checkAssertionWithJev sends; `order` (of the support verdicts) is for the
+ * option-order benchmark (#410). */
+export function assertionRequest(assertion: string, passage: string, citation?: string, order: readonly AssertionVerdict[] = ASSERTION_VERDICTS) {
+  return {
     state: { assertion, citedPassage: passage, citation: citation ?? "" },
     questions: {
       support: choice(
         "An answer asserted `assertion` and cited `citation` for it. `citedPassage` is what that reference actually contains. Classify the relationship: SUPPORTED if the passage bears out the assertion, even if worded differently; UNSUPPORTED if the passage does not address or does not establish it; CONTRADICTED if the passage says the opposite of the assertion or expressly denies what it claims.",
-        { SUPPORTED: null, UNSUPPORTED: null, CONTRADICTED: null },
+        optionsInOrder(order),
       ),
       evidenceKind: choice(
         "What does `citedPassage` actually amount to for this assertion?\n" +
@@ -78,7 +80,12 @@ export async function checkAssertionWithJev(assertion: string, passage: string, 
         Object.fromEntries(EVIDENCE_KINDS.map((k) => [k, null])) as Record<EvidenceKind, null>,
       ),
     },
-  });
+  };
+}
+
+export async function checkAssertionWithJev(assertion: string, passage: string, citation?: string): Promise<AssertionCheck> {
+  logger.info("Jev request", { feature: "assertion-check", citation, assertionChars: assertion.length, passageChars: passage.length });
+  const response = await jevAsk("assertion-check", assertionRequest(assertion, passage, citation));
 
   const support = response.answers.support;
   const kind = response.answers.evidenceKind;

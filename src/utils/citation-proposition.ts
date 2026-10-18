@@ -5,23 +5,31 @@ import { extractProposition, ParsedProposition } from "./citation-proposition-pa
 import { TenantCode } from "../types/tenant-code";
 import { containsQuote } from "./citation-validity";
 import { jevAsk } from "./typesafeClient";
+import { optionsInOrder } from "./jev-common";
 import logger from "./logger";
 
 /** Pilot flag for the Jev-based path below — see benchmarks/jev-report-2026-09-21.md. Unset/false keeps the
  * existing chat-wonder + regex path. */
 const USE_JEV_PROPOSITION = process.env.USE_JEV_PROPOSITION === "true";
 
-export async function classifyPropositionWithJev(quote: string, official: string): Promise<ParsedProposition | null> {
-  logger.info("Jev request", { feature: "citation-proposition", question: "propositionType", officialText: official, quotedText: quote });
-  const response = await jevAsk("citation-proposition", {
+export const JEV_PROPOSITION_TYPES = ["PARAPHRASED", "INFERRED"] as const;
+
+/** The exact request classifyPropositionWithJev sends; `order` is for the option-order benchmark (#410). */
+export function propositionRequest(quote: string, official: string, order: readonly (typeof JEV_PROPOSITION_TYPES)[number][] = JEV_PROPOSITION_TYPES) {
+  return {
     state: { officialText: official, quotedText: quote },
     questions: {
       propositionType: choice(
         "Given officialText (the source document) and quotedText (a proposition derived from it), classify their relationship: PARAPHRASED if quotedText restates the same meaning in different words, INFERRED if it is a conclusion drawn from officialText but not directly stated there.",
-        { PARAPHRASED: null, INFERRED: null },
+        optionsInOrder(order),
       ),
     },
-  });
+  };
+}
+
+export async function classifyPropositionWithJev(quote: string, official: string): Promise<ParsedProposition | null> {
+  logger.info("Jev request", { feature: "citation-proposition", question: "propositionType", officialText: official, quotedText: quote });
+  const response = await jevAsk("citation-proposition", propositionRequest(quote, official));
   const answer = response.answers.propositionType;
   logger.info("Jev response", {
     feature: "citation-proposition",
@@ -40,7 +48,7 @@ export async function classifyPropositionWithChatWonder(
 ): Promise<ParsedProposition | null> {
   const sessionId = await getChatWonderSessionId();
   const prompt = buildCitationPropositionPrompt(quote, official);
-  const payload = await callChatWonderRest(prompt, sessionId, undefined, tenantCode);
+  const payload = await callChatWonderRest(prompt, sessionId, undefined, tenantCode, { usage: { feature: "citationProposition" } });
   const text = String(payload.response || payload.intermediate_response || "");
   return extractProposition(text);
 }

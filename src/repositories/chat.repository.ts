@@ -4,10 +4,11 @@ import { TimelineItem, MindMapItem, AudioOverviewTurn, ReasoningExplanation, Dec
 import { RelatedCase } from "../utils/chatWonder";
 import type { MarkTiming } from "../utils/audio-overview-render";
 import { consultationDeletionDueAt } from "../constants/consultation-deletion.constants";
+import { openMessage, openMessages, sealMessageContent, sealPendingReply } from "../utils/message-content";
 
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
-  static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
+  static async createConsultation(organizationId: string | null, userId: string, title?: string, caseId?: string) {
     return prisma.consultation.create({ data: { organizationId, userId, title, caseId, titleSource: title ? "USER" : null } });
   }
 
@@ -20,7 +21,8 @@ export default class ChatRepo {
    * Case Workspace's Consultation switcher. */
   /** ACTIVE lists by latest activity. ARCHIVED is the archive as shown — those scheduled for
    * deletion (FOR_DELETION) included, since they can still be restored — by when each was
-   * archived, newest first. With userId, only that user's own. */
+   * archived, newest first. With userId and no case, the user's own main consultations — found
+   * by user, never by organization, so they read the same from every workspace. */
   static async listConsultations(
     organizationId: string,
     caseId?: string,
@@ -29,9 +31,8 @@ export default class ChatRepo {
   ) {
     const rows = await prisma.consultation.findMany({
       where: {
-        organizationId,
         caseId: caseId ?? null,
-        ...(userId ? { userId } : {}),
+        ...(!caseId && userId ? { userId } : { organizationId, ...(userId ? { userId } : {}) }),
         status: status === "ARCHIVED" ? { in: ["ARCHIVED", "FOR_DELETION"] } : status,
       },
       orderBy: { createdAt: "desc" },
@@ -108,7 +109,7 @@ export default class ChatRepo {
       take: limit,
       select: { content: true },
     });
-    return rows.map((row) => row.content).reverse();
+    return openMessages(rows).map((row) => row.content).reverse();
   }
 
   /** Restoring (ACTIVE) also cancels any deletion scheduled for it. */
@@ -194,7 +195,7 @@ export default class ChatRepo {
   }
 
   static async listMessagesByConsultation(consultationId: string) {
-    return prisma.message.findMany({
+    const rows = await prisma.message.findMany({
       where: { consultationId },
       orderBy: { createdAt: "asc" },
       include: {
@@ -219,6 +220,7 @@ export default class ChatRepo {
         },
       },
     });
+    return openMessages(rows);
   }
 
   static async createMessage(
@@ -232,9 +234,10 @@ export default class ChatRepo {
     groupTitle?: string,
     replyStatus?: MessageReplyStatus,
   ) {
-    const created = await prisma.message.create({
-      data: { consultationId, role, content, userId, parentMessageId, groupId, groupOrder, groupTitle, replyStatus },
+    const stored = await prisma.message.create({
+      data: { consultationId, role, content: sealMessageContent(content), userId, parentMessageId, groupId, groupOrder, groupTitle, replyStatus },
     });
+    const created = openMessage(stored) ?? stored;
     // A user turn in a case's chat is activity on that case — bump its "Last updated". Filtered
     // through the consultation relation so this needs no extra lookup; a standalone (non-case)
     // consultation matches no Case row and is a no-op. Assistant/system rows are follow-ons to a
@@ -261,10 +264,11 @@ export default class ChatRepo {
     replyStatus: MessageReplyStatus,
     opts?: { clearPendingContent?: boolean },
   ) {
-    return prisma.message.update({
+    const stored = await prisma.message.update({
       where: { id: messageId },
       data: { replyStatus, ...(opts?.clearPendingContent ? { pendingReplyContent: null } : {}) },
     });
+    return openMessage(stored) ?? stored;
   }
 
   /** True when this consultation's most recent message is a user turn still awaiting its reply.
@@ -297,10 +301,11 @@ export default class ChatRepo {
   /** A user turn's current replyStatus (and its checkpointed partial reply) — polled by the
    * generation worker to notice a Stop from another instance, and read by the cancel endpoint. */
   static async findReplyState(messageId: string) {
-    return prisma.message.findUnique({
+    const row = await prisma.message.findUnique({
       where: { id: messageId },
       select: { id: true, consultationId: true, role: true, userId: true, replyStatus: true, pendingReplyContent: true },
     });
+    return row ? openMessage(row) : row;
   }
 
   /** PENDING -> CANCELLED as ONE conditional write, so a Stop racing the worker's own DONE/FAILED
@@ -340,7 +345,8 @@ export default class ChatRepo {
   /** Checkpoints the raw accumulated reply text while a turn is still streaming — throttled by
    * the caller (ChatSvc.processChatGenerationJob), not on every chunk. */
   static async checkpointPendingReply(messageId: string, pendingReplyContent: string) {
-    return prisma.message.update({ where: { id: messageId }, data: { pendingReplyContent } });
+    const stored = await prisma.message.update({ where: { id: messageId }, data: { pendingReplyContent: sealPendingReply(pendingReplyContent) } });
+    return openMessage(stored) ?? stored;
   }
 
   /** One row per split, multi-topic AI reply — see MessageGroup. Created before the topic
@@ -380,17 +386,18 @@ export default class ChatRepo {
   /** Every assistant message of one turn: a single row for an ordinary reply, several siblings
    * under one MessageGroup for a split multi-topic answer. */
   static async findAssistantRepliesByParent(parentMessageId: string) {
-    return prisma.message.findMany({
+    const rows = await prisma.message.findMany({
       where: { parentMessageId, role: "assistant" },
       orderBy: { createdAt: "asc" },
       select: { id: true, content: true },
     });
+    return openMessages(rows);
   }
 
   /** The user's own text for a turn, for ranking citations against what they asked. */
   static async findUserMessageContent(messageId: string) {
     const row = await prisma.message.findUnique({ where: { id: messageId }, select: { content: true } });
-    return row?.content ?? null;
+    return (row && openMessage(row)?.content) ?? null;
   }
 
   /** Upsert, not create: a re-rank (calibration, a retried job) replaces the old result. */
@@ -404,10 +411,11 @@ export default class ChatRepo {
   }
 
   static async findMessageById(messageId: string) {
-    return prisma.message.findUnique({
+    const row = await prisma.message.findUnique({
       where: { id: messageId },
       include: { timeline: true, mindMap: true, relatedCases: true, reasoning: true },
     });
+    return row ? openMessage(row) : row;
   }
 
   /** Lean id/content/parent lookup for several messages at once — used by CaseSnapshotSvc to
@@ -415,10 +423,11 @@ export default class ChatRepo {
    * triggered it, for grouping decisions by turn without an N+1 query per record. */
   static async findManyByIds(messageIds: string[]) {
     if (!messageIds.length) return [];
-    return prisma.message.findMany({
+    const rows = await prisma.message.findMany({
       where: { id: { in: messageIds } },
       select: { id: true, content: true, parentMessageId: true, consultationId: true, createdAt: true },
     });
+    return openMessages(rows);
   }
 
   static async saveReasoning(messageId: string, data: ReasoningExplanation) {
@@ -490,11 +499,12 @@ export default class ChatRepo {
    * Postgres's NULLS FIRST default for DESC).
    */
   static async findLatestAssistantMessage(consultationId: string) {
-    return prisma.message.findFirst({
+    const row = await prisma.message.findFirst({
       where: { consultationId, role: "assistant", parentMessageId: { not: null } },
       orderBy: { parent: { createdAt: "desc" } },
       include: { relatedCases: true },
     });
+    return row ? openMessage(row) : row;
   }
 
   static async deleteMessage(messageId: string) {

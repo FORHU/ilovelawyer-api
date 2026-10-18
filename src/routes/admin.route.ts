@@ -4,6 +4,7 @@ import validSession from "../middleware/valid-session.middleware";
 import requireAdmin from "../middleware/require-admin.middleware";
 import AdminCtrl from "../controllers/admin.controller";
 import SecurityAuditCtrl from "../controllers/security-audit.controller";
+import LlmUsageCtrl from "../controllers/llm-usage.controller";
 
 const router = express.Router();
 
@@ -11,6 +12,7 @@ router.use(validSession, requireAdmin);
 
 router.get("/users", asyncHandler(AdminCtrl.listUsers));
 router.get("/audit-events", asyncHandler(AdminCtrl.listAuditEvents));
+router.get("/feedback", asyncHandler(AdminCtrl.listFeedback));
 
 router.get("/law/search", asyncHandler(AdminCtrl.searchLaw));
 router.get("/law", asyncHandler(AdminCtrl.listLaw));
@@ -31,5 +33,9 @@ router.post("/tenants/:code/approve-pending", asyncHandler(AdminCtrl.approvePend
 
 router.get("/audit-log", asyncHandler(SecurityAuditCtrl.listForAdmin));
 router.get("/audit-log/export", asyncHandler(SecurityAuditCtrl.exportForAdmin));
+
+router.get("/llm-usage/summary", asyncHandler(LlmUsageCtrl.summary));
+router.get("/llm-usage/people", asyncHandler(LlmUsageCtrl.people));
+router.get("/llm-usage", asyncHandler(LlmUsageCtrl.list));
 
 export default router;

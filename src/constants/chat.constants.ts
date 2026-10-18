@@ -1,6 +1,6 @@
 export const TITLE_CACHE_TTL = 60 * 60 * 24 * 7; // 7 days
 export const RESPONSE_CACHE_TTL = 60 * 15; // 15 minutes
-export const TITLE_MAX_CHARS = 60; // max title length (matches frontend truncation)
+export const TITLE_MAX_CHARS = 80; // max title length (matches frontend truncation)
 export const CHAT_WONDER_SESSION_TTL_S = 60 * 60; // match chat-wonder's in-memory session TTL
 
 // Used in place of the user's message text (title generation, AI prompt, cache key) when a

@@ -5,6 +5,7 @@ import { isJobStale, isUniqueConstraintError } from "../utils/ai-generation-lock
 import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
 import { emitToCase } from "../lib/socket";
 import logger from "../utils/logger";
+import LlmUsageSvc from "./llm-usage.service";
 
 /**
  * Generic "is a generation currently running" lock, shared by every Chat-Wonder-backed
@@ -162,7 +163,9 @@ export default class AiGenerationLockSvc {
   static async finishWith<T>(subjectId: string, kind: AiGenerationKind, fn: () => Promise<T>): Promise<T> {
     const stopHeartbeat = this.startHeartbeat(subjectId, kind);
     try {
-      const result = await fn();
+      // Every LLM call the work makes (Chat Wonder, Jev, embeddings) is attributed to the case's
+      // user and organization in the usage ledger.
+      const result = await LlmUsageSvc.runInCaseScope(subjectId, fn);
       stopHeartbeat();
       await this.finish(subjectId, kind, "DONE");
       return result;

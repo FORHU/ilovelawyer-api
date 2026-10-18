@@ -1,5 +1,7 @@
 import express from "express";
 import authRoute from "./auth.route";
+import trialRoute from "./trial.route";
+import { blockTrialWrites } from "../middleware/trial.middleware";
 import chatRoute from "./chat.route";
 import legalRagRoute from "./legal-rag.route";
 import filesRoute from "./files.route";
@@ -8,6 +10,7 @@ import caseRoute from "./case.route";
 import sharedCaseRoute from "./shared-case.route";
 import bookmarkRoute from "./bookmark.route";
 import consentRoute from "./consent.route";
+import feedbackRoute from "./feedback.route";
 import userDocumentRoute from "./user-document.route";
 import legalSourceCacheRoute from "./legal-source-cache.route";
 import transcriptionRoute from "./transcription.route";
@@ -31,11 +34,23 @@ import lawRoute from "./law.route";
 
 const router = express.Router();
 
+// A trial guest (see TrialSvc) can read around the app but not write through these. That includes
+// the routers whose POSTs call a paid model or the speech service (legal-rag, tts, law's citation
+// expansion, source analysis); a guest's only AI is the capped chat send (trialMessageLimit).
+router.use(
+  [
+    "/organizations", "/case-document", "/generated-document", "/my-cases", "/shared-cases", "/documents",
+    "/transcriptions", "/send-email", "/terminal", "/legal-rag", "/tts", "/law", "/legal-source-analysis", "/model-settings",
+  ],
+  blockTrialWrites,
+);
+
 router.use("/health", healthRoute);
 router.use("/organizations", organizationRoute);
 router.use("/case-document", caseDocumentRoute);
 router.use("/generated-document", generatedDocumentRoute);
 router.use("/auth", authRoute);
+router.use("/trial", trialRoute);
 router.use("/chat", chatRoute);
 router.use("/legal-rag", legalRagRoute);
 router.use("/files", filesRoute);
@@ -46,6 +61,7 @@ router.use("/my-cases", caseRoute);
 router.use("/shared-cases", sharedCaseRoute);
 router.use("/bookmarks", bookmarkRoute);
 router.use("/consents", consentRoute);
+router.use("/feedback", feedbackRoute);
 router.use("/documents", userDocumentRoute);
 router.use("/legal-source-analysis", legalSourceCacheRoute);
 router.use("/transcriptions", transcriptionRoute);

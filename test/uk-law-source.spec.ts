@@ -376,18 +376,19 @@ describe("UK Library source (LawSourceProvider)", () => {
     expect(res.body.edges[0].toRawReference).to.equal("[2000] UKSC 9");
   });
 
-  it("pdf proxy: streams a legislation PDF from our origin without X-Frame-Options, no auth", async () => {
-    // seed a UK legislation row
-    const legUrl = "https://www.legislation.gov.uk/ukpga/2018/12";
-    await prisma.law.deleteMany({ where: { jurisSourceId: legUrl } });
+  it("pdf proxy: streams a judgment PDF from our origin without X-Frame-Options, no auth", async () => {
+    // A made-up judgment, so the test never deletes a real stored row.
+    const caseUrl = "https://caselaw.nationalarchives.gov.uk/ewhc/kb/2099/9999";
+    await prisma.law.deleteMany({ where: { jurisSourceId: caseUrl } });
     const ukTenant = await prisma.tenant.findUnique({ where: { code: "UK" } });
     const leg = await prisma.law.create({
       data: {
-        jurisSourceId: legUrl,
-        category: "REPUBLIC_ACT",
+        jurisSourceId: caseUrl,
+        category: "JURISPRUDENCE",
         tenantId: ukTenant!.id,
-        title: "Data Protection Act 2018",
-        jurisUrl: legUrl,
+        title: "Test v Proxy",
+        jurisUrl: caseUrl,
+        pdfUrl: "https://assets.caselaw.nationalarchives.gov.uk/ewhc/kb/2099/9999/data.pdf",
         rawJson: {},
       },
     });
@@ -408,6 +409,54 @@ describe("UK Library source (LawSourceProvider)", () => {
     stubFetch(() => new Response("<html>waf challenge</html>", { status: 202, headers: { "content-type": "text/html" } }));
     const blocked = await request(app).get(`/api/law/${leg.id}/pdf`);
     expect(blocked.status).to.equal(502);
+
+    await prisma.law.deleteMany({ where: { id: leg.id } });
+  });
+
+  it("pdf proxy: frames legislation.gov.uk's HTML rendition, never asking for its PDF", async () => {
+    // A made-up Act number, so the test never deletes a real stored row.
+    const legUrl = "https://www.legislation.gov.uk/ukpga/2099/9999";
+    await prisma.law.deleteMany({ where: { jurisSourceId: legUrl } });
+    const ukTenant = await prisma.tenant.findUnique({ where: { code: "UK" } });
+    const leg = await prisma.law.create({
+      data: {
+        jurisSourceId: legUrl,
+        category: "REPUBLIC_ACT",
+        tenantId: ukTenant!.id,
+        title: "Human Rights Act 1998",
+        jurisUrl: legUrl,
+        rawJson: {},
+      },
+    });
+
+    // What legislation.gov.uk actually answers a server today: the PDF is challenged, the HTML is not.
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith("/data.pdf")) {
+        return new Response("", {
+          status: 202,
+          headers: { "content-type": "text/html; charset=UTF-8", "x-amzn-waf-action": "challenge" },
+        });
+      }
+      return new Response(
+        '<html><head><link rel="stylesheet" href="/styles/HTML5_styles/primary.css"></head><body><h1>Human Rights Act 1998</h1></body></html>',
+        { status: 200, headers: { "content-type": "text/html;charset=utf-8" } },
+      );
+    }) as typeof fetch;
+
+    const res = await request(app).get(`/api/law/${leg.id}/pdf?section=1`);
+
+    // Straight to the HTML — the PDF is never asked for.
+    expect(requested).to.deep.equal([`${legUrl}/section/1/data.html`]);
+    expect(res.status).to.equal(200);
+    expect(res.headers["content-type"]).to.match(/text\/html/);
+    expect(res.headers["x-frame-options"]).to.be.undefined;
+    expect(res.headers["content-security-policy"]).to.match(/^sandbox allow-popups allow-popups-to-escape-sandbox;/);
+    expect(res.headers["content-security-policy"]).not.to.contain("allow-scripts");
+    expect(res.text).to.contain("Human Rights Act 1998");
+    expect(res.text).to.contain('href="https://www.legislation.gov.uk/styles/HTML5_styles/primary.css"');
 
     await prisma.law.deleteMany({ where: { id: leg.id } });
   });

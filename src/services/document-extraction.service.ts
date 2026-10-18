@@ -4,14 +4,15 @@ import { emitToUser, type DocumentSocketEvent, type DocumentSocketPayload } from
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import OrganizationRepo from "../repositories/organization.repository";
-import { getObjectBuffer } from "../utils/s3";
-import { extractPages } from "../utils/document-text-extraction";
+import { downloadObjectToTempFile } from "../utils/s3";
+import { extractPagesFromFile, type ExtractedPage } from "../utils/document-text-extraction";
 import { transcribeS3Media } from "./transcription.service";
 import { MEDIA_DOCUMENT_EXTENSIONS, MEDIA_DOCUMENT_MIME_TYPES } from "../constants";
 import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
 import { embedTexts, isRateLimit } from "../utils/embedding";
 import { categorizeDocument } from "../utils/chatWonder";
 import logger from "../utils/logger";
+import LlmUsageSvc from "./llm-usage.service";
 
 /** mp3/mp4 evidence — transcribed via AWS Transcribe rather than text-extracted. */
 function isMediaDocument(mimeType?: string | null, filename?: string): boolean {
@@ -32,6 +33,27 @@ async function transcribeMedia(s3Key: string, documentId: string, filename: stri
   if (transcript) return transcript;
   logger.info("Document extraction: media has no recognizable speech", { documentId, name: filename });
   return `[Audio/video file "${filename}" — no speech was detected, so there is no transcript to index.]`;
+}
+
+/** Chunks embedded and stored per round (see process). A multiple of every chunking tier's
+ * embeddingBatchSize (100, 50, 32), so rounds never split a batch. */
+export const EMBED_ROUND_CHUNKS = 3_200;
+
+/** The first `maxChars` of a document's text, for auto-categorization — built page by page so a
+ * very large document is never joined into one string just to read its opening. */
+export function leadingText(pages: ExtractedPage[], maxChars: number): string {
+  let out = "";
+  for (const page of pages) {
+    if (out.length >= maxChars) break;
+    out += (out ? "\n\n" : "") + page.text.slice(0, maxChars);
+  }
+  return out.slice(0, maxChars);
+}
+
+export interface ProcessOptions {
+  /** Called once the file's size is known (from the row, then again from the actual download),
+   * so DocumentExtractionQueue can stretch its hard timeout for a large file. */
+  onFileSize?: (bytes: number) => void;
 }
 
 export default class DocumentExtractionSvc {
@@ -74,7 +96,16 @@ export default class DocumentExtractionSvc {
    * Pulled by `DocumentExtractionQueue` after confirm/PATCH/bulk-confirm — never throws,
    * always resolves ragStatus to READY or FAILED.
    */
-  static async process(documentId: string): Promise<void> {
+  static async process(documentId: string, options: ProcessOptions = {}): Promise<void> {
+    // Embeddings and categorization made below are attributed, in the usage ledger, to the user and
+    // organization that own the document — a queue worker has no request to say so.
+    return LlmUsageSvc.runInDocumentScope(documentId, () => DocumentExtractionSvc.processDocument(documentId, options));
+  }
+
+  private static async processDocument(documentId: string, options: ProcessOptions = {}): Promise<void> {
+    // Set once a multi-round document starts writing chunks outside a transaction — a failure
+    // after that must not leave a partial set behind (see the catch).
+    let partialChunksWritten = false;
     try {
       const doc = await DocumentRepo.findByIdWithFile(documentId);
       if (!doc?.file?.s3Key) {
@@ -88,6 +119,7 @@ export default class DocumentExtractionSvc {
       }
 
       logger.info("Document extraction: started", { documentId, name: doc.name });
+      if (doc.fileSize) options.onFileSize?.(doc.fileSize);
       // Also resets a re-run FAILED row's badge back to "indexing" on a connected client.
       DocumentExtractionSvc.emit(doc, "document:started", "PENDING");
 
@@ -99,16 +131,27 @@ export default class DocumentExtractionSvc {
       // the Transcription page uses, reading straight from S3 so the file is never buffered here)
       // and index the transcript through the normal pipeline below. A failed/timed-out job throws,
       // which the catch at the bottom resolves to ragStatus FAILED.
+      // Everything else is streamed to a temp file rather than buffered (uploads go up to 1 GB),
+      // and the file is removed as soon as extraction is done with it.
       const isMedia = isMediaDocument(doc.mimeType, doc.name);
-      const buffer = isMedia ? null : await getObjectBuffer(doc.file.s3Key);
+      const download = isMedia ? null : await downloadObjectToTempFile(doc.file.s3Key);
       const tDownloaded = Date.now();
-      const { pages, method, ocrAttempted } = buffer
-        ? await extractPages(buffer, doc.mimeType, doc.name, doc.file.s3Key)
-        : {
-            pages: [{ pageNumber: 1, text: await transcribeMedia(doc.file.s3Key, documentId, doc.name) }],
-            method: "text" as const,
-            ocrAttempted: false,
-          };
+      let extracted: Awaited<ReturnType<typeof extractPagesFromFile>>;
+      if (download) {
+        options.onFileSize?.(download.bytes);
+        try {
+          extracted = await extractPagesFromFile(download.path, download.bytes, doc.mimeType, doc.name, doc.file.s3Key);
+        } finally {
+          await download.cleanup();
+        }
+      } else {
+        extracted = {
+          pages: [{ pageNumber: 1, text: await transcribeMedia(doc.file.s3Key, documentId, doc.name) }],
+          method: "text",
+          ocrAttempted: false,
+        };
+      }
+      const { pages, method, ocrAttempted } = extracted;
       const tExtracted = Date.now();
       logger.info("Document extraction: timing (download, extract)", {
         documentId,
@@ -148,10 +191,11 @@ export default class DocumentExtractionSvc {
         });
         categoryPromise = Promise.resolve(null);
       } else {
-        categoryPromise = categorizeDocument(
-          trimmedPages.map((p) => p.text).join("\n\n").slice(0, 3000),
-          doc.name,
-        );
+        categoryPromise = categorizeDocument(leadingText(trimmedPages, 3000), doc.name, {
+          userId: doc.userId,
+          caseId: doc.caseId,
+          consultationId: doc.consultationId,
+        });
       }
 
       const totalChars = trimmedPages.reduce((sum, page) => sum + page.text.length, 0);
@@ -170,15 +214,13 @@ export default class DocumentExtractionSvc {
 
       const embeddingBatchSize = profile.embeddingBatchSize;
       const embeddingConcurrency = profile.embeddingConcurrency;
-      const batches: string[][] = [];
-      for (let i = 0; i < chunks.length; i += embeddingBatchSize) {
-        batches.push(chunks.slice(i, i + embeddingBatchSize).map((c) => c.text));
-      }
+      const totalBatches = Math.ceil(chunks.length / embeddingBatchSize);
 
       logger.info("Document extraction: embedding", {
         documentId,
         chunks: chunks.length,
-        batches: batches.length,
+        batches: totalBatches,
+        rounds: Math.ceil(chunks.length / EMBED_ROUND_CHUNKS),
         tier: profile.tier,
         chunkSize: profile.chunkSize,
         fileSizeBytes: doc.fileSize,
@@ -186,57 +228,84 @@ export default class DocumentExtractionSvc {
         totalChars,
       });
 
-      const embeddedChunks: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[]; pageNumber: number | null }[] = [];
-      for (let i = 0; i < batches.length; i += embeddingConcurrency) {
-        const group = batches.slice(i, i + embeddingConcurrency);
-        const groupEmbeddings = await Promise.all(group.map((batch) => embedTexts(batch)));
-        group.forEach((batch, g) => {
-          const baseChunkIndex = (i + g) * embeddingBatchSize;
-          batch.forEach((chunk, j) =>
-            embeddedChunks.push({
-              caseDocumentId: documentId,
-              chunkIndex: baseChunkIndex + j,
-              chunkText: chunk,
-              charCount: chunk.length,
-              embedding: groupEmbeddings[g][j],
-              pageNumber: chunks[baseChunkIndex + j]?.pageNumber ?? null,
-            }),
+      // Embedded and stored EMBED_ROUND_CHUNKS at a time, so memory holds one round's embeddings,
+      // not the whole document's (1536 floats per chunk — a large upload has hundreds of
+      // thousands of chunks). A document that fits in one round keeps the atomic replace (old
+      // chunks swapped for new in one transaction); a larger one clears its old chunks first and
+      // fills in round by round. It is PENDING meanwhile, which keeps it out of case/consultation
+      // retrieval (READY only), and a failure part-way deletes what was written (see the catch).
+      const singleRound = chunks.length <= EMBED_ROUND_CHUNKS;
+      if (!singleRound) {
+        partialChunksWritten = true;
+        await DocumentChunkRepo.deleteByDocument(documentId);
+      }
+      let embedMs = 0;
+      let storeMs = 0;
+      for (let roundStart = 0; roundStart < chunks.length; roundStart += EMBED_ROUND_CHUNKS) {
+        const roundChunks = chunks.slice(roundStart, roundStart + EMBED_ROUND_CHUNKS);
+        const batches: string[][] = [];
+        for (let i = 0; i < roundChunks.length; i += embeddingBatchSize) {
+          batches.push(roundChunks.slice(i, i + embeddingBatchSize).map((c) => c.text));
+        }
+
+        const tRoundStart = Date.now();
+        const rows: { caseDocumentId: string; chunkIndex: number; chunkText: string; charCount: number; embedding: number[]; pageNumber: number | null }[] = [];
+        for (let i = 0; i < batches.length; i += embeddingConcurrency) {
+          const group = batches.slice(i, i + embeddingConcurrency);
+          const groupEmbeddings = await Promise.all(group.map((batch) => embedTexts(batch)));
+          group.forEach((batch, g) => {
+            const baseInRound = (i + g) * embeddingBatchSize;
+            batch.forEach((chunk, j) =>
+              rows.push({
+                caseDocumentId: documentId,
+                chunkIndex: roundStart + baseInRound + j,
+                chunkText: chunk,
+                charCount: chunk.length,
+                embedding: groupEmbeddings[g][j],
+                pageNumber: roundChunks[baseInRound + j]?.pageNumber ?? null,
+              }),
+            );
+          });
+          logger.info("Document extraction: embedding progress", {
+            documentId,
+            completedBatches: Math.min(roundStart / embeddingBatchSize + i + embeddingConcurrency, totalBatches),
+            totalBatches,
+            tier: profile.tier,
+          });
+        }
+        const tRoundEmbedded = Date.now();
+        embedMs += tRoundEmbedded - tRoundStart;
+
+        if (singleRound) {
+          // Default interactive-transaction timeout (5s) is tuned for small transactions.
+          await prisma.$transaction(
+            async (tx) => {
+              await DocumentChunkRepo.deleteByDocument(documentId, tx);
+              await DocumentChunkRepo.insertMany(rows, tx);
+            },
+            { timeout: Math.min(600_000, Math.max(120_000, rows.length * 40)) },
           );
-        });
-        logger.info("Document extraction: embedding progress", {
-          documentId,
-          completedBatches: Math.min(i + embeddingConcurrency, batches.length),
-          totalBatches: batches.length,
-          tier: profile.tier,
-        });
+        } else {
+          await DocumentChunkRepo.insertMany(rows);
+        }
+        storeMs += Date.now() - tRoundEmbedded;
       }
 
-      const tEmbedded = Date.now();
-
-      // Default interactive-transaction timeout (5s) is tuned for small transactions; a document
-      // with tens of thousands of chunks needs the storage step to run considerably longer.
-      await prisma.$transaction(
-        async (tx) => {
-          await DocumentChunkRepo.deleteByDocument(documentId, tx);
-          await DocumentChunkRepo.insertMany(embeddedChunks, tx);
-        },
-        { timeout: Math.min(600_000, Math.max(120_000, chunks.length * 40)) },
-      );
       const tStored = Date.now();
       logger.info("Document extraction: timing (chunk, embed, store)", {
         documentId,
         chunkMs: tChunked - tExtracted,
-        embedMs: tEmbedded - tChunked,
-        storeMs: tStored - tEmbedded,
+        embedMs,
+        storeMs,
         totalMs: tStored - tStart,
         chunks: chunks.length,
       });
 
       const { chunkCount, embeddedCount } = await DocumentChunkRepo.verify(documentId);
-      if (chunkCount !== embeddedChunks.length || embeddedCount !== chunkCount) {
+      if (chunkCount !== chunks.length || embeddedCount !== chunkCount) {
         logger.error("Document extraction: chunk verification mismatch", {
           documentId,
-          expected: embeddedChunks.length,
+          expected: chunks.length,
           chunkCount,
           embeddedCount,
         });
@@ -245,7 +314,7 @@ export default class DocumentExtractionSvc {
       }
 
       await DocumentRepo.updateRagStatus(documentId, "READY");
-      logger.info("Document extraction: ready", { documentId, name: doc.name, chunks: embeddedChunks.length });
+      logger.info("Document extraction: ready", { documentId, name: doc.name, chunks: chunks.length });
 
       const category = await categoryPromise;
       let savedCategory: string | null = doc.category ?? null;
@@ -280,6 +349,11 @@ export default class DocumentExtractionSvc {
       }
     } catch (err) {
       logger.error("Document extraction failed", { err, documentId });
+      if (partialChunksWritten) {
+        await DocumentChunkRepo.deleteByDocument(documentId).catch((cleanupErr) => {
+          logger.error("Failed to delete partial chunks after extraction error", { cleanupErr, documentId });
+        });
+      }
       // 429 is transient — leave PENDING so the next boot/retry can embed instead of
       // permanently skipping RAG for this document.
       const ragStatus = isRateLimit(err) ? "PENDING" : "FAILED";

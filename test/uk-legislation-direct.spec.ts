@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import {
   DirectLegislationError,
+  frameableLegislationHtml,
   getLegislationSectionDirect,
   parseFeed,
   parseSection,
@@ -117,6 +118,32 @@ describe("searchLegislationDirect", () => {
       (e) => (caught = e),
     );
     expect(String((caught as Error).message)).to.match(/not found/i);
+  });
+});
+
+describe("frameableLegislationHtml", () => {
+  // Same shape as legislation.gov.uk's data.html: root-relative assets, absolute cross-references, in-page footnotes.
+  const HTML =
+    '<!DOCTYPE html><html><head><meta charset="utf-8"></meta><link rel="stylesheet" href="/styles/HTML5_styles/primary.css"></link></head>' +
+    '<body><header>x</header><img src="/images/crests/ukpga.gif"><a href="http://www.legislation.gov.uk/ukpga/1998/42/section/2">s 2</a>' +
+    '<a class="LegCommentaryLink" href="#commentary-c1">F1</a></body></html>';
+
+  it("points root-relative assets back at legislation.gov.uk", () => {
+    const out = frameableLegislationHtml(HTML);
+    expect(out).to.contain('href="https://www.legislation.gov.uk/styles/HTML5_styles/primary.css"');
+    expect(out).to.contain('src="https://www.legislation.gov.uk/images/crests/ukpga.gif"');
+  });
+
+  it("opens links in a new tab but keeps in-page footnote links in the frame", () => {
+    const out = frameableLegislationHtml(HTML);
+    expect(out).to.contain('<head><base target="_blank">');
+    expect(out).to.contain('<header>x</header>');
+    expect(out).to.contain('<a target="_self" class="LegCommentaryLink" href="#commentary-c1">');
+    expect(out).to.contain('<a href="http://www.legislation.gov.uk/ukpga/1998/42/section/2">');
+  });
+
+  it("still sets the new-tab default on a fragment with no <head>", () => {
+    expect(frameableLegislationHtml("<p>text</p>")).to.equal('<base target="_blank"><p>text</p>');
   });
 });
 
