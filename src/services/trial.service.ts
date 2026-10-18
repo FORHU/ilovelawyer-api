@@ -63,9 +63,9 @@ export default class TrialSvc {
 
   /** Deletes every trial guest whose trial ended before `now`, with everything they had: first
    * their own workspace (its cases, chats, documents — the sample case copy included — through
-   * OrganizationRepo.deletePermanently, which also marks the files for the S3 sweep), then the
+   * OrganizationRepo.deletePermanently, which also marks the files FOR_DELETION), then the
    * user itself (AccountDeletionSvc.purge). Only a personal workspace whose sole member is the
-   * guest is touched. Run by TrialGuestPurgeQueue and scripts/purge-trial-users. Returns how many
+   * guest is touched. Run by hand through scripts/purge-trial-users. Returns how many
    * guests were deleted. */
   static async purgeExpired(now: Date = new Date()): Promise<number> {
     const expired = await prisma.user.findMany({ where: { trialExpiresAt: { lt: now } }, select: { id: true } });
