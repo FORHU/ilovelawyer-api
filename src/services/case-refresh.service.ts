@@ -98,7 +98,7 @@ export default class CaseRefreshSvc {
     private static async refreshInner(caseId: string, userId: string, reason: "manual" | "post-extraction") {
         logger.info("Refresh analysis: started", { caseId, userId, reason });
 
-        // The automatic post-extraction trigger schedules this up to 45s (plus queue wait) after
+        // The automatic post-extraction trigger schedules this up to 20s (plus queue wait) after
         // the corpus change that caused it — long enough for the case to have been deleted in
         // the meantime. Manual "Refresh analysis" clicks can't hit this (beginQueued's
         // CaseAccess.assertCanEdit already confirmed the case exists just before enqueueing).

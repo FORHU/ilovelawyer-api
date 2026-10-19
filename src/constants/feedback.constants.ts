@@ -2,7 +2,7 @@
 export const FEEDBACK_CATEGORIES = ["BUG", "WRONG_ANSWER", "IDEA", "QUESTION"] as const;
 export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number];
 
-export const FEEDBACK_COMMENT_MAX_CHARS = 4000;
+export const FEEDBACK_COMMENT_MAX_CHARS = 1000;
 
 /** The label bound into the sealed comment (see field-crypto): <Model>.<field>, so the data export can open it. */
 export const FEEDBACK_COMMENT_LABEL = "Feedback.comment";
