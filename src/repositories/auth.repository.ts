@@ -1,5 +1,5 @@
 import prisma from "../lib/prisma";
-import { ApprovalStatus, Prisma } from "@prisma/client";
+import { ApprovalStatus, Prisma, Role } from "@prisma/client";
 import { redis } from "../lib/redis";
 import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
 import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
@@ -94,6 +94,7 @@ export default class AuthRepo {
     email: string;
     password: string;
     name: string;
+    role: Role;
     tenantId?: string | null;
     termsVersion?: string | null;
   }) {
@@ -104,6 +105,7 @@ export default class AuthRepo {
           email: normalizeEmail(data.email),
           password: data.password,
           name: data.name,
+          role: data.role,
           tenantId: data.tenantId,
           freeCreditUsd: FREE_CREDIT_USD,
           ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
@@ -113,11 +115,12 @@ export default class AuthRepo {
   }
 
   /** A trial guest (see TrialSvc): no password, a placeholder address nobody can receive mail at,
-   * and already verified and approved, since there is no inbox to verify and no admin to wait for. */
+   * and already verified and approved, since there is no inbox to verify and no admin to wait for.
+   * Always a LAWYER: the trial runs in ilovelawyer-app. */
   static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialExpiresAt: Date }) {
     return bustUsersList(
       await prisma.user.create({
-        data: { ...data, name: "Guest", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
+        data: { ...data, name: "Guest", role: "LAWYER", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
       }),
     );
   }
@@ -296,6 +299,7 @@ export default class AuthRepo {
     email: string;
     googleId: string;
     name?: string;
+    role: Role;
     tenantId?: string | null;
     termsVersion: string;
   }) {
@@ -313,6 +317,7 @@ export default class AuthRepo {
               googleId: data.googleId,
               name: data.name,
               provider: "google",
+              role: data.role,
               isEmailVerified: true,
               lastLoginAt: new Date(),
               tenantId: data.tenantId,
@@ -547,7 +552,7 @@ export default class AuthRepo {
 
     // Admins manage regular signups here, not other admin accounts.
     const where: Prisma.UserWhereInput = {
-      role: "USER",
+      role: { not: "ADMIN" },
       ...(q
         ? {
             OR: [
@@ -593,7 +598,7 @@ export default class AuthRepo {
    * deleteUnverifiedPendingUser can still clean them up — they're auto-approved at verifyOtp
    * instead if the Tenant's switch is on. */
   private static approvablePendingWhere(tenantId: string): Prisma.UserWhereInput {
-    return { tenantId, role: "USER", approvalStatus: "PENDING", isEmailVerified: true };
+    return { tenantId, role: { not: "ADMIN" }, approvalStatus: "PENDING", isEmailVerified: true };
   }
 
   static async countApprovablePending(tenantId: string) {

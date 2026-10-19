@@ -3,7 +3,7 @@ import { promisify } from "util";
 import { gunzip as gunzipCb, gzip as gzipCb } from "zlib";
 import type { Law, LawDocumentCopy } from "@prisma/client";
 import LawDocumentCopyRepo, { type LawDocumentCopyMeta } from "../repositories/law-document-copy.repository";
-import { legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
+import { caseLawDataPdfUrl, legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
 import { UK_EU_LEGISLATION_TYPES } from "../legal/law-source/uk/uk-law-vocab";
 import { UK_LEGISLATION_BASE_URL } from "../config";
 import { OUTBOUND_FETCH_HEADERS } from "../utils/law-fulltext";
@@ -112,7 +112,8 @@ export default class LawDocumentSvc {
 
   /** The live fetch. UK legislation is always legislation.gov.uk's HTML rendition (`data.html`) —
    * its PDF is never asked for (its AWS WAF refuses server-side `data.pdf` requests anyway). Every
-   * other document (PH jurisprudence, PH republic-acts, UK case law) is its PDF, from pdfUrl. */
+   * other document (PH jurisprudence, PH republic-acts, UK case law) is its PDF, from pdfUrl — and for
+   * UK case law, from TNA's `${jurisUrl}/data.pdf` when pdfUrl is missing or fails. */
   static async fetchLive(law: Law, section: string | null): Promise<LawDocumentBody | null> {
     const parts = legislationUrlParts(law.jurisUrl);
     if (parts) {
@@ -127,13 +128,18 @@ export default class LawDocumentSvc {
       return null;
     }
 
-    if (!law.pdfUrl) return null;
-    const pdfRes = await fetchUpstream(law.pdfUrl, "application/pdf,*/*", law.id);
-    if (pdfRes && contentTypeOf(pdfRes).includes("pdf")) {
-      return { body: Buffer.from(await pdfRes.arrayBuffer()), format: "pdf", sourceUrl: law.pdfUrl };
-    }
-    if (pdfRes) {
-      logger.warn("Law PDF proxy: upstream returned non-PDF response", { lawId: law.id, upstream: law.pdfUrl, contentType: contentTypeOf(pdfRes) });
+    // The stored pdfUrl first, then — UK judgments only — TNA's own data.pdf, which answers even when
+    // TNA holds no original PDF at the assets URL (it 302s to one generated from the judgment's XML).
+    const candidates = [...new Set([law.pdfUrl, caseLawDataPdfUrl(law.jurisUrl)].filter((u): u is string => !!u))];
+    for (const [i, url] of candidates.entries()) {
+      const pdfRes = await fetchUpstream(url, "application/pdf,*/*", law.id);
+      if (pdfRes && contentTypeOf(pdfRes).includes("pdf")) {
+        if (i > 0) logger.info("Law PDF proxy: served by fallback", { lawId: law.id, upstream: url });
+        return { body: Buffer.from(await pdfRes.arrayBuffer()), format: "pdf", sourceUrl: url };
+      }
+      if (pdfRes) {
+        logger.warn("Law PDF proxy: upstream returned non-PDF response", { lawId: law.id, upstream: url, contentType: contentTypeOf(pdfRes) });
+      }
     }
     return null;
   }

@@ -2,6 +2,8 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../repositories/auth.repository";
 import ChatRepo from "../repositories/chat.repository";
+import { redis } from "../lib/redis";
+import { trialSampleKey } from "../utils/chat.utils";
 import TenantRepo from "../repositories/tenant.repository";
 import OrganizationSvc from "./organization.service";
 import ConsentSvc from "./consent.service";
@@ -100,6 +102,9 @@ export default class TrialSvc {
     const question = await ChatRepo.createMessage(consultation.id, "user", TRIAL_SAMPLE_QUESTION, userId, undefined, undefined, undefined, undefined, "DONE");
     const answer = await ChatRepo.createMessage(consultation.id, "assistant", TRIAL_SAMPLE_ANSWER, undefined, question.id);
     await ChatRepo.saveRelatedCases(answer.id, TRIAL_SAMPLE_RELATED_CASES);
+    // Marks this as the sample chat, so a follow-up in it is answered with the sample answer as
+    // context (ChatSvc.trialSessionRecap). Outlives the trial by an hour; gone with it after that.
+    await redis.set(trialSampleKey(consultation.id), "1", Math.ceil(TRIAL_DURATION_MS / 1000) + 60 * 60);
     return consultation.id;
   }
 }

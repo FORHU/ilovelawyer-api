@@ -47,7 +47,7 @@ function row(overrides: Partial<Row> = {}): Row {
     email: "jane@firm.com",
     password: null,
     name: "Jane",
-    role: "USER",
+    role: "LAWYER",
     googleId: null,
     isEmailVerified: true,
     approvalStatus: "ACTIVE",
@@ -152,7 +152,7 @@ describe("AuthSvc Google sign-in", () => {
       const result = await AuthSvc.loginWithGoogle("token", true, null, true);
 
       expect(createdGoogleUsers).to.have.length(1);
-      expect(createdGoogleUsers[0]).to.include({ email: "jane@firm.com", googleId: "sub-1", termsVersion: TERMS_VERSION });
+      expect(createdGoogleUsers[0]).to.include({ email: "jane@firm.com", googleId: "sub-1", role: "LAWYER", termsVersion: TERMS_VERSION });
       expect(sentEmails).to.deep.equal(["signup-pending"]);
       expect(sessions).to.have.length(1);
       expect(result.user).to.deep.equal({ id: "new-user" });
@@ -419,7 +419,7 @@ describe("AuthRepo.createGoogleUser", () => {
       return data;
     };
 
-    const created = await realCreateGoogleUser({ email: " John@Firm.com", googleId: "sub-1", termsVersion: TERMS_VERSION });
+    const created = await realCreateGoogleUser({ email: " John@Firm.com", googleId: "sub-1", role: "LAWYER", termsVersion: TERMS_VERSION });
 
     expect(attempts).to.have.length(3);
     expect(attempts[0].username).to.equal("john");
@@ -432,7 +432,7 @@ describe("AuthRepo.createGoogleUser", () => {
       throw p2002("googleId");
     };
     try {
-      await realCreateGoogleUser({ email: "john@firm.com", googleId: "sub-1", termsVersion: TERMS_VERSION });
+      await realCreateGoogleUser({ email: "john@firm.com", googleId: "sub-1", role: "LAWYER", termsVersion: TERMS_VERSION });
       throw new Error("expected rejection");
     } catch (err) {
       expect(isUniqueViolation(err, "googleId")).to.equal(true);

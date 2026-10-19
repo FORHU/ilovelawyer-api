@@ -54,7 +54,7 @@ export default class AdminSvc {
    * manage regular accounts, not other admins. */
   static async assertExportable(userId: string) {
     const user = await AuthRepo.findById(userId);
-    if (!user || user.role !== "USER") throw new HttpError("User not found", 404);
+    if (!user || user.role === "ADMIN") throw new HttpError("User not found", 404);
   }
 
   /** `adminId` defaults to the signed-in admin of the current request (SecurityAuditSvc); the bulk

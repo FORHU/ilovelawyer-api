@@ -29,6 +29,7 @@ type StubUser = {
   id: string;
   email: string;
   name: string | null;
+  role: "USER" | "LAWYER";
   tenantId: string | null;
   approvalStatus: string;
   isEmailVerified: boolean;
@@ -42,6 +43,7 @@ function pendingUser(over: Partial<StubUser> = {}): StubUser {
     id: "user-1",
     email: "user@example.com",
     name: "Jane",
+    role: "LAWYER",
     tenantId: PH,
     approvalStatus: "PENDING",
     isEmailVerified: false,

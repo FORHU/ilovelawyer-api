@@ -16,3 +16,6 @@ Thumbs.db
 
 # local-only scripts
 prisma/seeders/adhoc-*.ts
+
+# role backfill rollback files (user ids)
+/backups

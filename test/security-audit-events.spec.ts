@@ -59,7 +59,7 @@ describe("Security audit events", () => {
         id: "user-1",
         email: "lawyer@firm.test",
         name: "Lawyer",
-        role: "USER",
+        role: "LAWYER",
         password: await bcrypt.hash("Correct-horse-1", 4),
         isEmailVerified: true,
         mustChangePassword: false,
