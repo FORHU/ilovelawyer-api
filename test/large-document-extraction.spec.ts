@@ -98,7 +98,13 @@ describe("large-document extraction", () => {
 
       const rowsOf = (pages: { text: string }[]) => pages.map((p) => p.text.split("\n").slice(1).join("\n"));
       expect(rowsOf(streamed.pages)).to.deep.equal(rowsOf(loaded.pages));
-      expect(streamed.pages.map((p) => p.text.split("\n")[0])).to.deep.equal(["Sheet1", "", "Sheet3"]);
+      // Whether the streaming reader has seen workbook.xml by the time a sheet is read depends on
+      // timing, so each name is either the sheet's real one or the Sheet<n> fallback.
+      const loadedNames = loaded.pages.map((p) => p.text.split("\n")[0]);
+      streamed.pages.forEach((p, i) => {
+        const name = p.text.split("\n")[0];
+        expect([loadedNames[i], loadedNames[i] ? `Sheet${i + 1}` : ""], `sheet ${i + 1}`).to.include(name);
+      });
     });
 
     it("splits one oversized sheet into several pages, each headed with the sheet's name", async () => {

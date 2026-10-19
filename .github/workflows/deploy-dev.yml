@@ -136,7 +136,7 @@ jobs:
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           TRIAL_MESSAGE_LIMIT: ${{vars.TRIAL_MESSAGE_LIMIT}}
           TRIAL_DURATION_HOURS: ${{vars.TRIAL_DURATION_HOURS}}
-          TRIAL_BUDGET_USD: ${{vars.TRIAL_BUDGET_USD}}
+          FREE_CREDIT_USD: ${{vars.FREE_CREDIT_USD}}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
         run: |
@@ -201,7 +201,7 @@ jobs:
           add JURIS_PH_API_URL          "${JURIS_PH_API_URL:-}"
           add TRIAL_MESSAGE_LIMIT       "${TRIAL_MESSAGE_LIMIT:-}"
           add TRIAL_DURATION_HOURS      "${TRIAL_DURATION_HOURS:-}"
-          add TRIAL_BUDGET_USD          "${TRIAL_BUDGET_USD:-}"
+          add FREE_CREDIT_USD          "${FREE_CREDIT_USD:-}"
           add UK_CASELAW_BASE_URL       "${UK_CASELAW_BASE_URL:-}"
           add UK_LEGISLATION_BASE_URL   "${UK_LEGISLATION_BASE_URL:-}"
 

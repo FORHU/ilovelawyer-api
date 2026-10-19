@@ -1,10 +1,10 @@
 import prisma from "../lib/prisma";
-import { ApprovalStatus, Prisma, TrialKind } from "@prisma/client";
+import { ApprovalStatus, Prisma } from "@prisma/client";
 import { redis } from "../lib/redis";
 import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
 import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 import { getStableProxyFileUrl } from "../utils/s3";
-import { TRIAL_FEATURE_LIMITS, TRIAL_MESSAGE_LIMIT, type TrialFeature } from "../config";
+import { FREE_CREDIT_USD, TRIAL_FEATURE_LIMITS, TRIAL_MESSAGE_LIMIT, type TrialFeature } from "../config";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -27,7 +27,7 @@ const PUBLIC_USER_SELECT = {
   createdAt: true,
   updatedAt: true,
   deletionRequestedAt: true,
-  trialKind: true,
+  freeCreditUsd: true,
   trialExpiresAt: true,
   trialMessagesUsed: true,
   trialFeatureUses: true,
@@ -115,6 +115,7 @@ export default class AuthRepo {
           password: data.password,
           name: data.name,
           tenantId: data.tenantId,
+          freeCreditUsd: FREE_CREDIT_USD,
           ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
         },
       })
@@ -123,7 +124,7 @@ export default class AuthRepo {
 
   /** A trial guest (see TrialSvc): no password, a placeholder address nobody can receive mail at,
    * and already verified and approved, since there is no inbox to verify and no admin to wait for. */
-  static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialKind: TrialKind; trialExpiresAt: Date | null }) {
+  static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialExpiresAt: Date }) {
     return bustUsersList(
       await prisma.user.create({
         data: { ...data, name: "Guest", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
@@ -131,10 +132,16 @@ export default class AuthRepo {
     );
   }
 
+  /** The account's free AI credit in USD (see User.freeCreditUsd), or null when it has none. */
+  static async findFreeCredit(userId: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { freeCreditUsd: true } });
+    return user?.freeCreditUsd ?? null;
+  }
+
   /** Null for a real account, which is what makes this the one check for "is this a trial guest". */
   static async findTrialState(userId: string) {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { trialKind: true, trialExpiresAt: true, trialMessagesUsed: true } });
-    return user?.trialKind ? { kind: user.trialKind, expiresAt: user.trialExpiresAt, messagesUsed: user.trialMessagesUsed } : null;
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { trialExpiresAt: true, trialMessagesUsed: true } });
+    return user?.trialExpiresAt ? { expiresAt: user.trialExpiresAt, messagesUsed: user.trialMessagesUsed } : null;
   }
 
   /** Spends one of the guest's answers, or reports none left. Conditional, so two simultaneous
@@ -331,6 +338,7 @@ export default class AuthRepo {
               tenantId: data.tenantId,
               termsAcceptedAt: new Date(),
               termsVersion: data.termsVersion,
+              freeCreditUsd: FREE_CREDIT_USD,
             },
           })
         );

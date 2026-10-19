@@ -23,13 +23,6 @@ enum ApprovalStatus {
   BLOCKED
 }
 
-// Which landing-page trial a guest is on (User.trialKind): CHAT is the chat-only trial with an
-// answer count and a clock; FULL is the whole product, limited only by TRIAL_BUDGET_USD of spend.
-enum TrialKind {
-  CHAT
-  FULL
-}
-
 model User {
   id                 String    @id @default(uuid())
   // Always stored trimmed + lowercased (see normalizeEmail in src/utils/auth.utils.ts and the
@@ -78,17 +71,20 @@ model User {
   onboardingCompleted Boolean        @default(false)
 
   // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
-  // email. `trialKind` is what marks one (null for every real account). A CHAT guest's session and
-  // access token stop working at `trialExpiresAt`, and `trialMessagesUsed` counts the AI answers it
-  // has spent against TRIAL_MESSAGE_LIMIT. A FULL guest has no expiry and no counts: it is limited
-  // only by its Chat Wonder spend in LlmUsage (TRIAL_BUDGET_USD). Expired CHAT rows can be deleted
-  // by hand with scripts/purge-trial-users.
-  trialKind         TrialKind?
+  // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
+  // session and access token stop working; `trialMessagesUsed` counts the AI answers it has
+  // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by scripts/purge-trial-users.
   trialExpiresAt    DateTime?
   trialMessagesUsed Int       @default(0)
   // Uses of each capped Studio feature (mind map, audio overview, case brief...) by name, against
   // TRIAL_FEATURE_LIMITS; spent atomically by blockTrialWrites (AuthRepo.spendTrialFeature).
   trialFeatureUses  Json      @default("{}")
+
+  // The free AI credit a new account gets at sign-up, in USD of OpenAI usage through Chat Wonder
+  // (FREE_CREDIT_USD at the time). Null for accounts created before it existed: they are never
+  // limited. Once spent, the account can start no new work and keeps read access, until it is on
+  // a subscription tier. Stays usable after subscribing (freeCreditLimit).
+  freeCreditUsd     Float?
 
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
