@@ -37,7 +37,7 @@ describe("AuthSvc.consumeLoginLink", () => {
     (AuthRepo as any).updateLastLogin = async (userId: string) => {
       lastLoginUpdated.push(userId);
     };
-    (AuthRepo as any).findById = async (id: string) => ({ id, email: "user@example.com", approvalStatus: "ACTIVE" });
+    (AuthRepo as any).findById = async (id: string) => ({ id, email: "user@example.com", role: "LAWYER", approvalStatus: "ACTIVE" });
   });
 
   afterEach(() => {

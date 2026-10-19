@@ -66,8 +66,12 @@ describe("FINDING_TAGS_BY_CATEGORY", () => {
     expect(isTagAllowed("STRENGTH", "OPEN")).to.equal(false);
   });
 
-  it("gives Attack and Defense Strategies no tags", () => {
-    expect(FINDING_TAGS_BY_CATEGORY.ATTACK_STRATEGY).to.deep.equal([]);
-    expect(FINDING_TAGS_BY_CATEGORY.DEFENSE_STRATEGY).to.deep.equal([]);
+  // Since ce2d7427 the strategies carry readiness tags: Attack how ready a line of attack is,
+  // Defense whether an attack has been answered.
+  it("gives Attack and Defense Strategies their own readiness tags", () => {
+    expect(FINDING_TAGS_BY_CATEGORY.ATTACK_STRATEGY).to.deep.equal(["READY", "DRAFTING", "BLOCKED"]);
+    expect(FINDING_TAGS_BY_CATEGORY.DEFENSE_STRATEGY).to.deep.equal(["ANSWERED", "PARTIAL", "UNANSWERED"]);
+    expect(isTagAllowed("ATTACK_STRATEGY", "ANSWERED")).to.equal(false);
+    expect(isTagAllowed("DEFENSE_STRATEGY", "READY")).to.equal(false);
   });
 });

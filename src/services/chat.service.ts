@@ -46,8 +46,8 @@ import DamageClaimSvc, { type CaseDamagesChatContext } from "./damage-claim.serv
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
-import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL, PROVISIONAL_UNCLEAR_TITLE, KEEP_TITLE_SENTINEL, SMALL_TALK_TITLE_SENTINEL, PROVISIONAL_GREETING_TITLE } from "../constants";
-import { chatWonderSessionKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
+import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL, PROVISIONAL_UNCLEAR_TITLE, KEEP_TITLE_SENTINEL, SMALL_TALK_TITLE_SENTINEL, PROVISIONAL_GREETING_TITLE, TRIAL_RECAP_TURNS, TRIAL_RECAP_TURN_CHARS } from "../constants";
+import { chatWonderSessionKey, chatWonderRecapKey, trialSampleKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 import SecurityAuditSvc from "./security-audit.service";
 
@@ -942,7 +942,14 @@ export default class ChatSvc {
       }
     }
 
-    const resolvedContext = [caseContext, mindMapChangesContext, documentContext, groundingContext, transcriptContext, triageContext]
+    // A trial guest's sample chat, first send in a fresh session: its earlier turns, so a follow-up
+    // to the sample answer is read in its context. Best-effort, like the other context blocks.
+    const trialRecap = await ChatSvc.trialSessionRecap(consultationId, sessionId, parentMessageId).catch((err) => {
+      logger.warn("Chat: trial recap unavailable, sending the turn without it", { err, consultationId, messageId: parentMessageId });
+      return undefined;
+    });
+
+    const resolvedContext = [trialRecap, caseContext, mindMapChangesContext, documentContext, groundingContext, transcriptContext, triageContext]
       .filter(Boolean)
       .join("\n\n");
     logger.info("Chat: grounding/RAG context resolved", {
@@ -1176,6 +1183,8 @@ export default class ChatSvc {
         // Stop landed just as the stream completed: the reply is already saved as a partial by
         // ChatSvc.cancelChatGeneration — don't cache it or persist a second, full one.
         if (signal.aborted) return;
+        // The session has now seen the earlier turns: later sends in it need not carry them again.
+        if (trialRecap) await ChatSvc.markTrialRecapSent(sessionId).catch(() => {});
         fullResponse = result.content;
         relatedCases = result.relatedCases;
         streamedMindMap = result.mindMap;
@@ -1732,6 +1741,38 @@ export default class ChatSvc {
       return stored;
     }
     return ChatSvc.storeChatWonderSession(consultationId, await getChatWonderSessionId());
+  }
+
+  /** What the first send in a new Chat Wonder session needs to carry, for a trial guest's sample
+   * consultation only. The model's memory lives in that session, not in our messages, so the
+   * sample answer a guest starts with (seeded by TrialSvc) would otherwise be invisible to it and
+   * a follow-up answered as if the chat were new. Returns the sample's turns so far as one context
+   * block, or undefined for every other consultation, and once this session has had them.
+   * The caller marks the session done (markTrialRecapSent) only after the model has answered. */
+  private static async trialSessionRecap(
+    consultationId: string,
+    sessionId: string,
+    currentMessageId: string,
+  ): Promise<string | undefined> {
+    if (!(await redis.get<string>(trialSampleKey(consultationId)))) return undefined;
+    if (await redis.get<string>(chatWonderRecapKey(sessionId))) return undefined;
+
+    const all = await ChatRepo.listMessagesByConsultation(consultationId);
+    const current = all.findIndex((m) => m.id === currentMessageId);
+    const earlier = (current === -1 ? all : all.slice(0, current))
+      // A user turn counts once it has its answer; an assistant row is always a finished answer.
+      .filter((m) => m.content.trim() && (m.role === "assistant" || (m.role === "user" && m.replyStatus === "DONE")))
+      .slice(-TRIAL_RECAP_TURNS);
+    if (earlier.length === 0) return undefined;
+
+    const turns = earlier
+      .map((m) => `${m.role === "user" ? "Question" : "Answer"}: ${m.content.trim().slice(0, TRIAL_RECAP_TURN_CHARS)}`)
+      .join("\n\n");
+    return `Earlier in this consultation (context only; do not repeat it or mention this note):\n\n${turns}`;
+  }
+
+  private static async markTrialRecapSent(sessionId: string): Promise<void> {
+    await redis.set(chatWonderRecapKey(sessionId), "1", CHAT_WONDER_SESSION_TTL_S);
   }
 
   private static async storeChatWonderSession(consultationId: string, sessionId: string): Promise<string> {

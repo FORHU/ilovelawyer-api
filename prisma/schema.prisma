@@ -70,6 +70,13 @@ model User {
   denialReason        String?
   onboardingCompleted Boolean        @default(false)
 
+  // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
+  // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
+  // session and access token stop working; `trialMessagesUsed` counts the AI answers it has
+  // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by scripts/purge-trial-users.
+  trialExpiresAt    DateTime?
+  trialMessagesUsed Int       @default(0)
+
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
   // ACCOUNT_DELETION_GRACE_PERIOD_DAYS has elapsed since this timestamp, unless the user
@@ -111,6 +118,7 @@ model User {
   documents               Document[]
   bookmarks               Bookmark[]
   consents                Consent[]
+  feedback                Feedback[]
   transcriptions          Transcription[]
   calendarWatchChannels   CalendarWatchChannel[]
   events                  Event[]
@@ -136,6 +144,7 @@ model User {
 
   @@index([tenantId])
   @@index([deletionRequestedAt])
+  @@index([trialExpiresAt])
   manualEdits        CaseManualEdit[]
 }
 
@@ -177,6 +186,7 @@ enum FileStatus {
 
 enum Role {
   USER
+  LAWYER
   ADMIN
 }
 
@@ -2767,6 +2777,48 @@ model Consent {
 
   @@unique([userId, purpose])
   @@index([userId])
+}
+
+enum FeedbackSource {
+  GENERAL
+  CHAT_ANSWER
+  TERMINAL_PANE
+}
+
+enum FeedbackRating {
+  UP
+  DOWN
+}
+
+// What a tester sent from inside the app: the header's Feedback drawer (GENERAL), a thumb on a chat
+// answer (CHAT_ANSWER), or the flag on a Terminal pane (TERMINAL_PANE). Carries ids and the person's
+// own words, never answer or pane text. `comment` is sealed at rest (see FeedbackSvc), so it can be
+// read but not searched. No foreign keys on the case/organization/consultation/message ids, so a row
+// outlives them; the user link cascades, so deleting an account deletes what that person wrote.
+// `category` is a string rather than an enum so a new one never needs a migration (see
+// FEEDBACK_CATEGORIES). `rating` is set only for CHAT_ANSWER. `panelId` is the Terminal pane's id.
+model Feedback {
+  id             String          @id @default(uuid())
+  userId         String
+  source         FeedbackSource
+  rating         FeedbackRating?
+  category       String?
+  comment        String?         @db.Text
+  organizationId String?
+  caseId         String?
+  consultationId String?
+  messageId      String?
+  panelId        String?
+  pagePath       String?
+  userAgent      String?
+  viewport       String?
+  createdAt      DateTime        @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([source])
 }
 
 model AuditEvent {

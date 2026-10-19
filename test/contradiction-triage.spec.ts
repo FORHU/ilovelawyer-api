@@ -149,6 +149,8 @@ describe("EvidenceIntelligenceSvc.scanContradictions carry-over", () => {
   });
 
   it("only sends contradictions it hasn't classified before to Jev, and only when the flag is on", async () => {
+    // Start with the flag off, whatever a developer's .env says (afterEach restores it).
+    delete process.env.USE_JEV_CONTRADICTIONS;
     llmHits = [hit()];
     await EvidenceIntelligenceSvc.scanContradictions("case-1");
     expect(jevCalls).to.equal(0);

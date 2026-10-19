@@ -3,6 +3,11 @@ export const RESPONSE_CACHE_TTL = 60 * 15; // 15 minutes
 export const TITLE_MAX_CHARS = 80; // max title length (matches frontend truncation)
 export const CHAT_WONDER_SESSION_TTL_S = 60 * 60; // match chat-wonder's in-memory session TTL
 
+// A trial guest's first send in a new Chat Wonder session carries the consultation's earlier turns
+// (ChatSvc.trialSessionRecap): at most this many, each cut to this many characters.
+export const TRIAL_RECAP_TURNS = 6;
+export const TRIAL_RECAP_TURN_CHARS = 2500;
+
 // Used in place of the user's message text (title generation, AI prompt, cache key) when a
 // message carries attachments but no typed text — content itself stays a stored empty string
 // (see ADR: locale-independent "no content" signal for the frontend to render nothing), so this

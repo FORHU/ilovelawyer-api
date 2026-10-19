@@ -2,7 +2,7 @@ import { expect } from "chai";
 import request from "supertest";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import { after, afterEach, before, describe, it } from "mocha";
+import { after, afterEach, before, beforeEach, describe, it } from "mocha";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
 import { ACCESS_TOKEN_SECRET } from "../src/config";
@@ -98,6 +98,12 @@ describe("UK Library source (LawSourceProvider)", () => {
         members: { create: { userId: ukUser, role: "OWNER" } },
       },
     });
+  });
+
+  // Browse pages are cached in the database by court and page size. Each test stubs its own UK
+  // source, so a page cached by an earlier test (same court, same size) must not answer for it.
+  beforeEach(async () => {
+    await prisma.lawBrowsePage.deleteMany({ where: { filterKey: { contains: "t=UK" } } });
   });
 
   afterEach(() => {

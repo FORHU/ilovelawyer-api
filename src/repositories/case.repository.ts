@@ -336,7 +336,7 @@ export default class CaseRepo {
   /** Stamped at the end of a full CaseRefreshSvc.refresh run — not scoped by organizationId
    * since the caller already went through CaseAccess.assertCanEdit for this caseId.
    * updateMany (not update) so a case deleted mid-refresh (a real race — the automatic
-   * post-extraction trigger runs up to 45s after the corpus change that scheduled it, and the
+   * post-extraction trigger runs up to 20s after the corpus change that scheduled it, and the
    * Chat Wonder calls upstream of this can themselves run for tens of seconds) is a silent
    * no-op rather than a P2025 throw; nothing meaningful to stamp on a row that's already gone. */
   /** Null until the case's first analysis refresh finishes (markRefreshed). */

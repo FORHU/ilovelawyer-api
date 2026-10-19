@@ -29,5 +29,5 @@ export const CONSENT_WHEN_UNANSWERED: Partial<Record<ConsentPurpose, "allowed" |
 export const SELF_SERVICE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["AI_PROCESSING"];
 
 /** Where an answer was given, stored with it. */
-export const CONSENT_SOURCES = ["settings", "first_login"] as const;
+export const CONSENT_SOURCES = ["settings", "first_login", "trial"] as const;
 export type ConsentSource = (typeof CONSENT_SOURCES)[number];

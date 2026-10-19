@@ -52,6 +52,10 @@ describe("--rekey puts everything under one key (real database)", () => {
   });
 
   describe("document chunks", () => {
+    // Every run is limited to docB (--document), the one sealed under the earlier key: a developer's
+    // database holds real chunks sealed under their own key, which these throwaway keys can't open,
+    // and a whole-table run would count them as unreadable. docA, under the one key, is never picked
+    // up by --rekey either way.
     beforeEach(async () => {
       for (const d of [docA, docB]) await DocumentChunkRepo.deleteByDocument(d);
       set(true, ONE); await insert(docA, ["a one", "a two"]); // already under the one key
@@ -61,14 +65,14 @@ describe("--rekey puts everything under one key (real database)", () => {
     it("a dry run counts the chunks under the earlier key and changes nothing", async () => {
       set(true, ONE, OTHER);
       const before = await rawChunks(docB);
-      expect(await backfillChunks({ apply: false, rekey: true }, quiet)).to.deep.equal({ matched: 3, changed: 0, unreadable: 0 });
+      expect(await backfillChunks({ documentId: docB,apply: false, rekey: true }, quiet)).to.deep.equal({ matched: 3, changed: 0, unreadable: 0 });
       expect(await rawChunks(docB)).to.deep.equal(before);
     });
 
     it("re-seals them under the one key, leaves the rest alone, and everything opens with that key alone", async () => {
       set(true, ONE, OTHER);
       const untouched = await rawChunks(docA);
-      expect(await backfillChunks({ apply: true, rekey: true }, quiet)).to.deep.equal({ matched: 3, changed: 3, unreadable: 0 });
+      expect(await backfillChunks({ documentId: docB,apply: true, rekey: true }, quiet)).to.deep.equal({ matched: 3, changed: 3, unreadable: 0 });
       expect(await rawChunks(docA)).to.deep.equal(untouched);
       expect((await rawChunks(docB)).map(idInside)).to.deep.equal([idOf(ONE), idOf(ONE), idOf(ONE)]);
       set(true, ONE, undefined); // the earlier key is gone from the settings
@@ -78,27 +82,27 @@ describe("--rekey puts everything under one key (real database)", () => {
 
     it("keeps the embeddings and can be repeated", async () => {
       set(true, ONE, OTHER);
-      await backfillChunks({ apply: true, rekey: true }, quiet);
+      await backfillChunks({ documentId: docB,apply: true, rekey: true }, quiet);
       const n = Number((await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(embedding) AS n FROM "CaseDocumentChunk" WHERE "caseDocumentId" = ${docB}`)[0]!.n);
       expect(n).to.equal(3);
-      expect(await backfillChunks({ apply: true, rekey: true }, quiet)).to.deep.equal({ matched: 0, changed: 0, unreadable: 0 });
+      expect(await backfillChunks({ documentId: docB,apply: true, rekey: true }, quiet)).to.deep.equal({ matched: 0, changed: 0, unreadable: 0 });
     });
 
     it("without the earlier key, counts those chunks as unreadable and leaves them exactly as they are", async () => {
       set(true, ONE, undefined);
       const before = await rawChunks(docB);
-      expect(await backfillChunks({ apply: true, rekey: true }, quiet)).to.deep.equal({ matched: 0, changed: 0, unreadable: 3 });
+      expect(await backfillChunks({ documentId: docB,apply: true, rekey: true }, quiet)).to.deep.equal({ matched: 0, changed: 0, unreadable: 3 });
       expect(await rawChunks(docB)).to.deep.equal(before);
     });
 
     it("refuses with no key, and refuses --reverse together with --rekey; nothing is changed", async () => {
       set(true, undefined, OTHER);
       let error: Error | undefined;
-      try { await backfillChunks({ apply: true, rekey: true }, quiet); } catch (e) { error = e as Error; }
+      try { await backfillChunks({ documentId: docB,apply: true, rekey: true }, quiet); } catch (e) { error = e as Error; }
       expect(error?.message).to.match(/FIELD_ENCRYPTION_KEY/);
       set(true, ONE, OTHER);
       error = undefined;
-      try { await backfillChunks({ apply: true, rekey: true, reverse: true }, quiet); } catch (e) { error = e as Error; }
+      try { await backfillChunks({ documentId: docB,apply: true, rekey: true, reverse: true }, quiet); } catch (e) { error = e as Error; }
       expect(error?.message).to.match(/not both/);
     });
   });

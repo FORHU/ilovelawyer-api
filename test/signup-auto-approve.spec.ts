@@ -29,6 +29,7 @@ type StubUser = {
   id: string;
   email: string;
   name: string | null;
+  role: "USER" | "LAWYER";
   tenantId: string | null;
   approvalStatus: string;
   isEmailVerified: boolean;
@@ -42,6 +43,7 @@ function pendingUser(over: Partial<StubUser> = {}): StubUser {
     id: "user-1",
     email: "user@example.com",
     name: "Jane",
+    role: "LAWYER",
     tenantId: PH,
     approvalStatus: "PENDING",
     isEmailVerified: false,
@@ -127,7 +129,7 @@ describe("AuthSvc — auto-approve at email verification", () => {
         "findById",
       ]),
       stash(TenantRepo, ["findIdByCode"]),
-      stash(OrganizationEmailInviteRepo, ["findByEmail", "claim"]),
+      stash(OrganizationEmailInviteRepo, ["findByEmail", "hasLiveInvite", "claim"]),
       stash(mailerModule as any, ["sendEmail"]),
       stash(templateModule as any, ["renderTemplate"]),
       stash(googleTokenModule as any, ["default"]),
@@ -135,6 +137,8 @@ describe("AuthSvc — auto-approve at email verification", () => {
 
     (OrganizationEmailInviteRepo as any).findByEmail = async (email: string) =>
       invitedEmails.has(email) ? { id: "invite-1", organizationId: "org-1", email, role: "MEMBER" } : null;
+    // signup checks for a live invite before sending the pending-approval email.
+    (OrganizationEmailInviteRepo as any).hasLiveInvite = async (email: string) => invitedEmails.has(email);
     (OrganizationEmailInviteRepo as any).claim = async (userId: string, email: string) => {
       claims.push({ userId, email });
       return invitedEmails.has(email);

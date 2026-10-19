@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import { Prisma } from "@prisma/client";
+import { Prisma, Role } from "@prisma/client";
 import AuthRepo from "../repositories/auth.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationEmailInviteRepo from "../repositories/organization-email-invite.repository";
@@ -21,6 +21,7 @@ import logger from "../utils/logger";
 import type { TenantCode } from "../types/tenant-code";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS } from "../config";
 import { emailLinkOrigin } from "../utils/tenant-host";
+import { currentClientApp, roleForClientApp } from "../utils/client-app";
 import {
   BCRYPT_SALT_ROUNDS,
   OTP_EXPIRY_MS,
@@ -59,6 +60,7 @@ export default class AuthSvc {
     // never blocks signup — the account is just created without a Tenant link, same as
     // login/refresh's existing "let it through" handling of an unresolved Tenant code.
     const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
+    const role = roleForClientApp(currentClientApp());
 
     let user;
     try {
@@ -70,6 +72,7 @@ export default class AuthSvc {
         email,
         password: hashedPassword,
         name,
+        role,
         tenantId,
         termsVersion: acceptedTerms ? TERMS_VERSION : null,
       });
@@ -88,10 +91,14 @@ export default class AuthSvc {
 
     // Sent immediately, before email verification — the user should know to expect the
     // wait from the very start. approvalStatus defaults to PENDING (see schema.prisma).
-    // Skipped when the Tenant auto-approves signups, or when an organization invited this
-    // address: there's no wait, and verifyOtp flips the account to ACTIVE (see
-    // autoApproveIfEnabled).
-    if (!(await TenantSettingSvc.isAutoApproveOn(tenantId)) && !(await OrganizationEmailInviteRepo.hasLiveInvite(email))) {
+    // Skipped for a client-app (USER) account, when the Tenant auto-approves signups, or when an
+    // organization invited this address: there's no wait, and verifyOtp flips the account to
+    // ACTIVE (see autoApproveIfEnabled).
+    if (
+      role === "LAWYER" &&
+      !(await TenantSettingSvc.isAutoApproveOn(tenantId)) &&
+      !(await OrganizationEmailInviteRepo.hasLiveInvite(email))
+    ) {
       await AuthSvc.sendSignupPendingEmail(user);
     }
 
@@ -111,9 +118,10 @@ export default class AuthSvc {
     }
   }
 
-  /** Flips a freshly verified PENDING account straight to ACTIVE when its Tenant has
-   * auto-approve on (admin Settings page), or when an organization has invited it — the inviting
-   * owner/admin vouches for them. This is also where an invite sent to the address before it had
+  /** Flips a freshly verified PENDING account straight to ACTIVE when it's a client-app (USER)
+   * account — admin approval is only for lawyers — when its Tenant has auto-approve on (admin
+   * Settings page), or when an organization has invited it — the inviting owner/admin vouches
+   * for them. This is also where an invite sent to the address before it had
    * an account becomes the user's own (OrganizationEmailInviteRepo.claim), whatever the account's
    * approval status. Called at the moment the email becomes verified —
    * verifyOtp for password signups, account creation for Google ones — never at row creation
@@ -122,10 +130,10 @@ export default class AuthSvc {
    * No session wipe or email, unlike AdminSvc.transition — the user is signing in right now
    * and the session about to be issued already sees ACTIVE. Also called by AdminSvc.verifyEmail,
    * where an admin marks the email verified in place of the OTP. Returns whether it approved. */
-  static async autoApproveIfEnabled(user: { id: string; email: string; tenantId: string | null; approvalStatus: string }) {
+  static async autoApproveIfEnabled(user: { id: string; email: string; role: Role; tenantId: string | null; approvalStatus: string }) {
     const invited = await OrganizationEmailInviteRepo.claim(user.id, user.email);
     if (user.approvalStatus !== "PENDING") return false;
-    if (!invited && !(await TenantSettingSvc.isAutoApproveOn(user.tenantId))) return false;
+    if (user.role !== "USER" && !invited && !(await TenantSettingSvc.isAutoApproveOn(user.tenantId))) return false;
     await AuthRepo.setApprovalStatus(user.id, "ACTIVE", null);
     return true;
   }
@@ -167,6 +175,20 @@ export default class AuthSvc {
       `This account belongs to the ${membership.organization.tenant.code} tenant and cannot sign in from ${requestTenantCode}.`,
       409,
     );
+  }
+
+  /** An account signs in only to its own app: LAWYER to ilovelawyer-app, USER to the client app
+   * (utils/client-app.ts). ADMIN is exempt — ilovelawyer-admin sends no X-Client-App header and
+   * has its own role check. Called by every path that issues a session (refresh has its own
+   * quieter version). 409 with code WRONG_APP, not 403, for the same reason as assertTenantAccess
+   * above: the app's sign-in handler reads a 403 as "email not verified". */
+  private static assertClientApp(user: { role: Role }) {
+    if (user.role === "ADMIN" || user.role === roleForClientApp(currentClientApp())) return;
+    const message =
+      user.role === "LAWYER"
+        ? "This is a lawyer account. Sign in from the ilovelawyer lawyer app."
+        : "This is a client account. Sign in from the ilovelawyer client app.";
+    throw new HttpError(message, 409, "WRONG_APP");
   }
 
   /** Every path below that issues a session calls this once its checks have passed (refresh
@@ -242,6 +264,7 @@ export default class AuthSvc {
       throw new HttpError("Password update required", 428);
     }
 
+    AuthSvc.assertClientApp(user);
     await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
     const deletionCancelled = await AuthSvc.restoreIfScheduled(user);
 
@@ -302,6 +325,7 @@ export default class AuthSvc {
       throw new HttpError("Password update was not required for this account", 409);
     }
 
+    AuthSvc.assertClientApp(user);
     await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
 
     const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
@@ -384,6 +408,7 @@ export default class AuthSvc {
       throw new HttpError("Invalid or expired code", 400);
     }
 
+    AuthSvc.assertClientApp(user);
     await AuthRepo.markEmailVerified(user.id);
     await SecurityAuditSvc.record({ action: "auth.email_verified", actorId: user.id });
     await AuthSvc.autoApproveIfEnabled(user);
@@ -435,11 +460,23 @@ export default class AuthSvc {
       }
     }
 
+    // Both apps call this API, so its refresh cookie is shared between them: without this, a
+    // lawyer's session would quietly resume inside the client app (and the reverse). Same quiet
+    // 401 as the cross-tenant case above, and the token is kept for a refresh from its own app.
+    const owner = await AuthRepo.findById(payload.userId);
+    if (owner && owner.role !== "ADMIN" && owner.role !== roleForClientApp(currentClientApp())) {
+      throw new HttpError("Invalid or expired refresh token", 401);
+    }
+
     await AuthRepo.deleteByRefreshToken(refreshToken);
+
+    // A trial guest's session ends with the trial, and so does what a refresh can renew it to.
+    const trial = await AuthRepo.findTrialState(payload.userId);
+    if (trial && trial.expiresAt <= new Date()) throw new HttpError("Invalid or expired refresh token", 401);
 
     const remember = !!payload.remember;
     const { accessToken, refreshToken: newRefreshToken } = loginToken(payload.userId, remember);
-    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    const expiresAt = trial?.expiresAt ?? new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     await AuthRepo.createSession(payload.userId, newRefreshToken, expiresAt);
 
     return { accessToken, refreshToken: newRefreshToken, remember };
@@ -535,7 +572,14 @@ export default class AuthSvc {
       // Same lenient handling as password signup — see the comment there.
       const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
       try {
-        user = await AuthRepo.createGoogleUser({ email, googleId, name: name ?? undefined, tenantId, termsVersion: TERMS_VERSION });
+        user = await AuthRepo.createGoogleUser({
+          email,
+          googleId,
+          name: name ?? undefined,
+          role: roleForClientApp(currentClientApp()),
+          tenantId,
+          termsVersion: TERMS_VERSION,
+        });
         created = true;
       } catch (err) {
         // The findByGoogleId/findByEmail checks above aren't atomic with the insert — a
@@ -565,6 +609,7 @@ export default class AuthSvc {
       const photoImport = AvatarSvc.importGooglePhoto(user.id, picture);
       await Promise.race([photoImport, new Promise((resolve) => setTimeout(resolve, GOOGLE_PHOTO_SIGNUP_WAIT_MS).unref())]);
     } else {
+      AuthSvc.assertClientApp(user);
       await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);
     }
@@ -661,6 +706,7 @@ export default class AuthSvc {
       throw new HttpError("Password update required", 428);
     }
 
+    AuthSvc.assertClientApp(user);
     await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
 
     // Idempotent for a retry of a link that already went through.
@@ -765,7 +811,9 @@ export default class AuthSvc {
     await AuthRepo.deleteSessionsByUserId(userId);
     await SecurityAuditSvc.record({ action: "auth.password_reset", actorId: userId });
     // Resetting the password signs the user in (below), so it restores a scheduled account too.
-    const deletionCancelled = await AuthSvc.restoreIfScheduled(await AuthRepo.findById(userId));
+    const resetUser = await AuthRepo.findById(userId);
+    if (resetUser) AuthSvc.assertClientApp(resetUser);
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(resetUser);
 
     const { accessToken, refreshToken } = loginToken(userId, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -797,7 +845,9 @@ export default class AuthSvc {
     // Defense in depth: transition() already revoked sessions at approval time, but this
     // clears anything created since (e.g. a normal login the user did in the meantime).
     await AuthRepo.deleteSessionsByUserId(userId);
-    const deletionCancelled = await AuthSvc.restoreIfScheduled(await AuthRepo.findById(userId));
+    const linkUser = await AuthRepo.findById(userId);
+    if (linkUser) AuthSvc.assertClientApp(linkUser);
+    const deletionCancelled = await AuthSvc.restoreIfScheduled(linkUser);
 
     const { accessToken, refreshToken } = loginToken(userId, remember);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
