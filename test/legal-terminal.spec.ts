@@ -307,14 +307,15 @@ describe("Legal Terminal — Chat Wonder case strategy parse", () => {
 [/TODOS]`;
     const parsed = extractCaseStrategy(text);
     expect(parsed?.strategy).to.deep.equal([
-      "Demand the higher principal in the affidavit",
-      "Subpoena the original promissory note",
+      { label: "Demand the higher principal in the affidavit", sourceLabel: null },
+      { label: "Subpoena the original promissory note", sourceLabel: null },
     ]);
     expect(parsed?.todos).to.deep.equal([
-      "Get certified copies of the demand letters",
-      "Calendar the 15-day answer period",
+      { label: "Get certified copies of the demand letters", sourceLabel: null },
+      { label: "Calendar the 15-day answer period", sourceLabel: null },
     ]);
-    expect(parsed?.dates).to.deep.equal([]);
+    // No [DATES] block: undefined, so the caller leaves the timeline alone (not "now empty").
+    expect(parsed?.dates).to.equal(undefined);
   });
 
   it("accepts {label} objects and strips Chat Wonder noise", () => {
@@ -328,8 +329,8 @@ describe("Legal Terminal — Chat Wonder case strategy parse", () => {
 [/TODOS]
 [Sources] ignored`;
     const parsed = extractCaseStrategy(text);
-    expect(parsed?.strategy).to.deep.equal(["File the complaint in Makati"]);
-    expect(parsed?.todos).to.deep.equal(["Serve summons"]);
+    expect(parsed?.strategy).to.deep.equal([{ label: "File the complaint in Makati", sourceLabel: null }]);
+    expect(parsed?.todos).to.deep.equal([{ label: "Serve summons", sourceLabel: null }]);
   });
 
   it("returns undefined when both blocks are missing so callers can keep existing items", () => {
@@ -337,10 +338,11 @@ describe("Legal Terminal — Chat Wonder case strategy parse", () => {
   });
 
   it("returns empty lists when the model explicitly finds none", () => {
+    // No [DATES] block in this reply, so dates is undefined rather than [].
     expect(extractCaseStrategy("[STRATEGY][][/STRATEGY]\n[TODOS][][/TODOS]")).to.deep.equal({
       strategy: [],
       todos: [],
-      dates: [],
+      dates: undefined,
     });
   });
 
@@ -378,7 +380,7 @@ describe("Legal Terminal — Chat Wonder case strategy parse", () => {
 ]
 [/DATES]`;
     const parsed = extractCaseStrategy(text);
-    expect(parsed?.dates).to.deep.equal([{ title: "Demand letter sent", date: "2024-03-01" }]);
+    expect(parsed?.dates).to.deep.equal([{ title: "Demand letter sent", date: "2024-03-01", documentId: null, pageNumber: null }]);
   });
 });
 

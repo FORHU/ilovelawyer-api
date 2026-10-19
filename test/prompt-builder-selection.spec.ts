@@ -91,7 +91,11 @@ describe("Prompt builder jurisdiction selection", () => {
 
   it("chat title prompt diverges by jurisdiction", () => {
     expect(getChatTitlePromptBuilder("PH")("test message")).to.include("Philippine");
-    expect(getChatTitlePromptBuilder("UK")("test message")).to.include("England & Wales");
+    // Since 2b2007b4 (Case.ukJurisdiction) the UK title prompt says "UK", not "England & Wales":
+    // a UK case may be England & Wales, Scotland or Northern Ireland.
+    const uk = getChatTitlePromptBuilder("UK")("test message");
+    expect(uk).to.include("UK legal consultation");
+    expect(uk).to.not.include("Philippine");
   });
 
   it("throws rather than silently falling back for an unmapped jurisdiction", () => {
