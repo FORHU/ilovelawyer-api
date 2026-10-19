@@ -17,9 +17,13 @@
 import * as dotenv from "dotenv";
 dotenv.config();
 
-import fs from "fs";
-import path from "path";
-import prisma from "../src/lib/prisma";
+import * as fs from "fs";
+import * as path from "path";
+import { PrismaClient } from "@prisma/client";
+
+// Its own client rather than src/lib/prisma, so this one file can be copied into the production
+// container (which ships dist/ but not src/ or scripts/) and run there with ts-node.
+const prisma = new PrismaClient();
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(name);
