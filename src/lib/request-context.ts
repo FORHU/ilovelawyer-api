@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "async_hooks";
 import { randomUUID } from "crypto";
 import { NextFunction, Request, Response } from "express";
+import { ClientApp, resolveClientApp } from "../utils/client-app";
 
 /** Who and where the current HTTP request came from, readable anywhere below the route handler
  * without threading `req` through every service — SecurityAuditSvc.record fills a row's ip,
@@ -14,6 +15,8 @@ export interface RequestContext {
   userId(): string | null;
   organizationId(): string | null;
   tenantCode(): string | null;
+  /** Which frontend sent the request (utils/client-app.ts); unset reads as the lawyer app. */
+  clientApp?: ClientApp;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -63,6 +66,7 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
     userId: () => req.user?.userId ?? null,
     organizationId: () => req.organization?.id ?? null,
     tenantCode: () => req.organization?.tenantCode ?? null,
+    clientApp: resolveClientApp(req),
   };
   contextByRequest.set(req, context);
   storage.run(context, () => next());

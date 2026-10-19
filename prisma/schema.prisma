@@ -186,6 +186,7 @@ enum FileStatus {
 
 enum Role {
   USER
+  LAWYER
   ADMIN
 }
 

@@ -65,7 +65,7 @@ describe("Restore a scheduled account on sign-in", () => {
       name: "Jane",
       password: passwordHash,
       provider: null,
-      role: "USER",
+      role: "LAWYER",
       googleId: null,
       isEmailVerified: true,
       mustChangePassword: false,

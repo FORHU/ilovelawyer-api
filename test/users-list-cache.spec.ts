@@ -50,8 +50,8 @@ describe("AuthRepo — admin users-list cache busting", () => {
   afterEach(() => restore.forEach((r) => r()));
 
   const busting: [string, () => Promise<unknown>][] = [
-    ["createUser", () => AuthRepo.createUser({ username: "u", email: "e@x.com", password: "h", name: "n" })],
-    ["createGoogleUser", () => AuthRepo.createGoogleUser({ email: "e@x.com", googleId: "g-1", name: "n", tenantId: null, termsVersion: "v" })],
+    ["createUser", () => AuthRepo.createUser({ username: "u", email: "e@x.com", password: "h", name: "n", role: "LAWYER" })],
+    ["createGoogleUser", () => AuthRepo.createGoogleUser({ email: "e@x.com", googleId: "g-1", name: "n", role: "LAWYER", tenantId: null, termsVersion: "v" })],
     ["updateLastLogin", () => AuthRepo.updateLastLogin("user-1")],
     ["updatePasswordAndClearMustChange", () => AuthRepo.updatePasswordAndClearMustChange("user-1", "h")],
     ["updateProfile", () => AuthRepo.updateProfile("user-1", { name: "n" })],
