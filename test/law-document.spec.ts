@@ -9,7 +9,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import type { Law } from "@prisma/client";
 import LawDocumentSvc, { MAX_COPY_BYTES, copyPart } from "../src/services/law-document.service";
 import LawDocumentCopyRepo, { type LawDocumentCopyMeta } from "../src/repositories/law-document-copy.repository";
-import { caseLawDataPdfUrl } from "../src/legal/law-source/uk/uk-law-mappers";
+import { caseLawDataPdfUrl, legislationUrlParts } from "../src/legal/law-source/uk/uk-law-mappers";
 
 type Patch = [object, string, unknown];
 const restores: Patch[] = [];
@@ -289,6 +289,25 @@ describe("LawDocumentSvc — retained EU law", () => {
     const calls = upstreamUp();
     await LawDocumentSvc.get(UK_GDPR, "6");
     expect(calls).to.deep.equal(["https://www.legislation.gov.uk/eur/2016/679/article/6/data.html"]);
+  });
+});
+
+describe("legislationUrlParts — every legislation.gov.uk document type", () => {
+  it("parses historical Acts, NI Orders, draft SIs and retained EU law, not just Acts and SIs", () => {
+    for (const [url, type, number] of [
+      ["https://www.legislation.gov.uk/ukpga/2010/15", "ukpga", 15],
+      ["https://www.legislation.gov.uk/aep/1697/10", "aep", 10],
+      ["https://www.legislation.gov.uk/nisi/1981/1675", "nisi", 1675],
+      ["https://www.legislation.gov.uk/ukdsi/2020/9780111191934", "ukdsi", 9780111191934],
+      ["https://www.legislation.gov.uk/eudn/2020/1999", "eudn", 1999],
+    ] as const) {
+      expect(legislationUrlParts(url), url).to.deep.equal({ type, year: Number(url.split("/")[4]), number });
+    }
+  });
+
+  it("still refuses what isn't a legislation document", () => {
+    expect(legislationUrlParts("https://www.legislation.gov.uk/search?title=Abortion+Act+1967")).to.equal(null);
+    expect(legislationUrlParts("https://www.legislation.gov.uk/notatype/2010/15")).to.equal(null);
   });
 });
 
