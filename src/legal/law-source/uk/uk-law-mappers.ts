@@ -57,6 +57,30 @@ export function legislationUrlParts(
   return { type, year: Number(m[2]), number: Number(m[3]) };
 }
 
+/** A TNA judgment slug: court (+ division) segments, then year/number — "uksc/2017/17",
+ * "ewca/civ/2015/797", "ukftt/grc/2026/1281". Nothing else (no query, dots or extra segments). */
+const UK_CASELAW_SLUG = /^[a-z][a-z0-9]*(?:\/[a-z][a-z0-9]*)*\/\d{4}\/\d+$/;
+
+/** A UK judgment's PDF on TNA's own site, `${jurisUrl}/data.pdf`, or null when `jurisUrl` isn't a
+ * judgment under UK_CASELAW_BASE_URL. TNA serves it for every judgment — the original PDF where it
+ * has one, otherwise a 302 to a PDF it generates from the judgment's XML — so it stands in when the
+ * MCP's assets `pdfUrl` is missing or 403s (TNA holds no original PDF for e.g. [2017] UKSC 17).
+ * Strict on host and path: the proxy fetches whatever this returns. */
+export function caseLawDataPdfUrl(jurisUrl: string | null | undefined): string | null {
+  if (!jurisUrl) return null;
+  let url: URL;
+  try {
+    url = new URL(jurisUrl);
+  } catch {
+    return null;
+  }
+  const base = new URL(UK_CASELAW_BASE_URL);
+  if (url.origin !== base.origin || url.username || url.password || url.search || url.hash) return null;
+  const slug = url.pathname.replace(/^\/+|\/+$/g, "");
+  if (!UK_CASELAW_SLUG.test(slug)) return null;
+  return `${UK_CASELAW_BASE_URL}/${slug}/data.pdf`;
+}
+
 // ── search / browse write-through ───────────────────────────────────────────
 
 export function caseLawHitToCreateInput(
@@ -76,9 +100,10 @@ export function caseLawHitToCreateInput(
     decisionDate: hit.published ? new Date(hit.published) : null,
     jurisUrl,
     sourceUrl: jurisUrl,
-    // Only the MCP-supplied assets URL (assets.caselaw.nationalarchives.gov.uk) is embeddable;
-    // the `${jurisUrl}/data.pdf` path on the TNA site sends X-Frame-Options: DENY, so there is
-    // no fallback — a row with no assets PDF just renders without the embedded viewer.
+    // The MCP-supplied assets URL (assets.caselaw.nationalarchives.gov.uk), kept as given. The
+    // viewer never frames it directly — LawCtrl.pdf fetches it server side and re-serves the bytes,
+    // so TNA's X-Frame-Options doesn't matter — and falls back to `${jurisUrl}/data.pdf`
+    // (caseLawDataPdfUrl) when it's null or TNA holds no original PDF there.
     pdfUrl: hit.pdf_url ?? null,
     rawJson: hit as unknown as Prisma.InputJsonValue,
   };
