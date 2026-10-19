@@ -10,7 +10,10 @@ import ConsentSvc from "./consent.service";
 import SecurityAuditSvc from "./security-audit.service";
 import HttpError from "../utils/http-error";
 import loginToken from "../utils/loginToken";
-import { OrganizationStatus } from "@prisma/client";
+import { OrganizationStatus, Prisma } from "@prisma/client";
+import TerminalWorkspaceRepo from "../repositories/terminal-workspace.repository";
+import TerminalWorkspaceSvc from "./terminal-workspace.service";
+import { buildDefaultLayout, normalizeLayout } from "../utils/terminal-layout";
 import prisma from "../lib/prisma";
 import OrganizationRepo from "../repositories/organization.repository";
 import AccountDeletionSvc from "./account-deletion.service";
@@ -43,7 +46,10 @@ export default class TrialSvc {
     const consultationId = await TrialSvc.seedSampleConsultation(id);
     // "Explore a sample case file": view-only access to the shared sample case, no copy. Removed
     // with the guest (CaseAccess cascades on the user).
-    if (sampleCase) await OrganizationRepo.grantCaseAccess(sampleCase.id, id, "VIEW");
+    if (sampleCase) {
+      await OrganizationRepo.grantCaseAccess(sampleCase.id, id, "VIEW");
+      await TrialSvc.seedGuestLayout(id, sampleCase.id);
+    }
 
     // Signed to stop with the trial, not at the usual access-token lifetime.
     const { refreshToken } = loginToken(id, false);
@@ -83,6 +89,17 @@ export default class TrialSvc {
       await AccountDeletionSvc.purge(id);
     }
     return expired.length;
+  }
+
+  /** The guest's Terminal for the sample case, already arranged. Layouts belong to each user and a
+   * view-only guest cannot create one (TerminalWorkspaceSvc.create needs contribute access), so
+   * without this the Terminal opens on "No layouts yet" and shows none of the generated panes. */
+  private static async seedGuestLayout(userId: string, caseId: string): Promise<void> {
+    const sku = await TerminalWorkspaceSvc.skuForUser(userId);
+    const preset = "PANE_6" as const;
+    const layoutJson = normalizeLayout(buildDefaultLayout(preset, sku), sku) as unknown as Prisma.InputJsonValue;
+    const workspace = await TerminalWorkspaceRepo.create(userId, { caseId, name: "Case overview", preset, layoutJson });
+    await TerminalWorkspaceRepo.markLastUsed(workspace.id, userId);
   }
 
   /** The shared sample case, when TRIAL_SAMPLE_CASE_ID names a case in someone's portfolio (a
