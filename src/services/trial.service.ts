@@ -21,6 +21,9 @@ import { ACCESS_TOKEN_SECRET, TRIAL_DURATION_MS, TRIAL_SAMPLE_CASE_ID } from "..
 import type { TenantCode } from "../types/tenant-code";
 import { TRIAL_SAMPLE_ANSWER, TRIAL_SAMPLE_QUESTION, TRIAL_SAMPLE_RELATED_CASES, TRIAL_SAMPLE_TITLE } from "../constants/trial-sample.constants";
 
+/** The Terminal panes the shared sample case has content for, in the order a guest sees them. */
+const GUEST_PANES = ["command", "evidence", "procedure", "witnesses", "redTeam", "chat"] as const;
+
 export default class TrialSvc {
   /** The landing page's "Start a consultation" for someone with no account: a throwaway guest in
    * its own personal UK workspace, signed in like any other user so every existing chat route
@@ -97,7 +100,16 @@ export default class TrialSvc {
   private static async seedGuestLayout(userId: string, caseId: string): Promise<void> {
     const sku = await TerminalWorkspaceSvc.skuForUser(userId);
     const preset = "PANE_6" as const;
-    const layoutJson = normalizeLayout(buildDefaultLayout(preset, sku), sku) as unknown as Prisma.InputJsonValue;
+    // The six panes the sample case has generated content for (the default six include Law &
+    // Precedent and the strategy map, which the sample case does not fill).
+    const base = buildDefaultLayout(preset, sku);
+    const panels = base.panels.map((panel, index) => {
+      const shown = GUEST_PANES.indexOf(panel.id as (typeof GUEST_PANES)[number]);
+      return shown === -1
+        ? { ...panel, visible: false, order: 100 + index, width: 0, height: 1 }
+        : { ...panel, visible: true, order: shown, width: 1 / GUEST_PANES.length, height: 1 };
+    });
+    const layoutJson = normalizeLayout({ ...base, panels }, sku) as unknown as Prisma.InputJsonValue;
     const workspace = await TerminalWorkspaceRepo.create(userId, { caseId, name: "Case overview", preset, layoutJson });
     await TerminalWorkspaceRepo.markLastUsed(workspace.id, userId);
   }
