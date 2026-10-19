@@ -2,11 +2,14 @@
  * (gzip-compressed in Postgres). No live Postgres or legislation.gov.uk: the repository and global
  * fetch are monkeypatched. */
 import { gunzipSync, gzipSync } from "zlib";
+import { createServer } from "http";
+import type { AddressInfo } from "net";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import type { Law } from "@prisma/client";
 import LawDocumentSvc, { MAX_COPY_BYTES, copyPart } from "../src/services/law-document.service";
 import LawDocumentCopyRepo, { type LawDocumentCopyMeta } from "../src/repositories/law-document-copy.repository";
+import { caseLawDataPdfUrl } from "../src/legal/law-source/uk/uk-law-mappers";
 
 type Patch = [object, string, unknown];
 const restores: Patch[] = [];
@@ -286,5 +289,208 @@ describe("LawDocumentSvc — retained EU law", () => {
     const calls = upstreamUp();
     await LawDocumentSvc.get(UK_GDPR, "6");
     expect(calls).to.deep.equal(["https://www.legislation.gov.uk/eur/2016/679/article/6/data.html"]);
+  });
+});
+
+describe("LawDocumentSvc — UK judgment PDF fallback", () => {
+  // Ilott v The Blue Cross [2017] UKSC 17: TNA holds no original PDF at the assets URL (403), but its
+  // data.pdf 302s to one it generates.
+  const ILOTT = {
+    id: "law-4",
+    jurisUrl: "https://caselaw.nationalarchives.gov.uk/uksc/2017/17",
+    pdfUrl: "https://assets.caselaw.nationalarchives.gov.uk/uksc/2017/17/uksc_2017_17.pdf",
+  } as Law;
+  const DATA_PDF = "https://caselaw.nationalarchives.gov.uk/uksc/2017/17/data.pdf";
+  const pdf = (body = "%PDF-1.7") => new Response(body, { status: 200, headers: { "content-type": "application/pdf" } });
+  const forbidden = () =>
+    new Response("<Error><Code>AccessDenied</Code></Error>", { status: 403, headers: { "content-type": "application/xml" } });
+
+  /** fetch answering per URL; an unlisted URL fails the test. Records each call's URL and signal. */
+  function upstream(routes: Record<string, () => Response>) {
+    const calls: { url: string; signal?: AbortSignal | null }[] = [];
+    patch([
+      [
+        globalThis,
+        "fetch",
+        async (url: string, init?: RequestInit) => {
+          calls.push({ url, signal: init?.signal });
+          const route = routes[url];
+          if (!route) throw new Error(`unexpected upstream call: ${url}`);
+          return route();
+        },
+      ],
+    ]);
+    return calls;
+  }
+
+  beforeEach(() => {
+    patch([
+      [
+        LawDocumentCopyRepo,
+        "findLatest",
+        async () => {
+          throw new Error("judgments are never copied");
+        },
+      ],
+    ]);
+  });
+
+  afterEach(restoreAll);
+
+  it("falls back to TNA's data.pdf when the assets PDF 403s", async () => {
+    const calls = upstream({ [ILOTT.pdfUrl!]: forbidden, [DATA_PDF]: () => pdf("%PDF-generated") });
+    const doc = await LawDocumentSvc.get(ILOTT, null);
+    expect(doc?.format).to.equal("pdf");
+    expect(doc?.body.toString()).to.equal("%PDF-generated");
+    expect(doc?.sourceUrl).to.equal(DATA_PDF);
+    expect(calls.map((c) => c.url)).to.deep.equal([ILOTT.pdfUrl, DATA_PDF]);
+  });
+
+  it("serves the stored PDF without asking for the fallback when it works", async () => {
+    const calls = upstream({ [ILOTT.pdfUrl!]: () => pdf("%PDF-original") });
+    const doc = await LawDocumentSvc.get(ILOTT, null);
+    expect(doc?.body.toString()).to.equal("%PDF-original");
+    expect(doc?.sourceUrl).to.equal(ILOTT.pdfUrl);
+    expect(calls.map((c) => c.url)).to.deep.equal([ILOTT.pdfUrl]);
+  });
+
+  it("returns null when both the stored PDF and data.pdf fail", async () => {
+    const calls = upstream({
+      [ILOTT.pdfUrl!]: forbidden,
+      [DATA_PDF]: () => new Response("Bad gateway", { status: 502, headers: { "content-type": "text/html" } }),
+    });
+    expect(await LawDocumentSvc.get(ILOTT, null)).to.equal(null);
+    expect(calls).to.have.length(2);
+  });
+
+  it("uses data.pdf when the judgment has no stored pdfUrl", async () => {
+    const calls = upstream({ [DATA_PDF]: () => pdf() });
+    const doc = await LawDocumentSvc.get({ ...ILOTT, pdfUrl: null }, null);
+    expect(doc?.format).to.equal("pdf");
+    expect(calls.map((c) => c.url)).to.deep.equal([DATA_PDF]);
+  });
+
+  it("never serves an HTML fallback as the PDF", async () => {
+    upstream({
+      [ILOTT.pdfUrl!]: forbidden,
+      [DATA_PDF]: () => new Response("<html>judgment</html>", { status: 200, headers: { "content-type": "text/html" } }),
+    });
+    expect(await LawDocumentSvc.get(ILOTT, null)).to.equal(null);
+  });
+
+  it("never serves an XML fallback as the PDF", async () => {
+    upstream({ [DATA_PDF]: () => new Response("<akomaNtoso/>", { status: 200, headers: { "content-type": "application/xml" } }) });
+    expect(await LawDocumentSvc.get({ ...ILOTT, pdfUrl: null }, null)).to.equal(null);
+  });
+
+  it("still tries the fallback, on its own timeout, after the stored PDF times out", async () => {
+    const calls = upstream({
+      [ILOTT.pdfUrl!]: () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      },
+      [DATA_PDF]: () => pdf(),
+    });
+    const doc = await LawDocumentSvc.get(ILOTT, null);
+    expect(doc?.format).to.equal("pdf");
+    expect(calls).to.have.length(2);
+    expect(calls[0].signal).to.be.instanceOf(AbortSignal);
+    expect(calls[1].signal).to.be.instanceOf(AbortSignal);
+    expect(calls[1].signal).to.not.equal(calls[0].signal);
+  });
+
+  it("still tries the fallback after a network error on the stored PDF", async () => {
+    const calls = upstream({
+      [ILOTT.pdfUrl!]: () => {
+        throw new TypeError("fetch failed");
+      },
+      [DATA_PDF]: () => pdf(),
+    });
+    expect((await LawDocumentSvc.get(ILOTT, null))?.format).to.equal("pdf");
+    expect(calls).to.have.length(2);
+  });
+
+  it("asks for a URL once when pdfUrl already is data.pdf", async () => {
+    const calls = upstream({ [DATA_PDF]: forbidden });
+    expect(await LawDocumentSvc.get({ ...ILOTT, pdfUrl: DATA_PDF }, null)).to.equal(null);
+    expect(calls.map((c) => c.url)).to.deep.equal([DATA_PDF]);
+  });
+
+  it("follows TNA's redirect from data.pdf to the generated PDF", async () => {
+    // A real HTTP server and the real fetch, so the 302 is followed the way it is in production;
+    // only TNA's origin is pointed at the local server.
+    const server = createServer((req, res) => {
+      if (req.url === "/uksc/2017/17/data.pdf") {
+        res.writeHead(302, { location: "/uksc/2017/17/generated.pdf" });
+        return res.end();
+      }
+      if (req.url === "/uksc/2017/17/generated.pdf") {
+        res.writeHead(200, { "content-type": "application/pdf" });
+        return res.end("%PDF-generated");
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const realFetch = globalThis.fetch;
+    const requested: string[] = [];
+    patch([
+      [
+        globalThis,
+        "fetch",
+        (url: string, init?: RequestInit) => {
+          requested.push(url);
+          return realFetch(url.replace("https://caselaw.nationalarchives.gov.uk", local), init);
+        },
+      ],
+    ]);
+    try {
+      const doc = await LawDocumentSvc.get({ ...ILOTT, pdfUrl: null }, null);
+      expect(doc?.format).to.equal("pdf");
+      expect(doc?.body.toString()).to.equal("%PDF-generated");
+      expect(requested).to.deep.equal([DATA_PDF]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("never builds a TNA fallback for a PH decision", async () => {
+    const PH = { id: "law-5", jurisUrl: "https://juris.ph/jurisprudence/12345", pdfUrl: "https://juris.ph/files/12345.pdf" } as Law;
+    const calls = upstream({ [PH.pdfUrl!]: forbidden });
+    expect(await LawDocumentSvc.get(PH, null)).to.equal(null);
+    expect(calls.map((c) => c.url)).to.deep.equal([PH.pdfUrl]);
+  });
+});
+
+describe("caseLawDataPdfUrl", () => {
+  it("builds data.pdf for a TNA judgment URL", () => {
+    expect(caseLawDataPdfUrl("https://caselaw.nationalarchives.gov.uk/uksc/2017/17")).to.equal(
+      "https://caselaw.nationalarchives.gov.uk/uksc/2017/17/data.pdf",
+    );
+    expect(caseLawDataPdfUrl("https://caselaw.nationalarchives.gov.uk/ewca/civ/2015/797/")).to.equal(
+      "https://caselaw.nationalarchives.gov.uk/ewca/civ/2015/797/data.pdf",
+    );
+  });
+
+  it("refuses anything that isn't a judgment on TNA's own origin", () => {
+    for (const url of [
+      null,
+      "",
+      "not a url",
+      "https://evil.example/uksc/2017/17",
+      "https://caselaw.nationalarchives.gov.uk.evil.example/uksc/2017/17",
+      "http://caselaw.nationalarchives.gov.uk/uksc/2017/17",
+      "https://caselaw.nationalarchives.gov.uk:8443/uksc/2017/17",
+      "https://user:pw@caselaw.nationalarchives.gov.uk/uksc/2017/17",
+      "https://caselaw.nationalarchives.gov.uk/uksc/2017/17?next=https://evil.example",
+      "https://caselaw.nationalarchives.gov.uk/uksc/2017/17#x",
+      "https://caselaw.nationalarchives.gov.uk/uksc/2017/17/data.pdf",
+      "https://caselaw.nationalarchives.gov.uk/uksc/2017/17/press-summary/1",
+      "https://caselaw.nationalarchives.gov.uk/search",
+      "https://www.legislation.gov.uk/ukpga/2010/15",
+      "https://juris.ph/jurisprudence/12345",
+    ]) {
+      expect(caseLawDataPdfUrl(url), String(url)).to.equal(null);
+    }
   });
 });

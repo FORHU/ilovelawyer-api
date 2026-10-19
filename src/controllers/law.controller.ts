@@ -9,7 +9,7 @@ import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
 import { assertCitationsAvailable } from "../utils/law.utils";
 import { getLawSourceProvider } from "../legal/law-source/law-source.registry";
-import { legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
+import { caseLawDataPdfUrl, legislationUrlParts } from "../legal/law-source/uk/uk-law-mappers";
 import { UK_LEGISLATION_BASE_URL } from "../config";
 import { lawSearchSchema, lawDocumentSchema, lawBrowseSchema } from "../validation/law.validation";
 import { frameableLegislationHtml } from "../utils/uk-legislation-direct";
@@ -113,14 +113,19 @@ export default class LawCtrl {
    * the bytes from our own origin sidesteps that for every source, not just UK's.
    * UK legislation is always legislation.gov.uk's HTML rendition (never its PDF), served from our own
    * saved copy while it is fresh (see LawDocumentSvc), so this route answers with text/html as well as
-   * a PDF. Returns 502 when the upstream is unreachable and no copy can stand in — the client falls
-   * back to a "View source" link.
+   * a PDF. A UK judgment is its stored pdfUrl (TNA's assets host) or, when that is missing or fails,
+   * TNA's `${jurisUrl}/data.pdf` — usable here although TNA sends X-Frame-Options: DENY, because the
+   * browser frames our response, not TNA's. Returns 502 with code LAW_DOCUMENT_UNAVAILABLE when the
+   * upstream is unreachable and no copy can stand in — the client falls back to a "View source" link.
    */
   static async pdf(req: Request, res: Response) {
     const law = await LawRepo.findById(req.params.lawId);
     if (!law) throw new HttpError("Law not found", 404);
-    // UK legislation's document lives at a derived legislation.gov.uk path; everything else needs a pdfUrl.
-    if (!legislationUrlParts(law.jurisUrl) && !law.pdfUrl) throw new HttpError("No PDF available for this document", 404);
+    // UK legislation and UK judgments have documents at derived upstream paths (legislation.gov.uk's
+    // HTML, TNA's data.pdf); everything else needs a pdfUrl.
+    if (!legislationUrlParts(law.jurisUrl) && !caseLawDataPdfUrl(law.jurisUrl) && !law.pdfUrl) {
+      throw new HttpError("No PDF available for this document", 404);
+    }
 
     // `?section=49` (UK legislation only) serves just that section — legislation.gov.uk publishes
     // one at `/section/<n>/data.html` (`/article/<n>` for retained EU law) — so a chat citation to
@@ -129,7 +134,7 @@ export default class LawCtrl {
 
     // Live from upstream, or (UK legislation) our saved copy of its HTML.
     const doc = await LawDocumentSvc.get(law, section);
-    if (!doc) throw new HttpError("The official document source is unavailable right now", 502);
+    if (!doc) throw new HttpError("The official document source is unavailable right now", 502, "LAW_DOCUMENT_UNAVAILABLE");
 
     // helmet() set these on the way in — drop them so the frontend (a different origin) can
     // embed the document in an <iframe>. Safe here: the body is public primary law, nothing
