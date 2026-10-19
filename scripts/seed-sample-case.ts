@@ -15,7 +15,12 @@
  *     with no linked case law or legislation is reported;
  *  4. Refresh analysis, then red team, witnesses, damages, claims and timeline, waiting for every
  *     job on the case to finish;
- *  5. the case brief as PDF and Word, last, so it holds everything above.
+ *  5. legal issues, one checked authority (Wood v Capita, text from the National Archives) pinned to the
+ *     issues that turn on contract wording, citation grounds and the strategy map; the legal issues and
+ *     the map are retried up to three times because the model's reply is sometimes unusable. Needs the
+ *     API deployed with the strategy-map parser fix (API #496) or the map step will keep failing;
+ *  6. the case brief as PDF and Word, last, so it holds everything above.
+ * `--only-rest` runs step 5 alone on an existing case.
  * Prints the case id to set as TRIAL_SAMPLE_CASE_ID. Spends real OpenAI money (about US$1.50).
  */
 import { spawn } from "child_process";
@@ -226,7 +231,7 @@ async function seedConversations(caseId: string) {
     }
   }
   // The seeder's own empty benchmark consultation is not part of the tour.
-  for (const c of existing.filter((c) => !(c.title in CONVERSATIONS))) {
+  for (const c of existing.filter((c) => !((c.title ?? "") in CONVERSATIONS))) {
     await signIn();
     await call("POST", `/chat/consultations/${c.id}/archive`);
     await call("DELETE", `/chat/consultations/${c.id}`);
@@ -265,6 +270,86 @@ async function generatePanes(caseId: string) {
   failed.forEach((j) => log(`  job ${j.kind}: ${j.status} ${j.error ?? ""}`));
 }
 
+
+// The model's reply for these two is sometimes unusable (no legal issues, or a map that does not parse),
+// so each is retried and only counted once the rows are really there.
+async function regenerateUntil(caseId: string, label: string, run: () => Promise<{ status: number; data: unknown }>, saved: () => Promise<number>) {
+  if ((await saved()) > 0) {
+    log(`${label}: already there`);
+    return;
+  }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await signIn();
+    const r = await run();
+    log(`${label}: ${r.status} (attempt ${attempt})`);
+    await sleep(8_000);
+    await waitForJobs(caseId);
+    if ((await saved()) > 0) return;
+  }
+  throw new Error(`${label}: nothing was saved after 3 attempts`);
+}
+
+// The one authority the sample case cites, with the passage taken from its National Archives text, so
+// Law & Precedent shows a real, checked authority pinned to the issues that turn on contract wording.
+const WOOD_SLUG = "uksc/2017/24";
+const WOOD_CITATION = "[2017] UKSC 24";
+const WOOD_PASSAGES = [
+  { para: "12", start: "This unitary exercise involves an iterative process", quote: "This unitary exercise involves an iterative process by which each suggested interpretation is checked against the provisions of the contract and its commercial consequences are investigated" },
+  { para: "13", start: "Textualism and contextualism are not conflicting paradigms", quote: "Textualism and contextualism are not conflicting paradigms in a battle for exclusive occupation of the field of contractual interpretation" },
+];
+const WOOD_ISSUE_PATTERN = /fairly disclosed|Clause 9|Earn-Out/i;
+
+async function seedAuthority(caseId: string) {
+  if ((await prisma.caseAuthority.count({ where: { caseId } })) > 0) {
+    log("authority: already there");
+    return;
+  }
+  const res = await fetch(`https://caselaw.nationalarchives.gov.uk/${WOOD_SLUG}/data.html`, { headers: { "user-agent": "Mozilla/5.0" } });
+  if (!res.ok) throw new Error(`National Archives page for ${WOOD_CITATION}: ${res.status}`);
+  const text = (await res.text()).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
+  await signIn();
+  for (const p of WOOD_PASSAGES) {
+    const at = text.indexOf(p.start);
+    if (at < 0) throw new Error(`${WOOD_CITATION} para ${p.para}: passage not found on the National Archives page`);
+    const next = text.indexOf(" 13. ", at);
+    const officialText = (p.para === "12" && next > 0 ? text.slice(at, next) : text.slice(at, at + 400)).trim();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const r = await call<{ status: string }>("POST", `/my-cases/${caseId}/citations`, { quotedText: p.quote, citedReference: WOOD_CITATION, officialText, pinpoint: `para ${p.para}` });
+      log(`quote check ${WOOD_CITATION} para ${p.para}: ${r.status} ${r.data?.status ?? ""}`);
+      if (r.status === 201 && r.data?.status === "VALID") break;
+      if (attempt === 3) throw new Error(`quote check para ${p.para} did not come back VALID`);
+    }
+  }
+  const issues = await prisma.caseFinding.findMany({ where: { caseId, category: "LEGAL_ISSUE" }, select: { id: true, label: true } });
+  const pinned = issues.filter((i) => WOOD_ISSUE_PATTERN.test(i.label));
+  if (pinned.length === 0) throw new Error("no legal issue to pin the authority to");
+  for (const issue of pinned) {
+    const r = await call("POST", `/my-cases/${caseId}/authorities`, {
+      kind: "CASE",
+      stance: "ON_POINT",
+      title: "Wood v Capita Insurance Services Ltd",
+      subtitle: "UK Supreme Court: how an SPA's wording is construed",
+      citation: WOOD_CITATION,
+      rationale: "Wording in a share purchase agreement is read as a unitary exercise: each suggested meaning is checked against the contract's provisions and its commercial consequences are investigated (para 12).",
+      findingId: issue.id,
+    });
+    log(`authority pinned to "${issue.label.slice(0, 50)}...": ${r.status}`);
+  }
+}
+
+async function generateRest(caseId: string) {
+  await regenerateUntil(caseId, "legal issues", () => call("POST", `/my-cases/${caseId}/findings/regenerate`, { category: "LEGAL_ISSUE" }), () =>
+    prisma.caseFinding.count({ where: { caseId, category: "LEGAL_ISSUE" } }),
+  );
+  await seedAuthority(caseId);
+  await signIn();
+  const g = await call("POST", `/my-cases/${caseId}/citation-grounds/map`);
+  log(`citation grounds: ${g.status}${g.status >= 300 ? ` ${JSON.stringify(g.data)}` : ""}`);
+  await sleep(8_000);
+  await waitForJobs(caseId);
+  await regenerateUntil(caseId, "strategy map", () => call("POST", `/my-cases/${caseId}/mind-map/generate`), () => prisma.caseMindMap.count({ where: { caseId } }));
+}
+
 async function generateBrief(caseId: string) {
   await waitForJobs(caseId);
   await signIn();
@@ -284,8 +369,11 @@ async function main() {
   const caseId = existingCase?.id ?? (await seedCase(portfolio.slug!));
   log(`sample case: ${caseId}`);
   await waitForDocuments(caseId);
-  await seedConversations(caseId);
-  await generatePanes(caseId);
+  if (!process.argv.includes("--only-rest")) {
+    await seedConversations(caseId);
+    await generatePanes(caseId);
+  }
+  await generateRest(caseId);
   await generateBrief(caseId);
   log(`done. Set TRIAL_SAMPLE_CASE_ID=${caseId}`);
 }
