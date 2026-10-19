@@ -37,30 +37,32 @@ const UK_TENANT_CODE = "UK";
 const log = (m: string) => console.log(`${new Date().toTimeString().slice(0, 8)} ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Each conversation asks which English authorities decide the point on the case's facts, so every
+// answer names and links the cases and statutes. The facts come from the case's own documents.
 const CONVERSATIONS: Record<string, string[]> = {
-  "Case overview and the warranty claim": [
-    "Give me an overview of this dispute: who the parties are, what Meridian bought and what it claims. Then set out the English law on warranty claims under a share purchase agreement.",
-    "Which warranties does Meridian say were breached, what does each require, and how do the English courts construe warranties like these?",
-    "What did the Disclosure Letter disclose, and does it cover the Northbridge contract? Apply the English test for fair disclosure.",
-    "Was the Notice of Warranty Claim valid? Apply the SPA's clauses and the English case law on notice-of-claim provisions.",
+  "Warranty claims under the SPA": [
+    "Which English authorities decide how a warranty in a share purchase agreement is construed, and how do they apply to Warranty 7.3 (Material Contracts) in Meridian's SPA?",
+    "Which English authorities decide whether a seller has fairly disclosed against a warranty, and does the Disclosure Letter cover the Northbridge Coatings contract?",
+    "Which English authorities decide whether a notice of warranty claim is valid, and does Meridian's notice satisfy clause 11.8 of the SPA?",
+    "Which English authorities decide the effect of the sellers' knowledge on a warranty claim, and what do the emails show about what Hale Specialty knew?",
   ],
-  "What Hale Specialty knew about Northbridge": [
-    "Using the emails, when did Hale Specialty learn that Northbridge would not renew, and how does English law treat a seller's actual knowledge in a warranty claim?",
-    "What does the internal 'close to chest' email show, and could it support a claim for fraudulent misrepresentation or deliberate concealment under English law?",
-    "What do the minutes of the pre-completion management meeting record, and did the sellers have any duty to correct earlier statements before completion?",
-    "Where do the witness statements of Priya Nandakumar and Julian Ashworth-Hale conflict, which account do the documents support, and how will an English tribunal weigh oral evidence against contemporaneous documents?",
+  "Misrepresentation and concealment": [
+    "Which English authorities decide when a failure to disclose becomes fraudulent misrepresentation, and could the 'close to chest' email support that claim?",
+    "Which English statute and cases govern an exclusion or limitation of liability for misrepresentation, and can the sellers rely on the SPA's limits here?",
+    "Which English authorities decide whether a party must correct an earlier statement that became untrue before completion, and what do the pre-completion meeting minutes record?",
+    "Which English authorities decide how a tribunal weighs witness evidence against contemporaneous documents, and where do the Nandakumar and Ashworth-Hale statements conflict?",
   ],
-  "Quantum, limits and next steps": [
-    "How do the two expert reports differ on the loss from the Northbridge contract, and how do the English courts measure damages for breach of warranty in a share sale?",
-    "Which limitations in the SPA (caps, thresholds, time limits) could reduce Meridian's recovery, and how do the English courts construe them?",
-    "What are the strongest and weakest points for each side, with the legal authority behind each?",
-    "What should Meridian do next before the hearing, including any procedural points under the LCIA Rules and English law?",
+  "Damages and limits on liability": [
+    "Which English authorities decide how damages for breach of warranty in a share sale are measured, and how do the two expert reports in this case differ on that measure?",
+    "Which English authorities decide how caps, thresholds and time limits in an SPA are construed, and which of those limits could reduce Meridian's recovery?",
+    "Which English authorities decide the recoverability of loss of a key customer contract, and how does that apply to the Northbridge non-renewal?",
+    "Which English authorities decide the strongest and weakest points on each side of a warranty dispute like this one?",
   ],
-  "The law: disclosure, knowledge and remedies": [
-    "Under English law, how do the courts decide whether a seller has fairly disclosed against a warranty in a share purchase agreement? Apply it to Meridian's Disclosure Letter.",
-    "How does English law treat a seller who knew of a problem and kept it back: can the contractual limits on liability still apply, and when does it become fraudulent misrepresentation?",
-    "How are damages for breach of warranty in a share sale measured under English law, and what does that mean for Meridian's claim?",
-    "How strictly do the English courts read notice-of-claim clauses in share purchase agreements, and would Meridian's notice survive them?",
+  "Procedure and next steps": [
+    "Which English authorities decide the powers of an LCIA tribunal on documents and timetable, and what should Meridian do about its overdue document?",
+    "Which English authorities decide whether a deadline extension or relief from a procedural default will be granted, and how do they apply here?",
+    "Which English authorities decide the consequences of non-compliance with a tribunal's directions, including costs?",
+    "Which English authorities should Meridian rely on to strengthen its claim before the hearing, and what evidence should it gather?",
   ],
 };
 // Panes Refresh analysis doesn't run itself.
@@ -77,7 +79,8 @@ async function call<T = any>(method: string, route: string, body?: unknown): Pro
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(organizationId ? { "X-Organization-Id": organizationId } : {}),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    // POSTs always carry a JSON body, as the app's own requests do; some controllers read req.body.
+    body: body === undefined ? (method === "POST" ? "{}" : undefined) : JSON.stringify(body),
   });
   const text = await res.text();
   let data: any = text;
@@ -184,7 +187,8 @@ async function waitForReply(consultationId: string) {
   return "TIMED OUT";
 }
 
-const AUTHORITY_LINK = /\]\((https?:\/\/(?:caselaw\.nationalarchives\.gov\.uk|www\.legislation\.gov\.uk)[^)\s]*)\)/g;
+// A saved citation is an internal Library link (the pill); an unrewritten one is still the external URL.
+const AUTHORITY_LINK = /\]\(((?:https?:\/\/(?:caselaw\.nationalarchives\.gov\.uk|www\.legislation\.gov\.uk)|[^)\s]*\/homepage\/library\/laws\/)[^)\s]*)\)/g;
 async function linkedAuthoritiesInLastAnswer(consultationId: string): Promise<number> {
   const r = await call("GET", `/chat/consultations/${consultationId}/messages`);
   const text = JSON.stringify(r.data);
@@ -247,14 +251,14 @@ async function generatePanes(caseId: string) {
     await signIn();
     const r = await call("POST", `/my-cases/${caseId}/refresh`);
     log(`Refresh analysis: ${r.status}`);
-    await sleep(5_000);
+    await sleep(8_000);
     await waitForJobs(caseId);
   }
   for (const pane of EXTRA_PANES) {
     await signIn();
     const r = await call("POST", `/my-cases/${caseId}/${pane}`);
     log(`${pane}: ${r.status}${r.status >= 300 ? ` ${JSON.stringify(r.data)}` : ""}`);
-    await sleep(3_000);
+    await sleep(8_000);
     await waitForJobs(caseId);
   }
   const failed = await prisma.aiGenerationJob.findMany({ where: { subjectId: caseId, status: { not: "DONE" } }, select: { kind: true, status: true, error: true } });
