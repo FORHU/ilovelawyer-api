@@ -73,12 +73,9 @@ model User {
   // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
   // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
   // session and access token stop working; `trialMessagesUsed` counts the AI answers it has
-  // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by scripts/purge-trial-users.
+  // spent against TRIAL_MESSAGE_LIMIT. Expired rows are deleted by TrialGuestPurgeQueue.
   trialExpiresAt    DateTime?
   trialMessagesUsed Int       @default(0)
-  // Uses of each capped Studio feature (mind map, audio overview, case brief...) by name, against
-  // TRIAL_FEATURE_LIMITS; spent atomically by blockTrialWrites (AuthRepo.spendTrialFeature).
-  trialFeatureUses  Json      @default("{}")
 
   // The free AI credit a new account gets at sign-up, in USD of OpenAI usage through Chat Wonder
   // (FREE_CREDIT_USD at the time). Null for accounts created before it existed: they are never

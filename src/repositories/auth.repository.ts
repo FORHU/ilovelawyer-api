@@ -4,7 +4,7 @@ import { redis } from "../lib/redis";
 import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
 import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 import { getStableProxyFileUrl } from "../utils/s3";
-import { FREE_CREDIT_USD, TRIAL_FEATURE_LIMITS, TRIAL_MESSAGE_LIMIT, type TrialFeature } from "../config";
+import { FREE_CREDIT_USD, TRIAL_MESSAGE_LIMIT } from "../config";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -30,7 +30,6 @@ const PUBLIC_USER_SELECT = {
   freeCreditUsd: true,
   trialExpiresAt: true,
   trialMessagesUsed: true,
-  trialFeatureUses: true,
   password: true,
   avatar: { select: { s3Key: true } },
   googleRefreshToken: true,
@@ -49,17 +48,14 @@ function toPublicUser<
     googleRefreshToken?: string | null;
     trialExpiresAt?: Date | null;
     trialMessagesUsed?: number;
-    trialFeatureUses?: Prisma.JsonValue;
   },
->(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken" | "trialFeatureUses"> & {
+>(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken"> & {
   hasPassword: boolean;
   avatarUrl: string | null;
   googleCalendarConnected: boolean;
   trialMessagesLeft: number | null;
-  trialFeaturesLeft: Record<TrialFeature, number> | null;
 } {
-  const { password, avatar, googleRefreshToken, trialFeatureUses, ...rest } = user;
-  const used = (trialFeatureUses ?? {}) as Partial<Record<TrialFeature, number>>;
+  const { password, avatar, googleRefreshToken, ...rest } = user;
   return {
     ...rest,
     hasPassword: password !== null && !isGoogleSsoAccount(user),
@@ -68,12 +64,6 @@ function toPublicUser<
     // Only a trial guest has one: what is left of their TRIAL_MESSAGE_LIMIT, so the app never has
     // to know the limit itself.
     trialMessagesLeft: user.trialExpiresAt ? Math.max(0, TRIAL_MESSAGE_LIMIT - (user.trialMessagesUsed ?? 0)) : null,
-    // Likewise each capped Studio feature's uses left (TRIAL_FEATURE_LIMITS).
-    trialFeaturesLeft: user.trialExpiresAt
-      ? (Object.fromEntries(
-          Object.entries(TRIAL_FEATURE_LIMITS).map(([f, limit]) => [f, Math.max(0, limit - (used[f as TrialFeature] ?? 0))]),
-        ) as Record<TrialFeature, number>)
-      : null,
   };
 }
 
@@ -151,16 +141,6 @@ export default class AuthRepo {
       where: { id: userId, trialExpiresAt: { not: null }, trialMessagesUsed: { lt: limit } },
       data: { trialMessagesUsed: { increment: 1 } },
     });
-    return count === 1;
-  }
-
-  /** Spends one use of a capped Studio feature (see TRIAL_FEATURE_LIMITS), or reports none left.
-   * One conditional statement, like spendTrialMessage, so two clicks can't both take the last use. */
-  static async spendTrialFeature(userId: string, feature: string, limit: number) {
-    const count = await prisma.$executeRaw`
-      UPDATE "User"
-      SET "trialFeatureUses" = jsonb_set("trialFeatureUses", ARRAY[${feature}::text], to_jsonb(COALESCE(("trialFeatureUses" ->> ${feature}::text)::int, 0) + 1))
-      WHERE "id" = ${userId} AND "trialExpiresAt" IS NOT NULL AND COALESCE(("trialFeatureUses" ->> ${feature}::text)::int, 0) < ${limit}`;
     return count === 1;
   }
 

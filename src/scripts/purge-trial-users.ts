@@ -1,7 +1,7 @@
 /**
  * Deletes landing-page trial guests (User.trialExpiresAt, see TrialSvc) whose trial has ended, with
- * their workspace and everything in it (TrialSvc.purgeExpired). Nothing runs this on a schedule;
- * run it by hand, e.g. right after an event:
+ * their workspace and everything in it (TrialSvc.purgeExpired). TrialGuestPurgeQueue does this
+ * every three days; this runs it on demand, e.g. right after an event:
  *   Dry run (default):  node dist/scripts/purge-trial-users.js
  *   Do it:              node dist/scripts/purge-trial-users.js --apply
  * From a checkout: npx ts-node src/scripts/purge-trial-users.ts [--apply]

@@ -8,6 +8,9 @@ import { renderBriefToPdf } from "../utils/case-brief-pdf-renderer";
 import { uploadToS3, getProxyFileUrl } from "../utils/s3";
 import SecurityAuditSvc from "./security-audit.service";
 import AuditSvc, { AuditAction } from "./audit.service";
+import AuthRepo from "../repositories/auth.repository";
+import HttpError from "../utils/http-error";
+import { TRIAL_SAMPLE_CASE_ID } from "../config";
 
 export type CaseBriefFormat = "docx" | "pdf";
 
@@ -41,6 +44,14 @@ export default class CaseBriefExportSvc {
    * distinction between the two; a lawyer opening the preview is still "generating a brief" as
    * far as history is concerned (confirmed with the user rather than assumed). */
   static async export(caseId: string, userId: string, format: CaseBriefFormat) {
+    // A trial guest looking at the shared sample case gets the brief its owner generated, so every
+    // guest sees the same file and no guest adds an export (or a history row) of their own.
+    if (caseId === TRIAL_SAMPLE_CASE_ID && (await AuthRepo.findTrialState(userId))) {
+      await CaseAccess.loadAccessibleCase(caseId, userId);
+      const stored = await CaseBriefExportRepo.findLatest(caseId, format);
+      if (!stored?.file.s3Key) throw new HttpError("The sample brief is not ready yet", 404);
+      return { file: { id: stored.file.id, fileUrl: briefFileUrl(stored.file.s3Key, stored.file.filename, { exportId: stored.id, caseId }) } };
+    }
     const snapshot = await CaseSnapshotSvc.get(caseId, userId);
     const briefDoc = buildBriefDocument(snapshot);
     const buffer = format === "docx" ? await renderBriefToDocx(briefDoc) : await renderBriefToPdf(briefDoc);

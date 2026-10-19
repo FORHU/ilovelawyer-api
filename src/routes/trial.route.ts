@@ -15,18 +15,18 @@ router.get("/config", (_req, res) =>
 
 // Public: starts a landing-page trial guest. `acceptedNotice` is the guest agreeing to the
 // AI-processing notice shown before the button; without it nothing is created. `sample: "case"`
-// starts the guest in their own copy of the sample case instead of the sample consultation.
+// also opens the shared sample case to the guest, read-only (see TrialSvc.start).
 router.post(
   "/start",
   asyncHandler(async (req, res) => {
     if (req.body?.acceptedNotice !== true) throw new HttpError("Accept the notice to start the trial", 400);
     const sample = req.body?.sample === "case" ? "case" : "consultation";
-    const { user, accessToken, refreshToken, consultationId, caseId, caseConsultationId } = await TrialSvc.start(
+    const { user, accessToken, refreshToken, consultationId, caseId, caseOrganizationId } = await TrialSvc.start(
       resolveTenantCodeFromRequest(req),
       sample,
     );
     setRefreshTokenCookie(res, refreshToken, true);
-    return res.status(201).json({ user, accessToken, consultationId, caseId, caseConsultationId });
+    return res.status(201).json({ user, accessToken, consultationId, caseId, caseOrganizationId });
   }),
 );
 

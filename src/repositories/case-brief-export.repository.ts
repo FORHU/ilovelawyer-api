@@ -5,6 +5,15 @@ export default class CaseBriefExportRepo {
     return prisma.caseBriefExport.create({ data: { caseId, userId, format, fileId } });
   }
 
+  /** The case's most recent export in this format, with its file; null when there is none. */
+  static async findLatest(caseId: string, format: string) {
+    return prisma.caseBriefExport.findFirst({
+      where: { caseId, format },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      include: { file: true },
+    });
+  }
+
   /** Most recent first — a lawyer checking history wants "what did I just make", not chronological
    * order. Includes the related File row (for name/s3Key) since the list needs to mint a fresh
    * presigned URL per entry — the one from generation time may have already expired.
