@@ -45,7 +45,7 @@ function account(overrides: Record<string, unknown> = {}) {
     email: "jane@firm.com",
     password: passwordHash,
     name: "Jane",
-    role: "USER",
+    role: "LAWYER",
     provider: null as string | null,
     googleId: null as string | null,
     isEmailVerified: true,
