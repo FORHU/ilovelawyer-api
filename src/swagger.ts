@@ -1,4 +1,5 @@
 import { OAS3Definition } from "swagger-jsdoc";
+import { clientHandoffPaths, clientHandoffSchemas, clientHandoffTags } from "./swagger-client-handoff";
 
 const swaggerSpec: OAS3Definition = {
   openapi: "3.0.0",
@@ -382,13 +383,18 @@ const swaggerSpec: OAS3Definition = {
       },
       Error: {
         type: "object",
+        description: "Further fields may follow (HttpError.details), e.g. `status` on INVALID_REQUEST_STATUS.",
         properties: {
           message: { type: "string" },
+          code: { type: "string", description: "Machine-readable reason, when the client may need to branch on why" },
         },
       },
+      ...clientHandoffSchemas,
     },
   },
+  tags: clientHandoffTags,
   paths: {
+    ...clientHandoffPaths,
     // ── Health ────────────────────────────────────────────────────────────
     "/health": {
       get: {
