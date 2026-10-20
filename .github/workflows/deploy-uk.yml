@@ -278,6 +278,8 @@ jobs:
           TRIAL_DURATION_HOURS: ${{ vars.TRIAL_DURATION_HOURS }}
           TRIAL_SAMPLE_CASE_ID: ${{ vars.TRIAL_SAMPLE_CASE_ID }}
           FREE_CREDIT_USD: ${{ vars.FREE_CREDIT_USD }}
+          MAX_CASES_PER_ACCOUNT: ${{ vars.MAX_CASES_PER_ACCOUNT }}
+          CASE_SPEND_LIMIT_USD: ${{ vars.CASE_SPEND_LIMIT_USD }}
         run: |
           set -euo pipefail
           umask 077
@@ -370,6 +372,8 @@ jobs:
           add TRIAL_DURATION_HOURS                     "${TRIAL_DURATION_HOURS:-}"
           add TRIAL_SAMPLE_CASE_ID                     "${TRIAL_SAMPLE_CASE_ID:-}"
           add FREE_CREDIT_USD                         "${FREE_CREDIT_USD:-}"
+          add MAX_CASES_PER_ACCOUNT                   "${MAX_CASES_PER_ACCOUNT:-}"
+          add CASE_SPEND_LIMIT_USD                    "${CASE_SPEND_LIMIT_USD:-}"
 
           # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the UK instance role grants
           # S3, SQS, Polly, Textract and Transcribe. An empty value here would

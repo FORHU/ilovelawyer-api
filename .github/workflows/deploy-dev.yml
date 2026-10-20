@@ -138,6 +138,8 @@ jobs:
           TRIAL_DURATION_HOURS: ${{vars.TRIAL_DURATION_HOURS}}
           TRIAL_SAMPLE_CASE_ID: ${{vars.TRIAL_SAMPLE_CASE_ID}}
           FREE_CREDIT_USD: ${{vars.FREE_CREDIT_USD}}
+          MAX_CASES_PER_ACCOUNT: ${{vars.MAX_CASES_PER_ACCOUNT}}
+          CASE_SPEND_LIMIT_USD: ${{vars.CASE_SPEND_LIMIT_USD}}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
         run: |
@@ -204,6 +206,8 @@ jobs:
           add TRIAL_DURATION_HOURS      "${TRIAL_DURATION_HOURS:-}"
           add TRIAL_SAMPLE_CASE_ID      "${TRIAL_SAMPLE_CASE_ID:-}"
           add FREE_CREDIT_USD          "${FREE_CREDIT_USD:-}"
+          add MAX_CASES_PER_ACCOUNT    "${MAX_CASES_PER_ACCOUNT:-}"
+          add CASE_SPEND_LIMIT_USD     "${CASE_SPEND_LIMIT_USD:-}"
           add UK_CASELAW_BASE_URL       "${UK_CASELAW_BASE_URL:-}"
           add UK_LEGISLATION_BASE_URL   "${UK_LEGISLATION_BASE_URL:-}"
 
