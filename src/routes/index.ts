@@ -2,6 +2,7 @@ import express from "express";
 import authRoute from "./auth.route";
 import trialRoute from "./trial.route";
 import { blockTrialWrites } from "../middleware/trial.middleware";
+import { freeCreditLimit } from "../middleware/free-credit.middleware";
 import chatRoute from "./chat.route";
 import legalRagRoute from "./legal-rag.route";
 import filesRoute from "./files.route";
@@ -33,6 +34,9 @@ import adminRoute from "./admin.route";
 import lawRoute from "./law.route";
 
 const router = express.Router();
+
+// An account that has spent its free AI credit starts no new work anywhere (freeCreditLimit).
+router.use(freeCreditLimit);
 
 // A trial guest (see TrialSvc) can read around the app but not write through these. That includes
 // the routers whose POSTs call a paid model or the speech service (legal-rag, tts, law's citation

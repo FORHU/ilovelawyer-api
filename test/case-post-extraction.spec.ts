@@ -212,11 +212,11 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
   it("schedules the debounce as a durably-delayed SQS message, not an in-memory timer", async () => {
     scheduleCasePostExtraction("case-1", "user-1");
     // scheduleCasePostExtraction's body is an async IIFE, not a synchronous call — a short flush
-    // lets that microtask run. If this were still setTimeout(fn, 45_000), nothing would be sent
+    // lets that microtask run. If this were still setTimeout(fn, 20_000), nothing would be sent
     // within this window and the assertion below would fail.
     await flush();
     expect(sent).to.have.length(1);
-    expect(sent[0].delaySeconds).to.equal(45);
+    expect(sent[0].delaySeconds).to.equal(20);
     const body = JSON.parse(sent[0].body);
     expect(body).to.include({ kind: "casePostExtraction", caseId: "case-1", userId: "user-1" });
   });
@@ -235,7 +235,7 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
 
     expect(lockCalled).to.equal(false);
     expect(sent).to.have.length(1); // the reschedule message
-    expect(sent[0].delaySeconds).to.equal(45);
+    expect(sent[0].delaySeconds).to.equal(20);
   });
 
   it("skips the refresh when the READY document set hasn't changed since the last run", async () => {

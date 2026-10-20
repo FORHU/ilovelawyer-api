@@ -45,6 +45,10 @@ export const LLM_PRICES: Record<string, ModelPrice> = {
   "jev*": { input: 0.042, output: 0 },
 };
 
+/** The rate an account's unpriced Chat Wonder rows are charged at against its free credit (LlmUsageSvc.chatWonderSpendUsd):
+ * the chat model, the dearest in the table, so an unknown cost never undercounts the budget. */
+export const FREE_CREDIT_UNPRICED_MODEL = "gpt-5.6-terra";
+
 export interface TokenCounts {
   inputTokens: number;
   outputTokens: number;

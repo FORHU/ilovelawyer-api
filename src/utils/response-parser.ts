@@ -609,10 +609,61 @@ export function extractMindMap(text: string): MindMapItem | undefined {
     .replace(/^﻿/, "")
     .replace(/^```json\s*/i, "")
     .replace(/```$/, "")
+    // The model sometimes drops the quotes on the sources key (`,sources:[...]`), which is not JSON
+    // and loses the whole map. That one key is repaired; nothing else is guessed.
+    .replace(/([,{]\s*)sources\s*:/g, '$1"sources":')
+    // A text value left without its quotes (`"label":Risks,"description"`) is quoted again, up to the
+    // next key. Only the id, label and description keys, and only values that hold no quote mark.
+    .replace(/"(id|label|description)":\s*(?!["[{])([^"]*?)\s*,(?="(?:id|label|description|sources|children|isRoot)":)/g, '"$1":"$2",')
     .trim();
 
-  const parsed = safeJsonParse(cleaned);
-  return normalizeMindMap(parsed);
+  const repaired = repairEarlyClose(cleaned);
+  const parsed = safeJsonParse(repaired);
+  // After an early-close repair the branches under each heading sit beside it, so they go back under it.
+  return normalizeMindMap(repaired === cleaned ? parsed : regroupUnderHeadings(parsed));
+}
+
+const MAP_HEADING_IDS = new Set(["legalBasis", "keyFacts", "remedies", "risks", "nextSteps"]);
+
+/** Moves every first-level node that is not one of the five headings into the heading before it. */
+function regroupUnderHeadings(tree: any): any {
+  const top = tree?.children;
+  if (!Array.isArray(top) || !top.some((n: any) => MAP_HEADING_IDS.has(n?.id))) return tree;
+  const headings: any[] = [];
+  for (const node of top) {
+    if (MAP_HEADING_IDS.has(node?.id) || headings.length === 0) {
+      headings.push({ ...node, children: Array.isArray(node?.children) ? [...node.children] : [] });
+    } else {
+      headings[headings.length - 1].children.push(node);
+    }
+  }
+  return { ...tree, children: headings };
+}
+
+/** The model sometimes closes the tree one level too early (an extra `]}`) and then keeps adding
+ * branches, so the JSON ends before its own text does. Where that is exactly what happened, the
+ * surplus closing pair is dropped; any other malformed text is returned untouched. */
+function repairEarlyClose(json: string): string {
+  let current = json;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    try {
+      JSON.parse(current);
+      return current;
+    } catch (err) {
+      const at = Number(/after JSON at position (\d+)/.exec(err instanceof Error ? err.message : "")?.[1]);
+      if (!Number.isFinite(at)) return json;
+      const head = current.slice(0, at);
+      const rest = current.slice(at);
+      // Only closing brackets left over: the tree was already complete, so they are dropped.
+      if (/^[\]}\s]*$/.test(rest)) {
+        current = head;
+        continue;
+      }
+      if (!rest.trimStart().startsWith(",") || !/\]\s*\}\s*$/.test(head)) return json;
+      current = head.replace(/\]\s*\}\s*$/, "") + rest;
+    }
+  }
+  return json;
 }
 
 /**

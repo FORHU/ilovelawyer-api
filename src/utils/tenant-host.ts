@@ -25,12 +25,14 @@ const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "ph-dev.ilovelawyer.local": "PH",
   "ph-local.ilovelawyer.com": "PH",
   "ph.ilovelawyer": "PH",
+  "ph.localhost": "PH",
   "uk.ilovelawyer.com": "UK",
   "uk-dev.ilovelawyer.com": "UK",
   "uk.ilovelawyer.local": "UK",
   "uk-dev.ilovelawyer.local": "UK",
   "uk-local.ilovelawyer.com": "UK",
   "uk.ilovelawyer": "UK",
+  "uk.localhost": "UK",
 };
 
 /** Strips a trailing `:port` (present on `Host`/`Origin` headers in local dev, e.g.

@@ -28,7 +28,10 @@ export interface CitationRewriteResult {
 // user's own report) actually looks like in `Message.content`, so both must be matched or this
 // rewrite silently finds nothing to do. Mirrors assistant-message.tsx's own convertHtmlAnchors
 // regex for the HTML form, so both sides agree on what counts as a citation anchor.
-const MD_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+// The label may itself hold one level of brackets — a UK neutral citation such as
+// `[*Nobahar-Cookson v The Hut Group Ltd* [2016] EWCA Civ 128 Jurisprudence](url)` — which a plain
+// `[^\]]+` stops at, so the whole citation went unmatched, unrewritten and pill-less.
+const MD_LINK_RE = /\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\((https?:\/\/[^)\s]+)\)/g;
 const HTML_LINK_RE = /<a\s+[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
 
 // Caps how long a chat turn's persistence can be held up resolving citations against the UK

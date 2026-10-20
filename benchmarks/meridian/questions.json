@@ -1,0 +1,161 @@
+{
+  "benchmark": "Meridian v Ashworth-Hale (public demo case)",
+  "source": "CASE-DOSSIER-001 and GROUND-TRUTH-001 (fictional sample case — not a real case). The Ground Truth is never uploaded to the case; it is used only for markingGuidance and coaching below.",
+  "tenant": "UK",
+  "caseName": "Meridian Chemical Holdings Ltd v Ashworth-Hale (LCIA 235841) — sample case",
+  "actionType": "Share purchase agreement dispute: breach of warranty (Warranty 7.3, Material Contracts); breach of non-compete covenant (Clause 9); counterclaim for Earn-Out deferred consideration (Clause 6.4)",
+  "jurisdiction": "England & Wales — LCIA arbitration, seat London (Arbitration Act 1996 as amended by the Arbitration Act 2025)",
+  "parties": [
+    { "name": "Meridian Chemical Holdings Ltd", "designation": "Claimant / Defendant to Counterclaim" },
+    { "name": "Julian Ashworth-Hale", "designation": "First Respondent / Counterclaimant" },
+    { "name": "Rosalind Ashworth-Hale", "designation": "Second Respondent / Counterclaimant" }
+  ],
+  "preamble": "Use the documents in this case file and the law of England and Wales. Cite the document for every fact you rely on, and say so where the documents don't settle a point. The arbitration is ongoing as at 1 September 2026: no findings have been made and the experts' Joint Memorandum has not yet been produced.",
+  "markingGuidance": [
+    "treat as undisputed: the SPA (signed 14 March 2024, completed 2 May 2024, £14m plus Earn-Out of up to £4.5m); Northbridge's written notice of non-renewal of 18 April 2024 (CLM-EMAIL-002); the 19 April 2024 'close to chest' email (CLM-EMAIL-001); that the 25 April 2024 call took place; the wording of CLM-EMAIL-003; service of the notice of claim by email and post on 12 September 2024, the postal copy received 14 September 2024; incorporation and ownership of Ashworth Specialty Solutions Ltd (CLM-CH-001); the 14 February 2026 email to Brenner (CLM-EMAIL-004); expiry of the Restricted Period on 2 May 2026; authenticity of every document",
+    "never assert that Elliott Vance was, or was not, told about the Northbridge notice on 25 April 2024 — the two witness accounts conflict and CLM-EMAIL-003 is ambiguous and consistent with either",
+    "never assert that Brenner Coatings Ltd terminated or reduced its business with the Target — nothing in the bundle addresses it; this is a gap in the evidence, not a conflict",
+    "never assert that Ashworth Specialty Solutions Ltd actually carried on distribution trading — CLM-EMAIL-004 evidences an offer to 'source and supply' only, and SIC codes do not evidence actual activity",
+    "never treat the Clause 11.4 cap (£4,200,000) as limiting recovery on the present figures (warranty claim approx. £2,140,000), and never treat the Clause 14.2 email-service point as outcome-determinative (the postal copy arrived 14 September 2024, well within the 18-month period expiring 2 November 2025)",
+    "never adopt either quantum expert's figures as established: EBITDA contribution (£390,000 v £255,000), multiple (5.5x v 4.0-4.5x) and Actual EBITDA (£2,180,000 v £2,690,000) are all contested and unagreed pending the Joint Memorandum; both experts expressly decline to opine on the construction of Clause 6.4(b)",
+    "treat CLM-EMAIL-003 and RES-MEET-001 as genuinely double-edged; treat CLM-EMAIL-001 as strong contemporaneous evidence of the Sellers' state of mind whose meaning is nonetheless disputed (RES-WIT-001 §5), and note that Rosalind Ashworth-Hale, its author, has given no witness statement",
+    "recognise that Rosalind Ashworth-Hale is not a respondent to the Clause 9 claim (Clause 9(a) binds Julian Ashworth-Hale alone; Clause 9(b) is not pleaded); that s.69 appeal is excluded by LCIA Article 26.8 while ss.67-68 challenges remain; and that the arbitration is confidential under LCIA Article 30",
+    "identify the missing evidence: no attendance note of the 25 April 2024 call; nothing from Brenner; no management accounts or ledger for the Earn-Out Period; no Joint Memorandum; no witness statement from Rosalind Ashworth-Hale"
+  ],
+  "questions": [
+    {
+      "id": "Q1",
+      "title": "Case overview",
+      "prompt": "Summarise this case: who the parties are, what each side claims and how much, and the main factual and legal issues the tribunal will have to decide.",
+      "coaching": {
+        "teaches": "Start every new matter by asking for an overview — it shows you what the AI has read and how it frames the dispute.",
+        "covers": [
+          "Three claims: Warranty 7.3 (approx. £2,140,000), Clause 9 non-compete against Julian only (approx. £420,000), and the Sellers' Earn-Out counterclaim (approx. £2,175,000 on their figures)",
+          "The central disputes: what was said on the 25 April 2024 call, the meaning of 'close to chest', whether para 3.2 of the Disclosure Letter qualifies Warranty 7.3, the scope of 'Restricted Business', and Clause 6.4(b)",
+          "The procedural stage: post-evidence, Joint Memorandum due 30 September 2026, Merits Hearing from 16 November 2026, no findings yet"
+        ],
+        "mustNotAssume": [
+          "That any outcome is likely or decided",
+          "That either expert's figures are the right ones"
+        ]
+      }
+    },
+    {
+      "id": "Q2",
+      "title": "The 25 April 2024 call",
+      "prompt": "What happened on the 25 April 2024 telephone call between Julian Ashworth-Hale and Elliott Vance? Compare Priya Nandakumar's statement (CLM-WIT-001), Julian Ashworth-Hale's statement (RES-WIT-001) and Elliott Vance's email of 26 April 2024 (CLM-EMAIL-003). What can the documents establish, and what can't they?",
+      "coaching": {
+        "teaches": "Ask the AI to compare conflicting accounts side by side, and to separate what each witness says from what a document shows.",
+        "covers": [
+          "The call happened; its content is disputed",
+          "Julian accepts he did not name Northbridge or mention the written notice (RES-WIT-001 §4)",
+          "Priya's account of the call is second-hand, from Elliott Vance (CLM-WIT-001 §5)",
+          "CLM-EMAIL-003 is ambiguous: 'a couple of the usual customer renewals' fits either side's account",
+          "No attendance note exists from either side"
+        ],
+        "mustNotAssume": [
+          "That Elliott Vance was, or was not, told about Northbridge — the evidence does not resolve it"
+        ]
+      }
+    },
+    {
+      "id": "Q3",
+      "title": "Disclosure Letter v the 'close to chest' email",
+      "prompt": "Does paragraph 3.2 of the Disclosure Letter (CLM-DISC-001) qualify Warranty 7.3 so as to cover the Northbridge non-renewal? How does Rosalind Ashworth-Hale's email of 19 April 2024 (CLM-EMAIL-001) bear on the Respondents' disclosure defence?",
+      "coaching": {
+        "teaches": "Test a defence against the other side's best document — a good answer finds the tension rather than picking a winner.",
+        "covers": [
+          "Para 3.2 is general ('ongoing commercial discussions with certain key accounts') and pre-dates the 18 April 2024 notice",
+          "The SPA contemplates disclosure through the Disclosure Letter and Data Room, not oral updates",
+          "CLM-EMAIL-001 ('no need to worry the buyers with this before we get to completion') sits uneasily with a belief that para 3.2 already covered the point",
+          "Julian's narrower reading of 'close to chest' (RES-WIT-001 §5), and that Rosalind has not given a statement"
+        ],
+        "mustNotAssume": [
+          "That the construction question is settled either way — it is a live issue for the tribunal"
+        ]
+      }
+    },
+    {
+      "id": "Q4",
+      "title": "The Earn-Out calculation",
+      "prompt": "Why do the two quantum experts (CLM-EXP-001 and RES-EXP-001) reach different Actual EBITDA figures for the Earn-Out? What does Clause 6.4(b) of the SPA require, and what Earn-Out Payment results on each side's figures?",
+      "coaching": {
+        "teaches": "Ask the AI to show its arithmetic against the contract formula, so you can check every step.",
+        "covers": [
+          "The single cause of the difference: the approx. £540,000 group overhead allocation (£2,180,000 v £2,690,000)",
+          "On £2,180,000: below the £2,400,000 floor, so nil",
+          "On £2,690,000: (2,690,000 - 2,400,000) / 600,000 = 48.3% of £4,500,000, approx. £2,175,000, split 62/38",
+          "Both experts decline to opine on the legal construction of Clause 6.4(b); that is for the tribunal"
+        ],
+        "mustNotAssume": [
+          "That either expert's figure is correct or agreed"
+        ]
+      }
+    },
+    {
+      "id": "Q5",
+      "title": "Restricted Business",
+      "prompt": "Does the evidence show that Ashworth Specialty Solutions Ltd carried on a business competing with the 'Restricted Business' under Clause 9 of the SPA during the Restricted Period? Consider the Companies House extract (CLM-CH-001), the email to Brenner Coatings Ltd (CLM-EMAIL-004) and Julian Ashworth-Hale's statement (RES-WIT-001).",
+      "coaching": {
+        "teaches": "Pin the AI to the contract's defined terms — the answer turns on the exact words of the definition.",
+        "covers": [
+          "'Restricted Business' is defined by distributing to third-party customers",
+          "Clause 9(a) also catches being 'engaged or interested' in, or consulting for, a competing business",
+          "CLM-EMAIL-004 is an offer to 'source and supply', made on 14 February 2026, inside the Restricted Period",
+          "CLM-CH-001 proves incorporation and control; the SIC code (management consultancy) does not prove actual activity"
+        ],
+        "mustNotAssume": [
+          "That Ashworth Specialty Solutions Ltd actually supplied anything — only an offer is evidenced"
+        ]
+      }
+    },
+    {
+      "id": "Q6",
+      "title": "Has Brenner taken its business elsewhere?",
+      "prompt": "Has Brenner Coatings Ltd stopped or reduced buying from the Target because of Julian Ashworth-Hale's approach? What would the Claimant need to prove to recover its £420,000 non-compete claim?",
+      "coaching": {
+        "teaches": "This is a trap question. A reliable assistant says what the documents don't show instead of filling the gap.",
+        "covers": [
+          "Nothing in the bundle shows any change in Brenner's business with the Target",
+          "Causation and loss are unproven; the Restricted Period has expired, so only a declaration and damages remain",
+          "Ways to fill the gap: the Target's own sales records for Brenner, evidence from Brenner itself, with the court's support if Brenner won't cooperate (ss.43-44 Arbitration Act 1996)"
+        ],
+        "mustNotAssume": [
+          "That Brenner terminated or reduced its contract"
+        ]
+      }
+    },
+    {
+      "id": "Q7",
+      "title": "Three quick checks",
+      "prompt": "Three quick checks: (a) does the £4,200,000 cap in Clause 11.4 reduce what the Claimant can recover on its warranty claim; (b) is Rosalind Ashworth-Hale a respondent to the non-compete claim; and (c) if the email copy of the 12 September 2024 notice was not valid service under Clause 14.2, is the warranty claim out of time?",
+      "coaching": {
+        "teaches": "More traps. Each question invites a confident wrong answer; check the AI goes back to the clause wording and the dates.",
+        "covers": [
+          "(a) No: approx. £2,140,000 is well under £4,200,000; the cap is not engaged on the present figures",
+          "(b) No: Clause 9(a) binds Julian alone; Clause 9(b) binds both but is not pleaded",
+          "(c) No: the postal copy arrived on 14 September 2024, well within 18 months of Completion (2 November 2025)"
+        ],
+        "mustNotAssume": [
+          "That the cap, the party point or the service point changes the outcome"
+        ]
+      }
+    },
+    {
+      "id": "Q8",
+      "title": "Challenging the award",
+      "prompt": "Once the tribunal makes its award, can either side appeal it to the English courts? Explain the effect of Article 26.8 of the LCIA Rules and sections 67 to 69 of the Arbitration Act 1996 as amended by the Arbitration Act 2025.",
+      "coaching": {
+        "teaches": "Procedural questions show whether the AI applies the right forum's rules: an LCIA arbitration seated in London, not court litigation.",
+        "covers": [
+          "Article 26.8 waives recourse so far as it validly can, which excludes a s.69 appeal on a point of law",
+          "ss.67 (jurisdiction) and 68 (serious irregularity) are mandatory and remain available",
+          "The 2025 Act streamlines s.67 challenges"
+        ],
+        "mustNotAssume": [
+          "That there is a general right of appeal on the merits"
+        ]
+      }
+    }
+  ]
+}

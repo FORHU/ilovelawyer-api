@@ -45,6 +45,33 @@ describe("response-parser — mind map", () => {
     expect(stripStructuredBlocks(text)).to.not.include("Illegal dismissal");
   });
 
+  it("keeps a map whose sources key has no quotes", () => {
+    const text = `[MINDMAP]
+{"id":"root","label":"Case","isRoot":true,"children":[{"id":"a","label":"Legal Basis","children":[{"id":"a1","label":"Point","description":"d",sources:[{"documentId":"D1","page":1}],"children":[]}]}]}
+[/MINDMAP]`;
+    const map = extractMindMap(text);
+    expect(map?.label).to.equal("Case");
+    expect(map?.children?.[0]?.children?.[0]?.label).to.equal("Point");
+  });
+
+  it("puts branches back under their heading when the model closed the tree early", () => {
+    const leaf = (id: string) => `{"id":"${id}","label":"${id}","children":[]}`;
+    const text = `[MINDMAP]
+{"id":"root","label":"Case","isRoot":true,"children":[{"id":"legalBasis","label":"Legal Basis","children":[${leaf("p1")}]}]},{"id":"p2","label":"Second point","children":[${leaf("p2a")}]}]},{"id":"keyFacts","label":"Key Facts","children":[${leaf("f1")}]}]}]}
+[/MINDMAP]`;
+    const map = extractMindMap(text);
+    expect(map?.children?.map((c) => c.label)).to.deep.equal(["Legal Basis", "Key Facts"]);
+    expect(map?.children?.[0]?.children?.map((c) => c.label)).to.deep.equal(["p1", "Second point"]);
+  });
+
+  it("keeps a label that has no opening quote", () => {
+    const text = `[MINDMAP]
+{"id":"root","label":"Case","isRoot":true,"children":[{"id":"risks","label":"Risks","children":[{"id":"r1","label":Email service may be invalid,"description":"d","children":[]}]}]}
+[/MINDMAP]`;
+    const map = extractMindMap(text);
+    expect(map?.children?.[0]?.children?.[0]?.label).to.equal("Email service may be invalid");
+  });
+
   it("gives nodes stable path-based ids and keeps the model's id as sourceId", () => {
     const map = normalizeMindMap(tree)!;
     expect(map.id).to.equal("root");

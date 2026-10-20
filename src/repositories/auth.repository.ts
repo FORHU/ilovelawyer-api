@@ -4,7 +4,7 @@ import { redis } from "../lib/redis";
 import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constants";
 import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 import { getStableProxyFileUrl } from "../utils/s3";
-import { TRIAL_MESSAGE_LIMIT } from "../config";
+import { FREE_CREDIT_USD, TRIAL_MESSAGE_LIMIT } from "../config";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -27,6 +27,7 @@ const PUBLIC_USER_SELECT = {
   createdAt: true,
   updatedAt: true,
   deletionRequestedAt: true,
+  freeCreditUsd: true,
   trialExpiresAt: true,
   trialMessagesUsed: true,
   password: true,
@@ -106,6 +107,7 @@ export default class AuthRepo {
           name: data.name,
           role: data.role,
           tenantId: data.tenantId,
+          freeCreditUsd: FREE_CREDIT_USD,
           ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
         },
       })
@@ -121,6 +123,12 @@ export default class AuthRepo {
         data: { ...data, name: "Guest", role: "LAWYER", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
       }),
     );
+  }
+
+  /** The account's free AI credit in USD (see User.freeCreditUsd), or null when it has none. */
+  static async findFreeCredit(userId: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { freeCreditUsd: true } });
+    return user?.freeCreditUsd ?? null;
   }
 
   /** Null for a real account, which is what makes this the one check for "is this a trial guest". */
@@ -315,6 +323,7 @@ export default class AuthRepo {
               tenantId: data.tenantId,
               termsAcceptedAt: new Date(),
               termsVersion: data.termsVersion,
+              freeCreditUsd: FREE_CREDIT_USD,
             },
           })
         );
