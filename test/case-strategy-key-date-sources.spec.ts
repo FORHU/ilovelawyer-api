@@ -9,6 +9,53 @@ const ready = [
   { id: B, name: "Payroll records.xlsx" },
 ];
 
+describe("key dates the model wrote with unquoted titles", () => {
+  const reply = `[STRATEGY]
+[]
+[/STRATEGY]
+
+[TODOS]
+[]
+[/TODOS]
+
+[DATES]
+[
+  {
+    "title": "Statement of Case served",
+    "date": "2025-04-30",
+    "documentId": "D12",
+    "pageNumber": 2
+  },
+  {
+    "title": Factual witness statement of Julian Ashworth-Hale,
+    "date": "2025-11-28",
+    "documentId": "D13",
+    "pageNumber": 1
+  },
+  {
+    "title": End of Earn-Out Period,
+    "date": "2026-03-31",
+    "documentId": null,
+    "pageNumber": null
+  }
+]
+[/DATES]`;
+
+  it("keeps every date instead of dropping the whole block", () => {
+    const dates = extractCaseStrategy(reply)!.dates!;
+    expect(dates.map((d) => [d.title, d.date, d.documentId])).to.deep.equal([
+      ["Statement of Case served", "2025-04-30", "D12"],
+      ["Factual witness statement of Julian Ashworth-Hale", "2025-11-28", "D13"],
+      ["End of Earn-Out Period", "2026-03-31", null],
+    ]);
+  });
+
+  it("leaves a block with properly quoted titles unchanged", () => {
+    const quoted = `[DATES]${JSON.stringify([{ title: "Hearing", date: "2026-01-15", documentId: null, pageNumber: 3 }])}[/DATES]`;
+    expect(extractCaseStrategy(quoted)!.dates).to.deep.equal([{ title: "Hearing", date: "2026-01-15", documentId: null, pageNumber: 3 }]);
+  });
+});
+
 describe("key date sources", () => {
   it("ties each key date to the document its handle names", () => {
     const reply = `[STRATEGY][][/STRATEGY][TODOS][][/TODOS][DATES]${JSON.stringify([

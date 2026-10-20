@@ -84,6 +84,17 @@ function extractDateList(text: string): ParsedKeyDate[] | undefined {
   return dates;
 }
 
+/**
+ * The model sometimes leaves the quotes off a text value (`"title": Factual witness statement,`), which
+ * is not JSON and loses the whole block. Only the title, label and sourceLabel keys are repaired, only
+ * where the value sits alone on its line, and a plain number, null or boolean is left as it is.
+ */
+function quoteBareTextValues(json: string): string {
+  return json.replace(/("(?:title|label|sourceLabel)"\s*:\s*)(?!["[{])([^"\r\n]+?)\s*(,?)[ \t]*$/gm, (whole, key: string, value: string, comma: string) =>
+    /^(?:-?\d+(?:\.\d+)?|null|true|false)$/.test(value) ? whole : `${key}${JSON.stringify(value)}${comma}`,
+  );
+}
+
 function extractTaggedArray(text: string, tag: string): unknown[] | undefined | null {
   const re = new RegExp(`\\[${tag}\\]([\\s\\S]*?)\\[\\/${tag}\\]`, "i");
   const closed = text.match(re);
@@ -101,7 +112,7 @@ function extractTaggedArray(text: string, tag: string): unknown[] | undefined | 
   }
   if (!jsonStr) return undefined;
 
-  jsonStr = jsonStr.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
+  jsonStr = quoteBareTextValues(jsonStr.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim());
   const parsed = parseAiJson(jsonStr);
   if (!Array.isArray(parsed)) return undefined;
   return parsed;
