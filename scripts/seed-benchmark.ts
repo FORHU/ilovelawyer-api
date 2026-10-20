@@ -58,10 +58,14 @@ type Questions = {
   questions: { id: string; title: string; prompt: string }[];
 };
 
+/** A bundle doc's filename: its label, an underscore, then a title. The label is either a D-number
+ *  (brackenmoor) or the bundle's own exhibit id (meridian: CLM-EMAIL-001, RES-WIT-001). */
+const BUNDLE_DOC = /^(D\d{2}|[A-Z]+(?:-[A-Z]+)*-\d{3})_(.+)\.pdf$/i;
+
 /** Bundle doc label ("D07") and a category from the filename, e.g.
  *  D07_Interview_Under_Caution_Aldwyn_Ferris.pdf → { label: "D07", category: "Interview Under Caution Aldwyn Ferris" }. */
 function describe(filename: string) {
-  const m = /^(D\d{2})_(.+)\.pdf$/i.exec(filename);
+  const m = BUNDLE_DOC.exec(filename);
   return {
     label: m ? m[1].toUpperCase() : filename,
     category: m ? m[2].replace(/_/g, " ") : "Bundle document",
@@ -88,7 +92,7 @@ async function resolveOrgAndUser(orgArg: string | undefined, userEmail: string |
     if (!member) throw new Error(`${userEmail} is not a member of organization ${org.slug}`);
   }
   if (!member) throw new Error(`Organization ${org.slug} has no accepted members`);
-  return { org, user: member.user };
+  return { org, user: member.user, role: member.role };
 }
 
 async function printStatus(caseId: string) {
@@ -109,7 +113,7 @@ async function printStatus(caseId: string) {
 async function main() {
   if (!fs.existsSync(QUESTIONS_PATH)) throw new Error(`No benchmark at ${BENCH_DIR} (expected questions.json and docs/)`);
   const questions: Questions = JSON.parse(fs.readFileSync(QUESTIONS_PATH, "utf-8"));
-  const { org, user } = await resolveOrgAndUser(arg("org"), arg("user"), questions.tenant ?? "UK");
+  const { org, user, role } = await resolveOrgAndUser(arg("org"), arg("user"), questions.tenant ?? "UK");
   console.log(`Benchmark:    ${BENCH_SLUG}`);
   console.log(`Organization: ${org.name} (${org.slug}, tenant ${org.tenant.code})`);
   console.log(`User:         ${user.email}`);
@@ -136,7 +140,7 @@ async function main() {
     caseId = existing.id;
     console.log(`Reusing existing case ${caseId}`);
   } else {
-    const created = await CaseSvc.create(org.id, user.id, {
+    const created = await CaseSvc.create(org.id, user.id, role, {
       caseName: questions.caseName,
       actionType: questions.actionType,
       jurisdiction: questions.jurisdiction,
@@ -157,7 +161,7 @@ async function main() {
   );
   const files = fs
     .readdirSync(DOCS_DIR)
-    .filter((f) => /^D\d{2}_.+\.pdf$/i.test(f))
+    .filter((f) => BUNDLE_DOC.test(f))
     .sort();
   const toUpload = files.filter((f) => !attached.has(f));
   console.log(`${files.length} bundle documents; ${toUpload.length} to upload`);

@@ -13,6 +13,15 @@ export const TRIAL_MESSAGE_LIMIT = trialMessageLimit > 0 ? trialMessageLimit : 5
 const trialDurationHours = Number(process.env.TRIAL_DURATION_HOURS);
 export const TRIAL_DURATION_HOURS = trialDurationHours > 0 ? trialDurationHours : 2;
 export const TRIAL_DURATION_MS = TRIAL_DURATION_HOURS * 60 * 60 * 1000;
+/** The one shared sample case every "Explore a sample case file" guest looks at, read-only
+ * (TrialSvc): a case in its owner's portfolio. Unset: the trial offers the free chat only. */
+export const TRIAL_SAMPLE_CASE_ID = process.env.TRIAL_SAMPLE_CASE_ID || "";
+/** US dollars of OpenAI usage through Chat Wonder every new account (PH and UK, email or Google
+ * sign-up) gets free, stored on the account at sign-up (User.freeCreditUsd). Set in the environment
+ * only; unset or not a positive number, it is null, new accounts get no credit and are not limited,
+ * and the server logs an error at startup. */
+const freeCreditUsd = Number(process.env.FREE_CREDIT_USD);
+export const FREE_CREDIT_USD = freeCreditUsd > 0 ? freeCreditUsd : null;
 export const MAILER_FROM = (process.env.MAILER_FROM || process.env.MAILER_EMAIL) as string;
 export const MAILER_TRANSPORT_HOST = process.env.MAILER_TRANSPORT_HOST as string;
 export const MAILER_TRANSPORT_PORT = Number(process.env.MAILER_TRANSPORT_PORT || 587);

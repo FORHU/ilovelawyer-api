@@ -114,6 +114,20 @@ describe("rewriteLegalCitationLinks", () => {
     });
   });
 
+  // A UK citation's label carries its neutral citation in square brackets; the whole link must
+  // still be recognised (here: stripped, since the host is not a known law host).
+  it("recognises a markdown citation whose label holds a bracketed neutral citation", async () => {
+    const content =
+      "See [*Nobahar-Cookson v The Hut Group Ltd* [2016] EWCA Civ 128 Jurisprudence](https://hansard.parliament.uk/x).";
+    const result = await rewriteLegalCitationLinks(content, "UK");
+    expect(result).to.deep.equal({
+      content: "See *Nobahar-Cookson v The Hut Group Ltd* [2016] EWCA Civ 128 Jurisprudence.",
+      rewrittenCount: 0,
+      attemptedCount: 0,
+      strippedCount: 1,
+    });
+  });
+
   it("strips multiple unresolvable citations independently, in one pass", async () => {
     const content =
       "[First Law](https://hansard.parliament.uk/a) and " +

@@ -18,10 +18,11 @@ export async function trialMessageLimit(req: Request, _res: Response, next: Next
   }
 }
 
-/** Refuses writes (uploads, sharing, new cases...) from a trial guest; reads still work, so the
- * pages around the chat load. Mounted ahead of a router, so it reads the token itself rather than
- * relying on validSession; a request without a valid one passes through for the router's own
- * checks to deal with. */
+/** Refuses every write (uploads, sharing, new cases, generations...) from a trial guest; reads
+ * still work, so the pages around the chat load and the shared sample case can be looked through
+ * (its brief included: a GET, served from the stored copy). Mounted ahead of a router, so it reads
+ * the token itself rather than relying on validSession; a request without a valid one passes
+ * through for the router's own checks to deal with. */
 export async function blockTrialWrites(req: Request, _res: Response, next: NextFunction) {
   try {
     if (req.method === "GET" || req.method === "HEAD") return next();

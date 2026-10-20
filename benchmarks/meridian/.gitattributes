@@ -1,0 +1,3 @@
+# These PDFs are uncompressed (reportlab) and look like text to git; with core.autocrlf an LF->CRLF
+# rewrite would shift every byte offset in the xref table and corrupt them.
+*.pdf binary

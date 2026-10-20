@@ -198,6 +198,8 @@ describe("ChatSvc.processChatGenerationJob", () => {
     saveRelatedCases: ChatRepo.saveRelatedCases,
     relevantChunksForConsultation: DocumentChunkSvc.relevantChunksForConsultation,
     transcriptRelevantChunksForConsultation: TranscriptionChunkSvc.relevantChunksForConsultation,
+    relevantChunksForCase: DocumentChunkSvc.relevantChunksForCase,
+    transcriptRelevantChunksForCase: TranscriptionChunkSvc.relevantChunksForCase,
     redisGet: redis.get,
     redisSet: redis.set,
     emitToUser: socketLib.emitToUser,
@@ -254,6 +256,9 @@ describe("ChatSvc.processChatGenerationJob", () => {
     ChatRepo.saveRelatedCases = async () => ({}) as any;
     DocumentChunkSvc.relevantChunksForConsultation = async () => ({ caseDocumentIds: [], caseDocumentChunkIds: [] });
     TranscriptionChunkSvc.relevantChunksForConsultation = async () => ({ transcriptionIds: [], transcriptionChunkIds: [] });
+    // A case-linked job (Test 7) also looks the case up; unstubbed, that embeds the query for real.
+    DocumentChunkSvc.relevantChunksForCase = async () => ({ caseDocumentIds: [], caseDocumentChunkIds: [] });
+    TranscriptionChunkSvc.relevantChunksForCase = async () => ({ transcriptionIds: [], transcriptionChunkIds: [] });
     redis.get = async () => null;
     redis.set = async () => {};
     (socketLib as any).emitToUser = (userId: string, event: string, payload: any) => {
@@ -280,6 +285,8 @@ describe("ChatSvc.processChatGenerationJob", () => {
     (ChatRepo as any).saveDecisionRecords = originals.saveDecisionRecords;
     DocumentChunkSvc.relevantChunksForConsultation = originals.relevantChunksForConsultation;
     TranscriptionChunkSvc.relevantChunksForConsultation = originals.transcriptRelevantChunksForConsultation;
+    DocumentChunkSvc.relevantChunksForCase = originals.relevantChunksForCase;
+    TranscriptionChunkSvc.relevantChunksForCase = originals.transcriptRelevantChunksForCase;
     redis.get = originals.redisGet;
     redis.set = originals.redisSet;
     (socketLib as any).emitToUser = originals.emitToUser;
