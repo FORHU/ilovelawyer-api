@@ -1,0 +1,87 @@
+name: Build tools image
+
+# Pushes the Dockerfile's BUILDER stage to ECR as tools-<sha>.
+#
+# The runner stage ships dist/, prisma/ and node_modules — no scripts/, no src/,
+# no benchmark PDFs. Anything run with ts-node (seed-sample-case.ts,
+# seed-benchmark.ts, the one-off backfills) needs the builder stage instead.
+#
+# Built here rather than on the host because neither host has git, and this repo
+# is private: the alternative is a personal access token and a full source tree
+# sitting on a shared box. This leaves nothing behind and the same image serves
+# every environment.
+#
+# Manual only. It builds no deployable artifact and must never swap a container.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to build (blank = the branch you ran this from)"
+        required: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  ACCOUNT_ID: "617163942417"
+  ECR_REPOSITORY: ilovelawyer-api
+
+jobs:
+  build:
+    name: Build and push tools image
+    # Native arm64: both hosts are Graviton. An amd64 image pulls cleanly then
+    # dies with "exec format error".
+    runs-on: ubuntu-24.04-arm
+    environment: staging
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref_name }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN || 'arn:aws:iam::617163942417:role/forhu-deploy' }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          # tools- prefix so it can never be mistaken for a deployable tag by a
+          # deploy workflow or by a human reading the repository listing.
+          echo "tag=tools-$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "registry=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ steps.tag.outputs.registry }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push the builder stage
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: builder
+          push: true
+          platforms: linux/arm64
+          provenance: false
+          tags: ${{ steps.tag.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### Tools image"
+            echo
+            echo "    ${{ steps.tag.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}"
+            echo
+            echo "Pull it on a host and run scripts with ts-node. It is not deployable."
+          } >> "$GITHUB_STEP_SUMMARY"
