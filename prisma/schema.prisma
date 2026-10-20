@@ -827,6 +827,8 @@ model Case {
   copiedFromCaseId      String?
   copiedFromOrgName     String?
   copiedAt              DateTime?
+  /// Staff-added AI allowance for this case, on top of the standard one (CaseLimitsSvc). Internal: never shown to users.
+  extraAiAllowanceUsd   Float      @default(0)
   caseName              String
   actionType            String?
   jurisdiction          String?
@@ -2946,6 +2948,7 @@ model LlmUsage {
   @@index([userId, createdAt])
   @@index([provider, model])
   @@index([feature])
+  @@index([caseId])
 }
 
 model JurisdictionModule {

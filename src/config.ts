@@ -22,6 +22,15 @@ export const TRIAL_SAMPLE_CASE_ID = process.env.TRIAL_SAMPLE_CASE_ID || "";
  * and the server logs an error at startup. */
 const freeCreditUsd = Number(process.env.FREE_CREDIT_USD);
 export const FREE_CREDIT_USD = freeCreditUsd > 0 ? freeCreditUsd : null;
+/** Cases one account may own. A missing or invalid value uses 3; 0 turns the limit off. */
+const maxCasesPerAccountRaw = process.env.MAX_CASES_PER_ACCOUNT?.trim();
+const maxCasesPerAccount = maxCasesPerAccountRaw ? Math.floor(Number(maxCasesPerAccountRaw)) : NaN;
+export const MAX_CASES_PER_ACCOUNT = Number.isFinite(maxCasesPerAccount) && maxCasesPerAccount >= 0 ? maxCasesPerAccount : 3;
+/** What one case may cost in AI (USD, all providers) before it starts no new AI work. A missing or
+ * invalid value uses 20; 0 turns the limit off. */
+const caseSpendLimitUsdRaw = process.env.CASE_SPEND_LIMIT_USD?.trim();
+const caseSpendLimitUsd = caseSpendLimitUsdRaw ? Number(caseSpendLimitUsdRaw) : NaN;
+export const CASE_SPEND_LIMIT_USD = Number.isFinite(caseSpendLimitUsd) && caseSpendLimitUsd >= 0 ? caseSpendLimitUsd : 20;
 export const MAILER_FROM = (process.env.MAILER_FROM || process.env.MAILER_EMAIL) as string;
 export const MAILER_TRANSPORT_HOST = process.env.MAILER_TRANSPORT_HOST as string;
 export const MAILER_TRANSPORT_PORT = Number(process.env.MAILER_TRANSPORT_PORT || 587);
