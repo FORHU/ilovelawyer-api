@@ -15,6 +15,7 @@ import AuthSvc from "../src/services/auth.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import OrganizationEmailInviteRepo from "../src/repositories/organization-email-invite.repository";
 import TenantSettingSvc from "../src/services/tenant-setting.service";
+import TenantRepo from "../src/repositories/tenant.repository";
 import { runWithRequestContext } from "../src/lib/request-context";
 import { ClientApp, resolveClientApp } from "../src/utils/client-app";
 import * as mailerModule from "../src/utils/mailer";
@@ -151,12 +152,15 @@ describe("Client app decides the account role", () => {
     let restore: (() => void)[];
     let created: { role: string }[];
     let emails: string[];
+    let tenantLookups: string[];
 
     beforeEach(() => {
       created = [];
       emails = [];
+      tenantLookups = [];
       restore = [
         stash(AuthRepo, ["findByEmail", "findByUsername", "createUser"]),
+        stash(TenantRepo, ["findIdByCode"]),
         stash(TenantSettingSvc, ["isAutoApproveOn"]),
         stash(OrganizationEmailInviteRepo, ["hasLiveInvite"]),
         stash(mailerModule, ["sendEmail"]),
@@ -168,6 +172,10 @@ describe("Client app decides the account role", () => {
         created.push(data);
         return { id: "new-1", email: "a@b.com", name: "A", ...data };
       };
+      (TenantRepo as any).findIdByCode = async (code: string) => {
+        tenantLookups.push(code);
+        return `tenant-${code}`;
+      };
       (TenantSettingSvc as any).isAutoApproveOn = async () => false;
       (OrganizationEmailInviteRepo as any).hasLiveInvite = async () => false;
       (templateModule as any).renderTemplate = async (name: string) => name;
@@ -176,7 +184,31 @@ describe("Client app decides the account role", () => {
 
     afterEach(() => restore.forEach((r) => r()));
 
-    const signup = () => AuthSvc.signup("a", "a@b.com", "Password123!", "A", null, true);
+    const signup = (requestTenantCode: "PH" | "UK" | null = null) =>
+      AuthSvc.signup("a", "a@b.com", "Password123!", "A", requestTenantCode, true);
+
+    it("puts every client in the UK tenant, whatever site it signed up from", async () => {
+      await inApp("user", () => signup(null));
+      await inApp("user", () => signup("PH"));
+      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-UK", "tenant-UK"]);
+    });
+
+    it("still takes a lawyer's tenant from the site, and none from an unknown one", async () => {
+      await inApp("lawyer", () => signup("PH"));
+      await inApp("lawyer", () => signup(null));
+      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-PH", null]);
+      expect(tenantLookups).to.deep.equal(["PH"]);
+    });
+
+    it("tells a returning client 'Email already in use', not to go to another tenant's site", async () => {
+      (AuthRepo as any).findByEmail = async () => ({ id: "cli-1", role: "USER", tenant: { code: "UK", name: "United Kingdom" } });
+      try {
+        await inApp("user", () => signup(null));
+        expect.fail("signup should have been refused");
+      } catch (err: any) {
+        expect(err.message).to.equal("Email already in use");
+      }
+    });
 
     it("creates a LAWYER from the lawyer app and tells them to wait for approval", async () => {
       await inApp("lawyer", signup);
@@ -256,22 +288,23 @@ describe("Client app decides the account role", () => {
   });
 
   describe("tenant from the client app's host", () => {
-    it("maps ph-client and uk-client to their tenants, port or not", () => {
-      expect(resolveTenantCodeFromHost("ph-client.ilovelawyer:3004")).to.equal("PH");
-      expect(resolveTenantCodeFromHost("uk-client.ilovelawyer")).to.equal("UK");
+    it("never reads a tenant from the client app's domains", () => {
+      expect(resolveTenantCodeFromHost("ilovelawyer.com")).to.equal(null);
+      expect(resolveTenantCodeFromHost("app.ilovelawyer.com")).to.equal(null);
+      expect(resolveTenantCodeFromHost("localhost:3004")).to.equal(null);
     });
   });
 
   describe("emailed link origin", () => {
-    const PH_CLIENT = "http://ph-client.ilovelawyer:3004";
-    const UK_CLIENT = "http://uk-client.ilovelawyer:3004";
+    const CLIENT = "https://ilovelawyer.com";
+    const STAGING_CLIENT = "https://app.ilovelawyer.com";
     const PH_LAWYER = "http://ph.ilovelawyer.local:3002";
     let saved: { user: string[]; client: string[] };
 
     before(() => {
       saved = { user: [...USER_APP_URL], client: [...CLIENT_URL] };
-      USER_APP_URL.splice(0, USER_APP_URL.length, PH_CLIENT, UK_CLIENT);
-      CLIENT_URL.splice(0, CLIENT_URL.length, PH_LAWYER, PH_CLIENT, UK_CLIENT);
+      USER_APP_URL.splice(0, USER_APP_URL.length, CLIENT, STAGING_CLIENT);
+      CLIENT_URL.splice(0, CLIENT_URL.length, PH_LAWYER, CLIENT, STAGING_CLIENT);
     });
 
     after(() => {
@@ -280,12 +313,12 @@ describe("Client app decides the account role", () => {
     });
 
     it("sends a client to the client app it asked from", () => {
-      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, UK_CLIENT)).to.equal(UK_CLIENT);
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, STAGING_CLIENT)).to.equal(STAGING_CLIENT);
     });
 
-    it("sends a client to its tenant's client app when it asked from the lawyer app or no origin", () => {
-      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, PH_LAWYER)).to.equal(UK_CLIENT);
-      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "PH" } }, null)).to.equal(PH_CLIENT);
+    it("sends a client to the first client app when it asked from the lawyer app or no origin", () => {
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, PH_LAWYER)).to.equal(CLIENT);
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, null)).to.equal(CLIENT);
     });
 
     it("never sends a lawyer to the client app", () => {

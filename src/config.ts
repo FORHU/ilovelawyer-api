@@ -52,7 +52,8 @@ export const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 export const REDIS_PASSWORD = process.env.REDIS_PASSWORD as string;
 export const SERVICE_ACCOUNT = process.env.SERVICE_ACCOUNT as string;
 export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
-/** The client app's origins (ilovelawyer-client, USER accounts), e.g. http://ph-client.ilovelawyer:3004.
+/** The client app's origins (ilovelawyer-client, USER accounts), first one the default — e.g.
+ * https://ilovelawyer.com,https://app.ilovelawyer.com, or http://localhost:3004 locally.
  * Links emailed to a client account open on one of these instead of the lawyer app — see
  * emailLinkOriginForAccount. Each must also be listed in CLIENT_URL so CORS lets it call the API. */
 export const USER_APP_URL = (process.env.USER_APP_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);

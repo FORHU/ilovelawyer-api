@@ -34,10 +34,9 @@ const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "uk-local.ilovelawyer.com": "UK",
   "uk.ilovelawyer": "UK",
   "uk.localhost": "UK",
-  // ilovelawyer-client (USER accounts) — local dev hosts. Keep in sync with
-  // ilovelawyer-client/src/lib/tenant/resolve-host.ts.
-  "ph-client.ilovelawyer": "PH",
-  "uk-client.ilovelawyer": "UK",
+  // The client app (ilovelawyer.com, app.ilovelawyer.com) is deliberately absent: one domain
+  // serves every region, so its host never names a Tenant. Client accounts get
+  // CLIENT_TENANT_CODE instead (AuthSvc.signupTenantCode).
 };
 
 /** Strips a trailing `:port` (present on `Host`/`Origin` headers in local dev, e.g.
@@ -120,35 +119,18 @@ export function emailLinkOrigin(tenantCode: string | null | undefined, requestOr
   return originForTenantCode(tenantCode);
 }
 
-/** The USER_APP_URL origin for a Tenant: the one whose host starts with `ph-client.` / `uk-client.`.
- * Null when none is configured for it. */
-export function clientOriginForTenantCode(tenantCode: string | null | undefined): string | null {
-  if (!tenantCode) return null;
-  const prefix = `${tenantCode.toLowerCase()}-client.`;
-  return (
-    USER_APP_URL.find((origin) => {
-      try {
-        return new URL(origin).hostname.toLowerCase().startsWith(prefix);
-      } catch {
-        return false;
-      }
-    }) ?? null
-  );
-}
-
 /** Where a link emailed to `account` should open: the app the account belongs to. A client (USER)
- * account gets the client app — the site it asked from when that's a client origin, else its
- * Tenant's client origin — never the lawyer app, which would refuse it (WRONG_APP). Every other
- * account keeps emailLinkOrigin's behaviour. Falls back to emailLinkOrigin when USER_APP_URL is
- * unset, so an environment without the client app behaves exactly as before. */
+ * account gets the client app — the site it asked from when that's a client origin (e.g.
+ * app.ilovelawyer.com on staging), else the first USER_APP_URL — never the lawyer app, which would
+ * refuse it (WRONG_APP). Every other account keeps emailLinkOrigin's behaviour. Falls back to
+ * emailLinkOrigin when USER_APP_URL is unset, so an environment without the client app behaves
+ * exactly as before. */
 export function emailLinkOriginForAccount(
   account: { role: Role; tenant?: { code: string } | null } | null,
   requestOrigin: string | null,
 ): string {
-  const tenantCode = account?.tenant?.code;
   if (account?.role === "USER" && USER_APP_URL.length > 0) {
-    if (requestOrigin && USER_APP_URL.includes(requestOrigin)) return requestOrigin;
-    return clientOriginForTenantCode(tenantCode) ?? USER_APP_URL[0];
+    return requestOrigin && USER_APP_URL.includes(requestOrigin) ? requestOrigin : USER_APP_URL[0];
   }
-  return emailLinkOrigin(tenantCode, requestOrigin);
+  return emailLinkOrigin(account?.tenant?.code, requestOrigin);
 }

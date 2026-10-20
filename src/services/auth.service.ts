@@ -29,6 +29,7 @@ import {
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
   GOOGLE_PHOTO_SIGNUP_WAIT_MS,
+  CLIENT_TENANT_CODE,
   termsVersionFor,
 } from "../constants";
 import { generateOtpCode, duplicateEmailMessage, isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
@@ -44,10 +45,11 @@ export default class AuthSvc {
   ) {
     email = normalizeEmail(email);
     const role = roleForClientApp(currentClientApp());
+    const tenantCode = AuthSvc.signupTenantCode(role, requestTenantCode);
 
     const existingUser = await AuthRepo.findByEmail(email);
     if (existingUser) {
-      throw AuthSvc.signupEmailConflict(existingUser, role, requestTenantCode);
+      throw AuthSvc.signupEmailConflict(existingUser, role, tenantCode);
     }
 
     const existingUsername = await AuthRepo.findByUsername(username);
@@ -58,9 +60,9 @@ export default class AuthSvc {
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
     // Unlike Organization creation, an unresolved origin (local dev, direct API calls)
-    // never blocks signup — the account is just created without a Tenant link, same as
+    // never blocks a lawyer signup — the account is just created without a Tenant link, same as
     // login/refresh's existing "let it through" handling of an unresolved Tenant code.
-    const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
+    const tenantId = tenantCode ? await TenantRepo.findIdByCode(tenantCode) : null;
 
     let user;
     try {
@@ -85,7 +87,7 @@ export default class AuthSvc {
       // this makes it the same clean 409 the pre-check above already gives a non-racing caller.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
         const winner = await AuthRepo.findByEmail(email);
-        if (winner) throw AuthSvc.signupEmailConflict(winner, role, requestTenantCode);
+        if (winner) throw AuthSvc.signupEmailConflict(winner, role, tenantCode);
         throw new HttpError("Email already in use", 409);
       }
       throw err;
@@ -106,6 +108,13 @@ export default class AuthSvc {
 
     await SecurityAuditSvc.record({ action: "auth.signup", actorId: user.id, payload: { method: "password" } });
     return user;
+  }
+
+  /** The Tenant a new account is created under. A lawyer's comes from the site they signed up on
+   * (ph./uk. subdomain); a client's is always CLIENT_TENANT_CODE, since the client app's domain
+   * says nothing about the region. */
+  private static signupTenantCode(role: Role, requestTenantCode: TenantCode | null): TenantCode | null {
+    return role === "USER" ? CLIENT_TENANT_CODE : requestTenantCode;
   }
 
   /** The 409 for a signup whose email already has an account. An email registered in the lawyer
@@ -591,9 +600,10 @@ export default class AuthSvc {
         await AuthRepo.deleteUnverifiedPendingUser(email);
       }
 
-      // Same lenient handling as password signup — see the comment there.
-      const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
+      // Same Tenant rule as password signup — see the comment there.
       const role = roleForClientApp(currentClientApp());
+      const tenantCode = AuthSvc.signupTenantCode(role, requestTenantCode);
+      const tenantId = tenantCode ? await TenantRepo.findIdByCode(tenantCode) : null;
       try {
         user = await AuthRepo.createGoogleUser({
           email,
