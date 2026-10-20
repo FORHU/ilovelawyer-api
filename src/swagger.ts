@@ -456,7 +456,11 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           201: { description: "User created", content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } },
           400: { description: "Validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-          409: { description: "Email already in use", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: {
+            description:
+              "Email or username already in use. From the client app (X-Client-App: user), an email registered to a lawyer account answers with code EMAIL_REGISTERED_AS_LAWYER.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
         },
       },
     },

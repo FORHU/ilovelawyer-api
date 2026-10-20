@@ -9,6 +9,7 @@ import {
   ConsentSource,
   SELF_SERVICE_CONSENT_PURPOSES,
 } from "../constants/consent.constants";
+import { termsVersionFor } from "../constants/auth.constants";
 
 export type ConsentStatus = "granted" | "withdrawn" | "not_set";
 
@@ -66,7 +67,8 @@ export default class ConsentSvc {
           version: terms.termsVersion,
           grantedAt: terms.termsAcceptedAt,
           withdrawnAt: null,
-          outdated: terms.termsVersion !== current,
+          // A client account agrees to the client app's own Terms, versioned separately.
+          outdated: terms.termsVersion !== termsVersionFor(terms.role),
         };
       }
 

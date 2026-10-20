@@ -7,7 +7,7 @@
  * as test/account-restore-on-login.spec.ts.
  */
 import { expect } from "chai";
-import { describe, it, before, beforeEach, afterEach } from "mocha";
+import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import type { Request } from "express";
@@ -15,11 +15,14 @@ import AuthSvc from "../src/services/auth.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import OrganizationEmailInviteRepo from "../src/repositories/organization-email-invite.repository";
 import TenantSettingSvc from "../src/services/tenant-setting.service";
+import TenantRepo from "../src/repositories/tenant.repository";
 import { runWithRequestContext } from "../src/lib/request-context";
 import { ClientApp, resolveClientApp } from "../src/utils/client-app";
 import * as mailerModule from "../src/utils/mailer";
 import * as templateModule from "../src/utils/template";
-import { REFRESH_TOKEN_SECRET } from "../src/config";
+import { REFRESH_TOKEN_SECRET, USER_APP_URL, CLIENT_URL } from "../src/config";
+import { CLIENT_TERMS_VERSION, TERMS_VERSION } from "../src/constants/auth.constants";
+import { emailLinkOriginForAccount, resolveTenantCodeFromHost } from "../src/utils/tenant-host";
 
 const PASSWORD = "Correct-horse-1";
 
@@ -149,12 +152,15 @@ describe("Client app decides the account role", () => {
     let restore: (() => void)[];
     let created: { role: string }[];
     let emails: string[];
+    let tenantLookups: string[];
 
     beforeEach(() => {
       created = [];
       emails = [];
+      tenantLookups = [];
       restore = [
         stash(AuthRepo, ["findByEmail", "findByUsername", "createUser"]),
+        stash(TenantRepo, ["findIdByCode"]),
         stash(TenantSettingSvc, ["isAutoApproveOn"]),
         stash(OrganizationEmailInviteRepo, ["hasLiveInvite"]),
         stash(mailerModule, ["sendEmail"]),
@@ -166,6 +172,10 @@ describe("Client app decides the account role", () => {
         created.push(data);
         return { id: "new-1", email: "a@b.com", name: "A", ...data };
       };
+      (TenantRepo as any).findIdByCode = async (code: string) => {
+        tenantLookups.push(code);
+        return `tenant-${code}`;
+      };
       (TenantSettingSvc as any).isAutoApproveOn = async () => false;
       (OrganizationEmailInviteRepo as any).hasLiveInvite = async () => false;
       (templateModule as any).renderTemplate = async (name: string) => name;
@@ -174,7 +184,31 @@ describe("Client app decides the account role", () => {
 
     afterEach(() => restore.forEach((r) => r()));
 
-    const signup = () => AuthSvc.signup("a", "a@b.com", "Password123!", "A");
+    const signup = (requestTenantCode: "PH" | "UK" | null = null) =>
+      AuthSvc.signup("a", "a@b.com", "Password123!", "A", requestTenantCode, true);
+
+    it("puts every client in the UK tenant, whatever site it signed up from", async () => {
+      await inApp("user", () => signup(null));
+      await inApp("user", () => signup("PH"));
+      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-UK", "tenant-UK"]);
+    });
+
+    it("still takes a lawyer's tenant from the site, and none from an unknown one", async () => {
+      await inApp("lawyer", () => signup("PH"));
+      await inApp("lawyer", () => signup(null));
+      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-PH", null]);
+      expect(tenantLookups).to.deep.equal(["PH"]);
+    });
+
+    it("tells a returning client 'Email already in use', not to go to another tenant's site", async () => {
+      (AuthRepo as any).findByEmail = async () => ({ id: "cli-1", role: "USER", tenant: { code: "UK", name: "United Kingdom" } });
+      try {
+        await inApp("user", () => signup(null));
+        expect.fail("signup should have been refused");
+      } catch (err: any) {
+        expect(err.message).to.equal("Email already in use");
+      }
+    });
 
     it("creates a LAWYER from the lawyer app and tells them to wait for approval", async () => {
       await inApp("lawyer", signup);
@@ -186,6 +220,110 @@ describe("Client app decides the account role", () => {
       await inApp("user", signup);
       expect(created.map((d) => d.role)).to.deep.equal(["USER"]);
       expect(emails).to.be.empty;
+    });
+
+    it("records the client Terms version for a client and the lawyer one for a lawyer", async () => {
+      await inApp("user", signup);
+      await inApp("lawyer", signup);
+      expect(created.map((d: any) => d.termsVersion)).to.deep.equal([CLIENT_TERMS_VERSION, TERMS_VERSION]);
+    });
+
+    it("refuses a lawyer's email in the client app with EMAIL_REGISTERED_AS_LAWYER", async () => {
+      (AuthRepo as any).findByEmail = async () => ({ id: "law-1", role: "LAWYER", tenant: null });
+      expect(await errorOf(inApp("user", signup))).to.deep.equal({ status: 409, code: "EMAIL_REGISTERED_AS_LAWYER" });
+      expect(created).to.be.empty;
+    });
+
+    it("keeps the generic 409 for a client's email in the lawyer app, and for a client signing up twice", async () => {
+      (AuthRepo as any).findByEmail = async () => ({ id: "cli-1", role: "USER", tenant: null });
+      expect(await errorOf(inApp("lawyer", signup))).to.deep.equal({ status: 409, code: undefined });
+      expect(await errorOf(inApp("user", signup))).to.deep.equal({ status: 409, code: undefined });
+    });
+  });
+
+  describe("password reset", () => {
+    let restore: (() => void)[];
+    let owner: { id: string; role: string } | null;
+    let consumed: string[];
+    let sessionsDeleted: string[];
+
+    beforeEach(() => {
+      consumed = [];
+      sessionsDeleted = [];
+      owner = { id: "user-1", role: "LAWYER" };
+      restore = [
+        stash(AuthRepo, ["findUserByResetToken", "consumeResetToken", "deleteSessionsByUserId", "findById", "createSession"]),
+      ];
+      (AuthRepo as any).findUserByResetToken = async () => owner;
+      (AuthRepo as any).consumeResetToken = async (token: string) => {
+        consumed.push(token);
+        return owner?.id ?? null;
+      };
+      (AuthRepo as any).deleteSessionsByUserId = async (id: string) => void sessionsDeleted.push(id);
+      (AuthRepo as any).findById = async (id: string) => ({ ...owner, id, email: "a@b.com", name: "A", deletionRequestedAt: null });
+      (AuthRepo as any).createSession = async () => {};
+    });
+
+    afterEach(() => restore.forEach((r) => r()));
+
+    const reset = () => AuthSvc.resetPassword("reset-token", PASSWORD);
+
+    it("refuses a lawyer's reset link in the client app without spending the token or ending sessions", async () => {
+      expect(await errorOf(inApp("user", reset))).to.deep.equal({ status: 409, code: "WRONG_APP" });
+      expect(consumed).to.be.empty;
+      expect(sessionsDeleted).to.be.empty;
+    });
+
+    it("resets a client's password from the client app", async () => {
+      owner = { id: "client-1", role: "USER" };
+      await inApp("user", reset);
+      expect(consumed).to.deep.equal(["reset-token"]);
+      expect(sessionsDeleted).to.deep.equal(["client-1"]);
+    });
+
+    it("answers 400 for an unknown or expired token", async () => {
+      owner = null;
+      expect((await errorOf(inApp("user", reset)))?.status).to.equal(400);
+    });
+  });
+
+  describe("tenant from the client app's host", () => {
+    it("never reads a tenant from the client app's domains", () => {
+      expect(resolveTenantCodeFromHost("ilovelawyer.com")).to.equal(null);
+      expect(resolveTenantCodeFromHost("app.ilovelawyer.com")).to.equal(null);
+      expect(resolveTenantCodeFromHost("localhost:3004")).to.equal(null);
+    });
+  });
+
+  describe("emailed link origin", () => {
+    const CLIENT = "https://ilovelawyer.com";
+    const STAGING_CLIENT = "https://app.ilovelawyer.com";
+    const PH_LAWYER = "http://ph.ilovelawyer.local:3002";
+    let saved: { user: string[]; client: string[] };
+
+    before(() => {
+      saved = { user: [...USER_APP_URL], client: [...CLIENT_URL] };
+      USER_APP_URL.splice(0, USER_APP_URL.length, CLIENT, STAGING_CLIENT);
+      CLIENT_URL.splice(0, CLIENT_URL.length, PH_LAWYER, CLIENT, STAGING_CLIENT);
+    });
+
+    after(() => {
+      USER_APP_URL.splice(0, USER_APP_URL.length, ...saved.user);
+      CLIENT_URL.splice(0, CLIENT_URL.length, ...saved.client);
+    });
+
+    it("sends a client to the client app it asked from", () => {
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, STAGING_CLIENT)).to.equal(STAGING_CLIENT);
+    });
+
+    it("sends a client to the first client app when it asked from the lawyer app or no origin", () => {
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, PH_LAWYER)).to.equal(CLIENT);
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, null)).to.equal(CLIENT);
+    });
+
+    it("never sends a lawyer to the client app", () => {
+      expect(emailLinkOriginForAccount({ role: "LAWYER", tenant: { code: "PH" } }, PH_LAWYER)).to.equal(PH_LAWYER);
+      expect(emailLinkOriginForAccount({ role: "LAWYER", tenant: { code: "PH" } }, null)).to.equal(PH_LAWYER);
     });
   });
 

@@ -12,7 +12,7 @@ export default class ConsentRepo {
 
   /** Terms of Service lives on the user row, not in Consent — see ConsentSvc.list. */
   static async findTerms(userId: string) {
-    return prisma.user.findUnique({ where: { id: userId }, select: { termsAcceptedAt: true, termsVersion: true } });
+    return prisma.user.findUnique({ where: { id: userId }, select: { termsAcceptedAt: true, termsVersion: true, role: true } });
   }
 
   /** Granting stamps a fresh grantedAt and clears any withdrawal; withdrawing keeps grantedAt and

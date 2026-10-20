@@ -1,3 +1,5 @@
+import type { TenantCode } from "../types/tenant-code";
+
 export const BCRYPT_SALT_ROUNDS = 10;
 export const OTP_EXPIRY_MS = 60 * 60 * 1000; // 1 hour — password-reset token
 
@@ -17,6 +19,21 @@ export const LOGIN_LINK_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // locales/*/term.json materially changes, so a later re-acceptance prompt can tell which
 // version each account agreed to.
 export const TERMS_VERSION = "2026-10";
+
+// The client app's (ilovelawyer-client, USER accounts) own Terms, versioned independently of the
+// lawyer Terms above. Bump this whenever ilovelawyer-client/src/lib/auth/terms.ts materially changes.
+export const CLIENT_TERMS_VERSION = "client-2026-10";
+
+/** The Tenant every client account (USER) belongs to. The client app is served from one domain
+ * for every region (ilovelawyer.com, app.ilovelawyer.com for staging), so the request's host can't
+ * tell PH from UK the way the lawyer app's ph./uk. subdomains do. */
+export const CLIENT_TENANT_CODE: TenantCode = "UK";
+
+/** The Terms version an account of `role` agrees to: the client Terms for USER, the lawyer Terms
+ * for everyone else. */
+export function termsVersionFor(role: string): string {
+  return role === "USER" ? CLIENT_TERMS_VERSION : TERMS_VERSION;
+}
 
 // How many times createGoogleUser retries a username collision (Prisma P2002 on `username`)
 // with a fresh numeric suffix before giving up.

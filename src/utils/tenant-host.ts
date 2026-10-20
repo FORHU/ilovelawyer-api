@@ -1,6 +1,7 @@
 import { Request } from "express";
+import { Role } from "@prisma/client";
 import { TenantCode } from "../types/tenant-code";
-import { CLIENT_URL } from "../config";
+import { CLIENT_URL, USER_APP_URL } from "../config";
 
 /**
  * Explicit hostname → Tenant code map. No substring/`.includes()` matching — an unrecognized
@@ -33,6 +34,9 @@ const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "uk-local.ilovelawyer.com": "UK",
   "uk.ilovelawyer": "UK",
   "uk.localhost": "UK",
+  // The client app (ilovelawyer.com, app.ilovelawyer.com) is deliberately absent: one domain
+  // serves every region, so its host never names a Tenant. Client accounts get
+  // CLIENT_TENANT_CODE instead (AuthSvc.signupTenantCode).
 };
 
 /** Strips a trailing `:port` (present on `Host`/`Origin` headers in local dev, e.g.
@@ -113,4 +117,20 @@ export function emailLinkOrigin(tenantCode: string | null | undefined, requestOr
     if (!tenantCode || requestTenant === tenantCode) return requestOrigin;
   }
   return originForTenantCode(tenantCode);
+}
+
+/** Where a link emailed to `account` should open: the app the account belongs to. A client (USER)
+ * account gets the client app — the site it asked from when that's a client origin (e.g.
+ * app.ilovelawyer.com on staging), else the first USER_APP_URL — never the lawyer app, which would
+ * refuse it (WRONG_APP). Every other account keeps emailLinkOrigin's behaviour. Falls back to
+ * emailLinkOrigin when USER_APP_URL is unset, so an environment without the client app behaves
+ * exactly as before. */
+export function emailLinkOriginForAccount(
+  account: { role: Role; tenant?: { code: string } | null } | null,
+  requestOrigin: string | null,
+): string {
+  if (account?.role === "USER" && USER_APP_URL.length > 0) {
+    return requestOrigin && USER_APP_URL.includes(requestOrigin) ? requestOrigin : USER_APP_URL[0];
+  }
+  return emailLinkOrigin(account?.tenant?.code, requestOrigin);
 }

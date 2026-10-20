@@ -84,6 +84,7 @@ describe("Restore a scheduled account on sign-in", () => {
         "updateLastLogin",
         "deleteSessionsByUserId",
         "consumeLoginLinkToken",
+        "findUserByResetToken",
         "consumeResetToken",
         "updatePasswordAndClearMustChange",
         "findByRefreshToken",
@@ -110,6 +111,7 @@ describe("Restore a scheduled account on sign-in", () => {
     (AuthRepo as any).updateLastLogin = async () => {};
     (AuthRepo as any).deleteSessionsByUserId = async (id: string) => void sessionsRevoked.push(id);
     (AuthRepo as any).consumeLoginLinkToken = async () => "user-1";
+    (AuthRepo as any).findUserByResetToken = async () => ({ id: "user-1", role: user.role });
     (AuthRepo as any).consumeResetToken = async () => "user-1";
     (AuthRepo as any).updatePasswordAndClearMustChange = async () => {};
     (AuthRepo as any).linkGoogleId = async () => true;
