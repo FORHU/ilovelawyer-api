@@ -2,6 +2,7 @@ import express from "express";
 import asyncHandler from "../utils/async-handler";
 import requireConsent from "../middleware/require-consent.middleware";
 import { blockTrialWrites, trialMessageLimit } from "../middleware/trial.middleware";
+import { consultationSpendLimit } from "../middleware/case-spend-limit.middleware";
 import validSession from "../middleware/valid-session.middleware";
 import { resolveOrganizationAllowingGuests } from "../middleware/resolve-organization.middleware";
 import { consultationCaseOf, guestItemNeedsCase, guestListNeedsCase, guestRefused } from "../middleware/guest-case-items.middleware";
@@ -27,7 +28,7 @@ router.delete("/consultations/:consultationId", asyncHandler(ChatCtrl.deleteCons
 router.get("/consultations/:consultationId/messages", asyncHandler(ChatCtrl.listMessages));
 router.get("/consultations/:consultationId/related-cases", asyncHandler(ChatCtrl.getRelatedCases));
 router.post("/consultations/:consultationId/relevant-chunks", blockTrialWrites, asyncHandler(ChatCtrl.relevantChunks));
-router.post("/consultations/:consultationId/messages", trialMessageLimit, requireConsent("AI_PROCESSING"), asyncHandler(ChatCtrl.sendMessage));
+router.post("/consultations/:consultationId/messages", asyncHandler(consultationSpendLimit), trialMessageLimit, requireConsent("AI_PROCESSING"), asyncHandler(ChatCtrl.sendMessage));
 router.post("/consultations/:consultationId/messages/:messageId/cancel", asyncHandler(ChatCtrl.cancelMessage));
 router.delete("/consultations/:consultationId/messages/:messageId", asyncHandler(ChatCtrl.deleteMessage));
 router.post(

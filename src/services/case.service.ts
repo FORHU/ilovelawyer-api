@@ -13,6 +13,7 @@ import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
 import { CasePermission, CaseStatus, OrganizationRole } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
+import CaseLimitsSvc from "./case-limits.service";
 
 export default class CaseSvc {
   /** Creating a case gives the creator the access their role doesn't: a MANAGER/MEMBER gets an
@@ -26,6 +27,7 @@ export default class CaseSvc {
     role: OrganizationRole,
     data: CaseData & { caseName: string; confidential?: boolean },
   ) {
+    await CaseLimitsSvc.assertCanCreateCase(userId);
     const { confidential = false, ...fields } = data;
     if (confidential && (await OrganizationRepo.isPersonal(organizationId))) {
       throw new HttpError("A case in your portfolio is already private to you", 400);

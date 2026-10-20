@@ -13,7 +13,16 @@ export const TRIAL_MESSAGE_LIMIT = trialMessageLimit > 0 ? trialMessageLimit : 5
 const trialDurationHours = Number(process.env.TRIAL_DURATION_HOURS);
 export const TRIAL_DURATION_HOURS = trialDurationHours > 0 ? trialDurationHours : 2;
 export const TRIAL_DURATION_MS = TRIAL_DURATION_HOURS * 60 * 60 * 1000;
-export const MAILER_FROM = (process.env.MAILER_FROM || process.env.MAILER_EMAIL) as string;
+/** Cases one account may own. A missing or invalid value uses 3; 0 turns the limit off. */
+const maxCasesPerAccountRaw = process.env.MAX_CASES_PER_ACCOUNT?.trim();
+const maxCasesPerAccount = maxCasesPerAccountRaw ? Math.floor(Number(maxCasesPerAccountRaw)) : NaN;
+export const MAX_CASES_PER_ACCOUNT = Number.isFinite(maxCasesPerAccount) && maxCasesPerAccount >= 0 ? maxCasesPerAccount : 3;
+/** What one case may cost in AI (USD, all providers) before it starts no new AI work. A missing or
+ * invalid value uses 20; 0 turns the limit off. */
+const caseSpendLimitUsdRaw = process.env.CASE_SPEND_LIMIT_USD?.trim();
+const caseSpendLimitUsd = caseSpendLimitUsdRaw ? Number(caseSpendLimitUsdRaw) : NaN;
+export const CASE_SPEND_LIMIT_USD = Number.isFinite(caseSpendLimitUsd) && caseSpendLimitUsd >= 0 ? caseSpendLimitUsd : 20;
+export const MAILER_FROM =(process.env.MAILER_FROM || process.env.MAILER_EMAIL) as string;
 export const MAILER_TRANSPORT_HOST = process.env.MAILER_TRANSPORT_HOST as string;
 export const MAILER_TRANSPORT_PORT = Number(process.env.MAILER_TRANSPORT_PORT || 587);
 export const MAILER_TRANSPORT_SECURE = process.env.MAILER_TRANSPORT_SECURE === "true";
