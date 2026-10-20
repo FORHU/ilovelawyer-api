@@ -20,7 +20,7 @@ import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
 import type { TenantCode } from "../types/tenant-code";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS } from "../config";
-import { emailLinkOrigin } from "../utils/tenant-host";
+import { emailLinkOriginForAccount } from "../utils/tenant-host";
 import { currentClientApp, roleForClientApp } from "../utils/client-app";
 import {
   BCRYPT_SALT_ROUNDS,
@@ -28,8 +28,8 @@ import {
   EMAIL_VERIFICATION_EXPIRY_MS,
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
-  TERMS_VERSION,
   GOOGLE_PHOTO_SIGNUP_WAIT_MS,
+  termsVersionFor,
 } from "../constants";
 import { generateOtpCode, duplicateEmailMessage, isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 
@@ -43,10 +43,11 @@ export default class AuthSvc {
     acceptedTerms = false,
   ) {
     email = normalizeEmail(email);
+    const role = roleForClientApp(currentClientApp());
 
     const existingUser = await AuthRepo.findByEmail(email);
     if (existingUser) {
-      throw new HttpError(duplicateEmailMessage(existingUser, "Email already in use", requestTenantCode), 409);
+      throw AuthSvc.signupEmailConflict(existingUser, role, requestTenantCode);
     }
 
     const existingUsername = await AuthRepo.findByUsername(username);
@@ -60,7 +61,6 @@ export default class AuthSvc {
     // never blocks signup — the account is just created without a Tenant link, same as
     // login/refresh's existing "let it through" handling of an unresolved Tenant code.
     const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
-    const role = roleForClientApp(currentClientApp());
 
     let user;
     try {
@@ -74,7 +74,7 @@ export default class AuthSvc {
         name,
         role,
         tenantId,
-        termsVersion: acceptedTerms ? TERMS_VERSION : null,
+        termsVersion: acceptedTerms ? termsVersionFor(role) : null,
       });
     } catch (err) {
       // The findByEmail/findByUsername checks above aren't atomic with this insert — a
@@ -84,6 +84,8 @@ export default class AuthSvc {
       // which error-handler.middleware.ts has no special case for and turns into a bare 500 —
       // this makes it the same clean 409 the pre-check above already gives a non-racing caller.
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        const winner = await AuthRepo.findByEmail(email);
+        if (winner) throw AuthSvc.signupEmailConflict(winner, role, requestTenantCode);
         throw new HttpError("Email already in use", 409);
       }
       throw err;
@@ -104,6 +106,26 @@ export default class AuthSvc {
 
     await SecurityAuditSvc.record({ action: "auth.signup", actorId: user.id, payload: { method: "password" } });
     return user;
+  }
+
+  /** The 409 for a signup whose email already has an account. An email registered in the lawyer
+   * app can't become a client account, and the client app says so (EMAIL_REGISTERED_AS_LAWYER)
+   * instead of the generic message, so the person knows to use another address rather than
+   * trying Sign In or Recover there, which WRONG_APP would refuse. The reverse direction — a
+   * client's email used in the lawyer app — keeps the generic message. */
+  private static signupEmailConflict(
+    existing: { role: Role; tenant: { code: string; name: string } | null },
+    role: Role,
+    requestTenantCode: TenantCode | null,
+  ): HttpError {
+    if (role === "USER" && existing.role === "LAWYER") {
+      return new HttpError(
+        "This email is registered to a lawyer account. Use a different email for your client account.",
+        409,
+        "EMAIL_REGISTERED_AS_LAWYER",
+      );
+    }
+    return new HttpError(duplicateEmailMessage(existing, "Email already in use", requestTenantCode), 409);
   }
 
   /** Non-fatal by design: the account row already exists by the time this runs, so letting a
@@ -571,14 +593,15 @@ export default class AuthSvc {
 
       // Same lenient handling as password signup — see the comment there.
       const tenantId = requestTenantCode ? await TenantRepo.findIdByCode(requestTenantCode) : null;
+      const role = roleForClientApp(currentClientApp());
       try {
         user = await AuthRepo.createGoogleUser({
           email,
           googleId,
           name: name ?? undefined,
-          role: roleForClientApp(currentClientApp()),
+          role,
           tenantId,
-          termsVersion: TERMS_VERSION,
+          termsVersion: termsVersionFor(role),
         });
         created = true;
       } catch (err) {
@@ -754,10 +777,11 @@ export default class AuthSvc {
     const result = { message: "If the email exists, a reset link will be sent" };
     await SecurityAuditSvc.record({ action: "auth.password_reset_requested", actorId: null, attemptedEmail: email });
 
-    // The site the user asked from, if it belongs to their Tenant; otherwise their Tenant's own
-    // subdomain (uk./ph.), not the bare CLIENT_URL[0] — see emailLinkOrigin. user.tenant is
-    // already on hand from findByEmail's include, so no extra lookup needed.
-    const origin = emailLinkOrigin(user?.tenant?.code, requestOrigin);
+    // The app the account belongs to: for a client account the client app, for a lawyer the site
+    // they asked from if it belongs to their Tenant, otherwise their Tenant's own subdomain
+    // (uk./ph.) — see emailLinkOriginForAccount. user.tenant is already on hand from
+    // findByEmail's include, so no extra lookup needed.
+    const origin = emailLinkOriginForAccount(user, requestOrigin);
 
     // Google SSO accounts never get a password (see isGoogleSsoAccount). Same response as
     // every other case, so it reveals nothing — only the inbox owner learns to use Google.
@@ -802,6 +826,14 @@ export default class AuthSvc {
   }
 
   private static async resetPasswordAndSignIn(token: string, password: string, remember: boolean) {
+    // Refused before the token is spent: a reset opened in the other app must leave the password,
+    // the token and every session untouched, so the same link still works from the right app.
+    const owner = await AuthRepo.findUserByResetToken(token);
+    if (!owner) {
+      throw new HttpError("Invalid or expired reset token", 400);
+    }
+    AuthSvc.assertClientApp(owner);
+
     const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
     const userId = await AuthRepo.consumeResetToken(token, hashedPassword);
     if (!userId) {
@@ -812,7 +844,6 @@ export default class AuthSvc {
     await SecurityAuditSvc.record({ action: "auth.password_reset", actorId: userId });
     // Resetting the password signs the user in (below), so it restores a scheduled account too.
     const resetUser = await AuthRepo.findById(userId);
-    if (resetUser) AuthSvc.assertClientApp(resetUser);
     const deletionCancelled = await AuthSvc.restoreIfScheduled(resetUser);
 
     const { accessToken, refreshToken } = loginToken(userId, remember);

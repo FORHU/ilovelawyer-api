@@ -7,6 +7,7 @@ import ConsentSvc from "../src/services/consent.service";
 import ConsentRepo from "../src/repositories/consent.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import { CONSENT_VERSIONS } from "../src/constants/consent.constants";
+import { CLIENT_TERMS_VERSION, TERMS_VERSION } from "../src/constants/auth.constants";
 
 type Row = {
   purpose: ConsentPurpose;
@@ -18,7 +19,7 @@ type Row = {
 describe("ConsentSvc", () => {
   const original = { findByUser: ConsentRepo.findByUser, findTerms: ConsentRepo.findTerms, set: ConsentRepo.set };
   let rows: Row[];
-  let terms: { termsAcceptedAt: Date | null; termsVersion: string | null } | null;
+  let terms: { termsAcceptedAt: Date | null; termsVersion: string | null; role?: string } | null;
   let sets: Array<{ purpose: ConsentPurpose; granted: boolean; version: string; source: string }>;
 
   beforeEach(() => {
@@ -55,6 +56,16 @@ describe("ConsentSvc", () => {
     terms = { termsAcceptedAt: new Date("2026-10-01T00:00:00Z"), termsVersion: CONSENT_VERSIONS.TERMS_OF_SERVICE! };
     const current = (await ConsentSvc.list("u1")).find((c) => c.purpose === "TERMS_OF_SERVICE")!;
     expect(current.outdated).to.equal(false);
+  });
+
+  it("checks a client account against the client app's own Terms version, not the lawyer one", async () => {
+    terms = { termsAcceptedAt: new Date("2026-10-01T00:00:00Z"), termsVersion: CLIENT_TERMS_VERSION, role: "USER" };
+    const client = (await ConsentSvc.list("u1")).find((c) => c.purpose === "TERMS_OF_SERVICE")!;
+    expect(client).to.deep.include({ version: CLIENT_TERMS_VERSION, outdated: false });
+
+    terms = { termsAcceptedAt: new Date("2026-10-01T00:00:00Z"), termsVersion: TERMS_VERSION, role: "USER" };
+    const lawyerTerms = (await ConsentSvc.list("u1")).find((c) => c.purpose === "TERMS_OF_SERVICE")!;
+    expect(lawyerTerms.outdated).to.equal(true);
   });
 
   it("grants a purpose at the current version and records where it came from", async () => {

@@ -6,6 +6,8 @@ export interface ListUsersParams {
   sortBy: "name" | "email" | "createdAt" | "lastLoginAt";
   sortDir: "asc" | "desc";
   q?: string;
+  /** Only lawyers (ilovelawyer-app) or only clients (the client app); both when omitted. */
+  role?: "LAWYER" | "USER";
 }
 
 // State machine (see schema.prisma's ApprovalStatus comment for the full diagram):

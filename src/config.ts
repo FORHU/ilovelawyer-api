@@ -43,6 +43,10 @@ export const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
 export const REDIS_PASSWORD = process.env.REDIS_PASSWORD as string;
 export const SERVICE_ACCOUNT = process.env.SERVICE_ACCOUNT as string;
 export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+/** The client app's origins (ilovelawyer-client, USER accounts), e.g. http://ph-client.ilovelawyer:3004.
+ * Links emailed to a client account open on one of these instead of the lawyer app — see
+ * emailLinkOriginForAccount. Each must also be listed in CLIENT_URL so CORS lets it call the API. */
+export const USER_APP_URL = (process.env.USER_APP_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
 /** Encrypts User.googleRefreshToken at rest (src/utils/google-token-crypto.ts): 32 bytes, as

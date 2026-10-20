@@ -441,6 +441,15 @@ export default class AuthRepo {
     return !!user;
   }
 
+  /** The account a still-valid reset token belongs to, without spending it — so the caller can
+   * refuse the reset (e.g. the wrong app) before consumeResetToken changes anything. */
+  static async findUserByResetToken(token: string) {
+    return prisma.user.findFirst({
+      where: { otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
+      select: { id: true, role: true },
+    });
+  }
+
   static async consumeResetToken(token: string, hashedPassword: string): Promise<string | null> {
     const user = await prisma.user.findFirst({
       where: { otpCode: token, otpExpiry: { gt: new Date() }, ...PASSWORD_ACCOUNT_WHERE },
@@ -538,12 +547,13 @@ export default class AuthRepo {
     sortBy: "name" | "email" | "createdAt" | "lastLoginAt";
     sortDir: "asc" | "desc";
     q?: string;
+    role?: "LAWYER" | "USER";
   }) {
-    const { page, limit, sortBy, sortDir, q } = params;
+    const { page, limit, sortBy, sortDir, q, role } = params;
 
-    // Admins manage regular signups here, not other admin accounts.
+    // Admins manage regular signups here, not other admin accounts: lawyers, clients, or both.
     const where: Prisma.UserWhereInput = {
-      role: { not: "ADMIN" },
+      role: role ?? { not: "ADMIN" },
       ...(q
         ? {
             OR: [

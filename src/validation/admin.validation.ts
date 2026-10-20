@@ -6,6 +6,8 @@ export const listUsersSchema = Joi.object({
   sortBy: Joi.string().valid("name", "email", "createdAt", "lastLoginAt").default("createdAt"),
   sortDir: Joi.string().valid("asc", "desc").default("desc"),
   q: Joi.string().trim().max(200).optional(),
+  // LAWYER = ilovelawyer-app accounts, USER = client app accounts; omitted = both.
+  role: Joi.string().valid("LAWYER", "USER").optional(),
 });
 
 export const listAuditEventsSchema = Joi.object({

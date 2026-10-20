@@ -32,8 +32,8 @@ export default class AdminCtrl {
     const { error, value } = listUsersSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const { page, limit, sortBy, sortDir, q } = value;
-    const { data, total } = await AdminSvc.listUsers({ page, limit, sortBy, sortDir, q });
+    const { page, limit, sortBy, sortDir, q, role } = value;
+    const { data, total } = await AdminSvc.listUsers({ page, limit, sortBy, sortDir, q, role });
 
     return res.status(200).json({
       data,
