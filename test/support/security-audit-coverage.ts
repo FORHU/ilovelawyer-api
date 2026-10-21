@@ -97,6 +97,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /admin/users/:id/verify-email": ["admin.user.email_verified"],
   "PATCH /admin/users/:id/tenant": ["admin.user.tenant_changed"],
   "DELETE /admin/users/:id": ["admin.user.deleted"],
+  "POST /admin/lawyers/:id/verify": ["admin.lawyer.verified"],
+  "POST /admin/lawyers/:id/reject": ["admin.lawyer.rejected"],
   "PATCH /admin/settings/tenants/:code": ["admin.settings.signup_auto_approve_changed"],
   "POST /admin/tenants/:code/approve-pending": ["admin.user.approved"],
   "GET /admin/audit-log/export": ["export.audit_log"],

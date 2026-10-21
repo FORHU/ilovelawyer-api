@@ -57,6 +57,8 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.settings.signup_auto_approve_changed",
   "admin.model_settings.updated",
   "admin.jurisdiction_module.toggled",
+  "admin.lawyer.verified",
+  "admin.lawyer.rejected",
 
   // Exports and downloads
   "export.case_brief",
@@ -162,6 +164,8 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.settings.signup_auto_approve_changed": "Signup auto-approval changed",
   "admin.model_settings.updated": "AI model setting changed",
   "admin.jurisdiction_module.toggled": "Jurisdiction module switched",
+  "admin.lawyer.verified": "Lawyer's client-request profile verified by ilovelawyer",
+  "admin.lawyer.rejected": "Lawyer's client-request profile rejected by ilovelawyer",
   "export.case_brief": "Case brief exported",
   "export.generated_document": "Document generated",
   "export.audit_log": "Audit log exported",
