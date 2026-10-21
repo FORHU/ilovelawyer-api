@@ -43,6 +43,15 @@ _Avoid_: "credits" for the free AI credit or the lawyer's case allowance; "subsc
 **Lawyer Readiness**:
 Whether a Client Case has enough in it for the client app to suggest a lawyer. After each AI answer Jev is asked five yes/no questions against the case details and the chat: the problem, where in the UK, the other side, what happened and when, and what the client wants (`lawyer-readiness-jev.ts`). Each answer has a confidence, and a yes under `READINESS_MIN_CONFIDENCE` counts as no. Jev also gives the kind of lawyer the case needs. Ready means all five are met, the case is in the UK, and it isn't personal injury. The result is stored on `Case.lawyerReadiness` with the AI message it read up to. Once ready, Jev's practice area is written to `Case.practiceArea` for matching. Behind `USE_JEV_LAWYER_READINESS`. When it's off, or Jev can't be reached, nothing is claimed.
 
+**Client Request**:
+A client's ask for a lawyer on one of their own UK cases (the UK client-to-lawyer hand-off). It carries the anonymised brief that matching lawyers see, then one lawyer's claim, quote, the per-case fee charged to that lawyer's organization, and the engagement. Statuses: `REQUESTED → ROUTED → CLAIMED → QUOTED → CONFIRMED → ENGAGED → CLOSED`, or `EXPIRED` / `WITHDRAWN` (`types/client-handoff.ts`). The client app calls it a lawyer request (`/lawyer-requests`). The lawyer app calls it a client request (`/client-requests`). Both are the same row. See `docs/adr/0016-client-app-shares-the-uk-api.md`.
+_Status: designed, not yet implemented (ilovelawyer-api#503–#520)._
+_Avoid_: "claim" alone in code for a lawyer's 24h hold on a request: name it `ClientRequestClaim`, since **Case Claim** is a cause of action. "Declined" as a request status: a declined quote ends the claim (`ClaimOutcome.DECLINED`) and the request goes back to `ROUTED`.
+
+**Engagement**:
+A Client Request once the client has confirmed the lawyer and the fee is paid (`ENGAGED`). The assigned lawyer gets a `VIEW` `CaseAccess` grant on the client's case, the same read-only share `CaseShareSvc` makes. Closing the engagement removes the grant. The engagement has its own AI budget, which the lawyer sees and tops up. It is separate from the internal case allowance in `CaseLimitsSvc`, which is never shown.
+_Status: designed, not yet implemented._
+
 **Email Verification**:
 A blocking gate on password-based Signup: a User's `isEmailVerified` flag starts `false` and Login is refused until it's flipped `true` by successfully completing OTP verification. Not required for Google signups — Google has already verified the email, so `isEmailVerified` is set `true` at account creation. An admin can also mark a User verified in place of the OTP (`POST /api/admin/users/:id/verify-email`, `AdminSvc.verifyEmail`) — one-way, audited as `users.email_verified`, and it auto-approves a PENDING User on an auto-approve Tenant exactly as OTP verification does.
 _Avoid_: "OTP" alone as the name of the gate (OTP is the mechanism — the one-time code — not the gate itself; the gate is Email Verification)
