@@ -1,4 +1,5 @@
 import { OAS3Definition } from "swagger-jsdoc";
+import { clientAppPaths } from "./swagger-client-app";
 import { clientHandoffPaths, clientHandoffSchemas, clientHandoffTags } from "./swagger-client-handoff";
 
 const swaggerSpec: OAS3Definition = {
@@ -2671,6 +2672,7 @@ const swaggerSpec: OAS3Definition = {
         responses: { 202: { description: "Refresh queued — AiGenerationJob status (IN_PROGRESS)" } },
       },
     },
+    ...clientAppPaths,
   },
 };
 
