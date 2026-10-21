@@ -1,0 +1,22 @@
+/**
+ * What a client agrees to when asking for a lawyer (POST /api/client/lawyer-requests). DRAFT
+ * wording, pending a UK solicitor's review (FORHU/ilovelawyer-app#846). It already says what the
+ * #845 decisions require: names reach only the claiming lawyer, and only for the conflict check;
+ * either side can end the engagement; the lawyer may keep a copy of the case. Bump the version
+ * whenever the text changes: a client who agreed to an older version is asked again
+ * (CONSENT_VERSION_STALE).
+ */
+export const CLIENT_REQUEST_CONSENT_VERSION = "2026-10-21-draft";
+
+export const CLIENT_REQUEST_CONSENT_TEXT = [
+  "We'll share an anonymised summary of your case with verified UK lawyers who may take it on. It leaves out names and documents.",
+  "The first lawyer to accept will also see the names of the people and organisations in your case, only to check they have no conflict of interest.",
+  "If you confirm that lawyer, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
+  "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.",
+].join("\n\n");
+
+/** The SRA requires telling the client the lawyer pays us for the introduction. */
+export const CLIENT_REQUEST_REFERRAL_DISCLOSURE =
+  "ilovelawyer is paid a fixed fee by the lawyer for introducing you. You don't pay us anything for this, and it doesn't change what the lawyer charges you.";
+
+export const CLIENT_REQUEST_NOTE_MAX_LENGTH = 1000;
