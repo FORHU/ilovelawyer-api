@@ -1036,6 +1036,11 @@ model ClientRequest {
   briefFingerprint  String?
   briefGeneratedAt  DateTime?
   briefError        String?
+  // Set when routed (#509): 48h from now. EXPIRED (#510) reads it; re-routing (#511, #512) resets it.
+  routingExpiresAt  DateTime?
+  // Lawyers excluded from matching this request again after they passed, released or lapsed on it
+  // (#509/#511/#512) — a client decline does the same once a quote is declined (#512).
+  excludedLawyerIds String[]            @default([])
   withdrawnAt       DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt

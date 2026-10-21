@@ -61,6 +61,11 @@ describe("Client lawyer requests", () => {
       Object.assign(r, data);
       return true;
     };
+    (ClientRequestRepo as any).route = async (id: string) => {
+      const r = requests.get(id);
+      Object.assign(r, { status: "ROUTED", routingExpiresAt: new Date() });
+      return r;
+    };
   });
   afterEach(() => {
     (ClientCaseRepo as any).findById = originals.caseFind;
@@ -100,7 +105,7 @@ describe("Client lawyer requests", () => {
     it("records the request with the consent version and time, and the trimmed note", async () => {
       const before = Date.now();
       const dto = await ask();
-      expect(dto).to.include({ caseId: CASE_ID, status: "REQUESTED", note: "Prefer a fixed fee.", consentVersion: CLIENT_REQUEST_CONSENT_VERSION, lawyer: null, quote: null });
+      expect(dto).to.include({ caseId: CASE_ID, status: "ROUTED", note: "Prefer a fixed fee.", consentVersion: CLIENT_REQUEST_CONSENT_VERSION, lawyer: null, quote: null });
       expect(new Date(dto.consentAcceptedAt).getTime()).to.be.at.least(before);
       expect(briefsStarted).to.deep.equal([dto.id]);
     });
