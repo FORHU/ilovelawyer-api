@@ -69,5 +69,26 @@ services:
       - ./docker/localstack-init:/init:ro
     restart: "no"
 
+  # Forwards Stripe test-mode webhooks to the API running on this machine (npm run dev), so a
+  # Checkout paid locally settles the same way it does when deployed. Opt-in: it only starts with
+  # `docker compose --profile stripe up stripe-cli`, and needs STRIPE_SECRET_KEY (a sk_test_ key)
+  # in .env. See docs/stripe-local-webhooks.md.
+  stripe-cli:
+    image: stripe/stripe-cli:v1.53.0
+    container_name: ilovelawyer-stripe-cli
+    profiles: ["stripe"]
+    environment:
+      STRIPE_API_KEY: ${STRIPE_SECRET_KEY:-}
+    # host.docker.internal is the host on Docker Desktop; the extra_hosts line makes it work on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - listen
+      - --forward-to
+      - http://host.docker.internal:${PORT:-3001}/api/webhooks/stripe
+      - --events
+      - checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired
+    restart: "no"
+
 volumes:
   postgres_data:

@@ -243,7 +243,7 @@ export default class ClientCaseSvc {
     return result;
   }
 
-  static async topUp(workspace: ClientWorkspace, userId: string, caseId: string, input: { packId: string; testOutcome?: "decline" }) {
+  static async topUp(workspace: ClientWorkspace, userId: string, caseId: string, input: { packId: string; testOutcome?: "decline"; origin?: string }) {
     await ClientCaseSvc.load(workspace, caseId);
     return ClientBillingSvc.topUp(userId, caseId, input);
   }

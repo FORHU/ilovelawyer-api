@@ -133,6 +133,11 @@ jobs:
           CLOUDFRONT_URL: ${{ vars.DEV_CLOUDFRONT_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          # Client app payments: unset means the dummy provider (charges nothing). Test-mode keys only.
+          CLIENT_PAYMENT_PROVIDER: ${{ vars.DEV_CLIENT_PAYMENT_PROVIDER }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ vars.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           TRIAL_MESSAGE_LIMIT: ${{vars.TRIAL_MESSAGE_LIMIT}}
           TRIAL_DURATION_HOURS: ${{vars.TRIAL_DURATION_HOURS}}
@@ -201,6 +206,10 @@ jobs:
           add CLOUDFRONT_URL            "${CLOUDFRONT_URL:-}"
           add OPENAI_API_KEY            "${OPENAI_API_KEY:-}"
           add TYPESAFE_API_KEY          "${TYPESAFE_API_KEY:-}"
+          add CLIENT_PAYMENT_PROVIDER   "${CLIENT_PAYMENT_PROVIDER:-}"
+          add STRIPE_SECRET_KEY         "${STRIPE_SECRET_KEY:-}"
+          add STRIPE_PUBLISHABLE_KEY    "${STRIPE_PUBLISHABLE_KEY:-}"
+          add STRIPE_WEBHOOK_SECRET     "${STRIPE_WEBHOOK_SECRET:-}"
           add JURIS_PH_API_URL          "${JURIS_PH_API_URL:-}"
           add TRIAL_MESSAGE_LIMIT       "${TRIAL_MESSAGE_LIMIT:-}"
           add TRIAL_DURATION_HOURS      "${TRIAL_DURATION_HOURS:-}"

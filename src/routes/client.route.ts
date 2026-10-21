@@ -15,6 +15,7 @@ router.use(validSession, asyncHandler(requireClientAccount));
 router.get("/pricing", asyncHandler(ClientCaseCtrl.pricing));
 router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.quoteCase));
 router.post("/payments/case", asyncHandler(ClientCaseCtrl.payForCase));
+router.get("/payments/:paymentId", asyncHandler(ClientCaseCtrl.paymentStatus));
 
 router.get("/cases", asyncHandler(ClientCaseCtrl.list));
 router.post("/cases", asyncHandler(ClientCaseCtrl.create));

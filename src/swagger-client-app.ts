@@ -16,6 +16,18 @@ const err = (description: string) => ({ description, content: json({ $ref: "#/co
 
 const money = { type: "object", properties: { amountMinor: { type: "integer", description: "Cents" }, currency: { type: "string", example: "USD" } } };
 const testOutcome = { type: "string", enum: ["decline"], description: "Dummy provider only: decline, to test the failure screen" };
+const paymentStatus = { type: "string", enum: ["PENDING", "SUCCEEDED", "FAILED"] };
+/** Null when the payment already settled (the dummy); otherwise what Stripe.js needs to show the form. */
+const checkout = {
+  type: "object",
+  nullable: true,
+  description: "Mount Stripe's embedded checkout with these (Stripe.js initEmbeddedCheckout). When it completes, poll GET /client/payments/{paymentId} until it isn't PENDING.",
+  properties: {
+    provider: { type: "string", enum: ["STRIPE"] },
+    clientSecret: { type: "string" },
+    publishableKey: { type: "string" },
+  },
+};
 
 const clientCase = {
   type: "object",
@@ -96,17 +108,51 @@ export const clientAppPaths: Paths = {
   "/client/payments/case": {
     post: {
       tags: [TAG],
-      summary: "Pay for a new case (DUMMY provider for now: nothing is charged)",
-      description: "Returns a paymentId, which POST /client/cases then uses up. One payment creates one case. No card details are sent or stored.",
+      summary: "Pay for a new case",
+      description:
+        "Returns a paymentId, which POST /client/cases then uses up once it has SUCCEEDED. One payment creates one case. With the dummy provider (CLIENT_PAYMENT_PROVIDER unset) it settles at once and `checkout` is null. With Stripe it starts PENDING and `checkout` opens Stripe's embedded payment form. No card details reach this API either way.",
       security,
       requestBody: { required: true, content: json({ type: "object", properties: { promoCode: { type: "string" }, testOutcome } }) },
       responses: {
         201: {
-          description: "Paid",
-          content: json({ type: "object", properties: { paymentId: { type: "string" }, amount: money, credits: { type: "integer" } } }),
+          description: "Paid (dummy) or started (Stripe)",
+          content: json({
+            type: "object",
+            properties: { paymentId: { type: "string" }, status: paymentStatus, amount: money, credits: { type: "integer" }, checkout },
+          }),
         },
         400: err("PROMO_NOT_APPLIED: the code doesn't apply (nothing charged)"),
-        402: err("PAYMENT_DECLINED"),
+        402: err("PAYMENT_DECLINED (dummy)"),
+        502: err("PAYMENT_PROVIDER_ERROR: Stripe couldn't open the payment page (the payment is marked FAILED)"),
+      },
+    },
+  },
+  "/client/payments/{paymentId}": {
+    get: {
+      tags: [TAG],
+      summary: "Where one of the client's payments stands",
+      description:
+        "A PENDING Stripe payment is checked with Stripe first and settled if the client has paid (or the page expired), so the app learns the outcome straight away instead of waiting for the webhook.",
+      security,
+      parameters: [{ name: "paymentId", in: "path", required: true, schema: { type: "string" } }],
+      responses: {
+        200: {
+          description: "Payment",
+          content: json({
+            type: "object",
+            properties: {
+              paymentId: { type: "string" },
+              kind: { type: "string", enum: ["CASE", "TOP_UP"] },
+              status: paymentStatus,
+              amount: money,
+              credits: { type: "integer" },
+              caseId: { type: "string", nullable: true },
+              failureReason: { type: "string", nullable: true },
+              usable: { type: "boolean", description: "A case payment that can still create its case" },
+            },
+          }),
+        },
+        404: err("Not one of this client's payments"),
       },
     },
   },
@@ -159,14 +205,25 @@ export const clientAppPaths: Paths = {
   "/client/cases/{caseId}/top-ups": {
     post: {
       tags: [TAG],
-      summary: "Buy chat credits for a case (DUMMY provider for now)",
+      summary: "Buy chat credits for a case",
+      description: "With the dummy the credits are added at once. With Stripe the payment starts PENDING with a `checkout`, and the credits are added when it settles (webhook, or GET /client/payments/{paymentId}).",
       security,
       parameters: [caseId],
       requestBody: { required: true, content: json({ type: "object", required: ["packId"], properties: { packId: { type: "string" }, testOutcome } }) },
       responses: {
         201: {
           description: "Credits added",
-          content: json({ type: "object", properties: { credits: { type: "integer", description: "New balance" }, added: { type: "integer" }, amount: money } }),
+          content: json({
+            type: "object",
+            properties: {
+              paymentId: { type: "string" },
+              status: paymentStatus,
+              credits: { type: "integer", description: "The case's balance now (unchanged while a Stripe payment is PENDING)" },
+              added: { type: "integer" },
+              amount: money,
+              checkout,
+            },
+          }),
         },
         400: err("No such pack"),
         402: err("PAYMENT_DECLINED"),

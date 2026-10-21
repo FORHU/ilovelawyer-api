@@ -4,6 +4,8 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
 import router from "./routes";
+import StripeWebhookCtrl from "./controllers/stripe-webhook.controller";
+import asyncHandler from "./utils/async-handler";
 import errorHandler from "./middleware/error-handler.middleware";
 import { isDev, CLIENT_URL } from "./config";
 import setup from "./setup";
@@ -24,6 +26,12 @@ app.use(
     credentials: true,
   }),
 );
+
+// Stripe signs the exact bytes it sends, so its webhook takes the raw body and must stay ahead of
+// express.json() below. Moving it after the JSON parser breaks every signature. It sits under /api
+// because the hosts that share a domain with a frontend (uk-dev, uk.ilovelawyer.com) only route
+// /api/* to this server; matched here first, it never reaches the /api router.
+app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: "1mb" }), asyncHandler(StripeWebhookCtrl.handle));
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());

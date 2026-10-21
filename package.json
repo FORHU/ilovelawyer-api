@@ -13,7 +13,10 @@
     "start:extraction-worker": "cross-env NODE_OPTIONS=--use-system-ca node ./dist/extraction-worker.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "stripe:listen": "docker compose --profile stripe up stripe-cli",
+    "stripe:secret": "docker compose --profile stripe run --rm stripe-cli listen --print-secret",
+    "stripe:webhook-check": "ts-node --files scripts/stripe-webhook-check.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -58,6 +61,7 @@
     "puppeteer-core": "24.15.0",
     "redis": "^4.6.10",
     "socket.io": "^4.7.2",
+    "stripe": "22.6.2",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
     "typescript": "^5.2.2",

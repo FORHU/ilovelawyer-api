@@ -69,11 +69,16 @@ export default class ClientCaseCtrl {
 
   static async payForCase(req: Request, res: Response) {
     const input = validate(payForClientCaseSchema, req.body);
-    res.status(201).json(await ClientBillingSvc.payForCase(req.user.userId, input));
+    res.status(201).json(await ClientBillingSvc.payForCase(req.user.userId, { ...input, origin: req.headers.origin }));
   }
 
   static async topUp(req: Request, res: Response) {
     const input = validate(topUpClientCaseSchema, req.body);
-    res.status(201).json(await ClientCaseSvc.topUp(req.organization!, req.user.userId, req.params.caseId, input));
+    res.status(201).json(await ClientCaseSvc.topUp(req.organization!, req.user.userId, req.params.caseId, { ...input, origin: req.headers.origin }));
+  }
+
+  /** Where a payment stands; checks a pending Stripe payment with Stripe first. */
+  static async paymentStatus(req: Request, res: Response) {
+    res.status(200).json(await ClientBillingSvc.paymentStatus(req.user.userId, req.params.paymentId));
   }
 }
