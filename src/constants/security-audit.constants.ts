@@ -59,6 +59,7 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.jurisdiction_module.toggled",
   "admin.lawyer.verified",
   "admin.lawyer.rejected",
+  "admin.client_payment.refunded",
 
   // Client requests (the UK client-to-lawyer hand-off, docs/adr/0016): a lawyer's claim gives
   // them the claim-scoped party lookup, so taking it and losing it are both access changes.
@@ -171,6 +172,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.jurisdiction_module.toggled": "Jurisdiction module switched",
   "admin.lawyer.verified": "Lawyer's client-request profile verified by ilovelawyer",
   "admin.lawyer.rejected": "Lawyer's client-request profile rejected by ilovelawyer",
+  "admin.client_payment.refunded": "Client app payment refunded by ilovelawyer",
   "client_request.claimed": "Client request accepted",
   "client_request.claim_lapsed": "Hold on a client request lapsed",
   "export.case_brief": "Case brief exported",
