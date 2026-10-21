@@ -1,5 +1,6 @@
-/** ClientRequestSweepQueue.tick — the client request timers (#511 adds the first: a claim's 24h hold
- * lapsing). No live Postgres: the claim repo is monkeypatched, same idiom as
+/** ClientRequestSweepQueue.tick — the client request timers: a claim's 24h hold lapsing (#511), and
+ * the 48h expiry, the 2h reminder and announcing (#510, ClientRequestNotifySvc, tested in
+ * test/client-request-notify.spec.ts). No live Postgres: the claim repo is monkeypatched, same idiom as
  * test/account-deletion-queue.spec.ts. The lapse's own guard runs against the database in
  * test/client-request-claim-repository.spec.ts. */
 import { expect } from "chai";
@@ -8,6 +9,7 @@ import ClientRequestSweepQueue from "../src/queues/client-request-sweep.queue";
 import ClientRequestClaimRepo from "../src/repositories/client-request-claim.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import NotificationSvc from "../src/services/notification.service";
+import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import * as socket from "../src/lib/socket";
 
@@ -38,6 +40,7 @@ describe("ClientRequestSweepQueue.tick", () => {
   let emitted: [string, string, any][];
   let securityAudits: any[];
   let audits: any[];
+  let steps: string[];
 
   beforeEach(() => {
     restore = [
@@ -46,7 +49,12 @@ describe("ClientRequestSweepQueue.tick", () => {
       stash(NotificationSvc, ["create"]),
       stash(SecurityAuditSvc, ["record"]),
       stash(socket, ["emitToUser"]),
+      stash(ClientRequestNotifySvc, ["expireDue", "remindDue", "announceDue"]),
     ];
+    steps = [];
+    (ClientRequestNotifySvc as any).expireDue = async () => (steps.push("expire"), 0);
+    (ClientRequestNotifySvc as any).remindDue = async () => (steps.push("remind"), 0);
+    (ClientRequestNotifySvc as any).announceDue = async () => (steps.push("announce"), 0);
     due = [LAPSED];
     lapseWins = true;
     lapsed = [];
@@ -77,7 +85,7 @@ describe("ClientRequestSweepQueue.tick", () => {
     await ClientRequestSweepQueue.tick(NOW);
 
     expect(notifications).to.have.length(1);
-    expect(notifications[0]).to.deep.include({ userId: "lawyer-1", type: "CLIENT_REQUEST" });
+    expect(notifications[0]).to.deep.include({ userId: "lawyer-1", type: "CLIENT_REQUEST", link: "/homepage/client-requests" });
     expect(notifications[0]).to.not.have.property("organizationId");
     const updates = emitted.filter(([, event]) => event === "client-request:updated");
     expect(updates.map(([userId]) => userId).sort()).to.deep.equal(["client-1", "lawyer-1"]);
@@ -99,6 +107,24 @@ describe("ClientRequestSweepQueue.tick", () => {
     expect(notifications).to.deep.equal([]);
     expect(emitted).to.deep.equal([]);
     expect(securityAudits).to.deep.equal([]);
+  });
+
+  it("lapses, then expires, reminds and announces, and says how many of each", async () => {
+    (ClientRequestClaimRepo as any).lapse = async () => (steps.push("lapse"), true);
+    (ClientRequestNotifySvc as any).expireDue = async () => (steps.push("expire"), 2);
+    (ClientRequestNotifySvc as any).remindDue = async () => (steps.push("remind"), 3);
+    (ClientRequestNotifySvc as any).announceDue = async () => (steps.push("announce"), 4);
+
+    expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.equal({ lapsed: 1, expired: 2, reminded: 3, announced: 4 });
+    expect(steps).to.deep.equal(["lapse", "expire", "remind", "announce"]);
+  });
+
+  it("still runs the later steps when one fails", async () => {
+    (ClientRequestNotifySvc as any).expireDue = async () => {
+      throw new Error("database gone");
+    };
+    (ClientRequestNotifySvc as any).announceDue = async () => (steps.push("announce"), 1);
+    expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.include({ lapsed: 1, expired: 0, announced: 1 });
   });
 
   it("keeps going when one lapse fails", async () => {

@@ -126,6 +126,62 @@ describe("ClientRequestClaimRepo.claim", () => {
     });
   });
 
+  describe("the #510 guards: nothing is sent twice", () => {
+    const withBrief = () => prisma.clientRequest.update({ where: { id: requestId }, data: { brief: { summary: "x" }, briefGeneratedAt: new Date() } });
+
+    it("claims a routed request's announcement once, and only once it has a brief", async () => {
+      expect(await ClientRequestRepo.claimAnnouncement(requestId, new Date())).to.equal(false);
+      await withBrief();
+      expect((await ClientRequestRepo.findUnannounced(new Date())).map((r) => r.id)).to.include(requestId);
+
+      const [first, second] = await Promise.all([ClientRequestRepo.claimAnnouncement(requestId, new Date()), ClientRequestRepo.claimAnnouncement(requestId, new Date())]);
+      expect([first, second].filter(Boolean)).to.have.length(1);
+      expect((await ClientRequestRepo.findUnannounced(new Date())).map((r) => r.id)).to.not.include(requestId);
+    });
+
+    it("doesn't announce a request someone already claimed", async () => {
+      await withBrief();
+      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
+      expect(await ClientRequestRepo.claimAnnouncement(requestId, new Date())).to.equal(false);
+    });
+
+    it("expires a routed request once its 48h is over, and only then", async () => {
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
+
+      const due = (await ClientRequestRepo.findExpired(new Date())).find((r) => r.id === requestId);
+      expect(due).to.deep.include({ caseId, clientId });
+      expect(due!.client.email).to.equal(`claim-race-${clientId}@example.com`);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(true);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("EXPIRED");
+    });
+
+    it("never expires a claimed request, even past its routing window", async () => {
+      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+    });
+
+    it("finds a hold within 2h of ending, and marks its reminder sent once", async () => {
+      const now = new Date();
+      // Claimed 22h30m ago: 1h30m left.
+      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, new Date(now.getTime() - CLAIM_HOLD_MS + 90 * 60 * 1000));
+
+      const due = (await ClientRequestClaimRepo.findDueReminders(now)).filter((c) => c.requestId === requestId);
+      expect(due).to.have.length(1);
+      expect(due[0]!.lawyer.email).to.equal(`claim-race-${lawyerIds[0]}@example.com`);
+      expect(await ClientRequestClaimRepo.markReminderSent(due[0]!.id, now)).to.equal(true);
+      expect(await ClientRequestClaimRepo.markReminderSent(due[0]!.id, now)).to.equal(false);
+      expect((await ClientRequestClaimRepo.findDueReminders(now)).filter((c) => c.requestId === requestId)).to.deep.equal([]);
+    });
+
+    it("doesn't remind for a hold with more than 2h left", async () => {
+      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
+      expect((await ClientRequestClaimRepo.findDueReminders(new Date())).filter((c) => c.requestId === requestId)).to.deep.equal([]);
+    });
+  });
+
   it("ends the open claim when the client withdraws the request", async () => {
     const claim = await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
     const now = new Date();

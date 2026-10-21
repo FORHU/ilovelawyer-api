@@ -2,6 +2,7 @@ import cron, { type ScheduledTask } from "node-cron";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import NotificationSvc from "../services/notification.service";
+import ClientRequestNotifySvc from "../services/client-request-notify.service";
 import SecurityAuditSvc from "../services/security-audit.service";
 import { emitToUser } from "../lib/socket";
 import { withCronLock } from "../lib/cron-lock";
@@ -13,11 +14,15 @@ const SCHEDULE = "* * * * *";
 
 type LapsedClaim = Awaited<ReturnType<typeof ClientRequestClaimRepo.findLapsed>>[number];
 
+type SweepResult = { lapsed: number; expired: number; reminded: number; announced: number };
+
 /**
- * The client request timers (the UK client-to-lawyer hand-off). #511: a claim's 24h hold lapsing
- * back to the pool. #510 adds the 48h routing expiry, the 2h claim reminder and announcing new
- * requests here. Each step is a guarded update, so a run that overlaps another or dies halfway
- * never acts on the same request twice.
+ * The client request timers (the UK client-to-lawyer hand-off), in order: a claim's 24h hold
+ * lapsing back to the pool (#511), then a routed request nobody claimed within 48h expiring, the
+ * 2h-before reminder to a lawyer holding one, and announcing routed requests nobody has been told
+ * about yet, including the ones a lapse just put back (#510, ClientRequestNotifySvc). Each step is
+ * a guarded update, so a run that overlaps another or dies halfway never acts on the same request
+ * twice, and one step failing doesn't stop the rest.
  */
 export default class ClientRequestSweepQueue {
   private static task: ScheduledTask | null = null;
@@ -34,25 +39,42 @@ export default class ClientRequestSweepQueue {
   }
 
   /** One sweep. Called by the cron schedule; exposed for tests. */
-  static async tick(now: Date = new Date()): Promise<{ lapsed: number }> {
-    if (this.ticking) return { lapsed: 0 };
+  static async tick(now: Date = new Date()): Promise<SweepResult> {
+    const result: SweepResult = { lapsed: 0, expired: 0, reminded: 0, announced: 0 };
+    if (this.ticking) return result;
     this.ticking = true;
-    let lapsed = 0;
     try {
-      for (const claim of await ClientRequestClaimRepo.findLapsed(now)) {
-        try {
-          if (await this.lapse(claim, now)) lapsed++;
-        } catch (err) {
-          logger.error("Client request sweep: lapse failed", { err, claimId: claim.id, requestId: claim.requestId });
-        }
-      }
-    } catch (err) {
-      logger.error("Client request sweep: run failed", { err });
+      result.lapsed = await this.step("lapse", () => this.lapseDue(now));
+      result.expired = await this.step("expire", () => ClientRequestNotifySvc.expireDue(now));
+      result.reminded = await this.step("remind", () => ClientRequestNotifySvc.remindDue(now));
+      result.announced = await this.step("announce", () => ClientRequestNotifySvc.announceDue(now));
     } finally {
       this.ticking = false;
     }
-    if (lapsed) logger.info("Client request sweep: run finished", { lapsed });
-    return { lapsed };
+    if (Object.values(result).some(Boolean)) logger.info("Client request sweep: run finished", result);
+    return result;
+  }
+
+  /** One step of the run: a failure is logged and counts as nothing done, so later steps still run. */
+  private static async step(name: string, run: () => Promise<number>): Promise<number> {
+    try {
+      return await run();
+    } catch (err) {
+      logger.error("Client request sweep: step failed", { step: name, err });
+      return 0;
+    }
+  }
+
+  private static async lapseDue(now: Date): Promise<number> {
+    let lapsed = 0;
+    for (const claim of await ClientRequestClaimRepo.findLapsed(now)) {
+      try {
+        if (await this.lapse(claim, now)) lapsed++;
+      } catch (err) {
+        logger.error("Client request sweep: lapse failed", { err, claimId: claim.id, requestId: claim.requestId });
+      }
+    }
+    return lapsed;
   }
 
   /** The hold ran out: the request goes back to the pool without this lawyer, who's told. */
@@ -80,7 +102,8 @@ export default class ClientRequestSweepQueue {
       type: "CLIENT_REQUEST",
       title: "Your hold on a client request ended",
       message: "The 24 hours ran out before a quote was sent, so the request went back to other lawyers.",
-      link: "/client-requests?view=history",
+      // ilovelawyer-app's Client Requests page; it opens on the inbox (no tab in the URL yet).
+      link: "/homepage/client-requests",
     }).catch((err) => logger.error("Client request sweep: failed to create notification", { err, claimId: claim.id }));
     return true;
   }

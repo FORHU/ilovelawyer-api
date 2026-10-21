@@ -4,6 +4,9 @@ import { ROUTING_WINDOW_MS } from "./client-request.repository";
 /** How long a claim holds a request before it lapses back to the pool (#511). */
 export const CLAIM_HOLD_MS = 24 * 60 * 60 * 1000;
 
+/** How long before a hold ends the lawyer holding it is reminded (#510). */
+export const CLAIM_REMINDER_LEAD_MS = 2 * 60 * 60 * 1000;
+
 /** Rolls the lapse's transaction back when the request had already moved on. */
 class RequestMovedOn extends Error {}
 
@@ -27,6 +30,22 @@ export default class ClientRequestClaimRepo {
         data: { requestId, openRequestId: requestId, lawyerId, organizationId, claimedAt: now, expiresAt: new Date(now.getTime() + CLAIM_HOLD_MS) },
       });
     });
+  }
+
+  /** Open claims on CLAIMED requests ending within the next 2h whose reminder hasn't gone out
+   * (#510). Only CLAIMED, since only a CLAIMED hold lapses (see findLapsed). */
+  static async findDueReminders(now: Date) {
+    return prisma.clientRequestClaim.findMany({
+      where: { outcome: null, reminderSentAt: null, expiresAt: { gt: now, lte: new Date(now.getTime() + CLAIM_REMINDER_LEAD_MS) }, request: { status: "CLAIMED" } },
+      select: { id: true, requestId: true, lawyerId: true, expiresAt: true, lawyer: { select: { email: true } } },
+      orderBy: { expiresAt: "asc" },
+    });
+  }
+
+  /** Takes the right to send a claim's reminder: true for exactly one caller, before it's sent. */
+  static async markReminderSent(id: string, now: Date): Promise<boolean> {
+    const { count } = await prisma.clientRequestClaim.updateMany({ where: { id, outcome: null, reminderSentAt: null }, data: { reminderSentAt: now } });
+    return count === 1;
   }
 
   /** Open claims whose 24h is over, on requests still CLAIMED. A QUOTED request's hold isn't

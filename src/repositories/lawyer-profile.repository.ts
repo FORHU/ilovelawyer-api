@@ -29,6 +29,12 @@ export default class LawyerProfileRepo {
     });
   }
 
+  /** Where to email these lawyers (#510's client request emails). */
+  static async findEmails(userIds: string[]) {
+    if (userIds.length === 0) return [];
+    return prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, email: true } });
+  }
+
   /** The lawyer's role and the tenant they work on: their organization's, else their own. */
   static async findLawyerTenant(userId: string) {
     const user = await prisma.user.findUnique({

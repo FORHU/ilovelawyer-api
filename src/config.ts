@@ -66,6 +66,9 @@ export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin)
  * Links emailed to a client account open on one of these instead of the lawyer app — see
  * emailLinkOriginForAccount. Each must also be listed in CLIENT_URL so CORS lets it call the API. */
 export const USER_APP_URL = (process.env.USER_APP_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+/** Who's emailed when client requests expire unclaimed 48h after routing (#510): one digest per
+ * sweep run, comma-separated. Unset, the expiry is only logged. */
+export const OPS_ALERT_EMAILS = (process.env.OPS_ALERT_EMAILS || "").split(",").map((email) => email.trim()).filter(Boolean);
 /** Who takes the client app's payments (payments/client-payment-provider.ts): "stripe", or "dummy"
  * (the default) which charges nothing. "stripe" needs STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY,
  * and STRIPE_WEBHOOK_SECRET for POST /api/webhooks/stripe. Use test-mode keys outside production. */

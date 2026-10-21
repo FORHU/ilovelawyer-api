@@ -9,6 +9,7 @@ import ClientRequestBriefSvc, { parseBriefReply } from "../src/services/client-r
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ChatRepo from "../src/repositories/chat.repository";
 import * as chatWonder from "../src/utils/chatWonder";
+import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
 
 const ctx: RedactionContext = {
   people: [
@@ -67,7 +68,9 @@ describe("Anonymised case brief", () => {
       listMessages: ChatRepo.listMessagesByConsultation,
       rest: chatWonder.callChatWonderRest,
       session: chatWonder.getChatWonderSessionId,
+      announce: ClientRequestNotifySvc.announceInBackground,
     };
+    let announced: string[];
     let source: any;
     let messages: any[];
     let saved: any[];
@@ -101,6 +104,8 @@ describe("Anonymised case brief", () => {
       };
       saved = [];
       aiCalls = 0;
+      announced = [];
+      (ClientRequestNotifySvc as any).announceInBackground = (id: string) => announced.push(id);
       // The AI "slips" and names everyone: the stored brief must not.
       aiReply = '{"summary": "John Smith was dismissed by Acme Logistics Ltd by text after 3 years; see Dismissal letter.pdf. He wants compensation.", "urgency": "SOON", "knownDeadline": null}';
       (ClientRequestRepo as any).findForBrief = async () => source;
@@ -122,6 +127,18 @@ describe("Anonymised case brief", () => {
       (ChatRepo as any).listMessagesByConsultation = originals.listMessages;
       (chatWonder as any).callChatWonderRest = originals.rest;
       (chatWonder as any).getChatWonderSessionId = originals.session;
+      (ClientRequestNotifySvc as any).announceInBackground = originals.announce;
+    });
+
+    it("announces the request to its lawyers once there's a brief for them to read (#510)", async () => {
+      await ClientRequestBriefSvc.generate("req-1");
+      expect(announced).to.deep.equal(["req-1"]);
+    });
+
+    it("announces nothing when the brief couldn't be written", async () => {
+      aiReply = new Error("AI down");
+      await ClientRequestBriefSvc.generate("req-1");
+      expect(announced).to.deep.equal([]);
     });
 
     it("stores a brief with no party name, client name, document name or phone number, even when the AI wrote them", async () => {

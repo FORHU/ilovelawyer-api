@@ -138,6 +138,8 @@ jobs:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ vars.STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          # Who's emailed when client requests expire unclaimed (comma-separated). Unset: logged only.
+          OPS_ALERT_EMAILS: ${{ secrets.DEV_OPS_ALERT_EMAILS }}
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           TRIAL_MESSAGE_LIMIT: ${{vars.TRIAL_MESSAGE_LIMIT}}
           TRIAL_DURATION_HOURS: ${{vars.TRIAL_DURATION_HOURS}}
@@ -210,6 +212,7 @@ jobs:
           add STRIPE_SECRET_KEY         "${STRIPE_SECRET_KEY:-}"
           add STRIPE_PUBLISHABLE_KEY    "${STRIPE_PUBLISHABLE_KEY:-}"
           add STRIPE_WEBHOOK_SECRET     "${STRIPE_WEBHOOK_SECRET:-}"
+          add OPS_ALERT_EMAILS          "${OPS_ALERT_EMAILS:-}"
           add JURIS_PH_API_URL          "${JURIS_PH_API_URL:-}"
           add TRIAL_MESSAGE_LIMIT       "${TRIAL_MESSAGE_LIMIT:-}"
           add TRIAL_DURATION_HOURS      "${TRIAL_DURATION_HOURS:-}"

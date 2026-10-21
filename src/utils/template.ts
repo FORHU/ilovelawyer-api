@@ -22,7 +22,7 @@ function readTemplate(name: string): string {
  * The dark lockup (light-colored logo) is used because it sits on the layout's dark header band;
  * it's embedded via LOGO_CID rather than linked.
  */
-export async function renderTemplate(name: string, vars: Record<string, string>): Promise<string> {
+export async function renderTemplate(name: string, vars: Record<string, unknown>): Promise<string> {
   const content = handlebars.compile(readTemplate(name))(vars);
 
   const layoutVars = {
