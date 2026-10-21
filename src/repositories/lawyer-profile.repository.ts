@@ -18,6 +18,17 @@ export default class LawyerProfileRepo {
     return prisma.lawyerClientProfile.update({ where: { userId }, data });
   }
 
+  /** Candidates for matching (#509): verified lawyers, minus anyone already excluded from this
+   * request. Accepting, not paused, enabled-by-org, capacity, practice area and jurisdiction are
+   * checked in ClientRequestMatchingSvc.matches — the single source of truth for the rule, so it
+   * stays unit-testable without a database. */
+  static async findVerified(excludeUserIds: string[]) {
+    return prisma.lawyerClientProfile.findMany({
+      where: { verificationStatus: "VERIFIED", userId: { notIn: excludeUserIds } },
+      select: { userId: true, acceptingRequests: true, enabledByOrganization: true, pausedUntil: true, practiceAreas: true, qualifiedJurisdictions: true },
+    });
+  }
+
   /** The lawyer's role and the tenant they work on: their organization's, else their own. */
   static async findLawyerTenant(userId: string) {
     const user = await prisma.user.findUnique({
