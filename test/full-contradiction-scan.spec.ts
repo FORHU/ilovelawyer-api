@@ -80,6 +80,13 @@ describe("FullContradictionScanSvc.scan", () => {
     });
   });
 
+  it("records the physical PDF page of each side, not the exhibit-relative page", async () => {
+    verdictFor = (b) => (b.includes("not recording") ? { choice: "INFERENTIAL", confidence: 0.82 } : { choice: "NOT_A_CONFLICT", confidence: 0.9 });
+    const { hits } = await FullContradictionScanSvc.scan("case-1", docs, "UK");
+    // D13 p.1 sits on page 31 of the merged PDF and D18 p.1 on page 44.
+    expect(hits[0]).to.include({ leftLocator: "D13 p.1", leftPage: 31, rightLocator: "D18 p.1", rightPage: 44 });
+  });
+
   it("drops an unsure NOT_A_CONFLICT and a low-confidence DIRECT alike", async () => {
     verdictFor = (b) => (b.includes("not recording") ? { choice: "NOT_A_CONFLICT", confidence: 0.55 } : { choice: "DIRECT", confidence: 0.45 });
     expect((await FullContradictionScanSvc.scan("case-1", docs, "UK")).hits).to.deep.equal([]);
@@ -143,7 +150,7 @@ describe("EvidenceIntelligenceSvc.scanContradictions with the full scan on", () 
     });
     (FullContradictionScanSvc as any).scan = async () => ({
       hits: [
-        { kind: "date_mismatch", factKey: "date", leftDocumentId: "bundle", rightDocumentId: "bundle", leftValue: "2023-11-03", rightValue: "2023-11-14", leftExcerpt: "The NVR fault was closed…", rightExcerpt: "…not recording on 14 November 2023…", confidence: 0.9, nature: "DIRECT", natureConfidence: 0.9, leftLocator: "D13 p.1", rightLocator: "D18 p.1" },
+        { kind: "date_mismatch", factKey: "date", leftDocumentId: "bundle", rightDocumentId: "bundle", leftValue: "2023-11-03", rightValue: "2023-11-14", leftExcerpt: "The NVR fault was closed…", rightExcerpt: "…not recording on 14 November 2023…", confidence: 0.9, nature: "DIRECT", natureConfidence: 0.9, leftLocator: "D13 p.1", rightLocator: "D18 p.1", leftPage: 31, rightPage: 44 },
       ],
       verdicts: [],
       stats: {},
@@ -169,6 +176,9 @@ describe("EvidenceIntelligenceSvc.scanContradictions with the full scan on", () 
     expect(stored).to.have.length(2);
     const full = stored.find((r) => r.leftLocator);
     expect(full).to.include({ leftLocator: "D13 p.1", rightLocator: "D18 p.1", nature: "DIRECT", natureConfidence: 0.9 });
+    expect(full).to.include({ leftPage: 31, rightPage: 44 });
+    // The sample scan's hit has no location, so its pages stay unset.
+    expect(stored.find((r) => r.kind === "party_mismatch").leftPage).to.equal(undefined);
     expect(stored.find((r) => r.kind === "party_mismatch")).to.exist;
   });
 
@@ -178,6 +188,21 @@ describe("EvidenceIntelligenceSvc.scanContradictions with the full scan on", () 
     stored[idx] = { ...stored[idx], status: "RESOLVED", resolutionNote: "Different NVR" };
     await EvidenceIntelligenceSvc.scanContradictions("case-1");
     expect(stored.find((r) => r.leftLocator)).to.include({ status: "RESOLVED", resolutionNote: "Different NVR" });
+  });
+
+  it("keeps a resolved contradiction resolved when a rescan moves its page", async () => {
+    await EvidenceIntelligenceSvc.scanContradictions("case-1");
+    const idx = stored.findIndex((r) => r.leftLocator);
+    stored[idx] = { ...stored[idx], status: "RESOLVED", resolutionNote: "Different NVR" };
+    (FullContradictionScanSvc as any).scan = async () => ({
+      hits: [
+        { kind: "date_mismatch", factKey: "date", leftDocumentId: "bundle", rightDocumentId: "bundle", leftValue: "2023-11-03", rightValue: "2023-11-14", leftExcerpt: "The NVR fault was closed…", rightExcerpt: "…not recording on 14 November 2023…", confidence: 0.9, nature: "DIRECT", natureConfidence: 0.9, leftLocator: "D13 p.1", rightLocator: "D18 p.1", leftPage: 33, rightPage: 46 },
+      ],
+      verdicts: [],
+      stats: {},
+    });
+    await EvidenceIntelligenceSvc.scanContradictions("case-1");
+    expect(stored.find((r) => r.leftLocator)).to.include({ status: "RESOLVED", leftPage: 33, rightPage: 46 });
   });
 
   it("still saves the sample scan's hits when the full scan throws", async () => {

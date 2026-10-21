@@ -1888,6 +1888,8 @@ model EvidenceContradiction {
   // often pairs two exhibits inside one merged PDF, so the document name alone can't tell them apart.
   leftLocator      String?
   rightLocator     String?
+  leftPage         Int?
+  rightPage        Int?
   createdAt        DateTime             @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)

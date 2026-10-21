@@ -183,6 +183,8 @@ export default class CaseGraphViewSvc {
           natureConfidence: contradiction.natureConfidence,
           leftLocator: contradiction.leftLocator,
           rightLocator: contradiction.rightLocator,
+          leftPage: contradiction.leftPage,
+          rightPage: contradiction.rightPage,
         },
       };
     });

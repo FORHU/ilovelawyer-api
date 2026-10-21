@@ -47,6 +47,10 @@ export type FullScanHit = ContradictionHit & {
   natureConfidence: number;
   leftLocator: string | null;
   rightLocator: string | null;
+  /** Physical PDF page of each side (1-based). The locator counts pages inside an exhibit, which
+   * in a merged bundle is not the page the viewer should open. */
+  leftPage: number | null;
+  rightPage: number | null;
 };
 
 export interface FullScanVerdict {
@@ -169,6 +173,8 @@ export default class FullContradictionScanSvc {
         natureConfidence: v.confidence!,
         leftLocator: left.locator,
         rightLocator: right.locator,
+        leftPage: left.pageNumber,
+        rightPage: right.pageNumber,
       });
     }
 
