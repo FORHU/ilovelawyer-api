@@ -6,6 +6,8 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import jwt from "jsonwebtoken";
 import AuthRepo from "../src/repositories/auth.repository";
 import TrialSvc from "../src/services/trial.service";
+import TerminalWorkspaceRepo from "../src/repositories/terminal-workspace.repository";
+import TerminalWorkspaceSvc from "../src/services/terminal-workspace.service";
 import ChatSvc from "../src/services/chat.service";
 import ChatRepo from "../src/repositories/chat.repository";
 import { redis } from "../src/lib/redis";
@@ -113,5 +115,86 @@ describe("Sample chat session recap", () => {
   it("is only for the sample chat: any other consultation is left alone", async () => {
     isSample = false;
     expect(await recap()).to.equal(undefined);
+  });
+});
+
+describe("Sample-case guest layout", () => {
+  const CASE = "case-1";
+  let saved: Record<string, any>;
+  let layouts: { id: string; caseId: string; name: string; userId: string }[];
+  let selected: Record<string, string>;
+  let deleted: string[];
+  let owner: string | null;
+  let racer: { id: string; caseId: string; name: string; userId: string } | null;
+
+  beforeEach(() => {
+    saved = {
+      findOldestNamed: TerminalWorkspaceRepo.findOldestNamed,
+      caseOwnerId: TerminalWorkspaceRepo.caseOwnerId,
+      create: TerminalWorkspaceRepo.create,
+      markLastUsed: TerminalWorkspaceRepo.markLastUsed,
+      delete: TerminalWorkspaceRepo.delete,
+      skuForUser: TerminalWorkspaceSvc.skuForUser,
+    };
+    layouts = [];
+    selected = {};
+    deleted = [];
+    owner = "case-owner";
+    racer = null;
+    (TerminalWorkspaceRepo as any).findOldestNamed = async (caseId: string, name: string) => layouts.find((l) => l.caseId === caseId && l.name === name) ?? null;
+    (TerminalWorkspaceRepo as any).caseOwnerId = async () => owner;
+    (TerminalWorkspaceRepo as any).create = async (userId: string, data: { caseId: string; name: string }) => {
+      const row = { id: `ws-${layouts.length + 1}`, userId, caseId: data.caseId, name: data.name };
+      // Another guest started at the same moment and created theirs first.
+      if (racer) layouts.push(racer);
+      layouts.push(row);
+      return row;
+    };
+    (TerminalWorkspaceRepo as any).markLastUsed = async (id: string, userId: string) => {
+      selected[userId] = id;
+      return { id };
+    };
+    (TerminalWorkspaceRepo as any).delete = async (id: string) => {
+      deleted.push(id);
+      layouts = layouts.filter((l) => l.id !== id);
+    };
+    (TerminalWorkspaceSvc as any).skuForUser = async () => "SOLO";
+  });
+  afterEach(() => {
+    Object.assign(TerminalWorkspaceRepo, saved);
+    (TerminalWorkspaceSvc as any).skuForUser = saved.skuForUser;
+  });
+
+  const seed = (guest: string) => (TrialSvc as any).seedGuestLayout(guest, CASE) as Promise<void>;
+
+  it("makes one layout, owned by the case's owner, and opens it for the first guest", async () => {
+    await seed("guest-a");
+    expect(layouts).to.have.length(1);
+    expect(layouts[0]!.userId).to.equal("case-owner");
+    expect(layouts[0]!.name).to.equal("Case overview");
+    expect(selected["guest-a"]).to.equal(layouts[0]!.id);
+  });
+
+  it("gives every later guest the same layout instead of another tab", async () => {
+    await seed("guest-a");
+    await seed("guest-b");
+    await seed("guest-c");
+    expect(layouts).to.have.length(1);
+    expect(selected["guest-b"]).to.equal(layouts[0]!.id);
+    expect(selected["guest-c"]).to.equal(layouts[0]!.id);
+  });
+
+  it("keeps the oldest when two guests start at the same moment", async () => {
+    racer = { id: "ws-first", userId: "case-owner", caseId: CASE, name: "Case overview" };
+    await seed("guest-b");
+    expect(layouts.map((l) => l.id)).to.deep.equal(["ws-first"]);
+    expect(deleted).to.have.length(1);
+    expect(selected["guest-b"]).to.equal("ws-first");
+  });
+
+  it("falls back to the guest as owner when the case has none", async () => {
+    owner = null;
+    await seed("guest-a");
+    expect(layouts[0]!.userId).to.equal("guest-a");
   });
 });
