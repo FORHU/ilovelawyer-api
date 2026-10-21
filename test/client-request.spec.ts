@@ -8,6 +8,8 @@ import ClientRequestSvc from "../src/services/client-request.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
 import ClientRequestBriefSvc from "../src/services/client-request-brief.service";
+import ClientRequestMatchingSvc from "../src/services/client-request-matching.service";
+import * as socket from "../src/lib/socket";
 import type { ClientWorkspace } from "../src/services/client-case.service";
 import { CLIENT_REQUEST_CONSENT_VERSION } from "../src/constants/client-request.constants";
 import { createClientRequestSchema } from "../src/validation/client-request.validation";
@@ -21,22 +23,46 @@ async function errorOf(promise: Promise<unknown>): Promise<{ status?: number; co
   }
 }
 
+/** Saves the named statics so afterEach can put them back. Spreading a class copies none of its
+ * static methods, so `{ ...Repo }` would restore nothing. */
+function stash<T extends object>(target: T, keys: (keyof T)[]) {
+  const saved = keys.map((k) => [k, target[k]] as const);
+  return () => saved.forEach(([k, v]) => ((target as any)[k] = v));
+}
+
 const workspace: ClientWorkspace = { id: "org-personal", role: "OWNER", tenantCode: "UK" };
 const CASE_ID = "11111111-1111-4111-8111-111111111111";
 
 describe("Client lawyer requests", () => {
-  const originals = {
-    caseFind: ClientCaseRepo.findById,
-    repo: { ...ClientRequestRepo } as Record<string, unknown>,
-    briefInBackground: ClientRequestBriefSvc.generateInBackground,
-  };
+  let restore: (() => void)[];
   let briefsStarted: string[];
   let caseRow: any;
   let paid: boolean;
   let open: { id: string } | null;
   let requests: Map<string, any>;
+  let claims: any[];
+  let emitted: [string, string, any][];
 
   beforeEach(() => {
+    restore = [
+      stash(ClientCaseRepo, ["findById"]),
+      stash(ClientRequestRepo, ["hasCasePayment", "findOpenForCase", "create", "findForClient", "transition", "route", "withdraw"]),
+      stash(ClientRequestBriefSvc, ["generateInBackground"]),
+      stash(ClientRequestMatchingSvc, ["eligibleLawyerIds"]),
+      stash(socket, ["emitToUser"]),
+    ];
+    claims = [];
+    emitted = [];
+    (ClientRequestMatchingSvc as any).eligibleLawyerIds = async () => ["lawyer-a", "lawyer-b"];
+    (socket as any).emitToUser = (userId: string, event: string, payload: unknown) => emitted.push([userId, event, payload]);
+    (ClientRequestRepo as any).withdraw = async (id: string, from: string[], now: Date) => {
+      const r = requests.get(id);
+      if (!r || !from.includes(r.status)) return { moved: false, heldBy: null };
+      const open = claims.find((c) => c.requestId === id && c.outcome === null);
+      if (open) Object.assign(open, { outcome: "WITHDRAWN", endedAt: now });
+      Object.assign(r, { status: "WITHDRAWN", withdrawnAt: now });
+      return { moved: true, heldBy: open?.lawyerId ?? null };
+    };
     caseRow = { id: CASE_ID, ukJurisdiction: "England and Wales", lawyerReadiness: null };
     paid = true;
     open = null;
@@ -67,11 +93,7 @@ describe("Client lawyer requests", () => {
       return r;
     };
   });
-  afterEach(() => {
-    (ClientCaseRepo as any).findById = originals.caseFind;
-    Object.assign(ClientRequestRepo, originals.repo);
-    (ClientRequestBriefSvc as any).generateInBackground = originals.briefInBackground;
-  });
+  afterEach(() => restore.forEach((r) => r()));
 
   const ask = (overrides: Record<string, unknown> = {}) =>
     ClientRequestSvc.create(workspace, "client-1", { caseId: CASE_ID, note: "  Prefer a fixed fee. ", consentVersion: CLIENT_REQUEST_CONSENT_VERSION, consentAccepted: true, ...overrides });
@@ -144,6 +166,30 @@ describe("Client lawyer requests", () => {
       const { id } = await ask();
       expect(await errorOf(ClientRequestSvc.withdraw("client-2", id))).to.deep.include({ status: 404 });
       expect(await errorOf(ClientRequestSvc.get("client-2", id))).to.deep.include({ status: 404 });
+    });
+
+    it("tells the lawyers who could see it in their inbox that it's gone", async () => {
+      const { id } = await ask();
+      await ClientRequestSvc.withdraw("client-1", id);
+
+      expect(emitted.map(([userId, event]) => [userId, event])).to.deep.equal([
+        ["lawyer-a", "client-request:taken"],
+        ["lawyer-b", "client-request:taken"],
+      ]);
+      expect(emitted[0]![2]).to.deep.equal({ requestId: id });
+    });
+
+    it("while a lawyer holds it, ends their claim and tells them", async () => {
+      const { id } = await ask();
+      requests.get(id).status = "CLAIMED";
+      claims.push({ requestId: id, lawyerId: "lawyer-a", outcome: null });
+
+      await ClientRequestSvc.withdraw("client-1", id);
+
+      expect(claims[0].outcome).to.equal("WITHDRAWN");
+      expect(emitted).to.have.length(1);
+      expect(emitted[0]!.slice(0, 2)).to.deep.equal(["lawyer-a", "client-request:updated"]);
+      expect(emitted[0]![2]).to.deep.include({ requestId: id, status: "WITHDRAWN" });
     });
   });
 

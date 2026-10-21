@@ -28,7 +28,7 @@ export default class NotificationSvc {
    * shortcut only: emitToUser is best-effort and never throws, so a client that's offline or
    * never connects still sees this via the normal GET /api/notifications poll/refetch.
    */
-  static async create(input: { userId: string; organizationId?: string; type: "EVENT_REMINDER" | "CASE_UPDATE" | "SYSTEM"; title: string; message: string; link?: string }) {
+  static async create(input: { userId: string; organizationId?: string; type: "EVENT_REMINDER" | "CASE_UPDATE" | "CLIENT_REQUEST" | "SYSTEM"; title: string; message: string; link?: string }) {
     const notification = await NotificationRepo.create(input);
     emitToUser(input.userId, "notification:new", notification);
     return notification;

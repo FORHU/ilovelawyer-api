@@ -617,7 +617,7 @@ export const clientHandoffPaths: Paths = {
   "/client-requests": {
     get: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#511",
+      issue: "ilovelawyer-api#511", built: true,
       summary: "The Client Requests inbox",
       description: "inbox: routed to you, unclaimed, not passed. mine: ones you hold or are engaged on. history: ones you held that ended (released, lapsed, declined, closed).",
       parameters: [{ name: "view", in: "query", schema: { type: "string", enum: ["inbox", "mine", "history"], default: "inbox" } }, ...pageParams],
@@ -627,7 +627,7 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}": {
     get: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#511",
+      issue: "ilovelawyer-api#511", built: true,
       summary: "One request: the brief, and your claim, quote and engagement",
       parameters: requestId,
       responses: { 200: ok("Request", ref("ClientRequestForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND },
@@ -636,9 +636,9 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/claim": {
     post: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#511",
+      issue: "ilovelawyer-api#511", built: true,
       summary: "Accept: hold the request for 24h",
-      description: "Only one lawyer can win. The others get client-request:taken. Needs a card on the organization. Nothing is charged until the client confirms.",
+      description: "Only one lawyer can win. The others get client-request:taken. Needs a card on the organization (not checked yet: card on file lands with ilovelawyer-api#505). Nothing is charged until the client confirms.",
       parameters: requestId,
       responses: {
         200: ok("Claimed (CLAIMED)", ref("ClientRequestForLawyer")),
@@ -652,7 +652,7 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/pass": {
     post: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#511",
+      issue: "ilovelawyer-api#511", built: true,
       summary: "Pass: hide the request from you",
       parameters: requestId,
       responses: { 204: ok("Hidden"), 403: LAWYER_ONLY, 404: NOT_FOUND },

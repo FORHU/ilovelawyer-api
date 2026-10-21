@@ -4,7 +4,9 @@ import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import HttpError from "../utils/http-error";
+import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
+import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
 import {
   CLIENT_REQUEST_CONSENT_TEXT,
   CLIENT_REQUEST_CONSENT_VERSION,
@@ -112,12 +114,21 @@ export default class ClientRequestSvc {
     return toDto(await ClientRequestSvc.load(clientId, id));
   }
 
-  /** Until a lawyer is confirmed, the client can take the request back. */
+  /** Until a lawyer is confirmed, the client can take the request back. A lawyer holding it loses
+   * their claim and is told; otherwise the lawyers it was routed to drop it from their inbox. */
   static async withdraw(clientId: string, id: string) {
     const request = await ClientRequestSvc.load(clientId, id);
-    const moved = await ClientRequestRepo.transition(id, WITHDRAWABLE, { status: "WITHDRAWN", withdrawnAt: new Date() });
+    const now = new Date();
+    const { moved, heldBy } = await ClientRequestRepo.withdraw(id, WITHDRAWABLE, now);
     if (!moved) {
       throw new HttpError("This request can't be withdrawn now.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+    if (heldBy) {
+      const updated: ClientRequestUpdatedEvent = { requestId: id, status: "WITHDRAWN", updatedAt: now.toISOString() };
+      emitToUser(heldBy, "client-request:updated", updated);
+    } else {
+      const taken: ClientRequestTakenEvent = { requestId: id };
+      for (const lawyerId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) emitToUser(lawyerId, "client-request:taken", taken);
     }
     return toDto(await ClientRequestSvc.load(clientId, id));
   }

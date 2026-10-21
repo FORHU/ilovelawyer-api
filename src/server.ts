@@ -14,6 +14,7 @@ import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
 import CaseCopyQueue from "./queues/case-copy.queue";
 import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
 import TrialGuestPurgeQueue from "./queues/trial-guest-purge.queue";
+import ClientRequestSweepQueue from "./queues/client-request-sweep.queue";
 
 import { DOCUMENT_EXTRACTION_IN_API, FREE_CREDIT_USD, PORT } from "./config";
 import logger from "./utils/logger";
@@ -41,6 +42,7 @@ GoogleCalendarSyncQueue.start();
 CaseCopyQueue.start();
 SecurityAuditRetentionQueue.start();
 TrialGuestPurgeQueue.start();
+ClientRequestSweepQueue.start();
 
 if (FREE_CREDIT_USD === null) logger.error("FREE_CREDIT_USD is not set: new accounts get no free AI credit and are not limited");
 
