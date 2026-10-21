@@ -40,6 +40,15 @@ A case a client made in the client app. It is an ordinary `Case` in the client's
 The client app is pay per case. A client pays first (`ClientPayment`, kind `CASE`), then creates the case with that payment. `usedAt` makes one payment create one case, and a failed creation gives it back. The case gets its chat credits (`Case.clientCredits`), each message to the AI takes one (402 `OUT_OF_CREDITS` at 0), and a `TOP_UP` payment adds more. Prices and packs are placeholders in `client-pricing.constants.ts`. Every payment goes through `clientPaymentProvider()`, which is a dummy for now: it charges nothing, and `provider = "DUMMY"` is stored on each row so a dummy payment is never taken for a real one. Stripe replaces it there later. The account-wide free credit (`User.freeCreditUsd`) doesn't apply under `/api/client`, since chat credits replace it.
 _Avoid_: "credits" for the free AI credit or the lawyer's case allowance; "subscription" (the client app has none).
 
+**Client Request**:
+A client's ask for a lawyer on one of their own UK cases (the UK client-to-lawyer hand-off). It carries the anonymised brief that matching lawyers see, then one lawyer's claim, quote, the per-case fee charged to that lawyer's organization, and the engagement. Statuses: `REQUESTED → ROUTED → CLAIMED → QUOTED → CONFIRMED → ENGAGED → CLOSED`, or `EXPIRED` / `WITHDRAWN` (`types/client-handoff.ts`). The client app calls it a lawyer request (`/lawyer-requests`). The lawyer app calls it a client request (`/client-requests`). Both are the same row. See `docs/adr/0016-client-app-shares-the-uk-api.md`.
+_Status: designed, not yet implemented (ilovelawyer-api#503–#520)._
+_Avoid_: "claim" alone in code for a lawyer's 24h hold on a request: name it `ClientRequestClaim`, since **Case Claim** is a cause of action. "Declined" as a request status: a declined quote ends the claim (`ClaimOutcome.DECLINED`) and the request goes back to `ROUTED`.
+
+**Engagement**:
+A Client Request once the client has confirmed the lawyer and the fee is paid (`ENGAGED`). The assigned lawyer gets a `VIEW` `CaseAccess` grant on the client's case, the same read-only share `CaseShareSvc` makes. Closing the engagement removes the grant. The engagement has its own AI budget, which the lawyer sees and tops up. It is separate from the internal case allowance in `CaseLimitsSvc`, which is never shown.
+_Status: designed, not yet implemented._
+
 **Email Verification**:
 A blocking gate on password-based Signup: a User's `isEmailVerified` flag starts `false` and Login is refused until it's flipped `true` by successfully completing OTP verification. Not required for Google signups — Google has already verified the email, so `isEmailVerified` is set `true` at account creation. An admin can also mark a User verified in place of the OTP (`POST /api/admin/users/:id/verify-email`, `AdminSvc.verifyEmail`) — one-way, audited as `users.email_verified`, and it auto-approves a PENDING User on an auto-approve Tenant exactly as OTP verification does.
 _Avoid_: "OTP" alone as the name of the gate (OTP is the mechanism — the one-time code — not the gate itself; the gate is Email Verification)
