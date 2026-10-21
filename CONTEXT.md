@@ -49,7 +49,7 @@ _Status: designed, not yet implemented (ilovelawyer-api#503–#520)._
 _Avoid_: "claim" alone in code for a lawyer's 24h hold on a request: name it `ClientRequestClaim`, since **Case Claim** is a cause of action. "Declined" as a request status: a declined quote ends the claim (`ClaimOutcome.DECLINED`) and the request goes back to `ROUTED`.
 
 **Engagement**:
-A Client Request once the client has confirmed the lawyer and the fee is paid (`ENGAGED`). The assigned lawyer gets a `VIEW` `CaseAccess` grant on the client's case, the same read-only share `CaseShareSvc` makes. Closing the engagement removes the grant. The engagement has its own AI budget, which the lawyer sees and tops up. It is separate from the internal case allowance in `CaseLimitsSvc`, which is never shown.
+A Client Request once the client has confirmed the lawyer and the fee is paid (`ENGAGED`). The assigned lawyer gets a `VIEW` `CaseAccess` grant on the client's case, the same read-only share `CaseShareSvc` makes. Ending the engagement removes the grant. Either side can end it: the lawyer closes it, or the client ends it from the client app. The lawyer keeps any workspace copy they made. The engagement has its own AI budget, which the lawyer sees and tops up. It is separate from the internal case allowance in `CaseLimitsSvc`, which is never shown.
 _Status: designed, not yet implemented._
 
 **Email Verification**:

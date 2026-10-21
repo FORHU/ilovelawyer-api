@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Needs sign-off from Jun (FORHU/ilovelawyer-app#845).
+Accepted (FORHU/ilovelawyer-app#845). One change from the first draft: the client can also end an engagement, not only the lawyer.
 
 ## Context
 
@@ -36,9 +36,9 @@ These existing pieces already do most of what the hand-off needs:
 | **How** | `ClientRequest` row | `ClientRequest` + claim-scoped party lookup (audited) | `CaseAccess` `VIEW` grant on the client's case | Grant removed. The copy is the lawyer's own case. |
 
 - **Live, not a snapshot.** The grant reads the client's case itself, so documents the client adds later appear for the lawyer. They're pushed as an `engagement:document-added` event. The existing `document:*` events only reach the uploader.
-- **Copy to my workspace** uses `CaseCopySvc`. The copy is a snapshot at the moment it's made. It stays in the lawyer's organization after close. It records its source case (`copiedFromCaseId`) and the Client Request it came from, so AI use on the copy counts against that engagement's budget.
+- **Copy to my workspace** uses `CaseCopySvc`. The copy is a snapshot at the moment it's made. It stays in the lawyer's organization after close, however the engagement ended: UK solicitors are expected to keep their client files after a matter ends, so it is never deleted on close. It records its source case (`copiedFromCaseId`) and the Client Request it came from, so AI use on the copy counts against that engagement's budget.
 - **Read-only means no AI on the client's case.** AI work writes analysis into the case, and that would change what the client sees. The lawyer uses AI on their workspace copy, metered against the engagement's AI budget. A lawyer who hasn't copied the case can still read everything.
-- **Access ends** when the lawyer closes the engagement. It also ends when the client deletes the case or their account. If the request is reassigned to another member of the firm, the grant moves to the new lawyer. The firm's OWNER/ADMIN see the request and its charges, but not the case, unless they are the assigned lawyer. This follows the existing rule that only the assigned person gets a per-case grant (decisions D1–D8, #331).
+- **Access ends** when either side ends the engagement: the lawyer closes it, or the client ends it from the client app. It's the client's data, so they never have to ask the lawyer to let go. It also ends when the client deletes the case or their account. Nothing the client adds after that reaches the lawyer. If the request is reassigned to another member of the firm, the grant moves to the new lawyer. The firm's OWNER/ADMIN see the request and its charges, but not the case, unless they are the assigned lawyer. This follows the existing rule that only the assigned person gets a per-case grant (decisions D1–D8, #331).
 - **Every access step is audited.** That covers claim, the party-name lookup, release, grant, reassign and close. They are written to `AuditEvent` on the client's case and `SecurityAuditEvent` (`SecurityAuditSvc`), like other access changes.
 
 ## Considered options

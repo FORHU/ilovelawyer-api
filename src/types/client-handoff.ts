@@ -20,7 +20,7 @@ export const CLIENT_REQUEST_STATUSES = [
   "QUOTED", // quote sent; the client confirms or declines
   "CONFIRMED", // the client confirmed; the per-case fee is being charged (or failed and awaits a new card)
   "ENGAGED", // fee paid; the lawyer has read-only access to the client's case
-  "CLOSED", // the lawyer closed the engagement; live access ended
+  "CLOSED", // the lawyer closed or the client ended the engagement; live access ended
   "EXPIRED", // unclaimed 48h after routing; ops alerted
   "WITHDRAWN", // the client withdrew before engagement
 ] as const;
