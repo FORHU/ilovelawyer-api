@@ -3,6 +3,12 @@ import ClientRequestRepo, { type ClientRequestForClient } from "../repositories/
 import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
+import OrganizationChargeSvc from "./organization-charge.service";
+import NotificationSvc from "./notification.service";
+import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
+import OrganizationChargeRepo from "../repositories/organization-charge.repository";
+import OrganizationRepo from "../repositories/organization.repository";
+import logger from "../utils/logger";
 import HttpError from "../utils/http-error";
 import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
@@ -77,7 +83,7 @@ function toDto(r: ClientRequestForClient) {
         }
       : null,
     referralDisclosure: quoted ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
-    engagedAt: null,
+    engagedAt: r.engagedAt,
     closedAt: null,
     closedBy: null,
     feedback: null,
@@ -161,6 +167,67 @@ export default class ClientRequestSvc {
       const taken: ClientRequestTakenEvent = { requestId: id };
       for (const lawyerId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) emitToUser(lawyerId, "client-request:taken", taken);
     }
+    return toDto(await ClientRequestSvc.load(clientId, id));
+  }
+
+  /**
+   * The client confirms the quoted lawyer (#513), having acknowledged the referral disclosure: QUOTED
+   * -> CONFIRMED, and the lawyer's organization is charged the per-case fee straight away. When it goes
+   * through the request is ENGAGED; when the card is declined it stays CONFIRMED, the firm is asked to
+   * update the card, and the client waits. Confirming twice charges once.
+   */
+  static async confirm(clientId: string, id: string, input: { disclosureAcknowledged: boolean }) {
+    if (!input.disclosureAcknowledged) {
+      throw new HttpError("Read and acknowledge how ilovelawyer is paid before confirming.", 400, "DISCLOSURE_NOT_ACKNOWLEDGED");
+    }
+    const request = await ClientRequestSvc.load(clientId, id);
+    const confirmed = await OrganizationChargeRepo.confirm(id, OrganizationChargeSvc.perCaseFee());
+    if (!confirmed) {
+      const now = await ClientRequestSvc.load(clientId, id);
+      throw new HttpError("This lawyer can't be confirmed now.", 409, "INVALID_REQUEST_STATUS", { status: now.status ?? request.status });
+    }
+
+    const lawyerId = confirmed.claim.lawyerId;
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: clientId, action: "client_request.confirmed", payload: { requestId: id, chargeId: confirmed.charge.id, lawyerId } });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CONFIRMED", updatedAt: new Date().toISOString() };
+    emitToUser(lawyerId, "client-request:updated", updated);
+    await NotificationSvc.create({
+      userId: lawyerId,
+      type: "CLIENT_REQUEST",
+      title: "A client confirmed you",
+      message: "The client accepted your quote. The introduction fee is being charged to your organization's card.",
+      link: `/client-requests/${id}`,
+    }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
+
+    // Engages the request, or tells the firm the card was declined.
+    await OrganizationChargeSvc.attempt(confirmed.charge.id);
+    return toDto(await ClientRequestSvc.load(clientId, id));
+  }
+
+  /** The client declines the quote (#513): nothing is charged, and the request goes back to other
+   * lawyers without this one. The reason stays on the claim; the lawyer is told it ended. */
+  static async decline(clientId: string, id: string, input: { reason?: string }) {
+    const request = await ClientRequestSvc.load(clientId, id);
+    const quoted = request.claims[0];
+    if (request.status !== "QUOTED" || !quoted || quoted.outcome !== null) {
+      throw new HttpError("There's no quote to decline now.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+    const now = new Date();
+    if (!(await ClientRequestClaimRepo.decline({ id: quoted.id, requestId: id, lawyerId: quoted.lawyerId }, input.reason?.trim() || null, now))) {
+      const current = await ClientRequestSvc.load(clientId, id);
+      throw new HttpError("There's no quote to decline now.", 409, "INVALID_REQUEST_STATUS", { status: current.status });
+    }
+
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: clientId, action: "client_request.declined", payload: { requestId: id, claimId: quoted.id, lawyerId: quoted.lawyerId } });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "ROUTED", updatedAt: now.toISOString() };
+    emitToUser(quoted.lawyerId, "client-request:updated", updated);
+    await NotificationSvc.create({
+      userId: quoted.lawyerId,
+      type: "CLIENT_REQUEST",
+      title: "A client chose not to go ahead",
+      message: "The client declined your quote. Nothing was charged.",
+      link: "/client-requests?view=history",
+    }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
     return toDto(await ClientRequestSvc.load(clientId, id));
   }
 

@@ -10,7 +10,7 @@ class RequestMovedOn extends Error {}
 
 /* REQUEST_ROW_FIRST: every transaction that changes both a request and one of its claims (claim,
  * quote, release, lapse, and ClientRequestRepo.withdraw) updates the request row before the claim
- * row. Taking the two locks in the same order is what keeps two of them at once (a quote and the
+ * row (OrganizationChargeRepo too: request, then charge, then claim). Taking the locks in the same order is what keeps two of them at once (a quote and the
  * lapse sweep, a release and a withdrawal) from deadlocking. */
 
 /** A lawyer's 24h hold on a client request (ClientRequestClaim). */
@@ -87,6 +87,38 @@ export default class ClientRequestClaimRepo {
         const ended = await tx.clientRequestClaim.updateMany({
           where: { id: claim.id, outcome: null },
           data: { outcome: "RELEASED", endedAt: now, openRequestId: null, releaseReason: reason.reason, releaseNote: reason.note },
+        });
+        if (ended.count !== 1 || rerouted.count !== 1) throw new RequestMovedOn();
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof RequestMovedOn) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * The client declines the quote (#513): the claim ends DECLINED, with their reason if they gave one,
+   * and the request goes back in the pool without that lawyer, as a release does. Only from QUOTED.
+   * Both or neither.
+   */
+  static async decline(claim: { id: string; requestId: string; lawyerId: string }, reason: string | null, now: Date = new Date()): Promise<boolean> {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Request row first, as everywhere (see REQUEST_ROW_FIRST).
+        const rerouted = await tx.clientRequest.updateMany({
+          where: { id: claim.requestId, status: "QUOTED" },
+          data: {
+            status: "ROUTED",
+            routedAt: now,
+            routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS),
+            announcedAt: null,
+            excludedLawyerIds: { push: claim.lawyerId },
+          },
+        });
+        const ended = await tx.clientRequestClaim.updateMany({
+          where: { id: claim.id, outcome: null },
+          data: { outcome: "DECLINED", endedAt: now, openRequestId: null, declineReason: reason },
         });
         if (ended.count !== 1 || rerouted.count !== 1) throw new RequestMovedOn();
       });

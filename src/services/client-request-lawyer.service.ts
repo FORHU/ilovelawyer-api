@@ -5,6 +5,8 @@ import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
+import OrganizationChargeSvc from "./organization-charge.service";
+import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import SecurityAuditSvc from "./security-audit.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
@@ -36,8 +38,8 @@ function quoteOf(claim: LawyerRequest["claims"][number] | undefined) {
   };
 }
 
-/** ClientRequestForLawyer in the contract, as `lawyerId` sees it. The fee, charge and engagement are
- * filled by later issues (#513 onwards); until then they're always empty. */
+/** ClientRequestForLawyer in the contract, as `lawyerId` sees it. The engagement is filled by #514;
+ * until then it's always empty. The per-case fee's charge shows only to the lawyer it's for. */
 function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
   const mine = r.claims.find((c) => c.lawyerId === lawyerId);
   return {
@@ -50,10 +52,16 @@ function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
       ? { byMe: true, lawyer: { id: mine.lawyer.id, name: mine.lawyer.name ?? "" }, claimedAt: mine.claimedAt, claimExpiresAt: mine.expiresAt }
       : null,
     quote: quoteOf(mine),
-    perCaseFee: null,
-    charge: null,
+    perCaseFee: OrganizationChargeSvc.perCaseFee(),
+    charge: chargeOf(r, lawyerId),
     engagement: null,
   };
+}
+
+function chargeOf(r: LawyerRequest, lawyerId: string) {
+  const fee = r.charges.find((c) => c.lawyerId === lawyerId);
+  if (!fee) return null;
+  return { id: fee.id, status: fee.status, amount: { amountMinor: fee.amountMinor, currency: fee.currency }, failureReason: fee.failureReason };
 }
 
 function criteriaOf(r: LawyerRequest) {
@@ -224,6 +232,27 @@ export default class ClientRequestLawyerSvc {
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "QUOTED", updatedAt: now.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
 
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+  }
+
+  /**
+   * Retries the per-case fee once the card has been updated (#513). Only while CONFIRMED with a failed
+   * charge, by the lawyer holding it. Never charges twice: a fee that went through engages the request
+   * and isn't taken again, and two retries at once can't both run. 402 CHARGE_FAILED when it fails again.
+   */
+  static async retryCharge(lawyer: LawyerContext, id: string) {
+    await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CONFIRMED"]);
+    const fee = await OrganizationChargeRepo.findFeeForRequest(id);
+    if (!fee || fee.status !== "FAILED") {
+      const status = fee?.status === "PENDING" ? "being charged already" : "not waiting on a retry";
+      throw new HttpError(`The introduction fee is ${status}.`, 409, "INVALID_REQUEST_STATUS", { status: "CONFIRMED", chargeStatus: fee?.status ?? null });
+    }
+    const outcome = await OrganizationChargeSvc.attempt(fee.id);
+    if (outcome === null) throw new HttpError("The introduction fee is being charged already.", 409, "INVALID_REQUEST_STATUS", { status: "CONFIRMED" });
+    if (outcome === "FAILED") {
+      const after = await OrganizationChargeRepo.findById(fee.id);
+      throw new HttpError(after?.failureReason ?? "The card was declined.", 402, "CHARGE_FAILED");
+    }
     return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
   }
 

@@ -3,6 +3,8 @@ import type Stripe from "stripe";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
 import ClientBillingAdminSvc from "./client-billing-admin.service";
 import OrganizationCardSvc from "./organization-card.service";
+import OrganizationChargeSvc from "./organization-charge.service";
+import { ORGANIZATION_CHARGE_PURPOSE } from "../payments/organization-card-provider";
 import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "../payments/client-payment-provider";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -179,6 +181,14 @@ export default class ClientBillingSvc {
         } else if (outcomeOfSession(session) === "paid") {
           await ClientPaymentRepo.settle(payment.id, { paid: true });
         }
+        break;
+      }
+      // A charge to a law firm's card (OrganizationChargeSvc: the per-case fee) that settled later, or
+      // whose direct answer never arrived.
+      case "payment_intent.succeeded":
+      case "payment_intent.payment_failed": {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        if (intent.metadata?.purpose === ORGANIZATION_CHARGE_PURPOSE) await OrganizationChargeSvc.applyStripeIntent(intent);
         break;
       }
       // A refund an admin issued (ClientBillingAdminSvc.refund) that Stripe finished, or couldn't.

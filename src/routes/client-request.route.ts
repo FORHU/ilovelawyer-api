@@ -18,5 +18,7 @@ router.post("/:id/pass", asyncHandler(ClientRequestLawyerCtrl.pass));
 router.get("/:id/parties", asyncHandler(ClientRequestLawyerCtrl.parties));
 router.post("/:id/release", asyncHandler(ClientRequestLawyerCtrl.release));
 router.post("/:id/quote", asyncHandler(ClientRequestLawyerCtrl.quote));
+// Retrying the per-case fee after the card was declined and updated (#513).
+router.post("/:id/charge/retry", asyncHandler(ClientRequestLawyerCtrl.retryCharge));
 
 export default router;

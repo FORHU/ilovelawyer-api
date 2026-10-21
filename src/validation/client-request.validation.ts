@@ -52,3 +52,14 @@ export const quoteClientRequestSchema = Joi.object({
   }).required(),
   message: Joi.string().trim().min(1).max(CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH).required(),
 });
+
+/** POST /client/lawyer-requests/:id/confirm. Not `valid(true)`: false gets its own
+ * DISCLOSURE_NOT_ACKNOWLEDGED answer from the service. */
+export const confirmClientRequestSchema = Joi.object({
+  disclosureAcknowledged: Joi.boolean().required(),
+});
+
+/** POST /client/lawyer-requests/:id/decline. */
+export const declineClientRequestSchema = Joi.object({
+  reason: Joi.string().trim().allow("").max(500).optional(),
+});

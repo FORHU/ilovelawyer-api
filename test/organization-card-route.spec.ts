@@ -62,6 +62,13 @@ describe("organization card on file", () => {
     async makeDefault(customerId, paymentMethodId, replaced) {
       defaults.push({ customerId, paymentMethodId, replaced });
     },
+    // Charging the card is OrganizationChargeSvc's (#513), tested in client-request-confirm-route.spec.ts.
+    async charge() {
+      throw new Error("not used here");
+    },
+    async chargeStatus() {
+      throw new Error("not used here");
+    },
   };
 
   const completeSession = (sessionId: string, over: Partial<CompletedCardSetup["card"]> & { organizationId?: string; customerId?: string } = {}) => {

@@ -377,8 +377,10 @@ export const clientHandoffSchemas: Schemas = {
       amount: money(),
       refunded: money(),
       requestId: { type: "string" },
-      lawyer: { type: "object", properties: { id: { type: "string" }, name: { type: "string" } } },
+      lawyer: { type: "object", nullable: true, properties: { id: { type: "string" }, name: { type: "string" } } },
       failureReason: { type: "string", nullable: true },
+      receiptUrl: { type: "string", nullable: true, description: "Stripe's receipt for a paid charge; null for a DUMMY test card or before it's paid" },
+      provider: { type: "string", enum: ["STRIPE", "DUMMY"], nullable: true, description: "The card's provider; null before the first attempt" },
       createdAt: dateTime(),
     },
   },
@@ -526,10 +528,10 @@ export const clientHandoffPaths: Paths = {
   "/client/lawyer-requests/{id}/confirm": {
     post: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#513",
+      issue: "ilovelawyer-api#513", built: true,
       summary: "Confirm the quoted lawyer",
       description:
-        "Moves to CONFIRMED and charges the lawyer's organization the per-case fee. On success the request becomes ENGAGED and the lawyer gets read access to the case. If the charge fails it stays CONFIRMED, the lawyer is asked to update their card, and the case stays closed to them.",
+        "Only from QUOTED, once: confirming twice charges once. Moves to CONFIRMED and charges the lawyer's organization the per-case fee straight away, off-session on its card on file (Stripe, or a DUMMY test card that takes no money). Paid: ENGAGED (engagedAt set); the lawyer's read access to the case comes with #514. Declined, or no card: it stays CONFIRMED, the lawyer and the organization's OWNER/ADMINs are notified to update the card, and the lawyer retries (POST /client-requests/{id}/charge/retry). A bank that settles later leaves it CONFIRMED until Stripe's webhook.",
       parameters: requestId,
       body: { type: "object", required: ["disclosureAcknowledged"], properties: { disclosureAcknowledged: { type: "boolean", enum: [true] } } },
       responses: { 200: ok("Confirmed or engaged", ref("LawyerRequestForClient")), 400: err("DISCLOSURE_NOT_ACKNOWLEDGED"), 404: NOT_FOUND, 409: BAD_STATUS },
@@ -538,9 +540,9 @@ export const clientHandoffPaths: Paths = {
   "/client/lawyer-requests/{id}/decline": {
     post: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#513",
+      issue: "ilovelawyer-api#513", built: true,
       summary: "Decline the quote",
-      description: "Nothing is charged. The claim ends DECLINED and the request goes back to ROUTED, without that lawyer.",
+      description: "Only from QUOTED. Nothing is charged. The claim ends DECLINED (the reason stays on it) and the request goes back to ROUTED for 48h, without that lawyer, who is notified.",
       parameters: requestId,
       body: { type: "object", properties: { reason: { type: "string", maxLength: 500 } } },
       responses: { 200: ok("Back to ROUTED", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
@@ -707,9 +709,10 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/charge/retry": {
     post: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#513",
+      issue: "ilovelawyer-api#513", built: true,
       summary: "Retry the per-case fee after updating the card",
-      description: "Only while CONFIRMED with a failed charge. Idempotent: a charge that already succeeded is not taken again.",
+      description:
+        "Only the lawyer holding the request, while CONFIRMED with a FAILED charge (409 otherwise, including while a payment is still processing). Each retry is a new payment on the current card; two at once can't both run. An attempt that got no answer from Stripe is retried with the same idempotency key, so it can't charge twice.",
       parameters: requestId,
       responses: { 200: ok("Engaged, or still failed", ref("ClientRequestForLawyer")), 402: err("CHARGE_FAILED"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
@@ -855,7 +858,7 @@ export const clientHandoffPaths: Paths = {
   "/organizations/{id}/billing/fees": {
     get: op({
       tag: BILLING_TAG,
-      issue: "ilovelawyer-api#513",
+      issue: "ilovelawyer-api#513", built: true,
       summary: "Fee history: per-case fees, AI top-ups and refunds",
       parameters: [idParam(), { name: "kind", in: "query", schema: enumOf(CHARGE_KINDS) }, ...pageParams],
       responses: { 200: ok("Charges", page("Charge")), 403: err("Not the organization's OWNER/ADMIN") },
@@ -877,7 +880,7 @@ export const clientHandoffPaths: Paths = {
         built: true,
         summary: "Stripe webhook (Stripe only, not the apps)",
         description:
-          "POST /api/webhooks/stripe. Mounted with a raw body ahead of express.json(), so the signature can be checked. Idempotent per Stripe event id (StripeWebhookEvent). Built for the client app's payments: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed and checkout.session.expired. A law firm's card (ilovelawyer-api#505) is saved from checkout.session.completed in setup mode. The per-case fee (#513) adds its events here.",
+          "POST /api/webhooks/stripe. Mounted with a raw body ahead of express.json(), so the signature can be checked. Idempotent per Stripe event id (StripeWebhookEvent). Built for the client app's payments: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed and checkout.session.expired. A law firm's card (ilovelawyer-api#505) is saved from checkout.session.completed in setup mode. The per-case fee (#513) settles from payment_intent.succeeded and payment_intent.payment_failed (metadata.purpose organization_charge), read fresh from Stripe.",
         responses: {},
       }),
       // Stripe signs the request instead of sending a session, so no 401.

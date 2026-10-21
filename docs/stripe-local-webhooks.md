@@ -93,6 +93,7 @@ Stripe creates a test checkout and sends its events, and the `stripe:listen` ter
   - `checkout.session.completed` and `checkout.session.async_payment_succeeded` settle the payment as paid;
   - `checkout.session.async_payment_failed` and `checkout.session.expired` settle it as failed;
   - `checkout.session.completed` for a session in **setup** mode saves a law firm's card on file instead (`OrganizationCardSvc`, `LAWYER_PAYMENT_PROVIDER=stripe`);
+  - `payment_intent.succeeded` and `payment_intent.payment_failed` settle a charge to a law firm's card (the per-case fee, `OrganizationChargeSvc`) that Stripe finished later; anything else's payment intents are ignored;
   - `refund.updated` and `refund.failed` bring a refund an admin issued (`POST /api/admin/billing/:id/refund`) to Stripe's final status. Card refunds usually finish at once; these matter for the ones that don't;
   - anything else is acknowledged and ignored.
 - **Never applied twice.** Every handled event is recorded in `StripeWebhookEvent`, so a redelivery is answered without being applied again. Settling only moves a payment that is still `PENDING`, so the webhook and the app checking at the same moment can't add credits twice.
@@ -114,7 +115,7 @@ Stripe creates a test checkout and sends its events, and the `stripe:listen` ter
 
 ## Deployed environments
 
-These don't use the CLI. Each one has a webhook endpoint in the Stripe dashboard (**Developers → Webhooks → Add endpoint**) with the six events above (the four `checkout.session.*` ones, `refund.updated` and `refund.failed`), and its own signing secret in GitHub.
+These don't use the CLI. Each one has a webhook endpoint in the Stripe dashboard (**Developers → Webhooks → Add endpoint**) with the eight events above (the four `checkout.session.*` ones, `refund.updated`, `refund.failed`, `payment_intent.succeeded` and `payment_intent.payment_failed`), and its own signing secret in GitHub.
 
 | Environment | Endpoint URL | GitHub environment | Variables (var) and secrets (secret) |
 | --- | --- | --- | --- |

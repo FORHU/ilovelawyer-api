@@ -89,6 +89,12 @@ router.get(
   requireOrgRole(OrganizationRole.ADMIN),
   asyncHandler(OrganizationCardCtrl.get),
 );
+router.get(
+  "/:id/billing/fees",
+  asyncHandler(resolveOrganizationFromParam()),
+  requireOrgRole(OrganizationRole.ADMIN),
+  asyncHandler(OrganizationCardCtrl.fees),
+);
 router.post(
   "/:id/billing/card/setup-session",
   asyncHandler(resolveOrganizationFromParam()),
