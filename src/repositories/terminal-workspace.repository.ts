@@ -30,6 +30,16 @@ export default class TerminalWorkspaceRepo {
     return rows.map((row) => ({ ...row, isLastUsed: row.id === lastUsedId }));
   }
 
+  /** The oldest layout on a case with this name, whoever owns it. */
+  static async findOldestNamed(caseId: string, name: string) {
+    return prisma.terminalWorkspace.findFirst({ where: { caseId, name }, orderBy: { createdAt: "asc" } });
+  }
+
+  /** Who created the case: the owner a shared layout on it belongs to. */
+  static async caseOwnerId(caseId: string): Promise<string | null> {
+    return (await prisma.case.findUnique({ where: { id: caseId }, select: { userId: true } }))?.userId ?? null;
+  }
+
   /** The bare row, for the access check — whoever's case it is decides who may reach it. */
   static async findRow(id: string) {
     return prisma.terminalWorkspace.findUnique({ where: { id } });
