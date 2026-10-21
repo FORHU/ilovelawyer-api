@@ -7,6 +7,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import ClientRequestSvc from "../src/services/client-request.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
+import ClientRequestBriefSvc from "../src/services/client-request-brief.service";
 import type { ClientWorkspace } from "../src/services/client-case.service";
 import { CLIENT_REQUEST_CONSENT_VERSION } from "../src/constants/client-request.constants";
 import { createClientRequestSchema } from "../src/validation/client-request.validation";
@@ -27,7 +28,9 @@ describe("Client lawyer requests", () => {
   const originals = {
     caseFind: ClientCaseRepo.findById,
     repo: { ...ClientRequestRepo } as Record<string, unknown>,
+    briefInBackground: ClientRequestBriefSvc.generateInBackground,
   };
+  let briefsStarted: string[];
   let caseRow: any;
   let paid: boolean;
   let open: { id: string } | null;
@@ -38,6 +41,8 @@ describe("Client lawyer requests", () => {
     paid = true;
     open = null;
     requests = new Map();
+    briefsStarted = [];
+    (ClientRequestBriefSvc as any).generateInBackground = (id: string) => briefsStarted.push(id);
     (ClientCaseRepo as any).findById = async (id: string, orgId: string) => (caseRow && id === caseRow.id && orgId === workspace.id ? caseRow : null);
     (ClientRequestRepo as any).hasCasePayment = async () => paid;
     (ClientRequestRepo as any).findOpenForCase = async () => open;
@@ -60,6 +65,7 @@ describe("Client lawyer requests", () => {
   afterEach(() => {
     (ClientCaseRepo as any).findById = originals.caseFind;
     Object.assign(ClientRequestRepo, originals.repo);
+    (ClientRequestBriefSvc as any).generateInBackground = originals.briefInBackground;
   });
 
   const ask = (overrides: Record<string, unknown> = {}) =>
@@ -96,12 +102,14 @@ describe("Client lawyer requests", () => {
       const dto = await ask();
       expect(dto).to.include({ caseId: CASE_ID, status: "REQUESTED", note: "Prefer a fixed fee.", consentVersion: CLIENT_REQUEST_CONSENT_VERSION, lawyer: null, quote: null });
       expect(new Date(dto.consentAcceptedAt).getTime()).to.be.at.least(before);
+      expect(briefsStarted).to.deep.equal([dto.id]);
     });
 
     it("needs the consent ticked, and the current version of it", async () => {
       expect(await errorOf(ask({ consentAccepted: false }))).to.deep.equal({ status: 400, code: "CONSENT_REQUIRED" });
       expect(await errorOf(ask({ consentVersion: "2020-01-01" }))).to.deep.equal({ status: 409, code: "CONSENT_VERSION_STALE" });
       expect(requests.size).to.equal(0);
+      expect(briefsStarted).to.deep.equal([]);
     });
 
     it("refuses with a clear reason when the case isn't eligible", async () => {

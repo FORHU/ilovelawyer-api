@@ -1,6 +1,7 @@
 import type { ClientRequest, ClientRequestStatus } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
+import ClientRequestBriefSvc from "./client-request-brief.service";
 import HttpError from "../utils/http-error";
 import type { ClientWorkspace } from "./client-case.service";
 import {
@@ -52,8 +53,8 @@ function toDto(r: ClientRequest) {
 
 /**
  * A client asking for a lawyer on one of their own cases (#507): only on a paid UK case that isn't
- * personal injury, one open request per case, with the consent text they agreed to recorded. What
- * happens next (the anonymised brief, routing, a lawyer claiming it) is later issues.
+ * personal injury, one open request per case, with the consent text they agreed to recorded. Making
+ * one starts its anonymised brief (#508); routing and a lawyer claiming it are later issues.
  */
 export default class ClientRequestSvc {
   static consent() {
@@ -92,6 +93,8 @@ export default class ClientRequestSvc {
       consentVersion: input.consentVersion,
       consentAcceptedAt: new Date(),
     });
+    // The anonymised brief lawyers will see (#508). Written in the background: the AI takes a while.
+    ClientRequestBriefSvc.generateInBackground(created.id);
     return toDto(created);
   }
 

@@ -1,4 +1,4 @@
-import { ClientRequestStatus } from "@prisma/client";
+import { ClientRequestStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 
 /** A request is open until it's closed, expired or withdrawn; a case has at most one open. */
@@ -31,6 +31,33 @@ export default class ClientRequestRepo {
   static async transition(id: string, from: ClientRequestStatus[], data: { status: ClientRequestStatus; withdrawnAt?: Date }) {
     const { count } = await prisma.clientRequest.updateMany({ where: { id, status: { in: from } }, data });
     return count === 1;
+  }
+
+  /** Everything the brief is written from (#508): the case, its parties and documents (names only,
+   * so they can be taken out), the chat's consultation, and the client's name. */
+  static async findForBrief(id: string) {
+    return prisma.clientRequest.findUnique({
+      where: { id },
+      include: {
+        client: { select: { name: true, username: true } },
+        case: {
+          select: {
+            caseName: true,
+            practiceArea: true,
+            ukJurisdiction: true,
+            jurisdiction: true,
+            clientSide: true,
+            parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } },
+            documents: { where: { status: "ACTIVE" }, select: { id: true, name: true }, orderBy: { createdAt: "asc" } },
+            consultations: { where: { status: "ACTIVE" }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 1 },
+          },
+        },
+      },
+    });
+  }
+
+  static async saveBrief(id: string, data: { brief: Prisma.InputJsonValue; briefFingerprint: string; briefGeneratedAt: Date } | { briefError: string }) {
+    await prisma.clientRequest.update({ where: { id }, data: "briefError" in data ? data : { ...data, briefError: null } });
   }
 
   static async hasCasePayment(caseId: string): Promise<boolean> {
