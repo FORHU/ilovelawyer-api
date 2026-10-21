@@ -1,6 +1,8 @@
 import { ClientSide, OrganizationRole, Prisma } from "@prisma/client";
 import ClientCaseRepo, { type ClientCaseRow } from "../repositories/client-case.repository";
+import ClientPaymentRepo from "../repositories/client-payment.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
+import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
 import ChatSvc from "./chat.service";
 import DocumentSvc from "./document.service";
@@ -18,6 +20,8 @@ export interface ClientWorkspace {
 }
 
 export interface NewClientCase {
+  /** A successful, unused case payment of this client's (ClientBillingSvc.payForCase). */
+  paymentId: string;
   title: string;
   area: ClientCaseArea;
   /** Null when the client said it happened outside the UK. */
@@ -40,6 +44,7 @@ function toDto(row: ClientCaseRow) {
     side: row.clientSide,
     others: row.parties.map((p) => ({ id: p.id, name: p.name, role: p.designation })),
     documents: row.documents.map((d) => ({ id: d.id, name: d.name, status: d.ragStatus, createdAt: d.createdAt })),
+    credits: row.clientCredits,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -51,8 +56,9 @@ export type ClientCaseDto = ReturnType<typeof toDto>;
  * The client app's cases (ilovelawyer-client, USER accounts). A client's case is an ordinary Case
  * in their personal workspace on the client tenant, with one Consultation that the chat runs in,
  * so the AI, document extraction and access rules are the same ones lawyers use. This is a thin,
- * client-shaped layer over CaseSvc, ChatSvc and DocumentSvc, and adds no rules of its own beyond
- * "only your own cases".
+ * client-shaped layer over CaseSvc, ChatSvc and DocumentSvc. Its own rules: only your own cases,
+ * a case is paid for before it's made, and each message to the AI takes a chat credit
+ * (ClientBillingSvc).
  */
 export default class ClientCaseSvc {
   /** The workspace every client request runs in, made the first time it's needed. A client never
@@ -82,15 +88,26 @@ export default class ClientCaseSvc {
     return toDto(await ClientCaseSvc.load(workspace, caseId));
   }
 
+  /** Uses up the case payment first, so one payment can't make two cases, and gives it back if the
+   * case then can't be made, so the client can retry without paying again. */
   static async create(workspace: ClientWorkspace, userId: string, input: NewClientCase) {
-    const created = await CaseSvc.create(workspace.id, userId, workspace.role, {
-      caseName: input.title,
-      practiceArea: input.area,
-      ukJurisdiction: input.ukJurisdiction ?? undefined,
-      jurisdiction: input.where || undefined,
-      clientSide: input.side ?? null,
-      parties: (input.others ?? []).map((o) => ({ name: o.name, designation: o.role })),
-    });
+    const credits = await ClientPaymentRepo.claimCasePayment(input.paymentId, userId);
+    if (credits === null) throw new HttpError("Pay for the case first.", 402, "PAYMENT_REQUIRED");
+    let created: { id: string };
+    try {
+      created = await CaseSvc.create(workspace.id, userId, workspace.role, {
+        caseName: input.title,
+        practiceArea: input.area,
+        ukJurisdiction: input.ukJurisdiction ?? undefined,
+        jurisdiction: input.where || undefined,
+        clientSide: input.side ?? null,
+        parties: (input.others ?? []).map((o) => ({ name: o.name, designation: o.role })),
+      });
+    } catch (err) {
+      await ClientPaymentRepo.releaseCasePayment(input.paymentId);
+      throw err;
+    }
+    await ClientPaymentRepo.attachToCase(input.paymentId, created.id, credits);
     await ChatSvc.createConsultation(workspace.id, userId, input.title.slice(0, CONSULTATION_TITLE_MAX), created.id);
     return ClientCaseSvc.get(workspace, created.id);
   }
@@ -114,11 +131,23 @@ export default class ClientCaseSvc {
     };
   }
 
-  /** Asks the AI. The answer is generated in the background (ChatGenerationQueue) and shows up in
-   * listMessages. */
+  /** Asks the AI, for one chat credit. The answer is generated in the background
+   * (ChatGenerationQueue) and shows up in listMessages. A message that couldn't be queued gets its
+   * credit back; one the AI then fails to answer keeps it spent, like any other AI work. */
   static async sendMessage(workspace: ClientWorkspace, userId: string, caseId: string, text: string) {
     const consultationId = await ClientCaseSvc.consultationOf(workspace, userId, caseId);
-    return ChatSvc.enqueueChatGeneration(workspace.id, workspace.tenantCode, userId, consultationId, "", text, undefined, undefined, caseId);
+    await ClientBillingSvc.spendCredit(caseId);
+    try {
+      return await ChatSvc.enqueueChatGeneration(workspace.id, workspace.tenantCode, userId, consultationId, "", text, undefined, undefined, caseId);
+    } catch (err) {
+      await ClientBillingSvc.refundCredit(caseId);
+      throw err;
+    }
+  }
+
+  static async topUp(workspace: ClientWorkspace, userId: string, caseId: string, input: { packId: string; testOutcome?: "decline" }) {
+    await ClientCaseSvc.load(workspace, caseId);
+    return ClientBillingSvc.topUp(userId, caseId, input);
   }
 
   /** Step one of an upload: a URL the browser PUTs the file to, straight to S3. */

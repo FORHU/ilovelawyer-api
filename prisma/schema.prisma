@@ -146,6 +146,7 @@ model User {
   caseBriefExports        CaseBriefExport[]
   caseViews               CaseView[]
   updatedTenantSettings   TenantSetting[]
+  clientPayments          ClientPayment[]
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -829,6 +830,9 @@ model Case {
   copiedAt              DateTime?
   /// Staff-added AI allowance for this case, on top of the standard one (CaseLimitsSvc). Internal: never shown to users.
   extraAiAllowanceUsd   Float      @default(0)
+  /// Client app only: chat credits left. Each message to the AI takes one; a case payment and
+  /// top-ups add them (ClientBillingSvc). 0 on lawyer cases, which never read it.
+  clientCredits         Int        @default(0)
   caseName              String
   actionType            String?
   jurisdiction          String?
@@ -891,11 +895,51 @@ model Case {
   mindMap              CaseMindMap?
   changeSummaries      CaseChangeSummary[]
   manualEdits          CaseManualEdit[]
+  clientPayments       ClientPayment[]
 
   @@index([userId])
   @@index([organizationId])
   @@index([organizationId, status])
   @@index([copiedFromCaseId])
+}
+
+enum ClientPaymentKind {
+  // Pays for a new case and its first chat credits.
+  CASE
+  // Adds chat credits to a case.
+  TOP_UP
+}
+
+enum ClientPaymentStatus {
+  SUCCEEDED
+  FAILED
+}
+
+// A payment in the client app, declined ones included (ClientBillingSvc). `provider` says who took
+// it: "DUMMY" (charges nothing) until Stripe replaces it. A CASE payment is taken before its case
+// exists: `usedAt` marks it spent (so it creates one case only) and `caseId` is set once the case is
+// made.
+model ClientPayment {
+  id            String              @id @default(uuid())
+  userId        String
+  caseId        String?
+  kind          ClientPaymentKind
+  provider      String
+  externalId    String?
+  amountMinor   Int
+  currency      String
+  credits       Int
+  promoCode     String?
+  status        ClientPaymentStatus
+  failureReason String?
+  usedAt        DateTime?
+  createdAt     DateTime            @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case Case? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  @@index([userId, kind, status])
+  @@index([caseId])
 }
 
 model Party {
