@@ -3,6 +3,7 @@ import multer from "multer";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import UsersCtrl from "../controllers/users.controller";
+import LawyerProfileCtrl from "../controllers/lawyer-profile.controller";
 import { freeCreditState } from "../middleware/free-credit.middleware";
 import { AVATAR_MAX_BYTES } from "../constants";
 
@@ -30,5 +31,8 @@ router.post("/me/google-calendar", asyncHandler(UsersCtrl.connectGoogleCalendar)
 router.delete("/me/google-calendar", asyncHandler(UsersCtrl.disconnectGoogleCalendar));
 router.get("/me/tour/:track", asyncHandler(UsersCtrl.getTour));
 router.put("/me/tour/:track", asyncHandler(UsersCtrl.saveTour));
+// A lawyer's settings for receiving client requests from the client app (UK only).
+router.get("/me/client-request-profile", asyncHandler(LawyerProfileCtrl.get));
+router.patch("/me/client-request-profile", asyncHandler(LawyerProfileCtrl.update));
 
 export default router;

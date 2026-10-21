@@ -48,6 +48,9 @@ A client's ask for a lawyer on one of their own UK cases (the UK client-to-lawye
 _Status: designed, not yet implemented (ilovelawyer-api#503–#520)._
 _Avoid_: "claim" alone in code for a lawyer's 24h hold on a request: name it `ClientRequestClaim`, since **Case Claim** is a cause of action. "Declined" as a request status: a declined quote ends the claim (`ClaimOutcome.DECLINED`) and the request goes back to `ROUTED`.
 
+**Lawyer Client Profile**:
+A lawyer's settings for receiving client requests from the client app (UK only): their regulator and registration number, the UK jurisdictions they're qualified in, the practice areas they take on (never personal injury), bio, languages, first-consultation fee in GBP, and whether they're accepting requests (with a pause date and a capacity limit). `LawyerClientProfile`, one per lawyer, at `/api/users/me/client-request-profile`. Verification moves on its own: `UNSUBMITTED` while a required field is missing, then `PENDING` for an admin's register check (#506), and back to `PENDING` whenever what was checked (regulator, number, jurisdictions) changes. Accepting requests needs a complete and `VERIFIED` profile; a lawyer who loses either is switched off rather than refused the edit.
+
 **Engagement**:
 A Client Request once the client has confirmed the lawyer and the fee is paid (`ENGAGED`). The assigned lawyer gets a `VIEW` `CaseAccess` grant on the client's case, the same read-only share `CaseShareSvc` makes. Ending the engagement removes the grant. Either side can end it: the lawyer closes it, or the client ends it from the client app. The lawyer keeps any workspace copy they made. The engagement has its own AI budget, which the lawyer sees and tops up. It is separate from the internal case allowance in `CaseLimitsSvc`, which is never shown.
 _Status: designed, not yet implemented._
