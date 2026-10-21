@@ -1017,6 +1017,13 @@ model ClientRequest {
   note              String              @default("") @db.Text
   consentVersion    String
   consentAcceptedAt DateTime
+  // The anonymised brief matching lawyers see (#508): CaseBrief in the contract. Null until the AI
+  // has written it. `briefFingerprint` is what the case looked like when it was written; a change
+  // before a lawyer claims the request means it's written again. `briefError` is the last failure.
+  brief             Json?
+  briefFingerprint  String?
+  briefGeneratedAt  DateTime?
+  briefError        String?
   withdrawnAt       DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
