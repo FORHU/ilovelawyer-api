@@ -54,6 +54,10 @@ export default class ClientCaseCtrl {
     res.status(201).json(await ClientCaseSvc.addDocument(req.organization!, req.user.userId, req.params.caseId, file));
   }
 
+  static async lawyerReadiness(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.lawyerReadiness(req.organization!, req.user.userId, req.params.caseId));
+  }
+
   static async pricing(_req: Request, res: Response) {
     res.status(200).json(ClientBillingSvc.pricing());
   }

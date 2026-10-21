@@ -9,6 +9,15 @@ import DocumentSvc from "./document.service";
 import OrganizationSvc from "./organization.service";
 import HttpError from "../utils/http-error";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
+import { JevUnavailableError } from "../utils/typesafeClient";
+import {
+  READINESS_CRITERIA,
+  READINESS_MIN_CONFIDENCE,
+  assessLawyerReadiness,
+  isLawyerReadinessJevEnabled,
+  type ReadinessAssessment,
+} from "../utils/lawyer-readiness-jev";
+import logger from "../utils/logger";
 import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
 import type { ClientCaseArea } from "../constants/client-case.constants";
 
@@ -51,6 +60,40 @@ function toDto(row: ClientCaseRow) {
 }
 
 export type ClientCaseDto = ReturnType<typeof toDto>;
+
+/** Why a lawyer can't be suggested even with everything known. */
+type ReadinessBlock = "OUTSIDE_UK" | "PERSONAL_INJURY";
+
+/** What the client app shows: whether to suggest a lawyer, and what's known and missing. */
+export interface LawyerReadiness {
+  /** False when USE_JEV_LAWYER_READINESS is off: the app then offers a lawyer as before. */
+  enabled: boolean;
+  ready: boolean;
+  criteria: ReadinessAssessment["criteria"];
+  /** The kind of lawyer the case needs, once Jev has looked. */
+  practiceArea: ReadinessAssessment["practiceArea"] | null;
+  ukJurisdiction: string | null;
+  blockedBy: ReadinessBlock | null;
+  /** Jev couldn't be reached this time; nothing is claimed either way. */
+  unavailable: boolean;
+  checkedAt: string | null;
+  /** The AI answer this check read up to. A newer answer means a fresh check. */
+  basedOnMessageId: string | null;
+}
+
+function unchecked(ukJurisdiction: string | null, unavailable = false): LawyerReadiness {
+  return {
+    enabled: true,
+    ready: false,
+    criteria: READINESS_CRITERIA.map((c) => ({ key: c.key, label: c.label, met: false, confidence: 0 })),
+    practiceArea: null,
+    ukJurisdiction,
+    blockedBy: null,
+    unavailable,
+    checkedAt: null,
+    basedOnMessageId: null,
+  };
+}
 
 /**
  * The client app's cases (ilovelawyer-client, USER accounts). A client's case is an ordinary Case
@@ -143,6 +186,61 @@ export default class ClientCaseSvc {
       await ClientBillingSvc.refundCredit(caseId);
       throw err;
     }
+  }
+
+  /**
+   * Whether the case has enough in it to suggest a lawyer, checked by Jev against the case details
+   * and the chat (lawyer-readiness-jev.ts). Checked once per AI answer and stored on the case, so
+   * reading it again costs nothing. Ready means every point is covered, the case is in the UK, and
+   * it isn't personal injury. When Jev can't be reached the answer is "unavailable", never "ready".
+   */
+  static async lawyerReadiness(workspace: ClientWorkspace, userId: string, caseId: string): Promise<LawyerReadiness> {
+    if (!isLawyerReadinessJevEnabled()) return { ...unchecked(null), enabled: false };
+    const row = await ClientCaseSvc.load(workspace, caseId);
+    const { messages } = await ClientCaseSvc.listMessages(workspace, userId, caseId);
+    const latestAnswer = [...messages].reverse().find((m) => m.role === "ai");
+    if (!latestAnswer) return unchecked(row.ukJurisdiction);
+
+    const cached = row.lawyerReadiness as unknown as LawyerReadiness | null;
+    if (cached?.basedOnMessageId === latestAnswer.id) return cached;
+
+    let assessment: ReadinessAssessment;
+    try {
+      assessment = await assessLawyerReadiness({
+        caseDetails: {
+          title: row.caseName,
+          area: row.practiceArea,
+          ukJurisdiction: row.ukJurisdiction,
+          where: row.jurisdiction,
+          side: row.clientSide,
+          otherParties: row.parties.map((p) => `${p.name} (${p.designation})`),
+        },
+        conversation: messages.map((m) => ({ from: m.role === "user" ? "client" : "ai", text: m.text })),
+      });
+    } catch (err) {
+      if (!(err instanceof JevUnavailableError)) throw err;
+      logger.warn("Lawyer readiness: Jev unavailable", { caseId, reason: err.reason });
+      return unchecked(row.ukJurisdiction, true);
+    }
+
+    const personalInjury = assessment.practiceArea.value === "PERSONAL_INJURY" && assessment.practiceArea.confidence >= READINESS_MIN_CONFIDENCE;
+    const blockedBy: ReadinessBlock | null = !row.ukJurisdiction ? "OUTSIDE_UK" : personalInjury ? "PERSONAL_INJURY" : null;
+    const ready = !blockedBy && assessment.criteria.every((c) => c.met);
+    const result: LawyerReadiness = {
+      enabled: true,
+      ready,
+      criteria: assessment.criteria,
+      practiceArea: assessment.practiceArea,
+      ukJurisdiction: row.ukJurisdiction,
+      blockedBy,
+      unavailable: false,
+      checkedAt: new Date().toISOString(),
+      basedOnMessageId: latestAnswer.id,
+    };
+    // Once the case is ready, Jev's area is the one matching uses, even if the client picked another.
+    const settledArea = ready && assessment.practiceArea.value !== "PERSONAL_INJURY" ? assessment.practiceArea.value : undefined;
+    await ClientCaseRepo.saveReadiness(caseId, result as unknown as Prisma.InputJsonValue, settledArea);
+    return result;
   }
 
   static async topUp(workspace: ClientWorkspace, userId: string, caseId: string, input: { packId: string; testOutcome?: "decline" }) {
