@@ -145,6 +145,8 @@ export default class EvidenceRepo {
       natureConfidence?: number | null;
       leftLocator?: string | null;
       rightLocator?: string | null;
+      leftPage?: number | null;
+      rightPage?: number | null;
     }[],
   ) {
     await prisma.$transaction([
