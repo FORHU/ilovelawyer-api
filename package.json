@@ -13,7 +13,10 @@
     "start:extraction-worker": "cross-env NODE_OPTIONS=--use-system-ca node ./dist/extraction-worker.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "stripe:listen": "docker compose --profile stripe up stripe-cli",
+    "stripe:secret": "docker compose --profile stripe run --rm stripe-cli listen --print-secret",
+    "stripe:webhook-check": "ts-node --files scripts/stripe-webhook-check.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

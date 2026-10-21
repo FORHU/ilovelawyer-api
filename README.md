@@ -82,3 +82,6 @@ We use Jest for testing. You can run the tests using the command:
 ```plaintext
 yarn test
 ```
+
+## Payments (Stripe) locally
+Payments use a dummy provider by default, which charges nothing. To work on real Stripe payments, including webhooks forwarded to your machine, follow [docs/stripe-local-webhooks.md](docs/stripe-local-webhooks.md).
