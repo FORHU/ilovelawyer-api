@@ -145,7 +145,7 @@ export default class ClientBillingSvc {
   }
 
   /**
-   * One verified Stripe webhook event (POST /webhooks/stripe). Checkout events settle the payment
+   * One verified Stripe webhook event (POST /api/webhooks/stripe). Checkout events settle the payment
    * they name; everything else is acknowledged and ignored. An event already handled is answered
    * without being applied again. An event for a payment this server doesn't have (another
    * environment sharing the Stripe account) is ignored.

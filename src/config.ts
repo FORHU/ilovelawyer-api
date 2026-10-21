@@ -68,7 +68,7 @@ export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin)
 export const USER_APP_URL = (process.env.USER_APP_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 /** Who takes the client app's payments (payments/client-payment-provider.ts): "stripe", or "dummy"
  * (the default) which charges nothing. "stripe" needs STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY,
- * and STRIPE_WEBHOOK_SECRET for POST /webhooks/stripe. Use test-mode keys outside production. */
+ * and STRIPE_WEBHOOK_SECRET for POST /api/webhooks/stripe. Use test-mode keys outside production. */
 export const CLIENT_PAYMENT_PROVIDER = (process.env.CLIENT_PAYMENT_PROVIDER || "dummy").trim().toLowerCase();
 export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || undefined;
 /** Public by design: the client app needs it to show Stripe's payment form. */

@@ -859,13 +859,12 @@ export const clientHandoffPaths: Paths = {
         built: true,
         summary: "Stripe webhook (Stripe only, not the apps)",
         description:
-          "Mounted outside /api with a raw body, ahead of express.json(), so the signature can be checked. Idempotent per Stripe event id (StripeWebhookEvent). Built for the client app's payments: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed and checkout.session.expired. The lawyer's card (ilovelawyer-api#505: setup_intent.succeeded) and the per-case fee (#513) add their events here.",
+          "POST /api/webhooks/stripe. Mounted with a raw body ahead of express.json(), so the signature can be checked. Idempotent per Stripe event id (StripeWebhookEvent). Built for the client app's payments: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed and checkout.session.expired. The lawyer's card (ilovelawyer-api#505: setup_intent.succeeded) and the per-case fee (#513) add their events here.",
         responses: {},
       }),
       // Stripe signs the request instead of sending a session, so no 401.
       responses: { 200: ok("Processed, or already seen"), 400: err("Bad signature") },
       security: [],
-      servers: [{ url: "/" }],
     },
   },
 

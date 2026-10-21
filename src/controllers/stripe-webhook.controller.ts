@@ -5,7 +5,7 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
 /**
- * POST /webhooks/stripe, called by Stripe only. Mounted in app.ts with express.raw() ahead of the
+ * POST /api/webhooks/stripe, called by Stripe only. Mounted in app.ts with express.raw() ahead of the
  * global express.json(): the signature is computed over the exact bytes Stripe sent, and a parsed
  * then re-serialised body would never match. A bad signature is a 400; once verified, a 200 tells
  * Stripe not to retry, and an error (500) makes it retry, which is safe because handling is
