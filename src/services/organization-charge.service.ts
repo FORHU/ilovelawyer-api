@@ -1,4 +1,4 @@
-import type { OrganizationCharge, OrganizationChargeKind } from "@prisma/client";
+import type { OrganizationCharge, OrganizationChargeKind, OrganizationChargeRefund } from "@prisma/client";
 import type Stripe from "stripe";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import OrganizationBillingRepo from "../repositories/organization-billing.repository";
@@ -15,6 +15,26 @@ const NO_CARD = "There's no card on file. An owner or admin can add one in the o
 const UNREACHABLE = "We couldn't reach the payment provider. Try again in a moment.";
 
 export type ChargeOutcome = "SUCCEEDED" | "PENDING" | "FAILED";
+
+/** Charge in the contract: one of a firm's charges, with what's been refunded of it (#520). Shared by
+ * the firm's fee history and the admin app. */
+export function chargeDto(c: OrganizationCharge & { refunds: OrganizationChargeRefund[] }, lawyerName: string | null) {
+  const refunded = c.refunds.filter((r) => r.status === "SUCCEEDED").reduce((sum, r) => sum + r.amountMinor, 0);
+  return {
+    id: c.id,
+    kind: c.kind,
+    status: c.status,
+    amount: { amountMinor: c.amountMinor, currency: c.currency },
+    refunded: { amountMinor: refunded, currency: c.currency },
+    requestId: c.requestId,
+    lawyer: c.lawyerId ? { id: c.lawyerId, name: lawyerName ?? "" } : null,
+    failureReason: c.failureReason,
+    /** Stripe's receipt for a paid charge; null for a test card or before it's paid. */
+    receiptUrl: c.receiptUrl,
+    provider: c.provider,
+    createdAt: c.createdAt,
+  };
+}
 
 /**
  * Charges to a law firm's card on file (OrganizationCharge). The per-case fee (#513) is charged when
@@ -102,24 +122,7 @@ export default class OrganizationChargeSvc {
     const { total, data } = await OrganizationChargeRepo.listForOrganization(organizationId, query.kind, query.page, query.limit);
     const lawyerIds = [...new Set(data.map((c) => c.lawyerId).filter((id): id is string => !!id))];
     const names = new Map((await OrganizationChargeRepo.findUserNames(lawyerIds)).map((u) => [u.id, u.name || u.email] as const));
-    return {
-      total,
-      data: data.map((c) => ({
-        id: c.id,
-        kind: c.kind,
-        status: c.status,
-        amount: { amountMinor: c.amountMinor, currency: c.currency },
-        // Refunds of lawyer charges come with #520.
-        refunded: { amountMinor: 0, currency: c.currency },
-        requestId: c.requestId,
-        lawyer: c.lawyerId ? { id: c.lawyerId, name: names.get(c.lawyerId) ?? "" } : null,
-        failureReason: c.failureReason,
-        /** Stripe's receipt for a paid charge; null for a test card or before it's paid. */
-        receiptUrl: c.receiptUrl,
-        provider: c.provider,
-        createdAt: c.createdAt,
-      })),
-    };
+    return { total, data: data.map((c) => chargeDto(c, c.lawyerId ? (names.get(c.lawyerId) ?? null) : null)) };
   }
 
   private static async readStripe(paymentIntentId: string): Promise<CardChargeResult | null> {

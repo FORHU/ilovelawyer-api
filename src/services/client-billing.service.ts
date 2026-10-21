@@ -4,7 +4,8 @@ import ClientPaymentRepo from "../repositories/client-payment.repository";
 import ClientBillingAdminSvc from "./client-billing-admin.service";
 import OrganizationCardSvc from "./organization-card.service";
 import OrganizationChargeSvc from "./organization-charge.service";
-import { ORGANIZATION_CHARGE_PURPOSE } from "../payments/organization-card-provider";
+import { ORGANIZATION_CHARGE_PURPOSE, ORGANIZATION_REFUND_PURPOSE } from "../payments/organization-card-provider";
+import ClientRequestAdminSvc from "./client-request-admin.service";
 import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "../payments/client-payment-provider";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -192,10 +193,14 @@ export default class ClientBillingSvc {
         break;
       }
       // A refund an admin issued (ClientBillingAdminSvc.refund) that Stripe finished, or couldn't.
+      // Or a refund of a law firm's charge (ClientRequestAdminSvc.refundCharge, #520).
       case "refund.updated":
-      case "refund.failed":
-        await ClientBillingAdminSvc.applyStripeRefund(event.data.object as Stripe.Refund);
+      case "refund.failed": {
+        const refund = event.data.object as Stripe.Refund;
+        if (refund.metadata?.purpose === ORGANIZATION_REFUND_PURPOSE) await ClientRequestAdminSvc.applyStripeRefund(refund);
+        else await ClientBillingAdminSvc.applyStripeRefund(refund);
         break;
+      }
       default:
         break;
     }

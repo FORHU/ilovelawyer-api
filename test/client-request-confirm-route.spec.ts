@@ -60,6 +60,10 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     async chargeStatus(paymentIntentId) {
       return stripeNow.get(paymentIntentId) ?? { status: "PENDING", paymentIntentId, receiptUrl: null, failureReason: null };
     },
+    // Refunds are #520's, tested in admin-client-requests-route.spec.ts.
+    async refund() {
+      throw new Error("not used");
+    },
   };
   const ok = (pi: string): CardChargeResult => ({ status: "SUCCEEDED", paymentIntentId: pi, receiptUrl: `https://pay.stripe.com/receipts/${pi}`, failureReason: null });
   const declined = (pi: string): CardChargeResult => ({ status: "FAILED", paymentIntentId: pi, receiptUrl: null, failureReason: "Your card was declined." });

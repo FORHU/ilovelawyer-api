@@ -939,6 +939,13 @@ enum OrganizationChargeStatus {
   PARTIALLY_REFUNDED
 }
 
+// Sent to Stripe and not final yet (PENDING), done, or refused. Stripe's refund.updated settles it.
+enum OrganizationChargeRefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
 enum ClientRefundStatus {
   // Sent to Stripe, not final yet (some payment methods take days); Stripe's refund.updated settles it.
   PENDING
@@ -2915,12 +2922,38 @@ model OrganizationCharge {
   createdAt       DateTime                 @default(now())
   updatedAt       DateTime                 @updatedAt
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  request      ClientRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  organization Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request      ClientRequest?              @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  refunds      OrganizationChargeRefund[]
 
   @@index([organizationId, createdAt])
   @@index([requestId])
   @@index([paymentIntentId])
+}
+
+// Money given back on an OrganizationCharge by a platform admin (POST /api/admin/charges/:id/refund,
+// #520), through Stripe. A charge can have several partial refunds; PENDING and SUCCEEDED ones together
+// never exceed it. Refunding gives back money only: the engagement it paid for carries on.
+model OrganizationChargeRefund {
+  id            String                         @id @default(uuid())
+  chargeId      String
+  amountMinor   Int
+  currency      String
+  // What the admin wrote; shown in the admin app and the audit log.
+  reason        String
+  status        OrganizationChargeRefundStatus
+  // Stripe's refund id (re_...).
+  externalId    String?
+  failureReason String?
+  // The admin who issued it. No foreign key, so the record outlives the admin's account.
+  adminId       String?
+  createdAt     DateTime                       @default(now())
+  updatedAt     DateTime                       @updatedAt
+
+  charge OrganizationCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+
+  @@index([chargeId])
+  @@index([externalId])
 }
 
 enum OrganizationStatus {

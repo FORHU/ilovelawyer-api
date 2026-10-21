@@ -101,6 +101,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /admin/lawyers/:id/verify": ["admin.lawyer.verified"],
   "POST /admin/lawyers/:id/reject": ["admin.lawyer.rejected"],
   "POST /admin/billing/:id/refund": ["admin.client_payment.refunded"],
+  "POST /admin/charges/:chargeId/refund": ["admin.organization_charge.refunded"],
   "PATCH /admin/settings/tenants/:code": ["admin.settings.signup_auto_approve_changed"],
   "POST /admin/tenants/:code/approve-pending": ["admin.user.approved"],
   "GET /admin/audit-log/export": ["export.audit_log"],
