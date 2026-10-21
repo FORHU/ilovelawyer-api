@@ -110,6 +110,52 @@ export const clientAppPaths: Paths = {
       },
     },
   },
+  "/client/cases/{caseId}/lawyer-readiness": {
+    get: {
+      tags: [TAG],
+      summary: "Whether the case has enough in it to suggest a lawyer, and what's still missing",
+      description:
+        "Jev checks five points against the case and its chat, once per AI answer (stored, so asking again is free). `enabled` is false when USE_JEV_LAWYER_READINESS is off. `unavailable` means Jev couldn't be reached: never read it as ready.",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: {
+          description: "Readiness",
+          content: json({
+            type: "object",
+            properties: {
+              enabled: { type: "boolean" },
+              ready: { type: "boolean" },
+              criteria: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    key: { type: "string", enum: ["problem", "place", "otherSide", "events", "goal"] },
+                    label: { type: "string" },
+                    met: { type: "boolean" },
+                    confidence: { type: "number" },
+                  },
+                },
+              },
+              practiceArea: {
+                type: "object",
+                nullable: true,
+                properties: { value: { type: "string", enum: [...CLIENT_CASE_AREAS, "PERSONAL_INJURY"] }, confidence: { type: "number" } },
+              },
+              ukJurisdiction: { type: "string", nullable: true },
+              blockedBy: { type: "string", enum: ["OUTSIDE_UK", "PERSONAL_INJURY"], nullable: true },
+              unavailable: { type: "boolean" },
+              checkedAt: { type: "string", format: "date-time", nullable: true },
+              basedOnMessageId: { type: "string", nullable: true },
+            },
+          }),
+        },
+        403: err("CONSENT_REQUIRED (AI processing withdrawn)"),
+        404: err("Not one of this client's cases"),
+      },
+    },
+  },
   "/client/cases/{caseId}/top-ups": {
     post: {
       tags: [TAG],

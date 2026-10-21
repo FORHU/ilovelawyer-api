@@ -287,6 +287,7 @@ describe("Client app cases", () => {
       "POST /cases/:caseId/documents/presign",
       "POST /cases/:caseId/documents",
       "POST /cases/:caseId/top-ups",
+      "GET /cases/:caseId/lawyer-readiness",
     ]);
   });
 });
