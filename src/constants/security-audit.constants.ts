@@ -66,6 +66,8 @@ export const SECURITY_AUDIT_ACTIONS = [
   // them the claim-scoped party lookup, so taking it and losing it are both access changes.
   "client_request.claimed",
   "client_request.claim_lapsed",
+  "client_request.parties_viewed",
+  "client_request.released",
 
   // Exports and downloads
   "export.case_brief",
@@ -177,6 +179,8 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.client_payment.refunded": "Client app payment refunded by ilovelawyer",
   "client_request.claimed": "Client request accepted",
   "client_request.claim_lapsed": "Hold on a client request lapsed",
+  "client_request.parties_viewed": "Party names viewed for a conflict check",
+  "client_request.released": "Client request given back",
   "export.case_brief": "Case brief exported",
   "export.generated_document": "Document generated",
   "export.audit_log": "Audit log exported",

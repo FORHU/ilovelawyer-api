@@ -1,9 +1,10 @@
-import type { ClientRequest, ClientRequestStatus } from "@prisma/client";
-import ClientRequestRepo from "../repositories/client-request.repository";
+import type { ClientRequestStatus } from "@prisma/client";
+import ClientRequestRepo, { type ClientRequestForClient } from "../repositories/client-request.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import HttpError from "../utils/http-error";
+import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
@@ -33,9 +34,31 @@ export interface NewClientRequest {
   consentAccepted: boolean;
 }
 
-/** LawyerRequestForClient in the contract. The lawyer, quote and engagement fields are filled by
- * later issues (#511 onwards); until then they're always empty. */
-function toDto(r: ClientRequest) {
+/** The lawyer as the client sees them once they've quoted (LawyerPublicProfile in the contract):
+ * their public profile, never their organization's members or anything from the lawyer app. */
+function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
+  const profile = claim.lawyer.clientRequestProfile;
+  return {
+    id: claim.lawyer.id,
+    name: claim.lawyer.name ?? "",
+    avatarUrl: claim.lawyer.avatar?.s3Key ? getStableProxyFileUrl(claim.lawyer.avatar.s3Key) : null,
+    // A solo practitioner's personal workspace isn't a firm.
+    firmName: claim.organization.isPersonal ? null : claim.organization.name,
+    regulator: profile?.regulator ?? null,
+    registrationNumber: profile?.registrationNumber ?? null,
+    practiceAreas: profile?.practiceAreas ?? [],
+    qualifiedJurisdictions: profile?.qualifiedJurisdictions ?? [],
+    languages: profile?.languages ?? [],
+    bio: profile?.bio ?? "",
+    firstConsultationFee: profile?.firstConsultationFeeMinor == null ? null : { amountMinor: profile.firstConsultationFeeMinor, currency: "GBP" },
+    verifiedAt: profile?.verifiedAt ?? null,
+  };
+}
+
+/** LawyerRequestForClient in the contract. From QUOTED, the lawyer, their quote and the referral
+ * disclosure the client acknowledges to confirm (#512). The engagement fields come with #514. */
+function toDto(r: ClientRequestForClient) {
+  const quoted = r.claims[0] ?? null;
   return {
     id: r.id,
     caseId: r.caseId,
@@ -44,9 +67,16 @@ function toDto(r: ClientRequest) {
     consentVersion: r.consentVersion,
     consentAcceptedAt: r.consentAcceptedAt,
     createdAt: r.createdAt,
-    lawyer: null,
-    quote: null,
-    referralDisclosure: null,
+    lawyer: quoted ? lawyerDto(quoted) : null,
+    quote: quoted
+      ? {
+          type: quoted.quoteType,
+          amount: { amountMinor: quoted.quoteAmountMinor, currency: quoted.quoteCurrency },
+          message: quoted.quoteMessage,
+          sentAt: quoted.quotedAt,
+        }
+      : null,
+    referralDisclosure: quoted ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
     engagedAt: null,
     closedAt: null,
     closedBy: null,
@@ -102,7 +132,8 @@ export default class ClientRequestSvc {
     // Routed (#509) straight away, even with zero current matches — the client just sees "Finding
     // a lawyer" either way; EXPIRED (#510) is what ends that wait.
     const routed = await ClientRequestMatchingSvc.route(created.id);
-    return toDto(routed);
+    // Brand new, so nobody has claimed or quoted it.
+    return toDto({ ...routed, claims: [] });
   }
 
   static async list(clientId: string, query: { caseId?: string; page: number; limit: number }) {

@@ -20,6 +20,22 @@ const FOR_LAWYER = {
   claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } } } },
 } satisfies Prisma.ClientRequestInclude;
 
+/** What the client app reads of a request (#512): the claim the current quote was made under (open,
+ * or ENGAGED once confirmed), with what the client may see of the lawyer and their firm. */
+const FOR_CLIENT = {
+  claims: {
+    where: { quotedAt: { not: null }, OR: [{ outcome: null }, { outcome: "ENGAGED" }] },
+    orderBy: { claimedAt: "desc" },
+    take: 1,
+    include: {
+      lawyer: { select: { id: true, name: true, avatar: { select: { s3Key: true } }, clientRequestProfile: true } },
+      organization: { select: { name: true, isPersonal: true } },
+    },
+  },
+} satisfies Prisma.ClientRequestInclude;
+
+export type ClientRequestForClient = Prisma.ClientRequestGetPayload<{ include: typeof FOR_CLIENT }>;
+
 export default class ClientRequestRepo {
   static async create(data: { caseId: string; clientId: string; note: string; consentVersion: string; consentAcceptedAt: Date }) {
     return prisma.clientRequest.create({ data });
@@ -31,14 +47,14 @@ export default class ClientRequestRepo {
 
   /** Only the client's own. */
   static async findForClient(id: string, clientId: string) {
-    return prisma.clientRequest.findFirst({ where: { id, clientId } });
+    return prisma.clientRequest.findFirst({ where: { id, clientId }, include: FOR_CLIENT });
   }
 
   static async listForClient(clientId: string, caseId: string | undefined, page: number, limit: number) {
     const where = { clientId, ...(caseId ? { caseId } : {}) };
     const [total, data] = await prisma.$transaction([
       prisma.clientRequest.count({ where }),
-      prisma.clientRequest.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.clientRequest.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit, include: FOR_CLIENT }),
     ]);
     return { total, data };
   }
@@ -143,6 +159,19 @@ export default class ClientRequestRepo {
       prisma.clientRequest.findMany({ where, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], skip: (page - 1) * limit, take: limit, include: FOR_LAWYER }),
     ]);
     return { total, data };
+  }
+
+  /** The names behind the anonymised brief, for the claiming lawyer's conflict check (#512): the
+   * client, and the case's other parties as the client entered them. */
+  static async findParties(id: string) {
+    return prisma.clientRequest.findUnique({
+      where: { id },
+      select: {
+        caseId: true,
+        client: { select: { name: true, username: true } },
+        case: { select: { parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } } } },
+      },
+    });
   }
 
   /** Stops one lawyer seeing a request again (a pass, #511). Status untouched. */
