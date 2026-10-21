@@ -55,6 +55,8 @@ export interface CaseData {
   actionType?: string;
   jurisdiction?: string;
   ukJurisdiction?: string;
+  /** Client app only (CLIENT_CASE_AREAS). */
+  practiceArea?: string;
   clientSide?: ClientSide | null;
   notes?: string;
   parties?: PartyInput[];

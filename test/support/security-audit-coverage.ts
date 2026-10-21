@@ -209,6 +209,11 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /bookmarks/": PERSONAL,
   "DELETE /bookmarks/:id": PERSONAL,
   "POST /documents/presign": UPLOAD,
+  // The client app (client.route.ts): a client's own cases in their personal workspace.
+  "POST /client/cases": CASE_FEED,
+  "POST /client/cases/:caseId/messages": AI_RUN,
+  "POST /client/cases/:caseId/documents/presign": UPLOAD,
+  "POST /client/cases/:caseId/documents": UPLOAD,
   "POST /documents/": UPLOAD,
   "PATCH /documents/:id": CASE_FEED,
   "DELETE /documents/:id": ["document.deleted"],

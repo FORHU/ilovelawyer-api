@@ -32,6 +32,7 @@ import { jurisdictionRouter, integrationRouter } from "./jurisdiction.route";
 import modelSettingsRoute from "./model-settings.route";
 import adminRoute from "./admin.route";
 import lawRoute from "./law.route";
+import clientRoute from "./client.route";
 
 const router = express.Router();
 
@@ -81,5 +82,7 @@ router.use("/terminal", terminalRoute);
 router.use("/jurisdictions", jurisdictionRouter);
 router.use("/integrations", integrationRouter);
 router.use("/model-settings", modelSettingsRoute);
+// The client app (ilovelawyer-client): client accounts only.
+router.use("/client", clientRoute);
 
 export default router;

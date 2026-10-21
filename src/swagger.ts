@@ -1,4 +1,5 @@
 import { OAS3Definition } from "swagger-jsdoc";
+import { clientAppPaths } from "./swagger-client-app";
 
 const swaggerSpec: OAS3Definition = {
   openapi: "3.0.0",
@@ -2665,6 +2666,7 @@ const swaggerSpec: OAS3Definition = {
         responses: { 202: { description: "Refresh queued — AiGenerationJob status (IN_PROGRESS)" } },
       },
     },
+    ...clientAppPaths,
   },
 };
 

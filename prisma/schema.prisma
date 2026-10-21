@@ -833,6 +833,9 @@ model Case {
   actionType            String?
   jurisdiction          String?
   ukJurisdiction        String?
+  /// The kind of problem, one of CLIENT_CASE_AREAS (constants/client-case.constants.ts). Set by the
+  /// client app; lawyer matching reads it. Null on cases made in the lawyer app.
+  practiceArea          String?
   language              String     @default("en")
   notes                 String?    @db.Text
   lastRefreshedAt       DateTime?
