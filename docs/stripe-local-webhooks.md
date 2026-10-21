@@ -118,8 +118,8 @@ These don't use the CLI. Each one has a webhook endpoint in the Stripe dashboard
 
 | Environment | Endpoint URL | GitHub environment | Variables (var) and secrets (secret) |
 | --- | --- | --- | --- |
-| Dev | `https://uk-dev.ilovelawyer.com/api/webhooks/stripe` | `staging` | var `DEV_CLIENT_PAYMENT_PROVIDER`, secret `STRIPE_SECRET_KEY`, var `STRIPE_PUBLISHABLE_KEY`, secret `STRIPE_WEBHOOK_SECRET` |
-| Staging | `https://api.ilovelawyer.com/api/webhooks/stripe` | `production` | var `CLIENT_PAYMENT_PROVIDER`, secret `STRIPE_SECRET_KEY`, var `STRIPE_PUBLISHABLE_KEY`, secret `STRIPE_WEBHOOK_SECRET` |
+| Dev | `https://uk-dev.ilovelawyer.com/api/webhooks/stripe` | `staging` | var `DEV_CLIENT_PAYMENT_PROVIDER`, var `DEV_LAWYER_PAYMENT_PROVIDER`, secret `STRIPE_SECRET_KEY`, secret `STRIPE_PUBLISHABLE_KEY`, secret `STRIPE_WEBHOOK_SECRET` |
+| Staging | `https://api.ilovelawyer.com/api/webhooks/stripe` | `production` | var `CLIENT_PAYMENT_PROVIDER`, var `LAWYER_PAYMENT_PROVIDER`, secret `STRIPE_SECRET_KEY`, secret `STRIPE_PUBLISHABLE_KEY`, secret `STRIPE_WEBHOOK_SECRET` |
 | UK | `https://uk.ilovelawyer.com/api/webhooks/stripe` | `production` | the same names, prefixed `UK_` |
 
 UK's names are prefixed because `deploy-uk.yml` and staging read the same GitHub environment; without the prefix they would share one set of Stripe keys. Dev and staging use test-mode keys. UK uses live keys only once it takes real payments.
