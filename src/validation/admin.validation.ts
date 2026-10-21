@@ -1,4 +1,5 @@
 import Joi from "joi";
+import { LAWYER_REJECTION_REASONS } from "../services/lawyer-verification.service";
 
 export const listUsersSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -38,6 +39,17 @@ export const exportUserDataSchema = Joi.object({
 });
 
 export const denyUserSchema =Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
+
+// note is required for OTHER (it's the whole message); optional extra detail for the canned reasons.
+export const rejectLawyerSchema = Joi.object({
+  reason: Joi.string()
+    .valid(...LAWYER_REJECTION_REASONS)
+    .required(),
+  note: Joi.string()
+    .trim()
+    .max(500)
+    .when("reason", { is: "OTHER", then: Joi.required(), otherwise: Joi.optional() }),
+});
 
 export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid("PH", "UK").required() });
 

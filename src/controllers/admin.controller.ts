@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import AdminSvc from "../services/admin.service";
+import LawyerVerificationSvc from "../services/lawyer-verification.service";
 import LawSvc, { parseLawCategory } from "../services/law.service";
 import TenantSettingSvc from "../services/tenant-setting.service";
 import BulkApprovalRunner from "../queues/bulk-approval.runner";
@@ -13,6 +14,7 @@ import {
   listFeedbackSchema,
   exportUserDataSchema,
   denyUserSchema,
+  rejectLawyerSchema,
   lawSearchSchema,
   listLawsSchema,
   updateTenantSettingsSchema,
@@ -148,6 +150,22 @@ export default class AdminCtrl {
   static async deleteUser(req: Request, res: Response) {
     await AdminSvc.deleteUser(req.params.id, req.user.userId);
     return res.status(204).send();
+  }
+
+  /** POST /api/admin/lawyers/:id/verify — admin accepts a PENDING client-request profile on trust
+   * (no register check yet, #506). */
+  static async verifyLawyer(req: Request, res: Response) {
+    const profile = await LawyerVerificationSvc.verify(req.params.id, req.user.userId);
+    return res.status(200).json(profile);
+  }
+
+  /** POST /api/admin/lawyers/:id/reject — body { reason, note? }; note required only for OTHER. */
+  static async rejectLawyer(req: Request, res: Response) {
+    const { error, value } = rejectLawyerSchema.validate(req.body ?? {});
+    if (error) throw new HttpError(error.message, 400);
+
+    const profile = await LawyerVerificationSvc.reject(req.params.id, value.reason, value.note || undefined, req.user.userId);
+    return res.status(200).json(profile);
   }
 
   /** GET /api/admin/settings — per-Tenant signup settings, pending backlog and bulk-run progress. */

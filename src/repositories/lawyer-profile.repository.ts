@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { LawyerClientProfile, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 
 export default class LawyerProfileRepo {
@@ -8,6 +8,14 @@ export default class LawyerProfileRepo {
 
   static async upsert(userId: string, data: Omit<Prisma.LawyerClientProfileUncheckedCreateInput, "userId">) {
     return prisma.lawyerClientProfile.upsert({ where: { userId }, create: { userId, ...data }, update: data });
+  }
+
+  /** An admin's verify/reject decision — only the fields that decision touches. */
+  static async setVerification(
+    userId: string,
+    data: Pick<LawyerClientProfile, "verificationStatus" | "verificationNote" | "verifiedAt">
+  ) {
+    return prisma.lawyerClientProfile.update({ where: { userId }, data });
   }
 
   /** The lawyer's role and the tenant they work on: their organization's, else their own. */

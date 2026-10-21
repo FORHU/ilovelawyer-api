@@ -27,6 +27,9 @@ router.post("/users/:id/verify-email", asyncHandler(AdminCtrl.verifyUserEmail));
 router.patch("/users/:id/tenant", asyncHandler(AdminCtrl.changeUserTenant));
 router.delete("/users/:id", asyncHandler(AdminCtrl.deleteUser));
 
+router.post("/lawyers/:id/verify", asyncHandler(AdminCtrl.verifyLawyer));
+router.post("/lawyers/:id/reject", asyncHandler(AdminCtrl.rejectLawyer));
+
 router.get("/settings", asyncHandler(AdminCtrl.getSettings));
 router.patch("/settings/tenants/:code", asyncHandler(AdminCtrl.updateTenantSettings));
 router.post("/tenants/:code/approve-pending", asyncHandler(AdminCtrl.approvePending));
