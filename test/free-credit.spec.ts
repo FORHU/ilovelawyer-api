@@ -70,6 +70,15 @@ describe("Free AI credit", () => {
     }
   });
 
+  it("leaves the client app to its per-case chat credits, so a client can still pay and chat", async () => {
+    spend.pricedUsd = 50;
+    for (const path of ["/client/payments/case", "/client/cases", "/client/cases/c1/messages", "/client/cases/c1/top-ups"]) {
+      expect(await run(req("POST", path)), path).to.equal(null);
+    }
+    // Only the client app's own routes: a lookalike prefix is still limited.
+    expect((await run(req("POST", "/clients-export")))?.code).to.equal("FREE_CREDIT_SPENT");
+  });
+
   it("never limits an account with no credit (one created before it existed)", async () => {
     credit = null;
     spend.pricedUsd = 1000;

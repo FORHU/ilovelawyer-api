@@ -16,6 +16,7 @@ const filename = Joi.string()
 const fileSize = Joi.number().integer().min(0).max(DOCUMENT_UPLOAD_BATCH_MAX_BYTES);
 
 export const createClientCaseSchema = Joi.object({
+  paymentId: Joi.string().required(),
   title: Joi.string().trim().min(1).max(CLIENT_CASE_TITLE_MAX_LENGTH).required(),
   area: Joi.string()
     .valid(...CLIENT_CASE_AREAS)
@@ -41,6 +42,24 @@ export const createClientCaseSchema = Joi.object({
     )
     .max(20)
     .optional(),
+});
+
+// Asks the dummy payment provider to decline, to test the app's failure screen. A real provider
+// ignores it.
+const testOutcome = Joi.string().valid("decline").optional();
+
+export const quoteClientCaseSchema = Joi.object({
+  promoCode: Joi.string().trim().allow("").max(40).optional(),
+});
+
+export const payForClientCaseSchema = Joi.object({
+  promoCode: Joi.string().trim().allow("").max(40).optional(),
+  testOutcome,
+});
+
+export const topUpClientCaseSchema = Joi.object({
+  packId: Joi.string().required(),
+  testOutcome,
 });
 
 export const sendClientMessageSchema = Joi.object({

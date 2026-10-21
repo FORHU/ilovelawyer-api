@@ -1,12 +1,16 @@
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import ClientCaseSvc from "../services/client-case.service";
+import ClientBillingSvc from "../services/client-billing.service";
 import HttpError from "../utils/http-error";
 import {
   addClientDocumentSchema,
   createClientCaseSchema,
+  payForClientCaseSchema,
   presignClientDocumentSchema,
+  quoteClientCaseSchema,
   sendClientMessageSchema,
+  topUpClientCaseSchema,
 } from "../validation/client-case.validation";
 
 function validate<T>(schema: ObjectSchema<T>, body: unknown): T {
@@ -48,5 +52,24 @@ export default class ClientCaseCtrl {
   static async addDocument(req: Request, res: Response) {
     const file = validate(addClientDocumentSchema, req.body);
     res.status(201).json(await ClientCaseSvc.addDocument(req.organization!, req.user.userId, req.params.caseId, file));
+  }
+
+  static async pricing(_req: Request, res: Response) {
+    res.status(200).json(ClientBillingSvc.pricing());
+  }
+
+  static async quoteCase(req: Request, res: Response) {
+    const { promoCode } = validate(quoteClientCaseSchema, req.body);
+    res.status(200).json(await ClientBillingSvc.quoteCase(req.user.userId, promoCode));
+  }
+
+  static async payForCase(req: Request, res: Response) {
+    const input = validate(payForClientCaseSchema, req.body);
+    res.status(201).json(await ClientBillingSvc.payForCase(req.user.userId, input));
+  }
+
+  static async topUp(req: Request, res: Response) {
+    const input = validate(topUpClientCaseSchema, req.body);
+    res.status(201).json(await ClientCaseSvc.topUp(req.organization!, req.user.userId, req.params.caseId, input));
   }
 }

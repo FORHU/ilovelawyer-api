@@ -8,6 +8,7 @@ import type { Request } from "express";
 import prisma from "../src/lib/prisma";
 import ClientCaseSvc, { type ClientWorkspace } from "../src/services/client-case.service";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
+import ClientPaymentRepo from "../src/repositories/client-payment.repository";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import OrganizationSvc from "../src/services/organization.service";
 import CaseSvc from "../src/services/case.service";
@@ -44,6 +45,7 @@ function caseRow(overrides: Record<string, unknown> = {}) {
     parties: [{ id: "p1", name: "Acme Ltd", designation: "Opposing party" }],
     documents: [{ id: "d1", name: "Contract.pdf", ragStatus: "READY", createdAt: new Date("2026-10-20") }],
     consultations: [{ id: "cons-1" }],
+    clientCredits: 50,
     createdAt: new Date("2026-10-20"),
     updatedAt: new Date("2026-10-21"),
     ...overrides,
@@ -150,7 +152,13 @@ describe("Client app cases", () => {
         stash(ClientCaseRepo, ["findById", "list"]),
         stash(CaseSvc, ["create"]),
         stash(ChatSvc, ["createConsultation", "listMessages", "enqueueChatGeneration"]),
+        // Paying and credits are test/client-billing.spec.ts's; here a payment is always good.
+        stash(ClientPaymentRepo, ["claimCasePayment", "attachToCase", "spendCredit", "addCredits"]),
       ];
+      (ClientPaymentRepo as any).claimCasePayment = async () => 50;
+      (ClientPaymentRepo as any).attachToCase = async () => undefined;
+      (ClientPaymentRepo as any).spendCredit = async () => true;
+      (ClientPaymentRepo as any).addCredits = async () => 50;
       restore = () => fns.forEach((f) => f());
       row = caseRow();
       calls = {};
@@ -175,6 +183,7 @@ describe("Client app cases", () => {
 
     it("maps a client case onto a lawyer Case, and starts its chat", async () => {
       const dto = await ClientCaseSvc.create(workspace, "u1", {
+        paymentId: "pay-1",
         title: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
         area: "EMPLOYMENT",
         ukJurisdiction: "England and Wales",
@@ -198,13 +207,13 @@ describe("Client app cases", () => {
       const [, , title, caseId] = calls.createConsultation as [string, string, string, string];
       expect(title.length).to.equal(80);
       expect(caseId).to.equal("case-1");
-      expect(dto).to.include({ id: "case-1", title: "Dismissed without notice", area: "EMPLOYMENT", where: "Leeds" });
+      expect(dto).to.include({ id: "case-1", title: "Dismissed without notice", area: "EMPLOYMENT", where: "Leeds", credits: 50 });
       expect(dto.others).to.deep.equal([{ id: "p1", name: "Acme Ltd", role: "Opposing party" }]);
       expect(dto.documents).to.deep.equal([{ id: "d1", name: "Contract.pdf", status: "READY", createdAt: new Date("2026-10-20") }]);
     });
 
     it("stores no UK jurisdiction for a case outside the UK", async () => {
-      await ClientCaseSvc.create(workspace, "u1", { title: "Holiday refund", area: "CONSUMER", ukJurisdiction: null });
+      await ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "Holiday refund", area: "CONSUMER", ukJurisdiction: null });
       expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, jurisdiction: undefined, clientSide: null });
     });
 
@@ -250,12 +259,13 @@ describe("Client app cases", () => {
   });
 
   describe("validation", () => {
-    const valid = { title: "Holiday refund", area: "CONSUMER", ukJurisdiction: "Scotland" };
+    const valid = { paymentId: "pay-1", title: "Holiday refund", area: "CONSUMER", ukJurisdiction: "Scotland" };
 
     it("needs the part of the UK, or null for outside it", () => {
       expect(createClientCaseSchema.validate(valid).error).to.equal(undefined);
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: null }).error).to.equal(undefined);
-      expect(createClientCaseSchema.validate({ title: "x", area: "CONSUMER" }).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ paymentId: "pay-1", title: "x", area: "CONSUMER" }).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ title: "x", area: "CONSUMER", ukJurisdiction: null }).error).to.not.equal(undefined);
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: "Wales" }).error).to.not.equal(undefined);
     });
 
@@ -266,6 +276,9 @@ describe("Client app cases", () => {
 
   it("serves exactly these routes", () => {
     expect(listRoutes(clientRoute).map((r) => `${r.method} ${r.path}`)).to.deep.equal([
+      "GET /pricing",
+      "POST /payments/case/quote",
+      "POST /payments/case",
       "GET /cases",
       "POST /cases",
       "GET /cases/:caseId",
@@ -273,6 +286,7 @@ describe("Client app cases", () => {
       "POST /cases/:caseId/messages",
       "POST /cases/:caseId/documents/presign",
       "POST /cases/:caseId/documents",
+      "POST /cases/:caseId/top-ups",
     ]);
   });
 });
