@@ -288,6 +288,12 @@ describe("Client app cases", () => {
       "POST /cases/:caseId/documents",
       "POST /cases/:caseId/top-ups",
       "GET /cases/:caseId/lawyer-readiness",
+      "GET /lawyer-requests/consent",
+      "GET /lawyer-requests/eligibility",
+      "POST /lawyer-requests",
+      "GET /lawyer-requests",
+      "GET /lawyer-requests/:id",
+      "POST /lawyer-requests/:id/withdraw",
     ]);
   });
 });

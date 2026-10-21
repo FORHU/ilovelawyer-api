@@ -89,7 +89,7 @@ export const clientHandoffTags: Tags = [
   {
     name: CLIENT_TAG,
     description: [
-      "Called by ilovelawyer-client (`USER` accounts, `X-Client-App: user`). Asking for a lawyer on one of the client's own UK cases, reviewing the quote, the engagement thread and feedback.",
+      "Called by ilovelawyer-client (`USER` accounts) under `/api/client`, next to its cases: client accounts only, and no `X-Organization-Id`. Asking for a lawyer on one of the client's own UK cases, reviewing the quote, the engagement thread and feedback.",
       "",
       "Status flow: `REQUESTED → ROUTED → CLAIMED → QUOTED → CONFIRMED → ENGAGED → CLOSED`, or `EXPIRED` / `WITHDRAWN`. Declining a quote sends the request back to `ROUTED`. The client sees `ROUTED` and `CLAIMED` as one state, \"Finding a lawyer\". Either side can end an engagement.",
       "",
@@ -448,27 +448,27 @@ const requestId = [idParam()];
 
 export const clientHandoffPaths: Paths = {
   // ── Client app ──────────────────────────────────────────────────────────
-  "/lawyer-requests/consent": {
+  "/client/lawyer-requests/consent": {
     get: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#507",
+      issue: "ilovelawyer-api#507", built: true,
       summary: "The current consent and referral-fee disclosure text",
       responses: { 200: ok("Consent text", ref("LawyerRequestConsent")) },
     }),
   },
-  "/lawyer-requests/eligibility": {
+  "/client/lawyer-requests/eligibility": {
     get: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#507",
+      issue: "ilovelawyer-api#507", built: true,
       summary: "Whether to show Get a lawyer on a case, and why not",
       parameters: [{ name: "caseId", in: "query", required: true, schema: { type: "string", format: "uuid" } }],
       responses: { 200: ok("Eligibility", ref("LawyerRequestEligibility")), 404: err("No such case of yours") },
     }),
   },
-  "/lawyer-requests": {
+  "/client/lawyer-requests": {
     post: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#507",
+      issue: "ilovelawyer-api#507", built: true,
       summary: "Ask for a lawyer on one of your UK cases",
       description: "Stores the consent with its version and time, generates the anonymised brief (#508) and routes it (#509).",
       body: {
@@ -491,32 +491,32 @@ export const clientHandoffPaths: Paths = {
     }),
     get: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#507",
+      issue: "ilovelawyer-api#507", built: true,
       summary: "Your lawyer requests, newest first",
       parameters: [{ name: "caseId", in: "query", schema: { type: "string", format: "uuid" } }, ...pageParams],
       responses: { 200: ok("Requests", page("LawyerRequestForClient")) },
     }),
   },
-  "/lawyer-requests/{id}": {
+  "/client/lawyer-requests/{id}": {
     get: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#512",
+      issue: "ilovelawyer-api#507", built: true,
       summary: "One request: status, and from QUOTED the lawyer's profile and quote",
       parameters: requestId,
       responses: { 200: ok("Request", ref("LawyerRequestForClient")), 404: NOT_FOUND },
     }),
   },
-  "/lawyer-requests/{id}/withdraw": {
+  "/client/lawyer-requests/{id}/withdraw": {
     post: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#507",
+      issue: "ilovelawyer-api#507", built: true,
       summary: "Withdraw before engagement",
       description: "Allowed up to QUOTED. Any claim ends WITHDRAWN and matching lawyers get client-request:taken.",
       parameters: requestId,
       responses: { 200: ok("Withdrawn", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
-  "/lawyer-requests/{id}/confirm": {
+  "/client/lawyer-requests/{id}/confirm": {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#513",
@@ -528,7 +528,7 @@ export const clientHandoffPaths: Paths = {
       responses: { 200: ok("Confirmed or engaged", ref("LawyerRequestForClient")), 400: err("DISCLOSURE_NOT_ACKNOWLEDGED"), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
-  "/lawyer-requests/{id}/decline": {
+  "/client/lawyer-requests/{id}/decline": {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#513",
@@ -539,7 +539,7 @@ export const clientHandoffPaths: Paths = {
       responses: { 200: ok("Back to ROUTED", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
-  "/lawyer-requests/{id}/messages": {
+  "/client/lawyer-requests/{id}/messages": {
     get: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#517",
@@ -557,7 +557,7 @@ export const clientHandoffPaths: Paths = {
       responses: { 201: ok("Posted", ref("EngagementMessage")), 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or INVALID_REQUEST_STATUS") },
     }),
   },
-  "/lawyer-requests/{id}/end": {
+  "/client/lawyer-requests/{id}/end": {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#519",
@@ -569,7 +569,7 @@ export const clientHandoffPaths: Paths = {
       responses: { 200: ok("Ended", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
-  "/lawyer-requests/{id}/feedback": {
+  "/client/lawyer-requests/{id}/feedback": {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#519",
@@ -763,7 +763,7 @@ export const clientHandoffPaths: Paths = {
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#519",
       summary: "Close the engagement",
-      description: "Moves to CLOSED (closedBy LAWYER), removes the read-only grant (shared-cases:changed) and makes the thread read-only. Your workspace copy stays. The client is asked for feedback. The client can also end it from their side (POST /lawyer-requests/{id}/end).",
+      description: "Moves to CLOSED (closedBy LAWYER), removes the read-only grant (shared-cases:changed) and makes the thread read-only. Your workspace copy stays. The client is asked for feedback. The client can also end it from their side (POST /client/lawyer-requests/{id}/end).",
       parameters: requestId,
       body: { type: "object", properties: { note: { type: "string", maxLength: 1000, description: "Shown to the client" } } },
       responses: { 200: ok("Closed", ref("ClientRequestForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },

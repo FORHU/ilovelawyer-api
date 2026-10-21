@@ -215,6 +215,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/cases/:caseId/documents/presign": UPLOAD,
   "POST /client/cases/:caseId/documents": UPLOAD,
   "PATCH /users/me/client-request-profile": { exempt: "A lawyer's own professional details; the admin's verification of them is audited (#506)" },
+  "POST /client/lawyer-requests": { exempt: "A client asking for a lawyer on their own case; consent and its version are stored on the request" },
+  "POST /client/lawyer-requests/:id/withdraw": { exempt: "A client taking back their own request" },
   "POST /client/payments/case/quote": { exempt: "Prices a new case; nothing is charged or stored" },
   "POST /client/payments/case": { exempt: "A client paying for their own case; stored as a ClientPayment" },
   "POST /client/cases/:caseId/top-ups": { exempt: "A client buying chat credits for their own case; stored as a ClientPayment" },

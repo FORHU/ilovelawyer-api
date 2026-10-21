@@ -145,6 +145,7 @@ model User {
   deadlineConfirmations   ProceduralDeadlineConfirmation[]
   caseBriefExports        CaseBriefExport[]
   caseViews               CaseView[]
+  clientRequests          ClientRequest[]
   updatedTenantSettings   TenantSetting[]
   clientPayments          ClientPayment[]
   clientRequestProfile    LawyerClientProfile?
@@ -900,6 +901,7 @@ model Case {
   changeSummaries      CaseChangeSummary[]
   manualEdits          CaseManualEdit[]
   clientPayments       ClientPayment[]
+  clientRequests       ClientRequest[]
 
   @@index([userId])
   @@index([organizationId])
@@ -986,6 +988,45 @@ model ClientPayment {
 
   @@index([userId, kind, status])
   @@index([caseId])
+}
+
+// See types/client-handoff.ts CLIENT_REQUEST_STATUSES for what each one means.
+enum ClientRequestStatus {
+  REQUESTED
+  ROUTED
+  CLAIMED
+  QUOTED
+  CONFIRMED
+  ENGAGED
+  CLOSED
+  EXPIRED
+  WITHDRAWN
+}
+
+// A client asking for a lawyer on one of their own UK cases (the UK client-to-lawyer hand-off,
+// FORHU/ilovelawyer-app#862; docs/adr/0016). At most one open (not CLOSED, EXPIRED or WITHDRAWN)
+// per case. The client agreed to the consent text of `consentVersion` (CLIENT_REQUEST_CONSENT_VERSION)
+// at `consentAcceptedAt`. Later issues add the brief (#508), routing (#509), the claim (#511), the
+// quote (#512), the charge (#513) and the engagement (#514).
+model ClientRequest {
+  id                String              @id @default(uuid())
+  caseId            String
+  clientId          String
+  status            ClientRequestStatus @default(REQUESTED)
+  // The client's note to the lawyer, as written.
+  note              String              @default("") @db.Text
+  consentVersion    String
+  consentAcceptedAt DateTime
+  withdrawnAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  case   Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client User @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, status])
+  @@index([clientId, createdAt])
+  @@index([status])
 }
 
 model Party {
