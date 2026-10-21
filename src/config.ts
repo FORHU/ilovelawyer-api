@@ -66,6 +66,14 @@ export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin)
  * Links emailed to a client account open on one of these instead of the lawyer app — see
  * emailLinkOriginForAccount. Each must also be listed in CLIENT_URL so CORS lets it call the API. */
 export const USER_APP_URL = (process.env.USER_APP_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+/** Who takes the client app's payments (payments/client-payment-provider.ts): "stripe", or "dummy"
+ * (the default) which charges nothing. "stripe" needs STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY,
+ * and STRIPE_WEBHOOK_SECRET for POST /webhooks/stripe. Use test-mode keys outside production. */
+export const CLIENT_PAYMENT_PROVIDER = (process.env.CLIENT_PAYMENT_PROVIDER || "dummy").trim().toLowerCase();
+export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || undefined;
+/** Public by design: the client app needs it to show Stripe's payment form. */
+export const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || undefined;
+export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || undefined;
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
 /** Encrypts User.googleRefreshToken at rest (src/utils/google-token-crypto.ts): 32 bytes, as

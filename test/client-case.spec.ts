@@ -279,6 +279,7 @@ describe("Client app cases", () => {
       "GET /pricing",
       "POST /payments/case/quote",
       "POST /payments/case",
+      "GET /payments/:paymentId",
       "GET /cases",
       "POST /cases",
       "GET /cases/:caseId",

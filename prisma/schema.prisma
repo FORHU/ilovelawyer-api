@@ -917,14 +917,12 @@ enum ClientPaymentKind {
 }
 
 enum ClientPaymentStatus {
+  // Waiting for the client to finish paying on Stripe (ClientPaymentProvider "checkout" mode).
+  PENDING
   SUCCEEDED
   FAILED
 }
 
-// A payment in the client app, declined ones included (ClientBillingSvc). `provider` says who took
-// it: "DUMMY" (charges nothing) until Stripe replaces it. A CASE payment is taken before its case
-// exists: `usedAt` marks it spent (so it creates one case only) and `caseId` is set once the case is
-// made.
 enum LawyerVerificationStatus {
   // Required fields still missing (LawyerProfileSvc.missingFields).
   UNSUBMITTED
@@ -967,6 +965,11 @@ model LawyerClientProfile {
   @@index([verificationStatus])
 }
 
+// A payment in the client app, failed ones included (ClientBillingSvc). `provider` says who took it:
+// "DUMMY" charges nothing and settles at once; "STRIPE" starts PENDING with a Stripe Checkout
+// Session (`externalId`) and settles on its webhook (StripeWebhookEvent) or when the app asks. A CASE
+// payment is taken before its case exists: `usedAt` marks it spent (so it creates one case only) and
+// `caseId` is set once the case is made.
 model ClientPayment {
   id            String              @id @default(uuid())
   userId        String
@@ -988,6 +991,15 @@ model ClientPayment {
 
   @@index([userId, kind, status])
   @@index([caseId])
+  @@index([externalId])
+}
+
+// Each Stripe webhook event handled, by Stripe's event id, so a retried delivery is answered without
+// being applied twice (POST /webhooks/stripe).
+model StripeWebhookEvent {
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now())
 }
 
 // See types/client-handoff.ts CLIENT_REQUEST_STATUSES for what each one means.

@@ -58,6 +58,7 @@
     "puppeteer-core": "24.15.0",
     "redis": "^4.6.10",
     "socket.io": "^4.7.2",
+    "stripe": "22.6.2",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
     "typescript": "^5.2.2",

@@ -1,5 +1,6 @@
 /** Paying for the client app (ClientBillingSvc): the price and promos, the dummy payment, a case
- * payment used once, top-ups, and one credit per AI message. No live Postgres: the repository is
+ * payment used once, top-ups, and one credit per AI message. Stripe Checkout is
+ * test/client-stripe-checkout.spec.ts. No live Postgres: the repository is
  * monkeypatched on its CommonJS module object, same idiom as test/client-case.spec.ts. */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
@@ -50,9 +51,10 @@ describe("Client app billing", () => {
       return true;
     };
   });
+  beforeEach(() => setClientPaymentProvider(dummyClientPaymentProvider));
   afterEach(() => {
     restore();
-    setClientPaymentProvider(dummyClientPaymentProvider);
+    setClientPaymentProvider(null);
   });
 
   describe("quoteCase", () => {
@@ -83,7 +85,13 @@ describe("Client app billing", () => {
   describe("payForCase", () => {
     it("records a dummy payment with the case's credits, ready to create one case", async () => {
       const paid = await ClientBillingSvc.payForCase("u1", { promoCode: "WELCOME5" });
-      expect(paid).to.deep.equal({ paymentId: "pay-1", amount: { amountMinor: CLIENT_CASE_PRICE_MINOR - 500, currency: "USD" }, credits: CLIENT_CASE_CREDITS });
+      expect(paid).to.deep.equal({
+        paymentId: "pay-1",
+        status: "SUCCEEDED",
+        amount: { amountMinor: CLIENT_CASE_PRICE_MINOR - 500, currency: "USD" },
+        credits: CLIENT_CASE_CREDITS,
+        checkout: null,
+      });
       expect(payments[0]).to.include({ kind: "CASE", provider: "DUMMY", status: "SUCCEEDED", caseId: null, promoCode: "WELCOME5" });
     });
 
@@ -97,17 +105,18 @@ describe("Client app billing", () => {
       expect(await errorOf(ClientBillingSvc.payForCase("u1", { promoCode: "WELCOME5" }))).to.deep.equal({ status: 400, code: "PROMO_NOT_APPLIED" });
       expect(payments).to.deep.equal([]);
     });
-
-    it("stores the provider's name, so a dummy payment is never taken for a real one", async () => {
-      setClientPaymentProvider({ name: "STRIPE", charge: async () => ({ ok: true, externalId: "pi_1" }) });
-      await ClientBillingSvc.payForCase("u1", {});
-      expect(payments[0]).to.include({ provider: "STRIPE", externalId: "pi_1" });
-    });
   });
 
   describe("credits", () => {
     it("adds a pack's credits to the case", async () => {
-      expect(await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" })).to.deep.equal({ credits: 28, added: 25, amount: { amountMinor: 499, currency: "USD" } });
+      expect(await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" })).to.deep.equal({
+        paymentId: "pay-1",
+        status: "SUCCEEDED",
+        credits: 28,
+        added: 25,
+        amount: { amountMinor: 499, currency: "USD" },
+        checkout: null,
+      });
       expect(payments[0]).to.include({ kind: "TOP_UP", caseId: "case-1", credits: 25 });
     });
 
