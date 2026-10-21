@@ -11,6 +11,10 @@ const router = express.Router();
 
 router.use(validSession, asyncHandler(requireClientAccount));
 
+router.get("/pricing", asyncHandler(ClientCaseCtrl.pricing));
+router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.quoteCase));
+router.post("/payments/case", asyncHandler(ClientCaseCtrl.payForCase));
+
 router.get("/cases", asyncHandler(ClientCaseCtrl.list));
 router.post("/cases", asyncHandler(ClientCaseCtrl.create));
 router.get("/cases/:caseId", asyncHandler(ClientCaseCtrl.get));
@@ -18,5 +22,6 @@ router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages))
 router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
 router.post("/cases/:caseId/documents", asyncHandler(ClientCaseCtrl.addDocument));
+router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 
 export default router;
