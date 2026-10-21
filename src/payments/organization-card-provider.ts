@@ -2,6 +2,7 @@ import crypto from "crypto";
 import Stripe from "stripe";
 import { LAWYER_PAYMENT_PROVIDER } from "../config";
 import { stripeClient } from "./stripe-client";
+import { refundResultOf, type ClientRefundResult } from "./client-refunds";
 
 /**
  * Saves an organization's card on file (OrganizationCardSvc). Two providers, chosen by
@@ -85,6 +86,17 @@ export interface HostedOrganizationCardProvider {
   charge(request: CardChargeRequest): Promise<CardChargeResult>;
   /** Where one of our payments stands now, read fresh (webhook events can arrive out of order). */
   chargeStatus(paymentIntentId: string): Promise<CardChargeResult>;
+  /** Gives back some or all of a charge (#520). A test card's charge took no money, so only Stripe
+   * refunds. */
+  refund(request: ChargeRefundRequest): Promise<ClientRefundResult>;
+}
+
+export interface ChargeRefundRequest {
+  /** Our OrganizationChargeRefund id: the idempotency key, and handed back on the refund webhooks. */
+  refundId: string;
+  chargeId: string;
+  paymentIntentId: string;
+  amountMinor: number;
 }
 
 export type OrganizationCardProvider = ImmediateOrganizationCardProvider | HostedOrganizationCardProvider;
@@ -93,6 +105,8 @@ export type OrganizationCardProvider = ImmediateOrganizationCardProvider | Hoste
 export const ORGANIZATION_CARD_PURPOSE = "organization_card";
 /** metadata.purpose on our charges' PaymentIntents, which tells the shared webhook to settle one. */
 export const ORGANIZATION_CHARGE_PURPOSE = "organization_charge";
+/** metadata.purpose on refunds of those charges, which tells refund.updated whose refund it is. */
+export const ORGANIZATION_REFUND_PURPOSE = "organization_refund";
 
 const NEEDS_AUTHENTICATION = "The bank wants the cardholder to approve this payment, which can't be done off-session. Add the card again (or another one) and retry.";
 
@@ -211,6 +225,18 @@ export const stripeOrganizationCardProvider: HostedOrganizationCardProvider = {
   },
   async chargeStatus(paymentIntentId) {
     return chargeResultOf(await stripeClient().paymentIntents.retrieve(paymentIntentId, { expand: ["latest_charge"] }));
+  },
+  async refund(request) {
+    const refund = await stripeClient().refunds.create(
+      {
+        payment_intent: request.paymentIntentId,
+        amount: request.amountMinor,
+        metadata: { purpose: ORGANIZATION_REFUND_PURPOSE, refundId: request.refundId, chargeId: request.chargeId },
+      },
+      // A retried request (a network blip) can't refund twice.
+      { idempotencyKey: `organization-refund-${request.refundId}` },
+    );
+    return refundResultOf(refund);
   },
 };
 

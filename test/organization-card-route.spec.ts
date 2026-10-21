@@ -69,6 +69,9 @@ describe("organization card on file", () => {
     async chargeStatus() {
       throw new Error("not used here");
     },
+    async refund() {
+      throw new Error("not used here");
+    },
   };
 
   const completeSession = (sessionId: string, over: Partial<CompletedCardSetup["card"]> & { organizationId?: string; customerId?: string } = {}) => {

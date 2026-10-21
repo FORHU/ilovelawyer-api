@@ -928,12 +928,15 @@ export const clientHandoffPaths: Paths = {
   "/admin/client-requests": {
     get: op({
       tag: ADMIN_TAG,
-      issue: "ilovelawyer-api#520",
+      issue: "ilovelawyer-api#520", built: true,
       summary: "All client requests, filtered by status and age",
+      description:
+        "Newest first. unclaimedOver48h: still ROUTED with its 48h routing window over. matchedLawyers is counted for ROUTED requests (0 otherwise). Claims carry the lawyer, their firm, the outcome and the quote; release notes and decline reasons are left out.",
       parameters: [
         { name: "status", in: "query", schema: enumOf(CLIENT_REQUEST_STATUSES) },
         { name: "minAgeHours", in: "query", schema: { type: "integer" } },
         { name: "unclaimedOver48h", in: "query", schema: { type: "boolean" } },
+        { name: "caseId", in: "query", schema: { type: "string" }, description: "One case's requests" },
         ...pageParams,
       ],
       responses: { 200: ok("Requests", page("AdminClientRequest")), 403: err("Not an admin") },
@@ -942,8 +945,10 @@ export const clientHandoffPaths: Paths = {
   "/admin/client-requests/fees-summary": {
     get: op({
       tag: ADMIN_TAG,
-      issue: "ilovelawyer-api#520",
+      issue: "ilovelawyer-api#520", built: true,
       summary: "Fees per lawyer or organization",
+      description:
+        "Paid charges created between from and to (both days included), most fees first. engagements counts paid per-case fees. A refunded charge still counts as paid; what was given back shows in refunds.",
       parameters: [
         { name: "groupBy", in: "query", schema: { type: "string", enum: ["lawyer", "organization"], default: "organization" } },
         { name: "from", in: "query", schema: { type: "string", format: "date" } },
@@ -952,15 +957,33 @@ export const clientHandoffPaths: Paths = {
       responses: { 200: ok("Summary", { type: "array", items: ref("FeesSummaryRow") }), 403: err("Not an admin") },
     }),
   },
+  "/admin/charges/{chargeId}": {
+    get: op({
+      tag: ADMIN_TAG,
+      issue: "ilovelawyer-api#520", built: true,
+      summary: "One firm charge with its refunds",
+      description: "Charge, plus organizationId, paymentIntentId, refundPending, refundable (0 when it can't be refunded) and refunds [{ id, amount, reason, status, externalId, failureReason, admin, createdAt }].",
+      parameters: [idParam("chargeId")],
+      responses: { 200: ok("Charge", ref("Charge")), 403: err("Not an admin"), 404: err("No such charge") },
+    }),
+  },
   "/admin/charges/{chargeId}/refund": {
     post: op({
       tag: ADMIN_TAG,
-      issue: "ilovelawyer-api#520",
+      issue: "ilovelawyer-api#520", built: true,
       summary: "Refund a per-case fee or top-up through Stripe",
-      description: "Full when amount is left out. Audited with the reason.",
+      description:
+        "Full when amount is left out, otherwise partial; more partial refunds may follow until nothing is left, and two admins at once can't give back more than was paid. Only a paid charge on a Stripe card: a DUMMY test card took no money. The charge becomes PARTIALLY_REFUNDED or REFUNDED as refunds go through; one Stripe hasn't finished stays PENDING until refund.updated. Gives back money only: the engagement carries on. Audited (admin.organization_charge.refunded) with the reason, in the firm's own audit log too, a failure included.",
       parameters: [idParam("chargeId")],
       body: { type: "object", required: ["reason"], properties: { amount: money(), reason: { type: "string", maxLength: 500 } } },
-      responses: { 200: ok("Refund started", ref("Charge")), 400: err("REFUND_EXCEEDS_CHARGE"), 403: err("Not an admin"), 404: err("No such charge") },
+      responses: {
+        200: ok("The charge, with the new refund", ref("Charge")),
+        400: err("No reason, a bad amount, or REFUND_EXCEEDS_CHARGE"),
+        403: err("Not an admin"),
+        404: err("No such charge"),
+        409: err("REFUND_NOT_SUPPORTED (test card), CHARGE_NOT_REFUNDABLE (not paid) or ALREADY_REFUNDED"),
+        502: err("PAYMENT_PROVIDER_ERROR: Stripe refused; the refund is recorded FAILED and nothing is held"),
+      },
     }),
   },
 };

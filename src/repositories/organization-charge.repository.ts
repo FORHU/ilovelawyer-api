@@ -146,7 +146,13 @@ export default class OrganizationChargeRepo {
     const where: Prisma.OrganizationChargeWhereInput = { organizationId, ...(kind ? { kind } : {}) };
     const [total, data] = await prisma.$transaction([
       prisma.organizationCharge.count({ where }),
-      prisma.organizationCharge.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip: (page - 1) * limit, take: limit }),
+      prisma.organizationCharge.findMany({
+        where,
+        include: { refunds: { orderBy: { createdAt: "desc" } } },
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
     ]);
     return { total, data };
   }
