@@ -89,7 +89,7 @@ export const clientHandoffTags: Tags = [
     description: [
       "Called by ilovelawyer-client (`USER` accounts, `X-Client-App: user`). Asking for a lawyer on one of the client's own UK cases, reviewing the quote, the engagement thread and feedback.",
       "",
-      "Status flow: `REQUESTED → ROUTED → CLAIMED → QUOTED → CONFIRMED → ENGAGED → CLOSED`, or `EXPIRED` / `WITHDRAWN`. Declining a quote sends the request back to `ROUTED`. The client sees `ROUTED` and `CLAIMED` as one state, \"Finding a lawyer\".",
+      "Status flow: `REQUESTED → ROUTED → CLAIMED → QUOTED → CONFIRMED → ENGAGED → CLOSED`, or `EXPIRED` / `WITHDRAWN`. Declining a quote sends the request back to `ROUTED`. The client sees `ROUTED` and `CLAIMED` as one state, \"Finding a lawyer\". Either side can end an engagement.",
       "",
       "Socket events (on the existing connection, user room; refetch on receipt):",
       "",
@@ -252,6 +252,7 @@ export const clientHandoffSchemas: Schemas = {
           clientName: { type: "string" },
           engagedAt: dateTime(),
           closedAt: dateTime(undefined, true),
+          closedBy: { type: "string", enum: ["LAWYER", "CLIENT"], nullable: true },
           copyCaseId: { type: "string", nullable: true, description: "The lawyer's workspace copy, once made" },
         },
       },
@@ -273,6 +274,7 @@ export const clientHandoffSchemas: Schemas = {
       referralDisclosure: { type: "string", nullable: true, description: "Shown on the quote screen; the client acknowledges it to confirm" },
       engagedAt: dateTime(undefined, true),
       closedAt: dateTime(undefined, true),
+      closedBy: { type: "string", enum: ["LAWYER", "CLIENT"], nullable: true },
       feedback: { ...ref("EngagementFeedback"), nullable: true },
     },
   },
@@ -553,6 +555,18 @@ export const clientHandoffPaths: Paths = {
       responses: { 201: ok("Posted", ref("EngagementMessage")), 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or INVALID_REQUEST_STATUS") },
     }),
   },
+  "/lawyer-requests/{id}/end": {
+    post: op({
+      tag: CLIENT_TAG,
+      issue: "ilovelawyer-api#519",
+      summary: "End the engagement (the client's side of close)",
+      description:
+        "Allowed while ENGAGED. Same effect as the lawyer closing it: CLOSED with closedBy CLIENT, the lawyer's read-only access is removed at once, and the thread becomes read-only. The lawyer keeps any workspace copy they made (UK file-retention rules). The lawyer is notified.",
+      parameters: requestId,
+      body: { type: "object", properties: { reason: { type: "string", maxLength: 1000, description: "Shown to the lawyer" } } },
+      responses: { 200: ok("Ended", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
+    }),
+  },
   "/lawyer-requests/{id}/feedback": {
     post: op({
       tag: CLIENT_TAG,
@@ -747,7 +761,7 @@ export const clientHandoffPaths: Paths = {
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#519",
       summary: "Close the engagement",
-      description: "Moves to CLOSED, removes the read-only grant (shared-cases:changed) and makes the thread read-only. Your workspace copy stays. The client is asked for feedback.",
+      description: "Moves to CLOSED (closedBy LAWYER), removes the read-only grant (shared-cases:changed) and makes the thread read-only. Your workspace copy stays. The client is asked for feedback. The client can also end it from their side (POST /lawyer-requests/{id}/end).",
       parameters: requestId,
       body: { type: "object", properties: { note: { type: "string", maxLength: 1000, description: "Shown to the client" } } },
       responses: { 200: ok("Closed", ref("ClientRequestForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
