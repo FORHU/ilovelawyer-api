@@ -1,6 +1,7 @@
 import type { ClientPayment } from "@prisma/client";
 import type Stripe from "stripe";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
+import ClientBillingAdminSvc from "./client-billing-admin.service";
 import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "../payments/client-payment-provider";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -146,7 +147,7 @@ export default class ClientBillingSvc {
 
   /**
    * One verified Stripe webhook event (POST /api/webhooks/stripe). Checkout events settle the payment
-   * they name; everything else is acknowledged and ignored. An event already handled is answered
+   * they name, and refund events update an admin's refund; everything else is acknowledged and ignored. An event already handled is answered
    * without being applied again. An event for a payment this server doesn't have (another
    * environment sharing the Stripe account) is ignored.
    */
@@ -173,6 +174,11 @@ export default class ClientBillingSvc {
         }
         break;
       }
+      // A refund an admin issued (ClientBillingAdminSvc.refund) that Stripe finished, or couldn't.
+      case "refund.updated":
+      case "refund.failed":
+        await ClientBillingAdminSvc.applyStripeRefund(event.data.object as Stripe.Refund);
+        break;
       default:
         break;
     }

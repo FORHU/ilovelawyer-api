@@ -924,6 +924,13 @@ enum ClientPaymentStatus {
   FAILED
 }
 
+enum ClientRefundStatus {
+  // Sent to Stripe, not final yet (some payment methods take days); Stripe's refund.updated settles it.
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
 enum LawyerVerificationStatus {
   // Required fields still missing (LawyerProfileSvc.missingFields).
   UNSUBMITTED
@@ -987,11 +994,38 @@ model ClientPayment {
   usedAt        DateTime?
   createdAt     DateTime            @default(now())
 
-  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case Case? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case    Case?          @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  refunds ClientRefund[]
 
   @@index([userId, kind, status])
   @@index([caseId])
+  @@index([externalId])
+  @@index([createdAt])
+}
+
+// Money given back on a ClientPayment by a platform admin (POST /api/admin/billing/:id/refund). A
+// payment can have several partial refunds; PENDING and SUCCEEDED ones together never exceed it.
+// Refunding gives back money only: the case and its credits stay.
+model ClientRefund {
+  id            String             @id @default(uuid())
+  paymentId     String
+  amountMinor   Int
+  currency      String
+  // What the admin wrote; shown in the admin app and the audit log.
+  reason        String
+  status        ClientRefundStatus
+  // Stripe's refund id (re_...).
+  externalId    String?
+  failureReason String?
+  // The admin who issued it. No foreign key, so the record outlives the admin's account.
+  adminId       String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  payment ClientPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
   @@index([externalId])
 }
 

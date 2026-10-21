@@ -55,6 +55,73 @@ const clientCase = {
   },
 };
 
+const ADMIN_TAG = "Admin: Client Billing";
+const pageParams = [
+  { name: "page", in: "query", schema: { type: "integer", minimum: 1, default: 1 } },
+  { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } },
+];
+const billingFilters = [
+  { name: "from", in: "query", schema: { type: "string", format: "date-time" }, description: "Inclusive. Default: 30 days before `to` (or now)" },
+  { name: "to", in: "query", schema: { type: "string", format: "date-time" }, description: "Exclusive" },
+  { name: "userId", in: "query", schema: { type: "string" } },
+  { name: "caseId", in: "query", schema: { type: "string" } },
+  { name: "status", in: "query", schema: paymentStatus },
+  { name: "kind", in: "query", schema: { type: "string", enum: ["CASE", "TOP_UP"] } },
+  { name: "provider", in: "query", schema: { type: "string", enum: ["DUMMY", "STRIPE", "FREE"] } },
+  { name: "q", in: "query", schema: { type: "string" }, description: "Part of the client's email or name, any case" },
+];
+const moneyGroup = { type: "object", properties: { key: { type: "string" }, amount: money, payments: { type: "integer" } } };
+const billingTotals = {
+  type: "array",
+  description: "One row per currency. Paid counts SUCCEEDED payments; refunded and net count the refunds of those payments.",
+  items: {
+    type: "object",
+    properties: { currency: { type: "string" }, paid: money, payments: { type: "integer" }, refunded: money, refundPending: money, net: money },
+  },
+};
+const statusCounts = { type: "object", properties: { PENDING: { type: "integer" }, SUCCEEDED: { type: "integer" }, FAILED: { type: "integer" } } };
+const adminClientPayment = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    kind: { type: "string", enum: ["CASE", "TOP_UP"] },
+    status: paymentStatus,
+    provider: { type: "string", enum: ["DUMMY", "STRIPE", "FREE"], description: "DUMMY and FREE took no money" },
+    externalId: { type: "string", nullable: true, description: "Stripe Checkout Session id (cs_...), or the dummy's" },
+    amount: money,
+    credits: { type: "integer" },
+    promoCode: { type: "string", nullable: true },
+    failureReason: { type: "string", nullable: true },
+    usedAt: { type: "string", format: "date-time", nullable: true, description: "When a case payment created its case" },
+    createdAt: { type: "string", format: "date-time" },
+    client: { type: "object", properties: { id: { type: "string" }, email: { type: "string" }, name: { type: "string", nullable: true } } },
+    case: { type: "object", nullable: true, properties: { id: { type: "string" }, title: { type: "string" } } },
+    refunded: money,
+    refundPending: money,
+    refundable: { ...money, description: "What a refund can still give back; 0 when the payment can't be refunded" },
+    refunds: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          amount: money,
+          reason: { type: "string" },
+          status: { type: "string", enum: ["PENDING", "SUCCEEDED", "FAILED"] },
+          externalId: { type: "string", nullable: true, description: "Stripe refund id (re_...)" },
+          failureReason: { type: "string", nullable: true },
+          admin: { type: "object", nullable: true, properties: { id: { type: "string" }, name: { type: "string", nullable: true } } },
+          createdAt: { type: "string", format: "date-time" },
+        },
+      },
+    },
+  },
+};
+const paymentPage = {
+  type: "object",
+  properties: { rows: { type: "array", items: adminClientPayment }, total: { type: "integer" }, page: { type: "integer" }, pageSize: { type: "integer" }, totalPages: { type: "integer" } },
+};
+
 export const clientAppPaths: Paths = {
   "/client/pricing": {
     get: {
@@ -350,6 +417,109 @@ export const clientAppPaths: Paths = {
         content: json({ type: "object", required: ["key", "name"], properties: { key: { type: "string" }, name: { type: "string" }, contentType: { type: "string" }, fileSize: { type: "integer" } } }),
       },
       responses: { 201: { description: "Added (status PENDING until it's read)" }, 404: err("Not one of this client's cases") },
+    },
+  },
+  // ── Admin: client billing (ilovelawyer-admin, ADMIN accounts only) ───────
+  "/admin/billing/summary": {
+    get: {
+      tags: [ADMIN_TAG],
+      summary: "Client app revenue, refunds and splits over a range",
+      description: "Over SUCCEEDED payments in the filter. DUMMY payments count unless `provider` narrows them out: byProvider shows how much of the total is fake money.",
+      security,
+      parameters: billingFilters,
+      responses: {
+        200: {
+          description: "Summary",
+          content: json({
+            type: "object",
+            properties: {
+              range: { type: "object", properties: { from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time", nullable: true } } },
+              totals: billingTotals,
+              counts: { ...statusCounts, description: "Every payment in the filter, by status" },
+              byKind: { type: "array", items: moneyGroup },
+              byProvider: { type: "array", items: moneyGroup },
+              byDay: { type: "array", items: { type: "object", properties: { day: { type: "string", format: "date" }, amount: money, payments: { type: "integer" } } } },
+            },
+          }),
+        },
+        400: err("A bad filter, or `from` not before `to`"),
+        403: err("Not an admin"),
+      },
+    },
+  },
+  "/admin/billing": {
+    get: {
+      tags: [ADMIN_TAG],
+      summary: "Client app payments, newest first",
+      security,
+      parameters: [...billingFilters, ...pageParams],
+      responses: { 200: { description: "One page", content: json(paymentPage) }, 400: err("A bad filter"), 403: err("Not an admin") },
+    },
+  },
+  "/admin/billing/clients/{userId}": {
+    get: {
+      tags: [ADMIN_TAG],
+      summary: "One client's billing, all time",
+      security,
+      parameters: [{ name: "userId", in: "path", required: true, schema: { type: "string" } }, ...pageParams],
+      responses: {
+        200: {
+          description: "Client",
+          content: json({
+            type: "object",
+            properties: {
+              user: {
+                type: "object",
+                properties: { id: { type: "string" }, email: { type: "string" }, name: { type: "string", nullable: true }, role: { type: "string" }, createdAt: { type: "string", format: "date-time" } },
+              },
+              totals: billingTotals,
+              counts: statusCounts,
+              cases: {
+                type: "array",
+                items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, credits: { type: "integer" }, createdAt: { type: "string", format: "date-time" } } },
+              },
+              payments: paymentPage,
+            },
+          }),
+        },
+        403: err("Not an admin"),
+        404: err("No such user"),
+      },
+    },
+  },
+  "/admin/billing/{paymentId}": {
+    get: {
+      tags: [ADMIN_TAG],
+      summary: "One payment with its refunds",
+      security,
+      parameters: [{ name: "paymentId", in: "path", required: true, schema: { type: "string" } }],
+      responses: { 200: { description: "Payment", content: json(adminClientPayment) }, 403: err("Not an admin"), 404: err("No such payment") },
+    },
+  },
+  "/admin/billing/{paymentId}/refund": {
+    post: {
+      tags: [ADMIN_TAG],
+      summary: "Refund a client app payment through Stripe",
+      description:
+        "Full when amountMinor is left out, otherwise partial; more partial refunds may follow until nothing is left. Only a SUCCEEDED STRIPE payment: DUMMY and FREE took no money. Gives back money only: the case and its credits stay. A refund Stripe hasn't finished stays PENDING until its refund.updated webhook. Audited as admin.client_payment.refunded, a failure included.",
+      security,
+      parameters: [{ name: "paymentId", in: "path", required: true, schema: { type: "string" } }],
+      requestBody: {
+        required: true,
+        content: json({
+          type: "object",
+          required: ["reason"],
+          properties: { amountMinor: { type: "integer", minimum: 1, description: "Cents. Left out: all that's left" }, reason: { type: "string", maxLength: 500 } },
+        }),
+      },
+      responses: {
+        200: { description: "The payment, with the new refund", content: json(adminClientPayment) },
+        400: err("No reason, a bad amount, or REFUND_EXCEEDS_PAYMENT"),
+        403: err("Not an admin"),
+        404: err("No such payment"),
+        409: err("REFUND_NOT_SUPPORTED (DUMMY or FREE), PAYMENT_NOT_REFUNDABLE (not SUCCEEDED) or ALREADY_REFUNDED"),
+        502: err("PAYMENT_PROVIDER_ERROR: Stripe refused; the refund is recorded FAILED and nothing is held"),
+      },
     },
   },
 };
