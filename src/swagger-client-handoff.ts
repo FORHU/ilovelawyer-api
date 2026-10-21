@@ -271,7 +271,7 @@ export const clientHandoffSchemas: Schemas = {
       consentVersion: { type: "string" },
       consentAcceptedAt: dateTime(),
       createdAt: dateTime(),
-      lawyer: { ...ref("LawyerPublicProfile"), nullable: true, description: "From QUOTED" },
+      lawyer: { ...ref("LawyerPublicProfile"), nullable: true, description: "From QUOTED (#512). firmName is null for a solo practitioner's personal workspace" },
       quote: { ...ref("Quote"), nullable: true },
       referralDisclosure: { type: "string", nullable: true, description: "Shown on the quote screen; the client acknowledges it to confirm" },
       engagedAt: dateTime(undefined, true),
@@ -668,9 +668,10 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/parties": {
     get: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#512",
+      issue: "ilovelawyer-api#512", built: true,
       summary: "Party names for the conflict check",
-      description: "Only for the lawyer holding the claim, while CLAIMED or QUOTED. Every read is audited.",
+      description:
+        "The client (role \"Client\") first, then the case's other parties as the client entered them. Only for the lawyer holding the claim, while CLAIMED (inside the 24h hold) or QUOTED; 404 for anyone who never held it. Every read is audited (client_request.parties_viewed).",
       parameters: requestId,
       responses: { 200: ok("Parties", ref("ConflictParties")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED or INVALID_REQUEST_STATUS") },
     }),
@@ -678,9 +679,10 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/release": {
     post: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#512",
+      issue: "ilovelawyer-api#512", built: true,
       summary: "Give the request back (conflict found, no capacity, out of scope)",
-      description: "Audited. The claim ends RELEASED and the request is routed again without you.",
+      description:
+        "From CLAIMED, or QUOTED before the client answers. The claim ends RELEASED and the request is routed again for 48h without you, and announced again (#510). Audited (client_request.released) with the reason; the note stays on the claim only, since it may name the conflict.",
       parameters: requestId,
       body: { type: "object", required: ["reason"], properties: { reason: enumOf(RELEASE_REASONS), note: { type: "string", maxLength: 500 } } },
       responses: { 200: ok("Back to ROUTED", ref("ClientRequestForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
@@ -689,9 +691,10 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/quote": {
     post: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#512",
+      issue: "ilovelawyer-api#512", built: true,
       summary: "Send your quote to the client",
-      description: "Allowed while CLAIMED. Moves to QUOTED. The 24h hold keeps running until the client answers. Whether it should pause while QUOTED is an open question.",
+      description:
+        "Allowed while CLAIMED and inside the 24h hold (409 CLAIM_EXPIRED after it). Moves to QUOTED, once. GBP only. A FIXED_FEE needs an amount above 0; a FIRST_CONSULTATION may be free. Once quoted, the hold no longer lapses: the request waits for the client to confirm or decline (#513). The client then sees the quote and the lawyer's public profile on GET /client/lawyer-requests/{id}.",
       parameters: requestId,
       body: {
         type: "object",

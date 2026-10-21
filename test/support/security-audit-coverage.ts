@@ -223,6 +223,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/lawyer-requests/:id/withdraw": { exempt: "A client taking back their own request" },
   "POST /client-requests/:id/claim": ["client_request.claimed"],
   "POST /client-requests/:id/pass": { exempt: "A lawyer hiding a request from their own inbox; it gives them no access" },
+  "POST /client-requests/:id/release": ["client_request.released"],
+  "POST /client-requests/:id/quote": { exempt: "A quote to the client; it changes nobody's access. Recorded in the case activity feed" },
   "POST /client/payments/case/quote": { exempt: "Prices a new case; nothing is charged or stored" },
   "POST /client/payments/case": { exempt: "A client paying for their own case; stored as a ClientPayment" },
   "POST /client/cases/:caseId/top-ups": { exempt: "A client buying chat credits for their own case; stored as a ClientPayment" },

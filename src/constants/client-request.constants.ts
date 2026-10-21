@@ -20,3 +20,9 @@ export const CLIENT_REQUEST_REFERRAL_DISCLOSURE =
   "ilovelawyer is paid a fixed fee by the lawyer for introducing you. You don't pay us anything for this, and it doesn't change what the lawyer charges you.";
 
 export const CLIENT_REQUEST_NOTE_MAX_LENGTH = 1000;
+
+/** A lawyer's quote (#512): the message to the client, and the most it can ask (£100,000, in pence). */
+export const CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH = 2000;
+export const CLIENT_REQUEST_QUOTE_MAX_MINOR = 10_000_000;
+/** A lawyer's note when releasing a request (#512). Kept on the claim only. */
+export const CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH = 500;

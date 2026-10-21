@@ -1,4 +1,4 @@
-import type { ClientRequestStatus, LawyerClientProfile } from "@prisma/client";
+import type { ClientRequestStatus, LawyerClientProfile, QuoteType, ReleaseReason } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
@@ -25,8 +25,19 @@ const HELD: ClientRequestStatus[] = ["CLAIMED", "QUOTED", "CONFIRMED", "ENGAGED"
 
 const NOT_FOUND = () => new HttpError("Request not found", 404);
 
-/** ClientRequestForLawyer in the contract, as `lawyerId` sees it. The quote, fee, charge and
- * engagement are filled by later issues (#512 onwards); until then they're always empty. */
+/** The lawyer's quote on a claim (#512), or null before they've sent one. */
+function quoteOf(claim: LawyerRequest["claims"][number] | undefined) {
+  if (!claim?.quotedAt) return null;
+  return {
+    type: claim.quoteType,
+    amount: { amountMinor: claim.quoteAmountMinor, currency: claim.quoteCurrency },
+    message: claim.quoteMessage,
+    sentAt: claim.quotedAt,
+  };
+}
+
+/** ClientRequestForLawyer in the contract, as `lawyerId` sees it. The fee, charge and engagement are
+ * filled by later issues (#513 onwards); until then they're always empty. */
 function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
   const mine = r.claims.find((c) => c.lawyerId === lawyerId);
   return {
@@ -38,7 +49,7 @@ function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
     claim: mine
       ? { byMe: true, lawyer: { id: mine.lawyer.id, name: mine.lawyer.name ?? "" }, claimedAt: mine.claimedAt, claimExpiresAt: mine.expiresAt }
       : null,
-    quote: null,
+    quote: quoteOf(mine),
     perCaseFee: null,
     charge: null,
     engagement: null,
@@ -123,6 +134,99 @@ export default class ClientRequestLawyerSvc {
     return toDto(after, lawyer.userId);
   }
 
+  /**
+   * The names behind the brief, for the conflict check (#512): the client and the case's other
+   * parties. Only for the lawyer holding the claim, while CLAIMED (inside the 24h) or QUOTED. Every
+   * read is audited, since it's the first time the lawyer learns who the client is.
+   */
+  static async parties(lawyer: LawyerContext, id: string) {
+    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CLAIMED", "QUOTED"]);
+    const found = await ClientRequestRepo.findParties(id);
+    if (!found) throw NOT_FOUND();
+    const parties = [
+      { name: found.client.name || found.client.username, role: "Client" },
+      ...found.case.parties.map((p) => ({ name: p.name, role: p.designation })),
+    ];
+    await SecurityAuditSvc.record({
+      action: "client_request.parties_viewed",
+      actorId: lawyer.userId,
+      organizationId: lawyer.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload: { requestId: id, claimId: claim.id, parties: parties.length },
+    });
+    return { parties };
+  }
+
+  /**
+   * Gives the request back (#512): a conflict, no capacity, or out of scope. The claim ends RELEASED
+   * and the request goes back in the pool without this lawyer, as a lapse does. Allowed until the
+   * client answers the quote. The note stays on the claim only: it may name the conflict, so it's
+   * kept out of the case's activity feed and the audit log.
+   */
+  static async release(lawyer: LawyerContext, id: string, input: { reason: ReleaseReason; note?: string }) {
+    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CLAIMED", "QUOTED"], { allowExpired: true });
+    const now = new Date();
+    const released = await ClientRequestClaimRepo.release(
+      { id: claim.id, requestId: id, lawyerId: lawyer.userId },
+      { reason: input.reason, note: input.note?.trim() || null },
+      now,
+    );
+    if (!released) {
+      const current = await ClientRequestRepo.findForLawyer(id);
+      throw new HttpError("This request can't be released now.", 409, "INVALID_REQUEST_STATUS", { status: current?.status ?? request.status });
+    }
+
+    const payload = { requestId: id, claimId: claim.id, reason: input.reason };
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.released", payload });
+    await SecurityAuditSvc.record({
+      action: "client_request.released",
+      actorId: lawyer.userId,
+      organizationId: lawyer.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload,
+    });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "ROUTED", updatedAt: now.toISOString() };
+    emitToUser(request.clientId, "client-request:updated", updated);
+
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+  }
+
+  /**
+   * Sends the lawyer's quote to the client (#512): CLAIMED -> QUOTED, inside the 24h hold. A fixed
+   * fee needs an amount; a first consultation may be free. The fee is the lawyer's own, paid to them
+   * directly: the platform's per-case fee (#513) is separate.
+   */
+  static async quote(lawyer: LawyerContext, id: string, input: { type: QuoteType; amount: { amountMinor: number; currency: string }; message: string }) {
+    if (input.type === "FIXED_FEE" && input.amount.amountMinor <= 0) throw new HttpError("A fixed fee needs an amount.", 400);
+    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CLAIMED"]);
+    const now = new Date();
+    const saved = await ClientRequestClaimRepo.quote(
+      { id: claim.id, requestId: id },
+      { type: input.type, amountMinor: input.amount.amountMinor, currency: input.amount.currency, message: input.message.trim() },
+      now,
+    );
+    if (!saved) {
+      const current = await ClientRequestRepo.findForLawyer(id);
+      if (current?.status === "CLAIMED" && claim.expiresAt <= now) throw ClientRequestLawyerSvc.claimExpired();
+      throw new HttpError("This request can't be quoted now.", 409, "INVALID_REQUEST_STATUS", { status: current?.status ?? request.status });
+    }
+
+    await OrganizationRepo.writeAudit({
+      caseId: request.caseId,
+      actorId: lawyer.userId,
+      action: "client_request.quoted",
+      payload: { requestId: id, claimId: claim.id, type: input.type, amountMinor: input.amount.amountMinor },
+    });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "QUOTED", updatedAt: now.toISOString() };
+    emitToUser(request.clientId, "client-request:updated", updated);
+
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+  }
+
   /** Pass: the lawyer stops seeing the request. Nothing else about it changes. A lawyer holding it
    * releases it instead (#512), which also puts it back in the pool. */
   static async pass(lawyer: LawyerContext, id: string) {
@@ -133,6 +237,28 @@ export default class ClientRequestLawyerSvc {
       throw new HttpError("You hold this request. Release it instead.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     }
     await ClientRequestRepo.exclude(id, lawyer.userId);
+  }
+
+  /**
+   * The lawyer's open claim on the request, while it's in one of `statuses`. 404 when they've never
+   * held it (so it can't be probed), 409 INVALID_REQUEST_STATUS when their claim ended or the request
+   * has moved on, 409 CLAIM_EXPIRED when a CLAIMED hold's 24h is over but the sweep hasn't lapsed it
+   * yet. A QUOTED hold doesn't expire: it waits for the client.
+   */
+  private static async heldClaim(lawyer: LawyerContext, id: string, statuses: ClientRequestStatus[], opts: { allowExpired?: boolean } = {}) {
+    await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
+    const request = await ClientRequestRepo.findForLawyer(id);
+    if (!request || !request.claims.some((c) => c.lawyerId === lawyer.userId)) throw NOT_FOUND();
+    const claim = request.claims.find((c) => c.lawyerId === lawyer.userId && c.outcome === null);
+    if (!claim || !statuses.includes(request.status)) {
+      throw new HttpError("You no longer hold this request.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+    if (!opts.allowExpired && request.status === "CLAIMED" && claim.expiresAt <= new Date()) throw ClientRequestLawyerSvc.claimExpired();
+    return { request, claim };
+  }
+
+  private static claimExpired() {
+    return new HttpError("Your 24-hour hold on this request has ended.", 409, "CLAIM_EXPIRED");
   }
 
   /** Whether the request is one this lawyer is matched to (whatever state it's in now), or one

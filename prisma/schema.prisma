@@ -1092,6 +1092,20 @@ model ClientRequest {
   @@index([status])
 }
 
+// types/client-handoff.ts QUOTE_TYPES: a fixed fee for the whole matter, or a paid first consultation.
+enum QuoteType {
+  FIXED_FEE
+  FIRST_CONSULTATION
+}
+
+// types/client-handoff.ts RELEASE_REASONS: why a lawyer gave a claimed request back.
+enum ReleaseReason {
+  CONFLICT
+  CAPACITY
+  OUT_OF_SCOPE
+  OTHER
+}
+
 // How a lawyer's claim on a client request ended (types/client-handoff.ts CLAIM_OUTCOMES).
 enum ClaimOutcome {
   RELEASED
@@ -1115,6 +1129,16 @@ model ClientRequestClaim {
   reminderSentAt DateTime?
   endedAt        DateTime?
   outcome        ClaimOutcome?
+  // Why the lawyer gave the request back (#512), with their note. Set when outcome is RELEASED.
+  releaseReason  ReleaseReason?
+  releaseNote    String?
+  // The lawyer's quote to the client (#512), kept on the claim it was made under so a declined or
+  // released quote stays in the lawyer's history. quoteAmountMinor is in pence (quoteCurrency GBP).
+  quoteType        QuoteType?
+  quoteAmountMinor Int?
+  quoteCurrency    String?
+  quoteMessage     String?    @db.Text
+  quotedAt         DateTime?
 
   request      ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   lawyer       User          @relation(fields: [lawyerId], references: [id], onDelete: Cascade)

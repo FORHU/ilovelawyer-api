@@ -79,7 +79,8 @@ describe("Client lawyer requests", () => {
     };
     (ClientRequestRepo as any).findForClient = async (id: string, clientId: string) => {
       const r = requests.get(id);
-      return r && r.clientId === clientId ? r : null;
+      // The real repository includes the quoting claim (#512); none in this world.
+      return r && r.clientId === clientId ? { claims: [], ...r } : null;
     };
     (ClientRequestRepo as any).transition = async (id: string, from: string[], data: any) => {
       const r = requests.get(id);
