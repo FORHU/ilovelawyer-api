@@ -23,6 +23,7 @@ import { TRIAL_SAMPLE_ANSWER, TRIAL_SAMPLE_QUESTION, TRIAL_SAMPLE_RELATED_CASES,
 
 /** The Terminal panes the shared sample case has content for, in the order a guest sees them. */
 const GUEST_PANES = ["command", "evidence", "procedure", "witnesses", "redTeam", "chat"] as const;
+const GUEST_LAYOUT_NAME = "Case overview";
 
 export default class TrialSvc {
   /** The landing page's "Start a consultation" for someone with no account: a throwaway guest in
@@ -98,6 +99,16 @@ export default class TrialSvc {
    * view-only guest cannot create one (TerminalWorkspaceSvc.create needs contribute access), so
    * without this the Terminal opens on "No layouts yet" and shows none of the generated panes. */
   private static async seedGuestLayout(userId: string, caseId: string): Promise<void> {
+    // Terminal layouts belong to the case and everyone who can see the case sees every one of them,
+    // so a new layout per guest piled one more identical "Case overview" tab onto the sample case
+    // for every visitor. There is one: the first guest creates it for the case's owner, and every
+    // later guest only records it as the tab they last opened. A guest on a view-only share can open
+    // a layout but not change or delete it (resolveOrganizationAllowingGuests), so sharing is safe.
+    const existing = await TerminalWorkspaceRepo.findOldestNamed(caseId, GUEST_LAYOUT_NAME);
+    if (existing) {
+      await TerminalWorkspaceRepo.markLastUsed(existing.id, userId);
+      return;
+    }
     const sku = await TerminalWorkspaceSvc.skuForUser(userId);
     const preset = "PANE_6" as const;
     // The six panes the sample case has generated content for (the default six include Law &
@@ -110,8 +121,14 @@ export default class TrialSvc {
         : { ...panel, visible: true, order: shown, width: 1 / GUEST_PANES.length, height: 1 };
     });
     const layoutJson = normalizeLayout({ ...base, panels }, sku) as unknown as Prisma.InputJsonValue;
-    const workspace = await TerminalWorkspaceRepo.create(userId, { caseId, name: "Case overview", preset, layoutJson });
-    await TerminalWorkspaceRepo.markLastUsed(workspace.id, userId);
+    // Owned by the case's owner, not the guest: a guest's layout would vanish with them when the
+    // guest clean-up removes them, while other visitors are still using it.
+    const ownerId = await TerminalWorkspaceRepo.caseOwnerId(caseId);
+    const workspace = await TerminalWorkspaceRepo.create(ownerId ?? userId, { caseId, name: GUEST_LAYOUT_NAME, preset, layoutJson });
+    // Two guests starting at the same moment can both find none and both create one: keep the oldest.
+    const oldest = await TerminalWorkspaceRepo.findOldestNamed(caseId, GUEST_LAYOUT_NAME);
+    if (oldest && oldest.id !== workspace.id) await TerminalWorkspaceRepo.delete(workspace.id);
+    await TerminalWorkspaceRepo.markLastUsed(oldest?.id ?? workspace.id, userId);
   }
 
   /** The shared sample case, when TRIAL_SAMPLE_CASE_ID names a case in someone's portfolio (a
