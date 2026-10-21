@@ -4,12 +4,6 @@ import prisma from "../lib/prisma";
 /** A request is open until it's closed, expired or withdrawn; a case has at most one open. */
 export const CLOSED_REQUEST_STATUSES: ClientRequestStatus[] = ["CLOSED", "EXPIRED", "WITHDRAWN"];
 
-/** How long a routed request stays open to a claim before EXPIRED (#510) acts on it. */
-export const ROUTING_WINDOW_MS = 48 * 60 * 60 * 1000;
-
-/** CLAIMED or QUOTED is where a held request re-enters the pool from (#511, #512). */
-const REROUTABLE: ClientRequestStatus[] = ["CLAIMED", "QUOTED"];
-
 export default class ClientRequestRepo {
   static async create(data: { caseId: string; clientId: string; note: string; consentVersion: string; consentAcceptedAt: Date }) {
     return prisma.clientRequest.create({ data });
@@ -68,36 +62,5 @@ export default class ClientRequestRepo {
 
   static async hasCasePayment(caseId: string): Promise<boolean> {
     return (await prisma.clientPayment.count({ where: { caseId, kind: "CASE", status: "SUCCEEDED" } })) > 0;
-  }
-
-  /** REQUESTED -> ROUTED, right after create() — nothing else touches a brand new request at the
-   * same instant, so this doesn't need transition()'s guard. */
-  static async route(id: string) {
-    return prisma.clientRequest.update({
-      where: { id },
-      data: { status: "ROUTED", routingExpiresAt: new Date(Date.now() + ROUTING_WINDOW_MS) },
-    });
-  }
-
-  /** The case's practice area and jurisdiction, and who's already excluded (#509's matching). */
-  static async findForMatching(id: string) {
-    return prisma.clientRequest.findUnique({
-      where: { id },
-      select: { excludedLawyerIds: true, case: { select: { practiceArea: true, ukJurisdiction: true } } },
-    });
-  }
-
-  /** Puts a held request back in the pool without one lawyer (#511 pass/release, #512 decline) —
-   * guarded, since a lapse timer and a manual action can race for the same request. */
-  static async reroute(id: string, excludeLawyerId: string): Promise<boolean> {
-    const { count } = await prisma.clientRequest.updateMany({
-      where: { id, status: { in: REROUTABLE } },
-      data: {
-        status: "ROUTED",
-        routingExpiresAt: new Date(Date.now() + ROUTING_WINDOW_MS),
-        excludedLawyerIds: { push: excludeLawyerId },
-      },
-    });
-    return count === 1;
   }
 }

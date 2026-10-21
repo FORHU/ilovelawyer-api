@@ -2,7 +2,6 @@ import type { ClientRequest, ClientRequestStatus } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
-import ClientRequestMatchingSvc from "./client-request-matching.service";
 import HttpError from "../utils/http-error";
 import type { ClientWorkspace } from "./client-case.service";
 import {
@@ -32,7 +31,7 @@ export interface NewClientRequest {
 }
 
 /** LawyerRequestForClient in the contract. The lawyer, quote and engagement fields are filled by
- * later issues (#511 onwards); until then they're always empty. */
+ * later issues (#512 onwards); until then they're always empty. */
 function toDto(r: ClientRequest) {
   return {
     id: r.id,
@@ -55,8 +54,7 @@ function toDto(r: ClientRequest) {
 /**
  * A client asking for a lawyer on one of their own cases (#507): only on a paid UK case that isn't
  * personal injury, one open request per case, with the consent text they agreed to recorded. Making
- * one starts its anonymised brief (#508) and routes it to every matching lawyer (#509); claiming
- * it is a later issue (#511).
+ * one starts its anonymised brief (#508); routing and a lawyer claiming it are later issues.
  */
 export default class ClientRequestSvc {
   static consent() {
@@ -97,10 +95,7 @@ export default class ClientRequestSvc {
     });
     // The anonymised brief lawyers will see (#508). Written in the background: the AI takes a while.
     ClientRequestBriefSvc.generateInBackground(created.id);
-    // Routed (#509) straight away, even with zero current matches — the client just sees "Finding
-    // a lawyer" either way; EXPIRED (#510) is what ends that wait.
-    const routed = await ClientRequestMatchingSvc.route(created.id);
-    return toDto(routed);
+    return toDto(created);
   }
 
   static async list(clientId: string, query: { caseId?: string; page: number; limit: number }) {
