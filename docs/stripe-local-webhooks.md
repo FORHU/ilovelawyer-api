@@ -92,6 +92,7 @@ Stripe creates a test checkout and sends its events, and the `stripe:listen` ter
 - **Events handled** (`ClientBillingSvc.handleStripeEvent`):
   - `checkout.session.completed` and `checkout.session.async_payment_succeeded` settle the payment as paid;
   - `checkout.session.async_payment_failed` and `checkout.session.expired` settle it as failed;
+  - `checkout.session.completed` for a session in **setup** mode saves a law firm's card on file instead (`OrganizationCardSvc`, `LAWYER_PAYMENT_PROVIDER=stripe`);
   - `refund.updated` and `refund.failed` bring a refund an admin issued (`POST /api/admin/billing/:id/refund`) to Stripe's final status. Card refunds usually finish at once; these matter for the ones that don't;
   - anything else is acknowledged and ignored.
 - **Never applied twice.** Every handled event is recorded in `StripeWebhookEvent`, so a redelivery is answered without being applied again. Settling only moves a payment that is still `PENDING`, so the webhook and the app checking at the same moment can't add credits twice.

@@ -256,6 +256,7 @@ jobs:
           # Client app payments: unset means the dummy provider (charges nothing). UK_-prefixed because
           # deploy-production.yml (staging) reads the same environment with its own test-mode keys.
           CLIENT_PAYMENT_PROVIDER: ${{ vars.UK_CLIENT_PAYMENT_PROVIDER }}
+          LAWYER_PAYMENT_PROVIDER: ${{ vars.UK_LAWYER_PAYMENT_PROVIDER }}
           STRIPE_SECRET_KEY: ${{ secrets.UK_STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ vars.UK_STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.UK_STRIPE_WEBHOOK_SECRET }}
@@ -353,6 +354,7 @@ jobs:
           add OPENAI_API_KEY                           "${OPENAI_API_KEY:-}"
           add TYPESAFE_API_KEY                         "${TYPESAFE_API_KEY:-}"
           add CLIENT_PAYMENT_PROVIDER                  "${CLIENT_PAYMENT_PROVIDER:-}"
+          add LAWYER_PAYMENT_PROVIDER                  "${LAWYER_PAYMENT_PROVIDER:-}"
           add STRIPE_SECRET_KEY                        "${STRIPE_SECRET_KEY:-}"
           add STRIPE_PUBLISHABLE_KEY                   "${STRIPE_PUBLISHABLE_KEY:-}"
           add STRIPE_WEBHOOK_SECRET                    "${STRIPE_WEBHOOK_SECRET:-}"
