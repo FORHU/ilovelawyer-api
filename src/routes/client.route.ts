@@ -36,5 +36,8 @@ router.post("/lawyer-requests", requireConsent("AI_PROCESSING"), asyncHandler(Cl
 router.get("/lawyer-requests", asyncHandler(ClientRequestCtrl.list));
 router.get("/lawyer-requests/:id", asyncHandler(ClientRequestCtrl.get));
 router.post("/lawyer-requests/:id/withdraw", asyncHandler(ClientRequestCtrl.withdraw));
+// Answering the lawyer's quote (#513): confirming charges their organization the per-case fee.
+router.post("/lawyer-requests/:id/confirm", asyncHandler(ClientRequestCtrl.confirm));
+router.post("/lawyer-requests/:id/decline", asyncHandler(ClientRequestCtrl.decline));
 
 export default router;

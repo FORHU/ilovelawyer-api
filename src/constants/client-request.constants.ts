@@ -26,3 +26,7 @@ export const CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH = 2000;
 export const CLIENT_REQUEST_QUOTE_MAX_MINOR = 10_000_000;
 /** A lawyer's note when releasing a request (#512). Kept on the claim only. */
 export const CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH = 500;
+
+/** What confirming a lawyer charges their organization (#513), in pence: the introduction fee. A
+ * PLACEHOLDER until the price is signed off (FORHU/ilovelawyer-app#846). */
+export const CLIENT_REQUEST_PER_CASE_FEE_MINOR = 5000;

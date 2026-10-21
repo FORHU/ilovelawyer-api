@@ -2,7 +2,13 @@ import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import ClientRequestSvc from "../services/client-request.service";
 import HttpError from "../utils/http-error";
-import { clientRequestEligibilitySchema, createClientRequestSchema, listClientRequestsSchema } from "../validation/client-request.validation";
+import {
+  clientRequestEligibilitySchema,
+  confirmClientRequestSchema,
+  createClientRequestSchema,
+  declineClientRequestSchema,
+  listClientRequestsSchema,
+} from "../validation/client-request.validation";
 
 function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
   const { error, value } = schema.validate(input, { stripUnknown: true, convert: true });
@@ -34,6 +40,16 @@ export default class ClientRequestCtrl {
 
   static async get(req: Request, res: Response) {
     res.status(200).json(await ClientRequestSvc.get(req.user.userId, req.params.id));
+  }
+
+  static async confirm(req: Request, res: Response) {
+    const body = validate(confirmClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestSvc.confirm(req.user.userId, req.params.id, body));
+  }
+
+  static async decline(req: Request, res: Response) {
+    const body = validate(declineClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestSvc.decline(req.user.userId, req.params.id, body));
   }
 
   static async withdraw(req: Request, res: Response) {

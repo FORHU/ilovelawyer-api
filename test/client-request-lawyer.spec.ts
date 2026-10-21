@@ -84,7 +84,8 @@ describe("ClientRequestLawyerSvc", () => {
       .map((p) => p.userId);
   }
 
-  const withClaims = (r: any) => ({ ...r, claims: claims.filter((c) => c.requestId === r.id).map((c) => ({ ...c, lawyer: { id: c.lawyerId, name: `Name of ${c.lawyerId}` } })) });
+  // No per-case fee charges in this world (#513): nothing here is confirmed.
+  const withClaims = (r: any) => ({ ...r, charges: [], claims: claims.filter((c) => c.requestId === r.id).map((c) => ({ ...c, lawyer: { id: c.lawyerId, name: `Name of ${c.lawyerId}` } })) });
 
   beforeEach(() => {
     restore = [

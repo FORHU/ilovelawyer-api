@@ -18,6 +18,8 @@ const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASS
 const FOR_LAWYER = {
   case: { select: { practiceArea: true, ukJurisdiction: true } },
   claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } } } },
+  // The per-case fee (#513), from CONFIRMED.
+  charges: { where: { kind: "PER_CASE_FEE" } },
 } satisfies Prisma.ClientRequestInclude;
 
 /** What the client app reads of a request (#512): the claim the current quote was made under (open,
