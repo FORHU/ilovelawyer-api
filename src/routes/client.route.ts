@@ -23,5 +23,7 @@ router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHan
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
 router.post("/cases/:caseId/documents", asyncHandler(ClientCaseCtrl.addDocument));
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
+// A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
+router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
 
 export default router;

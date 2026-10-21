@@ -833,6 +833,9 @@ model Case {
   /// Client app only: chat credits left. Each message to the AI takes one; a case payment and
   /// top-ups add them (ClientBillingSvc). 0 on lawyer cases, which never read it.
   clientCredits         Int        @default(0)
+  /// Client app only: Jev's last check of whether the case has enough in it to suggest a lawyer
+  /// (ClientCaseSvc.lawyerReadiness), with the AI message it was based on. Null until checked.
+  lawyerReadiness       Json?
   caseName              String
   actionType            String?
   jurisdiction          String?
