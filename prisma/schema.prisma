@@ -146,6 +146,7 @@ model User {
   caseBriefExports        CaseBriefExport[]
   caseViews               CaseView[]
   clientRequests          ClientRequest[]
+  clientRequestClaims     ClientRequestClaim[]
   updatedTenantSettings   TenantSetting[]
   clientPayments          ClientPayment[]
   clientRequestProfile    LawyerClientProfile?
@@ -1038,6 +1039,9 @@ model ClientRequest {
   briefError        String?
   // Set when routed (#509): 48h from now. EXPIRED (#510) reads it; re-routing (#511, #512) resets it.
   routingExpiresAt  DateTime?
+  // When it was last routed: first routing, or back in the pool after a claim ended (#511).
+  routedAt          DateTime?
+  announcedAt       DateTime?
   // Lawyers excluded from matching this request again after they passed, released or lapsed on it
   // (#509/#511/#512) — a client decline does the same once a quote is declined (#512).
   excludedLawyerIds String[]            @default([])
@@ -1045,12 +1049,46 @@ model ClientRequest {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
-  case   Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  client User @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  case   Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  claims ClientRequestClaim[]
 
   @@index([caseId, status])
   @@index([clientId, createdAt])
   @@index([status])
+}
+
+// How a lawyer's claim on a client request ended (types/client-handoff.ts CLAIM_OUTCOMES).
+enum ClaimOutcome {
+  RELEASED
+  LAPSED
+  DECLINED
+  REASSIGNED
+  WITHDRAWN
+  ENGAGED
+}
+
+model ClientRequestClaim {
+  id             String        @id @default(uuid())
+  requestId      String
+  openRequestId  String?       @unique
+  lawyerId       String
+  // The lawyer's organization when they claimed: the one the per-case fee is charged to (#513).
+  organizationId String
+  claimedAt      DateTime      @default(now())
+  expiresAt      DateTime
+  // When the 2h-before reminder went out (#510).
+  reminderSentAt DateTime?
+  endedAt        DateTime?
+  outcome        ClaimOutcome?
+
+  request      ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  lawyer       User          @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@index([lawyerId, outcome])
+  @@index([outcome, expiresAt])
 }
 
 model Party {
@@ -2735,6 +2773,7 @@ model Organization {
   notifications  Notification[]
   transcriptions Transcription[]
   connectors     IntegrationConnector[]
+  clientRequestClaims ClientRequestClaim[]
 
   @@index([createdById])
   @@index([tenantId])

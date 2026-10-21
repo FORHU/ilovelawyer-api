@@ -18,3 +18,10 @@ export const listClientRequestsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
 });
+
+/** GET /client-requests: the lawyer app's inbox, the ones they hold, and the ones that ended. */
+export const listLawyerClientRequestsSchema = Joi.object({
+  view: Joi.string().valid("inbox", "mine", "history").default("inbox"),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+});
