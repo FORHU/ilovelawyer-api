@@ -39,7 +39,7 @@ services:
     container_name: ilovelawyer-localstack
     environment:
       - SERVICES=sqs
-       DEFAULT_REGION=${AWS_REGION:-ap-southeast-1}
+      - DEFAULT_REGION=${AWS_REGION:-ap-southeast-1}
     ports:
       - "4566:4566"
     volumes:
