@@ -16,9 +16,8 @@ import {
 
 /**
  * The UK client-to-lawyer hand-off API contract (ilovelawyer-api#503), merged into swagger.ts.
- * Every operation here is planned, not built: each says which issue builds it and carries
- * `x-implemented: false`, so the frontends can mock it from /api-docs.json until then. When an
- * issue lands, drop its operations' marker. Values and socket events: types/client-handoff.ts.
+ * Each operation says which issue builds it. Until it lands it carries `x-implemented: false`, so
+ * the frontends can mock it from /api-docs.json; when it lands, mark it `built: true`. Values and socket events: types/client-handoff.ts.
  * Data model: docs/adr/0016-client-app-shares-the-uk-api.md.
  */
 
@@ -58,6 +57,8 @@ const pageParams: Parameter[] = [
 interface Op {
   tag: string;
   issue: string;
+  /** The issue has landed: no "planned" marker. */
+  built?: boolean;
   summary: string;
   description?: string;
   parameters?: Parameter[];
@@ -65,13 +66,14 @@ interface Op {
   responses: Record<number, object>;
 }
 
-/** One planned operation. Every hand-off route needs a session, so 401 is added to all. */
-function op({ tag, issue, summary, description, parameters, body, responses }: Op): Operation {
+/** One operation, planned unless `built`. Every hand-off route needs a session, so 401 is added to all. */
+function op({ tag, issue, built, summary, description, parameters, body, responses }: Op): Operation {
+  const status = built ? `Built in ${issue}.` : `**Planned (${issue}), not implemented yet.**`;
   return {
     tags: [tag],
     summary,
-    description: `**Planned (${issue}), not implemented yet.**${description ? `\n\n${description}` : ""}`,
-    "x-implemented": false,
+    description: `${status}${description ? `\n\n${description}` : ""}`,
+    "x-implemented": !!built,
     security: [{ bearerAuth: [] }],
     ...(parameters ? { parameters } : {}),
     ...(body ? { requestBody: { required: true, content: json(body) } } : {}),
@@ -583,13 +585,13 @@ export const clientHandoffPaths: Paths = {
   "/users/me/client-request-profile": {
     get: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#504",
+      issue: "ilovelawyer-api#504", built: true,
       summary: "Your client request settings",
       responses: { 200: ok("Profile", ref("ClientRequestProfile")), 403: err("NOT_UK_TENANT") },
     }),
     patch: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#504",
+      issue: "ilovelawyer-api#504", built: true,
       summary: "Update your client request settings",
       description: "Changing the registration number or jurisdictions of a VERIFIED profile sends it back to PENDING. Turning on acceptingRequests before verification answers 422 PROFILE_INCOMPLETE or 403 LAWYER_NOT_VERIFIED.",
       body: {

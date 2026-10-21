@@ -147,6 +147,7 @@ model User {
   caseViews               CaseView[]
   updatedTenantSettings   TenantSetting[]
   clientPayments          ClientPayment[]
+  clientRequestProfile    LawyerClientProfile?
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -922,6 +923,48 @@ enum ClientPaymentStatus {
 // it: "DUMMY" (charges nothing) until Stripe replaces it. A CASE payment is taken before its case
 // exists: `usedAt` marks it spent (so it creates one case only) and `caseId` is set once the case is
 // made.
+enum LawyerVerificationStatus {
+  // Required fields still missing (LawyerProfileSvc.missingFields).
+  UNSUBMITTED
+  // Complete, waiting for an admin to check the regulator's register (#506).
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+// A lawyer's settings for receiving client requests from the client app (UK only; #504). One per
+// lawyer. Matching (#509) reads it: verified, accepting, not paused, under capacity, and qualified
+// for the case's practice area and UK jurisdiction.
+model LawyerClientProfile {
+  userId                    String                   @id
+  // LAWYER_REGULATORS: SRA (England and Wales), LSS (Scotland), LSNI (Northern Ireland).
+  regulator                 String?
+  registrationNumber        String?
+  qualifiedJurisdictions    String[]
+  // CLIENT_CASE_AREAS. Never personal injury: referral fees are banned there.
+  practiceAreas             String[]
+  bio                       String                   @default("") @db.Text
+  languages                 String[]
+  // Pence (GBP). Null: no first-consultation offer.
+  firstConsultationFeeMinor Int?
+  acceptingRequests         Boolean                  @default(false)
+  // The organization's per-member switch (#518). Off stops new routing to them.
+  enabledByOrganization     Boolean                  @default(true)
+  pausedUntil               DateTime?
+  // Most engagements open at once; null for no limit.
+  capacityLimit             Int?
+  verificationStatus        LawyerVerificationStatus @default(UNSUBMITTED)
+  // The admin's note on a rejection, shown to the lawyer.
+  verificationNote          String?
+  verifiedAt                DateTime?
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([verificationStatus])
+}
+
 model ClientPayment {
   id            String              @id @default(uuid())
   userId        String
