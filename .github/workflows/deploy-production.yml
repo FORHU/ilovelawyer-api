@@ -201,6 +201,7 @@ jobs:
           # Client app payments: unset means the dummy provider (charges nothing). This is staging:
           # test-mode keys only. deploy-uk.yml reads the same environment, so its keys are UK_-prefixed.
           CLIENT_PAYMENT_PROVIDER: ${{ vars.CLIENT_PAYMENT_PROVIDER }}
+          LAWYER_PAYMENT_PROVIDER: ${{ vars.LAWYER_PAYMENT_PROVIDER }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ vars.STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
@@ -277,7 +278,7 @@ jobs:
             GROUNDING_MAX_ASSERTIONS \
             JURIS_PH_API_URL UK_CASELAW_BASE_URL UK_LEGISLATION_BASE_URL \
             TRIAL_MESSAGE_LIMIT TRIAL_DURATION_HOURS TRIAL_SAMPLE_CASE_ID FREE_CREDIT_USD \
-            MAX_CASES_PER_ACCOUNT CASE_SPEND_LIMIT_USD             CLIENT_PAYMENT_PROVIDER STRIPE_SECRET_KEY STRIPE_PUBLISHABLE_KEY STRIPE_WEBHOOK_SECRET
+            MAX_CASES_PER_ACCOUNT CASE_SPEND_LIMIT_USD             CLIENT_PAYMENT_PROVIDER LAWYER_PAYMENT_PROVIDER STRIPE_SECRET_KEY STRIPE_PUBLISHABLE_KEY STRIPE_WEBHOOK_SECRET
           do
             add "$name" "$(printenv "$name" || true)"
           done

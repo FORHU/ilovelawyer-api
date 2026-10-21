@@ -37,6 +37,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "DELETE /organizations/:id/members/me": ["org.member_left", "org.archived"],
   "DELETE /organizations/:id/members/:userId": ["org.member_removed"],
   "POST /organizations/:id/cases": ["org.case_attached"],
+  "POST /organizations/:id/billing/card/setup-session": ["org.payment_card_updated"],
   "GET /organizations/:id/audit-log/export": ["export.audit_log"],
   "POST /generated-document/": ["export.generated_document"],
   "POST /auth/signup": ["auth.signup"],

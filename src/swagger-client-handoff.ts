@@ -359,7 +359,14 @@ export const clientHandoffSchemas: Schemas = {
   },
   PaymentCard: {
     type: "object",
-    properties: { brand: { type: "string", example: "visa" }, last4: { type: "string", example: "4242" }, expMonth: { type: "integer" }, expYear: { type: "integer" } },
+    properties: {
+      brand: { type: "string", example: "visa" },
+      last4: { type: "string", example: "4242" },
+      expMonth: { type: "integer" },
+      expYear: { type: "integer" },
+      provider: { type: "string", enum: ["STRIPE", "DUMMY"], description: "DUMMY: a test card (LAWYER_PAYMENT_PROVIDER=dummy), never charged for real" },
+      updatedAt: dateTime(),
+    },
   },
   Charge: {
     type: "object",
@@ -819,7 +826,9 @@ export const clientHandoffPaths: Paths = {
       tag: BILLING_TAG,
       issue: "ilovelawyer-api#505",
       summary: "The organization's card on file",
-      parameters: [idParam()],
+      description:
+        "Pass setupSessionId (from returnUrl after Stripe) to have that setup applied first if it completed, so the card shows without waiting for the webhook. OWNER/ADMIN only, for reading too.",
+      parameters: [idParam(), { name: "setupSessionId", in: "query", schema: { type: "string" }, description: "The session returnUrl came back with" }],
       responses: { 200: ok("The card, or null", { ...ref("PaymentCard"), nullable: true }), 403: err("Not the organization's OWNER/ADMIN") },
     }),
   },
@@ -828,10 +837,16 @@ export const clientHandoffPaths: Paths = {
       tag: BILLING_TAG,
       issue: "ilovelawyer-api#505",
       summary: "Start a Stripe-hosted card setup (add or replace the card)",
-      description: "Returns a Stripe Checkout URL in setup mode. The card is saved from the webhook. The app refetches the card when the user comes back to returnUrl.",
+      description:
+        "Returns a Stripe Checkout URL in setup mode: the card is typed into Stripe's page, never sent here. Stripe sends the user back to returnUrl with ?cardSetup=done&setupSessionId=cs_... (or ?cardSetup=cancelled); the app then calls GET .../billing/card?setupSessionId=... The webhook (checkout.session.completed) saves it too, once either way. The organization's Stripe customer is made on its first setup. With LAWYER_PAYMENT_PROVIDER=dummy a test card (visa 4242) is saved at once and the url is returnUrl?cardSetup=done. Audited as org.payment_card_updated.",
       parameters: [idParam()],
       body: { type: "object", required: ["returnUrl"], properties: { returnUrl: { type: "string", description: "Must be on an allowed app origin" } } },
-      responses: { 200: ok("Setup session", { type: "object", properties: { url: { type: "string" } } }), 400: err("returnUrl not allowed"), 403: err("Not the organization's OWNER/ADMIN") },
+      responses: {
+        200: ok("Setup session", { type: "object", properties: { url: { type: "string" } } }),
+        400: err("RETURN_URL_NOT_ALLOWED: not on one of the app's origins (CLIENT_URL)"),
+        403: err("Not the organization's OWNER/ADMIN"),
+        502: err("PAYMENT_PROVIDER_ERROR: Stripe couldn't start the setup"),
+      },
     }),
   },
   "/organizations/{id}/billing/fees": {
@@ -859,7 +874,7 @@ export const clientHandoffPaths: Paths = {
         built: true,
         summary: "Stripe webhook (Stripe only, not the apps)",
         description:
-          "POST /api/webhooks/stripe. Mounted with a raw body ahead of express.json(), so the signature can be checked. Idempotent per Stripe event id (StripeWebhookEvent). Built for the client app's payments: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed and checkout.session.expired. The lawyer's card (ilovelawyer-api#505: setup_intent.succeeded) and the per-case fee (#513) add their events here.",
+          "POST /api/webhooks/stripe. Mounted with a raw body ahead of express.json(), so the signature can be checked. Idempotent per Stripe event id (StripeWebhookEvent). Built for the client app's payments: checkout.session.completed, checkout.session.async_payment_succeeded, checkout.session.async_payment_failed and checkout.session.expired. A law firm's card (ilovelawyer-api#505) is saved from checkout.session.completed in setup mode. The per-case fee (#513) adds its events here.",
         responses: {},
       }),
       // Stripe signs the request instead of sending a session, so no 401.

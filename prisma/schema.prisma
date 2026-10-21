@@ -2808,10 +2808,38 @@ model Organization {
   transcriptions Transcription[]
   connectors     IntegrationConnector[]
   clientRequestClaims ClientRequestClaim[]
+  billing        OrganizationBilling?
 
   @@index([createdById])
   @@index([tenantId])
   @@index([status, deletionScheduledAt])
+}
+
+// An organization's card on file, which the client hand-off's per-case fee is charged to
+// (ilovelawyer-api#505, #513). Made on the organization's first card setup. Only what Stripe hands
+// back is kept: card details are typed into Stripe's own page and never reach this API. A card is on
+// file when paymentMethodId is set.
+model OrganizationBilling {
+  organizationId  String   @id
+  // STRIPE, or DUMMY for the test card LAWYER_PAYMENT_PROVIDER=dummy saves.
+  provider        String
+  // Stripe customer (cus_...); one per organization, made with its first setup.
+  customerId      String?  @unique
+  // The card (pm_...) and what the app shows of it.
+  paymentMethodId String?
+  brand           String?
+  last4           String?
+  expMonth        Int?
+  expYear         Int?
+  // The Checkout Session the card came from, so the webhook and the app coming back can't both
+  // apply the same one.
+  setupSessionId  String?
+  // Who set up the current card.
+  updatedById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 enum OrganizationStatus {

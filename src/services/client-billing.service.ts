@@ -2,6 +2,7 @@ import type { ClientPayment } from "@prisma/client";
 import type Stripe from "stripe";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
 import ClientBillingAdminSvc from "./client-billing-admin.service";
+import OrganizationCardSvc from "./organization-card.service";
 import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "../payments/client-payment-provider";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -147,7 +148,7 @@ export default class ClientBillingSvc {
 
   /**
    * One verified Stripe webhook event (POST /api/webhooks/stripe). Checkout events settle the payment
-   * they name, and refund events update an admin's refund; everything else is acknowledged and ignored. An event already handled is answered
+   * they name (or, in setup mode, save a law firm's card), and refund events update an admin's refund; everything else is acknowledged and ignored. An event already handled is answered
    * without being applied again. An event for a payment this server doesn't have (another
    * environment sharing the Stripe account) is ignored.
    */
@@ -159,6 +160,12 @@ export default class ClientBillingSvc {
       case "checkout.session.async_payment_failed":
       case "checkout.session.expired": {
         const session = event.data.object as Stripe.Checkout.Session;
+        // A law firm adding its card (OrganizationCardSvc), not a client payment. Only completion
+        // matters: an abandoned setup changes nothing.
+        if (session.mode === "setup") {
+          if (event.type === "checkout.session.completed") await OrganizationCardSvc.applyStripeSetupSession(session.id);
+          break;
+        }
         const paymentId = session.metadata?.paymentId ?? session.client_reference_id;
         const payment = paymentId ? await ClientPaymentRepo.findById(paymentId) : null;
         if (!payment || payment.provider !== "STRIPE" || payment.externalId !== session.id) {
