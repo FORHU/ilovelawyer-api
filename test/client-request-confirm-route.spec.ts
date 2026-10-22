@@ -32,6 +32,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
   const clientId = crypto.randomUUID();
   const orgId = crypto.randomUUID();
   const otherOrgId = crypto.randomUUID();
+  const clientOrgId = crypto.randomUUID();
   const caseId = crypto.randomUUID();
   const webhookEvents: string[] = [];
   let requestId: string;
@@ -131,9 +132,22 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     await prisma.organization.create({
       data: { id: otherOrgId, name: "Other Firm", slug: `confirm-${otherOrgId}`, tenantId: tenant.id, createdById: otherLawyerId, members: { create: { userId: otherLawyerId, role: "OWNER", status: "ACCEPTED" } } },
     });
+    // The client's own personal workspace, like a real client case's (ADR 0016): a confirmed
+    // engagement reaches it as a guest of this portfolio, the same way a shared case does.
+    await prisma.organization.create({
+      data: {
+        id: clientOrgId,
+        name: "Clara Client",
+        slug: `confirm-${clientOrgId}`,
+        tenantId: tenant.id,
+        createdById: clientId,
+        isPersonal: true,
+        members: { create: { userId: clientId, role: "OWNER", status: "ACCEPTED" } },
+      },
+    });
     const profile = { regulator: "SRA", qualifiedJurisdictions: ["England and Wales"], practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED" as const, verifiedAt: new Date() };
     await prisma.lawyerClientProfile.createMany({ data: [{ ...profile, userId: lawyerId, registrationNumber: "111" }, { ...profile, userId: otherLawyerId, registrationNumber: "222" }] });
-    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Unfair dismissal", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, organizationId: clientOrgId, caseName: "Unfair dismissal", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
   });
 
   after(async () => {
@@ -288,6 +302,30 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     it("can't be copied before the engagement", async () => {
       await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED" } });
       expect((await copy().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+  });
+
+  describe("read-only access to the client's case", () => {
+    const asGuest = (id = lawyerId) => ({ ...auth(id), "X-Organization-Id": clientOrgId });
+
+    beforeEach(async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+    });
+
+    it("lets the engaged lawyer read the client's case as a guest of their portfolio", async () => {
+      const { body } = await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
+      expect(body.id).to.equal(caseId);
+    });
+
+    it("refuses every write the engaged lawyer makes on the client's case", async () => {
+      const { body } = await request(app).post(`/api/my-cases/${caseId}/archive`).set(asGuest()).expect(403);
+      expect(body.code).to.equal("SHARE_READ_ONLY");
+    });
+
+    it("gives a lawyer who isn't engaged on this case no access at all", async () => {
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest(otherLawyerId)).expect(403);
     });
   });
 
