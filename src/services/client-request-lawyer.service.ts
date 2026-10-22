@@ -7,6 +7,8 @@ import ClientRequestMatchingSvc from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import OrganizationChargeSvc from "./organization-charge.service";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
+import CaseCopyRepo from "../repositories/case-copy.repository";
+import CaseCopyQueue from "../queues/case-copy.queue";
 import SecurityAuditSvc from "./security-audit.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
@@ -254,6 +256,46 @@ export default class ClientRequestLawyerSvc {
       throw new HttpError(after?.failureReason ?? "The card was declined.", 402, "CHARGE_FAILED");
     }
     return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+  }
+
+  /**
+   * "Copy to my workspace" (#514): a snapshot of the client's live case, queued through
+   * CaseCopySvc and shown in the portfolio like other copies. Once, while ENGAGED, by the lawyer
+   * the request is engaged on. The existing copy is returned on a second call rather than queuing
+   * another one.
+   */
+  static async copy(lawyer: LawyerContext, id: string) {
+    await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
+    const request = await ClientRequestRepo.findForLawyer(id);
+    if (!request || !request.claims.some((c) => c.lawyerId === lawyer.userId)) throw NOT_FOUND();
+    if (request.status !== "ENGAGED" || !request.claims.some((c) => c.lawyerId === lawyer.userId && c.outcome === "ENGAGED")) {
+      throw new HttpError("Copy the case once you're engaged on it.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+
+    const existing = await CaseCopyRepo.findForRequest(id);
+    if (existing) return { caseCopyId: existing.id, status: existing.status };
+
+    const job = await CaseCopyRepo.enqueueForRequest({
+      requestId: id,
+      sourceCaseId: request.caseId,
+      caseName: request.case.caseName,
+      sourceOrganizationName: request.case.organization?.name ?? "",
+      userId: lawyer.userId,
+      targetOrganizationId: lawyer.organizationId,
+    });
+    const payload = { requestId: id, caseCopyId: job.id };
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.copied", payload });
+    await SecurityAuditSvc.record({
+      action: "client_request.copied",
+      actorId: lawyer.userId,
+      organizationId: lawyer.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload,
+    });
+    CaseCopyQueue.kick();
+    return { caseCopyId: job.id, status: job.status };
   }
 
   /** Pass: the lawyer stops seeing the request. Nothing else about it changes. A lawyer holding it

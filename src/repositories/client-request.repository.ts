@@ -16,7 +16,7 @@ const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASS
 /** What the lawyer app reads of a request (#511): the case's practice area and jurisdiction for
  * matching, and every claim on it, newest first, with the claiming lawyer's name. */
 const FOR_LAWYER = {
-  case: { select: { practiceArea: true, ukJurisdiction: true } },
+  case: { select: { caseName: true, practiceArea: true, ukJurisdiction: true, organizationId: true, organization: { select: { name: true } } } },
   claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } } } },
   // The per-case fee (#513), from CONFIRMED.
   charges: { where: { kind: "PER_CASE_FEE" } },
@@ -45,6 +45,27 @@ export default class ClientRequestRepo {
 
   static async findOpenForCase(caseId: string) {
     return prisma.clientRequest.findFirst({ where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } }, select: { id: true } });
+  }
+
+  /** Records the engaged lawyer's finished workspace copy (#514), once CaseCopyQueue makes one. */
+  static async setCopyCaseId(id: string, copyCaseId: string) {
+    await prisma.clientRequest.update({ where: { id }, data: { copyCaseId } });
+  }
+
+  /** The lawyer with live, read-only access to this case right now, and who to credit a new
+   * document to (#514) — null when nobody's engaged on it. */
+  static async findEngagedLawyerForCase(caseId: string) {
+    const request = await prisma.clientRequest.findFirst({
+      where: { caseId, status: "ENGAGED" },
+      select: {
+        id: true,
+        client: { select: { id: true, name: true, username: true } },
+        claims: { where: { outcome: null }, select: { lawyerId: true } },
+      },
+    });
+    const lawyerId = request?.claims[0]?.lawyerId;
+    if (!request || !lawyerId) return null;
+    return { requestId: request.id, lawyerId, client: { id: request.client.id, name: request.client.name || request.client.username } };
   }
 
   /** Only the client's own. */

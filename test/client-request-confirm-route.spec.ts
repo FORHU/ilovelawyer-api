@@ -12,6 +12,7 @@ import app from "../src/app";
 import prisma from "../src/lib/prisma";
 import loginToken from "../src/utils/loginToken";
 import ClientBillingSvc from "../src/services/client-billing.service";
+import CaseCopyQueue from "../src/queues/case-copy.queue";
 import {
   setOrganizationCardProvider,
   ORGANIZATION_CHARGE_PURPOSE,
@@ -76,6 +77,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
   const retry = (id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/charge/retry`).set({ ...auth(id), "X-Organization-Id": org });
   const lawyerView = () => request(app).get(`/api/client-requests/${requestId}`).set({ ...auth(lawyerId), "X-Organization-Id": orgId });
   const fees = (as = lawyerId) => request(app).get(`/api/organizations/${orgId}/billing/fees`).set(auth(as));
+  const copy = (id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/copy`).set({ ...auth(id), "X-Organization-Id": org });
 
   const card = (provider: "STRIPE" | "DUMMY") =>
     prisma.organizationBilling.upsert({
@@ -215,6 +217,15 @@ describe("client confirms, the firm is charged the per-case fee", () => {
       expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client confirmed you", "You're engaged on a client request"]);
     });
 
+    it("grants the engaged lawyer read-only access to the client's case", async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+
+      const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
+      expect(access?.permission).to.equal("VIEW");
+    });
+
     it("charges a dummy test card without Stripe", async () => {
       await card("DUMMY");
       expect((await confirm().expect(200)).body.status).to.equal("ENGAGED");
@@ -234,6 +245,49 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     it("can't confirm a request that isn't quoted", async () => {
       await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CLAIMED" } });
       expect((await confirm().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+  });
+
+  describe("copy", () => {
+    beforeEach(async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+    });
+
+    it("queues a workspace copy for the lawyer and finishes it through the copy queue", async () => {
+      const { body, status } = await copy();
+      expect(status).to.equal(202);
+      expect(body.status).to.equal("PENDING");
+      expect(body.caseCopyId).to.be.a("string");
+
+      await CaseCopyQueue.tick();
+
+      const job = await prisma.caseCopy.findUniqueOrThrow({ where: { id: body.caseCopyId } });
+      expect(job.status).to.equal("DONE");
+      expect(job.copyCaseId).to.be.a("string");
+
+      const copied = await prisma.case.findUniqueOrThrow({ where: { id: job.copyCaseId! } });
+      expect(copied).to.deep.include({ organizationId: orgId, copiedFromCaseId: caseId, caseName: "Unfair dismissal" });
+
+      const updatedRequest = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
+      expect(updatedRequest.copyCaseId).to.equal(job.copyCaseId);
+    });
+
+    it("doesn't queue a second copy for a second call", async () => {
+      const first = await copy().expect(202);
+      const second = await copy().expect(202);
+      expect(second.body.caseCopyId).to.equal(first.body.caseCopyId);
+      expect(await prisma.caseCopy.count({ where: { requestId } })).to.equal(1);
+    });
+
+    it("refuses a lawyer who isn't the one engaged on the request", async () => {
+      await copy(otherLawyerId, otherOrgId).expect(404);
+    });
+
+    it("can't be copied before the engagement", async () => {
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED" } });
+      expect((await copy().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
     });
   });
 

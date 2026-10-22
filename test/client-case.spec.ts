@@ -13,10 +13,13 @@ import OrganizationMemberRepo from "../src/repositories/organization-member.repo
 import OrganizationSvc from "../src/services/organization.service";
 import CaseSvc from "../src/services/case.service";
 import ChatSvc from "../src/services/chat.service";
+import DocumentSvc from "../src/services/document.service";
+import ClientRequestRepo from "../src/repositories/client-request.repository";
 import requireClientAccount from "../src/middleware/require-client-account.middleware";
 import clientRoute from "../src/routes/client.route";
 import { createClientCaseSchema } from "../src/validation/client-case.validation";
 import { listRoutes } from "./support/list-routes";
+import * as socket from "../src/lib/socket";
 
 function stash<T extends object>(target: T, keys: string[]) {
   const saved = keys.map((k) => [k, (target as any)[k]] as const);
@@ -154,11 +157,17 @@ describe("Client app cases", () => {
         stash(ChatSvc, ["createConsultation", "listMessages", "enqueueChatGeneration"]),
         // Paying and credits are test/client-billing.spec.ts's; here a payment is always good.
         stash(ClientPaymentRepo, ["claimCasePayment", "attachToCase", "spendCredit", "addCredits"]),
+        stash(DocumentSvc, ["create"]),
+        stash(ClientRequestRepo, ["findEngagedLawyerForCase"]),
+        stash(socket, ["emitToUser"]),
       ];
       (ClientPaymentRepo as any).claimCasePayment = async () => 50;
       (ClientPaymentRepo as any).attachToCase = async () => undefined;
       (ClientPaymentRepo as any).spendCredit = async () => true;
       (ClientPaymentRepo as any).addCredits = async () => 50;
+      (DocumentSvc as any).create = async () => ({ id: "d2", name: "Payslip.pdf", ragStatus: "PENDING", createdAt: new Date("2026-10-22") });
+      (ClientRequestRepo as any).findEngagedLawyerForCase = async () => null;
+      (socket as any).emitToUser = () => {};
       restore = () => fns.forEach((f) => f());
       row = caseRow();
       calls = {};
@@ -254,6 +263,36 @@ describe("Client app cases", () => {
       expect(await errorOf(ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Hi"))).to.deep.include({ status: 404 });
       expect(await errorOf(ClientCaseSvc.presignDocument(workspace, "u1", "case-1", { filename: "a.pdf", contentType: "application/pdf" }))).to.deep.include({
         status: 404,
+      });
+    });
+
+    describe("addDocument", () => {
+      const file = { key: "k1", name: "Payslip.pdf" };
+
+      it("tells the engaged lawyer live when the client adds a document to the case", async () => {
+        (ClientRequestRepo as any).findEngagedLawyerForCase = async (caseId: string) =>
+          caseId === "case-1" ? { requestId: "req-1", lawyerId: "lawyer-1", client: { id: "u1", name: "Jamie Lee" } } : null;
+        const emitted: unknown[] = [];
+        (socket as any).emitToUser = (userId: string, event: string, payload: unknown) => emitted.push([userId, event, payload]);
+
+        await ClientCaseSvc.addDocument(workspace, "u1", "case-1", file);
+
+        expect(emitted).to.deep.equal([
+          [
+            "lawyer-1",
+            "engagement:document-added",
+            { requestId: "req-1", caseId: "case-1", documentId: "d2", filename: "Payslip.pdf", submittedBy: { id: "u1", name: "Jamie Lee" }, submittedAt: new Date("2026-10-22").toISOString() },
+          ],
+        ]);
+      });
+
+      it("sends nothing when nobody is engaged on the case yet", async () => {
+        const emitted: unknown[] = [];
+        (socket as any).emitToUser = (...args: unknown[]) => emitted.push(args);
+
+        await ClientCaseSvc.addDocument(workspace, "u1", "case-1", file);
+
+        expect(emitted).to.deep.equal([]);
       });
     });
   });

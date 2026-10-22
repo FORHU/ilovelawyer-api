@@ -1,5 +1,6 @@
 import cron, { type ScheduledTask } from "node-cron";
 import CaseCopyRepo from "../repositories/case-copy.repository";
+import ClientRequestRepo from "../repositories/client-request.repository";
 import CaseCopySvc, { CaseCopyAbandoned } from "../services/case-copy.service";
 import logger from "../utils/logger";
 
@@ -62,6 +63,7 @@ export default class CaseCopyQueue {
     try {
       const copyCaseId = await CaseCopySvc.copy(job);
       await CaseCopyRepo.markDone(id, copyCaseId);
+      if (job.requestId) await ClientRequestRepo.setCopyCaseId(job.requestId, copyCaseId);
       logger.info("Case copy: copied case to portfolio", { copyId: id, sourceCaseId: job.sourceCaseId, copyCaseId });
     } catch (err) {
       const retry = !(err instanceof CaseCopyAbandoned) && job.attempts < MAX_ATTEMPTS;

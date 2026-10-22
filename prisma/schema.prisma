@@ -1104,6 +1104,9 @@ model ClientRequest {
   withdrawnAt       DateTime?
   // When the per-case fee went through and the request became ENGAGED (#513).
   engagedAt         DateTime?
+  // The lawyer's workspace copy of the client's case (#514), once POST /client-requests/{id}/copy
+  // has made one. Set from CaseCopy.requestId when the queued copy finishes.
+  copyCaseId        String?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -3058,6 +3061,9 @@ model CaseCopy {
   targetOrganizationId   String
   status                 CaseCopyStatus @default(PENDING)
   copyCaseId             String?
+  // Set when this copy is the lawyer's "Copy to my workspace" on an engaged client request (#514),
+  // so the queue can record the finished copy back onto ClientRequest.copyCaseId.
+  requestId              String?
   attempts               Int            @default(0)
   error                  String?        @db.Text
   createdAt              DateTime       @default(now())

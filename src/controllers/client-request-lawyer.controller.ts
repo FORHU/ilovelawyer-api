@@ -51,6 +51,10 @@ export default class ClientRequestLawyerCtrl {
     res.status(200).json(await ClientRequestLawyerSvc.retryCharge(lawyerOf(req), req.params.id));
   }
 
+  static async copy(req: Request, res: Response) {
+    res.status(202).json(await ClientRequestLawyerSvc.copy(lawyerOf(req), req.params.id));
+  }
+
   static async pass(req: Request, res: Response) {
     await ClientRequestLawyerSvc.pass(lawyerOf(req), req.params.id);
     res.status(204).end();
