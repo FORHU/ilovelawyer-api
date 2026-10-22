@@ -1,5 +1,6 @@
 import Joi from "joi";
 import { LAWYER_REJECTION_REASONS } from "../services/lawyer-verification.service";
+import { LAWYER_VERIFICATION_STATUSES, UK_JURISDICTIONS } from "../types/client-handoff";
 
 export const listUsersSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -40,6 +41,24 @@ export const exportUserDataSchema = Joi.object({
 
 export const denyUserSchema =Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
 
+export const listLawyerVerificationsSchema = Joi.object({
+  status: Joi.string()
+    .valid(...LAWYER_VERIFICATION_STATUSES)
+    .default("PENDING"),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+});
+
+// The jurisdictions the admin confirmed against the register replace what the lawyer claimed.
+export const verifyLawyerSchema = Joi.object({
+  confirmedJurisdictions: Joi.array()
+    .items(Joi.string().valid(...UK_JURISDICTIONS))
+    .min(1)
+    .unique()
+    .required(),
+  note: Joi.string().trim().max(1000).allow("").optional(),
+});
+
 // note is required for OTHER (it's the whole message); optional extra detail for the canned reasons.
 export const rejectLawyerSchema = Joi.object({
   reason: Joi.string()
@@ -47,7 +66,7 @@ export const rejectLawyerSchema = Joi.object({
     .required(),
   note: Joi.string()
     .trim()
-    .max(500)
+    .max(1000)
     .when("reason", { is: "OTHER", then: Joi.required(), otherwise: Joi.optional() }),
 });
 

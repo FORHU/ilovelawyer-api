@@ -42,6 +42,7 @@ function row(overrides: Record<string, unknown> = {}) {
     verificationStatus: "UNSUBMITTED",
     verificationNote: null,
     verifiedAt: null,
+    submittedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -130,6 +131,31 @@ describe("Lawyer client request profile", () => {
       const dto = await LawyerProfileSvc.update("u1", { registrationNumber: "654321" });
       expect(dto).to.include({ acceptingRequests: false });
       expect(dto.verification).to.deep.equal({ status: "PENDING", note: null, verifiedAt: null });
+    });
+
+    it("dates the submission when the profile joins the admin queue, and again on a resubmission", async () => {
+      await LawyerProfileSvc.update("u1", { bio: "Draft" });
+      expect(stored.submittedAt).to.equal(null);
+
+      await LawyerProfileSvc.update("u1", complete);
+      expect(stored.verificationStatus).to.equal("PENDING");
+      expect(stored.submittedAt).to.be.instanceOf(Date);
+
+      const first = new Date("2026-10-01T00:00:00Z");
+      stored = row({ ...complete, verificationStatus: "REJECTED", verificationNote: "Wrong number", submittedAt: first });
+      await LawyerProfileSvc.update("u1", { registrationNumber: "654321" });
+      expect(stored.verificationStatus).to.equal("PENDING");
+      expect(stored.submittedAt.getTime()).to.be.greaterThan(first.getTime());
+    });
+
+    it("keeps the submission date when an edit doesn't change the status", async () => {
+      const first = new Date("2026-10-01T00:00:00Z");
+      for (const status of ["PENDING", "VERIFIED"]) {
+        stored = row({ ...complete, verificationStatus: status, verifiedAt: status === "VERIFIED" ? new Date() : null, submittedAt: first });
+        await LawyerProfileSvc.update("u1", { bio: "New bio" });
+        expect(stored.verificationStatus, status).to.equal(status);
+        expect(stored.submittedAt, status).to.equal(first);
+      }
     });
 
     it("keeps pause and capacity", async () => {
