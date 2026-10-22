@@ -3,7 +3,7 @@ import type { ObjectSchema } from "joi";
 import ClientRequestLawyerSvc, { type LawyerContext } from "../services/client-request-lawyer.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
-import { listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
+import { closeClientRequestSchema, listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
 
 function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
   const { error, value } = schema.validate(input, { stripUnknown: true, convert: true });
@@ -53,6 +53,11 @@ export default class ClientRequestLawyerCtrl {
 
   static async copy(req: Request, res: Response) {
     res.status(202).json(await ClientRequestLawyerSvc.copy(lawyerOf(req), req.params.id));
+  }
+
+  static async close(req: Request, res: Response) {
+    const body = validate(closeClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestLawyerSvc.close(lawyerOf(req), req.params.id, body));
   }
 
   static async pass(req: Request, res: Response) {

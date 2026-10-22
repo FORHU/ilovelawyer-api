@@ -17,6 +17,7 @@ const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASS
  * matching, and every claim on it, newest first, with the claiming lawyer's name. */
 const FOR_LAWYER = {
   case: { select: { caseName: true, practiceArea: true, ukJurisdiction: true, organizationId: true, organization: { select: { name: true } } } },
+  client: { select: { id: true, name: true, username: true } },
   claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } } } },
   // The per-case fee (#513), from CONFIRMED.
   charges: { where: { kind: "PER_CASE_FEE" } },
@@ -34,6 +35,7 @@ const FOR_CLIENT = {
       organization: { select: { name: true, isPersonal: true } },
     },
   },
+  feedback: true,
 } satisfies Prisma.ClientRequestInclude;
 
 export type ClientRequestForClient = Prisma.ClientRequestGetPayload<{ include: typeof FOR_CLIENT }>;
@@ -98,6 +100,24 @@ export default class ClientRequestRepo {
   static async transition(id: string, from: ClientRequestStatus[], data: { status: ClientRequestStatus; withdrawnAt?: Date }) {
     const { count } = await prisma.clientRequest.updateMany({ where: { id, status: { in: from } }, data });
     return count === 1;
+  }
+
+  /** Either side ending the engagement (#519): ENGAGED -> CLOSED, once. True when this call moved
+   * it; false when it had already closed, expired or moved on some other way. */
+  static async close(id: string, closedBy: "LAWYER" | "CLIENT", now: Date = new Date()): Promise<boolean> {
+    const { count } = await prisma.clientRequest.updateMany({ where: { id, status: "ENGAGED" }, data: { status: "CLOSED", closedAt: now, closedBy } });
+    return count === 1;
+  }
+
+  /** The client's rating of the lawyer, once the engagement is CLOSED. Null when already given:
+   * EngagementFeedback.requestId is unique, so a second attempt would otherwise throw. */
+  static async createFeedback(requestId: string, rating: number, comment: string | null) {
+    try {
+      return await prisma.engagementFeedback.create({ data: { requestId, rating, comment } });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return null;
+      throw err;
+    }
   }
 
   /** Everything the brief is written from (#508): the case, its parties and documents (names only,

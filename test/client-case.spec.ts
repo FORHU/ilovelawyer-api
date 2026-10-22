@@ -336,6 +336,8 @@ describe("Client app cases", () => {
       "POST /lawyer-requests/:id/withdraw",
       "POST /lawyer-requests/:id/confirm",
       "POST /lawyer-requests/:id/decline",
+      "POST /lawyer-requests/:id/end",
+      "POST /lawyer-requests/:id/feedback",
     ]);
   });
 });

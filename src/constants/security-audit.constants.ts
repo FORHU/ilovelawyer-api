@@ -70,6 +70,7 @@ export const SECURITY_AUDIT_ACTIONS = [
   "client_request.parties_viewed",
   "client_request.released",
   "client_request.copied",
+  "client_request.closed",
 
   // Exports and downloads
   "export.case_brief",
@@ -185,6 +186,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "client_request.parties_viewed": "Party names viewed for a conflict check",
   "client_request.released": "Client request given back",
   "client_request.copied": "Engaged client's case copied to the lawyer's workspace",
+  "client_request.closed": "Engagement closed, lawyer's access removed",
   "export.case_brief": "Case brief exported",
   "export.generated_document": "Document generated",
   "export.audit_log": "Audit log exported",
