@@ -260,6 +260,7 @@ export const createWitnessSchema = Joi.object({
   credibilityOverride: Joi.number().integer().min(0).max(100).allow(null).optional(),
   statementDueOn: Joi.date().iso().allow(null).optional(),
   statementReceived: Joi.boolean().optional(),
+  calledBy: Joi.string().valid("OURS", "THEIRS").allow(null).optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 });
@@ -273,6 +274,13 @@ export const updateMissingEvidenceSchema = Joi.object({
   status: Joi.string().valid("OPEN", "RESOLVED", "DISMISSED").required(),
   resolutionNote: Joi.string().allow("", null).max(2000).optional(),
 });
+
+export const updateCrossExamQuestionSchema = Joi.object({
+  status: Joi.string().valid("PROPOSED", "ACCEPTED", "REJECTED").optional(),
+  topic: Joi.string().trim().min(1).max(80).optional(),
+  question: Joi.string().trim().min(1).max(600).optional(),
+  purpose: Joi.string().allow("", null).max(400).optional(),
+}).min(1);
 
 export const updateWitnessSchema = Joi.object({
   name: Joi.string().optional(),
@@ -294,6 +302,7 @@ export const updateWitnessSchema = Joi.object({
     )
     .max(30)
     .optional(),
+  calledBy: Joi.string().valid("OURS", "THEIRS").allow(null).optional(),
   contact: Joi.string().allow("").optional(),
   notes: Joi.string().allow("").optional(),
 }).min(1);

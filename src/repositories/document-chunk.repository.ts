@@ -338,6 +338,35 @@ export default class DocumentChunkRepo {
     return out;
   }
 
+  /** A document's chunk texts in order with their page numbers, up to `maxChars` characters, read
+   * a page at a time as findFullTextsByDocuments does. For finding the page a quote sits on. */
+  static async findPagedTextsByDocument(
+    caseDocumentId: string,
+    maxChars: number,
+    client: DbClient = prisma,
+  ): Promise<{ pageNumber: number | null; text: string }[]> {
+    const out: { pageNumber: number | null; text: string }[] = [];
+    let chars = 0;
+    let afterIndex = -1;
+    while (chars < maxChars) {
+      const rows = await client.caseDocumentChunk.findMany({
+        where: { caseDocumentId, chunkIndex: { gt: afterIndex } },
+        select: { chunkIndex: true, chunkText: true, pageNumber: true },
+        orderBy: { chunkIndex: "asc" },
+        take: FULL_TEXT_PAGE_SIZE,
+      });
+      for (const r of rows) {
+        const text = openText(r.chunkText);
+        out.push({ pageNumber: r.pageNumber, text });
+        chars += text.length + 1;
+        if (chars >= maxChars) break;
+      }
+      if (rows.length < FULL_TEXT_PAGE_SIZE) break;
+      afterIndex = rows[rows.length - 1].chunkIndex;
+    }
+    return out;
+  }
+
   /** A document's chunks in order, paged — up to the chunk that reaches `maxChars` characters
    * (default FULL_TEXT_MAX_CHARS_PER_DOCUMENT), for the same reason as findIdsByDocument. */
   static async findByDocument(

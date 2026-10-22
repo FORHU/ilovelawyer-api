@@ -131,6 +131,10 @@ router.post("/:caseId/witnesses/refresh", requireConsent("AI_PROCESSING"), async
 router.patch("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.updateWitness));
 router.patch("/:caseId/witnesses/:id/factors/:factor", asyncHandler(CaseTerminalCtrl.setWitnessFactor));
 router.delete("/:caseId/witnesses/:id", asyncHandler(CaseTerminalCtrl.deleteWitness));
+router.get("/:caseId/witnesses/:id/cross-examination", asyncHandler(CaseTerminalCtrl.listCrossExamination));
+router.post("/:caseId/witnesses/:id/cross-examination", requireConsent("AI_PROCESSING"), asyncHandler(CaseTerminalCtrl.prepareCrossExamination));
+router.patch("/:caseId/cross-examination/:id", asyncHandler(CaseTerminalCtrl.updateCrossExamQuestion));
+router.delete("/:caseId/cross-examination/:id", asyncHandler(CaseTerminalCtrl.deleteCrossExamQuestion));
 
 router.get("/:caseId/damages", asyncHandler(CaseTerminalCtrl.listDamages));
 router.post("/:caseId/damages", asyncHandler(CaseTerminalCtrl.createDamage));
