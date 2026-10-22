@@ -14,6 +14,8 @@ import {
   listFeedbackSchema,
   exportUserDataSchema,
   denyUserSchema,
+  listLawyerVerificationsSchema,
+  verifyLawyerSchema,
   rejectLawyerSchema,
   lawSearchSchema,
   listLawsSchema,
@@ -152,20 +154,46 @@ export default class AdminCtrl {
     return res.status(204).send();
   }
 
-  /** POST /api/admin/lawyers/:id/verify — admin accepts a PENDING client-request profile on trust
-   * (no register check yet, #506). */
-  static async verifyLawyer(req: Request, res: Response) {
-    const profile = await LawyerVerificationSvc.verify(req.params.id, req.user.userId);
-    return res.status(200).json(profile);
+  /** GET /api/admin/lawyer-verifications — the verification queue for one status (default
+   * PENDING), oldest submission first. */
+  static async listLawyerVerifications(req: Request, res: Response) {
+    const { error, value } = listLawyerVerificationsSchema.validate(req.query, { convert: true });
+    if (error) throw new HttpError(error.message, 400);
+
+    const { status, page, limit } = value;
+    const { data, total } = await LawyerVerificationSvc.list({ status, page, limit });
+
+    return res.status(200).json({
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
   }
 
-  /** POST /api/admin/lawyers/:id/reject — body { reason, note? }; note required only for OTHER. */
+  /** POST /api/admin/lawyer-verifications/:userId/verify — body { confirmedJurisdictions, note? }.
+   * The admin accepts a PENDING profile on trust (no register check yet, #506). */
+  static async verifyLawyer(req: Request, res: Response) {
+    const { error, value } = verifyLawyerSchema.validate(req.body ?? {});
+    if (error) throw new HttpError(error.message, 400);
+
+    const row = await LawyerVerificationSvc.verify(
+      req.params.userId,
+      { confirmedJurisdictions: value.confirmedJurisdictions, note: value.note || undefined },
+      req.user.userId
+    );
+    return res.status(200).json(row);
+  }
+
+  /** POST /api/admin/lawyer-verifications/:userId/reject — body { reason, note? }; note required
+   * only for OTHER. */
   static async rejectLawyer(req: Request, res: Response) {
     const { error, value } = rejectLawyerSchema.validate(req.body ?? {});
     if (error) throw new HttpError(error.message, 400);
 
-    const profile = await LawyerVerificationSvc.reject(req.params.id, value.reason, value.note || undefined, req.user.userId);
-    return res.status(200).json(profile);
+    const row = await LawyerVerificationSvc.reject(req.params.userId, value.reason, value.note || undefined, req.user.userId);
+    return res.status(200).json(row);
   }
 
   /** GET /api/admin/settings — per-Tenant signup settings, pending backlog and bulk-run progress. */

@@ -418,7 +418,7 @@ export const clientHandoffSchemas: Schemas = {
       organizationName: { type: "string", nullable: true },
       profile: ref("ClientRequestProfile"),
       registerCheck: { ...ref("RegisterCheck"), nullable: true, description: "Null when the register couldn't be reached; the admin checks by hand" },
-      submittedAt: dateTime(),
+      submittedAt: dateTime("When the profile last joined the queue; null while UNSUBMITTED", true),
     },
   },
   AdminClientRequest: {
@@ -904,14 +904,15 @@ export const clientHandoffPaths: Paths = {
       tag: ADMIN_TAG,
       issue: "ilovelawyer-api#506",
       summary: "Verify a lawyer for client requests",
-      description: "The admin confirms which jurisdictions the lawyer is qualified in. A register mismatch needs a note. Audited.",
+      description:
+        "The admin confirms which jurisdictions the lawyer is qualified in; they replace the lawyer's own. The note is internal: it goes in the audit log, not to the lawyer. 409 unless PENDING. Audited.",
       parameters: [idParam("userId")],
       body: {
         type: "object",
         required: ["confirmedJurisdictions"],
         properties: { confirmedJurisdictions: { type: "array", items: enumOf(UK_JURISDICTIONS), minItems: 1 }, note: { type: "string", maxLength: 1000 } },
       },
-      responses: { 200: ok("Verified", ref("AdminLawyerVerification")), 400: err("A mismatch without a note"), 403: err("Not an admin"), 404: err("No such lawyer") },
+      responses: { 200: ok("Verified", ref("AdminLawyerVerification")), 400: err("Invalid body"), 403: err("Not an admin"), 404: err("No such lawyer"), 409: err("Not PENDING") },
     }),
   },
   "/admin/lawyer-verifications/{userId}/reject": {
@@ -921,8 +922,15 @@ export const clientHandoffPaths: Paths = {
       summary: "Reject a lawyer, with a note they will see",
       description: "They drop out of routing. Requests they hold are released. Audited.",
       parameters: [idParam("userId")],
-      body: { type: "object", required: ["note"], properties: { note: { type: "string", maxLength: 1000 } } },
-      responses: { 200: ok("Rejected", ref("AdminLawyerVerification")), 403: err("Not an admin"), 404: err("No such lawyer") },
+      body: {
+        type: "object",
+        required: ["reason"],
+        properties: {
+          reason: { type: "string", enum: ["NAME_MISMATCH", "NOT_PRACTISING", "WRONG_JURISDICTION", "OTHER"], description: "Each but OTHER sends the lawyer a canned sentence" },
+          note: { type: "string", maxLength: 1000, description: "Required for OTHER, where it is the whole message; otherwise appended to the canned sentence" },
+        },
+      },
+      responses: { 200: ok("Rejected", ref("AdminLawyerVerification")), 400: err("Invalid body"), 403: err("Not an admin"), 404: err("No such lawyer"), 409: err("Not PENDING") },
     }),
   },
   "/admin/client-requests": {

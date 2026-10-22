@@ -33,6 +33,7 @@ const EMPTY: ProfileFields = {
   verificationStatus: "UNSUBMITTED",
   verificationNote: null,
   verifiedAt: null,
+  submittedAt: null,
 };
 
 /** What an admin needs before they can check the lawyer against the regulator's register. */
@@ -65,7 +66,7 @@ export function nextVerificationStatus(before: ProfileFields, after: ProfileFiel
   return before.verificationStatus;
 }
 
-function toDto(p: ProfileFields) {
+export function toDto(p: ProfileFields) {
   return {
     regulator: p.regulator,
     registrationNumber: p.registrationNumber,
@@ -109,7 +110,12 @@ export default class LawyerProfileSvc {
     after.verificationStatus = nextVerificationStatus(before, after);
     if (after.verificationStatus !== before.verificationStatus) {
       after.verifiedAt = after.verificationStatus === "VERIFIED" ? before.verifiedAt : null;
-      if (after.verificationStatus === "PENDING") after.verificationNote = null;
+      // Joining (or rejoining) the admin queue: a fresh date, so a resubmission isn't ranked by
+      // the first attempt.
+      if (after.verificationStatus === "PENDING") {
+        after.verificationNote = null;
+        after.submittedAt = new Date();
+      }
     }
 
     // Only an explicit switch-on is refused. A lawyer who was already accepting and then clears a
