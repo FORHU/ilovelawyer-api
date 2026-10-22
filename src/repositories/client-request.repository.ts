@@ -163,6 +163,59 @@ export default class ClientRequestRepo {
     return { total, data };
   }
 
+  /** Takes the right to announce a request to its lawyers (#510): true for exactly one caller, and
+   * only while it's routed with a brief to read and nobody has been told yet. Taken before
+   * anything is sent, so two runs can't both send. */
+  static async claimAnnouncement(id: string, now: Date): Promise<boolean> {
+    const { count } = await prisma.clientRequest.updateMany({
+      where: { id, status: "ROUTED", announcedAt: null, briefGeneratedAt: { not: null } },
+      data: { announcedAt: now },
+    });
+    return count === 1;
+  }
+
+  /** Routed requests with a brief that nobody has been told about yet, still inside their 48h: the
+   * brief landed before routing, a send failed, or a claim ended and put it back in the pool. */
+  static async findUnannounced(now: Date) {
+    return prisma.clientRequest.findMany({
+      where: { status: "ROUTED", announcedAt: null, briefGeneratedAt: { not: null }, routingExpiresAt: { gt: now } },
+      select: { id: true },
+      orderBy: { routedAt: "asc" },
+    });
+  }
+
+  /** What the announcement says: the brief's urgency, the case's area and part of the UK, and when
+   * the routing window closes. */
+  static async findForAnnouncement(id: string) {
+    return prisma.clientRequest.findUnique({
+      where: { id },
+      select: { id: true, brief: true, routingExpiresAt: true, case: { select: { practiceArea: true, ukJurisdiction: true } } },
+    });
+  }
+
+  /** Routed requests whose 48h is over (#510), with what the client and ops are told. */
+  static async findExpired(now: Date) {
+    return prisma.clientRequest.findMany({
+      where: { status: "ROUTED", routingExpiresAt: { lte: now } },
+      select: {
+        id: true,
+        caseId: true,
+        clientId: true,
+        routedAt: true,
+        case: { select: { practiceArea: true, ukJurisdiction: true } },
+        client: { select: { email: true } },
+      },
+      orderBy: { routingExpiresAt: "asc" },
+    });
+  }
+
+  /** ROUTED -> EXPIRED, only if it's still routed and its 48h is over: a claim that got in first
+   * wins. */
+  static async expire(id: string, now: Date): Promise<boolean> {
+    const { count } = await prisma.clientRequest.updateMany({ where: { id, status: "ROUTED", routingExpiresAt: { lte: now } }, data: { status: "EXPIRED" } });
+    return count === 1;
+  }
+
   /** The names behind the anonymised brief, for the claiming lawyer's conflict check (#512): the
    * client, and the case's other parties as the client entered them. */
   static async findParties(id: string) {

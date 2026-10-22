@@ -1,0 +1,8 @@
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">A new client request matches you</mj-text>
+<mj-text>Hello,</mj-text>
+<mj-text>A client is looking for a lawyer, and their case matches what you take on:</mj-text>
+<mj-text font-size="18px" font-weight="bold" color="#0b0b0f">{{practiceArea}}, {{ukJurisdiction}}</mj-text>
+<mj-text>Urgency: {{urgency}}</mj-text>
+<mj-text>It's open to accept until {{routingExpiresAt}}. The first lawyer to accept holds it for 24 hours.</mj-text>
+<mj-text>Read the anonymised brief in the app before you decide.</mj-text>
+<mj-button href="{{inboxLink}}">View client requests</mj-button>

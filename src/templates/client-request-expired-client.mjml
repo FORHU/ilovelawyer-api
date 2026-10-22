@@ -1,0 +1,5 @@
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">We couldn't find a lawyer this time</mj-text>
+<mj-text>Hello,</mj-text>
+<mj-text>No lawyer accepted your request within 48 hours, so it has closed.</mj-text>
+<mj-text>You can ask for a lawyer again from your case whenever you're ready.</mj-text>
+<mj-button href="{{caseLink}}">Go to your case</mj-button>

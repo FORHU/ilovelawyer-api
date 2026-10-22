@@ -1,0 +1,6 @@
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">{{count}} client request(s) expired unclaimed</mj-text>
+<mj-text>No lawyer accepted these within 48 hours of routing, so they're now EXPIRED. The clients have been told they can ask again.</mj-text>
+{{#each requests}}
+<mj-text padding-top="14px" font-weight="bold" color="#0b0b0f">{{this.practiceArea}}, {{this.ukJurisdiction}}</mj-text>
+<mj-text>Request {{this.id}}, routed {{this.routedAt}}. Lawyers matching it now: {{this.matchingLawyers}}.</mj-text>
+{{/each}}

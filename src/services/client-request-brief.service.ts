@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import type { ClientRequestStatus, Prisma } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
+import ClientRequestNotifySvc from "./client-request-notify.service";
 import ChatRepo from "../repositories/chat.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import { labelForDesignation, redactBrief, type RedactionContext } from "../utils/brief-redaction";
@@ -135,6 +136,9 @@ export default class ClientRequestBriefSvc {
         briefFingerprint: briefFingerprint(source, latestMessageId),
         briefGeneratedAt: new Date(brief.generatedAt),
       });
+      // Lawyers are told once there's a brief to read (#510). Only the first time: announcing is
+      // guarded, so a rewrite of an announced request tells nobody again.
+      ClientRequestNotifySvc.announceInBackground(requestId);
       return brief;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
