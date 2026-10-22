@@ -869,6 +869,7 @@ model Case {
   evidenceMatrix       EvidenceMatrixItem[]
   contradictions       EvidenceContradiction[]
   missingEvidence      CaseMissingEvidence[]
+  crossExamQuestions   CrossExamQuestion[]
   factPairChecks       FactPairCheck[]
   citationChecks       CitationCheck[]
   authorities          CaseAuthority[]
@@ -1259,6 +1260,7 @@ model Document {
   file               File?               @relation(fields: [fileId], references: [id])
   chunks             CaseDocumentChunk[]
   extractedWitnesses Witness[]
+  crossExamQuestions CrossExamQuestion[]
   extractedDamages   DamageClaim[]
 
   @@index([userId])
@@ -2431,6 +2433,9 @@ model Witness {
   scoredAt            DateTime?
   statementDueOn      DateTime?
   statementReceived   Boolean        @default(false)
+  // Which side calls this witness. Null until a lawyer says. Cross-examination prep is only built
+  // for THEIRS: preparing our own witness's answers would be coaching (CrossExaminationSvc).
+  calledBy            WitnessSide?
   contact             String?
   notes               String?        @db.Text
   createdAt           DateTime       @default(now())
@@ -2439,8 +2444,53 @@ model Witness {
   case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
   sourceDocument    Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
   sponsoredEvidence EvidenceMatrixItem[]
+  crossExamQuestions CrossExamQuestion[]
 
   @@index([caseId])
+}
+
+enum WitnessSide {
+  OURS
+  THEIRS
+}
+
+enum CrossExamStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+}
+
+/// One proposed cross-examination question for a witness the other side calls, tied to the
+/// verbatim passage it puts to them. A row is only written when `sourceQuote` was found in
+/// `sourceDocumentId`'s text (CrossExaminationSvc). `supportVerdict` is Jev's read of whether the
+/// passage supports the point the question puts; null when unchecked, including after a lawyer
+/// rewrites the question. A regeneration replaces PROPOSED rows nobody edited and keeps the rest,
+/// matched by question text — see CrossExamRepo.replaceAiQuestions.
+model CrossExamQuestion {
+  id                String          @id @default(uuid())
+  caseId            String
+  witnessId         String
+  topic             String
+  question          String          @db.Text
+  // What the question is meant to establish, in one line, for the lawyer reading the pack.
+  purpose           String?         @db.Text
+  position          Int
+  sourceDocumentId  String?
+  sourceQuote       String          @db.Text
+  pageNumber        Int?
+  supportVerdict    String?
+  supportConfidence Float?
+  status            CrossExamStatus @default(PROPOSED)
+  lawyerEditedAt    DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  witness        Witness   @relation(fields: [witnessId], references: [id], onDelete: Cascade)
+  sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
+  @@index([witnessId])
 }
 
 // Whether an entry is money the client is owed (DAMAGE) or another order the case asks for, such

@@ -13,3 +13,4 @@ export * from "./claim-extract.prompt";
 export * from "./mind-map-documents.prompt";
 export * from "./damages-extract.prompt";
 export * from "./missing-evidence.prompt";
+export * from "./cross-examination.prompt";

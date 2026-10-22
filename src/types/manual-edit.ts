@@ -29,6 +29,7 @@ export type ManualEditKind =
   | "todo"
   | "deadline"
   | "witness"
+  | "crossExamQuestion"
   | "damage"
   | "authority"
   | "citation"

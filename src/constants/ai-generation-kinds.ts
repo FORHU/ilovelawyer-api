@@ -36,6 +36,7 @@ export const AI_GENERATION_KINDS = [
   "claimExtract",
   "citationGrounds",
   "missingEvidence",
+  "crossExamination",
 ] as const;
 
 export type AiGenerationKind = (typeof AI_GENERATION_KINDS)[number];
@@ -63,4 +64,5 @@ export const PANE_REGENERATE_KINDS = [
   "redTeam",
   "audioOverviewScript",
   "missingEvidence",
+  "crossExamination",
 ] as const satisfies readonly AiGenerationKind[];
