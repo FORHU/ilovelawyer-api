@@ -6,6 +6,7 @@ import { resolveOrganizationFromParam } from "../middleware/resolve-organization
 import { requireOrgRole } from "../utils/org-role";
 import OrganizationCtrl from "../controllers/organization.controller";
 import SecurityAuditCtrl from "../controllers/security-audit.controller";
+import OrganizationCardCtrl from "../controllers/organization-card.controller";
 
 const router = express.Router();
 
@@ -78,6 +79,27 @@ router.get(
   asyncHandler(resolveOrganizationFromParam()),
   requireOrgRole(OrganizationRole.ADMIN),
   asyncHandler(SecurityAuditCtrl.exportForOrganization),
+);
+
+// The firm's card on file for the client hand-off's per-case fee (ilovelawyer-api#505): Owners and
+// Admins only, to see it as well as to change it.
+router.get(
+  "/:id/billing/card",
+  asyncHandler(resolveOrganizationFromParam()),
+  requireOrgRole(OrganizationRole.ADMIN),
+  asyncHandler(OrganizationCardCtrl.get),
+);
+router.get(
+  "/:id/billing/fees",
+  asyncHandler(resolveOrganizationFromParam()),
+  requireOrgRole(OrganizationRole.ADMIN),
+  asyncHandler(OrganizationCardCtrl.fees),
+);
+router.post(
+  "/:id/billing/card/setup-session",
+  asyncHandler(resolveOrganizationFromParam()),
+  requireOrgRole(OrganizationRole.ADMIN),
+  asyncHandler(OrganizationCardCtrl.startSetup),
 );
 
 export default router;

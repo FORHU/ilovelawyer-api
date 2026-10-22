@@ -1,9 +1,16 @@
-import type { ClientRequest, ClientRequestStatus } from "@prisma/client";
-import ClientRequestRepo from "../repositories/client-request.repository";
+import type { ClientRequestStatus } from "@prisma/client";
+import ClientRequestRepo, { type ClientRequestForClient } from "../repositories/client-request.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
+import OrganizationChargeSvc from "./organization-charge.service";
+import NotificationSvc from "./notification.service";
+import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
+import OrganizationChargeRepo from "../repositories/organization-charge.repository";
+import OrganizationRepo from "../repositories/organization.repository";
+import logger from "../utils/logger";
 import HttpError from "../utils/http-error";
+import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
@@ -33,9 +40,31 @@ export interface NewClientRequest {
   consentAccepted: boolean;
 }
 
-/** LawyerRequestForClient in the contract. The lawyer, quote and engagement fields are filled by
- * later issues (#511 onwards); until then they're always empty. */
-function toDto(r: ClientRequest) {
+/** The lawyer as the client sees them once they've quoted (LawyerPublicProfile in the contract):
+ * their public profile, never their organization's members or anything from the lawyer app. */
+function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
+  const profile = claim.lawyer.clientRequestProfile;
+  return {
+    id: claim.lawyer.id,
+    name: claim.lawyer.name ?? "",
+    avatarUrl: claim.lawyer.avatar?.s3Key ? getStableProxyFileUrl(claim.lawyer.avatar.s3Key) : null,
+    // A solo practitioner's personal workspace isn't a firm.
+    firmName: claim.organization.isPersonal ? null : claim.organization.name,
+    regulator: profile?.regulator ?? null,
+    registrationNumber: profile?.registrationNumber ?? null,
+    practiceAreas: profile?.practiceAreas ?? [],
+    qualifiedJurisdictions: profile?.qualifiedJurisdictions ?? [],
+    languages: profile?.languages ?? [],
+    bio: profile?.bio ?? "",
+    firstConsultationFee: profile?.firstConsultationFeeMinor == null ? null : { amountMinor: profile.firstConsultationFeeMinor, currency: "GBP" },
+    verifiedAt: profile?.verifiedAt ?? null,
+  };
+}
+
+/** LawyerRequestForClient in the contract. From QUOTED, the lawyer, their quote and the referral
+ * disclosure the client acknowledges to confirm (#512). The engagement fields come with #514. */
+function toDto(r: ClientRequestForClient) {
+  const quoted = r.claims[0] ?? null;
   return {
     id: r.id,
     caseId: r.caseId,
@@ -44,10 +73,17 @@ function toDto(r: ClientRequest) {
     consentVersion: r.consentVersion,
     consentAcceptedAt: r.consentAcceptedAt,
     createdAt: r.createdAt,
-    lawyer: null,
-    quote: null,
-    referralDisclosure: null,
-    engagedAt: null,
+    lawyer: quoted ? lawyerDto(quoted) : null,
+    quote: quoted
+      ? {
+          type: quoted.quoteType,
+          amount: { amountMinor: quoted.quoteAmountMinor, currency: quoted.quoteCurrency },
+          message: quoted.quoteMessage,
+          sentAt: quoted.quotedAt,
+        }
+      : null,
+    referralDisclosure: quoted ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
+    engagedAt: r.engagedAt,
     closedAt: null,
     closedBy: null,
     feedback: null,
@@ -102,7 +138,8 @@ export default class ClientRequestSvc {
     // Routed (#509) straight away, even with zero current matches — the client just sees "Finding
     // a lawyer" either way; EXPIRED (#510) is what ends that wait.
     const routed = await ClientRequestMatchingSvc.route(created.id);
-    return toDto(routed);
+    // Brand new, so nobody has claimed or quoted it.
+    return toDto({ ...routed, claims: [] });
   }
 
   static async list(clientId: string, query: { caseId?: string; page: number; limit: number }) {
@@ -130,6 +167,67 @@ export default class ClientRequestSvc {
       const taken: ClientRequestTakenEvent = { requestId: id };
       for (const lawyerId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) emitToUser(lawyerId, "client-request:taken", taken);
     }
+    return toDto(await ClientRequestSvc.load(clientId, id));
+  }
+
+  /**
+   * The client confirms the quoted lawyer (#513), having acknowledged the referral disclosure: QUOTED
+   * -> CONFIRMED, and the lawyer's organization is charged the per-case fee straight away. When it goes
+   * through the request is ENGAGED; when the card is declined it stays CONFIRMED, the firm is asked to
+   * update the card, and the client waits. Confirming twice charges once.
+   */
+  static async confirm(clientId: string, id: string, input: { disclosureAcknowledged: boolean }) {
+    if (!input.disclosureAcknowledged) {
+      throw new HttpError("Read and acknowledge how ilovelawyer is paid before confirming.", 400, "DISCLOSURE_NOT_ACKNOWLEDGED");
+    }
+    const request = await ClientRequestSvc.load(clientId, id);
+    const confirmed = await OrganizationChargeRepo.confirm(id, OrganizationChargeSvc.perCaseFee());
+    if (!confirmed) {
+      const now = await ClientRequestSvc.load(clientId, id);
+      throw new HttpError("This lawyer can't be confirmed now.", 409, "INVALID_REQUEST_STATUS", { status: now.status ?? request.status });
+    }
+
+    const lawyerId = confirmed.claim.lawyerId;
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: clientId, action: "client_request.confirmed", payload: { requestId: id, chargeId: confirmed.charge.id, lawyerId } });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CONFIRMED", updatedAt: new Date().toISOString() };
+    emitToUser(lawyerId, "client-request:updated", updated);
+    await NotificationSvc.create({
+      userId: lawyerId,
+      type: "CLIENT_REQUEST",
+      title: "A client confirmed you",
+      message: "The client accepted your quote. The introduction fee is being charged to your organization's card.",
+      link: `/client-requests/${id}`,
+    }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
+
+    // Engages the request, or tells the firm the card was declined.
+    await OrganizationChargeSvc.attempt(confirmed.charge.id);
+    return toDto(await ClientRequestSvc.load(clientId, id));
+  }
+
+  /** The client declines the quote (#513): nothing is charged, and the request goes back to other
+   * lawyers without this one. The reason stays on the claim; the lawyer is told it ended. */
+  static async decline(clientId: string, id: string, input: { reason?: string }) {
+    const request = await ClientRequestSvc.load(clientId, id);
+    const quoted = request.claims[0];
+    if (request.status !== "QUOTED" || !quoted || quoted.outcome !== null) {
+      throw new HttpError("There's no quote to decline now.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+    const now = new Date();
+    if (!(await ClientRequestClaimRepo.decline({ id: quoted.id, requestId: id, lawyerId: quoted.lawyerId }, input.reason?.trim() || null, now))) {
+      const current = await ClientRequestSvc.load(clientId, id);
+      throw new HttpError("There's no quote to decline now.", 409, "INVALID_REQUEST_STATUS", { status: current.status });
+    }
+
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: clientId, action: "client_request.declined", payload: { requestId: id, claimId: quoted.id, lawyerId: quoted.lawyerId } });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "ROUTED", updatedAt: now.toISOString() };
+    emitToUser(quoted.lawyerId, "client-request:updated", updated);
+    await NotificationSvc.create({
+      userId: quoted.lawyerId,
+      type: "CLIENT_REQUEST",
+      title: "A client chose not to go ahead",
+      message: "The client declined your quote. Nothing was charged.",
+      link: "/client-requests?view=history",
+    }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
     return toDto(await ClientRequestSvc.load(clientId, id));
   }
 

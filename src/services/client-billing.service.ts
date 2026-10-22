@@ -1,6 +1,11 @@
 import type { ClientPayment } from "@prisma/client";
 import type Stripe from "stripe";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
+import ClientBillingAdminSvc from "./client-billing-admin.service";
+import OrganizationCardSvc from "./organization-card.service";
+import OrganizationChargeSvc from "./organization-charge.service";
+import { ORGANIZATION_CHARGE_PURPOSE, ORGANIZATION_REFUND_PURPOSE } from "../payments/organization-card-provider";
+import ClientRequestAdminSvc from "./client-request-admin.service";
 import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "../payments/client-payment-provider";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -146,7 +151,7 @@ export default class ClientBillingSvc {
 
   /**
    * One verified Stripe webhook event (POST /api/webhooks/stripe). Checkout events settle the payment
-   * they name; everything else is acknowledged and ignored. An event already handled is answered
+   * they name (or, in setup mode, save a law firm's card), and refund events update an admin's refund; everything else is acknowledged and ignored. An event already handled is answered
    * without being applied again. An event for a payment this server doesn't have (another
    * environment sharing the Stripe account) is ignored.
    */
@@ -158,6 +163,12 @@ export default class ClientBillingSvc {
       case "checkout.session.async_payment_failed":
       case "checkout.session.expired": {
         const session = event.data.object as Stripe.Checkout.Session;
+        // A law firm adding its card (OrganizationCardSvc), not a client payment. Only completion
+        // matters: an abandoned setup changes nothing.
+        if (session.mode === "setup") {
+          if (event.type === "checkout.session.completed") await OrganizationCardSvc.applyStripeSetupSession(session.id);
+          break;
+        }
         const paymentId = session.metadata?.paymentId ?? session.client_reference_id;
         const payment = paymentId ? await ClientPaymentRepo.findById(paymentId) : null;
         if (!payment || payment.provider !== "STRIPE" || payment.externalId !== session.id) {
@@ -171,6 +182,23 @@ export default class ClientBillingSvc {
         } else if (outcomeOfSession(session) === "paid") {
           await ClientPaymentRepo.settle(payment.id, { paid: true });
         }
+        break;
+      }
+      // A charge to a law firm's card (OrganizationChargeSvc: the per-case fee) that settled later, or
+      // whose direct answer never arrived.
+      case "payment_intent.succeeded":
+      case "payment_intent.payment_failed": {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        if (intent.metadata?.purpose === ORGANIZATION_CHARGE_PURPOSE) await OrganizationChargeSvc.applyStripeIntent(intent);
+        break;
+      }
+      // A refund an admin issued (ClientBillingAdminSvc.refund) that Stripe finished, or couldn't.
+      // Or a refund of a law firm's charge (ClientRequestAdminSvc.refundCharge, #520).
+      case "refund.updated":
+      case "refund.failed": {
+        const refund = event.data.object as Stripe.Refund;
+        if (refund.metadata?.purpose === ORGANIZATION_REFUND_PURPOSE) await ClientRequestAdminSvc.applyStripeRefund(refund);
+        else await ClientBillingAdminSvc.applyStripeRefund(refund);
         break;
       }
       default:

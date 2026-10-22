@@ -135,8 +135,9 @@ jobs:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           # Client app payments: unset means the dummy provider (charges nothing). Test-mode keys only.
           CLIENT_PAYMENT_PROVIDER: ${{ vars.DEV_CLIENT_PAYMENT_PROVIDER }}
+          LAWYER_PAYMENT_PROVIDER: ${{ vars.DEV_LAWYER_PAYMENT_PROVIDER }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_PUBLISHABLE_KEY: ${{ vars.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           # Who's emailed when client requests expire unclaimed (comma-separated). Unset: logged only.
           OPS_ALERT_EMAILS: ${{ secrets.DEV_OPS_ALERT_EMAILS }}
@@ -147,6 +148,8 @@ jobs:
           FREE_CREDIT_USD: ${{vars.FREE_CREDIT_USD}}
           MAX_CASES_PER_ACCOUNT: ${{vars.MAX_CASES_PER_ACCOUNT}}
           CASE_SPEND_LIMIT_USD: ${{vars.CASE_SPEND_LIMIT_USD}}
+          USE_FULL_CONTRADICTION_SCAN: ${{vars.USE_FULL_CONTRADICTION_SCAN}}
+          USE_JEV_CONTRADICTIONS: ${{vars.USE_JEV_CONTRADICTIONS}}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
         run: |
@@ -209,6 +212,7 @@ jobs:
           add OPENAI_API_KEY            "${OPENAI_API_KEY:-}"
           add TYPESAFE_API_KEY          "${TYPESAFE_API_KEY:-}"
           add CLIENT_PAYMENT_PROVIDER   "${CLIENT_PAYMENT_PROVIDER:-}"
+          add LAWYER_PAYMENT_PROVIDER   "${LAWYER_PAYMENT_PROVIDER:-}"
           add STRIPE_SECRET_KEY         "${STRIPE_SECRET_KEY:-}"
           add STRIPE_PUBLISHABLE_KEY    "${STRIPE_PUBLISHABLE_KEY:-}"
           add STRIPE_WEBHOOK_SECRET     "${STRIPE_WEBHOOK_SECRET:-}"
@@ -220,6 +224,8 @@ jobs:
           add FREE_CREDIT_USD          "${FREE_CREDIT_USD:-}"
           add MAX_CASES_PER_ACCOUNT    "${MAX_CASES_PER_ACCOUNT:-}"
           add CASE_SPEND_LIMIT_USD     "${CASE_SPEND_LIMIT_USD:-}"
+          add USE_FULL_CONTRADICTION_SCAN "${USE_FULL_CONTRADICTION_SCAN:-}"
+          add USE_JEV_CONTRADICTIONS   "${USE_JEV_CONTRADICTIONS:-}"
           add UK_CASELAW_BASE_URL       "${UK_CASELAW_BASE_URL:-}"
           add UK_LEGISLATION_BASE_URL   "${UK_LEGISLATION_BASE_URL:-}"
 

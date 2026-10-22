@@ -73,6 +73,11 @@ export const OPS_ALERT_EMAILS = (process.env.OPS_ALERT_EMAILS || "").split(",").
  * (the default) which charges nothing. "stripe" needs STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY,
  * and STRIPE_WEBHOOK_SECRET for POST /api/webhooks/stripe. Use test-mode keys outside production. */
 export const CLIENT_PAYMENT_PROVIDER = (process.env.CLIENT_PAYMENT_PROVIDER || "dummy").trim().toLowerCase();
+/** Who saves a law firm's card on file (payments/organization-card-provider.ts): "stripe" (Stripe's
+ * hosted card setup; needs STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET), or "dummy" (the default),
+ * which saves a test card at once. Separate from CLIENT_PAYMENT_PROVIDER so each side can go live on
+ * its own. */
+export const LAWYER_PAYMENT_PROVIDER = (process.env.LAWYER_PAYMENT_PROVIDER || "dummy").trim().toLowerCase();
 export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || undefined;
 /** Public by design: the client app needs it to show Stripe's payment form. */
 export const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || undefined;

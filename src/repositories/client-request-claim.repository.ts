@@ -1,3 +1,4 @@
+import type { QuoteType, ReleaseReason } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { ROUTING_WINDOW_MS } from "./client-request.repository";
 
@@ -9,6 +10,11 @@ export const CLAIM_REMINDER_LEAD_MS = 2 * 60 * 60 * 1000;
 
 /** Rolls the lapse's transaction back when the request had already moved on. */
 class RequestMovedOn extends Error {}
+
+/* REQUEST_ROW_FIRST: every transaction that changes both a request and one of its claims (claim,
+ * quote, release, lapse, and ClientRequestRepo.withdraw) updates the request row before the claim
+ * row (OrganizationChargeRepo too: request, then charge, then claim). Taking the locks in the same order is what keeps two of them at once (a quote and the
+ * lapse sweep, a release and a withdrawal) from deadlocking. */
 
 /** A lawyer's 24h hold on a client request (ClientRequestClaim). */
 export default class ClientRequestClaimRepo {
@@ -48,8 +54,102 @@ export default class ClientRequestClaimRepo {
     return count === 1;
   }
 
+  /**
+   * Saves the lawyer's quote and moves the request CLAIMED -> QUOTED (#512). Both or neither: false,
+   * with nothing changed, when the claim already ended or its 24h ran out, or the request is no
+   * longer CLAIMED (a second quote, a withdrawal, the lapse sweep got there first).
+   */
+  static async quote(
+    claim: { id: string; requestId: string },
+    quote: { type: QuoteType; amountMinor: number; currency: string; message: string },
+    now: Date = new Date(),
+  ): Promise<boolean> {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const quoted = await tx.clientRequest.updateMany({ where: { id: claim.requestId, status: "CLAIMED" }, data: { status: "QUOTED" } });
+        const saved = await tx.clientRequestClaim.updateMany({
+          where: { id: claim.id, outcome: null, expiresAt: { gt: now } },
+          data: { quoteType: quote.type, quoteAmountMinor: quote.amountMinor, quoteCurrency: quote.currency, quoteMessage: quote.message, quotedAt: now },
+        });
+        if (quoted.count !== 1 || saved.count !== 1) throw new RequestMovedOn();
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof RequestMovedOn) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * The lawyer gives the request back (#512): the claim ends RELEASED with the reason, and the
+   * request goes back in the pool as a lapse does (ROUTED for another 48h, this lawyer excluded, to
+   * be announced again). From CLAIMED, or QUOTED before the client has answered. Both or neither.
+   */
+  static async release(
+    claim: { id: string; requestId: string; lawyerId: string },
+    reason: { reason: ReleaseReason; note: string | null },
+    now: Date = new Date(),
+  ): Promise<boolean> {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Request row first, as everywhere (see REQUEST_ROW_FIRST).
+        const rerouted = await tx.clientRequest.updateMany({
+          where: { id: claim.requestId, status: { in: ["CLAIMED", "QUOTED"] } },
+          data: {
+            status: "ROUTED",
+            routedAt: now,
+            routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS),
+            announcedAt: null,
+            excludedLawyerIds: { push: claim.lawyerId },
+          },
+        });
+        const ended = await tx.clientRequestClaim.updateMany({
+          where: { id: claim.id, outcome: null },
+          data: { outcome: "RELEASED", endedAt: now, openRequestId: null, releaseReason: reason.reason, releaseNote: reason.note },
+        });
+        if (ended.count !== 1 || rerouted.count !== 1) throw new RequestMovedOn();
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof RequestMovedOn) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * The client declines the quote (#513): the claim ends DECLINED, with their reason if they gave one,
+   * and the request goes back in the pool without that lawyer, as a release does. Only from QUOTED.
+   * Both or neither.
+   */
+  static async decline(claim: { id: string; requestId: string; lawyerId: string }, reason: string | null, now: Date = new Date()): Promise<boolean> {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Request row first, as everywhere (see REQUEST_ROW_FIRST).
+        const rerouted = await tx.clientRequest.updateMany({
+          where: { id: claim.requestId, status: "QUOTED" },
+          data: {
+            status: "ROUTED",
+            routedAt: now,
+            routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS),
+            announcedAt: null,
+            excludedLawyerIds: { push: claim.lawyerId },
+          },
+        });
+        const ended = await tx.clientRequestClaim.updateMany({
+          where: { id: claim.id, outcome: null },
+          data: { outcome: "DECLINED", endedAt: now, openRequestId: null, declineReason: reason },
+        });
+        if (ended.count !== 1 || rerouted.count !== 1) throw new RequestMovedOn();
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof RequestMovedOn) return false;
+      throw err;
+    }
+  }
+
   /** Open claims whose 24h is over, on requests still CLAIMED. A QUOTED request's hold isn't
-   * lapsed: whether it should be is still open (#512). */
+   * lapsed: once the lawyer has quoted, it waits for the client to answer (#512, #513). */
   static async findLapsed(now: Date) {
     return prisma.clientRequestClaim.findMany({
       where: { outcome: null, expiresAt: { lte: now }, request: { status: "CLAIMED" } },
@@ -67,10 +167,7 @@ export default class ClientRequestClaimRepo {
   static async lapse(claim: { id: string; requestId: string; lawyerId: string }, now: Date = new Date()): Promise<boolean> {
     try {
       await prisma.$transaction(async (tx) => {
-        const ended = await tx.clientRequestClaim.updateMany({
-          where: { id: claim.id, outcome: null },
-          data: { outcome: "LAPSED", endedAt: now, openRequestId: null },
-        });
+        // Request row first, as everywhere (see REQUEST_ROW_FIRST).
         const rerouted = await tx.clientRequest.updateMany({
           where: { id: claim.requestId, status: "CLAIMED" },
           data: {
@@ -80,6 +177,10 @@ export default class ClientRequestClaimRepo {
             announcedAt: null,
             excludedLawyerIds: { push: claim.lawyerId },
           },
+        });
+        const ended = await tx.clientRequestClaim.updateMany({
+          where: { id: claim.id, outcome: null },
+          data: { outcome: "LAPSED", endedAt: now, openRequestId: null },
         });
         if (ended.count !== 1 || rerouted.count !== 1) throw new RequestMovedOn();
       });

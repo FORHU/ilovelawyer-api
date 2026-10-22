@@ -5,6 +5,8 @@ import requireAdmin from "../middleware/require-admin.middleware";
 import AdminCtrl from "../controllers/admin.controller";
 import SecurityAuditCtrl from "../controllers/security-audit.controller";
 import LlmUsageCtrl from "../controllers/llm-usage.controller";
+import ClientBillingAdminCtrl from "../controllers/client-billing-admin.controller";
+import ClientRequestAdminCtrl from "../controllers/client-request-admin.controller";
 
 const router = express.Router();
 
@@ -40,5 +42,17 @@ router.get("/audit-log/export", asyncHandler(SecurityAuditCtrl.exportForAdmin));
 router.get("/llm-usage/summary", asyncHandler(LlmUsageCtrl.summary));
 router.get("/llm-usage/people", asyncHandler(LlmUsageCtrl.people));
 router.get("/llm-usage", asyncHandler(LlmUsageCtrl.list));
+
+router.get("/billing/summary", asyncHandler(ClientBillingAdminCtrl.summary));
+router.get("/billing/clients/:userId", asyncHandler(ClientBillingAdminCtrl.client));
+router.get("/billing", asyncHandler(ClientBillingAdminCtrl.list));
+router.get("/billing/:id", asyncHandler(ClientBillingAdminCtrl.get));
+router.post("/billing/:id/refund", asyncHandler(ClientBillingAdminCtrl.refund));
+
+// The UK client-to-lawyer hand-off: requests, the firms' fees, and refunds of them (#520).
+router.get("/client-requests/fees-summary", asyncHandler(ClientRequestAdminCtrl.feesSummary));
+router.get("/client-requests", asyncHandler(ClientRequestAdminCtrl.listRequests));
+router.get("/charges/:chargeId", asyncHandler(ClientRequestAdminCtrl.getCharge));
+router.post("/charges/:chargeId/refund", asyncHandler(ClientRequestAdminCtrl.refundCharge));
 
 export default router;

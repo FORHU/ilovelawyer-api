@@ -924,6 +924,35 @@ enum ClientPaymentStatus {
   FAILED
 }
 
+// types/client-handoff.ts CHARGE_KINDS.
+enum OrganizationChargeKind {
+  PER_CASE_FEE
+  AI_TOP_UP
+}
+
+// types/client-handoff.ts CHARGE_STATUSES. PENDING: being charged, or waiting on the provider.
+enum OrganizationChargeStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+// Sent to Stripe and not final yet (PENDING), done, or refused. Stripe's refund.updated settles it.
+enum OrganizationChargeRefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum ClientRefundStatus {
+  // Sent to Stripe, not final yet (some payment methods take days); Stripe's refund.updated settles it.
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
 enum LawyerVerificationStatus {
   // Required fields still missing (LawyerProfileSvc.missingFields).
   UNSUBMITTED
@@ -987,11 +1016,38 @@ model ClientPayment {
   usedAt        DateTime?
   createdAt     DateTime            @default(now())
 
-  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  case Case? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case    Case?          @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  refunds ClientRefund[]
 
   @@index([userId, kind, status])
   @@index([caseId])
+  @@index([externalId])
+  @@index([createdAt])
+}
+
+// Money given back on a ClientPayment by a platform admin (POST /api/admin/billing/:id/refund). A
+// payment can have several partial refunds; PENDING and SUCCEEDED ones together never exceed it.
+// Refunding gives back money only: the case and its credits stay.
+model ClientRefund {
+  id            String             @id @default(uuid())
+  paymentId     String
+  amountMinor   Int
+  currency      String
+  // What the admin wrote; shown in the admin app and the audit log.
+  reason        String
+  status        ClientRefundStatus
+  // Stripe's refund id (re_...).
+  externalId    String?
+  failureReason String?
+  // The admin who issued it. No foreign key, so the record outlives the admin's account.
+  adminId       String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  payment ClientPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
   @@index([externalId])
 }
 
@@ -1046,16 +1102,33 @@ model ClientRequest {
   // (#509/#511/#512) — a client decline does the same once a quote is declined (#512).
   excludedLawyerIds String[]            @default([])
   withdrawnAt       DateTime?
+  // When the per-case fee went through and the request became ENGAGED (#513).
+  engagedAt         DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
   case   Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  client User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  claims ClientRequestClaim[]
+  client  User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  claims  ClientRequestClaim[]
+  charges OrganizationCharge[]
 
   @@index([caseId, status])
   @@index([clientId, createdAt])
   @@index([status])
+}
+
+// types/client-handoff.ts QUOTE_TYPES: a fixed fee for the whole matter, or a paid first consultation.
+enum QuoteType {
+  FIXED_FEE
+  FIRST_CONSULTATION
+}
+
+// types/client-handoff.ts RELEASE_REASONS: why a lawyer gave a claimed request back.
+enum ReleaseReason {
+  CONFLICT
+  CAPACITY
+  OUT_OF_SCOPE
+  OTHER
 }
 
 // How a lawyer's claim on a client request ended (types/client-handoff.ts CLAIM_OUTCOMES).
@@ -1081,6 +1154,18 @@ model ClientRequestClaim {
   reminderSentAt DateTime?
   endedAt        DateTime?
   outcome        ClaimOutcome?
+  // Why the lawyer gave the request back (#512), with their note. Set when outcome is RELEASED.
+  releaseReason  ReleaseReason?
+  releaseNote    String?
+  // The client's reason when they declined the quote (#513), if they gave one. Kept on the claim only.
+  declineReason  String?
+  // The lawyer's quote to the client (#512), kept on the claim it was made under so a declined or
+  // released quote stays in the lawyer's history. quoteAmountMinor is in pence (quoteCurrency GBP).
+  quoteType        QuoteType?
+  quoteAmountMinor Int?
+  quoteCurrency    String?
+  quoteMessage     String?    @db.Text
+  quotedAt         DateTime?
 
   request      ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   lawyer       User          @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
@@ -2774,10 +2859,101 @@ model Organization {
   transcriptions Transcription[]
   connectors     IntegrationConnector[]
   clientRequestClaims ClientRequestClaim[]
+  billing        OrganizationBilling?
+  charges        OrganizationCharge[]
 
   @@index([createdById])
   @@index([tenantId])
   @@index([status, deletionScheduledAt])
+}
+
+// An organization's card on file, which the client hand-off's per-case fee is charged to
+// (ilovelawyer-api#505, #513). Made on the organization's first card setup. Only what Stripe hands
+// back is kept: card details are typed into Stripe's own page and never reach this API. A card is on
+// file when paymentMethodId is set.
+model OrganizationBilling {
+  organizationId  String   @id
+  // STRIPE, or DUMMY for the test card LAWYER_PAYMENT_PROVIDER=dummy saves.
+  provider        String
+  // Stripe customer (cus_...); one per organization, made with its first setup.
+  customerId      String?  @unique
+  // The card (pm_...) and what the app shows of it.
+  paymentMethodId String?
+  brand           String?
+  last4           String?
+  expMonth        Int?
+  expYear         Int?
+  // The Checkout Session the card came from, so the webhook and the app coming back can't both
+  // apply the same one.
+  setupSessionId  String?
+  // Who set up the current card.
+  updatedById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// A charge to a law firm's card on file (OrganizationChargeSvc): the per-case fee when a client
+// confirms the firm's lawyer (#513), and later AI top-ups (#516). Each attempt is a new payment at the
+// provider; a failed one can be retried once the card is updated. `provider` is the card's (STRIPE, or
+// DUMMY for a test card), null until the first attempt.
+model OrganizationCharge {
+  id              String                   @id @default(uuid())
+  organizationId  String
+  kind            OrganizationChargeKind
+  status          OrganizationChargeStatus
+  amountMinor     Int
+  currency        String
+  provider        String?
+  requestId       String?
+  // Set on a PER_CASE_FEE only, and unique: a request's fee is never charged twice.
+  feeRequestId    String?                  @unique
+  // The lawyer whose claim the fee is for.
+  lawyerId        String?
+  // The provider's payment for the latest attempt (Stripe pi_...), and its receipt once paid.
+  paymentIntentId String?
+  receiptUrl      String?
+  failureReason   String?
+  // How many times it's been tried; the provider's idempotency key includes it, so a network retry of
+  // one attempt can never charge twice, and a retry after a new card is a new payment.
+  attempts        Int                      @default(0)
+  succeededAt     DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  organization Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request      ClientRequest?              @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  refunds      OrganizationChargeRefund[]
+
+  @@index([organizationId, createdAt])
+  @@index([requestId])
+  @@index([paymentIntentId])
+}
+
+// Money given back on an OrganizationCharge by a platform admin (POST /api/admin/charges/:id/refund,
+// #520), through Stripe. A charge can have several partial refunds; PENDING and SUCCEEDED ones together
+// never exceed it. Refunding gives back money only: the engagement it paid for carries on.
+model OrganizationChargeRefund {
+  id            String                         @id @default(uuid())
+  chargeId      String
+  amountMinor   Int
+  currency      String
+  // What the admin wrote; shown in the admin app and the audit log.
+  reason        String
+  status        OrganizationChargeRefundStatus
+  // Stripe's refund id (re_...).
+  externalId    String?
+  failureReason String?
+  // The admin who issued it. No foreign key, so the record outlives the admin's account.
+  adminId       String?
+  createdAt     DateTime                       @default(now())
+  updatedAt     DateTime                       @updatedAt
+
+  charge OrganizationCharge @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+
+  @@index([chargeId])
+  @@index([externalId])
 }
 
 enum OrganizationStatus {

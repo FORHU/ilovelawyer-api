@@ -3,7 +3,7 @@ import type { ObjectSchema } from "joi";
 import ClientRequestLawyerSvc, { type LawyerContext } from "../services/client-request-lawyer.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
-import { listLawyerClientRequestsSchema } from "../validation/client-request.validation";
+import { listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
 
 function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
   const { error, value } = schema.validate(input, { stripUnknown: true, convert: true });
@@ -16,7 +16,8 @@ function lawyerOf(req: Request): LawyerContext {
   return { userId, organizationId, tenantCode };
 }
 
-/** The lawyer app's client requests (/api/client-requests): the inbox, claim and pass (#511).
+/** The lawyer app's client requests (/api/client-requests): the inbox, claim and pass (#511), and
+ * the conflict check, release and quote (#512).
  * resolveOrganization has checked the lawyer belongs to the X-Organization-Id organization. */
 export default class ClientRequestLawyerCtrl {
   static async list(req: Request, res: Response) {
@@ -30,6 +31,24 @@ export default class ClientRequestLawyerCtrl {
 
   static async claim(req: Request, res: Response) {
     res.status(200).json(await ClientRequestLawyerSvc.claim(lawyerOf(req), req.params.id));
+  }
+
+  static async parties(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.parties(lawyerOf(req), req.params.id));
+  }
+
+  static async release(req: Request, res: Response) {
+    const body = validate(releaseClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestLawyerSvc.release(lawyerOf(req), req.params.id, body));
+  }
+
+  static async quote(req: Request, res: Response) {
+    const body = validate(quoteClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestLawyerSvc.quote(lawyerOf(req), req.params.id, body));
+  }
+
+  static async retryCharge(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.retryCharge(lawyerOf(req), req.params.id));
   }
 
   static async pass(req: Request, res: Response) {
