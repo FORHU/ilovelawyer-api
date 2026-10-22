@@ -70,6 +70,19 @@ export default class ClientRequestRepo {
     return { requestId: request.id, lawyerId, client: { id: request.client.id, name: request.client.name || request.client.username } };
   }
 
+  /** The engagement a lawyer's workspace copy belongs to (#515), with who to tell about its AI
+   * budget — null for a case that isn't one, or whose engagement has no assigned lawyer any more
+   * (closed and reassigned have both kept the same claim's outcome, so this still resolves after
+   * close; a withdrawn or expired request was never engaged, so it was never copied). */
+  static async findByCopyCaseId(caseId: string) {
+    const request = await prisma.clientRequest.findFirst({
+      where: { copyCaseId: caseId },
+      select: { id: true, copyCaseId: true, claims: { where: { outcome: "ENGAGED" }, select: { lawyerId: true } } },
+    });
+    if (!request) return null;
+    return { id: request.id, copyCaseId: request.copyCaseId!, lawyerId: request.claims[0]?.lawyerId ?? null };
+  }
+
   /** Only the client's own. */
   static async findForClient(id: string, clientId: string) {
     return prisma.clientRequest.findFirst({ where: { id, clientId }, include: FOR_CLIENT });

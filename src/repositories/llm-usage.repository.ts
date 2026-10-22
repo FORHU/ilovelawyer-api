@@ -102,6 +102,13 @@ export default class LlmUsageRepo {
     return prisma.llmUsage.create({ data });
   }
 
+  /** What one case has cost in AI so far, in USD — the engagement AI budget (#515) reads this of
+   * a lawyer's workspace copy, same aggregate CaseLimitsSvc reads of the internal allowance. */
+  static async sumCostUsd(caseId: string): Promise<number> {
+    const { _sum } = await prisma.llmUsage.aggregate({ where: { caseId }, _sum: { estimatedCostUsd: true } });
+    return _sum.estimatedCostUsd ?? 0;
+  }
+
   /** Newest first. */
   static async list(filter: LlmUsageFilter, take: number, skip: number) {
     return prisma.llmUsage.findMany({ where: toWhere(filter), orderBy: [{ createdAt: "desc" }, { id: "desc" }], take, skip });

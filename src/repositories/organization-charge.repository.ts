@@ -52,6 +52,13 @@ export default class OrganizationChargeRepo {
     return prisma.organizationCharge.findUnique({ where: { feeRequestId: requestId } });
   }
 
+  /** How much of `kind` has actually been paid for a request — AI top-ups (#515, #516), in pence.
+   * A refunded top-up still counts: it bought AI credit that was used. */
+  static async sumSucceeded(requestId: string, kind: OrganizationChargeKind): Promise<number> {
+    const { _sum } = await prisma.organizationCharge.aggregate({ where: { requestId, kind, status: "SUCCEEDED" }, _sum: { amountMinor: true } });
+    return _sum.amountMinor ?? 0;
+  }
+
   static async findByPaymentIntent(paymentIntentId: string) {
     return prisma.organizationCharge.findFirst({ where: { paymentIntentId } });
   }

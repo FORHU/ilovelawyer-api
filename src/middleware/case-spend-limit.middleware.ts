@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import CaseLimitsSvc from "../services/case-limits.service";
+import EngagementAiBudgetSvc from "../services/engagement-ai-budget.service";
 import { consultationCaseOf } from "./guest-case-items.middleware";
 
 const CASE_PATH = /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/.*)?$/i;
@@ -23,12 +24,15 @@ export function startsAiWork(method: string, rest: string): boolean {
 }
 
 /** Mounted on the case router: once a case has used its AI (CASE_SPEND_LIMIT_USD), writes that could
- * start AI work answer 403 CASE_BUDGET_SPENT; reads, deletes and housekeeping still pass. */
+ * start AI work answer 403 CASE_BUDGET_SPENT; reads, deletes and housekeeping still pass. A case
+ * that's an engaged lawyer's workspace copy also answers 403 ENGAGEMENT_AI_BUDGET_SPENT once that
+ * engagement's own AI budget is spent (#515) — a separate check from the internal allowance. */
 export async function caseSpendLimit(req: Request, _res: Response, next: NextFunction) {
   try {
     const match = CASE_PATH.exec(req.path);
     if (!match || !startsAiWork(req.method, match[2] ?? "")) return next();
     await CaseLimitsSvc.assertCaseHasBudget(match[1]);
+    await EngagementAiBudgetSvc.assertHasBudget(match[1]);
     next();
   } catch (err) {
     next(err);
@@ -40,7 +44,10 @@ export async function caseSpendLimit(req: Request, _res: Response, next: NextFun
 export async function consultationSpendLimit(req: Request, _res: Response, next: NextFunction) {
   try {
     const consultation = await consultationCaseOf(req.params.consultationId, req.organization!.id);
-    if (consultation?.caseId) await CaseLimitsSvc.assertCaseHasBudget(consultation.caseId);
+    if (consultation?.caseId) {
+      await CaseLimitsSvc.assertCaseHasBudget(consultation.caseId);
+      await EngagementAiBudgetSvc.assertHasBudget(consultation.caseId);
+    }
     next();
   } catch (err) {
     next(err);

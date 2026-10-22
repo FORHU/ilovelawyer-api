@@ -10,6 +10,7 @@ import OrganizationChargeRepo from "../repositories/organization-charge.reposito
 import CaseCopyRepo from "../repositories/case-copy.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
 import EngagementAccessSvc from "./engagement-access.service";
+import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
 import SecurityAuditSvc from "./security-audit.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
@@ -302,6 +303,13 @@ export default class ClientRequestLawyerSvc {
     });
     CaseCopyQueue.kick();
     return { caseCopyId: job.id, status: job.status };
+  }
+
+  /** The engagement's AI budget meter (#515): what's included, any top-ups, what's been spent on
+   * the workspace copy, and whether AI work can still run. */
+  static async aiBudget(lawyer: LawyerContext, id: string) {
+    const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "This request isn't engaged.");
+    return EngagementAiBudgetSvc.forRequest(id, request.copyCaseId);
   }
 
   /**

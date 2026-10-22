@@ -1,5 +1,6 @@
 import { LlmProvider, LlmUsageSource, Prisma } from "@prisma/client";
 import LlmUsageRepo, { LlmUsageDayRow, LlmUsageFilter, LlmUsageGroup } from "../repositories/llm-usage.repository";
+import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
 import { getRequestContext } from "../lib/request-context";
 import { getLlmUsageScope, LlmUsageScope, runInLlmUsageScope } from "../lib/llm-usage-scope";
 import { estimateCostUsd, FREE_CREDIT_UNPRICED_MODEL } from "../constants/llm-pricing.constants";
@@ -84,7 +85,13 @@ export default class LlmUsageSvc {
   static record(entry: LlmUsageEntry): void {
     try {
       const row = LlmUsageSvc.buildRow(entry);
-      void Promise.resolve(LlmUsageRepo.create(row)).catch((err) => logger.warn("LLM usage: failed to write row", { err, feature: entry.feature }));
+      void Promise.resolve(LlmUsageRepo.create(row))
+        .then(() => {
+          // An engagement's AI budget is only ever metered on a case (its lawyer's workspace
+          // copy): nothing to check for usage scoped to a consultation alone.
+          if (row.caseId) void EngagementAiBudgetSvc.checkThresholds(row.caseId, row.estimatedCostUsd ?? 0);
+        })
+        .catch((err) => logger.warn("LLM usage: failed to write row", { err, feature: entry.feature }));
     } catch (err) {
       logger.warn("LLM usage: could not build row", { err, feature: entry?.feature });
     }
