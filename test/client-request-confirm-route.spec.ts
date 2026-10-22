@@ -12,6 +12,7 @@ import app from "../src/app";
 import prisma from "../src/lib/prisma";
 import loginToken from "../src/utils/loginToken";
 import ClientBillingSvc from "../src/services/client-billing.service";
+import CaseCopyQueue from "../src/queues/case-copy.queue";
 import {
   setOrganizationCardProvider,
   ORGANIZATION_CHARGE_PURPOSE,
@@ -31,6 +32,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
   const clientId = crypto.randomUUID();
   const orgId = crypto.randomUUID();
   const otherOrgId = crypto.randomUUID();
+  const clientOrgId = crypto.randomUUID();
   const caseId = crypto.randomUUID();
   const webhookEvents: string[] = [];
   let requestId: string;
@@ -76,6 +78,10 @@ describe("client confirms, the firm is charged the per-case fee", () => {
   const retry = (id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/charge/retry`).set({ ...auth(id), "X-Organization-Id": org });
   const lawyerView = () => request(app).get(`/api/client-requests/${requestId}`).set({ ...auth(lawyerId), "X-Organization-Id": orgId });
   const fees = (as = lawyerId) => request(app).get(`/api/organizations/${orgId}/billing/fees`).set(auth(as));
+  const copy = (id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/copy`).set({ ...auth(id), "X-Organization-Id": org });
+  const close = (body: object = {}, id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/close`).set({ ...auth(id), "X-Organization-Id": org }).send(body);
+  const end = (body: object = {}) => request(app).post(`/api/client/lawyer-requests/${requestId}/end`).set(auth(clientId)).send(body);
+  const feedback = (body: object) => request(app).post(`/api/client/lawyer-requests/${requestId}/feedback`).set(auth(clientId)).send(body);
 
   const card = (provider: "STRIPE" | "DUMMY") =>
     prisma.organizationBilling.upsert({
@@ -129,9 +135,22 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     await prisma.organization.create({
       data: { id: otherOrgId, name: "Other Firm", slug: `confirm-${otherOrgId}`, tenantId: tenant.id, createdById: otherLawyerId, members: { create: { userId: otherLawyerId, role: "OWNER", status: "ACCEPTED" } } },
     });
+    // The client's own personal workspace, like a real client case's (ADR 0016): a confirmed
+    // engagement reaches it as a guest of this portfolio, the same way a shared case does.
+    await prisma.organization.create({
+      data: {
+        id: clientOrgId,
+        name: "Clara Client",
+        slug: `confirm-${clientOrgId}`,
+        tenantId: tenant.id,
+        createdById: clientId,
+        isPersonal: true,
+        members: { create: { userId: clientId, role: "OWNER", status: "ACCEPTED" } },
+      },
+    });
     const profile = { regulator: "SRA", qualifiedJurisdictions: ["England and Wales"], practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED" as const, verifiedAt: new Date() };
     await prisma.lawyerClientProfile.createMany({ data: [{ ...profile, userId: lawyerId, registrationNumber: "111" }, { ...profile, userId: otherLawyerId, registrationNumber: "222" }] });
-    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Unfair dismissal", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, organizationId: clientOrgId, caseName: "Unfair dismissal", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
   });
 
   after(async () => {
@@ -215,6 +234,15 @@ describe("client confirms, the firm is charged the per-case fee", () => {
       expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client confirmed you", "You're engaged on a client request"]);
     });
 
+    it("grants the engaged lawyer read-only access to the client's case", async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+
+      const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
+      expect(access?.permission).to.equal("VIEW");
+    });
+
     it("charges a dummy test card without Stripe", async () => {
       await card("DUMMY");
       expect((await confirm().expect(200)).body.status).to.equal("ENGAGED");
@@ -234,6 +262,172 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     it("can't confirm a request that isn't quoted", async () => {
       await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CLAIMED" } });
       expect((await confirm().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+  });
+
+  describe("copy", () => {
+    beforeEach(async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+    });
+
+    it("queues a workspace copy for the lawyer and finishes it through the copy queue", async () => {
+      const { body, status } = await copy();
+      expect(status).to.equal(202);
+      expect(body.status).to.equal("PENDING");
+      expect(body.caseCopyId).to.be.a("string");
+
+      await CaseCopyQueue.tick();
+
+      const job = await prisma.caseCopy.findUniqueOrThrow({ where: { id: body.caseCopyId } });
+      expect(job.status).to.equal("DONE");
+      expect(job.copyCaseId).to.be.a("string");
+
+      const copied = await prisma.case.findUniqueOrThrow({ where: { id: job.copyCaseId! } });
+      expect(copied).to.deep.include({ organizationId: orgId, copiedFromCaseId: caseId, caseName: "Unfair dismissal" });
+
+      const updatedRequest = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
+      expect(updatedRequest.copyCaseId).to.equal(job.copyCaseId);
+    });
+
+    it("doesn't queue a second copy for a second call", async () => {
+      const first = await copy().expect(202);
+      const second = await copy().expect(202);
+      expect(second.body.caseCopyId).to.equal(first.body.caseCopyId);
+      expect(await prisma.caseCopy.count({ where: { requestId } })).to.equal(1);
+    });
+
+    it("refuses a lawyer who isn't the one engaged on the request", async () => {
+      await copy(otherLawyerId, otherOrgId).expect(404);
+    });
+
+    it("can't be copied before the engagement", async () => {
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED" } });
+      expect((await copy().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+  });
+
+  describe("read-only access to the client's case", () => {
+    const asGuest = (id = lawyerId) => ({ ...auth(id), "X-Organization-Id": clientOrgId });
+
+    beforeEach(async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+    });
+
+    it("lets the engaged lawyer read the client's case as a guest of their portfolio", async () => {
+      const { body } = await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
+      expect(body.id).to.equal(caseId);
+    });
+
+    it("refuses every write the engaged lawyer makes on the client's case", async () => {
+      const { body } = await request(app).post(`/api/my-cases/${caseId}/archive`).set(asGuest()).expect(403);
+      expect(body.code).to.equal("SHARE_READ_ONLY");
+    });
+
+    it("gives a lawyer who isn't engaged on this case no access at all", async () => {
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest(otherLawyerId)).expect(403);
+    });
+  });
+
+  describe("close", () => {
+    const asGuest = (id = lawyerId) => ({ ...auth(id), "X-Organization-Id": clientOrgId });
+
+    beforeEach(async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+    });
+
+    it("closes the engagement and removes the lawyer's access", async () => {
+      const { body } = await close().expect(200);
+      expect(body.status).to.equal("CLOSED");
+      expect(body.engagement).to.include({ closedBy: "LAWYER" });
+      expect(body.engagement.closedAt).to.be.a("string");
+
+      expect(await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } })).to.equal(null);
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(403);
+    });
+
+    it("keeps the lawyer's workspace copy made before close", async () => {
+      const { body: copied } = await copy().expect(202);
+      await CaseCopyQueue.tick();
+      await close().expect(200);
+
+      const job = await prisma.caseCopy.findUniqueOrThrow({ where: { id: copied.caseCopyId } });
+      expect(job.status).to.equal("DONE");
+      expect(await prisma.case.findUnique({ where: { id: job.copyCaseId! } })).to.not.equal(null);
+    });
+
+    it("can't be closed twice", async () => {
+      await close().expect(200);
+      expect((await close().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+
+    it("refuses a lawyer who isn't the one engaged on the request", async () => {
+      await close({}, otherLawyerId, otherOrgId).expect(404);
+    });
+  });
+
+  describe("client ends the engagement", () => {
+    beforeEach(async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+    });
+
+    it("closes the engagement, closedBy CLIENT, and removes the lawyer's access", async () => {
+      const { body } = await end({ reason: "Settled out of court." }).expect(200);
+      expect(body.status).to.equal("CLOSED");
+      expect(body.closedAt).to.be.a("string");
+      expect(body.closedBy).to.equal("CLIENT");
+
+      expect(await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } })).to.equal(null);
+    });
+
+    it("tells the lawyer the client ended it", async () => {
+      await end({ reason: "Settled out of court." }).expect(200);
+      expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.include("The client ended the engagement");
+    });
+
+    it("can't be ended before engagement", async () => {
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED" } });
+      expect((await end().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+  });
+
+  describe("feedback", () => {
+    beforeEach(async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await confirm().expect(200);
+    });
+
+    it("can't be given before the engagement closes", async () => {
+      expect((await feedback({ rating: 5 }).expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+
+    it("stores the rating once the engagement is closed, and shows it on the request", async () => {
+      await close().expect(200);
+      const { body } = await feedback({ rating: 4, comment: "Clear and responsive." }).expect(201);
+      expect(body).to.deep.include({ rating: 4, comment: "Clear and responsive." });
+
+      const view = await clientView().expect(200);
+      expect(view.body.feedback).to.deep.include({ rating: 4, comment: "Clear and responsive." });
+    });
+
+    it("can only be given once", async () => {
+      await close().expect(200);
+      await feedback({ rating: 4 }).expect(201);
+      expect((await feedback({ rating: 2 }).expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+
+    it("needs a rating from 1 to 5", async () => {
+      await close().expect(200);
+      await feedback({ rating: 0 }).expect(400);
+      await feedback({ rating: 6 }).expect(400);
     });
   });
 

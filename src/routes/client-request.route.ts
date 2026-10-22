@@ -20,5 +20,9 @@ router.post("/:id/release", asyncHandler(ClientRequestLawyerCtrl.release));
 router.post("/:id/quote", asyncHandler(ClientRequestLawyerCtrl.quote));
 // Retrying the per-case fee after the card was declined and updated (#513).
 router.post("/:id/charge/retry", asyncHandler(ClientRequestLawyerCtrl.retryCharge));
+// Copying the engaged client's case to the lawyer's own workspace (#514).
+router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));
+// The lawyer's side of closing the engagement (#519). The client's side is /client/lawyer-requests/:id/end.
+router.post("/:id/close", asyncHandler(ClientRequestLawyerCtrl.close));
 
 export default router;

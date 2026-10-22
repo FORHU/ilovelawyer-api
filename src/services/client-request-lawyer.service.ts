@@ -7,6 +7,9 @@ import ClientRequestMatchingSvc from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import OrganizationChargeSvc from "./organization-charge.service";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
+import CaseCopyRepo from "../repositories/case-copy.repository";
+import CaseCopyQueue from "../queues/case-copy.queue";
+import EngagementAccessSvc from "./engagement-access.service";
 import SecurityAuditSvc from "./security-audit.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
@@ -54,7 +57,17 @@ function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
     quote: quoteOf(mine),
     perCaseFee: OrganizationChargeSvc.perCaseFee(),
     charge: chargeOf(r, lawyerId),
-    engagement: null,
+    engagement:
+      mine?.outcome === "ENGAGED"
+        ? {
+            caseId: r.caseId,
+            clientName: r.client.name || r.client.username,
+            engagedAt: r.engagedAt!,
+            closedAt: r.closedAt,
+            closedBy: r.closedBy,
+            copyCaseId: r.copyCaseId,
+          }
+        : null,
   };
 }
 
@@ -254,6 +267,84 @@ export default class ClientRequestLawyerSvc {
       throw new HttpError(after?.failureReason ?? "The card was declined.", 402, "CHARGE_FAILED");
     }
     return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+  }
+
+  /**
+   * "Copy to my workspace" (#514): a snapshot of the client's live case, queued through
+   * CaseCopySvc and shown in the portfolio like other copies. Once, while ENGAGED, by the lawyer
+   * the request is engaged on. The existing copy is returned on a second call rather than queuing
+   * another one.
+   */
+  static async copy(lawyer: LawyerContext, id: string) {
+    const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "Copy the case once you're engaged on it.");
+
+    const existing = await CaseCopyRepo.findForRequest(id);
+    if (existing) return { caseCopyId: existing.id, status: existing.status };
+
+    const job = await CaseCopyRepo.enqueueForRequest({
+      requestId: id,
+      sourceCaseId: request.caseId,
+      caseName: request.case.caseName,
+      sourceOrganizationName: request.case.organization?.name ?? "",
+      userId: lawyer.userId,
+      targetOrganizationId: lawyer.organizationId,
+    });
+    const payload = { requestId: id, caseCopyId: job.id };
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.copied", payload });
+    await SecurityAuditSvc.record({
+      action: "client_request.copied",
+      actorId: lawyer.userId,
+      organizationId: lawyer.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload,
+    });
+    CaseCopyQueue.kick();
+    return { caseCopyId: job.id, status: job.status };
+  }
+
+  /**
+   * The lawyer closes the engagement (#519): ENGAGED -> CLOSED, once, and their read-only access
+   * on the client's case ends immediately. Their workspace copy, if they made one, stays theirs.
+   * The client can also end it from their side (ClientRequestSvc.end).
+   */
+  static async close(lawyer: LawyerContext, id: string, input: { note?: string }) {
+    const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "This request isn't engaged.");
+    const now = new Date();
+    if (!(await ClientRequestRepo.close(id, "LAWYER", now))) {
+      const current = await ClientRequestRepo.findForLawyer(id);
+      throw new HttpError("This request isn't engaged.", 409, "INVALID_REQUEST_STATUS", { status: current?.status ?? request.status });
+    }
+
+    await EngagementAccessSvc.revoke({ requestId: id, caseId: request.caseId, lawyerId: lawyer.userId });
+    const payload = { requestId: id, closedBy: "LAWYER", note: input.note?.trim() || null };
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.closed", payload });
+    await SecurityAuditSvc.record({
+      action: "client_request.closed",
+      actorId: lawyer.userId,
+      organizationId: lawyer.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload,
+    });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CLOSED", updatedAt: now.toISOString() };
+    emitToUser(request.clientId, "client-request:updated", updated);
+
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+  }
+
+  /** `id` is ENGAGED and `lawyer` is the one it's engaged on — what both copy() and close() need
+   * before touching the live case. 404 when they've never held it; 409 `message` otherwise. */
+  private static async engagedRequest(lawyer: LawyerContext, id: string, message: string) {
+    await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
+    const request = await ClientRequestRepo.findForLawyer(id);
+    if (!request || !request.claims.some((c) => c.lawyerId === lawyer.userId)) throw NOT_FOUND();
+    if (request.status !== "ENGAGED" || !request.claims.some((c) => c.lawyerId === lawyer.userId && c.outcome === "ENGAGED")) {
+      throw new HttpError(message, 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+    return request;
   }
 
   /** Pass: the lawyer stops seeing the request. Nothing else about it changes. A lawyer holding it

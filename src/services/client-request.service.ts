@@ -4,7 +4,9 @@ import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import OrganizationChargeSvc from "./organization-charge.service";
+import EngagementAccessSvc from "./engagement-access.service";
 import NotificationSvc from "./notification.service";
+import SecurityAuditSvc from "./security-audit.service";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import OrganizationRepo from "../repositories/organization.repository";
@@ -84,9 +86,9 @@ function toDto(r: ClientRequestForClient) {
       : null,
     referralDisclosure: quoted ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
     engagedAt: r.engagedAt,
-    closedAt: null,
-    closedBy: null,
-    feedback: null,
+    closedAt: r.closedAt,
+    closedBy: r.closedBy,
+    feedback: r.feedback ? { rating: r.feedback.rating, comment: r.feedback.comment, createdAt: r.feedback.createdAt } : null,
   };
 }
 
@@ -139,7 +141,7 @@ export default class ClientRequestSvc {
     // a lawyer" either way; EXPIRED (#510) is what ends that wait.
     const routed = await ClientRequestMatchingSvc.route(created.id);
     // Brand new, so nobody has claimed or quoted it.
-    return toDto({ ...routed, claims: [] });
+    return toDto({ ...routed, claims: [], feedback: null });
   }
 
   static async list(clientId: string, query: { caseId?: string; page: number; limit: number }) {
@@ -229,6 +231,59 @@ export default class ClientRequestSvc {
       link: "/client-requests?view=history",
     }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
     return toDto(await ClientRequestSvc.load(clientId, id));
+  }
+
+  /**
+   * The client ends the engagement (#519): same effect as the lawyer closing it, except the client
+   * does it from their own data. Only while ENGAGED. The lawyer's read-only access ends at once;
+   * their workspace copy, if they made one, stays theirs.
+   */
+  static async end(clientId: string, id: string, input: { reason?: string }) {
+    const request = await ClientRequestSvc.load(clientId, id);
+    const engaged = request.claims[0];
+    if (request.status !== "ENGAGED" || !engaged) {
+      throw new HttpError("This engagement can't be ended now.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+    const now = new Date();
+    if (!(await ClientRequestRepo.close(id, "CLIENT", now))) {
+      const current = await ClientRequestSvc.load(clientId, id);
+      throw new HttpError("This engagement can't be ended now.", 409, "INVALID_REQUEST_STATUS", { status: current.status });
+    }
+
+    await EngagementAccessSvc.revoke({ requestId: id, caseId: request.caseId, lawyerId: engaged.lawyerId });
+    const payload = { requestId: id, closedBy: "CLIENT", reason: input.reason?.trim() || null };
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: clientId, action: "client_request.closed", payload });
+    await SecurityAuditSvc.record({
+      action: "client_request.closed",
+      actorId: clientId,
+      organizationId: engaged.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload,
+    });
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CLOSED", updatedAt: now.toISOString() };
+    emitToUser(engaged.lawyerId, "client-request:updated", updated);
+    await NotificationSvc.create({
+      userId: engaged.lawyerId,
+      type: "CLIENT_REQUEST",
+      title: "The client ended the engagement",
+      message: input.reason?.trim() || "The client ended the engagement. Your workspace copy, if you made one, is still yours.",
+      link: "/client-requests?view=history",
+    }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
+
+    return toDto(await ClientRequestSvc.load(clientId, id));
+  }
+
+  /** The client's rating of the lawyer (#519), once CLOSED, once. */
+  static async feedback(clientId: string, id: string, input: { rating: number; comment?: string }) {
+    const request = await ClientRequestSvc.load(clientId, id);
+    if (request.status !== "CLOSED") {
+      throw new HttpError("Feedback can be given once the engagement has closed.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    }
+    const created = await ClientRequestRepo.createFeedback(id, input.rating, input.comment?.trim() || null);
+    if (!created) throw new HttpError("Feedback has already been given for this engagement.", 409, "INVALID_REQUEST_STATUS", { status: "CLOSED" });
+    return { rating: created.rating, comment: created.comment, createdAt: created.createdAt };
   }
 
   private static async load(clientId: string, id: string) {

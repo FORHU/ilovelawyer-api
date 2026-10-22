@@ -1106,17 +1106,42 @@ model ClientRequest {
   withdrawnAt       DateTime?
   // When the per-case fee went through and the request became ENGAGED (#513).
   engagedAt         DateTime?
+  // The lawyer's workspace copy of the client's case (#514), once POST /client-requests/{id}/copy
+  // has made one. Set from CaseCopy.requestId when the queued copy finishes.
+  copyCaseId        String?
+  // Either side can end the engagement (#519): the lawyer closes it, or the client ends it. Live
+  // access ends immediately either way; the lawyer's workspace copy, if any, is kept.
+  closedAt          DateTime?
+  closedBy          ClosedBy?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
-  case   Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  client  User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  claims  ClientRequestClaim[]
-  charges OrganizationCharge[]
+  case     Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client   User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  claims   ClientRequestClaim[]
+  charges  OrganizationCharge[]
+  feedback EngagementFeedback?
 
   @@index([caseId, status])
   @@index([clientId, createdAt])
   @@index([status])
+}
+
+// Who closed an engagement (ClientRequest.closedBy, #519).
+enum ClosedBy {
+  LAWYER
+  CLIENT
+}
+
+// The client's rating of the lawyer after an engagement closes (#519), once per request.
+model EngagementFeedback {
+  id        String   @id @default(uuid())
+  requestId String   @unique
+  rating    Int
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 }
 
 // types/client-handoff.ts QUOTE_TYPES: a fixed fee for the whole matter, or a paid first consultation.
@@ -3060,6 +3085,9 @@ model CaseCopy {
   targetOrganizationId   String
   status                 CaseCopyStatus @default(PENDING)
   copyCaseId             String?
+  // Set when this copy is the lawyer's "Copy to my workspace" on an engaged client request (#514),
+  // so the queue can record the finished copy back onto ClientRequest.copyCaseId.
+  requestId              String?
   attempts               Int            @default(0)
   error                  String?        @db.Text
   createdAt              DateTime       @default(now())
