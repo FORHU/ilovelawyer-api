@@ -50,10 +50,10 @@ function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
     avatarUrl: claim.lawyer.avatar?.s3Key ? getStableProxyFileUrl(claim.lawyer.avatar.s3Key) : null,
     // A solo practitioner's personal workspace isn't a firm.
     firmName: claim.organization.isPersonal ? null : claim.organization.name,
-    regulator: profile?.regulator ?? null,
-    registrationNumber: profile?.registrationNumber ?? null,
+    regulator: profile?.ukRegistration?.regulator ?? null,
+    registrationNumber: profile?.ukRegistration?.registrationNumber ?? null,
     practiceAreas: profile?.practiceAreas ?? [],
-    qualifiedJurisdictions: profile?.qualifiedJurisdictions ?? [],
+    qualifiedJurisdictions: profile?.ukRegistration?.qualifiedJurisdictions ?? [],
     languages: profile?.languages ?? [],
     bio: profile?.bio ?? "",
     firstConsultationFee: profile?.firstConsultationFeeMinor == null ? null : { amountMinor: profile.firstConsultationFeeMinor, currency: "GBP" },

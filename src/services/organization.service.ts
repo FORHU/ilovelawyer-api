@@ -1,5 +1,5 @@
 import { CasePermission, OrganizationRole, OrganizationMemberStatus, OrganizationStatus, PackageSku } from "@prisma/client";
-import OrganizationRepo from "../repositories/organization.repository";
+import OrganizationRepo, { type FirmDetails } from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import OrganizationInviteRepo from "../repositories/organization-invite.repository";
 import OrganizationEmailInviteRepo from "../repositories/organization-email-invite.repository";
@@ -24,6 +24,19 @@ import SecurityAuditSvc from "./security-audit.service";
 import AuditSvc, { AuditAction } from "./audit.service";
 import logger from "../utils/logger";
 
+/** A firm regulator and its number are UK only: SRA, the Law Society of Scotland or of Northern
+ * Ireland. A PH firm has no equivalent number yet. */
+function assertFirmDetailsFitTenant(details: FirmDetails, tenantCode: TenantCode) {
+  if (tenantCode !== "UK" && (details.firmRegulator || details.firmRegistrationNumber)) {
+    throw new HttpError("A firm regulator and number are only for UK firms", 400);
+  }
+}
+
+/** "" in a text field clears it, the same as null. */
+function blanksToNull<T extends Record<string, unknown>>(data: T): T {
+  return Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === "" ? null : v])) as T;
+}
+
 export default class OrganizationSvc {
   /** `personal` is onboarding's "Skip for now": a private workspace the app never presents as
    * an organization (see Organization.isPersonal). A real organization is always a new one —
@@ -35,6 +48,7 @@ export default class OrganizationSvc {
     packageSku: PackageSku | undefined,
     tenantCode: TenantCode,
     personal = false,
+    details: FirmDetails = {},
   ) {
     const tenantId = await TenantRepo.findIdByCode(tenantCode);
     // The controller already validated tenantCode resolved to something — a miss here means
@@ -56,8 +70,12 @@ export default class OrganizationSvc {
       return OrganizationRepo.create(userId, name, slug, "SOLO", tenantId, true);
     }
 
+    assertFirmDetailsFitTenant(details, tenantCode);
     const slug = await OrganizationSvc.generateUniqueSlug(name);
-    const org = await OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", tenantId, false, { parkCurrent: inPersonal });
+    const org = await OrganizationRepo.create(userId, name, slug, packageSku ?? "PROFESSIONAL", tenantId, false, {
+      parkCurrent: inPersonal,
+      details: blanksToNull(details),
+    });
     await SecurityAuditSvc.record({
       action: "org.created",
       actorId: userId,
@@ -118,10 +136,15 @@ export default class OrganizationSvc {
     return org;
   }
 
-  static async update(id: string, data: { name?: string; slug?: string }) {
+  static async update(id: string, input: { name?: string; slug?: string } & FirmDetails) {
+    const data = blanksToNull(input);
     if (data.slug) {
       const existing = await OrganizationRepo.findBySlug(data.slug);
       if (existing && existing.id !== id) throw new HttpError("An organization with this slug already exists", 409);
+    }
+    if (data.firmRegulator || data.firmRegistrationNumber) {
+      const org = await OrganizationRepo.findById(id);
+      if (org) assertFirmDetailsFitTenant(data, org.tenant.code as TenantCode);
     }
     const updated = await OrganizationRepo.update(id, data);
     await SecurityAuditSvc.record({

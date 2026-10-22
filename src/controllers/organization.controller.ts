@@ -22,7 +22,8 @@ export default class OrganizationCtrl {
     const tenantCode = resolveTenantCodeFromRequest(req);
     if (!tenantCode) throw new HttpError("Unable to determine tenant from request origin", 400);
 
-    const result = await OrganizationSvc.create(req.user.userId, value.name, value.packageSku, tenantCode, value.personal);
+    const { name, packageSku, personal, ...details } = value;
+    const result = await OrganizationSvc.create(req.user.userId, name, packageSku, tenantCode, personal, personal ? {} : details);
     return res.status(201).json(result);
   }
 

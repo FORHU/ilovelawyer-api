@@ -154,14 +154,14 @@ export default class AdminCtrl {
     return res.status(204).send();
   }
 
-  /** GET /api/admin/lawyer-verifications — the verification queue for one status (default
-   * PENDING), oldest submission first. */
+  /** GET /api/admin/lawyer-verifications — the Lawyer Application queue for one site (default UK)
+   * and status (default PENDING), oldest submission first. */
   static async listLawyerVerifications(req: Request, res: Response) {
     const { error, value } = listLawyerVerificationsSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
 
-    const { status, page, limit } = value;
-    const { data, total } = await LawyerVerificationSvc.list({ status, page, limit });
+    const { site, status, page, limit } = value;
+    const { data, total } = await LawyerVerificationSvc.list({ country: site, status, page, limit });
 
     return res.status(200).json({
       data,
@@ -172,8 +172,9 @@ export default class AdminCtrl {
     });
   }
 
-  /** POST /api/admin/lawyer-verifications/:userId/verify — body { confirmedJurisdictions, note? }.
-   * The admin accepts a PENDING profile on trust (no register check yet, #506). */
+  /** POST /api/admin/lawyer-verifications/:userId/verify — body { confirmedJurisdictions?, note? }
+   * (jurisdictions for UK only). The admin approves a PENDING application on trust (no register
+   * check yet, #506). */
   static async verifyLawyer(req: Request, res: Response) {
     const { error, value } = verifyLawyerSchema.validate(req.body ?? {});
     if (error) throw new HttpError(error.message, 400);

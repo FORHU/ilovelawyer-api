@@ -1,3 +1,4 @@
-<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">Your registration has been verified</mj-text>
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">Your lawyer application has been approved</mj-text>
 <mj-text>Hello {{name}},</mj-text>
-<mj-text>We've verified the registration details on your ilovelawyer client-request profile. You can now turn on accepting client requests.</mj-text>
+<mj-text>We've checked the registration details in your ilovelawyer lawyer application and approved it.</mj-text>
+<mj-text>{{nextStep}}</mj-text>

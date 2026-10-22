@@ -51,7 +51,8 @@ const swaggerSpec: OAS3Definition = {
           name: { type: "string", nullable: true },
           role: { type: "string", enum: ["USER", "LAWYER", "ADMIN"] },
           isEmailVerified: { type: "boolean" },
-          onboardingCompleted: { type: "boolean" },
+          onboardingCompleted: { type: "boolean", description: "Every product tour finished" },
+          setupCompletedAt: { type: "string", format: "date-time", nullable: true, description: "Account setup after sign-up finished or skipped; null sends a lawyer to /onboarding" },
           provider: { type: "string", nullable: true },
           avatarId: { type: "string", nullable: true },
           avatarUrl: {

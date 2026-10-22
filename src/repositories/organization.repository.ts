@@ -3,6 +3,11 @@ import { CasePermission, OrganizationRole, OrganizationMemberStatus, Organizatio
 import ChatRepo from "./chat.repository";
 import { organizationDeletionDueAt } from "../constants/organization-deletion.constants";
 
+/** A firm's optional details (onboarding's firm step, the Organization page). Null clears one. */
+export type FirmDetails = Partial<
+  Record<"phone" | "addressLine1" | "addressLine2" | "city" | "postcode" | "firmRegulator" | "firmRegistrationNumber", string | null>
+>;
+
 export default class OrganizationRepo {
   /** Creates the org and its first membership (creator as OWNER, ACCEPTED) atomically.
    * `tenantId` must already be trusted-resolved by the caller (see
@@ -16,12 +21,12 @@ export default class OrganizationRepo {
     packageSku: PackageSku = "PROFESSIONAL",
     tenantId: string,
     isPersonal = false,
-    { parkCurrent = false }: { parkCurrent?: boolean } = {},
+    { parkCurrent = false, details = {} }: { parkCurrent?: boolean; details?: FirmDetails } = {},
   ) {
     return prisma.$transaction(async (tx) => {
       if (parkCurrent) await tx.organizationMember.deleteMany({ where: { userId: createdById } });
       const org = await tx.organization.create({
-        data: { name, slug, packageSku, createdById, tenantId, isPersonal },
+        data: { name, slug, packageSku, createdById, tenantId, isPersonal, ...details },
       });
       await tx.organizationMember.create({
         data: { organizationId: org.id, userId: createdById, role: OrganizationRole.OWNER, status: OrganizationMemberStatus.ACCEPTED },
@@ -225,7 +230,7 @@ export default class OrganizationRepo {
     });
   }
 
-  static async update(id: string, data: { name?: string; slug?: string }) {
+  static async update(id: string, data: { name?: string; slug?: string } & FirmDetails) {
     return prisma.organization.update({ where: { id }, data });
   }
 

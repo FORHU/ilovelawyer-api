@@ -21,6 +21,7 @@ const PUBLIC_USER_SELECT = {
   approvalStatus: true,
   denialReason: true,
   onboardingCompleted: true,
+  setupCompletedAt: true,
   provider: true,
   avatarId: true,
   lastLoginAt: true,
@@ -120,7 +121,7 @@ export default class AuthRepo {
   static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialExpiresAt: Date }) {
     return bustUsersList(
       await prisma.user.create({
-        data: { ...data, name: "Guest", role: "LAWYER", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
+        data: { ...data, name: "Guest", role: "LAWYER", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true, setupCompletedAt: new Date() },
       }),
     );
   }
@@ -189,6 +190,12 @@ export default class AuthRepo {
 
   static async updateLastLogin(userId: string) {
     return bustUsersList(await prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } }));
+  }
+
+  /** Account setup after sign-up is done (or skipped). Idempotent: a second call keeps the first
+   * date. No bustUsersList: AdminSvc.listUsers doesn't show it. */
+  static async setSetupCompleted(userId: string) {
+    await prisma.user.updateMany({ where: { id: userId, setupCompletedAt: null }, data: { setupCompletedAt: new Date() } });
   }
 
   /** No bustUsersList: onboardingCompleted isn't a column AdminSvc.listUsers shows. */

@@ -1,7 +1,7 @@
-import type { ClientRequestStatus, LawyerClientProfile, QuoteType, ReleaseReason } from "@prisma/client";
+import type { ClientRequestStatus, QuoteType, ReleaseReason } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
-import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
+import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
@@ -292,13 +292,13 @@ export default class ClientRequestLawyerSvc {
 
   /** Whether the request is one this lawyer is matched to (whatever state it's in now), or one
    * they've held. */
-  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerClientProfile) {
+  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerProfileRow) {
     if (r.claims.some((c) => c.lawyerId === lawyerId)) return true;
     return !r.excludedLawyerIds.includes(lawyerId) && ClientRequestMatchingSvc.matches(profile, criteriaOf(r));
   }
 
   /** Client requests are UK only, for lawyers whose registration has been verified (#506). */
-  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerClientProfile> {
+  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow> {
     const who = await LawyerProfileRepo.findLawyerTenant(lawyer.userId);
     if (!who || who.role !== "LAWYER") throw new HttpError("Client requests are for lawyer accounts", 403, "NOT_A_LAWYER");
     if (lawyer.tenantCode !== "UK") throw new HttpError("Client requests are only available on the UK site", 403, "NOT_UK_TENANT");

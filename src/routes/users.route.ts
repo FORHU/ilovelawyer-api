@@ -30,8 +30,10 @@ router.delete("/me/avatar", asyncHandler(UsersCtrl.removeAvatar));
 router.post("/me/google-calendar", asyncHandler(UsersCtrl.connectGoogleCalendar));
 router.delete("/me/google-calendar", asyncHandler(UsersCtrl.disconnectGoogleCalendar));
 router.get("/me/tour/:track", asyncHandler(UsersCtrl.getTour));
+// Account setup after sign-up (the app's /onboarding) is finished or skipped; sets setupCompletedAt.
+router.post("/me/setup/complete", asyncHandler(UsersCtrl.completeSetup));
 router.put("/me/tour/:track", asyncHandler(UsersCtrl.saveTour));
-// A lawyer's settings for receiving client requests from the client app (UK only).
+// A lawyer's Lawyer Application (UK and PH; the path predates PH).
 router.get("/me/client-request-profile", asyncHandler(LawyerProfileCtrl.get));
 router.patch("/me/client-request-profile", asyncHandler(LawyerProfileCtrl.update));
 

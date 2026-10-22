@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import UsersSvc from "../services/users.service";
+import AuthRepo from "../repositories/auth.repository";
 import { sendExportZip, exportAuditPayload } from "../utils/export-response";
 import SecurityAuditSvc from "../services/security-audit.service";
 import AvatarSvc from "../services/avatar.service";
@@ -14,6 +15,12 @@ export default class UsersCtrl {
   static async me(req: Request, res: Response) {
     const user = await UsersSvc.getMe(req.user.userId);
     return res.status(200).json(user);
+  }
+
+  /** POST /api/users/me/setup/complete — returns the user, setupCompletedAt now set. */
+  static async completeSetup(req: Request, res: Response) {
+    await AuthRepo.setSetupCompleted(req.user.userId);
+    return res.status(200).json(await UsersSvc.getMe(req.user.userId));
   }
 
   static async updateMe(req: Request, res: Response) {

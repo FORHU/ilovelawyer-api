@@ -1,7 +1,7 @@
-<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">We couldn't verify your registration</mj-text>
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">Your lawyer application wasn't approved</mj-text>
 <mj-text>Hello {{name}},</mj-text>
-<mj-text>We couldn't verify the registration details on your ilovelawyer client-request profile.</mj-text>
+<mj-text>We couldn't approve your ilovelawyer lawyer application.</mj-text>
 {{#if reason}}
 <mj-text>Reason: {{reason}}</mj-text>
 {{/if}}
-<mj-text>Please update your profile and we'll take another look.</mj-text>
+<mj-text>Correct your details on your Profile page and resubmit, and we'll take another look.</mj-text>

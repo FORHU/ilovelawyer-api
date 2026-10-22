@@ -68,7 +68,12 @@ model User {
   // admin-authored, optional, shown to the user in the denial email/page.
   approvalStatus      ApprovalStatus @default(PENDING)
   denialReason        String?
+  // Set when the product tours are all finished (ProductTourSvc). Not account setup: see
+  // setupCompletedAt.
   onboardingCompleted Boolean        @default(false)
+  // Account setup after sign-up (the app's /onboarding: solo or firm, firm details, invites, the
+  // Lawyer Application) was finished or skipped. Null: the app sends the lawyer back to it.
+  setupCompletedAt    DateTime?
 
   // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
   // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
@@ -965,17 +970,20 @@ enum LawyerVerificationStatus {
 // A lawyer's settings for receiving client requests from the client app (UK only; #504). One per
 // lawyer. Matching (#509) reads it: verified, accepting, not paused, under capacity, and qualified
 // for the case's practice area and UK jurisdiction.
+// A lawyer's Lawyer Application: the fields every site shares, and where it stands with the admin.
+// The registration details an admin checks differ by country, so they live in one table per
+// country (LawyerUkRegistration, LawyerPhRegistration), keyed by the same userId.
 model LawyerClientProfile {
   userId                    String                   @id
-  // LAWYER_REGULATORS: SRA (England and Wales), LSS (Scotland), LSNI (Northern Ireland).
-  regulator                 String?
-  registrationNumber        String?
-  qualifiedJurisdictions    String[]
-  // CLIENT_CASE_AREAS. Never personal injury: referral fees are banned there.
+  // The site the lawyer applied on ("UK" | "PH"), from their tenant at the first save. Picks which
+  // registration table, practice-area list and fee currency apply.
+  country                   String                   @default("UK")
+  // UK: PRACTICE_AREAS (never personal injury: referral fees are banned there). PH:
+  // PH_PRACTICE_AREAS.
   practiceAreas             String[]
   bio                       String                   @default("") @db.Text
   languages                 String[]
-  // Pence (GBP). Null: no first-consultation offer.
+  // Minor units of the country's currency: pence (GBP) or centavos (PHP). Null: no offer.
   firstConsultationFeeMinor Int?
   acceptingRequests         Boolean                  @default(false)
   // The organization's per-member switch (#518). Off stops new routing to them.
@@ -992,9 +1000,40 @@ model LawyerClientProfile {
   createdAt                 DateTime                 @default(now())
   updatedAt                 DateTime                 @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ukRegistration LawyerUkRegistration?
+  phRegistration LawyerPhRegistration?
 
-  @@index([verificationStatus, submittedAt])
+  @@index([country, verificationStatus, submittedAt])
+}
+
+// The UK part of a Lawyer Application: what the admin checks against the regulator's register.
+model LawyerUkRegistration {
+  userId                 String   @id
+  // LAWYER_REGULATORS: SRA (England and Wales), LSS (Scotland), LSNI (Northern Ireland).
+  regulator              String?
+  registrationNumber     String?
+  // UK_JURISDICTIONS. Matching (#509) routes a request only to lawyers qualified where it is.
+  qualifiedJurisdictions String[]
+
+  profile LawyerClientProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+}
+
+// The PH part of a Lawyer Application. The PH rules aren't final, so only the Roll number and IBP
+// chapter are required to submit.
+model LawyerPhRegistration {
+  userId              String  @id
+  // Roll of Attorneys number (Supreme Court).
+  rollNumber          String?
+  // Integrated Bar of the Philippines chapter.
+  ibpChapter          String?
+  // Lifetime membership number, or the annual dues receipt number.
+  ibpMembershipNumber String?
+  mcleNumber          String?
+  // The MCLE compliance period, as written on the certificate (e.g. "VII").
+  mclePeriod          String?
+
+  profile LawyerClientProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 }
 
 // A payment in the client app, failed ones included (ClientBillingSvc). `provider` says who took it:
@@ -2835,6 +2874,15 @@ model Organization {
   slug        String     @unique
   packageSku  PackageSku @default(PROFESSIONAL)
   isPersonal  Boolean    @default(false)
+  // Firm details, all optional (set at onboarding or on the Organization page). The firm regulator
+  // and its number are UK only (LAWYER_REGULATORS); the address country is the tenant's.
+  phone                  String?
+  addressLine1           String?
+  addressLine2           String?
+  city                   String?
+  postcode               String?
+  firmRegulator          String?
+  firmRegistrationNumber String?
   createdById String
   tenantId    String
   status              OrganizationStatus @default(ACTIVE)
