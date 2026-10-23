@@ -8,6 +8,7 @@ import AccountDeletionSvc from "./account-deletion.service";
 import FeedbackSvc from "./feedback.service";
 import AuthSvc from "./auth.service";
 import SecurityAuditSvc from "./security-audit.service";
+import PaymentPlanSvc from "./payment-plan.service";
 import type { TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
@@ -170,7 +171,11 @@ export default class AdminSvc {
       );
     }
 
-    const updated = await AuthRepo.setTenant(userId, tenantId);
+    // A lawyer's tier belongs to their tenant: moving them takes the same tier in the new one (or
+    // its default). One with a tenant but no tier (canceled) stays without one.
+    const movesTier = user.role === "LAWYER" && user.tenantId !== tenantId && (user.paymentPlanId || !user.tenantId);
+    const paymentPlanId = movesTier ? await PaymentPlanSvc.equivalentIdInTenant(user.paymentPlanId, tenantId) : undefined;
+    const updated = await AuthRepo.setTenant(userId, tenantId, paymentPlanId);
     if (user.tenantId !== tenantId) {
       await SecurityAuditSvc.record({
         action: "admin.user.tenant_changed",

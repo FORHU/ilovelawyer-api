@@ -44,7 +44,7 @@ model User {
   // unsubscribed/canceled, not "fall back to a default tier" — see AccountLimitsSvc.allowanceInfo.
   paymentPlanId           String?
   // Start of the current billing period, for summing LlmUsage against the tier's allowance. Null
-  // means sum spend all-time (today's behavior, and the state of every grandfathered account).
+  // means sum spend all-time. Grandfathered accounts start at the payment_plan_tiers migration.
   allowancePeriodStart    DateTime?
   // One-time fence for the "you're over your tier's case limit" notice (grandfathering).
   caseLimitNotifiedAt     DateTime?
@@ -3235,7 +3235,7 @@ model PaymentPlan {
   // already have — editing feeUsd here never changes what an active subscriber is charged.
   stripePriceId          String?
   // unit_amount (cents) the current stripePriceId was created with. Compared against feeUsd to
-  // detect drift that requires minting a new Price (see payment-plan-stripe-sync.service.ts).
+  // detect drift that requires minting a new Price (the Stripe price sync, not built yet).
   stripePriceAmountMinor Int?
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
@@ -3252,8 +3252,7 @@ model PaymentPlan {
 }
 
 // One row per checkout attempt / Stripe subscription, mirroring AccountAiTopUp's PENDING->settled
-// shape. userId is the payer (billing is per-lawyer, not per-organization, in v1 — see
-// docs/payment-plan-tiers handoff).
+// shape. userId is the payer (billing is per-lawyer, not per-organization, in v1).
 model PaymentPlanSubscription {
   id                   String                        @id @default(cuid())
   userId               String

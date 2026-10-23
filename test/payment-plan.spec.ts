@@ -84,6 +84,18 @@ describe("PaymentPlanSvc", () => {
     expect(reactivated.isActive).to.equal(true);
   });
 
+  it("ranks a tier created without a level above every existing tier", async () => {
+    const before = await PaymentPlanSvc.listForTenant(tenantId);
+    const plan = await PaymentPlanSvc.create("PH", { code: `${code}-nolevel`, name: "No Level", feeUsd: 1, includedAllowanceUsd: 1, caseLimit: 1 }, adminId);
+    createdPlanIds.push(plan.id);
+    expect(plan.level).to.equal(Math.max(-1, ...before.map((p: PaymentPlan) => p.level)) + 1);
+  });
+
+  it("starts new lawyers on the tenant's lowest-level active tier", async () => {
+    const active = (await PaymentPlanSvc.listForTenant(tenantId)).filter((p: PaymentPlan) => p.isActive);
+    expect(await PaymentPlanSvc.defaultIdForTenant(tenantId)).to.equal(active[0]?.id ?? null);
+  });
+
   it("lists every active and inactive tier for a tenant, ordered by level", async () => {
     const plans = await PaymentPlanSvc.listForTenant(tenantId);
     const codes = plans.filter((p: PaymentPlan) => p.code === code).map((p: PaymentPlan) => p.code);

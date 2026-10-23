@@ -14,7 +14,8 @@ export interface PaymentPlanInput {
   caseLimit: number;
 }
 
-export type PaymentPlanPatch = Partial<PaymentPlanInput>;
+/** `code` is set once at create: it's the stable slug signup and upgrades refer to. */
+export type PaymentPlanPatch = Partial<Omit<PaymentPlanInput, "code">>;
 
 function validateNumbers(input: { feeUsd?: number; includedAllowanceUsd?: number; caseLimit?: number }) {
   if (input.feeUsd !== undefined && input.feeUsd < 0) throw new HttpError("Fee can't be negative", 400);
@@ -28,7 +29,7 @@ function validateNumbers(input: { feeUsd?: number; includedAllowanceUsd?: number
  * Admin-editable B2B subscription tiers (Standard/Pro/Max are placeholders), one row per
  * (tenant, planType, code). Real columns on a dedicated table rather than a TenantSetting Json
  * blob, so a User can hold a real FK (User.paymentPlanId) and admin CRUD doesn't need to
- * hand-roll ids/ordering inside an array — see docs handoff for the full rationale.
+ * hand-roll ids/ordering inside an array.
  *
  * Tiers are never hard-deleted (setActive only): a lawyer's User.paymentPlanId and every
  * PaymentPlanSubscription row must stay valid even after a tier is retired from new signups.
@@ -36,6 +37,33 @@ function validateNumbers(input: { feeUsd?: number; includedAllowanceUsd?: number
 export default class PaymentPlanSvc {
   static async listForTenant(tenantId: string, planType: PaymentPlanType = "B2B_SUBSCRIPTION"): Promise<PaymentPlan[]> {
     return prisma.paymentPlan.findMany({ where: { tenantId, planType }, orderBy: { level: "asc" } });
+  }
+
+  /** The tier a new lawyer starts on: the tenant's lowest-level active B2B tier, or null when the
+   * tenant has none. Until checkout-at-signup exists this is never charged — without it a new
+   * lawyer would have no tier, and no tier means a locked account (AccountLimitsSvc). */
+  static async defaultIdForTenant(tenantId: string): Promise<string | null> {
+    const plan = await prisma.paymentPlan.findFirst({
+      where: { tenantId, planType: "B2B_SUBSCRIPTION", isActive: true },
+      orderBy: { level: "asc" },
+      select: { id: true },
+    });
+    return plan?.id ?? null;
+  }
+
+  /** The same tier (by code) in another tenant, falling back to that tenant's default — for a
+   * lawyer moved between tenants, whose old tier belongs to the tenant they left. */
+  static async equivalentIdInTenant(paymentPlanId: string | null, tenantId: string): Promise<string | null> {
+    const current = paymentPlanId ? await prisma.paymentPlan.findUnique({ where: { id: paymentPlanId }, select: { tenantId: true, planType: true, code: true } }) : null;
+    if (current?.tenantId === tenantId) return paymentPlanId;
+    if (current) {
+      const match = await prisma.paymentPlan.findUnique({
+        where: { tenantId_planType_code: { tenantId, planType: current.planType, code: current.code } },
+        select: { id: true, isActive: true },
+      });
+      if (match?.isActive) return match.id;
+    }
+    return PaymentPlanSvc.defaultIdForTenant(tenantId);
   }
 
   /** The admin Settings page: every Tenant's tiers, in level order. */
@@ -61,6 +89,12 @@ export default class PaymentPlanSvc {
     if (!input.code.trim() || !input.name.trim()) throw new HttpError("Code and name are required", 400);
     validateNumbers(input);
 
+    // No level given (the admin "Add tier" form doesn't ask): rank it above every existing tier,
+    // so it never ties with one — upgrades compare levels.
+    const level =
+      input.level ??
+      ((await prisma.paymentPlan.aggregate({ where: { tenantId: tenant.id, planType: "B2B_SUBSCRIPTION" }, _max: { level: true } }))._max.level ?? -1) + 1;
+
     let plan: PaymentPlan;
     try {
       plan = await prisma.paymentPlan.create({
@@ -69,7 +103,7 @@ export default class PaymentPlanSvc {
           planType: "B2B_SUBSCRIPTION",
           code: input.code.trim(),
           name: input.name.trim(),
-          level: input.level ?? 0,
+          level,
           feeUsd: input.feeUsd,
           includedAllowanceUsd: input.includedAllowanceUsd,
           caseLimit: input.caseLimit,
@@ -89,7 +123,7 @@ export default class PaymentPlanSvc {
       organizationId: null,
       targetType: "tenant",
       targetId: code,
-      payload: { planId: plan.id, ...input },
+      payload: { planId: plan.id, ...input, level },
     });
     return plan;
   }
@@ -102,7 +136,6 @@ export default class PaymentPlanSvc {
     const plan = await prisma.paymentPlan.update({
       where: { id: planId },
       data: {
-        code: patch.code?.trim(),
         name: patch.name?.trim(),
         level: patch.level,
         feeUsd: patch.feeUsd,

@@ -98,8 +98,8 @@ export const createPaymentPlanSchema = Joi.object({
   caseLimit: Joi.number().integer().min(0).required(),
 });
 
+// No `code`: it's the stable slug signup and upgrades refer to, set once at create.
 export const updatePaymentPlanSchema = Joi.object({
-  code: Joi.string().trim().min(1).max(40).optional(),
   name: Joi.string().trim().min(1).max(100).optional(),
   level: Joi.number().integer().min(0).optional(),
   feeUsd: Joi.number().min(0).optional(),

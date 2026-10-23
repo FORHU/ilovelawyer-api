@@ -93,7 +93,8 @@ ALTER TABLE "PaymentPlanSubscription" ADD CONSTRAINT "PaymentPlanSubscription_us
 ALTER TABLE "PaymentPlanSubscription" ADD CONSTRAINT "PaymentPlanSubscription_paymentPlanId_fkey" FOREIGN KEY ("paymentPlanId") REFERENCES "PaymentPlan"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- Seed every existing tenant with the three placeholder B2B tiers (Standard/Pro/Max), using the
--- product-given placeholder numbers. Admin-editable afterwards via PaymentPlanSvc.
+-- product-given placeholder numbers. Admin-editable afterwards via PaymentPlanSvc. Same numbers as
+-- PAYMENT_PLAN_DEFAULT_TIERS, which the tenant seeder uses for tenants created after this runs.
 INSERT INTO "PaymentPlan" ("id", "tenantId", "planType", "code", "name", "level", "feeUsd", "includedAllowanceUsd", "caseLimit", "isActive", "createdAt", "updatedAt")
 SELECT gen_random_uuid()::text, t."id", 'B2B_SUBSCRIPTION', tier.code, tier.name, tier.level, tier."feeUsd", tier."includedAllowanceUsd", tier."caseLimit", true, NOW(), NOW()
 FROM "Tenant" t
@@ -109,8 +110,13 @@ CROSS JOIN (
 -- deliberate reversal of MAX_CASES_PER_ACCOUNT's off-by-default behavior, so lawyers who already
 -- own more cases than Standard's limit are not retroactively blocked: assertCanCreateCase only
 -- fires on new case creation, so existing cases stay accessible either way.
+--
+-- Their allowance period starts now. Spend was summed all-time against the old flat plan's
+-- allowance ($20 by default); summing it all-time against Standard's $10 would lock every lawyer
+-- who had ever spent $10 the moment this runs.
 UPDATE "User" u
-SET "paymentPlanId" = pp."id"
+SET "paymentPlanId" = pp."id",
+    "allowancePeriodStart" = NOW()
 FROM "PaymentPlan" pp
 WHERE pp."tenantId" = u."tenantId"
   AND pp."planType" = 'B2B_SUBSCRIPTION'

@@ -12,6 +12,7 @@ import AuthSvc from "../src/services/auth.service";
 import TenantSettingSvc from "../src/services/tenant-setting.service";
 import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
+import PaymentPlanSvc from "../src/services/payment-plan.service";
 import TenantSettingRepo from "../src/repositories/tenant-setting.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import OrganizationEmailInviteRepo from "../src/repositories/organization-email-invite.repository";
@@ -129,12 +130,14 @@ describe("AuthSvc — auto-approve at email verification", () => {
         "findById",
       ]),
       stash(TenantRepo, ["findIdByCode"]),
+      stash(PaymentPlanSvc, ["defaultIdForTenant"]),
       stash(OrganizationEmailInviteRepo, ["findByEmail", "hasLiveInvite", "claim"]),
       stash(mailerModule as any, ["sendEmail"]),
       stash(templateModule as any, ["renderTemplate"]),
       stash(googleTokenModule as any, ["default"]),
     ];
 
+    (PaymentPlanSvc as any).defaultIdForTenant = async () => null;
     (OrganizationEmailInviteRepo as any).findByEmail = async (email: string) =>
       invitedEmails.has(email) ? { id: "invite-1", organizationId: "org-1", email, role: "MEMBER" } : null;
     // signup checks for a live invite before sending the pending-approval email.

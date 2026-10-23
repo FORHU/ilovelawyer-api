@@ -33,7 +33,8 @@ export default class AccountLimitsSvc {
     });
     if (user?.role !== "LAWYER") return;
 
-    const limit = user.tenantId ? (user.paymentPlan?.caseLimit ?? 0) : MAX_CASES_PER_ACCOUNT;
+    // No tier (no tenant, or canceled): the global MAX_CASES_PER_ACCOUNT fallback.
+    const limit = user.paymentPlan?.caseLimit ?? MAX_CASES_PER_ACCOUNT;
     if (!limit) return;
 
     const owned = await db.case.count({ where: { userId } });

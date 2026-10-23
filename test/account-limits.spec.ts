@@ -75,8 +75,12 @@ describe("cases a lawyer may own", () => {
     expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", cases: 50 })))).to.equal(null);
   });
 
-  it("a tenant-scoped lawyer with no tier at all (0 caseLimit) is unlimited, same as off", async () => {
+  it("a tier with a 0 caseLimit is unlimited, same as off", async () => {
     expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", tenantId: "t1", caseLimit: 0, cases: 50 })))).to.equal(null);
+  });
+
+  it("a tenant-scoped lawyer with no tier (canceled) falls back to MAX_CASES_PER_ACCOUNT (0, off)", async () => {
+    expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", tenantId: "t1", hasPlan: false, cases: 50 })))).to.equal(null);
   });
 
   it("sends a one-time notice the first time a grandfathered lawyer is over their tier's limit, then never again", async () => {

@@ -16,6 +16,7 @@ import AuthRepo from "../src/repositories/auth.repository";
 import OrganizationEmailInviteRepo from "../src/repositories/organization-email-invite.repository";
 import TenantSettingSvc from "../src/services/tenant-setting.service";
 import TenantRepo from "../src/repositories/tenant.repository";
+import PaymentPlanSvc from "../src/services/payment-plan.service";
 import { runWithRequestContext } from "../src/lib/request-context";
 import { ClientApp, resolveClientApp } from "../src/utils/client-app";
 import * as mailerModule from "../src/utils/mailer";
@@ -161,11 +162,13 @@ describe("Client app decides the account role", () => {
       restore = [
         stash(AuthRepo, ["findByEmail", "findByUsername", "createUser"]),
         stash(TenantRepo, ["findIdByCode"]),
+        stash(PaymentPlanSvc, ["defaultIdForTenant"]),
         stash(TenantSettingSvc, ["isAutoApproveOn"]),
         stash(OrganizationEmailInviteRepo, ["hasLiveInvite"]),
         stash(mailerModule, ["sendEmail"]),
         stash(templateModule, ["renderTemplate"]),
       ];
+      (PaymentPlanSvc as any).defaultIdForTenant = async (tenantId: string) => `plan-standard-${tenantId}`;
       (AuthRepo as any).findByEmail = async () => null;
       (AuthRepo as any).findByUsername = async () => null;
       (AuthRepo as any).createUser = async (data: { role: string }) => {
@@ -198,6 +201,13 @@ describe("Client app decides the account role", () => {
       await inApp("lawyer", () => signup(null));
       expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-PH", null]);
       expect(tenantLookups).to.deep.equal(["PH"]);
+    });
+
+    it("starts a lawyer on their tenant's default tier, and a client or tenant-less lawyer on none", async () => {
+      await inApp("lawyer", () => signup("PH"));
+      await inApp("lawyer", () => signup(null));
+      await inApp("user", () => signup(null));
+      expect(created.map((d: any) => d.paymentPlanId)).to.deep.equal(["plan-standard-tenant-PH", null, null]);
     });
 
     it("tells a returning client 'Email already in use', not to go to another tenant's site", async () => {

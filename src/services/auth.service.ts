@@ -7,6 +7,7 @@ import OrganizationMemberRepo from "../repositories/organization-member.reposito
 import OrganizationEmailInviteRepo from "../repositories/organization-email-invite.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import TenantSettingSvc from "./tenant-setting.service";
+import PaymentPlanSvc from "./payment-plan.service";
 import loginToken from "../utils/loginToken";
 import AvatarSvc from "./avatar.service";
 import AccountDeletionSvc from "./account-deletion.service";
@@ -63,6 +64,9 @@ export default class AuthSvc {
     // never blocks a lawyer signup — the account is just created without a Tenant link, same as
     // login/refresh's existing "let it through" handling of an unresolved Tenant code.
     const tenantId = tenantCode ? await TenantRepo.findIdByCode(tenantCode) : null;
+    // A lawyer starts on the tenant's default tier (never charged until checkout-at-signup exists)
+    // — with no tier at all, AccountLimitsSvc would lock the account before its first message.
+    const paymentPlanId = role === "LAWYER" && tenantId ? await PaymentPlanSvc.defaultIdForTenant(tenantId) : null;
 
     let user;
     try {
@@ -76,6 +80,7 @@ export default class AuthSvc {
         name,
         role,
         tenantId,
+        paymentPlanId,
         termsVersion: acceptedTerms ? termsVersionFor(role) : null,
       });
     } catch (err) {
