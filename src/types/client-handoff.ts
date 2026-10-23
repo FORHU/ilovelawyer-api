@@ -81,6 +81,7 @@ export const CLIENT_HANDOFF_ERROR_CODES = {
   PERSONAL_INJURY_EXCLUDED: "PERSONAL_INJURY_EXCLUDED", // 422
   CASE_NOT_PAID: "CASE_NOT_PAID", // 422: the client hasn't paid for the case yet
   REQUEST_ALREADY_OPEN: "REQUEST_ALREADY_OPEN", // 409: the case already has a request that isn't closed, expired or withdrawn
+  REQUEST_LIMIT_REACHED: "REQUEST_LIMIT_REACHED", // 409: the client has MAX_OPEN_LAWYER_REQUESTS open requests; withdraw one first
   CONSENT_REQUIRED: "CONSENT_REQUIRED", // 400
   CONSENT_VERSION_STALE: "CONSENT_VERSION_STALE", // 409: the consent text changed; show the new one
   DISCLOSURE_NOT_ACKNOWLEDGED: "DISCLOSURE_NOT_ACKNOWLEDGED", // 400: confirm without the referral-fee disclosure

@@ -39,6 +39,7 @@ describe("Client lawyer requests", () => {
   let caseRow: any;
   let paid: boolean;
   let open: { id: string } | null;
+  let slots: { id: string; caseId: string; status: string; createdAt: Date; case: { caseName: string } }[];
   let requests: Map<string, any>;
   let claims: any[];
   let emitted: [string, string, any][];
@@ -46,7 +47,7 @@ describe("Client lawyer requests", () => {
   beforeEach(() => {
     restore = [
       stash(ClientCaseRepo, ["findById"]),
-      stash(ClientRequestRepo, ["hasCasePayment", "findOpenForCase", "create", "findForClient", "transition", "route", "withdraw"]),
+      stash(ClientRequestRepo, ["hasCasePayment", "findOpenForCase", "listOpenForClient", "create", "findForClient", "transition", "route", "withdraw"]),
       stash(ClientRequestBriefSvc, ["generateInBackground"]),
       stash(ClientRequestMatchingSvc, ["eligibleLawyerIds"]),
       stash(socket, ["emitToUser"]),
@@ -66,12 +67,14 @@ describe("Client lawyer requests", () => {
     caseRow = { id: CASE_ID, ukJurisdiction: "England and Wales", lawyerReadiness: null };
     paid = true;
     open = null;
+    slots = [];
     requests = new Map();
     briefsStarted = [];
     (ClientRequestBriefSvc as any).generateInBackground = (id: string) => briefsStarted.push(id);
     (ClientCaseRepo as any).findById = async (id: string, orgId: string) => (caseRow && id === caseRow.id && orgId === workspace.id ? caseRow : null);
     (ClientRequestRepo as any).hasCasePayment = async () => paid;
     (ClientRequestRepo as any).findOpenForCase = async () => open;
+    (ClientRequestRepo as any).listOpenForClient = async () => slots;
     (ClientRequestRepo as any).create = async (data: any) => {
       const row = { id: `req-${requests.size + 1}`, status: "REQUESTED", withdrawnAt: null, createdAt: new Date(), updatedAt: new Date(), ...data };
       requests.set(row.id, row);
@@ -101,26 +104,64 @@ describe("Client lawyer requests", () => {
 
   describe("eligibility", () => {
     it("is eligible on a paid UK case with no open request", async () => {
-      expect(await ClientRequestSvc.eligibility(workspace, CASE_ID)).to.deep.equal({ eligible: true, reason: null, openRequestId: null });
+      expect(await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1")).to.deep.equal({ eligible: true, reason: null, openRequestId: null });
     });
 
     it("says why not, in order: outside the UK, personal injury, unpaid, already asked", async () => {
       caseRow.ukJurisdiction = null;
-      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("NOT_UK_CASE");
+      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1")).reason).to.equal("NOT_UK_CASE");
       caseRow.ukJurisdiction = "Scotland";
       caseRow.lawyerReadiness = { blockedBy: "PERSONAL_INJURY" };
-      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("PERSONAL_INJURY_EXCLUDED");
+      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1")).reason).to.equal("PERSONAL_INJURY_EXCLUDED");
       caseRow.lawyerReadiness = null;
       paid = false;
-      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("CASE_NOT_PAID");
+      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1")).reason).to.equal("CASE_NOT_PAID");
       paid = true;
       open = { id: "req-9" };
-      expect(await ClientRequestSvc.eligibility(workspace, CASE_ID)).to.deep.equal({ eligible: false, reason: "REQUEST_ALREADY_OPEN", openRequestId: "req-9" });
+      expect(await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1")).to.deep.equal({ eligible: false, reason: "REQUEST_ALREADY_OPEN", openRequestId: "req-9" });
     });
 
     it("answers 404 for someone else's case", async () => {
       caseRow = null;
-      expect(await errorOf(ClientRequestSvc.eligibility(workspace, CASE_ID))).to.deep.equal({ status: 404, code: undefined });
+      expect(await errorOf(ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1"))).to.deep.equal({ status: 404, code: undefined });
+    });
+
+    describe("request slots", () => {
+      const slot = (n: number, status: string) => ({ id: `req-${n}`, caseId: `case-${n}`, status, createdAt: new Date(), case: { caseName: `Case ${n}` } });
+
+      it("is eligible while a slot is free", async () => {
+        slots = [slot(1, "ROUTED"), slot(2, "QUOTED")];
+        expect((await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1", 3)).eligible).to.equal(true);
+      });
+
+      it("is full at the limit, listing what holds each slot and which can be withdrawn", async () => {
+        slots = [slot(1, "ROUTED"), slot(2, "ENGAGED"), slot(3, "CONFIRMED")];
+        const check = await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1", 3);
+        expect(check).to.include({ eligible: false, reason: "REQUEST_LIMIT_REACHED", openRequestId: null });
+        expect(check.limit!.max).to.equal(3);
+        expect(check.limit!.open.map((r) => [r.requestId, r.caseTitle, r.canWithdraw])).to.deep.equal([
+          ["req-1", "Case 1", true],
+          ["req-2", "Case 2", false],
+          ["req-3", "Case 3", false],
+        ]);
+      });
+
+      it("has no limit at 0", async () => {
+        slots = [slot(1, "ROUTED"), slot(2, "ROUTED"), slot(3, "ROUTED"), slot(4, "ROUTED")];
+        expect((await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1", 0)).eligible).to.equal(true);
+      });
+
+      it("reports a case that already has a request before the limit", async () => {
+        slots = [slot(1, "ROUTED")];
+        open = { id: "req-1" };
+        expect((await ClientRequestSvc.eligibility(workspace, CASE_ID, "client-1", 1)).reason).to.equal("REQUEST_ALREADY_OPEN");
+      });
+
+      it("refuses create with 409 when the last slot is taken between the check and the insert", async () => {
+        (ClientRequestRepo as any).create = async () => null;
+        expect(await errorOf(ask())).to.deep.equal({ status: 409, code: "REQUEST_LIMIT_REACHED" });
+        expect(briefsStarted).to.deep.equal([]);
+      });
     });
   });
 

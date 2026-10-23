@@ -1,7 +1,8 @@
 import { ClaimOutcome, ClientRequestStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 
-/** A request is open until it's closed, expired or withdrawn; a case has at most one open. */
+/** A request is open until it's closed, expired or withdrawn; a case has at most one open, and a
+ * client at most MAX_OPEN_LAWYER_REQUESTS. */
 export const CLOSED_REQUEST_STATUSES: ClientRequestStatus[] = ["CLOSED", "EXPIRED", "WITHDRAWN"];
 
 /** How long a routed request stays open to a claim before EXPIRED (#510) acts on it. */
@@ -41,8 +42,25 @@ const FOR_CLIENT = {
 export type ClientRequestForClient = Prisma.ClientRequestGetPayload<{ include: typeof FOR_CLIENT }>;
 
 export default class ClientRequestRepo {
-  static async create(data: { caseId: string; clientId: string; note: string; consentVersion: string; consentAcceptedAt: Date }) {
-    return prisma.clientRequest.create({ data });
+  /** With a `limit`, the client's open requests are counted and the insert made under a per-client
+   * lock, so two requests made at once can't both take the last slot. Returns null when full. */
+  static async create(data: { caseId: string; clientId: string; note: string; consentVersion: string; consentAcceptedAt: Date }, limit = 0) {
+    if (!limit) return prisma.clientRequest.create({ data });
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${data.clientId}))`;
+      const open = await tx.clientRequest.count({ where: { clientId: data.clientId, status: { notIn: CLOSED_REQUEST_STATUSES } } });
+      if (open >= limit) return null;
+      return tx.clientRequest.create({ data });
+    });
+  }
+
+  /** The client's open requests, newest first, with the case each is on (the slots in use). */
+  static async listOpenForClient(clientId: string) {
+    return prisma.clientRequest.findMany({
+      where: { clientId, status: { notIn: CLOSED_REQUEST_STATUSES } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, caseId: true, status: true, createdAt: true, case: { select: { caseName: true } } },
+    });
   }
 
   static async findOpenForCase(caseId: string) {

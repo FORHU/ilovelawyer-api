@@ -306,10 +306,30 @@ export const clientHandoffSchemas: Schemas = {
       reason: {
         type: "string",
         nullable: true,
-        enum: ["NOT_UK_CASE", "PERSONAL_INJURY_EXCLUDED", "CASE_NOT_PAID", "REQUEST_ALREADY_OPEN", null],
-        description: "NOT_UK_CASE shows \"Not available yet\"",
+        enum: ["NOT_UK_CASE", "PERSONAL_INJURY_EXCLUDED", "CASE_NOT_PAID", "REQUEST_ALREADY_OPEN", "REQUEST_LIMIT_REACHED", null],
+        description: "NOT_UK_CASE shows \"Not available yet\". REQUEST_LIMIT_REACHED: all the client's request slots (MAX_OPEN_LAWYER_REQUESTS) are in use; see limit.",
       },
       openRequestId: { type: "string", nullable: true, description: "Set with REQUEST_ALREADY_OPEN" },
+      limit: {
+        type: "object",
+        description: "Set with REQUEST_LIMIT_REACHED: the requests using the slots. Withdraw one (POST /client/lawyer-requests/{id}/withdraw) to free it; only those with canWithdraw can be.",
+        properties: {
+          max: { type: "integer", example: 3 },
+          open: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                requestId: { type: "string" },
+                caseId: { type: "string" },
+                caseTitle: { type: "string" },
+                status: { type: "string" },
+                canWithdraw: { type: "boolean" },
+              },
+            },
+          },
+        },
+      },
     },
   },
   EngagementMessage: {
@@ -494,7 +514,7 @@ export const clientHandoffPaths: Paths = {
         201: ok("Request created (REQUESTED)", ref("LawyerRequestForClient")),
         400: err("CONSENT_REQUIRED, or a validation error"),
         404: err("No such case of yours"),
-        409: err("REQUEST_ALREADY_OPEN or CONSENT_VERSION_STALE"),
+        409: err("REQUEST_ALREADY_OPEN, REQUEST_LIMIT_REACHED or CONSENT_VERSION_STALE"),
         422: err("NOT_UK_CASE, PERSONAL_INJURY_EXCLUDED or CASE_NOT_PAID"),
       },
     }),

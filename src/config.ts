@@ -26,6 +26,11 @@ export const FREE_CREDIT_USD = freeCreditUsd > 0 ? freeCreditUsd : null;
 const maxCasesPerAccountRaw = process.env.MAX_CASES_PER_ACCOUNT?.trim();
 const maxCasesPerAccount = maxCasesPerAccountRaw ? Math.floor(Number(maxCasesPerAccountRaw)) : NaN;
 export const MAX_CASES_PER_ACCOUNT = Number.isFinite(maxCasesPerAccount) && maxCasesPerAccount >= 0 ? maxCasesPerAccount : 3;
+/** Lawyer requests one client may have open at once (any request that isn't closed, expired or
+ * withdrawn). A missing or invalid value uses 3; 0 turns the limit off. */
+const maxOpenLawyerRequestsRaw = process.env.MAX_OPEN_LAWYER_REQUESTS?.trim();
+const maxOpenLawyerRequests = maxOpenLawyerRequestsRaw ? Math.floor(Number(maxOpenLawyerRequestsRaw)) : NaN;
+export const MAX_OPEN_LAWYER_REQUESTS = Number.isFinite(maxOpenLawyerRequests) && maxOpenLawyerRequests >= 0 ? maxOpenLawyerRequests : 3;
 /** What one case may cost in AI (USD, all providers) before it starts no new AI work. A missing or
  * invalid value uses 20; 0 turns the limit off. */
 const caseSpendLimitUsdRaw = process.env.CASE_SPEND_LIMIT_USD?.trim();

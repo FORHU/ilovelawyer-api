@@ -27,7 +27,7 @@ export default class ClientRequestCtrl {
 
   static async eligibility(req: Request, res: Response) {
     const { caseId } = validate(clientRequestEligibilitySchema, req.query);
-    res.status(200).json(await ClientRequestSvc.eligibility(req.organization!, caseId));
+    res.status(200).json(await ClientRequestSvc.eligibility(req.organization!, caseId, req.user.userId));
   }
 
   static async create(req: Request, res: Response) {

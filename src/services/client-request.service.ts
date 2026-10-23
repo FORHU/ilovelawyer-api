@@ -11,6 +11,7 @@ import ClientRequestClaimRepo from "../repositories/client-request-claim.reposit
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import logger from "../utils/logger";
+import { MAX_OPEN_LAWYER_REQUESTS } from "../config";
 import HttpError from "../utils/http-error";
 import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
@@ -23,14 +24,21 @@ import {
 } from "../constants/client-request.constants";
 
 /** Why the client can't ask for a lawyer on a case (CLIENT_HANDOFF_ERROR_CODES). */
-type IneligibleReason = "NOT_UK_CASE" | "PERSONAL_INJURY_EXCLUDED" | "CASE_NOT_PAID" | "REQUEST_ALREADY_OPEN";
+type IneligibleReason = "NOT_UK_CASE" | "PERSONAL_INJURY_EXCLUDED" | "CASE_NOT_PAID" | "REQUEST_ALREADY_OPEN" | "REQUEST_LIMIT_REACHED";
 
 const REFUSALS: Record<IneligibleReason, { status: number; message: string }> = {
   NOT_UK_CASE: { status: 422, message: "Lawyers are only available for cases in the UK for now." },
   PERSONAL_INJURY_EXCLUDED: { status: 422, message: "We can't connect personal injury cases with a lawyer yet." },
   CASE_NOT_PAID: { status: 422, message: "Pay for the case before asking for a lawyer." },
   REQUEST_ALREADY_OPEN: { status: 409, message: "You've already asked for a lawyer on this case." },
+  REQUEST_LIMIT_REACHED: { status: 409, message: "You've used all your lawyer requests. Withdraw one to ask for another." },
 };
+
+/** The client's slots when they're all in use (LawyerRequestEligibility.limit in the contract). */
+export interface RequestLimit {
+  max: number;
+  open: { requestId: string; caseId: string; caseTitle: string; status: ClientRequestStatus; canWithdraw: boolean }[];
+}
 
 /** A client can withdraw until they've confirmed a lawyer. */
 const WITHDRAWABLE: ClientRequestStatus[] = ["REQUESTED", "ROUTED", "CLAIMED", "QUOTED"];
@@ -104,7 +112,12 @@ export default class ClientRequestSvc {
   }
 
   /** Whether the app should offer "Get a lawyer" on this case, and if not, why. */
-  static async eligibility(workspace: ClientWorkspace, caseId: string): Promise<{ eligible: boolean; reason: IneligibleReason | null; openRequestId: string | null }> {
+  static async eligibility(
+    workspace: ClientWorkspace,
+    caseId: string,
+    clientId: string,
+    maxOpen = MAX_OPEN_LAWYER_REQUESTS,
+  ): Promise<{ eligible: boolean; reason: IneligibleReason | null; openRequestId: string | null; limit?: RequestLimit }> {
     const row = await ClientCaseRepo.findById(caseId, workspace.id);
     if (!row) throw new HttpError("Case not found", 404);
     const no = (reason: IneligibleReason, openRequestId: string | null = null) => ({ eligible: false, reason, openRequestId });
@@ -115,6 +128,17 @@ export default class ClientRequestSvc {
     if (!(await ClientRequestRepo.hasCasePayment(caseId))) return no("CASE_NOT_PAID");
     const open = await ClientRequestRepo.findOpenForCase(caseId);
     if (open) return no("REQUEST_ALREADY_OPEN", open.id);
+    // Last, so a case that already has a request says so rather than "limit reached".
+    if (maxOpen) {
+      const slots = await ClientRequestRepo.listOpenForClient(clientId);
+      if (slots.length >= maxOpen) {
+        const limit: RequestLimit = {
+          max: maxOpen,
+          open: slots.map((r) => ({ requestId: r.id, caseId: r.caseId, caseTitle: r.case.caseName, status: r.status, canWithdraw: WITHDRAWABLE.includes(r.status) })),
+        };
+        return { ...no("REQUEST_LIMIT_REACHED"), limit };
+      }
+    }
     return { eligible: true, reason: null, openRequestId: null };
   }
 
@@ -123,18 +147,23 @@ export default class ClientRequestSvc {
     if (input.consentVersion !== CLIENT_REQUEST_CONSENT_VERSION) {
       throw new HttpError("The consent text has changed. Read it again before sending.", 409, "CONSENT_VERSION_STALE", { version: CLIENT_REQUEST_CONSENT_VERSION });
     }
-    const check = await ClientRequestSvc.eligibility(workspace, input.caseId);
+    const check = await ClientRequestSvc.eligibility(workspace, input.caseId, clientId);
     if (check.reason) {
       const refusal = REFUSALS[check.reason];
       throw new HttpError(refusal.message, refusal.status, check.reason, check.openRequestId ? { openRequestId: check.openRequestId } : undefined);
     }
-    const created = await ClientRequestRepo.create({
-      caseId: input.caseId,
-      clientId,
-      note: input.note?.trim() ?? "",
-      consentVersion: input.consentVersion,
-      consentAcceptedAt: new Date(),
-    });
+    const created = await ClientRequestRepo.create(
+      {
+        caseId: input.caseId,
+        clientId,
+        note: input.note?.trim() ?? "",
+        consentVersion: input.consentVersion,
+        consentAcceptedAt: new Date(),
+      },
+      MAX_OPEN_LAWYER_REQUESTS,
+    );
+    // The last slot went to another request between the check and the insert.
+    if (!created) throw new HttpError(REFUSALS.REQUEST_LIMIT_REACHED.message, 409, "REQUEST_LIMIT_REACHED");
     // The anonymised brief lawyers will see (#508). Written in the background: the AI takes a while.
     ClientRequestBriefSvc.generateInBackground(created.id);
     // Routed (#509) straight away, even with zero current matches — the client just sees "Finding
