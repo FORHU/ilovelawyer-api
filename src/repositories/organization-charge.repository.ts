@@ -52,6 +52,13 @@ export default class OrganizationChargeRepo {
     return prisma.organizationCharge.findUnique({ where: { feeRequestId: requestId } });
   }
 
+  /** How much of `kind` has actually been paid for a request — AI top-ups (#515, #516), in pence.
+   * A refunded top-up still counts: it bought AI credit that was used. */
+  static async sumSucceeded(requestId: string, kind: OrganizationChargeKind): Promise<number> {
+    const { _sum } = await prisma.organizationCharge.aggregate({ where: { requestId, kind, status: "SUCCEEDED" }, _sum: { amountMinor: true } });
+    return _sum.amountMinor ?? 0;
+  }
+
   static async findByPaymentIntent(paymentIntentId: string) {
     return prisma.organizationCharge.findFirst({ where: { paymentIntentId } });
   }
@@ -143,7 +150,15 @@ export default class OrganizationChargeRepo {
 
   /** The organization's charges, newest first, with the lawyer each is for. */
   static async listForOrganization(organizationId: string, kind: OrganizationChargeKind | undefined, page: number, limit: number) {
-    const where: Prisma.OrganizationChargeWhereInput = { organizationId, ...(kind ? { kind } : {}) };
+    return OrganizationChargeRepo.list({ organizationId, ...(kind ? { kind } : {}) }, page, limit);
+  }
+
+  /** A solo lawyer's own charges: theirs, with no organization (docs/adr/0022). */
+  static async listForLawyer(lawyerId: string, kind: OrganizationChargeKind | undefined, page: number, limit: number) {
+    return OrganizationChargeRepo.list({ organizationId: null, lawyerId, ...(kind ? { kind } : {}) }, page, limit);
+  }
+
+  private static async list(where: Prisma.OrganizationChargeWhereInput, page: number, limit: number) {
     const [total, data] = await prisma.$transaction([
       prisma.organizationCharge.count({ where }),
       prisma.organizationCharge.findMany({

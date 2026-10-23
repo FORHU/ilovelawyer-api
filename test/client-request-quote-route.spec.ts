@@ -56,8 +56,6 @@ describe("client request conflict check, release and quote", () => {
       });
     }
     const profile = {
-      regulator: "SRA",
-      qualifiedJurisdictions: ["England and Wales"],
       practiceAreas: ["EMPLOYMENT"],
       languages: ["English"],
       acceptingRequests: true,
@@ -66,8 +64,15 @@ describe("client request conflict check, release and quote", () => {
     };
     await prisma.lawyerClientProfile.createMany({
       data: [
-        { ...profile, userId: lawyerId, registrationNumber: "123456", bio: "Employment law for 12 years.", firstConsultationFeeMinor: 15000 },
-        { ...profile, userId: otherLawyerId, registrationNumber: "654321" },
+        { ...profile, userId: lawyerId, bio: "Employment law for 12 years.", firstConsultationFeeMinor: 15000 },
+        { ...profile, userId: otherLawyerId },
+      ],
+    });
+    const registration = { regulator: "SRA", qualifiedJurisdictions: ["England and Wales"] };
+    await prisma.lawyerUkRegistration.createMany({
+      data: [
+        { ...registration, userId: lawyerId, registrationNumber: "123456" },
+        { ...registration, userId: otherLawyerId, registrationNumber: "654321" },
       ],
     });
     await prisma.case.create({

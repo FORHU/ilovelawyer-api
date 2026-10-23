@@ -19,7 +19,8 @@ router.get("/", asyncHandler(OrganizationCtrl.list));
 // (which requires an already-ACCEPTED membership) — a pending invitee has none yet.
 router.get("/invites/me", asyncHandler(OrganizationCtrl.getMyInvite));
 
-// The caller's own portfolio (their personal workspace) — reachable whatever org they're in.
+// The caller's own workspace ("My work", no organization — docs/adr/0022): its site and the copies
+// still being made into it. Reachable whatever firm they're in.
 router.get("/portfolio", asyncHandler(OrganizationCtrl.getPortfolio));
 router.post("/invites/:id/accept", asyncHandler(OrganizationCtrl.acceptInvite));
 router.post("/invites/:id/decline", asyncHandler(OrganizationCtrl.declineInvite));
@@ -60,6 +61,15 @@ router.delete(
   asyncHandler(resolveOrganizationFromParam()),
   requireOrgRole(OrganizationRole.ADMIN),
   asyncHandler(OrganizationCtrl.removeMember),
+);
+
+// Account setup's "back to the choice": the founder deletes the firm they just made, while it's
+// still empty (OrganizationSvc.discardDuringSetup checks they created it).
+router.post(
+  "/:id/discard",
+  asyncHandler(resolveOrganizationFromParam()),
+  requireOrgRole(OrganizationRole.OWNER),
+  asyncHandler(OrganizationCtrl.discard),
 );
 
 // Case-attachment requires the caller to be a member of the target org (not a

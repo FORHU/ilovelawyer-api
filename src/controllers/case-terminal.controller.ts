@@ -7,6 +7,7 @@ import CaseChangeSvc from "../services/case-change.service";
 import CaseManualEditSvc from "../services/case-manual-edit.service";
 import EvidenceIntelligenceSvc from "../services/evidence-intelligence.service";
 import MissingEvidenceAiSvc from "../services/missing-evidence-ai.service";
+import CrossExaminationSvc from "../services/cross-examination.service";
 import CitationCheckSvc from "../services/citation-check.service";
 import CaseAuthoritySvc from "../services/case-authority.service";
 import GroundingVerifierSvc from "../services/grounding-verifier.service";
@@ -70,6 +71,7 @@ import {
   witnessFactorSchema,
   updateContradictionSchema,
   updateMissingEvidenceSchema,
+  updateCrossExamQuestionSchema,
   createDamageSchema,
   updateDamageSchema,
   createClaimSchema,
@@ -592,6 +594,34 @@ export default class CaseTerminalCtrl {
     AiGenerationQueue.enqueue({ kind: "witnessScoring", caseId, userId });
     const status = await AiGenerationLockSvc.getStatus(caseId, "witnessScoring");
     return res.status(202).json(status);
+  }
+
+  static async listCrossExamination(req: Request, res: Response) {
+    const result = await CrossExaminationSvc.list(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(200).json(result);
+  }
+
+  /** Queues a witness's cross-examination prep; the pane follows the "crossExamination" job status
+   * and re-reads the questions when it's DONE. */
+  static async prepareCrossExamination(req: Request, res: Response) {
+    const { caseId, id: witnessId } = req.params;
+    const userId = req.user.userId;
+    await CrossExaminationSvc.beginQueued(caseId, witnessId, userId);
+    AiGenerationQueue.enqueue({ kind: "crossExamination", caseId, userId, witnessId });
+    const status = await AiGenerationLockSvc.getStatus(caseId, "crossExamination");
+    return res.status(202).json(status);
+  }
+
+  static async updateCrossExamQuestion(req: Request, res: Response) {
+    const { error, value } = updateCrossExamQuestionSchema.validate(req.body);
+    if (error) throw new HttpError(error.message, 400);
+    const result = await CrossExaminationSvc.update(req.params.caseId, req.params.id, req.user.userId, value);
+    return res.status(200).json(result);
+  }
+
+  static async deleteCrossExamQuestion(req: Request, res: Response) {
+    await CrossExaminationSvc.delete(req.params.caseId, req.params.id, req.user.userId);
+    return res.status(204).send();
   }
 
   static async deleteWitness(req: Request, res: Response) {

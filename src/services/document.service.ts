@@ -20,6 +20,7 @@ import ChatRepo from "../repositories/chat.repository";
 import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { DocumentStatus } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
+import type { WorkspaceScope } from "../utils/workspace";
 
 /** Flattens the related File row's fileUrl onto the Document, matching the Swagger `UserDocument`
  * contract (a top-level `fileUrl`, not a nested `file` object) — see docs/adr for the fileUrl gap
@@ -72,23 +73,24 @@ export default class DocumentSvc {
    * its chat answers just as a case's documents are, so naming one takes what sending a message
    * in it does (ChatSvc.assertConsultationWritable) — before this, any consultationId was taken
    * on trust. */
-  private static async assertCanUploadTo(organizationId: string, userId: string, caseId?: string, consultationId?: string) {
-    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, organizationId, userId);
-    if (consultationId) await ChatSvc.assertConsultationWritable(organizationId, userId, consultationId);
+  private static async assertCanUploadTo(scope: WorkspaceScope, userId: string, caseId?: string, consultationId?: string) {
+    if (caseId) await DocumentSvc.assertCanUploadToCase(caseId, scope, userId);
+    if (consultationId) await ChatSvc.assertConsultationWritable(scope, userId, consultationId);
   }
 
   /** The organization a new document is filed under. A file attached to a main (case-less)
    * consultation has none — it follows its user, like the consultation does (see
    * Consultation.organizationId) — so joining or leaving an organization can't hide or delete it. */
-  private static async organizationFor(organizationId: string, caseId?: string, consultationId?: string): Promise<string | null> {
+  private static async organizationFor(scope: WorkspaceScope, caseId?: string, consultationId?: string): Promise<string | null> {
+    const organizationId = scope.organizationId;
     if (caseId || !consultationId) return organizationId;
     const consultation = await ChatRepo.findConsultationById(consultationId);
     return consultation && !consultation.caseId ? null : organizationId;
   }
 
-  private static async assertCanUploadToCase(caseId: string, organizationId: string, userId: string) {
+  private static async assertCanUploadToCase(caseId: string, scope: WorkspaceScope, userId: string) {
     const caseRecord = await CaseAccess.assertCanContribute(caseId, userId);
-    if (caseRecord.organizationId && caseRecord.organizationId !== organizationId) {
+    if (caseRecord.organizationId && caseRecord.organizationId !== scope.organizationId) {
       throw new HttpError("Case not found", 404);
     }
   }
@@ -100,7 +102,7 @@ export default class DocumentSvc {
    * same-millisecond collisions when multiple files are presigned concurrently for the same
    * case/user (Create Case uploads pending files in a concurrency pool, then confirms in batches). */
   static async presign(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     filename: string,
     contentType: string,
@@ -108,7 +110,7 @@ export default class DocumentSvc {
     consultationId?: string,
     fileSize?: number,
   ) {
-    await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
+    await DocumentSvc.assertCanUploadTo(scope, userId, caseId, consultationId);
     return DocumentSvc.presignKey(userId, filename, contentType, caseId, consultationId, fileSize);
   }
 
@@ -134,7 +136,7 @@ export default class DocumentSvc {
   }
 
   static async presignMany(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     files: { filename: string; contentType: string; fileSize?: number }[],
     caseId?: string,
@@ -142,7 +144,7 @@ export default class DocumentSvc {
   ) {
     assertBatchWithinLimit(files.map((file) => file.fileSize));
     // Checked once for the batch's shared caseId/consultationId, not per file.
-    await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
+    await DocumentSvc.assertCanUploadTo(scope, userId, caseId, consultationId);
     return Promise.all(
       files.map((file) =>
         DocumentSvc.presignKey(userId, file.filename, file.contentType, caseId, consultationId, file.fileSize),
@@ -155,14 +157,14 @@ export default class DocumentSvc {
    * upload with neither (e.g. Document Analysis's "No Case" flow) stays un-embedded, since nothing
    * will ever query it via chat RAG and there's no reason to pay for that OpenAI call. */
   static async create(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string; fileSize?: number },
   ) {
-    await DocumentSvc.assertCanUploadTo(organizationId, userId, data.caseId, data.consultationId);
+    await DocumentSvc.assertCanUploadTo(scope, userId, data.caseId, data.consultationId);
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
-    const doc = await DocumentRepo.create(await DocumentSvc.organizationFor(organizationId, data.caseId, data.consultationId), userId, {
+    const doc = await DocumentRepo.create(await DocumentSvc.organizationFor(scope, data.caseId, data.consultationId), userId, {
       name: data.name,
       fileId: file.id,
       caseId: data.caseId,
@@ -177,15 +179,15 @@ export default class DocumentSvc {
   /** Bulk variant of `create()` — confirms several files uploaded to S3 in one transaction.
    * Extraction is queued when either caseId or consultationId is given. */
   static async createMany(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     items: { key: string; name: string; contentType?: string; fileSize?: number }[],
     caseId?: string,
     consultationId?: string,
   ) {
     assertBatchWithinLimit(items.map((item) => item.fileSize));
-    await DocumentSvc.assertCanUploadTo(organizationId, userId, caseId, consultationId);
-    const documentOrganizationId = await DocumentSvc.organizationFor(organizationId, caseId, consultationId);
+    await DocumentSvc.assertCanUploadTo(scope, userId, caseId, consultationId);
+    const documentOrganizationId = await DocumentSvc.organizationFor(scope, caseId, consultationId);
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({
       filename: item.name,
       fileUrl: s3UrlForKey(item.key),
@@ -225,31 +227,31 @@ export default class DocumentSvc {
     );
   }
 
-  static async list(organizationId: string, userId: string, status?: DocumentStatus) {
-    const docs = await DocumentRepo.list(organizationId, status, userId);
+  static async list(scope: WorkspaceScope, userId: string, status?: DocumentStatus) {
+    const docs = await DocumentRepo.list(scope, status, userId);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
   /** Reads of a case's documents need the case to be one the user can open (#346). */
-  static async listByCase(organizationId: string, caseId: string, userId: string, status?: DocumentStatus) {
+  static async listByCase(scope: WorkspaceScope, caseId: string, userId: string, status?: DocumentStatus) {
     await CaseAccess.loadAccessibleCase(caseId, userId);
-    const docs = await DocumentRepo.listByCase(organizationId, caseId, status);
+    const docs = await DocumentRepo.listByCase(scope, caseId, status);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async listByConsultation(organizationId: string, consultationId: string, status?: DocumentStatus, userId?: string) {
-    const docs = await DocumentRepo.listByConsultation(organizationId, consultationId, status, userId);
+  static async listByConsultation(scope: WorkspaceScope, consultationId: string, status?: DocumentStatus, userId?: string) {
+    const docs = await DocumentRepo.listByConsultation(scope, consultationId, status, userId);
     return Promise.all(docs.map(mapDocumentToDto));
   }
 
-  static async getById(id: string, organizationId: string, userId: string) {
-    const doc = await DocumentSvc.loadForRead(id, organizationId, userId);
+  static async getById(id: string, scope: WorkspaceScope, userId: string) {
+    const doc = await DocumentSvc.loadForRead(id, scope, userId);
     return mapDocumentToDto(doc);
   }
 
   /** A document on a case the user can't open (a confidential one, #346) reads as not found. */
-  private static async loadForRead(id: string, organizationId: string, userId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId, userId);
+  private static async loadForRead(id: string, scope: WorkspaceScope, userId: string) {
+    const doc = await DocumentRepo.findById(id, scope, userId);
     if (!doc) throw new HttpError("Document not found", 404);
     if (doc.caseId) {
       await CaseAccess.loadAccessibleCase(doc.caseId, userId).catch(() => {
@@ -264,8 +266,8 @@ export default class DocumentSvc {
    * indexing pipeline uses (document-text-extraction.ts) directly against the S3 bytes rather
    * than reading persisted CaseDocumentChunk rows, so it works immediately after upload without
    * waiting on (or depending on the success of) RAG extraction/chunking. */
-  static async getTextPreview(id: string, organizationId: string, userId: string) {
-    const doc = await DocumentSvc.loadForRead(id, organizationId, userId);
+  static async getTextPreview(id: string, scope: WorkspaceScope, userId: string) {
+    const doc = await DocumentSvc.loadForRead(id, scope, userId);
     if (!doc.file?.s3Key) throw new HttpError("Document has no file", 404);
 
     const buffer = await getObjectBuffer(doc.file.s3Key);
@@ -280,8 +282,8 @@ export default class DocumentSvc {
   /** A document attached to a case is part of that case, so changing it (update, delete,
    * archive, unarchive) takes the same bar as editing the case itself — CaseAccess.assertCanEdit,
    * see CaseSvc.update (#345). One with no case stays organization-scoped. */
-  private static async loadForChange(id: string, organizationId: string, actorId: string) {
-    const doc = await DocumentRepo.findById(id, organizationId, actorId);
+  private static async loadForChange(id: string, scope: WorkspaceScope, actorId: string) {
+    const doc = await DocumentRepo.findById(id, scope, actorId);
     if (!doc) throw new HttpError("Document not found", 404);
     if (doc.caseId) await CaseAccess.assertCanEdit(doc.caseId, actorId);
     return doc;
@@ -292,16 +294,16 @@ export default class DocumentSvc {
    * grant on another organization's case. */
   static async update(
     id: string,
-    organizationId: string,
+    scope: WorkspaceScope,
     actorId: string,
     data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean },
   ) {
-    const doc = await DocumentSvc.loadForChange(id, organizationId, actorId);
+    const doc = await DocumentSvc.loadForChange(id, scope, actorId);
     if (data.caseId && data.caseId !== doc.caseId) {
       const target = await CaseAccess.assertCanEdit(data.caseId, actorId);
-      if (target.organizationId !== organizationId) throw new HttpError("Case not found or not editable", 404);
+      if (target.organizationId !== scope.organizationId) throw new HttpError("Case not found or not editable", 404);
     }
-    const updated = await DocumentRepo.update(id, organizationId, data, actorId);
+    const updated = await DocumentRepo.update(id, scope, data, actorId);
     if (!updated) throw new HttpError("Document not found", 404);
     if (data.caseId || data.consultationId) DocumentExtractionQueue.enqueue(id);
   }
@@ -312,9 +314,9 @@ export default class DocumentSvc {
    * (findings, strategy, contradictions) still reads archived documents; the case mind map follows
    * chat instead and leaves them out, so both schedule the post-upload job, which rebuilds only the
    * map when only the map's document set moved (see runCasePostExtraction). */
-  static async archive(id: string, organizationId: string, actorId: string) {
-    await DocumentSvc.loadForChange(id, organizationId, actorId);
-    const updated = await DocumentRepo.setStatus(id, organizationId, "ARCHIVED", actorId);
+  static async archive(id: string, scope: WorkspaceScope, actorId: string) {
+    await DocumentSvc.loadForChange(id, scope, actorId);
+    const updated = await DocumentRepo.setStatus(id, scope, "ARCHIVED", actorId);
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.archive", payload: { documentId: id } });
     // Without this, chat-wonder's listByDocument/listByCaseOrConsultation callbacks would keep
@@ -331,9 +333,9 @@ export default class DocumentSvc {
     scheduleCasePostExtraction(doc.caseId, actorId);
   }
 
-  static async unarchive(id: string, organizationId: string, actorId: string) {
-    await DocumentSvc.loadForChange(id, organizationId, actorId);
-    const updated = await DocumentRepo.setStatus(id, organizationId, "ACTIVE", actorId);
+  static async unarchive(id: string, scope: WorkspaceScope, actorId: string) {
+    await DocumentSvc.loadForChange(id, scope, actorId);
+    const updated = await DocumentRepo.setStatus(id, scope, "ACTIVE", actorId);
     if (!updated) throw new HttpError("Document not found", 404);
     await OrganizationRepo.writeAudit({ caseId: updated.caseId ?? undefined, actorId, action: "document.unarchive", payload: { documentId: id } });
     // Same reasoning as archive() above, in reverse — listByCaseOrConsultation's cached array
@@ -346,8 +348,8 @@ export default class DocumentSvc {
   /** Bulk archive from the documents view — same per-document path as archive() (audit row +
    * cache invalidation each), fanned out with allSettled so one missing/already-archived id
    * doesn't fail the whole batch. Mirrors unarchiveMany below. */
-  static async archiveMany(ids: string[], organizationId: string, actorId: string) {
-    const results = await Promise.allSettled(ids.map((id) => this.archive(id, organizationId, actorId)));
+  static async archiveMany(ids: string[], scope: WorkspaceScope, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.archive(id, scope, actorId)));
     const succeeded: Awaited<ReturnType<typeof mapDocumentToDto>>[] = [];
     const failed: { id: string; error: string }[] = [];
     results.forEach((result, i) => {
@@ -360,8 +362,8 @@ export default class DocumentSvc {
   /** Bulk "Select All" restore from the Archived documents view — same per-document path as
    * unarchive() (audit row + cache invalidation each), fanned out with allSettled so one missing/
    * already-active id doesn't fail the whole batch the user selected. */
-  static async unarchiveMany(ids: string[], organizationId: string, actorId: string) {
-    const results = await Promise.allSettled(ids.map((id) => this.unarchive(id, organizationId, actorId)));
+  static async unarchiveMany(ids: string[], scope: WorkspaceScope, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.unarchive(id, scope, actorId)));
     const succeeded: Awaited<ReturnType<typeof mapDocumentToDto>>[] = [];
     const failed: { id: string; error: string }[] = [];
     results.forEach((result, i) => {
@@ -375,10 +377,10 @@ export default class DocumentSvc {
    * archive() over every document under the case, same shape as CaseSvc.delete looping delete()
    * below. Skips documents already ARCHIVED so archiving a case (or one with documents a user
    * already archived by hand) doesn't write redundant audit rows. */
-  static async archiveByCase(caseId: string, organizationId: string, actorId: string) {
+  static async archiveByCase(caseId: string, scope: WorkspaceScope, actorId: string) {
     const docs = await DocumentRepo.listAllByCase(caseId);
     for (const doc of docs) {
-      if (doc.status === "ACTIVE") await this.archive(doc.id, organizationId, actorId);
+      if (doc.status === "ACTIVE") await this.archive(doc.id, scope, actorId);
     }
   }
 
@@ -388,18 +390,18 @@ export default class DocumentSvc {
    * cascade would have archived; one a user deliberately archived by hand while the case was
    * already active would, in practice, already be ACTIVE by the time the case gets archived, so
    * this can't distinguish the two today — same limitation archiveByCase already accepts. */
-  static async unarchiveByCase(caseId: string, organizationId: string, actorId: string) {
+  static async unarchiveByCase(caseId: string, scope: WorkspaceScope, actorId: string) {
     const docs = await DocumentRepo.listAllByCase(caseId);
     for (const doc of docs) {
-      if (doc.status === "ARCHIVED") await this.unarchive(doc.id, organizationId, actorId);
+      if (doc.status === "ARCHIVED") await this.unarchive(doc.id, scope, actorId);
     }
   }
 
   /** Bulk delete from the documents view — loops delete() over every selected id with
    * allSettled so one missing document doesn't fail the rest of the batch. `succeeded` is the
    * deleted ids, since there's no row left to return. */
-  static async deleteMany(ids: string[], organizationId: string, userId: string) {
-    const results = await Promise.allSettled(ids.map((id) => this.delete(id, organizationId, userId)));
+  static async deleteMany(ids: string[], scope: WorkspaceScope, userId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.delete(id, scope, userId)));
     const succeeded: string[] = [];
     const failed: { id: string; error: string }[] = [];
     results.forEach((result, i) => {
@@ -412,16 +414,16 @@ export default class DocumentSvc {
   /** userId is the authenticated deleter — needed only to attribute an auto-triggered
    * post-extraction refresh (case-post-extraction.ts) to a real actor when a READY, case-scoped
    * document is removed, same as the uploader is used when extraction finishes. */
-  static async delete(id: string, organizationId: string, userId: string) {
-    const doc = await DocumentSvc.loadForChange(id, organizationId, userId);
+  static async delete(id: string, scope: WorkspaceScope, userId: string) {
+    const doc = await DocumentSvc.loadForChange(id, scope, userId);
 
-    const deleted = await DocumentRepo.delete(id, organizationId, userId);
+    const deleted = await DocumentRepo.delete(id, scope, userId);
     if (!deleted) throw new HttpError("Document not found", 404);
     await AuditSvc.record({
       action: AuditAction.DocumentDeleted,
       actorId: userId,
       caseId: doc.caseId ?? undefined,
-      payload: { documentId: id, organizationId },
+      payload: { documentId: id, organizationId: scope.organizationId },
     });
 
     // The Document row (and its RAG chunks, via cascade) are gone now, but its File row and the
@@ -431,7 +433,7 @@ export default class DocumentSvc {
     await SecurityAuditSvc.record({
       action: "document.deleted",
       actorId: userId,
-      organizationId,
+      organizationId: scope.organizationId,
       targetType: "document",
       targetId: id,
       targetName: doc.name,

@@ -8,8 +8,9 @@ import DocumentExtractionQueue from "../queues/document-extraction.queue";
 /** Thrown for a copy that can never succeed (e.g. the original is gone) — not retried. */
 export class CaseCopyAbandoned extends Error {}
 
-type CopyRequest = { sourceCaseId: string; userId: string; targetOrganizationId: string; sourceOrganizationName: string };
-type ConsultationCopyRequest = { sourceConsultationId: string; userId: string; targetOrganizationId: string };
+/** targetOrganizationId null: the lawyer's own workspace (no organization, docs/adr/0022). */
+type CopyRequest = { sourceCaseId: string; userId: string; targetOrganizationId: string | null; sourceOrganizationName: string };
+type ConsultationCopyRequest = { sourceConsultationId: string; userId: string; targetOrganizationId: string | null };
 
 const CONSULTATION_INCLUDE = {
   messages: true,
@@ -31,7 +32,7 @@ type IdMaps = {
 
 /** Where the copy lands. `caseId` is the copied case (null for a standalone consultation), and
  * `sourceCaseId` the original it was copied from — only documents on that case keep a case link. */
-type Target = { userId: string; organizationId: string; caseId: string | null; sourceCaseId: string | null };
+type Target = { userId: string; organizationId: string | null; caseId: string | null; sourceCaseId: string | null };
 
 const mapped = <T>(ids: Map<string, string>, id: T | null) => (id ? (ids.get(id as string) ?? null) : null);
 
@@ -70,7 +71,7 @@ export default class CaseCopySvc {
     if (!source) throw new CaseCopyAbandoned("The original case was deleted before it could be copied");
 
     const existing = await prisma.case.findFirst({
-      where: { copiedFromCaseId: source.id, organizationId: request.targetOrganizationId, copiedAt: { gte: source.updatedAt } },
+      where: { copiedFromCaseId: source.id, organizationId: request.targetOrganizationId, userId: request.userId, copiedAt: { gte: source.updatedAt } },
       select: { id: true },
     });
     if (existing) return existing.id;
@@ -179,7 +180,7 @@ export default class CaseCopySvc {
     }
 
     const existing = await prisma.consultation.findFirst({
-      where: { copiedFromId: source.id, organizationId: request.targetOrganizationId, caseId: null },
+      where: { copiedFromId: source.id, organizationId: request.targetOrganizationId, userId: request.userId, caseId: null },
       orderBy: { createdAt: "desc" },
       select: { id: true, _count: { select: { messages: true } } },
     });

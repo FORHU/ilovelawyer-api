@@ -5,7 +5,7 @@ import { ClientApp, resolveClientApp } from "../utils/client-app";
 
 /** Who and where the current HTTP request came from, readable anywhere below the route handler
  * without threading `req` through every service — SecurityAuditSvc.record fills a row's ip,
- * userAgent, requestId, actor and organization from it. Reads `req.user` / `req.organization`
+ * userAgent, requestId, actor and organization from it. Reads `req.user` / `req.workspace`
  * lazily, since validSession and resolveOrganization set them after this middleware runs. Empty
  * outside a request (queues, cron), where callers name the actor themselves. */
 export interface RequestContext {
@@ -64,8 +64,8 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
     ip: normalizeIp(req.ip),
     userAgent: typeof userAgent === "string" ? userAgent.slice(0, 512) : null,
     userId: () => req.user?.userId ?? null,
-    organizationId: () => req.organization?.id ?? null,
-    tenantCode: () => req.organization?.tenantCode ?? null,
+    organizationId: () => req.workspace?.organizationId ?? null,
+    tenantCode: () => req.workspace?.tenantCode ?? null,
     clientApp: resolveClientApp(req),
   };
   contextByRequest.set(req, context);

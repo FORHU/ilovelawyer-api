@@ -1,7 +1,7 @@
 import type { OrganizationCharge, OrganizationChargeKind, OrganizationChargeRefund } from "@prisma/client";
 import type Stripe from "stripe";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
-import OrganizationBillingRepo from "../repositories/organization-billing.repository";
+import OrganizationBillingRepo, { payerOf } from "../repositories/organization-billing.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import { organizationCardProviderNamed, type CardChargeResult } from "../payments/organization-card-provider";
@@ -13,6 +13,8 @@ import { CLIENT_REQUEST_PER_CASE_FEE_MINOR } from "../constants/client-request.c
 import type { ClientRequestUpdatedEvent } from "../types/client-handoff";
 
 const NO_CARD = "There's no card on file. An owner or admin can add one in the organization's billing settings.";
+/** A solo lawyer pays with their own card (docs/adr/0022). */
+const NO_OWN_CARD = "There's no card on file. Add one in your profile's billing settings.";
 const UNREACHABLE = "We couldn't reach the payment provider. Try again in a moment.";
 
 export type ChargeOutcome = "SUCCEEDED" | "PENDING" | "FAILED";
@@ -59,10 +61,13 @@ export default class OrganizationChargeSvc {
   static async attempt(chargeId: string): Promise<ChargeOutcome | null> {
     const charge = await OrganizationChargeRepo.findById(chargeId);
     if (!charge) return null;
-    const billing = await OrganizationBillingRepo.find(charge.organizationId);
+    // The firm's card, or for a solo lawyer (no organization) their own.
+    const payer = payerOf(charge.organizationId, charge.lawyerId);
+    const billing = payer ? await OrganizationBillingRepo.find(payer) : null;
     if (!billing?.paymentMethodId) {
-      await OrganizationChargeRepo.failWithoutAttempt(chargeId, NO_CARD);
-      await OrganizationChargeSvc.after({ ...charge, failureReason: NO_CARD }, "FAILED", false);
+      const reason = charge.organizationId ? NO_CARD : NO_OWN_CARD;
+      await OrganizationChargeRepo.failWithoutAttempt(chargeId, reason);
+      await OrganizationChargeSvc.after({ ...charge, failureReason: reason }, "FAILED", false);
       return "FAILED";
     }
 
@@ -80,7 +85,10 @@ export default class OrganizationChargeSvc {
         amountMinor: charge.amountMinor,
         currency: charge.currency,
         description: charge.kind === "PER_CASE_FEE" ? "ilovelawyer introduction fee for a client request" : "ilovelawyer AI top-up",
-        metadata: { organizationId: charge.organizationId, ...(charge.requestId ? { requestId: charge.requestId } : {}) },
+        metadata: {
+          ...(charge.organizationId ? { organizationId: charge.organizationId } : charge.lawyerId ? { lawyerId: charge.lawyerId } : {}),
+          ...(charge.requestId ? { requestId: charge.requestId } : {}),
+        },
       });
     } catch (err) {
       logger.error("Organization charge: provider unreachable", { chargeId, attempt, err: err instanceof Error ? err.message : String(err) });
@@ -126,6 +134,13 @@ export default class OrganizationChargeSvc {
     return { total, data: data.map((c) => chargeDto(c, c.lawyerId ? (names.get(c.lawyerId) ?? null) : null)) };
   }
 
+  /** A solo lawyer's own fee history (charges with no organization), newest first. */
+  static async listForLawyer(lawyerId: string, query: { kind?: OrganizationChargeKind; page: number; limit: number }) {
+    const { total, data } = await OrganizationChargeRepo.listForLawyer(lawyerId, query.kind, query.page, query.limit);
+    const names = new Map((await OrganizationChargeRepo.findUserNames([lawyerId])).map((u) => [u.id, u.name || u.email] as const));
+    return { total, data: data.map((c) => chargeDto(c, names.get(lawyerId) ?? null)) };
+  }
+
   private static async readStripe(paymentIntentId: string): Promise<CardChargeResult | null> {
     const stripe = organizationCardProviderNamed("STRIPE");
     if (stripe.mode !== "hosted") return null;
@@ -159,11 +174,13 @@ export default class OrganizationChargeSvc {
 
     await OrganizationRepo.writeAudit({ caseId: request.caseId, action: "client_request.charge_failed", payload: { requestId: request.id, chargeId: charge.id } });
     const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "CONFIRMED", updatedAt: now };
-    const told = new Set([...(charge.lawyerId ? [charge.lawyerId] : []), ...(await OrganizationChargeRepo.findBillingAdmins(charge.organizationId))]);
+    // A solo lawyer's charge has no organization: only they are told.
+    const admins = charge.organizationId ? await OrganizationChargeRepo.findBillingAdmins(charge.organizationId) : [];
+    const told = new Set([...(charge.lawyerId ? [charge.lawyerId] : []), ...admins]);
     for (const userId of told) {
       emitToUser(userId, "client-request:updated", updated);
       await OrganizationChargeSvc.notify(userId, {
-        organizationId: charge.organizationId,
+        organizationId: charge.organizationId ?? undefined,
         title: "The introduction fee couldn't be charged",
         message: `${charge.failureReason ?? "The card was declined."} The client is waiting: update the card, then retry from the request.`,
         link: `/client-requests/${request.id}`,

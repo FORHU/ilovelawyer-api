@@ -1,6 +1,7 @@
 import Joi from "joi";
 import { LAWYER_REJECTION_REASONS } from "../services/lawyer-verification.service";
 import { LAWYER_VERIFICATION_STATUSES, UK_JURISDICTIONS } from "../types/client-handoff";
+import { LAWYER_COUNTRIES } from "../constants/lawyer-application.constants";
 
 export const listUsersSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -42,6 +43,9 @@ export const exportUserDataSchema = Joi.object({
 export const denyUserSchema =Joi.object({ reason: Joi.string().trim().max(500).allow("").optional() });
 
 export const listLawyerVerificationsSchema = Joi.object({
+  site: Joi.string()
+    .valid(...LAWYER_COUNTRIES)
+    .default("UK"),
   status: Joi.string()
     .valid(...LAWYER_VERIFICATION_STATUSES)
     .default("PENDING"),
@@ -49,13 +53,14 @@ export const listLawyerVerificationsSchema = Joi.object({
   limit: Joi.number().integer().min(1).max(100).default(20),
 });
 
-// The jurisdictions the admin confirmed against the register replace what the lawyer claimed.
+// UK: the jurisdictions the admin confirmed against the register replace what the lawyer claimed;
+// LawyerVerificationSvc.verify requires them there. PH has none, so it sends only the note.
 export const verifyLawyerSchema = Joi.object({
   confirmedJurisdictions: Joi.array()
     .items(Joi.string().valid(...UK_JURISDICTIONS))
     .min(1)
     .unique()
-    .required(),
+    .optional(),
   note: Joi.string().trim().max(1000).allow("").optional(),
 });
 

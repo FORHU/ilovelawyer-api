@@ -71,7 +71,15 @@ model User {
   // admin-authored, optional, shown to the user in the denial email/page.
   approvalStatus      ApprovalStatus @default(PENDING)
   denialReason        String?
+  // Set when the product tours are all finished (ProductTourSvc). Not account setup: see
+  // setupCompletedAt.
   onboardingCompleted Boolean        @default(false)
+  // Account setup after sign-up (the app's /onboarding: solo or firm, firm details, invites, the
+  // Lawyer Application) was finished or skipped. Null: the app sends the lawyer back to it.
+  setupCompletedAt    DateTime?
+  // The lawyer chose Solo practitioner at account setup: they work in their own workspace, with no
+  // organization (docs/adr/0022). Null until they choose; a firm lawyer never sets it.
+  soloChosenAt        DateTime?
 
   // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
   // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
@@ -154,6 +162,7 @@ model User {
   clientPayments          ClientPayment[]
   accountAiTopUps         AccountAiTopUp[]
   clientRequestProfile    LawyerClientProfile?
+  billing                 UserBilling?
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
@@ -871,6 +880,7 @@ model Case {
   evidenceMatrix       EvidenceMatrixItem[]
   contradictions       EvidenceContradiction[]
   missingEvidence      CaseMissingEvidence[]
+  crossExamQuestions   CrossExamQuestion[]
   factPairChecks       FactPairCheck[]
   citationChecks       CitationCheck[]
   authorities          CaseAuthority[]
@@ -967,17 +977,20 @@ enum LawyerVerificationStatus {
 // A lawyer's settings for receiving client requests from the client app (UK only; #504). One per
 // lawyer. Matching (#509) reads it: verified, accepting, not paused, under capacity, and qualified
 // for the case's practice area and UK jurisdiction.
+// A lawyer's Lawyer Application: the fields every site shares, and where it stands with the admin.
+// The registration details an admin checks differ by country, so they live in one table per
+// country (LawyerUkRegistration, LawyerPhRegistration), keyed by the same userId.
 model LawyerClientProfile {
   userId                    String                   @id
-  // LAWYER_REGULATORS: SRA (England and Wales), LSS (Scotland), LSNI (Northern Ireland).
-  regulator                 String?
-  registrationNumber        String?
-  qualifiedJurisdictions    String[]
-  // CLIENT_CASE_AREAS. Never personal injury: referral fees are banned there.
+  // The site the lawyer applied on ("UK" | "PH"), from their tenant at the first save. Picks which
+  // registration table, practice-area list and fee currency apply.
+  country                   String                   @default("UK")
+  // UK: PRACTICE_AREAS (never personal injury: referral fees are banned there). PH:
+  // PH_PRACTICE_AREAS.
   practiceAreas             String[]
   bio                       String                   @default("") @db.Text
   languages                 String[]
-  // Pence (GBP). Null: no first-consultation offer.
+  // Minor units of the country's currency: pence (GBP) or centavos (PHP). Null: no offer.
   firstConsultationFeeMinor Int?
   acceptingRequests         Boolean                  @default(false)
   // The organization's per-member switch (#518). Off stops new routing to them.
@@ -994,9 +1007,40 @@ model LawyerClientProfile {
   createdAt                 DateTime                 @default(now())
   updatedAt                 DateTime                 @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ukRegistration LawyerUkRegistration?
+  phRegistration LawyerPhRegistration?
 
-  @@index([verificationStatus, submittedAt])
+  @@index([country, verificationStatus, submittedAt])
+}
+
+// The UK part of a Lawyer Application: what the admin checks against the regulator's register.
+model LawyerUkRegistration {
+  userId                 String   @id
+  // LAWYER_REGULATORS: SRA (England and Wales), LSS (Scotland), LSNI (Northern Ireland).
+  regulator              String?
+  registrationNumber     String?
+  // UK_JURISDICTIONS. Matching (#509) routes a request only to lawyers qualified where it is.
+  qualifiedJurisdictions String[]
+
+  profile LawyerClientProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+}
+
+// The PH part of a Lawyer Application. The PH rules aren't final, so only the Roll number and IBP
+// chapter are required to submit.
+model LawyerPhRegistration {
+  userId              String  @id
+  // Roll of Attorneys number (Supreme Court).
+  rollNumber          String?
+  // Integrated Bar of the Philippines chapter.
+  ibpChapter          String?
+  // Lifetime membership number, or the annual dues receipt number.
+  ibpMembershipNumber String?
+  mcleNumber          String?
+  // The MCLE compliance period, as written on the certificate (e.g. "VII").
+  mclePeriod          String?
+
+  profile LawyerClientProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 }
 
 // A payment in the client app, failed ones included (ClientBillingSvc). `provider` says who took it:
@@ -1210,7 +1254,8 @@ model ClientRequestClaim {
   openRequestId  String?       @unique
   lawyerId       String
   // The lawyer's organization when they claimed: the one the per-case fee is charged to (#513).
-  organizationId String
+  // Null for a solo lawyer, who pays with their own card (UserBilling).
+  organizationId String?
   claimedAt      DateTime      @default(now())
   expiresAt      DateTime
   // When the 2h-before reminder went out (#510).
@@ -1232,7 +1277,7 @@ model ClientRequestClaim {
 
   request      ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   lawyer       User          @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([requestId])
   @@index([lawyerId, outcome])
@@ -1295,6 +1340,7 @@ model Document {
   file               File?               @relation(fields: [fileId], references: [id])
   chunks             CaseDocumentChunk[]
   extractedWitnesses Witness[]
+  crossExamQuestions CrossExamQuestion[]
   extractedDamages   DamageClaim[]
 
   @@index([userId])
@@ -1584,7 +1630,9 @@ model LawBrowsePage {
 model Bookmark {
   id             String       @id @default(uuid())
   userId         String
-  organizationId String
+  // Null in a lawyer's own workspace (no organization). There the item dedupes per lawyer
+  // (BookmarkSvc), since a unique key treats nulls as distinct.
+  organizationId String?
   itemId         String
   title          String
   reference      String?
@@ -1596,7 +1644,7 @@ model Bookmark {
   createdAt      DateTime     @default(now())
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   // Uniqueness moves to the org: bookmarks are a shared resource, so two members bookmarking
   // the same item should dedupe at the organization level, not per-user.
@@ -1629,7 +1677,8 @@ model Event {
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String? @map("copied_from_id")
   userId               String
-  organizationId       String    @map("organization_id")
+  // Null in a lawyer's own workspace (no organization).
+  organizationId       String?   @map("organization_id")
   title                String
   type                 String    @default("Meeting")
   dateTime             DateTime  @map("date_time")
@@ -1658,7 +1707,7 @@ model Event {
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case         Case?        @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
   @@unique([googleEventId, userId], map: "events_google_event_id_user_id_key")
@@ -1673,14 +1722,15 @@ model Event {
 model Note {
   id             String   @id @default(uuid())
   userId         String
-  organizationId String   @map("organization_id")
+  // Null in a lawyer's own workspace (no organization).
+  organizationId String?  @map("organization_id")
   date           DateTime @map("date")
   body           String   @db.Text
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([organizationId])
@@ -1720,7 +1770,8 @@ model Notification {
 model Transcription {
   id             String    @id @default(uuid())
   userId         String
-  organizationId String
+  // Null in a lawyer's own workspace (no organization).
+  organizationId String?
   caseId         String?
   consultationId String?
   audioFileId    String?
@@ -1734,7 +1785,7 @@ model Transcription {
   updatedAt      DateTime  @updatedAt
 
   user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization?        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   case         Case?                @relation(fields: [caseId], references: [id])
   consultation Consultation?        @relation(fields: [consultationId], references: [id], onDelete: SetNull)
   audioFile    File?                @relation(fields: [audioFileId], references: [id])
@@ -2467,6 +2518,9 @@ model Witness {
   scoredAt            DateTime?
   statementDueOn      DateTime?
   statementReceived   Boolean        @default(false)
+  // Which side calls this witness. Null until a lawyer says. Cross-examination prep is only built
+  // for THEIRS: preparing our own witness's answers would be coaching (CrossExaminationSvc).
+  calledBy            WitnessSide?
   contact             String?
   notes               String?        @db.Text
   createdAt           DateTime       @default(now())
@@ -2475,8 +2529,53 @@ model Witness {
   case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
   sourceDocument    Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
   sponsoredEvidence EvidenceMatrixItem[]
+  crossExamQuestions CrossExamQuestion[]
 
   @@index([caseId])
+}
+
+enum WitnessSide {
+  OURS
+  THEIRS
+}
+
+enum CrossExamStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+}
+
+/// One proposed cross-examination question for a witness the other side calls, tied to the
+/// verbatim passage it puts to them. A row is only written when `sourceQuote` was found in
+/// `sourceDocumentId`'s text (CrossExaminationSvc). `supportVerdict` is Jev's read of whether the
+/// passage supports the point the question puts; null when unchecked, including after a lawyer
+/// rewrites the question. A regeneration replaces PROPOSED rows nobody edited and keeps the rest,
+/// matched by question text — see CrossExamRepo.replaceAiQuestions.
+model CrossExamQuestion {
+  id                String          @id @default(uuid())
+  caseId            String
+  witnessId         String
+  topic             String
+  question          String          @db.Text
+  // What the question is meant to establish, in one line, for the lawyer reading the pack.
+  purpose           String?         @db.Text
+  position          Int
+  sourceDocumentId  String?
+  sourceQuote       String          @db.Text
+  pageNumber        Int?
+  supportVerdict    String?
+  supportConfidence Float?
+  status            CrossExamStatus @default(PROPOSED)
+  lawyerEditedAt    DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  witness        Witness   @relation(fields: [witnessId], references: [id], onDelete: Cascade)
+  sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
+  @@index([witnessId])
 }
 
 // Whether an entry is money the client is owed (DAMAGE) or another order the case asks for, such
@@ -2896,6 +2995,15 @@ model Organization {
   slug        String     @unique
   packageSku  PackageSku @default(PROFESSIONAL)
   isPersonal  Boolean    @default(false)
+  // Firm details, all optional (set at onboarding or on the Organization page). The firm regulator
+  // and its number are UK only (LAWYER_REGULATORS); the address country is the tenant's.
+  phone                  String?
+  addressLine1           String?
+  addressLine2           String?
+  city                   String?
+  postcode               String?
+  firmRegulator          String?
+  firmRegistrationNumber String?
   createdById String
   tenantId    String
   status              OrganizationStatus @default(ACTIVE)
@@ -2934,6 +3042,25 @@ model Organization {
 // (ilovelawyer-api#505, #513). Made on the organization's first card setup. Only what Stripe hands
 // back is kept: card details are typed into Stripe's own page and never reach this API. A card is on
 // file when paymentMethodId is set.
+// A solo lawyer's card, for the per-case fee on client requests they claim while they have no
+// firm (docs/adr/0022). The same fields as OrganizationBilling.
+model UserBilling {
+  userId          String   @id
+  // STRIPE, or DUMMY for the test card LAWYER_PAYMENT_PROVIDER=dummy saves.
+  provider        String
+  customerId      String?  @unique
+  paymentMethodId String?
+  brand           String?
+  last4           String?
+  expMonth        Int?
+  expYear         Int?
+  setupSessionId  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
 model OrganizationBilling {
   organizationId  String   @id
   // STRIPE, or DUMMY for the test card LAWYER_PAYMENT_PROVIDER=dummy saves.
@@ -2963,7 +3090,8 @@ model OrganizationBilling {
 // DUMMY for a test card), null until the first attempt.
 model OrganizationCharge {
   id              String                   @id @default(uuid())
-  organizationId  String
+  // The firm charged, or null when a solo lawyer paid with their own card (then lawyerId says who).
+  organizationId  String?
   kind            OrganizationChargeKind
   status          OrganizationChargeStatus
   amountMinor     Int
@@ -2985,7 +3113,7 @@ model OrganizationCharge {
   createdAt       DateTime                 @default(now())
   updatedAt       DateTime                 @updatedAt
 
-  organization Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization?               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   request      ClientRequest?              @relation(fields: [requestId], references: [id], onDelete: SetNull)
   refunds      OrganizationChargeRefund[]
 
@@ -3118,7 +3246,8 @@ model CaseCopy {
   caseName               String
   sourceOrganizationName String
   userId                 String
-  targetOrganizationId   String
+  // Null: the lawyer's own workspace (no organization, docs/adr/0022).
+  targetOrganizationId   String?
   status                 CaseCopyStatus @default(PENDING)
   copyCaseId             String?
   // Set when this copy is the lawyer's "Copy to my workspace" on an engaged client request (#514),
@@ -3130,7 +3259,7 @@ model CaseCopy {
   updatedAt              DateTime       @updatedAt
 
   user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  targetOrganization Organization @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
+  targetOrganization Organization? @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
   @@index([status, updatedAt])
@@ -3144,7 +3273,8 @@ model ConsultationCopy {
   id                   String         @id @default(uuid())
   sourceConsultationId String
   userId               String
-  targetOrganizationId String
+  // Null: the lawyer's own workspace (no organization, docs/adr/0022).
+  targetOrganizationId String?
   status               CaseCopyStatus @default(PENDING)
   copyConsultationId   String?
   attempts             Int            @default(0)
@@ -3153,7 +3283,7 @@ model ConsultationCopy {
   updatedAt            DateTime       @updatedAt
 
   user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  targetOrganization Organization @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
+  targetOrganization Organization? @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
   @@index([status, updatedAt])

@@ -9,6 +9,7 @@
  * No live Postgres: the rules' queries are checked by capturing what CaseAccess hands prisma, and
  * the services with CaseAccess and the repos monkeypatched, as in case-access-sharing.spec.ts.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import prisma from "../src/lib/prisma";
@@ -290,20 +291,20 @@ describe("CaseSvc.create — the creator's access", () => {
 
   for (const role of ["MEMBER", "MANAGER"] as const) {
     it(`a ${role} gets an EDIT grant on the case they create, audited`, async () => {
-      await CaseSvc.create("org-1", "user-1", role, { caseName: "Santos v. Reyes" });
+      await CaseSvc.create(firmScope("org-1"), "user-1", role, { caseName: "Santos v. Reyes" });
       expect(writes).to.deep.equal(["create:false", "grant:user-1:EDIT", "audit:case.grant_access", "security:case.access_granted"]);
     });
   }
 
   for (const role of ["OWNER", "ADMIN"] as const) {
     it(`an ${role} needs no grant — their role already edits it`, async () => {
-      await CaseSvc.create("org-1", "user-1", role, { caseName: "Santos v. Reyes" });
+      await CaseSvc.create(firmScope("org-1"), "user-1", role, { caseName: "Santos v. Reyes" });
       expect(writes).to.deep.equal(["create:false"]);
     });
   }
 
   it("a case made confidential at creation is walled from the start, and its creator manages it", async () => {
-    await CaseSvc.create("org-1", "user-1", "MEMBER", { caseName: "Santos v. Reyes", confidential: true });
+    await CaseSvc.create(firmScope("org-1"), "user-1", "MEMBER", { caseName: "Santos v. Reyes", confidential: true });
     expect(writes).to.deep.equal([
       "create:true",
       "grant:user-1:ADMIN",
@@ -316,7 +317,7 @@ describe("CaseSvc.create — the creator's access", () => {
 
   it("refuses confidential in a personal workspace, creating nothing", async () => {
     personal = true;
-    const err = await rejection(CaseSvc.create("org-1", "user-1", "OWNER", { caseName: "Mine", confidential: true }));
+    const err = await rejection(CaseSvc.create(firmScope("org-1"), "user-1", "OWNER", { caseName: "Mine", confidential: true }));
     expect(err.statusCode).to.equal(400);
     expect(writes).to.deep.equal([]);
   });
@@ -336,7 +337,7 @@ describe("CaseSvc.list — per-row canEdit", () => {
     (CaseRepo as any).withCopyContext = async (rows: any[]) => rows;
     (CaseAccess as any).editableIds = async () => new Set(["case-2"]);
 
-    const result = await CaseSvc.list("org-1", "user-1", 1, 20);
+    const result = await CaseSvc.list(firmScope("org-1"), "user-1", 1, 20);
     expect(result.data).to.deep.equal([
       { id: "case-1", canEdit: false },
       { id: "case-2", canEdit: true },

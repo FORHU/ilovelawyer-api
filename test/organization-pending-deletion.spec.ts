@@ -103,9 +103,8 @@ describe("Organization pending deletion", () => {
       expect(org?.archivedById).to.equal(ownerId);
       expect(org?.archivedAt?.getTime()).to.be.at.least(before - 1000);
       expect(org!.deletionScheduledAt!.getTime() - org!.archivedAt!.getTime()).to.equal(ORGANIZATION_DELETION_GRACE_PERIOD_DAYS * DAY_MS);
-      // The leaver lands in their portfolio, as with any leave.
-      const orgs = await OrganizationSvc.listForUser(ownerId);
-      expect(orgs.map((o) => o.isPersonal)).to.deep.equal([true]);
+      // The leaver works solo now, with no organization, as with any leave.
+      expect(await OrganizationSvc.listForUser(ownerId)).to.deep.equal([]);
     });
 
     it("archives the old org when its sole owner accepts an invite elsewhere", async () => {

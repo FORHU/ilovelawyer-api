@@ -6,16 +6,18 @@ import OrganizationSvc from "../src/services/organization.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import OrganizationInviteRepo from "../src/repositories/organization-invite.repository";
 
-async function makeUser(createdUserIds: string[]) {
+async function makeUser(createdUserIds: string[], role: "USER" | "LAWYER" = "USER") {
   const userId = crypto.randomUUID();
   await prisma.user.create({
-    data: { id: userId, email: `personal-${userId}@example.com`, username: `personal-${userId}` },
+    data: { id: userId, role, email: `personal-${userId}@example.com`, username: `personal-${userId}` },
   });
   createdUserIds.push(userId);
   return userId;
 }
 
-describe("Personal workspace (onboarding Skip)", () => {
+// A personal workspace is a client-app account's (ClientCaseSvc.workspaceFor). A lawyer never gets
+// one: a solo lawyer has no organization at all (docs/adr/0022, test/solo-lawyer.spec.ts).
+describe("Personal workspace (client-app accounts)", () => {
   const createdUserIds: string[] = [];
 
   after(async () => {
@@ -25,7 +27,7 @@ describe("Personal workspace (onboarding Skip)", () => {
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   });
 
-  it("creates a personal SOLO workspace, and a retried Skip returns the same one", async () => {
+  it("creates a personal SOLO workspace, and a retried request returns the same one", async () => {
     const userId = await makeUser(createdUserIds);
 
     const first = await OrganizationSvc.create(userId, "Ana", undefined, "PH", true);
@@ -36,18 +38,13 @@ describe("Personal workspace (onboarding Skip)", () => {
     expect(second.id).to.equal(first.id);
   });
 
-  it("stays behind as the portfolio when the user creates an organization", async () => {
-    const userId = await makeUser(createdUserIds);
-    const personal = await OrganizationSvc.create(userId, "Ben", undefined, "PH", true);
+  it("is never made for a lawyer", async () => {
+    const lawyerId = await makeUser(createdUserIds, "LAWYER");
 
-    const org = await OrganizationSvc.create(userId, "Ben Law Office", "PROFESSIONAL", "PH");
-    expect(org.id).to.not.equal(personal.id);
-    expect(org.isPersonal).to.equal(false);
-    expect(org.name).to.equal("Ben Law Office");
-    expect(org.packageSku).to.equal("PROFESSIONAL");
-    const stillPersonal = await prisma.organization.findUniqueOrThrow({ where: { id: personal.id } });
-    expect(stillPersonal.isPersonal).to.equal(true);
-    expect((await OrganizationSvc.getPortfolio(userId)).id).to.equal(personal.id);
+    const err = await OrganizationSvc.create(lawyerId, "Lee", undefined, "PH", true).catch((e) => e);
+    expect(err.statusCode).to.equal(400);
+    expect(err.code).to.equal("SOLO_HAS_NO_ORGANIZATION");
+    expect(await prisma.organization.count({ where: { createdById: lawyerId } })).to.equal(0);
   });
 
   it("refuses to create a second organization for someone already in a real one", async () => {
@@ -77,22 +74,5 @@ describe("Personal workspace (onboarding Skip)", () => {
 
     await OrganizationSvc.declineInvite(firm.id, inviteeId);
     expect((await OrganizationMemberRepo.findAnyForUser(inviteeId))?.organizationId).to.equal(personal.id);
-  });
-
-  it("is parked by accepting an invite, and restored when the user leaves that organization", async () => {
-    const ownerId = await makeUser(createdUserIds);
-    const inviteeId = await makeUser(createdUserIds);
-    const firm = await OrganizationSvc.create(ownerId, "Gail Firm", undefined, "PH");
-    const personal = await OrganizationSvc.create(inviteeId, "Hal", undefined, "PH", true);
-
-    await OrganizationInviteRepo.create(firm.id, inviteeId, "MEMBER");
-    await OrganizationSvc.acceptInvite(firm.id, inviteeId);
-    expect((await OrganizationMemberRepo.findAnyForUser(inviteeId))?.organizationId).to.equal(firm.id);
-
-    await OrganizationSvc.leave(firm.id, inviteeId);
-    const restored = await OrganizationMemberRepo.findAnyForUser(inviteeId);
-    expect(restored?.organizationId).to.equal(personal.id);
-    expect(restored?.status).to.equal("ACCEPTED");
-    expect(restored?.role).to.equal("OWNER");
   });
 });

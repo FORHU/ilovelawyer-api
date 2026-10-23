@@ -10,6 +10,7 @@ import HttpError from "../utils/http-error";
 import DocumentRepo from "../repositories/document.repository";
 import { DecisionRecordItem } from "../utils/response-parser";
 import { DocumentRef, decisionRecordsNeedSanitizing, sanitizeDecisionRecords } from "../utils/document-references";
+import { caseScope } from "../utils/workspace";
 
 /**
  * Case-level Decision Records (differentiation program, Phase 1) — see
@@ -28,12 +29,10 @@ export default class DecisionRecordSvc {
     // label; show the file name instead (see utils/document-references.ts). Nothing is written.
     if (!rows.some((row) => decisionRecordsNeedSanitizing({ records: [row.payload] }))) return rows;
     let docs: DocumentRef[] = [];
-    if (accessibleCase.organizationId) {
-      try {
-        docs = (await DocumentRepo.listRefsForScope(accessibleCase.organizationId, { caseId })).map((d) => ({ id: d.id, name: d.name }));
-      } catch {
-        docs = [];
-      }
+    try {
+      docs = (await DocumentRepo.listRefsForScope(caseScope(accessibleCase), { caseId })).map((d) => ({ id: d.id, name: d.name }));
+    } catch {
+      docs = [];
     }
     return rows.map((row) => {
       if (!decisionRecordsNeedSanitizing({ records: [row.payload] })) return row;

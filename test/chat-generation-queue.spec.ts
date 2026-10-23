@@ -10,6 +10,7 @@
  * monkeypatched on the CommonJS module objects, and the AI stream client talks to a local `ws`
  * server — the same pattern test/message-persistence-durability.spec.ts already established.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import { AddressInfo } from "net";
@@ -125,7 +126,7 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     ChatRepo.findConsultationWithCase = async () => null;
     let err: Error | undefined;
     try {
-      await ChatSvc.enqueueChatGeneration("org1", "PH", "user1", "c1", "sess-1", "hello");
+      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "hello");
     } catch (e) {
       err = e as Error;
     }
@@ -145,7 +146,7 @@ describe("ChatSvc.enqueueChatGeneration", () => {
       enqueued = job;
     };
 
-    const result = await ChatSvc.enqueueChatGeneration("org1", "PH", "user1", "c1", "sess-1", "hello");
+    const result = await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "hello");
 
     expect(result).to.deep.equal({ messageId: "m-user-1", sessionId: "sess-1", replyStatus: "PENDING" });
     expect(enqueued).to.not.equal(null);
@@ -166,7 +167,7 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     };
     let err: Error | undefined;
     try {
-      await ChatSvc.enqueueChatGeneration("org1", "PH", "user1", "c1", "sess-1", "hello", undefined, undefined, "foreign-case");
+      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "hello", undefined, undefined, "foreign-case");
     } catch (e) {
       err = e as Error;
     }
@@ -657,7 +658,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
       },
     ];
     try {
-      const messages: any[] = await ChatSvc.listMessages("org1", "u1", "c1");
+      const messages: any[] = await ChatSvc.listMessages(firmScope("org1"), "u1", "c1");
       const assistant = messages.find((m) => m.id === "a1");
       expect(assistant.content).to.equal('See "Letter before claim.pdf" for the claim.');
       expect(assistant.decisionRecords.records[0].evidenceFor[0].doc).to.equal(DOC_NAME);
@@ -688,7 +689,7 @@ describe("ChatSvc.processChatGenerationJob", () => {
       { id: "a1", role: "assistant", content: "A clean answer.", documents: [], decisionRecords: null, generatedDocument: null },
     ];
     try {
-      const messages: any[] = await ChatSvc.listMessages("org1", "u1", "c1");
+      const messages: any[] = await ChatSvc.listMessages(firmScope("org1"), "u1", "c1");
       expect(messages).to.have.length(2);
       expect(lookups).to.equal(0);
     } finally {

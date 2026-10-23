@@ -13,6 +13,7 @@
  *
  * No live Postgres or S3: CaseAccess, the repos, the queue and the S3 helpers are monkeypatched.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import DocumentSvc from "../src/services/document.service";
@@ -114,30 +115,30 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
 
   describe("presign", () => {
     it("refuses a case in another organization, issuing no upload URL", async () => {
-      const err = await rejection(DocumentSvc.presign(ORG, UPLOADER, "brief.pdf", "application/pdf", "case-other-org"));
+      const err = await rejection(DocumentSvc.presign(firmScope(ORG), UPLOADER, "brief.pdf", "application/pdf", "case-other-org"));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses a confidential case the uploader is walled off from", async () => {
-      const err = await rejection(DocumentSvc.presign(ORG, UPLOADER, "brief.pdf", "application/pdf", "case-confidential"));
+      const err = await rejection(DocumentSvc.presign(firmScope(ORG), UPLOADER, "brief.pdf", "application/pdf", "case-confidential"));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses a case that doesn't exist at all, with the same 404", async () => {
-      const err = await rejection(DocumentSvc.presign(ORG, UPLOADER, "brief.pdf", "application/pdf", "case-nonexistent"));
+      const err = await rejection(DocumentSvc.presign(firmScope(ORG), UPLOADER, "brief.pdf", "application/pdf", "case-nonexistent"));
       expect(err.statusCode).to.equal(404);
     });
 
     it("lets a member upload to a case they can open, checking access as them", async () => {
-      const result = await DocumentSvc.presign(ORG, UPLOADER, "brief.pdf", "application/pdf", "case-mine");
+      const result = await DocumentSvc.presign(firmScope(ORG), UPLOADER, "brief.pdf", "application/pdf", "case-mine");
       expect(accessChecks).to.deep.equal([{ caseId: "case-mine", userId: UPLOADER }]);
       expect(result.key).to.match(/^documents\/cases\/case-mine\//);
     });
 
     it("an upload with no case is unaffected and needs no case check", async () => {
-      const result = await DocumentSvc.presign(ORG, UPLOADER, "brief.pdf", "application/pdf");
+      const result = await DocumentSvc.presign(firmScope(ORG), UPLOADER, "brief.pdf", "application/pdf");
       expect(accessChecks).to.deep.equal([]);
       expect(result.key).to.match(/^documents\/users\//);
     });
@@ -147,12 +148,12 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
         { filename: "a.pdf", contentType: "application/pdf" },
         { filename: "b.pdf", contentType: "application/pdf" },
       ];
-      await DocumentSvc.presignMany(ORG, UPLOADER, files, "case-mine");
+      await DocumentSvc.presignMany(firmScope(ORG), UPLOADER, files, "case-mine");
       expect(accessChecks).to.have.length(1);
 
       accessChecks = [];
       writes = [];
-      const err = await rejection(DocumentSvc.presignMany(ORG, UPLOADER, files, "case-other-org"));
+      const err = await rejection(DocumentSvc.presignMany(firmScope(ORG), UPLOADER, files, "case-other-org"));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
@@ -162,24 +163,24 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
     const file = { key: "documents/cases/case-other-org/1-ab.pdf", name: "brief.pdf" };
 
     it("refuses a case in another organization before writing anything", async () => {
-      const err = await rejection(DocumentSvc.create(ORG, UPLOADER, { ...file, caseId: "case-other-org" }));
+      const err = await rejection(DocumentSvc.create(firmScope(ORG), UPLOADER, { ...file, caseId: "case-other-org" }));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses a confidential case the uploader is walled off from", async () => {
-      const err = await rejection(DocumentSvc.create(ORG, UPLOADER, { ...file, caseId: "case-confidential" }));
+      const err = await rejection(DocumentSvc.create(firmScope(ORG), UPLOADER, { ...file, caseId: "case-confidential" }));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("lets a member upload to a case they can open, and still queues extraction", async () => {
-      await DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-mine" });
+      await DocumentSvc.create(firmScope(ORG), UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-mine" });
       expect(writes).to.deep.equal(["file:create", "doc:create:case-mine", "queue:enqueue"]);
     });
 
     it("an upload with no case is unaffected", async () => {
-      await DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf" });
+      await DocumentSvc.create(firmScope(ORG), UPLOADER, { key: "k", name: "brief.pdf" });
       expect(accessChecks).to.deep.equal([]);
       expect(writes).to.deep.equal(["file:create", "doc:create:none"]);
     });
@@ -189,13 +190,13 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
     const items = [{ key: "k1", name: "a.pdf" }, { key: "k2", name: "b.pdf" }];
 
     it("refuses a case in another organization before writing anything", async () => {
-      const err = await rejection(DocumentSvc.createMany(ORG, UPLOADER, items, "case-other-org"));
+      const err = await rejection(DocumentSvc.createMany(firmScope(ORG), UPLOADER, items, "case-other-org"));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("checks the shared case once and lets the batch through", async () => {
-      await DocumentSvc.createMany(ORG, UPLOADER, items, "case-mine");
+      await DocumentSvc.createMany(firmScope(ORG), UPLOADER, items, "case-mine");
       expect(accessChecks).to.have.length(1);
       expect(writes).to.include("doc:createMany:case-mine");
     });
@@ -203,26 +204,26 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
 
   describe("a confidential case the uploader holds a grant on", () => {
     it("refuses a view-only grant with a 403, issuing no upload URL", async () => {
-      const err = await rejection(DocumentSvc.presign(ORG, UPLOADER, "brief.pdf", "application/pdf", "case-confidential-view"));
+      const err = await rejection(DocumentSvc.presign(firmScope(ORG), UPLOADER, "brief.pdf", "application/pdf", "case-confidential-view"));
       expect(err.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses a view-only grant on create and createMany before writing anything", async () => {
-      const single = await rejection(DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-confidential-view" }));
+      const single = await rejection(DocumentSvc.create(firmScope(ORG), UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-confidential-view" }));
       expect(single.statusCode).to.equal(403);
-      const batch = await rejection(DocumentSvc.createMany(ORG, UPLOADER, [{ key: "k1", name: "a.pdf" }], "case-confidential-view"));
+      const batch = await rejection(DocumentSvc.createMany(firmScope(ORG), UPLOADER, [{ key: "k1", name: "a.pdf" }], "case-confidential-view"));
       expect(batch.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);
     });
 
     it("lets an edit grant upload, and still queues extraction", async () => {
-      await DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-confidential-edit" });
+      await DocumentSvc.create(firmScope(ORG), UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-confidential-edit" });
       expect(writes).to.deep.equal(["file:create", "doc:create:case-confidential-edit", "queue:enqueue"]);
     });
 
     it("leaves an ordinary case alone: a viewer may still upload, with no edit check", async () => {
-      await DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-mine" });
+      await DocumentSvc.create(firmScope(ORG), UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-mine" });
       expect(editChecks).to.deep.equal([]);
       expect(writes).to.include("doc:create:case-mine");
     });
@@ -230,7 +231,7 @@ describe("#371 — uploads only reach a case the uploader can open", () => {
 
   describe("a case with no organization (creator-owned)", () => {
     it("is allowed for the creator, since only they can open it", async () => {
-      await DocumentSvc.create(ORG, UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-no-org" });
+      await DocumentSvc.create(firmScope(ORG), UPLOADER, { key: "k", name: "brief.pdf", caseId: "case-no-org" });
       expect(writes).to.include("doc:create:case-no-org");
     });
   });

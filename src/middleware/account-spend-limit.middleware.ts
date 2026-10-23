@@ -1,5 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import AccountLimitsSvc from "../services/account-limits.service";
+import EngagementAiBudgetSvc from "../services/engagement-ai-budget.service";
+import { consultationCaseOf } from "./guest-case-items.middleware";
+import { workspaceOf } from "../utils/workspace";
 
 const CASE_PATH = /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/.*)?$/i;
 
@@ -24,13 +27,16 @@ export function startsAiWork(method: string, rest: string): boolean {
 /** Mounted on the case router: once the signed-in account has used its AI allowance
  * (AccountLimitsSvc, account-level now — cases aren't billed individually), writes that could
  * start AI work answer 403 ACCOUNT_ALLOWANCE_REACHED; reads, deletes and housekeeping still pass.
- * The case id in the path is only used to decide which requests count as AI work — the budget
- * check itself is against the signed-in user, not the case. */
+ * The case id in the path is only used to decide which requests count as AI work, and to check
+ * whether it's an engaged lawyer's workspace copy — a separate, shown-to-the-lawyer budget
+ * (EngagementAiBudgetSvc, #515) — the account budget check itself is against the signed-in user,
+ * not the case. */
 export async function accountSpendLimit(req: Request, _res: Response, next: NextFunction) {
   try {
     const match = CASE_PATH.exec(req.path);
     if (!match || !startsAiWork(req.method, match[2] ?? "")) return next();
     await AccountLimitsSvc.assertAccountHasBudget(req.user.userId);
+    await EngagementAiBudgetSvc.assertHasBudget(match[1]);
     next();
   } catch (err) {
     next(err);
@@ -38,10 +44,13 @@ export async function accountSpendLimit(req: Request, _res: Response, next: Next
 }
 
 /** The same for sending a chat message: any AI work spends the account's allowance, whether or not
- * the consultation is tied to a case. */
+ * the consultation is tied to a case. A consultation on an engaged lawyer's workspace copy also
+ * checks that engagement's own AI budget (#515) — a separate, shown-to-the-lawyer check. */
 export async function consultationSpendLimit(req: Request, _res: Response, next: NextFunction) {
   try {
     await AccountLimitsSvc.assertAccountHasBudget(req.user.userId);
+    const consultation = await consultationCaseOf(req.params.consultationId, workspaceOf(req));
+    if (consultation?.caseId) await EngagementAiBudgetSvc.assertHasBudget(consultation.caseId);
     next();
   } catch (err) {
     next(err);

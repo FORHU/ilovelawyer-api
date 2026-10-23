@@ -23,6 +23,7 @@ export const TRACE_SOURCES = [
   "caseOutlook",
   "contradictionScan",
   "missingEvidence",
+  "crossExamination",
 ] as const;
 
 export type TraceSource = (typeof TRACE_SOURCES)[number];

@@ -21,6 +21,8 @@ const PUBLIC_USER_SELECT = {
   approvalStatus: true,
   denialReason: true,
   onboardingCompleted: true,
+  setupCompletedAt: true,
+  soloChosenAt: true,
   provider: true,
   avatarId: true,
   lastLoginAt: true,
@@ -120,7 +122,7 @@ export default class AuthRepo {
   static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialExpiresAt: Date }) {
     return bustUsersList(
       await prisma.user.create({
-        data: { ...data, name: "Guest", role: "LAWYER", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true },
+        data: { ...data, name: "Guest", role: "LAWYER", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true, setupCompletedAt: new Date(), soloChosenAt: new Date() },
       }),
     );
   }
@@ -167,6 +169,20 @@ export default class AuthRepo {
     return user?.preferredLanguage ?? null;
   }
 
+  /** The site (tenant code) an account works on: its organization's, or for someone with none (a
+   * solo lawyer, docs/adr/0022) the account's own. Null when neither is known. */
+  static async findSiteCode(userId: string): Promise<string | null> {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        tenant: { select: { code: true } },
+        organizationMemberships: { select: { organization: { select: { tenant: { select: { code: true } } } } } },
+      },
+    });
+    if (!user) return null;
+    return user.organizationMemberships[0]?.organization.tenant.code ?? user.tenant?.code ?? null;
+  }
+
   static async findById(id: string) {
     const user = await prisma.user.findUnique({ where: { id }, select: PUBLIC_USER_SELECT });
     return user ? toPublicUser(user) : null;
@@ -189,6 +205,18 @@ export default class AuthRepo {
 
   static async updateLastLogin(userId: string) {
     return bustUsersList(await prisma.user.update({ where: { id: userId }, data: { lastLoginAt: new Date() } }));
+  }
+
+  /** Account setup after sign-up is done (or skipped). Idempotent: a second call keeps the first
+   * date. No bustUsersList: AdminSvc.listUsers doesn't show it. */
+  static async setSetupCompleted(userId: string) {
+    await prisma.user.updateMany({ where: { id: userId, setupCompletedAt: null }, data: { setupCompletedAt: new Date() } });
+  }
+
+  /** The lawyer chose to work solo, with no organization (docs/adr/0022). Idempotent: a second
+   * call keeps the first date. Busts the users list, which shows solo lawyers as such. */
+  static async setSoloChosen(userId: string) {
+    await bustUsersList(await prisma.user.updateMany({ where: { id: userId, soloChosenAt: null }, data: { soloChosenAt: new Date() } }));
   }
 
   /** No bustUsersList: onboardingCompleted isn't a column AdminSvc.listUsers shows. */

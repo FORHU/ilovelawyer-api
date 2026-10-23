@@ -1,34 +1,35 @@
 import prisma from "../lib/prisma";
 import CaseAccess from "../utils/case-access";
 import { RagStatus } from "@prisma/client";
+import { organizationIdOf, scopeWhere, type WorkspaceScope } from "../utils/workspace";
 
 export default class TranscriptionRepo {
   /** The organization's transcriptions, minus those on a case `userId` can't open (#346). */
-  static async findAllByUser(organizationId: string, userId: string) {
+  static async findAllByUser(scope: WorkspaceScope, userId: string) {
     return prisma.transcription.findMany({
-      where: { organizationId, OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] },
+      where: { ...scopeWhere(scope), OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] },
       include: { audioFile: true },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  static async findAllByCase(organizationId: string, caseId: string) {
+  static async findAllByCase(scope: WorkspaceScope, caseId: string) {
     return prisma.transcription.findMany({
-      where: { organizationId, caseId },
+      where: { ...scopeWhere(scope), caseId },
       include: { audioFile: true },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  static async findById(id: string, organizationId: string) {
+  static async findById(id: string, scope: WorkspaceScope) {
     return prisma.transcription.findFirst({
-      where: { id, organizationId },
+      where: { id, ...scopeWhere(scope) },
       include: { audioFile: true },
     });
   }
 
-  /** userId is stamped for "created by" audit purposes only — reads/updates/deletes below scope by organizationId. */
-  static async create(organizationId: string, userId: string, data: {
+  /** userId is stamped for "created by" audit purposes only — reads/updates/deletes below scope by the workspace (scopeWhere). */
+  static async create(scope: WorkspaceScope, userId: string, data: {
     title?: string;
     audioFileId?: string;
     transcript?: string;
@@ -39,12 +40,12 @@ export default class TranscriptionRepo {
     consultationId?: string | null;
   }) {
     return prisma.transcription.create({
-      data: { organizationId, userId, ...data },
+      data: { organizationId: organizationIdOf(scope), userId, ...data },
       include: { audioFile: true },
     });
   }
 
-  static async update(id: string, organizationId: string, data: {
+  static async update(id: string, scope: WorkspaceScope, data: {
     title?: string;
     audioFileId?: string;
     transcript?: string;
@@ -55,13 +56,13 @@ export default class TranscriptionRepo {
     consultationId?: string | null;
   }) {
     return prisma.transcription.updateMany({
-      where: { id, organizationId },
+      where: { id, ...scopeWhere(scope) },
       data,
     });
   }
 
-  static async delete(id: string, organizationId: string) {
-    return prisma.transcription.deleteMany({ where: { id, organizationId } });
+  static async delete(id: string, scope: WorkspaceScope) {
+    return prisma.transcription.deleteMany({ where: { id, ...scopeWhere(scope) } });
   }
 
   /** Unscoped — ownership is already checked at the controller/service boundary

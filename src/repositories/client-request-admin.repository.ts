@@ -42,6 +42,8 @@ function toWhere(filter: AdminRequestFilter, now: Date): Prisma.ClientRequestWhe
 
 export interface FeesSummaryRow {
   key: string;
+  /** Per organization: the row is a solo lawyer (no organization), `key` their id. */
+  solo: boolean;
   engagements: number;
   perCaseFees: number;
   topUps: number;
@@ -64,18 +66,20 @@ export default class ClientRequestAdminRepo {
   /**
    * Paid charges in [from, to) per organization or lawyer: engagements (paid per-case fees), the fees,
    * the AI top-ups, and what's been refunded of them. A refunded charge still counts as paid, and its
-   * refunds show separately. Most fees first.
+   * refunds show separately. Most fees first. Per organization, a solo lawyer's charges (no
+   * organization, docs/adr/0022) are grouped under the lawyer, with `solo` set.
    */
   static async feesSummary(groupBy: "organization" | "lawyer", from: Date | undefined, to: Date | undefined): Promise<FeesSummaryRow[]> {
-    const column = Prisma.raw(groupBy === "organization" ? `c."organizationId"` : `c."lawyerId"`);
+    const column = Prisma.raw(groupBy === "organization" ? `COALESCE(c."organizationId", c."lawyerId")` : `c."lawyerId"`);
     const conditions = [
       Prisma.sql`c."status" IN (${Prisma.join(PAID_CHARGE_STATUSES.map((s) => Prisma.sql`${s}::"OrganizationChargeStatus"`))})`,
       Prisma.sql`${column} IS NOT NULL`,
       ...(from ? [Prisma.sql`c."createdAt" >= ${from}`] : []),
       ...(to ? [Prisma.sql`c."createdAt" < ${to}`] : []),
     ];
-    const rows = await prisma.$queryRaw<{ key: string; engagements: bigint; perCaseFees: bigint | null; topUps: bigint | null; refunds: bigint | null }[]>(Prisma.sql`
+    const rows = await prisma.$queryRaw<{ key: string; solo: boolean; engagements: bigint; perCaseFees: bigint | null; topUps: bigint | null; refunds: bigint | null }[]>(Prisma.sql`
       SELECT ${column} AS "key",
+             BOOL_OR(c."organizationId" IS NULL) AS "solo",
              COUNT(*) FILTER (WHERE c."kind" = 'PER_CASE_FEE'::"OrganizationChargeKind") AS "engagements",
              SUM(c."amountMinor") FILTER (WHERE c."kind" = 'PER_CASE_FEE'::"OrganizationChargeKind") AS "perCaseFees",
              SUM(c."amountMinor") FILTER (WHERE c."kind" = 'AI_TOP_UP'::"OrganizationChargeKind") AS "topUps",
@@ -90,6 +94,7 @@ export default class ClientRequestAdminRepo {
       ORDER BY "perCaseFees" DESC NULLS LAST, 1 ASC`);
     return rows.map((r) => ({
       key: r.key,
+      solo: groupBy === "organization" && r.solo,
       engagements: Number(r.engagements),
       perCaseFees: Number(r.perCaseFees ?? 0),
       topUps: Number(r.topUps ?? 0),

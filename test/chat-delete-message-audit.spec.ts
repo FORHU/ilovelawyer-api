@@ -3,6 +3,7 @@
  * TypeScript build (and with it every deploy) and would have thrown on every message delete.
  * Repos and the audit service are monkeypatched on their module objects, same idiom as
  * test/consultation-access.spec.ts. */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import ChatSvc from "../src/services/chat.service";
@@ -51,7 +52,7 @@ describe("ChatSvc.deleteMessage audit event", () => {
   });
 
   it("deletes the message and records which Case it was on", async () => {
-    await ChatSvc.deleteMessage("org-1", "creator", "c1", "m1");
+    await ChatSvc.deleteMessage(firmScope("org-1"), "creator", "c1", "m1");
 
     expect(deletedIds).to.deep.equal(["m1"]);
     expect(recorded).to.have.length(1);
@@ -67,7 +68,7 @@ describe("ChatSvc.deleteMessage audit event", () => {
 
   it("records no Case for a standalone consultation", async () => {
     consultation = { ...consultation, caseId: null };
-    await ChatSvc.deleteMessage("org-1", "creator", "c1", "m1");
+    await ChatSvc.deleteMessage(firmScope("org-1"), "creator", "c1", "m1");
 
     expect(recorded[0]!.caseId).to.equal(null);
   });

@@ -14,6 +14,7 @@ import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
 import { CasePermission, CaseStatus, OrganizationRole } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
 import AccountLimitsSvc from "./account-limits.service";
+import type { WorkspaceScope } from "../utils/workspace";
 
 export default class CaseSvc {
   /** Creating a case gives the creator the access their role doesn't: a MANAGER/MEMBER gets an
@@ -22,18 +23,18 @@ export default class CaseSvc {
    * the rest of the firm; like marking one later (OrganizationSvc.setConfidential), the creator
    * gets an ADMIN grant so they keep it and can bring teammates in. Both are audited. */
   static async create(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     role: OrganizationRole,
     data: CaseData & { caseName: string; confidential?: boolean },
   ) {
     await AccountLimitsSvc.assertCanCreateCase(userId);
     const { confidential = false, ...fields } = data;
-    if (confidential && (await OrganizationRepo.isPersonal(organizationId))) {
+    if (confidential && (!scope.organizationId || (await OrganizationRepo.isPersonal(scope.organizationId)))) {
       throw new HttpError("A case in your portfolio is already private to you", 400);
     }
 
-    const created = await CaseRepo.create(organizationId, userId, { ...fields, confidential });
+    const created = await CaseRepo.create(scope, userId, { ...fields, confidential });
     const permission: CasePermission | null = confidential ? "ADMIN" : role === "MANAGER" || role === "MEMBER" ? "EDIT" : null;
     if (permission) {
       await OrganizationRepo.grantCaseAccess(created.id, userId, permission);
@@ -41,7 +42,7 @@ export default class CaseSvc {
       await SecurityAuditSvc.record({
         action: "case.access_granted",
         actorId: userId,
-        organizationId,
+        organizationId: scope.organizationId,
         targetType: "user",
         targetId: userId,
         caseId: created.id,
@@ -53,7 +54,7 @@ export default class CaseSvc {
       await SecurityAuditSvc.record({
         action: "case.confidential_changed",
         actorId: userId,
-        organizationId,
+        organizationId: scope.organizationId,
         targetType: "case",
         targetId: created.id,
         targetName: created.caseName,
@@ -65,7 +66,7 @@ export default class CaseSvc {
   }
 
   static async list(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     page: number,
     limit: number,
@@ -75,7 +76,7 @@ export default class CaseSvc {
     sort?: CaseListSort,
     order?: CaseListOrder,
   ) {
-    const result = await CaseRepo.list(organizationId, userId, page, limit, search, status, createdBy, sort, order);
+    const result = await CaseRepo.list(scope, userId, page, limit, search, status, createdBy, sort, order);
     // Per row, since a grant (a creator's included) lets someone change one case and not the next.
     const [data, editable] = await Promise.all([
       CaseRepo.withCopyContext(result.data, userId),
@@ -86,9 +87,9 @@ export default class CaseSvc {
 
   /** "Last opened" for the requesting user. Org-scoped existence check first so a caseId from
    * another organization can't be stamped, and one they can't open (#346) isn't either. */
-  static async markOpened(id: string, organizationId: string, userId: string) {
+  static async markOpened(id: string, scope: WorkspaceScope, userId: string) {
     await CaseAccess.loadAccessibleCase(id, userId);
-    const caseRecord = await CaseRepo.findById(id, organizationId);
+    const caseRecord = await CaseRepo.findById(id, scope);
     if (!caseRecord) throw new HttpError("Case not found", 404);
     await CaseRepo.markOpened(id, userId);
   }
@@ -97,9 +98,9 @@ export default class CaseSvc {
    * off from it, #346) in this organization. A portfolio copy also says how it relates to its
    * original (see CaseRepo.withCopyContext) — what the case page shows. The AI allowance is
    * account-level now, not per case — see GET /api/users/me/ai-allowance (AccountLimitsSvc). */
-  static async getById(id: string, organizationId: string, userId: string) {
+  static async getById(id: string, scope: WorkspaceScope, userId: string) {
     await CaseAccess.loadAccessibleCase(id, userId);
-    const caseRecord = await CaseRepo.findById(id, organizationId);
+    const caseRecord = await CaseRepo.findById(id, scope);
     if (!caseRecord) throw new HttpError("Case not found", 404);
     const [withContext] = await CaseRepo.withCopyContext([caseRecord], userId);
     return withContext;
@@ -112,15 +113,15 @@ export default class CaseSvc {
    * member could delete a whole case while unable to edit one finding in it. The
    * organizationId scoping below still applies on top: a grant on a case in another
    * organization doesn't reach it through this one. */
-  static async update(id: string, organizationId: string, actorId: string, data: CaseData) {
+  static async update(id: string, scope: WorkspaceScope, actorId: string, data: CaseData) {
     await CaseAccess.assertCanEdit(id, actorId);
-    const before = data.clientSide !== undefined ? await CaseRepo.findById(id, organizationId) : null;
-    const updated = await CaseRepo.update(id, organizationId, data);
+    const before = data.clientSide !== undefined ? await CaseRepo.findById(id, scope) : null;
+    const updated = await CaseRepo.update(id, scope, data);
     if (!updated) throw new HttpError("Case not found", 404);
     // The findings were written for the other side — the next Terminal load regenerates them
     // (CaseFindingAiSvc.scheduleIfOutdated).
     if (before && before.clientSide !== data.clientSide) await CaseRepo.clearFindingsFormatVersion(id);
-    return CaseRepo.findById(id, organizationId);
+    return CaseRepo.findById(id, scope);
   }
 
   /** Document.caseId's FK is ON DELETE SET NULL, not CASCADE (see schema) — nothing removes a
@@ -130,22 +131,22 @@ export default class CaseSvc {
    * is checked up front so a caseId from another organization can't reach listAllByCase at all;
    * listAllByCase itself is also scoped to the case's own organization (#373), so a document
    * mis-attached to this case from elsewhere is left out of the cascade rather than failing it. */
-  static async delete(id: string, organizationId: string, actorId: string) {
+  static async delete(id: string, scope: WorkspaceScope, actorId: string) {
     // Stricter than archive: an EDIT/ADMIN grant doesn't reach it (CaseAccess.assertCanDelete).
     await CaseAccess.assertCanDelete(id, actorId);
-    const caseRecord = await CaseRepo.findById(id, organizationId);
+    const caseRecord = await CaseRepo.findById(id, scope);
     if (!caseRecord) throw new HttpError("Case not found", 404);
 
     const docs = await DocumentRepo.listAllByCase(id);
     for (const doc of docs) {
-      await DocumentSvc.delete(doc.id, organizationId, actorId);
+      await DocumentSvc.delete(doc.id, scope, actorId);
     }
 
-    await CaseRepo.delete(id, organizationId);
+    await CaseRepo.delete(id, scope);
     await SecurityAuditSvc.record({
       action: "case.deleted",
       actorId,
-      organizationId,
+      organizationId: scope.organizationId,
       targetType: "case",
       targetId: id,
       targetName: caseRecord.caseName,
@@ -157,8 +158,8 @@ export default class CaseSvc {
   /** Bulk delete from the case list — loops delete() (document cleanup included) over every
    * selected id with allSettled so one missing case doesn't fail the rest of the batch. Mirrors
    * archiveMany below; `succeeded` is the deleted ids, since there's no row left to return. */
-  static async deleteMany(ids: string[], organizationId: string, actorId: string) {
-    const results = await Promise.allSettled(ids.map((id) => this.delete(id, organizationId, actorId)));
+  static async deleteMany(ids: string[], scope: WorkspaceScope, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.delete(id, scope, actorId)));
     const succeeded: string[] = [];
     const failed: { id: string; error: string }[] = [];
     results.forEach((result, i) => {
@@ -171,21 +172,21 @@ export default class CaseSvc {
   /** Archiving/unarchiving are independent of delete — an archived case can still be deleted,
    * and archiving never blocks anything else on the case (documents, chat, auto-refresh all
    * keep working identically). Gated like update/delete above. */
-  static async archive(id: string, organizationId: string, actorId: string) {
+  static async archive(id: string, scope: WorkspaceScope, actorId: string) {
     await CaseAccess.assertCanEdit(id, actorId);
-    const updated = await CaseRepo.setStatus(id, organizationId, "ARCHIVED");
+    const updated = await CaseRepo.setStatus(id, scope, "ARCHIVED");
     if (!updated) throw new HttpError("Case not found", 404);
     await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.archive" });
     // Cascades into the case's own documents — see DocumentSvc.archiveByCase.
-    await DocumentSvc.archiveByCase(id, organizationId, actorId);
+    await DocumentSvc.archiveByCase(id, scope, actorId);
     return updated;
   }
 
   /** Bulk "Select All" archive from the Active Cases tab — loops archive() (cascade included)
    * over every selected id with allSettled so one missing/already-archived case doesn't fail the
    * rest of the batch. Mirrors unarchiveMany below. */
-  static async archiveMany(ids: string[], organizationId: string, actorId: string) {
-    const results = await Promise.allSettled(ids.map((id) => this.archive(id, organizationId, actorId)));
+  static async archiveMany(ids: string[], scope: WorkspaceScope, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.archive(id, scope, actorId)));
     const succeeded: Awaited<ReturnType<typeof CaseRepo.setStatus>>[] = [];
     const failed: { id: string; error: string }[] = [];
     results.forEach((result, i) => {
@@ -195,22 +196,22 @@ export default class CaseSvc {
     return { succeeded, failed };
   }
 
-  static async unarchive(id: string, organizationId: string, actorId: string) {
+  static async unarchive(id: string, scope: WorkspaceScope, actorId: string) {
     await CaseAccess.assertCanEdit(id, actorId);
-    const updated = await CaseRepo.setStatus(id, organizationId, "ACTIVE");
+    const updated = await CaseRepo.setStatus(id, scope, "ACTIVE");
     if (!updated) throw new HttpError("Case not found", 404);
     await OrganizationRepo.writeAudit({ caseId: id, actorId, action: "case.unarchive" });
     // Cascades into the case's own documents, mirroring archive()'s cascade above — otherwise a
     // restored case would show back up as Active while its documents stayed stuck in Archived.
-    await DocumentSvc.unarchiveByCase(id, organizationId, actorId);
+    await DocumentSvc.unarchiveByCase(id, scope, actorId);
     return updated;
   }
 
   /** Bulk "Select All" restore from the Archived Cases tab — loops unarchive() (cascade included)
    * over every selected id with allSettled so one missing/already-active case doesn't fail the
    * rest of the batch. */
-  static async unarchiveMany(ids: string[], organizationId: string, actorId: string) {
-    const results = await Promise.allSettled(ids.map((id) => this.unarchive(id, organizationId, actorId)));
+  static async unarchiveMany(ids: string[], scope: WorkspaceScope, actorId: string) {
+    const results = await Promise.allSettled(ids.map((id) => this.unarchive(id, scope, actorId)));
     const succeeded: Awaited<ReturnType<typeof CaseRepo.setStatus>>[] = [];
     const failed: { id: string; error: string }[] = [];
     results.forEach((result, i) => {
@@ -245,13 +246,13 @@ export default class CaseSvc {
   }
 
   static async handleCreateCaseWithDocument(
-    caseData: { caseId: string; organizationId: string; userId: string },
+    caseData: { caseId: string; scope: WorkspaceScope; userId: string },
     documentData: IncomingCaseDocument[],
   ) {
     assertBatchWithinLimit(documentData.map((doc) => doc.metaData.fileSize));
     // In this organization and a case the uploader can open — not a confidential one walled off
     // from them (#346).
-    await this.getById(caseData.caseId, caseData.organizationId, caseData.userId);
+    await this.getById(caseData.caseId, caseData.scope, caseData.userId);
 
     // fileUrl is derived from s3Key server-side, never accepted from the client (spoofing risk:
     // a client-supplied fileUrl could point a row at an S3 object it doesn't own).
@@ -266,7 +267,7 @@ export default class CaseSvc {
       const files = await FileSvc.createFile(filesToCreate, tx);
 
       const userDocumentData = files.map((file, i) => ({
-        organizationId: caseData.organizationId,
+        organizationId: caseData.scope.organizationId,
         userId: caseData.userId,
         caseId: caseData.caseId,
         name: file.filename ?? "",

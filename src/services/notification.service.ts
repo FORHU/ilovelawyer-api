@@ -2,13 +2,13 @@ import NotificationRepo from "../repositories/notification.repository";
 import { emitToUser } from "../lib/socket";
 
 export default class NotificationSvc {
-  static async list(userId: string, organizationId: string, filters: { limit?: number; cursor?: string; unreadOnly?: boolean }) {
+  static async list(userId: string, organizationId: string | null, filters: { limit?: number; cursor?: string; unreadOnly?: boolean }) {
     const notifications = await NotificationRepo.findMany(userId, organizationId, filters);
     const nextCursor = filters.limit && notifications.length === filters.limit ? notifications[notifications.length - 1]!.id : null;
     return { notifications, nextCursor };
   }
 
-  static async unreadCount(userId: string, organizationId: string) {
+  static async unreadCount(userId: string, organizationId: string | null) {
     return NotificationRepo.countUnread(userId, organizationId);
   }
 
@@ -16,7 +16,7 @@ export default class NotificationSvc {
     await NotificationRepo.markRead(id, userId);
   }
 
-  static async markAllRead(userId: string, organizationId: string) {
+  static async markAllRead(userId: string, organizationId: string | null) {
     await NotificationRepo.markAllRead(userId, organizationId);
   }
 

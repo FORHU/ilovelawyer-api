@@ -3,6 +3,7 @@ import AvatarSvc from "./avatar.service";
 import GoogleCalendarSvc from "./google-calendar.service";
 import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
+import OrganizationRepo from "../repositories/organization.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
@@ -20,6 +21,8 @@ export default class AccountDeletionSvc {
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);
+    // Their own workspace (no organization) goes with them; a firm keeps its cases.
+    await OrganizationRepo.deleteOwnWorkspace(userId);
     // No actorId: the row is deleted next, and AuditEvent.actorId would be nulled anyway. The id
     // goes in the payload so the event still says whose account it was.
     await AuditSvc.record({ action: AuditAction.AccountPurged, payload: { userId } });
@@ -40,6 +43,7 @@ export default class AccountDeletionSvc {
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);
+    await OrganizationRepo.deleteOwnWorkspace(userId, cutoff);
     const deleted = await AuthRepo.deleteUserIfDeletionDue(userId, cutoff);
     if (deleted) {
       await SecurityAuditSvc.record({

@@ -27,9 +27,11 @@ export interface SavedCard {
 }
 
 export interface CardSetupRequest {
-  organizationId: string;
+  /** The firm the card is for; null for a solo lawyer's own card (docs/adr/0022), who is `userId`. */
+  organizationId: string | null;
+  /** The name the Stripe customer is made with: the firm's, or the solo lawyer's. */
   organizationName: string;
-  /** The organization's Stripe customer, null on its first setup. */
+  /** The payer's Stripe customer, null on its first setup. */
   customerId: string | null;
   email: string | null;
   userId: string;
@@ -40,7 +42,9 @@ export interface CardSetupRequest {
 /** A Checkout Session's card, once it has completed, with who started it. */
 export interface CompletedCardSetup {
   sessionId: string;
-  organizationId: string;
+  /** The firm the card is for, or null for a solo lawyer's own card (then `lawyerId`). */
+  organizationId: string | null;
+  lawyerId?: string | null;
   userId: string | null;
   card: SavedCard;
 }
@@ -143,14 +147,16 @@ export const stripeOrganizationCardProvider: HostedOrganizationCardProvider = {
   mode: "hosted",
   async startSetup(request) {
     const stripe = stripeClient();
-    const metadata = { purpose: ORGANIZATION_CARD_PURPOSE, organizationId: request.organizationId, userId: request.userId };
+    // Whose card it is: a firm's, or a solo lawyer's own (no organization).
+    const payer: Record<string, string> = request.organizationId ? { organizationId: request.organizationId } : { lawyerId: request.userId };
+    const metadata = { purpose: ORGANIZATION_CARD_PURPOSE, ...payer, userId: request.userId };
     const customerId =
       request.customerId ??
       (
         await stripe.customers.create(
-          { name: request.organizationName, ...(request.email ? { email: request.email } : {}), metadata: { organizationId: request.organizationId } },
+          { name: request.organizationName, ...(request.email ? { email: request.email } : {}), metadata: payer },
           // Two admins starting a first setup at once get the same customer.
-          { idempotencyKey: `organization-customer-${request.organizationId}` },
+          { idempotencyKey: request.organizationId ? `organization-customer-${request.organizationId}` : `lawyer-customer-${request.userId}` },
         )
       ).id;
     const session = await stripe.checkout.sessions.create({
@@ -167,15 +173,17 @@ export const stripeOrganizationCardProvider: HostedOrganizationCardProvider = {
   },
   async completedSetup(sessionId) {
     const session = await stripeClient().checkout.sessions.retrieve(sessionId, { expand: ["setup_intent.payment_method"] });
-    if (session.mode !== "setup" || session.metadata?.purpose !== ORGANIZATION_CARD_PURPOSE || !session.metadata.organizationId) return null;
+    const meta = session.metadata;
+    if (session.mode !== "setup" || meta?.purpose !== ORGANIZATION_CARD_PURPOSE || !(meta.organizationId || meta.lawyerId)) return null;
     if (session.status !== "complete") return null;
     const intent = session.setup_intent as Stripe.SetupIntent | null;
     if (!intent || intent.status !== "succeeded" || !intent.payment_method) return null;
     const method = intent.payment_method as Stripe.PaymentMethod;
     return {
       sessionId,
-      organizationId: session.metadata.organizationId,
-      userId: session.metadata.userId || null,
+      organizationId: meta.organizationId || null,
+      lawyerId: meta.organizationId ? null : meta.lawyerId,
+      userId: meta.userId || null,
       card: {
         customerId: typeof session.customer === "string" ? session.customer : (session.customer?.id ?? null),
         paymentMethodId: method.id,

@@ -9,6 +9,7 @@
  * CaseAccess.assertCanEdit's query; what's under test here is that every destructive path goes
  * through it, with the acting user, before anything is written.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import CaseSvc from "../src/services/case.service";
@@ -89,7 +90,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
       return { id: caseId };
     };
 
-    (CaseRepo as any).findById = async (id: string, organizationId: string) =>
+    (CaseRepo as any).findById = async (id: string, { organizationId }: { organizationId: string }) =>
       CASE_ORGS[id] === organizationId ? { id, organizationId, clientSide: null } : null;
     (CaseRepo as any).update = async (id: string) => {
       writes.push(`case.update:${id}`);
@@ -99,7 +100,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
       writes.push(`case.delete:${id}`);
       return true;
     };
-    (CaseRepo as any).setStatus = async (id: string, organizationId: string, status: string) => {
+    (CaseRepo as any).setStatus = async (id: string, { organizationId }: { organizationId: string }, status: string) => {
       if (CASE_ORGS[id] !== organizationId) return null;
       writes.push(`case.${status}:${id}`);
       return { id, status };
@@ -151,56 +152,56 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
   describe("CaseSvc", () => {
     it("update: refuses a plain member before anything is written", async () => {
-      const err = await rejection(CaseSvc.update("case-1", "org-1", MEMBER, { caseName: "Renamed" }));
+      const err = await rejection(CaseSvc.update("case-1", firmScope("org-1"), MEMBER, { caseName: "Renamed" }));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("update: lets an editor through, checking access as the acting user", async () => {
-      await CaseSvc.update("case-1", "org-1", EDITOR, { caseName: "Renamed" });
+      await CaseSvc.update("case-1", firmScope("org-1"), EDITOR, { caseName: "Renamed" });
       expect(accessChecks).to.deep.include({ caseId: "case-1", userId: EDITOR });
       expect(writes).to.deep.equal(["case.update:case-1"]);
     });
 
     it("delete: refuses a plain member without touching the case or its documents", async () => {
-      const err = await rejection(CaseSvc.delete("case-1", "org-1", MEMBER));
+      const err = await rejection(CaseSvc.delete("case-1", firmScope("org-1"), MEMBER));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("delete: refuses an EDIT grant holder who isn't an org owner/admin — editing isn't destroying", async () => {
       editable.add("case-1:grantee-1");
-      const err = await rejection(CaseSvc.delete("case-1", "org-1", "grantee-1"));
+      const err = await rejection(CaseSvc.delete("case-1", firmScope("org-1"), "grantee-1"));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("delete: an editor deletes the case's documents, then the case", async () => {
-      await CaseSvc.delete("case-1", "org-1", EDITOR);
+      await CaseSvc.delete("case-1", firmScope("org-1"), EDITOR);
       expect(writes).to.deep.equal(["doc.delete:doc-case", "audit:document.delete", "case.delete:case-1"]);
     });
 
     it("archive: refuses a plain member before the status flip, the audit row or the cascade", async () => {
-      const err = await rejection(CaseSvc.archive("case-1", "org-1", MEMBER));
+      const err = await rejection(CaseSvc.archive("case-1", firmScope("org-1"), MEMBER));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("unarchive: refuses a plain member before the status flip, the audit row or the cascade", async () => {
-      const err = await rejection(CaseSvc.unarchive("case-1", "org-1", MEMBER));
+      const err = await rejection(CaseSvc.unarchive("case-1", firmScope("org-1"), MEMBER));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("archive: still 404s for an editor when the case isn't in the active organization", async () => {
-      const err = await rejection(CaseSvc.archive("case-other-org", "org-1", EDITOR));
+      const err = await rejection(CaseSvc.archive("case-other-org", firmScope("org-1"), EDITOR));
       expect(err.statusCode).to.equal(404);
     });
 
     it("deleteMany: authorizes per id — the editable case goes, the other lands in failed", async () => {
       editable.delete("case-2:" + EDITOR);
       deletable.delete("case-2:" + EDITOR);
-      const result = await CaseSvc.deleteMany(["case-1", "case-2"], "org-1", EDITOR);
+      const result = await CaseSvc.deleteMany(["case-1", "case-2"], firmScope("org-1"), EDITOR);
       expect(result.succeeded).to.deep.equal(["case-1"]);
       expect(result.failed).to.deep.equal([{ id: "case-2", error: "Only an owner or admin can delete a case" }]);
       expect(writes).to.not.include("case.delete:case-2");
@@ -208,7 +209,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
     it("archiveMany: authorizes per id — the editable case goes, the other lands in failed", async () => {
       editable.delete("case-2:" + EDITOR);
-      const result = await CaseSvc.archiveMany(["case-1", "case-2"], "org-1", EDITOR);
+      const result = await CaseSvc.archiveMany(["case-1", "case-2"], firmScope("org-1"), EDITOR);
       expect(result.succeeded.map((c: any) => c.id)).to.deep.equal(["case-1"]);
       expect(result.failed.map((f) => f.id)).to.deep.equal(["case-2"]);
       expect(writes).to.not.include("case.ARCHIVED:case-2");
@@ -216,7 +217,7 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
     it("unarchiveMany: authorizes per id", async () => {
       editable.delete("case-2:" + EDITOR);
-      const result = await CaseSvc.unarchiveMany(["case-1", "case-2"], "org-1", EDITOR);
+      const result = await CaseSvc.unarchiveMany(["case-1", "case-2"], firmScope("org-1"), EDITOR);
       expect(result.succeeded.map((c: any) => c.id)).to.deep.equal(["case-1"]);
       expect(result.failed.map((f) => f.id)).to.deep.equal(["case-2"]);
     });
@@ -224,44 +225,44 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
   describe("DocumentSvc — a document attached to a case", () => {
     it("delete: refuses a plain member without deleting", async () => {
-      const err = await rejection(DocumentSvc.delete("doc-case", "org-1", MEMBER));
+      const err = await rejection(DocumentSvc.delete("doc-case", firmScope("org-1"), MEMBER));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("delete: lets an editor of the document's case through", async () => {
-      await DocumentSvc.delete("doc-case", "org-1", EDITOR);
+      await DocumentSvc.delete("doc-case", firmScope("org-1"), EDITOR);
       expect(accessChecks).to.deep.include({ caseId: "case-1", userId: EDITOR });
       expect(writes).to.deep.equal(["doc.delete:doc-case", "audit:document.delete"]);
     });
 
     it("archive: refuses a plain member before the status flip", async () => {
-      const err = await rejection(DocumentSvc.archive("doc-case", "org-1", MEMBER));
+      const err = await rejection(DocumentSvc.archive("doc-case", firmScope("org-1"), MEMBER));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("unarchive: refuses a plain member before the status flip", async () => {
-      const err = await rejection(DocumentSvc.unarchive("doc-case", "org-1", MEMBER));
+      const err = await rejection(DocumentSvc.unarchive("doc-case", firmScope("org-1"), MEMBER));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("update: refuses a plain member (e.g. Mark-as-Exhibit)", async () => {
-      const err = await rejection(DocumentSvc.update("doc-case", "org-1", MEMBER, { isExhibit: true }));
+      const err = await rejection(DocumentSvc.update("doc-case", firmScope("org-1"), MEMBER, { isExhibit: true }));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("update: lets an editor of the document's case through", async () => {
-      await DocumentSvc.update("doc-case", "org-1", EDITOR, { isExhibit: true });
+      await DocumentSvc.update("doc-case", firmScope("org-1"), EDITOR, { isExhibit: true });
       expect(writes).to.deep.equal(["doc.update:doc-case"]);
     });
 
     it("deleteMany: authorizes per id", async () => {
       documents["doc-case-2"] = { id: "doc-case-2", caseId: "case-2", ragStatus: "PENDING", status: "ACTIVE", fileId: null };
       editable.delete("case-2:" + EDITOR);
-      const result = await DocumentSvc.deleteMany(["doc-case", "doc-case-2"], "org-1", EDITOR);
+      const result = await DocumentSvc.deleteMany(["doc-case", "doc-case-2"], firmScope("org-1"), EDITOR);
       expect(result.succeeded).to.deep.equal(["doc-case"]);
       expect(result.failed.map((f) => f.id)).to.deep.equal(["doc-case-2"]);
       expect(writes).to.not.include("doc.delete:doc-case-2");
@@ -270,19 +271,19 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
   describe("DocumentSvc — moving a document into a case", () => {
     it("refuses when the actor can't edit the target case", async () => {
-      const err = await rejection(DocumentSvc.update("doc-loose", "org-1", MEMBER, { caseId: "case-1" }));
+      const err = await rejection(DocumentSvc.update("doc-loose", firmScope("org-1"), MEMBER, { caseId: "case-1" }));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses a target case from another organization, even for someone who can edit it", async () => {
-      const err = await rejection(DocumentSvc.update("doc-loose", "org-1", EDITOR, { caseId: "case-other-org" }));
+      const err = await rejection(DocumentSvc.update("doc-loose", firmScope("org-1"), EDITOR, { caseId: "case-other-org" }));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("checks both the case it leaves and the case it joins", async () => {
-      await DocumentSvc.update("doc-case", "org-1", EDITOR, { caseId: "case-2" });
+      await DocumentSvc.update("doc-case", firmScope("org-1"), EDITOR, { caseId: "case-2" });
       expect(accessChecks).to.deep.equal([
         { caseId: "case-1", userId: EDITOR },
         { caseId: "case-2", userId: EDITOR },
@@ -293,9 +294,9 @@ describe("#345 — destructive case and case-document operations require CaseAcc
 
   describe("DocumentSvc — a document with no case stays organization-scoped", () => {
     it("delete, archive and update go through without a case access check", async () => {
-      await DocumentSvc.archive("doc-loose", "org-1", MEMBER);
-      await DocumentSvc.update("doc-loose", "org-1", MEMBER, { name: "Renamed.pdf" });
-      await DocumentSvc.delete("doc-loose", "org-1", MEMBER);
+      await DocumentSvc.archive("doc-loose", firmScope("org-1"), MEMBER);
+      await DocumentSvc.update("doc-loose", firmScope("org-1"), MEMBER, { name: "Renamed.pdf" });
+      await DocumentSvc.delete("doc-loose", firmScope("org-1"), MEMBER);
       expect(accessChecks).to.deep.equal([]);
       expect(writes).to.deep.equal(["doc.ARCHIVED:doc-loose", "audit:document.archive", "doc.update:doc-loose", "doc.delete:doc-loose", "audit:document.delete"]);
     });

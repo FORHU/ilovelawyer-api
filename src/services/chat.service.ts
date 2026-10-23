@@ -50,6 +50,7 @@ import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSI
 import { chatWonderSessionKey, chatWonderRecapKey, trialSampleKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
 import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 import SecurityAuditSvc from "./security-audit.service";
+import { caseScope, firmScope, ownScope, type WorkspaceScope } from "../utils/workspace";
 
 /** How a running chat turn is stopped — see ChatSvc.processChatGenerationJob/cancelChatGeneration. */
 interface GenerationControl {
@@ -108,24 +109,24 @@ export default class ChatSvc {
   /** Jobs currently running on THIS instance, so a Stop that lands here can abort them at once. */
   private static activeGenerations = new Map<string, GenerationControl>();
 
-  static async createConsultation(organizationId: string, userId: string, title?: string, caseId?: string) {
+  static async createConsultation(scope: WorkspaceScope, userId: string, title?: string, caseId?: string) {
     if (caseId) {
       // Throws 404 if the case doesn't exist, isn't in this organization, or this user can't open
       // it — a Case's Consultations belong to the people on the Case.
-      await CaseSvc.getById(caseId, organizationId, userId);
+      await CaseSvc.getById(caseId, scope, userId);
       // Starting one adds to the Case: read-only for a view-only person on a confidential Case.
       await CaseAccess.assertCanContribute(caseId, userId);
     }
     // A main consultation belongs to the user, not to the workspace it was started in.
-    return ChatRepo.createConsultation(caseId ? organizationId : null, userId, title, caseId);
+    return ChatRepo.createConsultation(caseId ? scope.organizationId : null, userId, title, caseId);
   }
 
   /** With a caseId, every Consultation on that Case — shared with everyone who can open the Case,
    * not just the ones this user started (see CONTEXT.md's Consultation entry). Without one, only
    * this user's own standalone Consultations — those are never shared. */
-  static async listConsultations(organizationId: string, userId: string, caseId?: string, status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE") {
+  static async listConsultations(scope: WorkspaceScope, userId: string, caseId?: string, status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE") {
     if (caseId) await CaseAccess.loadAccessibleCase(caseId, userId);
-    return ChatRepo.listConsultations(organizationId, caseId, status, caseId ? undefined : userId);
+    return ChatRepo.listConsultations(scope.organizationId, caseId, status, caseId ? undefined : userId);
   }
 
   /**
@@ -178,14 +179,14 @@ export default class ChatSvc {
     });
   }
 
-  static async renameConsultation(organizationId: string, userId: string, consultationId: string, title: string) {
-    await this.assertConsultationWritable(organizationId, userId, consultationId);
+  static async renameConsultation(scope: WorkspaceScope, userId: string, consultationId: string, title: string) {
+    await this.assertConsultationWritable(scope, userId, consultationId);
     return ChatRepo.updateConsultation(consultationId, title);
   }
 
-  private static async assertConsultationOwned(organizationId: string, consultationId: string) {
+  private static async assertConsultationOwned(scope: WorkspaceScope, consultationId: string) {
     const consultation = await ChatRepo.findConsultationById(consultationId);
-    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
+    if (!consultation || !consultationInWorkspace(consultation, scope)) {
       throw new HttpError("Consultation not found", 404);
     }
     return consultation;
@@ -196,16 +197,16 @@ export default class ChatSvc {
    * role, can see it. A case-linked one is shared: its creator, an invited participant, or anyone
    * who can open the Case — on a confidential Case, only the last (#346). 404 either way, so a Consultation the user can't see is
    * indistinguishable from one that doesn't exist. */
-  static async assertConsultationAccess(organizationId: string, userId: string, consultationId: string) {
-    const consultation = await this.assertConsultationOwned(organizationId, consultationId);
+  static async assertConsultationAccess(scope: WorkspaceScope, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationOwned(scope, consultationId);
     await this.assertUserAccess(consultation, userId);
     return consultation;
   }
 
   /** assertConsultationAccess for changing a Consultation — sending in it, renaming, archiving,
    * deleting a message. */
-  static async assertConsultationWritable(organizationId: string, userId: string, consultationId: string) {
-    const consultation = await this.assertConsultationAccess(organizationId, userId, consultationId);
+  static async assertConsultationWritable(scope: WorkspaceScope, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationAccess(scope, userId, consultationId);
     await this.assertCanChangeOnCase(consultation, userId);
     return consultation;
   }
@@ -244,8 +245,8 @@ export default class ChatSvc {
   /** The creator, or — for a case-linked Consultation — anyone who can edit the Case. Everyone on
    * the Case can see a colleague's Consultation, but only these people can archive, restore or
    * delete it. */
-  private static async assertCanRemove(organizationId: string, userId: string, consultationId: string) {
-    const consultation = await this.assertConsultationWritable(organizationId, userId, consultationId);
+  private static async assertCanRemove(scope: WorkspaceScope, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationWritable(scope, userId, consultationId);
     if (consultation.caseId && consultation.userId !== userId) {
       try {
         await CaseAccess.assertCanEdit(consultation.caseId, userId);
@@ -258,8 +259,8 @@ export default class ChatSvc {
 
   /** The soft delete: hides the Consultation from its lists (see ConsultationStatus) with every
    * message, file and Topic kept, so unarchive brings it back exactly as it was. Idempotent. */
-  static async archiveConsultation(organizationId: string, userId: string, consultationId: string) {
-    const consultation = await this.assertCanRemove(organizationId, userId, consultationId);
+  static async archiveConsultation(scope: WorkspaceScope, userId: string, consultationId: string) {
+    const consultation = await this.assertCanRemove(scope, userId, consultationId);
     // Re-archiving would silently cancel the scheduled deletion; restoring is how that's done.
     if (consultation.status === "FOR_DELETION") {
       throw new HttpError("This consultation is scheduled for deletion — restore it instead", 409);
@@ -273,8 +274,8 @@ export default class ChatSvc {
     return ChatRepo.setConsultationStatus(consultationId, "ARCHIVED");
   }
 
-  static async unarchiveConsultation(organizationId: string, userId: string, consultationId: string) {
-    await this.assertCanRemove(organizationId, userId, consultationId);
+  static async unarchiveConsultation(scope: WorkspaceScope, userId: string, consultationId: string) {
+    await this.assertCanRemove(scope, userId, consultationId);
     return ChatRepo.setConsultationStatus(consultationId, "ACTIVE");
   }
 
@@ -284,8 +285,8 @@ export default class ChatSvc {
    * and everything hanging off them, plus files uploaded into this chat alone, whose S3 objects
    * are flagged FOR_DELETION (see ChatRepo.deleteConsultationPermanently). Files uploaded to the
    * Case from inside this chat stay with the Case. */
-  static async deleteConsultation(organizationId: string, userId: string, consultationId: string) {
-    const consultation = await this.assertCanRemove(organizationId, userId, consultationId);
+  static async deleteConsultation(scope: WorkspaceScope, userId: string, consultationId: string) {
+    const consultation = await this.assertCanRemove(scope, userId, consultationId);
     if (consultation.status === "FOR_DELETION") {
       throw new HttpError("Deletion is already scheduled for this consultation", 409);
     }
@@ -298,7 +299,7 @@ export default class ChatSvc {
     await SecurityAuditSvc.record({
       action: "consultation.deleted",
       actorId: userId,
-      organizationId,
+      organizationId: scope.organizationId,
       targetType: "consultation",
       targetId: consultationId,
       targetName: consultation.title ?? null,
@@ -308,8 +309,8 @@ export default class ChatSvc {
     return { deletionScheduledFor };
   }
 
-  static async listMessages(organizationId: string, userId: string, consultationId: string) {
-    const consultation = await this.assertConsultationAccess(organizationId, userId, consultationId);
+  static async listMessages(scope: WorkspaceScope, userId: string, consultationId: string) {
+    const consultation = await this.assertConsultationAccess(scope, userId, consultationId);
 
     const messages = await ChatRepo.listMessagesByConsultation(consultationId);
 
@@ -319,7 +320,7 @@ export default class ChatSvc {
       Boolean(m.decisionRecords && decisionRecordsNeedSanitizing({ records: m.decisionRecords.records })) ||
       (m.role === "assistant" && /\(\s*id:\s*[0-9a-f]{8}-[0-9a-f]{4}-/i.test(m.content));
     const scopeDocs = messages.some(looksLeaky)
-      ? await ChatSvc.scopeDocumentRefs(organizationId, consultationId, consultation.caseId, userId)
+      ? await ChatSvc.scopeDocumentRefs(scope, consultationId, consultation.caseId, userId)
       : [];
 
     return Promise.all(
@@ -328,7 +329,7 @@ export default class ChatSvc {
         if (decisionRecords && decisionRecordsNeedSanitizing({ records: decisionRecords.records })) {
           const cleaned = await ChatSvc.sanitizeDecisionPayload(
             { records: decisionRecords.records as unknown as DecisionRecordsPayload["records"] },
-            { organizationId, consultationId, caseId: consultation.caseId },
+            { workspace: scope, consultationId, caseId: consultation.caseId },
             scopeDocs,
           );
           cleanedDecisionRecords = { ...decisionRecords, records: cleaned.records as unknown as typeof decisionRecords.records };
@@ -368,14 +369,14 @@ export default class ChatSvc {
   /** (id, name) of the documents in scope for a consultation/case, for turning file ids into
    * names. Never throws: with no list, ids are still replaced by a generic label, never shown. */
   static async scopeDocumentRefs(
-    organizationId: string | null | undefined,
+    scope: WorkspaceScope | null | undefined,
     consultationId: string,
     caseId?: string | null,
     userId?: string,
   ): Promise<DocumentRef[]> {
-    if (!organizationId) return [];
+    if (!scope) return [];
     try {
-      const rows = await DocumentRepo.listRefsForScope(organizationId, { consultationId, caseId }, userId);
+      const rows = await DocumentRepo.listRefsForScope(scope, { consultationId, caseId }, userId);
       return rows.map((d) => ({ id: d.id, name: d.name }));
     } catch (err) {
       logger.warn("Chat: could not load scope documents for id redaction", { err, consultationId });
@@ -391,11 +392,11 @@ export default class ChatSvc {
    */
   static async sanitizeDecisionPayload(
     payload: DecisionRecordsPayload,
-    scope: { organizationId: string | null | undefined; consultationId: string; caseId?: string | null },
+    scope: { workspace: WorkspaceScope | null | undefined; consultationId: string; caseId?: string | null },
     docs?: DocumentRef[],
   ): Promise<DecisionRecordsPayload> {
     if (!decisionRecordsNeedSanitizing(payload)) return payload;
-    const refs = docs ?? (await ChatSvc.scopeDocumentRefs(scope.organizationId, scope.consultationId, scope.caseId));
+    const refs = docs ?? (await ChatSvc.scopeDocumentRefs(scope.workspace, scope.consultationId, scope.caseId));
 
     let texts: Map<string, string> | undefined;
     const inScope = new Set(refs.map((d) => d.id.toLowerCase()));
@@ -418,8 +419,8 @@ export default class ChatSvc {
     return sanitizeDecisionRecords(payload, refs, { texts });
   }
 
-  static async deleteMessage(organizationId: string, userId: string, consultationId: string, messageId: string) {
-    const consultation = await ChatSvc.assertConsultationWritable(organizationId, userId, consultationId);
+  static async deleteMessage(scope: WorkspaceScope, userId: string, consultationId: string, messageId: string) {
+    const consultation = await ChatSvc.assertConsultationWritable(scope, userId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
@@ -427,7 +428,7 @@ export default class ChatSvc {
     const deleted = await ChatRepo.deleteMessage(messageId);
     await SecurityAuditSvc.record({
       action: "consultation.message_deleted",
-      organizationId,
+      organizationId: scope.organizationId,
       targetType: "message",
       targetId: messageId,
       caseId: consultation.caseId ?? null,
@@ -452,7 +453,7 @@ export default class ChatSvc {
    * returned to the client right away instead of arriving later over the socket.
    */
   static async enqueueChatGeneration(
-    organizationId: string,
+    scope: WorkspaceScope,
     tenantCode: TenantCode,
     userId: string,
     consultationId: string,
@@ -467,7 +468,7 @@ export default class ChatSvc {
     logger.info("Chat: enqueueChatGeneration started", { consultationId });
 
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
+    if (!consultation || !consultationInWorkspace(consultation, scope)) {
       throw new HttpError("Consultation not found", 404);
     }
     await ChatSvc.assertUserAccess(consultation, userId);
@@ -490,7 +491,7 @@ export default class ChatSvc {
     // whose consultation was created without a case link.
     let effectiveCaseId = consultation.caseId ?? undefined;
     if (!effectiveCaseId && caseId) {
-      await CaseSvc.getById(caseId, organizationId, userId); // org + access check (#346)
+      await CaseSvc.getById(caseId, scope, userId); // org + access check (#346)
       effectiveCaseId = caseId;
     }
 
@@ -518,12 +519,12 @@ export default class ChatSvc {
     logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
 
     if (documentIds?.length) {
-      await DocumentRepo.linkToMessage(documentIds, userMessage.id, organizationId, consultationId, userId);
+      await DocumentRepo.linkToMessage(documentIds, userMessage.id, scope, consultationId, userId);
     }
 
     ChatGenerationQueue.enqueue({
       jobId: userMessage.id,
-      organizationId,
+      organizationId: scope.organizationId,
       tenantCode,
       userId,
       consultationId,
@@ -618,12 +619,12 @@ export default class ChatSvc {
    * its partial text then comes from the ~1s-old checkpoint rather than the live buffer.
    */
   static async cancelChatGeneration(
-    organizationId: string,
+    scope: WorkspaceScope,
     requesterUserId: string,
     consultationId: string,
     messageId: string,
   ): Promise<{ messageId: string; replyStatus: string | null; assistantMessageId?: string }> {
-    await ChatSvc.assertConsultationWritable(organizationId, requesterUserId, consultationId);
+    await ChatSvc.assertConsultationWritable(scope, requesterUserId, consultationId);
     const message = await ChatRepo.findReplyState(messageId);
     if (!message || message.consultationId !== consultationId || message.role !== "user") {
       throw new HttpError("Message not found", 404);
@@ -669,10 +670,12 @@ export default class ChatSvc {
     logger.info("Chat generation: processing started", { jobId: job.jobId, consultationId: job.consultationId });
 
     const { jobId: parentMessageId, organizationId, tenantCode, userId, consultationId, sessionId, caseDocumentId, documentContext } = job;
+    // A job from a lawyer's own workspace carries no organization; the asker owns that workspace.
+    const scope = organizationId ? firmScope(organizationId) : ownScope(userId);
     const effectiveCaseId = job.effectiveCaseId ?? undefined;
 
     const consultation = await ChatRepo.findConsultationWithCase(consultationId);
-    if (!consultation || !consultationInWorkspace(consultation, organizationId)) {
+    if (!consultation || !consultationInWorkspace(consultation, scope)) {
       // The consultation was deleted between enqueue and this job running — nothing left to
       // reply into. Not retryable (see ChatGenerationQueue's doc comment on why it always
       // acks): re-running the same job against a gone consultation would never succeed.
@@ -694,7 +697,7 @@ export default class ChatSvc {
 
     // The documents in scope for this turn, as (id, name): every id that reaches a user (live
     // chunks, the saved answer, Decision Records) is turned into a name first. One light query.
-    const scopeDocs = await ChatSvc.scopeDocumentRefs(organizationId, consultationId, effectiveCaseId ?? consultation.caseId, userId);
+    const scopeDocs = await ChatSvc.scopeDocumentRefs(scope, consultationId, effectiveCaseId ?? consultation.caseId, userId);
 
     // emitToUser is documented as never throwing (lib/socket.ts), but this is called
     // synchronously from inside streamChatWonderMessage's ws.onmessage handler on every
@@ -784,7 +787,7 @@ export default class ChatSvc {
     // enqueueChatGeneration's effectiveCaseId resolution, which already ownership-checked it).
     let caseRecord = consultation.case;
     if (!caseRecord && effectiveCaseId) {
-      caseRecord = await CaseSvc.getById(effectiveCaseId, organizationId, userId);
+      caseRecord = await CaseSvc.getById(effectiveCaseId, scope, userId);
     }
     const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
     // The lawyer's hand edits to the case's strategy map (added/reworded/removed points), so the
@@ -809,7 +812,7 @@ export default class ChatSvc {
     let grounding: CaseDocumentGrounding | undefined;
     const scopedDocumentId = await ChatSvc.scopedCaseDocumentId(
       caseDocumentId,
-      organizationId,
+      scope,
       userId,
       consultationId,
       effectiveCaseId,
@@ -1161,7 +1164,7 @@ export default class ChatSvc {
               trace: {
                 consultationId,
                 caseId: effectiveCaseId ?? null,
-                organizationId,
+                organizationId: scope.organizationId,
                 source: generationKind === "mindMap" ? "mindMap" : generationKind === "audioOverviewScript" ? "audioOverview" : "chat",
                 turnId: parentMessageId,
                 userId: userId ?? null,
@@ -1259,7 +1262,7 @@ export default class ChatSvc {
     if (streamedDecisions) {
       streamedDecisions = await ChatSvc.sanitizeDecisionPayload(
         streamedDecisions,
-        { organizationId, consultationId, caseId: effectiveCaseId ?? consultation.caseId },
+        { workspace: scope, consultationId, caseId: effectiveCaseId ?? consultation.caseId },
         scopeDocs,
       );
     }
@@ -1788,7 +1791,7 @@ export default class ChatSvc {
    * same best-effort shape as every other grounding fallback in this file. */
   private static async scopedCaseDocumentId(
     caseDocumentId: string | undefined,
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     consultationId: string,
     caseId?: string,
@@ -1797,15 +1800,15 @@ export default class ChatSvc {
     // findById is scoped by ORGANIZATION. This used to pass the user id here, which never matches
     // an organization id, so an explicitly attached document was silently never used for grounding.
     // documentBelongsToScope below still requires the uploading user, the consultation or the case.
-    const doc = await DocumentRepo.findById(caseDocumentId, organizationId, userId);
+    const doc = await DocumentRepo.findById(caseDocumentId, scope, userId);
     if (!doc) return undefined;
     if (doc.status === "ARCHIVED") return undefined;
     if (!documentBelongsToScope(doc, { userId, consultationId, caseId })) return undefined;
     return doc.id;
   }
 
-  static async getRelatedCases(organizationId: string, userId: string, tenantCode: TenantCode, consultationId: string) {
-    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
+  static async getRelatedCases(scope: WorkspaceScope, userId: string, tenantCode: TenantCode, consultationId: string) {
+    await ChatSvc.assertConsultationAccess(scope, userId, consultationId);
 
     const message = await ChatRepo.findLatestAssistantMessage(consultationId);
     const items = await enrichRelatedCaseTitles((message?.relatedCases?.items ?? []) as unknown as RelatedCase[]);
@@ -1819,8 +1822,8 @@ export default class ChatSvc {
    * (see sendMessage's audioOverview handling above) — the separate, explicit "Generate
    * Audio" action from the grilling session's plan, never auto-triggered from script
    * generation. Enqueues onto AudioOverviewQueue and returns immediately. */
-  static async startAudioOverviewAudio(organizationId: string, userId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationWritable(organizationId, userId, consultationId);
+  static async startAudioOverviewAudio(scope: WorkspaceScope, userId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationWritable(scope, userId, consultationId);
     const message = await ChatRepo.findMessageById(messageId);
     if (!message || message.consultationId !== consultationId) {
       throw new HttpError("Message not found", 404);
@@ -1851,8 +1854,8 @@ export default class ChatSvc {
     });
   }
 
-  static async pollAudioOverviewAudio(organizationId: string, userId: string, consultationId: string, messageId: string) {
-    await ChatSvc.assertConsultationAccess(organizationId, userId, consultationId);
+  static async pollAudioOverviewAudio(scope: WorkspaceScope, userId: string, consultationId: string, messageId: string) {
+    await ChatSvc.assertConsultationAccess(scope, userId, consultationId);
     const row = await ChatRepo.findAudioOverviewByMessageId(messageId);
     if (!row) throw new HttpError("No Audio Overview script for this message", 404);
 

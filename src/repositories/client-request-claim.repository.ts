@@ -25,7 +25,8 @@ export default class ClientRequestClaimRepo {
    * second wait on the row, then re-checks `status` and finds it CLAIMED, so only one row ever
    * moves. Null when this lawyer didn't win; the caller works out why.
    */
-  static async claim(requestId: string, lawyerId: string, organizationId: string, now: Date = new Date()) {
+  /** `organizationId` null: a solo lawyer, with no organization (docs/adr/0022). */
+  static async claim(requestId: string, lawyerId: string, organizationId: string | null, now: Date = new Date()) {
     return prisma.$transaction(async (tx) => {
       const { count } = await tx.clientRequest.updateMany({
         where: { id: requestId, status: "ROUTED", routingExpiresAt: { gt: now }, NOT: { excludedLawyerIds: { has: lawyerId } } },

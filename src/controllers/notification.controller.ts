@@ -1,3 +1,4 @@
+import { workspaceOf } from "../utils/workspace";
 import { Request, Response } from "express";
 import NotificationSvc from "../services/notification.service";
 import HttpError from "../utils/http-error";
@@ -8,7 +9,7 @@ export default class NotificationCtrl {
     const { error, value } = listNotificationsSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await NotificationSvc.list(req.user.userId, req.organization!.id, {
+    const result = await NotificationSvc.list(req.user.userId, workspaceOf(req).organizationId, {
       limit: value.limit,
       cursor: value.cursor,
       unreadOnly: value.unreadOnly,
@@ -17,7 +18,7 @@ export default class NotificationCtrl {
   }
 
   static async unreadCount(req: Request, res: Response) {
-    const count = await NotificationSvc.unreadCount(req.user.userId, req.organization!.id);
+    const count = await NotificationSvc.unreadCount(req.user.userId, workspaceOf(req).organizationId);
     return res.status(200).json({ count });
   }
 
@@ -27,7 +28,7 @@ export default class NotificationCtrl {
   }
 
   static async markAllRead(req: Request, res: Response) {
-    await NotificationSvc.markAllRead(req.user.userId, req.organization!.id);
+    await NotificationSvc.markAllRead(req.user.userId, workspaceOf(req).organizationId);
     return res.status(204).send();
   }
 }

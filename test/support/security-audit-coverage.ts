@@ -20,7 +20,7 @@ const AI_RUN: Exempt = {
 const UPLOAD: Exempt = { exempt: "Uploads a file — adding data, not access to or removal of it; document.ready lands in the case activity feed" };
 const SESSION: Exempt = { exempt: "Keeps an existing session or grant alive (token rotation, OTP resend) — the sign-in itself is recorded" };
 const PERSONAL: Exempt = { exempt: "The user's own calendar, bookmarks or notes — not client-matter access" };
-const UI_STATE: Exempt = { exempt: "Personal UI state (terminal layouts, presets, tours, notification read marks)" };
+const UI_STATE: Exempt = { exempt: "Personal UI state (terminal layouts, presets, tours, account setup, notification read marks)" };
 const PROFILE_COSMETIC: Exempt = { exempt: "Avatar image — cosmetic profile change" };
 const SYSTEM: Exempt = { exempt: "Google Calendar push-notification plumbing, called by Google or the sync job" };
 const TIER2_READ: Exempt = { exempt: "Opening a case — a read, Tier 2 (audit plan issue E)" };
@@ -37,6 +37,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "DELETE /organizations/:id/members/me": ["org.member_left", "org.archived"],
   "DELETE /organizations/:id/members/:userId": ["org.member_removed"],
   "POST /organizations/:id/cases": ["org.case_attached"],
+  "POST /organizations/:id/discard": ["org.deleted"],
   "POST /organizations/:id/billing/card/setup-session": ["org.payment_card_updated"],
   "GET /organizations/:id/audit-log/export": ["export.audit_log"],
   "POST /generated-document/": ["export.generated_document"],
@@ -89,6 +90,9 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /users/me/google-calendar": ["integration.connected"],
   "DELETE /users/me/google-calendar": ["integration.disconnected"],
   "PUT /users/me/tour/:track": UI_STATE,
+  "POST /users/me/setup/complete": UI_STATE,
+  "POST /users/me/solo": UI_STATE,
+  "POST /users/me/billing/card/setup-session": ["account.payment_card_updated"],
   "POST /admin/users/:id/export": ["export.user_data"],
   "POST /admin/users/:id/approve": ["admin.user.approved"],
   "POST /admin/users/:id/deny": ["admin.user.denied"],
@@ -170,6 +174,9 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "PATCH /my-cases/:caseId/witnesses/:id": CASE_FEED,
   "PATCH /my-cases/:caseId/witnesses/:id/factors/:factor": CASE_FEED,
   "DELETE /my-cases/:caseId/witnesses/:id": ["case.item_deleted"],
+  "POST /my-cases/:caseId/witnesses/:id/cross-examination": AI_RUN,
+  "PATCH /my-cases/:caseId/cross-examination/:id": CASE_FEED,
+  "DELETE /my-cases/:caseId/cross-examination/:id": ["case.item_deleted"],
   "POST /my-cases/:caseId/damages": CASE_FEED,
   "POST /my-cases/:caseId/damages/propose": AI_RUN,
   "POST /my-cases/:caseId/damages/refresh": AI_RUN,

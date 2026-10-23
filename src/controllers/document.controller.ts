@@ -1,3 +1,4 @@
+import { workspaceOf } from "../utils/workspace";
 import { Request, Response } from "express";
 import ChatSvc from "../services/chat.service";
 import DocumentSvc from "../services/document.service";
@@ -15,12 +16,12 @@ export default class DocumentCtrl {
     const { error, value } = presignDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     if (value.consultationId) {
-      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+      await ChatSvc.assertConsultationAccess(workspaceOf(req), req.user.userId, value.consultationId);
     }
 
     if (value.files) {
       const items = await DocumentSvc.presignMany(
-        req.organization!.id,
+        workspaceOf(req),
         req.user.userId,
         value.files,
         value.caseId,
@@ -30,7 +31,7 @@ export default class DocumentCtrl {
     }
 
     const result = await DocumentSvc.presign(
-      req.organization!.id,
+      workspaceOf(req),
       req.user.userId,
       value.filename,
       value.contentType,
@@ -45,12 +46,12 @@ export default class DocumentCtrl {
     const { error, value } = createDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     if (value.consultationId) {
-      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+      await ChatSvc.assertConsultationAccess(workspaceOf(req), req.user.userId, value.consultationId);
     }
 
     if (value.items) {
       const docs = await DocumentSvc.createMany(
-        req.organization!.id,
+        workspaceOf(req),
         req.user.userId,
         value.items,
         value.caseId,
@@ -59,7 +60,7 @@ export default class DocumentCtrl {
       return res.status(201).json(docs);
     }
 
-    const doc = await DocumentSvc.create(req.organization!.id, req.user.userId, value);
+    const doc = await DocumentSvc.create(workspaceOf(req), req.user.userId, value);
     return res.status(201).json(doc);
   }
 
@@ -70,28 +71,28 @@ export default class DocumentCtrl {
     const { caseId, consultationId, status } = value;
 
     if (caseId) {
-      const docs = await DocumentSvc.listByCase(req.organization!.id, caseId, req.user.userId, status);
+      const docs = await DocumentSvc.listByCase(workspaceOf(req), caseId, req.user.userId, status);
       return res.status(200).json(docs);
     }
 
     if (consultationId) {
       // Same rule as opening the consultation itself — a case-linked one follows its case (#346).
-      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, consultationId);
-      const docs = await DocumentSvc.listByConsultation(req.organization!.id, consultationId, status, req.user.userId);
+      await ChatSvc.assertConsultationAccess(workspaceOf(req), req.user.userId, consultationId);
+      const docs = await DocumentSvc.listByConsultation(workspaceOf(req), consultationId, status, req.user.userId);
       return res.status(200).json(docs);
     }
 
-    const docs = await DocumentSvc.list(req.organization!.id, req.user.userId, status);
+    const docs = await DocumentSvc.list(workspaceOf(req), req.user.userId, status);
     return res.status(200).json(docs);
   }
 
   static async getById(req: Request, res: Response) {
-    const doc = await DocumentSvc.getById(req.params.id, req.organization!.id, req.user.userId);
+    const doc = await DocumentSvc.getById(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(200).json(doc);
   }
 
   static async getTextPreview(req: Request, res: Response) {
-    const result = await DocumentSvc.getTextPreview(req.params.id, req.organization!.id, req.user.userId);
+    const result = await DocumentSvc.getTextPreview(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -99,25 +100,25 @@ export default class DocumentCtrl {
     const { error, value } = updateDocumentSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
     if (value.consultationId) {
-      await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, value.consultationId);
+      await ChatSvc.assertConsultationAccess(workspaceOf(req), req.user.userId, value.consultationId);
     }
 
-    await DocumentSvc.update(req.params.id, req.organization!.id, req.user.userId, value);
+    await DocumentSvc.update(req.params.id, workspaceOf(req), req.user.userId, value);
     return res.status(204).send();
   }
 
   static async delete(req: Request, res: Response) {
-    await DocumentSvc.delete(req.params.id, req.organization!.id, req.user.userId);
+    await DocumentSvc.delete(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(204).send();
   }
 
   static async archive(req: Request, res: Response) {
-    const result = await DocumentSvc.archive(req.params.id, req.organization!.id, req.user.userId);
+    const result = await DocumentSvc.archive(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
   static async unarchive(req: Request, res: Response) {
-    const result = await DocumentSvc.unarchive(req.params.id, req.organization!.id, req.user.userId);
+    const result = await DocumentSvc.unarchive(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -127,7 +128,7 @@ export default class DocumentCtrl {
     const { error, value } = bulkDocumentIdsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await DocumentSvc.archiveMany(value.ids, req.organization!.id, req.user.userId);
+    const result = await DocumentSvc.archiveMany(value.ids, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -137,7 +138,7 @@ export default class DocumentCtrl {
     const { error, value } = bulkDocumentIdsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await DocumentSvc.unarchiveMany(value.ids, req.organization!.id, req.user.userId);
+    const result = await DocumentSvc.unarchiveMany(value.ids, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -147,7 +148,7 @@ export default class DocumentCtrl {
     const { error, value } = bulkDocumentIdsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await DocumentSvc.deleteMany(value.ids, req.organization!.id, req.user.userId);
+    const result = await DocumentSvc.deleteMany(value.ids, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 }

@@ -1,3 +1,4 @@
+import { workspaceOf } from "../utils/workspace";
 import { Request, Response } from "express";
 import BookmarkSvc from "../services/bookmark.service";
 import HttpError from "../utils/http-error";
@@ -9,7 +10,7 @@ export default class BookmarkCtrl {
     const { error, value } = bookmarkSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const bookmark = await BookmarkSvc.create(req.organization!.id, req.user.userId, {
+    const bookmark = await BookmarkSvc.create(workspaceOf(req), req.user.userId, {
       ...value,
       type: value.type as BookmarkType,
     });
@@ -17,24 +18,24 @@ export default class BookmarkCtrl {
   }
 
   static async list(req: Request, res: Response) {
-    const bookmarks = await BookmarkSvc.list(req.organization!.id);
+    const bookmarks = await BookmarkSvc.list(workspaceOf(req));
     return res.status(200).json(bookmarks);
   }
 
   static async getById(req: Request, res: Response) {
-    const bookmark = await BookmarkSvc.getById(req.params.id, req.organization!.id);
+    const bookmark = await BookmarkSvc.getById(req.params.id, workspaceOf(req));
     return res.status(200).json(bookmark);
   }
 
   static async checkByItemId(req: Request, res: Response) {
     const { itemId } = req.query;
     if (!itemId || typeof itemId !== "string") throw new HttpError("itemId query param is required", 400);
-    const result = await BookmarkSvc.checkByItemId(req.organization!.id, itemId);
+    const result = await BookmarkSvc.checkByItemId(workspaceOf(req), itemId);
     return res.status(200).json(result);
   }
 
   static async delete(req: Request, res: Response) {
-    await BookmarkSvc.delete(req.params.id, req.organization!.id);
+    await BookmarkSvc.delete(req.params.id, workspaceOf(req));
     return res.status(204).send();
   }
 }

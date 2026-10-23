@@ -1,7 +1,7 @@
-import type { ClientRequestStatus, LawyerClientProfile, QuoteType, ReleaseReason } from "@prisma/client";
+import type { ClientRequestStatus, QuoteType, ReleaseReason } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
-import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
+import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
@@ -10,16 +10,18 @@ import OrganizationChargeRepo from "../repositories/organization-charge.reposito
 import CaseCopyRepo from "../repositories/case-copy.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
 import EngagementAccessSvc from "./engagement-access.service";
+import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
 import SecurityAuditSvc from "./security-audit.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
 
-/** Who's asking, from the lawyer app's resolved organization (X-Organization-Id). */
+/** Who's asking, from the lawyer app's resolved workspace (X-Organization-Id): their firm, or null
+ * for a solo lawyer, who has no organization and is charged on their own card (docs/adr/0022). */
 export interface LawyerContext {
   userId: string;
-  organizationId: string;
+  organizationId: string | null;
   tenantCode: TenantCode;
 }
 
@@ -304,6 +306,13 @@ export default class ClientRequestLawyerSvc {
     return { caseCopyId: job.id, status: job.status };
   }
 
+  /** The engagement's AI budget meter (#515): what's included, any top-ups, what's been spent on
+   * the workspace copy, and whether AI work can still run. */
+  static async aiBudget(lawyer: LawyerContext, id: string) {
+    const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "This request isn't engaged.");
+    return EngagementAiBudgetSvc.forRequest(id, request.copyCaseId);
+  }
+
   /**
    * The lawyer closes the engagement (#519): ENGAGED -> CLOSED, once, and their read-only access
    * on the client's case ends immediately. Their workspace copy, if they made one, stays theirs.
@@ -383,13 +392,13 @@ export default class ClientRequestLawyerSvc {
 
   /** Whether the request is one this lawyer is matched to (whatever state it's in now), or one
    * they've held. */
-  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerClientProfile) {
+  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerProfileRow) {
     if (r.claims.some((c) => c.lawyerId === lawyerId)) return true;
     return !r.excludedLawyerIds.includes(lawyerId) && ClientRequestMatchingSvc.matches(profile, criteriaOf(r));
   }
 
   /** Client requests are UK only, for lawyers whose registration has been verified (#506). */
-  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerClientProfile> {
+  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow> {
     const who = await LawyerProfileRepo.findLawyerTenant(lawyer.userId);
     if (!who || who.role !== "LAWYER") throw new HttpError("Client requests are for lawyer accounts", 403, "NOT_A_LAWYER");
     if (lawyer.tenantCode !== "UK") throw new HttpError("Client requests are only available on the UK site", 403, "NOT_UK_TENANT");

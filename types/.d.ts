@@ -11,18 +11,17 @@ declare global {
       user: {
         userId: string;
       };
-      /** Set by resolve-organization.middleware from the X-Organization-Id header.
-       * `tenantCode` is the org's persisted, authoritative Tenant's code (see
-       * src/types/tenant-code.ts) — see utils/tenant-context.ts for the preferred way to
-       * read it. Inlined rather than imported: this ambient .d.ts lives outside src/ and
-       * has no established convention for reaching across that boundary. */
-      organization?: {
-        id: string;
+      /** Set by resolve-organization.middleware: a firm, or a lawyer's own workspace (no
+       * organization). Read it through workspaceOf() / firmIdOf() in src/utils/workspace.ts, and
+       * filter workspace data with scopeWhere() there. Inlined rather than imported: this ambient
+       * .d.ts lives outside src/ and has no established convention for reaching across that
+       * boundary. */
+      workspace?: {
+        organizationId: string | null;
+        ownerId: string | null;
+        userId: string;
         role: OrganizationRole;
         tenantCode: "PH" | "UK";
-        /** Set when the caller isn't a member but was let in by resolveOrganizationAllowingGuests:
-         * someone else's portfolio, reached through a read-only share of one of its cases.
-         * `role` is then MEMBER, the lowest rank, so no role check passes on it alone. */
         guest?: boolean;
       };
     }

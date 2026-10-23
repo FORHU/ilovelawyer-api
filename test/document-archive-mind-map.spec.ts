@@ -3,6 +3,7 @@
  * brings the case mind map back in step (archived documents are left out of the map — see
  * mindMapDocumentIds). No DB: repository statics are monkeypatched.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import DocumentSvc from "../src/services/document.service";
@@ -45,8 +46,8 @@ describe("Document archive → case mind map resync", () => {
   });
 
   it("archive and unarchive of an indexed case document both schedule the resync", async () => {
-    await DocumentSvc.archive("doc-1", "org-1", "user-1").catch(() => {});
-    await DocumentSvc.unarchive("doc-1", "org-1", "user-1").catch(() => {});
+    await DocumentSvc.archive("doc-1", firmScope("org-1"), "user-1").catch(() => {});
+    await DocumentSvc.unarchive("doc-1", firmScope("org-1"), "user-1").catch(() => {});
     expect(scheduled).to.deep.equal([
       { caseId: "case-1", userId: "user-1" },
       { caseId: "case-1", userId: "user-1" },
@@ -55,9 +56,9 @@ describe("Document archive → case mind map resync", () => {
 
   it("doesn't for a document that isn't indexed yet, or isn't on a case", async () => {
     doc = { ...doc, ragStatus: "PENDING" };
-    await DocumentSvc.archive("doc-1", "org-1", "user-1").catch(() => {});
+    await DocumentSvc.archive("doc-1", firmScope("org-1"), "user-1").catch(() => {});
     doc = { ...doc, ragStatus: "READY", caseId: null };
-    await DocumentSvc.archive("doc-1", "org-1", "user-1").catch(() => {});
+    await DocumentSvc.archive("doc-1", firmScope("org-1"), "user-1").catch(() => {});
     expect(scheduled).to.deep.equal([]);
   });
 });

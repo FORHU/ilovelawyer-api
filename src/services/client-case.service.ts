@@ -23,6 +23,7 @@ import {
 import logger from "../utils/logger";
 import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
 import type { ClientCaseArea } from "../constants/client-case.constants";
+import { firmScope } from "../utils/workspace";
 
 /** The client's personal workspace, as req.organization carries it. */
 export interface ClientWorkspace {
@@ -141,7 +142,7 @@ export default class ClientCaseSvc {
     if (credits === null) throw new HttpError("Pay for the case first.", 402, "PAYMENT_REQUIRED");
     let created: { id: string };
     try {
-      created = await CaseSvc.create(workspace.id, userId, workspace.role, {
+      created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
         caseName: input.title,
         practiceArea: input.area,
         ukJurisdiction: input.ukJurisdiction ?? undefined,
@@ -154,7 +155,7 @@ export default class ClientCaseSvc {
       throw err;
     }
     await ClientPaymentRepo.attachToCase(input.paymentId, created.id, credits);
-    await ChatSvc.createConsultation(workspace.id, userId, input.title.slice(0, CONSULTATION_TITLE_MAX), created.id);
+    await ChatSvc.createConsultation(firmScope(workspace.id), userId, input.title.slice(0, CONSULTATION_TITLE_MAX), created.id);
     return ClientCaseSvc.get(workspace, created.id);
   }
 
@@ -162,7 +163,7 @@ export default class ClientCaseSvc {
    * so the app knows to keep checking. */
   static async listMessages(workspace: ClientWorkspace, userId: string, caseId: string) {
     const consultationId = await ClientCaseSvc.consultationOf(workspace, userId, caseId);
-    const messages = await ChatSvc.listMessages(workspace.id, userId, consultationId);
+    const messages = await ChatSvc.listMessages(firmScope(workspace.id), userId, consultationId);
     const visible = messages.filter((m) => m.role === "user" || m.role === "assistant");
     return {
       replying: visible.some((m) => m.role === "user" && m.replyStatus === "PENDING"),
@@ -184,7 +185,7 @@ export default class ClientCaseSvc {
     const consultationId = await ClientCaseSvc.consultationOf(workspace, userId, caseId);
     await ClientBillingSvc.spendCredit(caseId);
     try {
-      return await ChatSvc.enqueueChatGeneration(workspace.id, workspace.tenantCode, userId, consultationId, "", text, undefined, undefined, caseId);
+      return await ChatSvc.enqueueChatGeneration(firmScope(workspace.id), workspace.tenantCode, userId, consultationId, "", text, undefined, undefined, caseId);
     } catch (err) {
       await ClientBillingSvc.refundCredit(caseId);
       throw err;
@@ -254,14 +255,14 @@ export default class ClientCaseSvc {
   /** Step one of an upload: a URL the browser PUTs the file to, straight to S3. */
   static async presignDocument(workspace: ClientWorkspace, userId: string, caseId: string, file: { filename: string; contentType: string; fileSize?: number }) {
     await ClientCaseSvc.load(workspace, caseId);
-    return DocumentSvc.presign(workspace.id, userId, file.filename, file.contentType, caseId, undefined, file.fileSize);
+    return DocumentSvc.presign(firmScope(workspace.id), userId, file.filename, file.contentType, caseId, undefined, file.fileSize);
   }
 
   /** Step two: records the uploaded file on the case. Extraction starts from here, and the AI uses
    * the document once it's READY. */
   static async addDocument(workspace: ClientWorkspace, userId: string, caseId: string, file: { key: string; name: string; contentType?: string; fileSize?: number }) {
     await ClientCaseSvc.load(workspace, caseId);
-    const doc = await DocumentSvc.create(workspace.id, userId, { ...file, caseId });
+    const doc = await DocumentSvc.create(firmScope(workspace.id), userId, { ...file, caseId });
     const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
     if (engaged) {
       const event: EngagementDocumentAddedEvent = {
@@ -287,7 +288,7 @@ export default class ClientCaseSvc {
   private static async consultationOf(workspace: ClientWorkspace, userId: string, caseId: string): Promise<string> {
     const row = await ClientCaseSvc.load(workspace, caseId);
     if (row.consultations[0]) return row.consultations[0].id;
-    const created = await ChatSvc.createConsultation(workspace.id, userId, row.caseName.slice(0, CONSULTATION_TITLE_MAX), caseId);
+    const created = await ChatSvc.createConsultation(firmScope(workspace.id), userId, row.caseName.slice(0, CONSULTATION_TITLE_MAX), caseId);
     return created.id;
   }
 }

@@ -24,7 +24,9 @@ export default class ChatRepo {
    * archived, newest first. With userId and no case, the user's own main consultations — found
    * by user, never by organization, so they read the same from every workspace. */
   static async listConsultations(
-    organizationId: string,
+    /** The workspace's firm, or null in a lawyer's own workspace. Only used with a caseId, which
+     * the caller has already checked the user can open. */
+    organizationId: string | null,
     caseId?: string,
     status: Exclude<ConsultationStatus, "FOR_DELETION"> = "ACTIVE",
     userId?: string,
