@@ -3,18 +3,41 @@ import { describe, it } from "mocha";
 import AccountLimitsSvc from "../src/services/account-limits.service";
 import { startsAiWork } from "../src/middleware/account-spend-limit.middleware";
 
-/** A stand-in for the database: one user with a role, a number of cases, an extra (top-up) AI
- * allowance and a recorded AI spend. `tenantId: null` (the default here) keeps allowanceInfo on the
- * CASE_SPEND_LIMIT_USD fallback path, skipping the live, DB-backed subscription-plan lookup — that
- * lookup is AccountTopUpPricingSvc's own concern. */
-const db = (opts: { role?: string; cases?: number; spend?: number | null; extra?: number }) =>
+/** A stand-in for the database: one user with a role, a tenant (or not), a tier's case limit and
+ * included allowance (or none), a number of cases, an extra (top-up) AI allowance and a recorded
+ * AI spend. `tenantId: null` (the default here) keeps both limits on the legacy
+ * MAX_CASES_PER_ACCOUNT / CASE_SPEND_LIMIT_USD off-switch fallback path, skipping the
+ * tier-resolution path entirely — that path is exercised by the `tenantId` cases below. */
+const db = (opts: {
+  role?: string;
+  cases?: number;
+  spend?: number | null;
+  extra?: number;
+  tenantId?: string | null;
+  caseLimit?: number;
+  includedAllowanceUsd?: number;
+  hasPlan?: boolean;
+  allowancePeriodStart?: Date | null;
+  caseLimitNotifiedAt?: Date | null;
+}) =>
   ({
     user: {
-      findUnique: async () => (opts.role ? { role: opts.role, extraAiAllowanceUsd: opts.extra ?? 0, tenantId: null } : null),
-      update: async (args: { data: { extraAiAllowanceUsd: { increment: number } } }) => ({ id: "u", email: "u@example.com", extraAiAllowanceUsd: args.data.extraAiAllowanceUsd.increment }),
+      findUnique: async () =>
+        opts.role
+          ? {
+              role: opts.role,
+              extraAiAllowanceUsd: opts.extra ?? 0,
+              tenantId: opts.tenantId ?? null,
+              allowancePeriodStart: opts.allowancePeriodStart ?? null,
+              caseLimitNotifiedAt: opts.caseLimitNotifiedAt ?? null,
+              paymentPlan: opts.hasPlan === false || !opts.tenantId ? null : { caseLimit: opts.caseLimit ?? 0, includedAllowanceUsd: opts.includedAllowanceUsd ?? 0 },
+            }
+          : null,
+      update: async (args: { data: { extraAiAllowanceUsd?: { increment: number } } }) => ({ id: "u", email: "u@example.com", extraAiAllowanceUsd: args.data.extraAiAllowanceUsd?.increment }),
     },
     case: { count: async () => opts.cases ?? 0 },
     llmUsage: { aggregate: async () => ({ _sum: { estimatedCostUsd: opts.spend ?? null } }) },
+    notification: { create: async (args: { data: unknown }) => ({ id: "n1", ...(args.data as object) }) },
   }) as never;
 
 const rejection = async (run: () => Promise<unknown>) => {
@@ -27,59 +50,113 @@ const rejection = async (run: () => Promise<unknown>) => {
 };
 
 describe("cases a lawyer may own", () => {
-  it("lets a lawyer create a case while under the limit", async () => {
-    expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", cases: 2 }), 3))).to.equal(null);
+  it("lets a lawyer create a case while under their tier's limit", async () => {
+    expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", tenantId: "t1", caseLimit: 3, cases: 2 })))).to.equal(null);
   });
 
-  it("stops a lawyer who already owns the limit, with a reason a client can branch on", async () => {
-    const err = await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", cases: 3 }), 3));
+  it("stops a lawyer who already owns their tier's limit, with a reason a client can branch on", async () => {
+    const err = await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", tenantId: "t1", caseLimit: 3, cases: 3 })));
     expect(err?.statusCode).to.equal(403);
     expect(err?.code).to.equal("CASE_LIMIT_REACHED");
   });
 
   it("keeps a lawyer who is already over the limit out of creating more, without touching their cases", async () => {
-    const err = await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", cases: 7 }), 3));
+    const err = await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", tenantId: "t1", caseLimit: 3, cases: 7 })));
     expect(err?.code).to.equal("CASE_LIMIT_REACHED");
   });
 
   it("never limits staff or other roles", async () => {
     for (const role of ["ADMIN", "USER"]) {
-      expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role, cases: 50 }), 3))).to.equal(null);
+      expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role, tenantId: "t1", caseLimit: 3, cases: 50 })))).to.equal(null);
     }
   });
 
-  it("is off by default (0)", async () => {
+  it("is unlimited for a tenant-less lawyer when MAX_CASES_PER_ACCOUNT is off (0, the default)", async () => {
     expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", cases: 50 })))).to.equal(null);
+  });
+
+  it("a tenant-scoped lawyer with no tier at all (0 caseLimit) is unlimited, same as off", async () => {
+    expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", tenantId: "t1", caseLimit: 0, cases: 50 })))).to.equal(null);
+  });
+
+  it("sends a one-time notice the first time a grandfathered lawyer is over their tier's limit, then never again", async () => {
+    const notified: unknown[] = [];
+    const stamped: Date[] = [];
+    const base = db({ role: "LAWYER", tenantId: "t1", caseLimit: 3, cases: 7 }) as unknown as { user: { update: (args: unknown) => Promise<unknown> }; notification: { create: (args: { data: unknown }) => Promise<unknown> }; case: unknown; llmUsage: unknown };
+    const spyDb = {
+      ...base,
+      notification: { create: async (args: { data: unknown }) => { notified.push(args.data); return { id: "n1", ...(args.data as object) }; } },
+      user: { ...base.user, update: async (args: { data: { caseLimitNotifiedAt?: Date } }) => { if (args.data.caseLimitNotifiedAt) stamped.push(args.data.caseLimitNotifiedAt); return {}; } },
+    };
+    await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", spyDb as never));
+    expect(notified.length).to.equal(1);
+    expect(stamped.length).to.equal(1);
+
+    // Already notified (caseLimitNotifiedAt set) — must not notify again.
+    const already = db({ role: "LAWYER", tenantId: "t1", caseLimit: 3, cases: 7, caseLimitNotifiedAt: new Date() }) as unknown as object;
+    const notified2: unknown[] = [];
+    const spyDb2 = { ...already, notification: { create: async (args: { data: unknown }) => { notified2.push(args.data); return {}; } } };
+    await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", spyDb2 as never));
+    expect(notified2.length).to.equal(0);
   });
 });
 
 describe("an account's AI allowance", () => {
-  it("lets a lawyer's account work while under the allowance", async () => {
-    expect(await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", spend: 19.99 })))).to.equal(null);
-    expect(await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", spend: null })))).to.equal(null);
+  it("lets a lawyer's account work while under their tier's allowance", async () => {
+    expect(await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 19.99 })))).to.equal(null);
+    expect(await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: null })))).to.equal(null);
   });
 
-  it("stops new AI work at the allowance", async () => {
-    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", spend: 20 })));
+  it("stops new AI work at the tier's allowance", async () => {
+    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 20 })));
     expect(err?.statusCode).to.equal(403);
     expect(err?.code).to.equal("ACCOUNT_ALLOWANCE_REACHED");
   });
 
   it("never states the ceiling as a bare number in the error", async () => {
-    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", spend: 23.456 })));
+    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 23.456 })));
     expect(err?.message).to.not.match(/\d|\$|USD|dollar/i);
     expect(err?.details).to.equal(undefined);
   });
 
   it("tells the lawyer to top up", async () => {
-    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", spend: 20 })));
+    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 20 })));
     expect(err?.message).to.match(/top up/i);
   });
 
-  it("counts top-up credit on top of the standard allowance", async () => {
-    expect(await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", spend: 25, extra: 20 })))).to.equal(null);
-    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", spend: 40, extra: 20 })));
+  it("counts top-up credit on top of the tier's allowance", async () => {
+    expect(await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 25, extra: 20 })))).to.equal(null);
+    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 40, extra: 20 })));
     expect(err?.code).to.equal("ACCOUNT_ALLOWANCE_REACHED");
+  });
+
+  it("locks a canceled/never-subscribed lawyer (no tier, no top-up credit) instead of treating them as unlimited", async () => {
+    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", hasPlan: false, spend: 0 })));
+    expect(err?.code).to.equal("ACCOUNT_ALLOWANCE_REACHED");
+    const info = await AccountLimitsSvc.allowanceInfo("u", db({ role: "LAWYER", tenantId: "t1", hasPlan: false, spend: 0 }));
+    expect(info).to.deep.equal({ limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0 });
+  });
+
+  it("a canceled lawyer with leftover top-up credit can still work until that credit runs out", async () => {
+    expect(await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", hasPlan: false, extra: 10, spend: 5 })))).to.equal(null);
+    const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", hasPlan: false, extra: 10, spend: 10 })));
+    expect(err?.code).to.equal("ACCOUNT_ALLOWANCE_REACHED");
+  });
+
+  it("sums spend only from the current billing period when allowancePeriodStart is set", async () => {
+    let sawCreatedAtFilter = false;
+    const base = db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 5, allowancePeriodStart: new Date("2026-01-01") }) as unknown as { user: { findUnique: () => Promise<unknown> } };
+    const spyDb = {
+      ...base,
+      llmUsage: {
+        aggregate: async (args: { where?: { createdAt?: unknown } }) => {
+          sawCreatedAtFilter = Boolean(args.where?.createdAt);
+          return { _sum: { estimatedCostUsd: 5 } };
+        },
+      },
+    };
+    await AccountLimitsSvc.allowanceInfo("u", spyDb as never);
+    expect(sawCreatedAtFilter).to.equal(true);
   });
 
   it("does not limit staff, another role, or a user that doesn't exist", async () => {
@@ -90,13 +167,13 @@ describe("an account's AI allowance", () => {
   });
 
   it("allowanceInfo reports remainingUsd and consumedPct, floored/capped", async () => {
-    const info = await AccountLimitsSvc.allowanceInfo("u", db({ role: "LAWYER", spend: 15 }));
+    const info = await AccountLimitsSvc.allowanceInfo("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 15 }));
     expect(info.limited).to.equal(true);
     expect(info.locked).to.equal(false);
     expect(info.remainingUsd).to.equal(5);
     expect(info.consumedPct).to.equal(75);
 
-    const over = await AccountLimitsSvc.allowanceInfo("u", db({ role: "LAWYER", spend: 40 }));
+    const over = await AccountLimitsSvc.allowanceInfo("u", db({ role: "LAWYER", tenantId: "t1", includedAllowanceUsd: 20, spend: 40 }));
     expect(over.locked).to.equal(true);
     expect(over.remainingUsd).to.equal(0);
     expect(over.consumedPct).to.equal(100);
