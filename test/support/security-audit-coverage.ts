@@ -245,6 +245,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/payments/case/quote": { exempt: "Prices a new case; nothing is charged or stored" },
   "POST /client/payments/case": { exempt: "A client paying for their own case; stored as a ClientPayment" },
   "POST /client/cases/:caseId/top-ups": { exempt: "A client buying chat credits for their own case; stored as a ClientPayment" },
+  "POST /account-topups/quote": { exempt: "Prices a top-up of the lawyer's own account allowance; nothing is charged or stored" },
+  "POST /account-topups/checkout": { exempt: "A lawyer topping up their own account's AI allowance; stored as an AccountAiTopUp" },
   "POST /documents/": UPLOAD,
   "PATCH /documents/:id": CASE_FEED,
   "DELETE /documents/:id": ["document.deleted"],
