@@ -151,12 +151,11 @@ export default class ClientBillingSvc {
 
   /**
    * One verified Stripe webhook event (POST /api/webhooks/stripe). Checkout events settle the payment
-   * they name (or, in setup mode, save a law firm's card), and refund events update an admin's refund; everything else is acknowledged and ignored. An event already handled is answered
-   * without being applied again. An event for a payment this server doesn't have (another
-   * environment sharing the Stripe account) is ignored.
+   * they name (or, in setup mode, save a law firm's card), and refund events update an admin's refund; everything else is acknowledged and ignored. An event for a payment this server doesn't
+   * have (another environment sharing the Stripe account) is ignored. Retried deliveries are ruled
+   * out before this runs (StripeWebhookSvc).
    */
-  static async handleStripeEvent(event: Stripe.Event): Promise<{ duplicate: boolean }> {
-    if (await ClientPaymentRepo.isWebhookEventRecorded(event.id)) return { duplicate: true };
+  static async handleStripeEvent(event: Stripe.Event): Promise<void> {
     switch (event.type) {
       case "checkout.session.completed":
       case "checkout.session.async_payment_succeeded":
@@ -204,8 +203,6 @@ export default class ClientBillingSvc {
       default:
         break;
     }
-    await ClientPaymentRepo.recordWebhookEvent(event.id, event.type);
-    return { duplicate: false };
   }
 
   /** Takes one credit for a message to the AI. 402 OUT_OF_CREDITS when there are none. */

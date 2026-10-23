@@ -112,6 +112,26 @@ export default class AccountLimitsSvc {
     };
   }
 
+  /** Starts a new allowance period on `paymentPlanId` (a paid subscription's first or next billing
+   * period): spend is summed from `periodStart` on. Top-up credit the lawyer paid for carries over,
+   * less whatever of it the ending period used — the tier's own allowance is spent first, so it's
+   * never wiped by a renewal and never granted twice. Pass a transaction client to apply it
+   * atomically with the subscription's own state change. */
+  static async startAllowancePeriod(userId: string, paymentPlanId: string, periodStart: Date, db: DbClient = prisma) {
+    const user = await db.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { extraAiAllowanceUsd: true, allowancePeriodStart: true, paymentPlan: { select: { includedAllowanceUsd: true } } },
+    });
+    const { _sum } = await db.llmUsage.aggregate({
+      where: { userId, ...(user.allowancePeriodStart ? { createdAt: { gte: user.allowancePeriodStart } } : {}) },
+      _sum: { estimatedCostUsd: true },
+    });
+    const included = user.paymentPlan?.includedAllowanceUsd ?? 0;
+    const extra = user.extraAiAllowanceUsd;
+    const carriedExtra = Math.max(0, Math.min(extra, included + extra - (_sum.estimatedCostUsd ?? 0)));
+    await db.user.update({ where: { id: userId }, data: { paymentPlanId, allowancePeriodStart: periodStart, extraAiAllowanceUsd: carriedExtra } });
+  }
+
   /** Staff/top-up only: adds to one account's AI allowance. `db` accepts a transaction client so a
    * caller (e.g. AccountAiTopUpRepo.settle) can apply the increment atomically with its own state
    * change. */

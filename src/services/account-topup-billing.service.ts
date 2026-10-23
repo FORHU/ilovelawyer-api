@@ -106,10 +106,9 @@ export default class AccountTopUpBillingSvc {
     };
   }
 
-  /** One verified Stripe webhook event, called only after StripeWebhookCtrl has confirmed via
-   * ClientBillingSvc.handleStripeEvent that it isn't a retried delivery (StripeWebhookEvent dedup
-   * stays there, untouched). This only decides whether the event is an account AI top-up
-   * (metadata.kind === ACCOUNT_TOPUP) and applies it; anything else no-ops. */
+  /** One verified Stripe webhook event (StripeWebhookSvc has already ruled out a retried delivery).
+   * This only decides whether the event is an account AI top-up (metadata.kind === ACCOUNT_TOPUP)
+   * and applies it; anything else no-ops. */
   static async handleStripeEvent(event: Stripe.Event): Promise<{ handled: boolean }> {
     switch (event.type) {
       case "checkout.session.completed":

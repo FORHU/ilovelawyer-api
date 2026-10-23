@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import ClientBillingSvc from "../services/client-billing.service";
-import AccountTopUpBillingSvc from "../services/account-topup-billing.service";
+import StripeWebhookSvc from "../services/stripe-webhook.service";
 import { verifyStripeWebhook } from "../payments/stripe-client";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -12,11 +11,8 @@ import logger from "../utils/logger";
  * Stripe not to retry, and an error (500) makes it retry, which is safe because handling is
  * idempotent.
  *
- * One Stripe account, one webhook mount, two billing services. ClientBillingSvc.handleStripeEvent
- * keeps owning the StripeWebhookEvent dedup/record (its existing, tested contract, left untouched);
- * AccountTopUpBillingSvc.handleStripeEvent only runs once that call reports the event wasn't a
- * duplicate, so a retried delivery is never applied twice by either service. AccountTopUpBillingSvc
- * recognizes its own events by metadata and otherwise no-ops.
+ * StripeWebhookSvc routes the event to every billing service and records it once they've all
+ * applied it.
  */
 export default class StripeWebhookCtrl {
   static async handle(req: Request, res: Response) {
@@ -24,8 +20,7 @@ export default class StripeWebhookCtrl {
       throw new HttpError("Webhook body wasn't read raw; check the mount order in app.ts", 500, "STRIPE_WEBHOOK_MISCONFIGURED");
     }
     const event = verifyStripeWebhook(req.body, req.header("stripe-signature"));
-    const { duplicate } = await ClientBillingSvc.handleStripeEvent(event);
-    if (!duplicate) await AccountTopUpBillingSvc.handleStripeEvent(event);
+    const { duplicate } = await StripeWebhookSvc.handle(event);
     logger.info("Stripe webhook handled", { eventId: event.id, type: event.type, duplicate });
     res.status(200).json({ received: true, duplicate });
   }

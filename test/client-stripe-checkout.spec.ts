@@ -7,6 +7,7 @@ import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import Stripe from "stripe";
 import ClientBillingSvc, { returnOrigin } from "../src/services/client-billing.service";
+import StripeWebhookSvc from "../src/services/stripe-webhook.service";
 import ClientPaymentRepo from "../src/repositories/client-payment.repository";
 import {
   outcomeOfSession,
@@ -225,8 +226,8 @@ describe("Client app payments through Stripe Checkout", () => {
     it("applies a retried delivery only once", async () => {
       await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
       const event = sessionEvent("evt_1", "checkout.session.completed", completed("pay-1"));
-      await ClientBillingSvc.handleStripeEvent(event);
-      expect(await ClientBillingSvc.handleStripeEvent(event)).to.deep.equal({ duplicate: true });
+      await StripeWebhookSvc.handle(event);
+      expect(await StripeWebhookSvc.handle(event)).to.deep.equal({ duplicate: true });
       expect(credits["case-1"]).to.equal(28);
     });
 
@@ -254,14 +255,14 @@ describe("Client app payments through Stripe Checkout", () => {
 
     it("ignores a session that isn't one of ours, or doesn't match the payment it names", async () => {
       await ClientBillingSvc.payForCase("u1", {});
-      await ClientBillingSvc.handleStripeEvent(sessionEvent("evt_1", "checkout.session.completed", completed("pay-from-another-env")));
-      await ClientBillingSvc.handleStripeEvent(sessionEvent("evt_2", "checkout.session.completed", completed("pay-1", { id: "cs_test_other" })));
+      await StripeWebhookSvc.handle(sessionEvent("evt_1", "checkout.session.completed", completed("pay-from-another-env")));
+      await StripeWebhookSvc.handle(sessionEvent("evt_2", "checkout.session.completed", completed("pay-1", { id: "cs_test_other" })));
       expect(payments.get("pay-1").status).to.equal("PENDING");
       expect(recordedEvents).to.deep.equal(new Set(["evt_1", "evt_2"]));
     });
 
     it("acknowledges events it doesn't handle", async () => {
-      expect(await ClientBillingSvc.handleStripeEvent(sessionEvent("evt_1", "customer.created", {}))).to.deep.equal({ duplicate: false });
+      expect(await StripeWebhookSvc.handle(sessionEvent("evt_1", "customer.created", {}))).to.deep.equal({ duplicate: false });
     });
   });
 
