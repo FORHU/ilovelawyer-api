@@ -72,6 +72,8 @@ export interface ReadinessInput {
     where: string | null;
     side: string | null;
     otherParties: string[];
+    /** What the client wrote about what happened and what they want when they made the case. */
+    notes?: string | null;
   };
   conversation: { from: "client" | "ai"; text: string }[];
 }
@@ -85,7 +87,7 @@ export interface ReadinessAssessment {
  * check", never "ready". */
 export async function assessLawyerReadiness(input: ReadinessInput): Promise<ReadinessAssessment> {
   const conversation = input.conversation.slice(-MAX_MESSAGES).map((m) => ({ from: m.from, text: m.text.slice(0, MAX_MESSAGE_CHARS) }));
-  const ruling = "Answer YES only if `caseDetails` or `conversation` actually show it; answer NO if it is missing, vague, or would have to be guessed.";
+  const ruling = "`caseDetails.notes` is the client's own account of what happened and what they want, and counts like the conversation. Answer YES only if `caseDetails` or `conversation` actually show it; answer NO if it is missing, vague, or would have to be guessed.";
   const question = Object.fromEntries(READINESS_CRITERIA.map((c) => [c.key, c.question])) as Record<ReadinessKey, string>;
   const ask = (key: ReadinessKey) => choice(`${question[key]} ${ruling}`, optionsInOrder(ANSWERS));
 
