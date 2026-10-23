@@ -1,3 +1,4 @@
+import { firmScope, ownScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import crypto from "crypto";
 import { describe, it, before, after } from "mocha";
@@ -45,6 +46,12 @@ describe("Case portfolio", () => {
       where: { OR: [{ organizationId: { in: orgIds } }, { organizationId: null, userId: { in: createdUserIds } }] },
     });
     await prisma.case.deleteMany({ where: { id: { in: caseIds } } });
+    // Their own workspaces (no organization, docs/adr/0022).
+    const own = { organizationId: null, userId: { in: createdUserIds } };
+    await prisma.event.deleteMany({ where: own });
+    await prisma.note.deleteMany({ where: own });
+    await prisma.document.deleteMany({ where: own });
+    await prisma.case.deleteMany({ where: own });
     await prisma.caseCopy.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.consultationCopy.deleteMany({ where: { userId: { in: createdUserIds } } });
     await prisma.organizationInvite.deleteMany({ where: { userId: { in: createdUserIds } } });
@@ -56,7 +63,8 @@ describe("Case portfolio", () => {
   async function makeUser(name?: string) {
     const userId = crypto.randomUUID();
     await prisma.user.create({
-      data: { id: userId, name, email: `portfolio-${userId}@example.com`, username: `portfolio-${userId}` },
+      // A site, since their own workspace (no organization) works on the account's.
+      data: { id: userId, name, email: `portfolio-${userId}@example.com`, username: `portfolio-${userId}`, tenant: { connect: { code: "PH" } } },
     });
     createdUserIds.push(userId);
     return userId;
@@ -74,25 +82,27 @@ describe("Case portfolio", () => {
     return userId;
   }
 
-  async function personalOf(userId: string) {
-    return prisma.organization.findFirst({ where: { createdById: userId, isPersonal: true } });
+  /** The lawyer's own workspace, where their portfolio lives: it has no organization
+   * (docs/adr/0022), so its rows carry organizationId null. */
+  async function personalOf(_userId: string) {
+    return { id: null };
   }
 
   describe("leaving queues a copy of every case the leaver created", () => {
     it("copies their own cases (archived too), never other members' cases", async () => {
       const firm = await makeOrg("Ash Firm");
       const leaverId = await memberOf(firm.organizationId, "Leah");
-      const mine = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Mine" });
-      const archived = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Old" });
+      const mine = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Mine" });
+      const archived = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Old" });
       await prisma.case.update({ where: { id: archived.id }, data: { status: "ARCHIVED" } });
-      await CaseRepo.create(firm.organizationId, firm.ownerId, { caseName: "Theirs" });
+      await CaseRepo.create(firmScope(firm.organizationId), firm.ownerId, { caseName: "Theirs" });
 
       await OrganizationSvc.leave(firm.organizationId, leaverId);
 
       const portfolio = await personalOf(leaverId);
-      expect(portfolio).to.not.equal(null);
-      // They land in their portfolio, so they still have a workspace.
-      expect((await OrganizationMemberRepo.findAnyForUser(leaverId))?.organizationId).to.equal(portfolio!.id);
+      // They land in their own workspace, which has no organization: they're solo now.
+      expect(await OrganizationMemberRepo.findAnyForUser(leaverId)).to.equal(null);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: leaverId } })).soloChosenAt).to.be.instanceOf(Date);
       const queued = await prisma.caseCopy.findMany({ where: { userId: leaverId } });
       expect(queued.map((q) => q.sourceCaseId).sort()).to.deep.equal([mine.id, archived.id].sort());
       expect(queued.every((q) => q.targetOrganizationId === portfolio!.id && q.sourceOrganizationName === "Ash Firm")).to.equal(true);
@@ -102,8 +112,8 @@ describe("Case portfolio", () => {
       const firm = await makeOrg("Bea Firm");
       const removedId = await memberOf(firm.organizationId);
       const switcherId = await memberOf(firm.organizationId);
-      await CaseRepo.create(firm.organizationId, removedId, { caseName: "R" });
-      await CaseRepo.create(firm.organizationId, switcherId, { caseName: "S" });
+      await CaseRepo.create(firmScope(firm.organizationId), removedId, { caseName: "R" });
+      await CaseRepo.create(firmScope(firm.organizationId), switcherId, { caseName: "S" });
       const other = await makeOrg("Cal Firm");
       await OrganizationInviteRepo.create(other.organizationId, switcherId, "MEMBER");
 
@@ -119,14 +129,14 @@ describe("Case portfolio", () => {
       const firm = await makeOrg("Dee Firm");
       const leaverId = await memberOf(firm.organizationId);
       const stayerId = await memberOf(firm.organizationId);
-      const original = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Kept" });
+      const original = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Kept" });
 
       await OrganizationSvc.leave(firm.organizationId, leaverId);
 
       expect((await CaseAccess.loadAccessibleCase(original.id, stayerId)).id).to.equal(original.id);
       const err = await CaseAccess.loadAccessibleCase(original.id, leaverId).catch((e) => e);
       expect(err.statusCode).to.equal(404);
-      const listed = await CaseRepo.list(firm.organizationId, stayerId, 1, 50);
+      const listed = await CaseRepo.list(firmScope(firm.organizationId), stayerId, 1, 50);
       const row = listed.data.find((c) => c.id === original.id);
       expect(row?.createdBy?.id).to.equal(leaverId);
       expect(row?.createdBy?.isMember).to.equal(false);
@@ -137,7 +147,7 @@ describe("Case portfolio", () => {
     it("copies the case with its parties, timeline, events, documents and consultations", async () => {
       const firm = await makeOrg("Eli Firm");
       const leaverId = await memberOf(firm.organizationId, "Lou");
-      const source = await CaseRepo.create(firm.organizationId, leaverId, {
+      const source = await CaseRepo.create(firmScope(firm.organizationId), leaverId, {
         caseName: "Full",
         notes: "Some notes",
         parties: [{ name: "Acme", designation: "Plaintiff" }],
@@ -244,7 +254,7 @@ describe("Case portfolio", () => {
     it("reuses a copy made since the original last changed instead of duplicating it", async () => {
       const firm = await makeOrg("Fay Firm");
       const leaverId = await memberOf(firm.organizationId);
-      const source = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Once" });
+      const source = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Once" });
       await OrganizationSvc.leave(firm.organizationId, leaverId);
       const portfolio = (await personalOf(leaverId))!;
       const request = { sourceCaseId: source.id, userId: leaverId, targetOrganizationId: portfolio.id, sourceOrganizationName: "Fay Firm" };
@@ -259,14 +269,14 @@ describe("Case portfolio", () => {
     it("links back once the user rejoins, flags changes, and numbers repeat copies", async () => {
       const firm = await makeOrg("Nell Firm");
       const leaverId = await memberOf(firm.organizationId);
-      const source = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Twice" });
+      const source = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Twice" });
       await OrganizationSvc.leave(firm.organizationId, leaverId);
       const portfolio = (await personalOf(leaverId))!;
       const request = { sourceCaseId: source.id, userId: leaverId, targetOrganizationId: portfolio.id, sourceOrganizationName: "Nell Firm" };
       const firstCopyId = await CaseCopySvc.copy(request);
 
       // Away from the firm, the copy can't reach the original.
-      const away = await CaseSvc.getById(firstCopyId, portfolio.id, leaverId);
+      const away = await CaseSvc.getById(firstCopyId, ownScope(leaverId), leaverId);
       expect(away.original).to.equal(null);
       expect(away.copyVersion).to.equal(null);
 
@@ -275,7 +285,7 @@ describe("Case portfolio", () => {
       await OrganizationSvc.acceptInvite(firm.organizationId, leaverId);
       await prisma.case.update({ where: { id: source.id }, data: { notes: "Edited by the team" } });
 
-      const back = await CaseSvc.getById(firstCopyId, portfolio.id, leaverId);
+      const back = await CaseSvc.getById(firstCopyId, ownScope(leaverId), leaverId);
       expect(back.original).to.deep.equal({ id: source.id, organizationName: "Nell Firm", changedSinceCopy: true });
 
       // Leaving again makes a second copy rather than touching the first.
@@ -283,7 +293,7 @@ describe("Case portfolio", () => {
       const secondCopyId = await CaseCopySvc.copy(request);
       expect(secondCopyId).to.not.equal(firstCopyId);
 
-      const listed = await CaseSvc.list(portfolio.id, leaverId, 1, 50);
+      const listed = await CaseSvc.list(ownScope(leaverId), leaverId, 1, 50);
       const versions = Object.fromEntries(listed.data.map((c) => [c.id, c.copyVersion]));
       expect(versions[firstCopyId]).to.deep.equal({ number: 1, total: 2 });
       expect(versions[secondCopyId]).to.deep.equal({ number: 2, total: 2 });
@@ -294,8 +304,8 @@ describe("Case portfolio", () => {
     it("moves their own calendar and copies their appointments on others' cases, leaving their main consultations untouched", async () => {
       const firm = await makeOrg("Opal Firm");
       const removedId = await memberOf(firm.organizationId, "Rae");
-      const theirCase = await CaseRepo.create(firm.organizationId, removedId, { caseName: "Theirs" });
-      const ownersCase = await CaseRepo.create(firm.organizationId, firm.ownerId, { caseName: "Owner's" });
+      const theirCase = await CaseRepo.create(firmScope(firm.organizationId), removedId, { caseName: "Theirs" });
+      const ownersCase = await CaseRepo.create(firmScope(firm.organizationId), firm.ownerId, { caseName: "Owner's" });
       const event = (data: { title: string; caseId?: string; googleEventId?: string }) =>
         prisma.event.create({
           data: { userId: removedId, organizationId: firm.organizationId, dateTime: new Date(), reminderLeadMinutes: 15, ...data },
@@ -329,7 +339,7 @@ describe("Case portfolio", () => {
       expect((await prisma.event.findUniqueOrThrow({ where: { id: onTheirCase.id } })).organizationId).to.equal(firm.organizationId);
       expect((await prisma.event.findUniqueOrThrow({ where: { id: onOwnersCase.id } })).organizationId).to.equal(firm.organizationId);
       // On someone else's case they get an unlinked copy; on their own, the case's copy brings it.
-      const copies = await prisma.event.findMany({ where: { organizationId: portfolio.id, copiedFromId: { not: null } } });
+      const copies = await prisma.event.findMany({ where: { organizationId: portfolio.id, userId: removedId, copiedFromId: { not: null } } });
       expect(copies.map((e) => e.copiedFromId)).to.deep.equal([onOwnersCase.id]);
       expect(copies[0]).to.include({ caseId: null, googleEventId: null, reminderLeadMinutes: null, title: "On owner's" });
 
@@ -354,9 +364,9 @@ describe("Case portfolio", () => {
       await OrganizationSvc.removeMember(firm.organizationId, "OWNER", firm.ownerId, removedId);
       await CaseCopyQueue.tick();
 
-      // The workspace logging back in lands them in.
-      const workspaceId = (await OrganizationMemberRepo.findAnyForUser(removedId))!.organizationId;
-      expect(workspaceId).to.equal((await personalOf(removedId))!.id);
+      // Logging back in lands them in their own workspace, which has no organization.
+      expect(await OrganizationMemberRepo.findAnyForUser(removedId)).to.equal(null);
+      const workspaceId = null;
       const consultations = await ChatRepo.listConsultations(workspaceId, undefined, "ACTIVE", removedId);
       expect(consultations.map((c) => c.title)).to.deep.equal(["Advice"]);
       expect(consultations[0].messageCount).to.equal(1);
@@ -373,7 +383,7 @@ describe("Case portfolio", () => {
     it("doesn't copy an unchanged appointment twice when they leave, rejoin and leave again", async () => {
       const firm = await makeOrg("Quinn Firm");
       const leaverId = await memberOf(firm.organizationId);
-      const ownersCase = await CaseRepo.create(firm.organizationId, firm.ownerId, { caseName: "Owner's" });
+      const ownersCase = await CaseRepo.create(firmScope(firm.organizationId), firm.ownerId, { caseName: "Owner's" });
       await prisma.event.create({
         data: { userId: leaverId, organizationId: firm.organizationId, caseId: ownersCase.id, title: "Hearing", dateTime: new Date() },
       });
@@ -384,7 +394,7 @@ describe("Case portfolio", () => {
       await OrganizationSvc.leave(firm.organizationId, leaverId);
 
       const portfolio = (await personalOf(leaverId))!;
-      expect(await prisma.event.count({ where: { organizationId: portfolio.id, title: "Hearing" } })).to.equal(1);
+      expect(await prisma.event.count({ where: { organizationId: portfolio.id, userId: leaverId, title: "Hearing" } })).to.equal(1);
     });
   });
 
@@ -439,8 +449,8 @@ describe("Case portfolio", () => {
     it("works through queued copies, and gives up on one whose original was deleted", async () => {
       const firm = await makeOrg("Gil Firm");
       const leaverId = await memberOf(firm.organizationId);
-      const kept = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Kept" });
-      const doomed = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Doomed" });
+      const kept = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Kept" });
+      const doomed = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Doomed" });
       await OrganizationSvc.leave(firm.organizationId, leaverId);
       await prisma.case.delete({ where: { id: doomed.id } });
 
@@ -458,43 +468,38 @@ describe("Case portfolio", () => {
     it("is open to its owner from another organization, and to nobody else", async () => {
       const firm = await makeOrg("Hal Firm");
       const leaverId = await memberOf(firm.organizationId);
-      const source = await CaseRepo.create(firm.organizationId, leaverId, { caseName: "Travels" });
+      const source = await CaseRepo.create(firmScope(firm.organizationId), leaverId, { caseName: "Travels" });
       await OrganizationSvc.leave(firm.organizationId, leaverId);
       await CaseCopyQueue.tick();
-      const portfolio = (await personalOf(leaverId))!;
-
-      // Joins another organization; the portfolio goes membership-less but stays theirs.
+      // Joins another organization; their own workspace stays theirs.
       const next = await makeOrg("Ida Firm");
       await OrganizationInviteRepo.create(next.organizationId, leaverId, "MEMBER");
       await OrganizationSvc.acceptInvite(next.organizationId, leaverId);
 
-      const access = await OrganizationSvc.requireMembership(portfolio.id, leaverId);
-      expect(access.role).to.equal("OWNER");
       const copy = await prisma.case.findFirstOrThrow({ where: { copiedFromCaseId: source.id } });
+      expect(copy).to.include({ organizationId: null, userId: leaverId });
       expect((await CaseAccess.loadAccessibleCase(copy.id, leaverId)).id).to.equal(copy.id);
+      expect((await CaseSvc.list(ownScope(leaverId), leaverId, 1, 50)).data.map((c) => c.id)).to.include(copy.id);
 
-      const err = await OrganizationSvc.requireMembership(portfolio.id, next.ownerId).catch((e) => e);
-      expect(err.statusCode).to.equal(403);
       const caseErr = await CaseAccess.loadAccessibleCase(copy.id, next.ownerId).catch((e) => e);
       expect(caseErr.statusCode).to.equal(404);
+      expect((await CaseSvc.list(ownScope(next.ownerId), next.ownerId, 1, 50)).data.map((c) => c.id)).to.not.include(copy.id);
 
       const fetched = await OrganizationSvc.getPortfolio(leaverId);
-      expect(fetched.id).to.equal(portfolio.id);
-      expect(fetched.role).to.equal("OWNER");
+      expect(fetched).to.include({ own: true, role: "OWNER" });
     });
 
-    it("creating an organization from a personal workspace leaves the workspace as the portfolio", async () => {
+    it("creating an organization leaves the cases made solo in the lawyer's own workspace", async () => {
       const userId = await makeUser("Jo");
-      const personal = await OrganizationSvc.create(userId, "Jo", undefined, "PH", true);
-      const solo = await CaseRepo.create(personal.id, userId, { caseName: "Solo" });
+      const solo = await CaseRepo.create(ownScope(userId), userId, { caseName: "Solo" });
 
       const org = await OrganizationSvc.create(userId, "Jo Law", "PROFESSIONAL", "PH");
 
-      expect(org.id).to.not.equal(personal.id);
       expect((await OrganizationMemberRepo.findAnyForUser(userId))?.organizationId).to.equal(org.id);
-      expect((await prisma.case.findUniqueOrThrow({ where: { id: solo.id } })).organizationId).to.equal(personal.id);
+      expect(await prisma.case.findUniqueOrThrow({ where: { id: solo.id } })).to.include({ organizationId: null, userId });
       expect((await CaseAccess.loadAccessibleCase(solo.id, userId)).id).to.equal(solo.id);
-      expect((await OrganizationSvc.getPortfolio(userId)).id).to.equal(personal.id);
+      expect((await CaseSvc.list(firmScope(org.id), userId, 1, 50)).data.map((c) => c.id)).to.not.include(solo.id);
+      expect((await OrganizationSvc.getPortfolio(userId)).tenant.code).to.equal("PH");
     });
   });
 
@@ -502,11 +507,11 @@ describe("Case portfolio", () => {
     it("keeps the organization's case, and the creator's name, when the creator's account is deleted", async () => {
       const firm = await makeOrg("Kim Firm");
       const creatorId = await memberOf(firm.organizationId, "Kai");
-      const created = await CaseRepo.create(firm.organizationId, creatorId, { caseName: "Survives" });
+      const created = await CaseRepo.create(firmScope(firm.organizationId), creatorId, { caseName: "Survives" });
       await prisma.organizationMember.delete({ where: { userId: creatorId } });
       await prisma.user.delete({ where: { id: creatorId } });
 
-      const after = await CaseRepo.findById(created.id, firm.organizationId);
+      const after = await CaseRepo.findById(created.id, firmScope(firm.organizationId));
       expect(after?.userId).to.equal(null);
       expect(after?.createdByName).to.equal("Kai");
       expect(after?.createdBy).to.equal(null);
@@ -515,10 +520,10 @@ describe("Case portfolio", () => {
     it("filters the list by creator", async () => {
       const firm = await makeOrg("Lux Firm");
       const memberId = await memberOf(firm.organizationId, "Mia");
-      await CaseRepo.create(firm.organizationId, memberId, { caseName: "Hers" });
-      await CaseRepo.create(firm.organizationId, firm.ownerId, { caseName: "Owner's" });
+      await CaseRepo.create(firmScope(firm.organizationId), memberId, { caseName: "Hers" });
+      await CaseRepo.create(firmScope(firm.organizationId), firm.ownerId, { caseName: "Owner's" });
 
-      const mine = await CaseRepo.list(firm.organizationId, memberId, 1, 50, undefined, "ACTIVE", memberId);
+      const mine = await CaseRepo.list(firmScope(firm.organizationId), memberId, 1, 50, undefined, "ACTIVE", memberId);
       expect(mine.data.map((c) => c.caseName)).to.deep.equal(["Hers"]);
       expect(mine.data[0].createdBy).to.include({ id: memberId, name: "Mia", isMember: true });
     });
@@ -532,7 +537,7 @@ describe("Case portfolio", () => {
       // Created order A < B < C < D; updated order is the reverse of that, so the two sorts disagree.
       const ids: Record<string, string> = {};
       for (const [i, name] of ["A", "B", "C", "D"].entries()) {
-        const created = await CaseRepo.create(firm.organizationId, userId, { caseName: name });
+        const created = await CaseRepo.create(firmScope(firm.organizationId), userId, { caseName: name });
         ids[name] = created.id;
         await prisma.case.update({ where: { id: created.id }, data: { createdAt: at(i + 1), updatedAt: at(10 - i) } });
       }
@@ -544,7 +549,7 @@ describe("Case portfolio", () => {
       await prisma.caseView.create({ data: { caseId: ids.D, userId: otherId, lastOpenedAt: at(22) } });
 
       const names = async (sort: "created" | "updated" | "opened", page: number, limit: number, order: "asc" | "desc" = "desc") =>
-        (await CaseRepo.list(firm.organizationId, userId, page, limit, undefined, "ACTIVE", undefined, sort, order)).data.map(
+        (await CaseRepo.list(firmScope(firm.organizationId), userId, page, limit, undefined, "ACTIVE", undefined, sort, order)).data.map(
           (c) => c.caseName,
         );
 
@@ -563,7 +568,7 @@ describe("Case portfolio", () => {
       expect(await names("opened", 1, 10, "asc")).to.deep.equal(["C", "B", "A", "D"]);
       expect(await names("opened", 2, 3, "asc")).to.deep.equal(["D"]);
 
-      const opened = await CaseRepo.list(firm.organizationId, userId, 1, 10, undefined, "ACTIVE", undefined, "opened");
+      const opened = await CaseRepo.list(firmScope(firm.organizationId), userId, 1, 10, undefined, "ACTIVE", undefined, "opened");
       expect(opened.total).to.equal(4);
       expect(opened.data[0].lastOpenedAt?.toISOString()).to.equal(at(21).toISOString());
       expect(opened.data[3].lastOpenedAt).to.equal(null);

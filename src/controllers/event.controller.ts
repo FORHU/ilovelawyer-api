@@ -1,3 +1,4 @@
+import { workspaceOf } from "../utils/workspace";
 import { Request, Response } from "express";
 import EventSvc from "../services/event.service";
 import HttpError from "../utils/http-error";
@@ -13,7 +14,7 @@ export default class EventCtrl {
   static async list(req: Request, res: Response) {
     const { startRange, endRange, excludeId, excludeStatus, limitOne, caseId } = req.query;
     const email = await getUserEmail(req.user.userId);
-    const events = await EventSvc.list(req.organization!.id, req.user.userId, email, {
+    const events = await EventSvc.list(workspaceOf(req), req.user.userId, email, {
       startRange: startRange as string | undefined,
       endRange: endRange as string | undefined,
       excludeId: excludeId as string | undefined,
@@ -26,7 +27,7 @@ export default class EventCtrl {
 
   static async getById(req: Request, res: Response) {
     const email = await getUserEmail(req.user.userId);
-    const event = await EventSvc.getById(req.params.id, req.organization!.id, req.user.userId, email);
+    const event = await EventSvc.getById(req.params.id, workspaceOf(req), req.user.userId, email);
     return res.status(200).json({ event });
   }
 
@@ -34,7 +35,7 @@ export default class EventCtrl {
     const { error, value } = createEventSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const event = await EventSvc.create(req.organization!.id, req.user.userId, value);
+    const event = await EventSvc.create(workspaceOf(req), req.user.userId, value);
     return res.status(201).json({ event });
   }
 
@@ -43,7 +44,7 @@ export default class EventCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     const email = await getUserEmail(req.user.userId);
-    const result = await EventSvc.updateById(req.params.id, req.organization!.id, req.user.userId, email, value);
+    const result = await EventSvc.updateById(req.params.id, workspaceOf(req), req.user.userId, email, value);
     return res.status(200).json(result);
   }
 
@@ -52,17 +53,17 @@ export default class EventCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     const email = await getUserEmail(req.user.userId);
-    const result = await EventSvc.updateByGoogleEventId(req.params.googleEventId, req.organization!.id, req.user.userId, email, value);
+    const result = await EventSvc.updateByGoogleEventId(req.params.googleEventId, workspaceOf(req), req.user.userId, email, value);
     return res.status(200).json(result);
   }
 
   static async deleteById(req: Request, res: Response) {
-    await EventSvc.deleteById(req.params.id, req.organization!.id, req.user.userId);
+    await EventSvc.deleteById(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(204).send();
   }
 
   static async deleteByGoogleEventId(req: Request, res: Response) {
-    await EventSvc.deleteByGoogleEventId(req.params.googleEventId, req.organization!.id, req.user.userId);
+    await EventSvc.deleteByGoogleEventId(req.params.googleEventId, workspaceOf(req), req.user.userId);
     return res.status(204).send();
   }
 }

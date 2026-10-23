@@ -61,17 +61,20 @@ export default class ClientRequestAdminSvc {
     };
   }
 
-  /** Fees per organization or lawyer over a date range (to exclusive). */
+  /** Fees per organization or lawyer over a date range (to exclusive). Per organization, a solo
+   * lawyer (no organization) is a row of their own: `solo`, with the lawyer's id and name. */
   static async feesSummary(groupBy: "organization" | "lawyer", from?: Date, to?: Date) {
     const rows = await ClientRequestAdminRepo.feesSummary(groupBy, from, to);
-    const ids = rows.map((r) => r.key);
-    const names =
-      groupBy === "organization"
-        ? new Map((await ClientRequestAdminRepo.findOrganizationNames(ids)).map((o) => [o.id, o.name] as const))
-        : new Map((await ClientRequestAdminRepo.findUserNames(ids)).map((u) => [u.id, u.name || u.email] as const));
+    const orgIds = rows.filter((r) => groupBy === "organization" && !r.solo).map((r) => r.key);
+    const userIds = rows.filter((r) => groupBy === "lawyer" || r.solo).map((r) => r.key);
+    const names = new Map([
+      ...(await ClientRequestAdminRepo.findOrganizationNames(orgIds)).map((o) => [o.id, o.name] as const),
+      ...(await ClientRequestAdminRepo.findUserNames(userIds)).map((u) => [u.id, u.name || u.email] as const),
+    ]);
     return rows.map((r) => ({
       id: r.key,
-      name: names.get(r.key) ?? (groupBy === "organization" ? "Deleted organization" : "Deleted account"),
+      solo: r.solo,
+      name: names.get(r.key) ?? (groupBy === "organization" && !r.solo ? "Deleted organization" : "Deleted account"),
       engagements: r.engagements,
       perCaseFees: money(r.perCaseFees),
       topUps: money(r.topUps),
@@ -98,8 +101,9 @@ export default class ClientRequestAdminSvc {
       action: "admin.organization_charge.refunded" as const,
       actorId: adminId,
       organizationId: charge.organizationId,
-      targetType: "organization" as const,
-      targetId: charge.organizationId,
+      // A solo lawyer's charge has no organization: the refund is about them.
+      targetType: charge.organizationId ? ("organization" as const) : ("user" as const),
+      targetId: charge.organizationId ?? charge.lawyerId,
       payload: { chargeId, kind: charge.kind, requestId: charge.requestId, refundId: refund.id, amountMinor: refund.amountMinor, currency: refund.currency, reason: input.reason },
     };
 
@@ -181,14 +185,15 @@ export default class ClientRequestAdminSvc {
         lawyerId: c.lawyerId,
         lawyerName: c.lawyer.name || c.lawyer.email,
         organizationId: c.organizationId,
-        organizationName: c.organization.name,
+        // Null for a solo lawyer, who has no organization.
+        organizationName: c.organization?.name ?? null,
         claimedAt: c.claimedAt,
         endedAt: c.endedAt,
         outcome: c.outcome,
         releaseReason: c.releaseReason,
         quote: c.quotedAt ? { type: c.quoteType, amount: money(c.quoteAmountMinor ?? 0, c.quoteCurrency ?? "GBP"), sentAt: c.quotedAt } : null,
       })),
-      organizationName: latest?.organization.name ?? null,
+      organizationName: latest?.organization?.name ?? null,
       charges: r.charges.map((c) => ClientRequestAdminSvc.adminChargeDto(c, names)),
     };
   }

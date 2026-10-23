@@ -18,11 +18,15 @@ function ownedByUser(userId: string): Prisma.CaseWhereInput[] {
 /** Org membership that reaches a case: any accepted member, or only `roles` when given. A
  * confidential case (#346) is the exception — membership alone no longer reaches it, org ADMIN
  * included (D6); only the organization's OWNER keeps it (D5). Everyone else needs a grant. */
-/** A per-case grant that can change the case (EDIT, or ADMIN to share it on). A portfolio case is
- * only ever shared to read (see OrganizationSvc.grantAccess), so a grant there never counts here
- * even if one were stored. */
+/** A per-case grant that can change the case (EDIT, or ADMIN to share it on). A portfolio case (a
+ * lawyer's own workspace, with no organization, or a client account's personal workspace) is only
+ * ever shared to read (see OrganizationSvc.grantAccess), so a grant there never counts here even
+ * if one were stored. */
 function changingGrant(userId: string, permissions: CasePermission[]): Prisma.CaseWhereInput {
-  return { accesses: { some: { userId, permission: { in: permissions } } }, NOT: { organization: { isPersonal: true } } };
+  return {
+    accesses: { some: { userId, permission: { in: permissions } } },
+    NOT: [{ organizationId: null }, { organization: { isPersonal: true } }],
+  };
 }
 
 function viaMembership(userId: string, roles?: OrganizationRole[]): Prisma.CaseWhereInput[] {
@@ -82,7 +86,14 @@ export default class CaseAccess {
    * is read-only. False for the owner, and for any organization case. */
   static async isPortfolioShare(caseId: string, userId: string): Promise<boolean> {
     const record = await prisma.case.findFirst({
-      where: { id: caseId, organization: { isPersonal: true, createdById: { not: userId } } },
+      where: {
+        id: caseId,
+        OR: [
+          // Another lawyer's own workspace (no organization, docs/adr/0022).
+          { organizationId: null, userId: { not: userId } },
+          { organization: { isPersonal: true, createdById: { not: userId } } },
+        ],
+      },
       select: { id: true },
     });
     return !!record;
@@ -201,22 +212,25 @@ export default class CaseAccess {
 
   /**
    * The authoritative Tenant code for legal/AI operations on this case: case -> its
-   * organization -> organization.tenant.code. This is the seam every legal-content
-   * generator (deadline engine, prompt builders) resolves the tenant code through — never
-   * from the ambient X-Organization-Id header, and never from client input. A case with no
-   * organization attached yet has no tenant context to operate under, so this throws
-   * rather than guessing (no silent fallback to PH). Call only after loadAccessibleCase/
-   * assertCanEdit has already authorized the caller for this caseId.
+   * organization -> organization.tenant.code, or for a case in a lawyer's own workspace (no
+   * organization, docs/adr/0022) case -> its lawyer -> their account's site. This is the seam
+   * every legal-content generator (deadline engine, prompt builders) resolves the tenant code
+   * through — never from the ambient X-Organization-Id header, and never from client input. A
+   * case with neither has no tenant context to operate under, so this throws rather than
+   * guessing (no silent fallback to PH). Call only after loadAccessibleCase/assertCanEdit has
+   * already authorized the caller for this caseId.
    */
   static async resolveTenantCode(caseId: string): Promise<TenantCode> {
     const record = await prisma.case.findUnique({
       where: { id: caseId },
-      select: { organization: { select: { tenant: { select: { code: true } } } } },
+      select: {
+        organization: { select: { tenant: { select: { code: true } } } },
+        user: { select: { tenant: { select: { code: true } } } },
+      },
     });
-    if (!record?.organization) {
-      throw new HttpError("This case has no organization/tenant context — attach it to an organization first", 409);
-    }
-    return asTenantCode(record.organization.tenant.code);
+    const code = record?.organization ? record.organization.tenant.code : record?.user?.tenant?.code;
+    if (!code) throw new HttpError("This case has no site (UK or PH) to work under", 409);
+    return asTenantCode(code);
   }
 
   /**
@@ -245,8 +259,10 @@ export default class CaseAccess {
   static async requiredConfirmations(caseId: string): Promise<number> {
     const record = await prisma.case.findUnique({
       where: { id: caseId },
-      select: { organization: { select: { packageSku: true } } },
+      select: { organizationId: true, organization: { select: { packageSku: true } } },
     });
+    // A case in a lawyer's own workspace (no organization) has only them to confirm, like SOLO.
+    if (record && !record.organizationId) return 1;
     return record?.organization?.packageSku === "SOLO" ? 1 : 2;
   }
 }

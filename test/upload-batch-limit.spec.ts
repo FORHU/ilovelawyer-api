@@ -5,6 +5,7 @@
  *
  * No live Postgres or S3: CaseAccess, the repos, the queue and the S3 helpers are monkeypatched.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import DocumentSvc from "../src/services/document.service";
@@ -140,21 +141,21 @@ describe("upload batch limit (1 GB per request)", () => {
         { filename: "a.pdf", contentType: "application/pdf", fileSize: 100 * MB },
         { filename: "b.txt", contentType: "text/plain", fileSize: 0 },
       ];
-      const items = await DocumentSvc.presignMany("org-1", "user-1", files, "case-1");
+      const items = await DocumentSvc.presignMany(firmScope("org-1"), "user-1", files, "case-1");
       expect(items).to.have.length(2);
       expect(presigned.map((p) => p.contentLength)).to.deep.equal([100 * MB, 0]);
     });
 
     it("presignMany mints no URL for a batch over 1 GB", async () => {
       const files = Array.from({ length: 11 }, (_, i) => ({ filename: `f${i}.pdf`, contentType: "application/pdf", fileSize: 100 * MB }));
-      const err = await rejection(DocumentSvc.presignMany("org-1", "user-1", files, "case-1"));
+      const err = await rejection(DocumentSvc.presignMany(firmScope("org-1"), "user-1", files, "case-1"));
       expect(err.statusCode).to.equal(413);
       expect(presigned).to.have.length(0);
     });
 
     it("single presign passes the size through, and leaves it unsigned when missing", async () => {
-      await DocumentSvc.presign("org-1", "user-1", "a.pdf", "application/pdf", "case-1", undefined, 42);
-      await DocumentSvc.presign("org-1", "user-1", "b.pdf", "application/pdf", "case-1");
+      await DocumentSvc.presign(firmScope("org-1"), "user-1", "a.pdf", "application/pdf", "case-1", undefined, 42);
+      await DocumentSvc.presign(firmScope("org-1"), "user-1", "b.pdf", "application/pdf", "case-1");
       expect(presigned.map((p) => p.contentLength)).to.deep.equal([42, undefined]);
     });
 
@@ -163,7 +164,7 @@ describe("upload batch limit (1 GB per request)", () => {
         { key: "k1", name: "a.pdf", fileSize: 600 * MB },
         { key: "k2", name: "b.pdf", fileSize: 600 * MB },
       ];
-      const err = await rejection(DocumentSvc.createMany("org-1", "user-1", items, "case-1"));
+      const err = await rejection(DocumentSvc.createMany(firmScope("org-1"), "user-1", items, "case-1"));
       expect(err.statusCode).to.equal(413);
       expect(writes).to.deep.equal([]);
     });
@@ -173,7 +174,7 @@ describe("upload batch limit (1 GB per request)", () => {
         { key: "k1", name: "a.pdf", fileSize: GB / 2 },
         { key: "k2", name: "b.pdf", fileSize: GB / 2 },
       ];
-      await DocumentSvc.createMany("org-1", "user-1", items, "case-1");
+      await DocumentSvc.createMany(firmScope("org-1"), "user-1", items, "case-1");
       expect(writes).to.include("doc:createMany");
     });
 
@@ -184,7 +185,7 @@ describe("upload batch limit (1 GB per request)", () => {
         { filename: "b.pdf", s3Key: "k2", metaData: { fileSize: 700 * MB, mimeType: "application/pdf" } },
       ];
       const err = await rejection(
-        CaseSvc.handleCreateCaseWithDocument({ caseId: "case-1", organizationId: "org-1", userId: "user-1" }, documentData),
+        CaseSvc.handleCreateCaseWithDocument({ caseId: "case-1", scope: firmScope("org-1"), userId: "user-1" }, documentData),
       );
       expect(err.statusCode).to.equal(413);
       expect(writes).to.deep.equal([]);

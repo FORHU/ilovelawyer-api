@@ -31,7 +31,7 @@ const FOR_CLIENT = {
     orderBy: { claimedAt: "desc" },
     take: 1,
     include: {
-      lawyer: { select: { id: true, name: true, avatar: { select: { s3Key: true } }, clientRequestProfile: true } },
+      lawyer: { select: { id: true, name: true, avatar: { select: { s3Key: true } }, clientRequestProfile: { include: { ukRegistration: true } } } },
       organization: { select: { name: true, isPersonal: true } },
     },
   },

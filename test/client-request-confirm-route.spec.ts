@@ -148,8 +148,10 @@ describe("client confirms, the firm is charged the per-case fee", () => {
         members: { create: { userId: clientId, role: "OWNER", status: "ACCEPTED" } },
       },
     });
-    const profile = { regulator: "SRA", qualifiedJurisdictions: ["England and Wales"], practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED" as const, verifiedAt: new Date() };
-    await prisma.lawyerClientProfile.createMany({ data: [{ ...profile, userId: lawyerId, registrationNumber: "111" }, { ...profile, userId: otherLawyerId, registrationNumber: "222" }] });
+    const profile = { practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED" as const, verifiedAt: new Date() };
+    await prisma.lawyerClientProfile.createMany({ data: [{ ...profile, userId: lawyerId }, { ...profile, userId: otherLawyerId }] });
+    const registration = { regulator: "SRA", qualifiedJurisdictions: ["England and Wales"] };
+    await prisma.lawyerUkRegistration.createMany({ data: [{ ...registration, userId: lawyerId, registrationNumber: "111" }, { ...registration, userId: otherLawyerId, registrationNumber: "222" }] });
     await prisma.case.create({ data: { id: caseId, userId: clientId, organizationId: clientOrgId, caseName: "Unfair dismissal", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
   });
 

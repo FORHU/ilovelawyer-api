@@ -42,7 +42,8 @@ export class MindMapLimitError extends HttpError {
 }
 
 interface ConsultationTarget {
-  organizationId: string;
+  /** The workspace's firm, or null in a lawyer's own (then the case access check decides). */
+  organizationId: string | null;
   userId: string;
   consultationId: string;
   /** Which message's map to act on; defaults to the consultation's active (newest) map. */

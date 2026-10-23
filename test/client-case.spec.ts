@@ -2,6 +2,7 @@
  * client's personal workspace, and a thin mapping onto the lawyer app's Case, Consultation and
  * Document. No live Postgres: repositories and services are monkeypatched on their CommonJS
  * module objects, same idiom as test/client-app-role.spec.ts. */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import type { Request } from "express";
@@ -94,7 +95,7 @@ describe("Client app cases", () => {
     it("runs a client's request in their personal workspace", async () => {
       const { req, nextCalled } = await run();
       expect(nextCalled).to.equal(true);
-      expect(req.organization).to.deep.equal(workspace);
+      expect(req.workspace).to.deep.include({ organizationId: workspace.id, ownerId: null, role: workspace.role, tenantCode: workspace.tenantCode });
     });
 
     it("refuses a lawyer or admin account, whatever app sent it", async () => {
@@ -200,8 +201,9 @@ describe("Client app cases", () => {
         side: "CLAIMANT",
         others: [{ name: "Acme Ltd", role: "Opposing party" }],
       });
+      // The client's personal workspace is an organization, scoped like a firm.
       expect(calls.caseCreate).to.deep.equal([
-        "org-personal",
+        firmScope("org-personal"),
         "u1",
         "OWNER",
         {
@@ -237,7 +239,7 @@ describe("Client app cases", () => {
         ];
       };
       const result = await ClientCaseSvc.listMessages(workspace, "u1", "case-1");
-      expect(calls.listMessages).to.deep.equal(["org-personal", "u1", "cons-1"]);
+      expect(calls.listMessages).to.deep.equal([firmScope("org-personal"), "u1", "cons-1"]);
       expect(result.replying).to.equal(true);
       expect(result.messages.map((m) => [m.id, m.role, m.replyStatus])).to.deep.equal([
         ["m1", "user", "DONE"],
@@ -248,7 +250,7 @@ describe("Client app cases", () => {
 
     it("asks the AI in the case's consultation, on the UK tenant, scoped to the case", async () => {
       await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "What are my rights?");
-      expect(calls.enqueue).to.deep.equal(["org-personal", "UK", "u1", "cons-1", "", "What are my rights?", undefined, undefined, "case-1"]);
+      expect(calls.enqueue).to.deep.equal([firmScope("org-personal"), "UK", "u1", "cons-1", "", "What are my rights?", undefined, undefined, "case-1"]);
     });
 
     it("gives a case that lost its chat a new one", async () => {

@@ -2,14 +2,19 @@ import prisma from "../lib/prisma";
 import CaseAccess from "../utils/case-access";
 import { Prisma, RagStatus, DocumentStatus } from "@prisma/client";
 import CaseRepo from "./case.repository";
+import { scopeWhere, type WorkspaceScope } from "../utils/workspace";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
 /** The documents reachable from the workspace (`organizationId`) a request came in through. A
  * file attached to a main consultation has no organization and belongs to its uploader, so with
  * `userId` it is reachable from every workspace that user opens — and only by them. */
-const inWorkspace = (organizationId: string, userId?: string): Prisma.DocumentWhereInput =>
-  userId ? { OR: [{ organizationId }, { organizationId: null, userId }] } : { organizationId };
+const inWorkspace = (scope: WorkspaceScope, userId?: string): Prisma.DocumentWhereInput => {
+  // A lawyer's own workspace has no organization: its documents are the owner's, all org-less.
+  if (!scope.organizationId) return scopeWhere(scope);
+  const { organizationId } = scope;
+  return userId ? { OR: [{ organizationId }, { organizationId: null, userId }] } : { organizationId };
+};
 
 interface NewUserDocument {
   organizationId: string | null;
@@ -61,10 +66,10 @@ export default class DocumentRepo {
   /** The organization's documents, minus those on a case `userId` can't open — a confidential
    * case's documents are left out for anyone walled off from it (#346) — and minus files that live
    * only in someone else's standalone Consultation, which is private to its creator, as are its files. */
-  static async list(organizationId: string, status: DocumentStatus = "ACTIVE", userId: string) {
+  static async list(scope: WorkspaceScope, status: DocumentStatus = "ACTIVE", userId: string) {
     return prisma.document.findMany({
       where: {
-        AND: [inWorkspace(organizationId, userId), { OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] }],
+        AND: [inWorkspace(scope, userId), { OR: [{ caseId: null }, { case: CaseAccess.visibleWhere(userId) }] }],
         status,
         NOT: { caseId: null, consultation: { is: { userId: { not: userId } } } },
       },
@@ -73,36 +78,36 @@ export default class DocumentRepo {
     });
   }
 
-  static async listByCase(organizationId: string, caseId: string, status: DocumentStatus = "ACTIVE") {
+  static async listByCase(scope: WorkspaceScope, caseId: string, status: DocumentStatus = "ACTIVE") {
     return prisma.document.findMany({
-      where: { organizationId, caseId, status },
+      where: { ...scopeWhere(scope), caseId, status },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
   }
 
-  static async listByConsultation(organizationId: string, consultationId: string, status: DocumentStatus = "ACTIVE", userId?: string) {
+  static async listByConsultation(scope: WorkspaceScope, consultationId: string, status: DocumentStatus = "ACTIVE", userId?: string) {
     return prisma.document.findMany({
-      where: { ...inWorkspace(organizationId, userId), consultationId, status },
+      where: { ...inWorkspace(scope, userId), consultationId, status },
       orderBy: { createdAt: "desc" },
       include: { file: true },
     });
   }
 
   /** (id, name) of every document attached to a consultation and/or a case, any status (an
-   * archived document can still be cited by an older answer). Scoped to the organization. Used to
+   * archived document can still be cited by an older answer). Scoped to the workspace. Used to
    * turn the file ids an AI answer or Decision Record may carry into names - see
    * utils/document-references.ts. */
   static async listRefsForScope(
-    organizationId: string,
-    scope: { consultationId?: string | null; caseId?: string | null },
+    scope: WorkspaceScope,
+    target: { consultationId?: string | null; caseId?: string | null },
     userId?: string,
   ) {
     const or: Array<{ consultationId: string } | { caseId: string }> = [];
-    if (scope.consultationId) or.push({ consultationId: scope.consultationId });
-    if (scope.caseId) or.push({ caseId: scope.caseId });
+    if (target.consultationId) or.push({ consultationId: target.consultationId });
+    if (target.caseId) or.push({ caseId: target.caseId });
     if (!or.length) return [];
-    return prisma.document.findMany({ where: { AND: [inWorkspace(organizationId, userId), { OR: or }] }, select: { id: true, name: true } });
+    return prisma.document.findMany({ where: { AND: [inWorkspace(scope, userId), { OR: or }] }, select: { id: true, name: true } });
   }
 
   /** Unscoped by organizationId — used internally by case-level services (refresh, strategy,
@@ -187,8 +192,8 @@ export default class DocumentRepo {
     });
   }
 
-  static async findById(id: string, organizationId: string, userId?: string) {
-    return prisma.document.findFirst({ where: { id, ...inWorkspace(organizationId, userId) }, include: { file: true } });
+  static async findById(id: string, scope: WorkspaceScope, userId?: string) {
+    return prisma.document.findFirst({ where: { id, ...inWorkspace(scope, userId) }, include: { file: true } });
   }
 
   /** Links documents already uploaded (via presign + confirm) to the message they were sent
@@ -200,9 +205,9 @@ export default class DocumentRepo {
     return prisma.document.count({ where: { messageId } });
   }
 
-  static async linkToMessage(ids: string[], messageId: string, organizationId: string, consultationId: string, userId?: string) {
+  static async linkToMessage(ids: string[], messageId: string, scope: WorkspaceScope, consultationId: string, userId?: string) {
     await prisma.document.updateMany({
-      where: { id: { in: ids }, ...inWorkspace(organizationId, userId), consultationId },
+      where: { id: { in: ids }, ...inWorkspace(scope, userId), consultationId },
       data: { messageId },
     });
   }
@@ -231,11 +236,11 @@ export default class DocumentRepo {
 
   static async update(
     id: string,
-    organizationId: string,
+    scope: WorkspaceScope,
     data: { name?: string; caseId?: string | null; consultationId?: string | null; isExhibit?: boolean },
     userId?: string,
   ) {
-    const result = await prisma.document.updateMany({ where: { id, ...inWorkspace(organizationId, userId) }, data });
+    const result = await prisma.document.updateMany({ where: { id, ...inWorkspace(scope, userId) }, data });
     return result.count > 0;
   }
 
@@ -256,16 +261,16 @@ export default class DocumentRepo {
     return prisma.document.update({ where: { id }, data: { category } });
   }
 
-  static async delete(id: string, organizationId: string, userId?: string) {
-    const result = await prisma.document.deleteMany({ where: { id, ...inWorkspace(organizationId, userId) } });
+  static async delete(id: string, scope: WorkspaceScope, userId?: string) {
+    const result = await prisma.document.deleteMany({ where: { id, ...inWorkspace(scope, userId) } });
     return result.count > 0;
   }
 
   /** Archiving is a pure visibility flag (see DocumentStatus on the schema) — this is the one
    * place that flips it. Find-then-update (not updateMany) since this is a genuine
    * user-initiated action with a real 404 to report. */
-  static async setStatus(id: string, organizationId: string, status: DocumentStatus, userId?: string) {
-    const existing = await prisma.document.findFirst({ where: { id, ...inWorkspace(organizationId, userId) }, select: { id: true } });
+  static async setStatus(id: string, scope: WorkspaceScope, status: DocumentStatus, userId?: string) {
+    const existing = await prisma.document.findFirst({ where: { id, ...inWorkspace(scope, userId) }, select: { id: true } });
     if (!existing) return null;
     return prisma.document.update({ where: { id }, data: { status }, include: { file: true } });
   }

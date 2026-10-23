@@ -18,7 +18,8 @@ function shareEnded(caseId: string, userId: string) {
 }
 
 /**
- * Sharing a portfolio case (a case in someone's personal workspace) with other registered users.
+ * Sharing a portfolio case (a case in a lawyer's own workspace, which has no organization, or in a
+ * client account's personal workspace) with other registered users.
  * Unlike an organization case, which is shared among that organization's members, a portfolio case
  * goes to individual people the owner picks — and only to read:
  *  - only the owner shares it, and the share is always VIEW;
@@ -54,7 +55,7 @@ export default class CaseShareSvc {
    * partial matching: this is not a way to browse who uses the app. */
   static async lookup(caseId: string, ownerId: string, email: string) {
     const record = await CaseShareSvc.loadShareable(caseId, ownerId);
-    return CaseShareSvc.loadRecipient({ email: normalizeEmail(email) }, ownerId, record.organization?.tenantId);
+    return CaseShareSvc.loadRecipient({ email: normalizeEmail(email) }, ownerId, record.tenantId ?? undefined);
   }
 
   static async grant(caseId: string, ownerId: string, userId: string, permission: string) {
@@ -62,7 +63,7 @@ export default class CaseShareSvc {
       throw new HttpError("A case from your portfolio can only be shared to view", 400, "SHARE_READ_ONLY");
     }
     const record = await CaseShareSvc.loadShareable(caseId, ownerId);
-    const recipient = await CaseShareSvc.loadRecipient({ id: userId }, ownerId, record.organization?.tenantId);
+    const recipient = await CaseShareSvc.loadRecipient({ id: userId }, ownerId, record.tenantId ?? undefined);
     const access = await OrganizationRepo.grantCaseAccess(caseId, recipient.id, "VIEW");
     await OrganizationRepo.writeAudit({ caseId, actorId: ownerId, action: "case.grant_access", payload: { userId: recipient.id, permission: "VIEW", portfolio: true } });
     await SecurityAuditSvc.record({
@@ -75,7 +76,7 @@ export default class CaseShareSvc {
       payload: { permission: "VIEW", portfolio: true },
     });
 
-    const ownerName = record.organization?.createdBy.name || record.organization?.createdBy.username || "Someone";
+    const ownerName = record.ownerName || "Someone";
     // No organizationId: the recipient isn't in the owner's portfolio, so the notification shows
     // wherever they are.
     await NotificationSvc.create({

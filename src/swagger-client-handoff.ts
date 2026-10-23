@@ -13,6 +13,7 @@ import {
   REQUEST_URGENCIES,
   UK_JURISDICTIONS,
 } from "./types/client-handoff";
+import { LAWYER_COUNTRIES, LAWYER_REJECTION_REASONS, PH_PRACTICE_AREAS } from "./constants/lawyer-application.constants";
 
 /**
  * The UK client-to-lawyer hand-off API contract (ilovelawyer-api#503), merged into swagger.ts.
@@ -193,18 +194,49 @@ export const clientHandoffSchemas: Schemas = {
       verifiedAt: dateTime(),
     },
   },
+  UkRegistration: {
+    type: "object",
+    description: "The UK part of a Lawyer Application: what the admin checks against the regulator's register.",
+    properties: {
+      country: { type: "string", enum: ["UK"] },
+      regulator: { ...enumOf(LAWYER_REGULATORS), nullable: true },
+      registrationNumber: { type: "string", nullable: true, maxLength: 40 },
+      qualifiedJurisdictions: { type: "array", items: enumOf(UK_JURISDICTIONS) },
+    },
+  },
+  PhRegistration: {
+    type: "object",
+    description: "The PH part of a Lawyer Application. Only rollNumber and ibpChapter are required to submit (the PH rules aren't final).",
+    properties: {
+      country: { type: "string", enum: ["PH"] },
+      rollNumber: { type: "string", nullable: true, maxLength: 40, description: "Roll of Attorneys number" },
+      ibpChapter: { type: "string", nullable: true, maxLength: 80 },
+      ibpMembershipNumber: { type: "string", nullable: true, maxLength: 40 },
+      mcleNumber: { type: "string", nullable: true, maxLength: 40 },
+      mclePeriod: { type: "string", nullable: true, maxLength: 20, description: "As on the certificate, e.g. VII" },
+    },
+  },
   ClientRequestProfile: {
     type: "object",
-    description: "A lawyer's own settings for receiving client requests. UK tenant only.",
+    description:
+      "A lawyer's Lawyer Application, UK or PH (the lawyer's site). On UK it also holds the settings for receiving client requests; on PH approval only shows a badge for now.",
     properties: {
-      regulator: { ...enumOf(LAWYER_REGULATORS), nullable: true },
-      registrationNumber: { type: "string", nullable: true },
-      qualifiedJurisdictions: { type: "array", items: enumOf(UK_JURISDICTIONS) },
-      practiceAreas: { type: "array", items: enumOf(PRACTICE_AREAS) },
+      country: enumOf(LAWYER_COUNTRIES),
+      registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
+      practiceAreas: {
+        type: "array",
+        items: { type: "string", enum: [...new Set([...PRACTICE_AREAS, ...PH_PRACTICE_AREAS])] },
+        description: "UK: PRACTICE_AREAS. PH: PH_PRACTICE_AREAS.",
+      },
       bio: { type: "string", maxLength: 1500 },
       languages: { type: "array", items: { type: "string" } },
-      firstConsultationFee: { ...money(), nullable: true },
-      acceptingRequests: { type: "boolean", description: "The lawyer's own switch. The organization can also turn it off per member" },
+      firstConsultationFee: {
+        type: "object",
+        nullable: true,
+        description: "Minor units: pence on UK, centavos on PH.",
+        properties: { amountMinor: { type: "integer" }, currency: { type: "string", enum: ["GBP", "PHP"] } },
+      },
+      acceptingRequests: { type: "boolean", description: "The lawyer's own switch (UK only). The organization can also turn it off per member" },
       enabledByOrganization: { type: "boolean", readOnly: true },
       pausedUntil: dateTime("Skipped by routing until then", true),
       capacityLimit: { type: "integer", nullable: true, minimum: 1, description: "Most engagements open at once; null for no limit" },
@@ -415,7 +447,22 @@ export const clientHandoffSchemas: Schemas = {
       userId: { type: "string" },
       name: { type: "string" },
       email: { type: "string" },
-      organizationName: { type: "string", nullable: true },
+      organizationName: { type: "string", nullable: true, description: "Null for a solo practitioner" },
+      firm: {
+        type: "object",
+        nullable: true,
+        description: "The lawyer's organization's details; null for a solo practitioner. Not reviewed separately",
+        properties: {
+          name: { type: "string" },
+          regulator: { ...enumOf(LAWYER_REGULATORS), nullable: true },
+          registrationNumber: { type: "string", nullable: true },
+          phone: { type: "string", nullable: true },
+          address: {
+            type: "object",
+            properties: { line1: { type: "string", nullable: true }, line2: { type: "string", nullable: true }, city: { type: "string", nullable: true }, postcode: { type: "string", nullable: true } },
+          },
+        },
+      },
       profile: ref("ClientRequestProfile"),
       registerCheck: { ...ref("RegisterCheck"), nullable: true, description: "Null when the register couldn't be reached; the admin checks by hand" },
       submittedAt: dateTime("When the profile last joined the queue; null while UNSUBMITTED", true),
@@ -595,24 +642,27 @@ export const clientHandoffPaths: Paths = {
     get: op({
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#504", built: true,
-      summary: "Your client request settings",
-      responses: { 200: ok("Profile", ref("ClientRequestProfile")), 403: err("NOT_UK_TENANT") },
+      summary: "Your Lawyer Application",
+      responses: { 200: ok("Profile", ref("ClientRequestProfile")), 403: err("NOT_A_LAWYER or NOT_SUPPORTED_TENANT") },
     }),
     patch: op({
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#504", built: true,
-      summary: "Update your client request settings",
-      description: "Changing the registration number or jurisdictions of a VERIFIED profile sends it back to PENDING. Turning on acceptingRequests before verification answers 422 PROFILE_INCOMPLETE or 403 LAWYER_NOT_VERIFIED.",
+      summary: "Update your Lawyer Application",
+      description:
+        "registration must be your own site's (400 WRONG_COUNTRY otherwise). Changing what was checked sends a VERIFIED or REJECTED application back to PENDING: UK regulator, number or jurisdictions; PH Roll number or IBP chapter. Turning on acceptingRequests answers 403 NOT_UK_TENANT on PH, and before verification 422 PROFILE_INCOMPLETE or 403 LAWYER_NOT_VERIFIED.",
       body: {
         type: "object",
         properties: {
-          regulator: enumOf(LAWYER_REGULATORS),
-          registrationNumber: { type: "string" },
-          qualifiedJurisdictions: { type: "array", items: enumOf(UK_JURISDICTIONS) },
-          practiceAreas: { type: "array", items: enumOf(PRACTICE_AREAS) },
+          registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
+          practiceAreas: { type: "array", items: { type: "string" }, description: "Your site's list" },
           bio: { type: "string", maxLength: 1500 },
           languages: { type: "array", items: { type: "string" } },
-          firstConsultationFee: { ...money(), nullable: true },
+          firstConsultationFee: {
+            type: "object",
+            nullable: true,
+            properties: { amountMinor: { type: "integer" }, currency: { type: "string", enum: ["GBP", "PHP"], description: "Your site's" } },
+          },
           acceptingRequests: { type: "boolean" },
           pausedUntil: dateTime(undefined, true),
           capacityLimit: { type: "integer", minimum: 1, nullable: true },
@@ -864,6 +914,42 @@ export const clientHandoffPaths: Paths = {
       responses: { 200: ok("Charges", page("Charge")), 403: err("Not the organization's OWNER/ADMIN") },
     }),
   },
+  "/users/me/billing/card": {
+    get: op({
+      tag: BILLING_TAG,
+      issue: "docs/adr/0022", built: true,
+      summary: "A solo lawyer's own card on file",
+      description:
+        "A solo lawyer has no organization, so the per-case fee is charged to their own card. Same shape and setupSessionId handling as GET /organizations/{id}/billing/card.",
+      parameters: [{ name: "setupSessionId", in: "query", schema: { type: "string" }, description: "The session returnUrl came back with" }],
+      responses: { 200: ok("The card, or null", { ...ref("PaymentCard"), nullable: true }) },
+    }),
+  },
+  "/users/me/billing/card/setup-session": {
+    post: op({
+      tag: BILLING_TAG,
+      issue: "docs/adr/0022", built: true,
+      summary: "Start a Stripe-hosted setup of a solo lawyer's own card",
+      description:
+        "As POST /organizations/{id}/billing/card/setup-session, for the lawyer's own card (their own Stripe customer). Audited as account.payment_card_updated.",
+      body: { type: "object", required: ["returnUrl"], properties: { returnUrl: { type: "string", description: "Must be on an allowed app origin" } } },
+      responses: {
+        200: ok("Setup session", { type: "object", properties: { url: { type: "string" } } }),
+        400: err("RETURN_URL_NOT_ALLOWED: not on one of the app's origins (CLIENT_URL)"),
+        502: err("PAYMENT_PROVIDER_ERROR: Stripe couldn't start the setup"),
+      },
+    }),
+  },
+  "/users/me/billing/fees": {
+    get: op({
+      tag: BILLING_TAG,
+      issue: "docs/adr/0022", built: true,
+      summary: "A solo lawyer's own fee history",
+      description: "Charges for client requests the lawyer took in their own workspace (no organization).",
+      parameters: [{ name: "kind", in: "query", schema: enumOf(CHARGE_KINDS) }, ...pageParams],
+      responses: { 200: ok("Charges", page("Charge")) },
+    }),
+  },
   "/billing/top-up-packs": {
     get: op({
       tag: BILLING_TAG,
@@ -894,8 +980,12 @@ export const clientHandoffPaths: Paths = {
     get: op({
       tag: ADMIN_TAG,
       issue: "ilovelawyer-api#506",
-      summary: "Lawyers waiting for verification, with the register check",
-      parameters: [{ name: "status", in: "query", schema: { ...enumOf(LAWYER_VERIFICATION_STATUSES), default: "PENDING" } }, ...pageParams],
+      summary: "Lawyer Applications for one site, with the register check",
+      parameters: [
+        { name: "site", in: "query", schema: { ...enumOf(LAWYER_COUNTRIES), default: "UK" } },
+        { name: "status", in: "query", schema: { ...enumOf(LAWYER_VERIFICATION_STATUSES), default: "PENDING" } },
+        ...pageParams,
+      ],
       responses: { 200: ok("Verifications", page("AdminLawyerVerification")), 403: err("Not an admin") },
     }),
   },
@@ -903,14 +993,16 @@ export const clientHandoffPaths: Paths = {
     post: op({
       tag: ADMIN_TAG,
       issue: "ilovelawyer-api#506",
-      summary: "Verify a lawyer for client requests",
+      summary: "Approve a Lawyer Application",
       description:
-        "The admin confirms which jurisdictions the lawyer is qualified in; they replace the lawyer's own. The note is internal: it goes in the audit log, not to the lawyer. 409 unless PENDING. Audited.",
+        "UK: the admin confirms which jurisdictions the lawyer is qualified in (required, 400 without); they replace the lawyer's own. PH: no jurisdictions, only the optional note. The note is internal: it goes in the audit log, not to the lawyer. 409 unless PENDING. Audited.",
       parameters: [idParam("userId")],
       body: {
         type: "object",
-        required: ["confirmedJurisdictions"],
-        properties: { confirmedJurisdictions: { type: "array", items: enumOf(UK_JURISDICTIONS), minItems: 1 }, note: { type: "string", maxLength: 1000 } },
+        properties: {
+          confirmedJurisdictions: { type: "array", items: enumOf(UK_JURISDICTIONS), minItems: 1, description: "UK only" },
+          note: { type: "string", maxLength: 1000 },
+        },
       },
       responses: { 200: ok("Verified", ref("AdminLawyerVerification")), 400: err("Invalid body"), 403: err("Not an admin"), 404: err("No such lawyer"), 409: err("Not PENDING") },
     }),
@@ -919,14 +1011,15 @@ export const clientHandoffPaths: Paths = {
     post: op({
       tag: ADMIN_TAG,
       issue: "ilovelawyer-api#506",
-      summary: "Reject a lawyer, with a note they will see",
-      description: "They drop out of routing. Requests they hold are released. Audited.",
+      summary: "Reject a Lawyer Application, with a note they will see",
+      description:
+        "UK reasons: NAME_MISMATCH, NOT_PRACTISING, WRONG_JURISDICTION, OTHER. PH reasons: NAME_MISMATCH, ROLL_NOT_FOUND, NOT_IN_GOOD_STANDING, OTHER. A reason from the other country answers 400. They drop out of routing. Requests they hold are released. Audited.",
       parameters: [idParam("userId")],
       body: {
         type: "object",
         required: ["reason"],
         properties: {
-          reason: { type: "string", enum: ["NAME_MISMATCH", "NOT_PRACTISING", "WRONG_JURISDICTION", "OTHER"], description: "Each but OTHER sends the lawyer a canned sentence" },
+          reason: { type: "string", enum: LAWYER_REJECTION_REASONS, description: "Each but OTHER sends the lawyer a canned sentence, in the application's country's wording" },
           note: { type: "string", maxLength: 1000, description: "Required for OTHER, where it is the whole message; otherwise appended to the canned sentence" },
         },
       },

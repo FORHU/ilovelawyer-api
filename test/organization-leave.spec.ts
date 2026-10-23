@@ -1,3 +1,4 @@
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import crypto from "crypto";
 import { describe, it, after } from "mocha";
@@ -30,7 +31,7 @@ describe("Leaving an organization", () => {
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   });
 
-  it("removes the membership, so org-scoped routes reject the user, and lands them in their portfolio", async () => {
+  it("removes the membership, so org-scoped routes reject the user, and leaves them solo with no organization", async () => {
     const ownerId = await makeUser(createdUserIds);
     const memberId = await makeUser(createdUserIds);
     const firm = await OrganizationSvc.create(ownerId, "Ivy Firm", undefined, "PH");
@@ -40,9 +41,9 @@ describe("Leaving an organization", () => {
 
     const err = await OrganizationSvc.requireMembership(firm.id, memberId).catch((e) => e);
     expect(err.statusCode).to.equal(403);
-    const orgs = await OrganizationSvc.listForUser(memberId);
-    expect(orgs).to.have.length(1);
-    expect(orgs[0].isPersonal).to.equal(true);
+    // Their own workspace has no organization (docs/adr/0022).
+    expect(await OrganizationSvc.listForUser(memberId)).to.deep.equal([]);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: memberId } })).soloChosenAt).to.be.instanceOf(Date);
   });
 
   it("revokes the user's per-case grants on the org's cases, and only those", async () => {
@@ -81,9 +82,9 @@ describe("Leaving an organization", () => {
 
     await OrganizationSvc.leave(firm.id, creatorId);
 
-    const listed = await CaseSvc.list(firm.id, memberId, 1, 50);
+    const listed = await CaseSvc.list(firmScope(firm.id), memberId, 1, 50);
     expect(listed.data.map((c) => c.id)).to.include(firmCase.id);
-    expect((await CaseSvc.getById(firmCase.id, firm.id, memberId)).id).to.equal(firmCase.id);
+    expect((await CaseSvc.getById(firmCase.id, firmScope(firm.id), memberId)).id).to.equal(firmCase.id);
     expect((await CaseAccess.loadAccessibleCase(firmCase.id, memberId)).id).to.equal(firmCase.id);
     expect((await CaseAccess.assertCanEdit(firmCase.id, ownerId)).id).to.equal(firmCase.id);
   });

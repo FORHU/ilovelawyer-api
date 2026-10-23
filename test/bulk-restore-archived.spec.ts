@@ -8,6 +8,7 @@
  * No live Postgres: repos/services are monkeypatched on their CommonJS module objects, same idiom
  * as case-archive-delete-cascades-documents.spec.ts / document-delete-triggers-refresh.spec.ts.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import CaseSvc from "../src/services/case.service";
@@ -31,8 +32,8 @@ describe("CaseSvc.unarchive — cascades into the case's documents", () => {
     (CaseAccess as any).assertCanEdit = async () => ({});
     (CaseRepo as any).setStatus = async () => ({ id: "case-1", status: "ACTIVE" });
     (OrganizationRepo as any).writeAudit = async () => {};
-    (DocumentSvc as any).unarchiveByCase = async (caseId: string, organizationId: string, actorId: string) => {
-      restoredFor.push({ caseId, organizationId, actorId });
+    (DocumentSvc as any).unarchiveByCase = async (caseId: string, scope: { organizationId: string }, actorId: string) => {
+      restoredFor.push({ caseId, organizationId: scope.organizationId, actorId });
     };
   });
 
@@ -44,7 +45,7 @@ describe("CaseSvc.unarchive — cascades into the case's documents", () => {
   });
 
   it("restores the case's documents after flipping the case's own status", async () => {
-    await CaseSvc.unarchive("case-1", "org-1", "user-1");
+    await CaseSvc.unarchive("case-1", firmScope("org-1"), "user-1");
 
     expect(restoredFor).to.deep.equal([{ caseId: "case-1", organizationId: "org-1", actorId: "user-1" }]);
   });
@@ -54,7 +55,7 @@ describe("CaseSvc.unarchive — cascades into the case's documents", () => {
 
     let threw: any;
     try {
-      await CaseSvc.unarchive("case-1", "org-1", "user-1");
+      await CaseSvc.unarchive("case-1", firmScope("org-1"), "user-1");
     } catch (e) {
       threw = e;
     }
@@ -90,7 +91,7 @@ describe("DocumentSvc.unarchiveByCase — loops the single-document unarchive() 
       { id: "doc-3", status: "ARCHIVED" },
     ];
 
-    await DocumentSvc.unarchiveByCase("case-1", "org-1", "user-1");
+    await DocumentSvc.unarchiveByCase("case-1", firmScope("org-1"), "user-1");
 
     expect(restoredIds).to.deep.equal(["doc-1", "doc-3"]);
   });
@@ -98,7 +99,7 @@ describe("DocumentSvc.unarchiveByCase — loops the single-document unarchive() 
   it("does nothing when the case has no documents", async () => {
     (DocumentRepo as any).listAllByCase = async () => [];
 
-    await DocumentSvc.unarchiveByCase("case-1", "org-1", "user-1");
+    await DocumentSvc.unarchiveByCase("case-1", firmScope("org-1"), "user-1");
 
     expect(restoredIds).to.have.length(0);
   });
@@ -114,7 +115,7 @@ describe("DocumentSvc.unarchiveMany — bulk restore for Select All in the Archi
   it("restores every id and reports nothing failed", async () => {
     (DocumentSvc as any).unarchive = async (id: string) => ({ id, status: "ACTIVE" });
 
-    const result = await DocumentSvc.unarchiveMany(["doc-1", "doc-2"], "org-1", "user-1");
+    const result = await DocumentSvc.unarchiveMany(["doc-1", "doc-2"], firmScope("org-1"), "user-1");
 
     expect(result.succeeded).to.deep.equal([
       { id: "doc-1", status: "ACTIVE" },
@@ -129,7 +130,7 @@ describe("DocumentSvc.unarchiveMany — bulk restore for Select All in the Archi
       return { id, status: "ACTIVE" };
     };
 
-    const result = await DocumentSvc.unarchiveMany(["doc-1", "doc-2", "doc-3"], "org-1", "user-1");
+    const result = await DocumentSvc.unarchiveMany(["doc-1", "doc-2", "doc-3"], firmScope("org-1"), "user-1");
 
     expect(result.succeeded.map((d: any) => d.id)).to.deep.equal(["doc-1", "doc-3"]);
     expect(result.failed).to.deep.equal([{ id: "doc-2", error: "Document not found" }]);
@@ -146,7 +147,7 @@ describe("CaseSvc.unarchiveMany — bulk restore for Select All in the Archived 
   it("restores every id and reports nothing failed", async () => {
     (CaseSvc as any).unarchive = async (id: string) => ({ id, status: "ACTIVE" });
 
-    const result = await CaseSvc.unarchiveMany(["case-1", "case-2"], "org-1", "user-1");
+    const result = await CaseSvc.unarchiveMany(["case-1", "case-2"], firmScope("org-1"), "user-1");
 
     expect(result.succeeded).to.deep.equal([
       { id: "case-1", status: "ACTIVE" },
@@ -161,7 +162,7 @@ describe("CaseSvc.unarchiveMany — bulk restore for Select All in the Archived 
       return { id, status: "ACTIVE" };
     };
 
-    const result = await CaseSvc.unarchiveMany(["case-1", "case-2", "case-3"], "org-1", "user-1");
+    const result = await CaseSvc.unarchiveMany(["case-1", "case-2", "case-3"], firmScope("org-1"), "user-1");
 
     expect(result.succeeded.map((c: any) => c.id)).to.deep.equal(["case-1", "case-3"]);
     expect(result.failed).to.deep.equal([{ id: "case-2", error: "Case not found" }]);
@@ -178,7 +179,7 @@ describe("CaseSvc.archiveMany — bulk archive for Select All in the Active case
   it("archives every id and reports nothing failed", async () => {
     (CaseSvc as any).archive = async (id: string) => ({ id, status: "ARCHIVED" });
 
-    const result = await CaseSvc.archiveMany(["case-1", "case-2"], "org-1", "user-1");
+    const result = await CaseSvc.archiveMany(["case-1", "case-2"], firmScope("org-1"), "user-1");
 
     expect(result.succeeded).to.deep.equal([
       { id: "case-1", status: "ARCHIVED" },
@@ -193,7 +194,7 @@ describe("CaseSvc.archiveMany — bulk archive for Select All in the Active case
       return { id, status: "ARCHIVED" };
     };
 
-    const result = await CaseSvc.archiveMany(["case-1", "case-2", "case-3"], "org-1", "user-1");
+    const result = await CaseSvc.archiveMany(["case-1", "case-2", "case-3"], firmScope("org-1"), "user-1");
 
     expect(result.succeeded.map((c: any) => c.id)).to.deep.equal(["case-1", "case-3"]);
     expect(result.failed).to.deep.equal([{ id: "case-2", error: "Case not found" }]);

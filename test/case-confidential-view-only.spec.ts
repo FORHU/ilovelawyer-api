@@ -7,6 +7,7 @@
  *
  * No live Postgres: CaseAccess's lookups, the repos and the generation lock are monkeypatched.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import CaseAccess from "../src/utils/case-access";
@@ -122,43 +123,43 @@ describe("#346 — Can view on a confidential case is read-only", () => {
     });
 
     it("refuses adding one to a confidential case the person can only view", async () => {
-      const err = await rejection(TranscriptionSvc.create(ORG, USER, { caseId: "confidential-view" }));
+      const err = await rejection(TranscriptionSvc.create(firmScope(ORG), USER, { caseId: "confidential-view" }));
       expect(err.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);
     });
 
     it("still lets anyone who can open an ordinary case add one", async () => {
-      await TranscriptionSvc.create(ORG, USER, { caseId: "ordinary" });
+      await TranscriptionSvc.create(firmScope(ORG), USER, { caseId: "ordinary" });
       expect(writes).to.deep.equal(["create:ordinary"]);
     });
 
     it("refuses adding one to a case the person can't open — create never checked before", async () => {
-      const err = await rejection(TranscriptionSvc.create(ORG, USER, { caseId: "walled" }));
+      const err = await rejection(TranscriptionSvc.create(firmScope(ORG), USER, { caseId: "walled" }));
       expect(err.statusCode).to.equal(404);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses deleting or editing one on a confidential case the person can only view", async () => {
-      const del = await rejection(TranscriptionSvc.delete("t-view", ORG, USER));
+      const del = await rejection(TranscriptionSvc.delete("t-view", firmScope(ORG), USER));
       expect(del.statusCode).to.equal(403);
-      const upd = await rejection(TranscriptionSvc.update("t-view", ORG, USER, { title: "Renamed" }));
+      const upd = await rejection(TranscriptionSvc.update("t-view", firmScope(ORG), USER, { title: "Renamed" }));
       expect(upd.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses moving one onto a confidential case the person can only view", async () => {
-      const err = await rejection(TranscriptionSvc.update("t-none", ORG, USER, { caseId: "confidential-view" }));
+      const err = await rejection(TranscriptionSvc.update("t-none", firmScope(ORG), USER, { caseId: "confidential-view" }));
       expect(err.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);
     });
 
     it("lets an edit grant on a confidential case delete one", async () => {
-      await TranscriptionSvc.delete("t-edit", ORG, USER);
+      await TranscriptionSvc.delete("t-edit", firmScope(ORG), USER);
       expect(writes).to.deep.equal(["delete:t-edit"]);
     });
 
     it("still lets a view-only person read one", async () => {
-      const item = await TranscriptionSvc.getById("t-view", ORG, USER);
+      const item = await TranscriptionSvc.getById("t-view", firmScope(ORG), USER);
       expect(item.id).to.equal("t-view");
     });
   });
@@ -196,26 +197,26 @@ describe("#346 — Can view on a confidential case is read-only", () => {
     });
 
     it("still lets a view-only person open one on a confidential case — reading stays", async () => {
-      const found = await ChatSvc.assertConsultationAccess(ORG, USER, "c-view");
+      const found = await ChatSvc.assertConsultationAccess(firmScope(ORG), USER, "c-view");
       expect(found.id).to.equal("c-view");
     });
 
     it("refuses asking in one, their own included, with a 403", async () => {
       const err = await rejection(
-        ChatSvc.enqueueChatGeneration(ORG, "UK" as never, USER, "c-view", "session-1", "What are the risks?"),
+        ChatSvc.enqueueChatGeneration(firmScope(ORG), "UK" as never, USER, "c-view", "session-1", "What are the risks?"),
       );
       expect(err.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses starting one on the case", async () => {
-      const err = await rejection(ChatSvc.createConsultation(ORG, USER, "New chat", "confidential-view"));
+      const err = await rejection(ChatSvc.createConsultation(firmScope(ORG), USER, "New chat", "confidential-view"));
       expect(err.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);
     });
 
     it("refuses renaming one, or sharing it", async () => {
-      const rename = await rejection(ChatSvc.renameConsultation(ORG, USER, "c-view", "Renamed"));
+      const rename = await rejection(ChatSvc.renameConsultation(firmScope(ORG), USER, "c-view", "Renamed"));
       expect(rename.statusCode).to.equal(403);
       const invite = await rejection(InviteSvc.create(USER, "c-view"));
       expect(invite.statusCode).to.equal(403);
@@ -230,19 +231,19 @@ describe("#346 — Can view on a confidential case is read-only", () => {
     });
 
     it("refuses attaching a document to it, though no case is named", async () => {
-      const err = await rejection(DocumentSvc.presign(ORG, USER, "brief.pdf", "application/pdf", undefined, "c-view"));
+      const err = await rejection(DocumentSvc.presign(firmScope(ORG), USER, "brief.pdf", "application/pdf", undefined, "c-view"));
       expect(err.statusCode).to.equal(403);
     });
 
     it("lets an edit grant on a confidential case start and rename one", async () => {
-      await ChatSvc.createConsultation(ORG, USER, "New chat", "confidential-edit");
-      await ChatSvc.renameConsultation(ORG, USER, "c-edit", "Renamed");
+      await ChatSvc.createConsultation(firmScope(ORG), USER, "New chat", "confidential-edit");
+      await ChatSvc.renameConsultation(firmScope(ORG), USER, "c-edit", "Renamed");
       expect(writes).to.deep.equal(["consultation:create:confidential-edit", "consultation:rename:c-edit"]);
     });
 
     it("leaves an ordinary case alone: anyone who can open it may start and rename one", async () => {
-      await ChatSvc.createConsultation(ORG, USER, "New chat", "ordinary");
-      await ChatSvc.renameConsultation(ORG, USER, "c-ordinary", "Renamed");
+      await ChatSvc.createConsultation(firmScope(ORG), USER, "New chat", "ordinary");
+      await ChatSvc.renameConsultation(firmScope(ORG), USER, "c-ordinary", "Renamed");
       expect(writes).to.deep.equal(["consultation:create:ordinary", "consultation:rename:c-ordinary"]);
     });
   });

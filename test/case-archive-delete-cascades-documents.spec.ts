@@ -5,6 +5,7 @@
  * No live Postgres: CaseRepo/DocumentRepo/DocumentSvc/OrganizationRepo are monkeypatched on
  * their CommonJS module objects, same idiom as document-delete-triggers-refresh.spec.ts.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import CaseSvc from "../src/services/case.service";
@@ -30,8 +31,8 @@ describe("CaseSvc.archive — cascades into the case's documents", () => {
     (CaseAccess as any).assertCanDelete = async () => ({});
     (CaseRepo as any).setStatus = async () => ({ id: "case-1", status: "ARCHIVED" });
     (OrganizationRepo as any).writeAudit = async () => {};
-    (DocumentSvc as any).archiveByCase = async (caseId: string, organizationId: string, actorId: string) => {
-      archivedFor.push({ caseId, organizationId, actorId });
+    (DocumentSvc as any).archiveByCase = async (caseId: string, scope: { organizationId: string }, actorId: string) => {
+      archivedFor.push({ caseId, organizationId: scope.organizationId, actorId });
     };
   });
 
@@ -44,7 +45,7 @@ describe("CaseSvc.archive — cascades into the case's documents", () => {
   });
 
   it("archives the case's documents after flipping the case's own status", async () => {
-    await CaseSvc.archive("case-1", "org-1", "user-1");
+    await CaseSvc.archive("case-1", firmScope("org-1"), "user-1");
 
     expect(archivedFor).to.deep.equal([{ caseId: "case-1", organizationId: "org-1", actorId: "user-1" }]);
   });
@@ -54,7 +55,7 @@ describe("CaseSvc.archive — cascades into the case's documents", () => {
 
     let threw: any;
     try {
-      await CaseSvc.archive("case-1", "org-1", "user-1");
+      await CaseSvc.archive("case-1", firmScope("org-1"), "user-1");
     } catch (e) {
       threw = e;
     }
@@ -90,7 +91,7 @@ describe("DocumentSvc.archiveByCase — loops the single-document archive() over
       { id: "doc-3", status: "ACTIVE" },
     ];
 
-    await DocumentSvc.archiveByCase("case-1", "org-1", "user-1");
+    await DocumentSvc.archiveByCase("case-1", firmScope("org-1"), "user-1");
 
     expect(archivedIds).to.deep.equal(["doc-1", "doc-3"]);
   });
@@ -98,7 +99,7 @@ describe("DocumentSvc.archiveByCase — loops the single-document archive() over
   it("does nothing when the case has no documents", async () => {
     (DocumentRepo as any).listAllByCase = async () => [];
 
-    await DocumentSvc.archiveByCase("case-1", "org-1", "user-1");
+    await DocumentSvc.archiveByCase("case-1", firmScope("org-1"), "user-1");
 
     expect(archivedIds).to.have.length(0);
   });
@@ -143,7 +144,7 @@ describe("CaseSvc.delete — cascades into the case's documents", () => {
   it("deletes every document under the case before deleting the case itself", async () => {
     (CaseRepo as any).findById = async () => ({ id: "case-1" });
 
-    await CaseSvc.delete("case-1", "org-1", "user-1");
+    await CaseSvc.delete("case-1", firmScope("org-1"), "user-1");
 
     expect(deletedDocIds).to.deep.equal(["doc-1", "doc-2"]);
     expect(caseDeleted).to.equal(true);
@@ -154,7 +155,7 @@ describe("CaseSvc.delete — cascades into the case's documents", () => {
 
     let threw: any;
     try {
-      await CaseSvc.delete("case-1", "org-1", "user-1");
+      await CaseSvc.delete("case-1", firmScope("org-1"), "user-1");
     } catch (e) {
       threw = e;
     }

@@ -65,7 +65,7 @@ describe("resolveOrganizationAllowingGuests", () => {
   it("lets a share holder read as a guest of the owner's portfolio", async () => {
     const req = request("GET", "/api/my-cases", "/c1");
     expect(await run(req)).to.equal(true);
-    expect(req.organization).to.deep.equal({ id: "alice-portfolio", role: "MEMBER", tenantCode: "UK", guest: true });
+    expect(req.workspace).to.deep.equal({ organizationId: "alice-portfolio", ownerId: null, userId: "bob", role: "MEMBER", tenantCode: "UK", guest: true });
   });
 
   it("refuses a guest's writes", async () => {
@@ -93,12 +93,12 @@ describe("resolveOrganizationAllowingGuests", () => {
     (OrganizationSvc as any).requireMembership = async () => ({ role: "ADMIN", organization: { tenant: { code: "PH" } } });
     const req = request("POST", "/api/my-cases", "/");
     expect(await run(req)).to.equal(true);
-    expect(req.organization.guest).to.equal(undefined);
+    expect(req.workspace.guest).to.equal(undefined);
   });
 });
 
 describe("guest case-item guards", () => {
-  const guest = (query: object = {}) => ({ organization: { id: "alice-portfolio", guest: true }, query }) as any;
+  const guest = (query: object = {}) => ({ workspace: { organizationId: "alice-portfolio", ownerId: null, guest: true }, query }) as any;
 
   it("makes a guest list one case's documents, not the whole workspace's", () => {
     let error: unknown = "none";
@@ -127,13 +127,13 @@ describe("guest case-item guards", () => {
     let error: unknown = "none";
     guestRefused(guest(), {} as any, (e?: unknown) => (error = e));
     expect((error as HttpError).statusCode).to.equal(403);
-    guestRefused({ organization: { id: "org" } } as any, {} as any, (e?: unknown) => (error = e));
+    guestRefused({ workspace: { organizationId: "org", ownerId: null } } as any, {} as any, (e?: unknown) => (error = e));
     expect(error).to.equal(undefined);
   });
 
   it("leaves members alone", () => {
     let error: unknown = "none";
-    guestListNeedsCase({ organization: { id: "org" }, query: {} } as any, {} as any, (e?: unknown) => (error = e));
+    guestListNeedsCase({ workspace: { organizationId: "org", ownerId: null }, query: {} } as any, {} as any, (e?: unknown) => (error = e));
     expect(error).to.equal(undefined);
   });
 });
@@ -144,7 +144,8 @@ describe("CaseShareSvc", () => {
     caseName: "Marchetti v Braybourne",
     copiedFromCaseId: null,
     organizationId: "alice-portfolio",
-    organization: { tenantId: "uk", createdBy: { name: "Alice", username: "alice" } },
+    tenantId: "uk",
+    ownerName: "Alice",
     ...overrides,
   });
   const bob = { id: "bob", name: "Bob", email: "bob@firm.test", username: "bob", avatarUrl: null, tenantId: "uk" };

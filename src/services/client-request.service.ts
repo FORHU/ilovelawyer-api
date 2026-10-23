@@ -50,12 +50,12 @@ function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
     id: claim.lawyer.id,
     name: claim.lawyer.name ?? "",
     avatarUrl: claim.lawyer.avatar?.s3Key ? getStableProxyFileUrl(claim.lawyer.avatar.s3Key) : null,
-    // A solo practitioner's personal workspace isn't a firm.
-    firmName: claim.organization.isPersonal ? null : claim.organization.name,
-    regulator: profile?.regulator ?? null,
-    registrationNumber: profile?.registrationNumber ?? null,
+    // A solo lawyer has no organization, so no firm (nor did a client-era personal workspace).
+    firmName: claim.organization && !claim.organization.isPersonal ? claim.organization.name : null,
+    regulator: profile?.ukRegistration?.regulator ?? null,
+    registrationNumber: profile?.ukRegistration?.registrationNumber ?? null,
     practiceAreas: profile?.practiceAreas ?? [],
-    qualifiedJurisdictions: profile?.qualifiedJurisdictions ?? [],
+    qualifiedJurisdictions: profile?.ukRegistration?.qualifiedJurisdictions ?? [],
     languages: profile?.languages ?? [],
     bio: profile?.bio ?? "",
     firstConsultationFee: profile?.firstConsultationFeeMinor == null ? null : { amountMinor: profile.firstConsultationFeeMinor, currency: "GBP" },
@@ -197,7 +197,7 @@ export default class ClientRequestSvc {
       userId: lawyerId,
       type: "CLIENT_REQUEST",
       title: "A client confirmed you",
-      message: "The client accepted your quote. The introduction fee is being charged to your organization's card.",
+      message: "The client accepted your quote. The introduction fee is being charged to your card on file.",
       link: `/client-requests/${id}`,
     }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
 
