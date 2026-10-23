@@ -24,30 +24,38 @@ enum ApprovalStatus {
 }
 
 model User {
-  id                 String    @id @default(uuid())
+  id                      String    @id @default(uuid())
   // Always stored trimmed + lowercased (see normalizeEmail in src/utils/auth.utils.ts and the
   // normalize_user_emails migration) — @unique is therefore effectively case-insensitive.
-  email              String    @unique
-  password           String?
-  name               String?
-  username           String    @unique
-  role               Role      @default(USER)
-  lastLoginAt        DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  provider           String?
-  googleId           String?   @unique
+  email                   String    @unique
+  password                String?
+  name                    String?
+  username                String    @unique
+  role                    Role      @default(USER)
+  lastLoginAt             DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  provider                String?
+  googleId                String?   @unique
   // Staff/self-serve top-up credit on top of the subscription plan's included AI allowance
   // (AccountLimitsSvc). Internal: never shown to lawyers as a ceiling, only the balance/percentage.
-  extraAiAllowanceUsd Float    @default(0)
-  googleAccessToken  String?
-  googleRefreshToken String?
+  extraAiAllowanceUsd     Float     @default(0)
+  // The B2B PaymentPlan tier this lawyer is on (PaymentPlanSvc/AccountLimitsSvc). Null means
+  // unsubscribed/canceled, not "fall back to a default tier" — see AccountLimitsSvc.allowanceInfo.
+  paymentPlanId           String?
+  // Start of the current billing period, for summing LlmUsage against the tier's allowance. Null
+  // means sum spend all-time (today's behavior, and the state of every grandfathered account).
+  allowancePeriodStart    DateTime?
+  // One-time fence for the "you're over your tier's case limit" notice (grandfathering).
+  caseLimitNotifiedAt     DateTime?
+  googleAccessToken       String?
+  googleRefreshToken      String?
   // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
   // poll takes a fresh baseline. Reset on connect and disconnect.
   googleCalendarSyncToken String?
-  avatarId           String?
-  tenantId           String?
-  isEmailVerified    Boolean   @default(false)
+  avatarId                String?
+  tenantId                String?
+  isEmailVerified         Boolean   @default(false)
 
   // Set true for every account that existed before the strong-password policy shipped
   // (see the add_must_change_password migration's backfill) and for any account whose
@@ -92,7 +100,7 @@ model User {
   // (FREE_CREDIT_USD at the time). Null for accounts created before it existed: they are never
   // limited. Once spent, the account can start no new work and keeps read access, until it is on
   // a subscription tier. Stays usable after subscribing (freeCreditLimit).
-  freeCreditUsd     Float?
+  freeCreditUsd Float?
 
   // Self-service deletion request. Set when the user requests deletion from their profile;
   // the account (and all its data) is hard-deleted by AccountDeletionQueue once
@@ -131,44 +139,48 @@ model User {
   packageSku               PackageSku                @default(SOLO)
   preferredLanguage        String                    @default("en")
 
-  cases                   Case[]
-  documents               Document[]
-  bookmarks               Bookmark[]
-  consents                Consent[]
-  feedback                Feedback[]
-  transcriptions          Transcription[]
-  calendarWatchChannels   CalendarWatchChannel[]
-  events                  Event[]
-  notes                   Note[]
-  notifications           Notification[]
-  terminalWorkspaces      TerminalWorkspace[]
+  cases                       Case[]
+  documents                   Document[]
+  bookmarks                   Bookmark[]
+  consents                    Consent[]
+  feedback                    Feedback[]
+  transcriptions              Transcription[]
+  calendarWatchChannels       CalendarWatchChannel[]
+  events                      Event[]
+  notes                       Note[]
+  notifications               Notification[]
+  terminalWorkspaces          TerminalWorkspace[]
   terminalWorkspaceSelections TerminalWorkspaceSelection[]
-  screenPresets           ScreenPreset[]
-  organizationMemberships OrganizationMember[]
-  organizationInvites     OrganizationInvite[]
-  caseCopies              CaseCopy[]
-  consultationCopies      ConsultationCopy[]
-  createdOrganizations    Organization[]                   @relation("OrgCreator")
-  ownedRisks              CaseRisk[]
-  auditEvents             AuditEvent[]
-  caseAccesses            CaseAccess[]
-  integrationConnectors   IntegrationConnector[]
-  deadlineConfirmations   ProceduralDeadlineConfirmation[]
-  caseBriefExports        CaseBriefExport[]
-  caseViews               CaseView[]
-  clientRequests          ClientRequest[]
-  clientRequestClaims     ClientRequestClaim[]
-  updatedTenantSettings   TenantSetting[]
-  clientPayments          ClientPayment[]
-  accountAiTopUps         AccountAiTopUp[]
-  clientRequestProfile    LawyerClientProfile?
-  billing                 UserBilling?
-  tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  screenPresets               ScreenPreset[]
+  organizationMemberships     OrganizationMember[]
+  organizationInvites         OrganizationInvite[]
+  caseCopies                  CaseCopy[]
+  consultationCopies          ConsultationCopy[]
+  createdOrganizations        Organization[]                   @relation("OrgCreator")
+  ownedRisks                  CaseRisk[]
+  auditEvents                 AuditEvent[]
+  caseAccesses                CaseAccess[]
+  integrationConnectors       IntegrationConnector[]
+  deadlineConfirmations       ProceduralDeadlineConfirmation[]
+  caseBriefExports            CaseBriefExport[]
+  caseViews                   CaseView[]
+  clientRequests              ClientRequest[]
+  clientRequestClaims         ClientRequestClaim[]
+  updatedTenantSettings       TenantSetting[]
+  clientPayments              ClientPayment[]
+  accountAiTopUps             AccountAiTopUp[]
+  clientRequestProfile        LawyerClientProfile?
+  billing                     UserBilling?
+  tenant                      Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  paymentPlan                 PaymentPlan?                     @relation("UserPaymentPlan", fields: [paymentPlanId], references: [id], onDelete: SetNull)
+  updatedPaymentPlans         PaymentPlan[]                    @relation("PaymentPlanUpdatedBy")
+  paymentPlanSubscriptions    PaymentPlanSubscription[]
+  manualEdits                 CaseManualEdit[]
 
   @@index([tenantId])
   @@index([deletionRequestedAt])
   @@index([trialExpiresAt])
-  manualEdits        CaseManualEdit[]
+  @@index([paymentPlanId])
 }
 
 model Session {
@@ -222,34 +234,34 @@ enum PackageSku {
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 model Consultation {
-  id             String                   @id @default(uuid())
+  id                  String                   @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the consultation in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
-  copiedFromId String?
-  userId         String
+  copiedFromId        String?
+  userId              String
   // Null for a main (standalone) consultation: those belong to the user alone, so joining,
   // switching or leaving an organization never hides, moves or copies them. Set only for a
   // consultation on a case, which lives with the case's organization.
-  organizationId String?
-  caseId         String?
+  organizationId      String?
+  caseId              String?
   // Max 80 chars — keep in step with TITLE_MAX_CHARS (chat.constants.ts).
-  title          String?                  @db.VarChar(80)
+  title               String?                  @db.VarChar(80)
   // Who set `title` — decides whether the AI may still change it (see ChatSvc title handling).
   // Null while untitled.
-  titleSource    ConsultationTitleSource?
-  createdAt      DateTime                 @default(now())
+  titleSource         ConsultationTitleSource?
+  createdAt           DateTime                 @default(now())
   // When the most recent Jev-triaged user message was flagged urgent (see message-triage.ts).
   // Set on an urgent turn, cleared on the next routine one, so the consultation list can badge
   // and sort chats that currently need attention without walking every message. Null when
   // triage is off or has never run for this consultation.
-  urgentAt       DateTime?
+  urgentAt            DateTime?
   // Archiving is the soft delete: an ARCHIVED consultation leaves the lists (it shows only in
   // the Archived section, ?status=ARCHIVED), takes no new messages, and can be restored as it
   // was. Deleting is only offered from there and moves it to FOR_DELETION — still listed under
   // Archived and restorable until ConsultationDeletionQueue purges it. See ChatSvc.deleteConsultation.
-  status         ConsultationStatus        @default(ACTIVE)
+  status              ConsultationStatus       @default(ACTIVE)
   // When it was last archived — the Archived list's sort key. Null while ACTIVE.
-  archivedAt     DateTime?
+  archivedAt          DateTime?
   // When it moved to FOR_DELETION — the grace period counts from here. It stays restorable
   // (which clears this) for CONSULTATION_DELETION_GRACE_PERIOD_DAYS, then
   // ConsultationDeletionQueue purges it. Null unless FOR_DELETION.
@@ -468,22 +480,22 @@ model MessageCitationRanking {
 // case (`caseId`) when the case analysis wrote it (AudioOverviewSvc.generateForCase). Rendering and
 // the history list work on the row id, so both kinds go through the same path.
 model MessageAudioOverview {
-  id          String               @id @default(uuid())
-  messageId   String?              @unique
-  caseId      String?
-  turns       Json
-  voiceHostA  String
-  voiceHostB  String
-  audioFileId String?
-  audioStatus AudioOverviewStatus?
+  id              String               @id @default(uuid())
+  messageId       String?              @unique
+  caseId          String?
+  turns           Json
+  voiceHostA      String
+  voiceHostB      String
+  audioFileId     String?
+  audioStatus     AudioOverviewStatus?
   // Jev's verdict per script turn (see audio-overview-jev.ts / USE_JEV_AUDIO_OVERVIEW) — null
   // when the check never ran or found nothing checkable; a turn Jev couldn't check has no entry.
-  checks      Json?
+  checks          Json?
   // Cumulative start second of each turn within the rendered audio (see turnStartTimes in
   // audio-overview-render.ts) — number[], one entry per `turns` element, index-aligned. Null
   // until audioStatus reaches COMPLETED (set alongside audioFileId); the frontend's line-by-line
   // highlight/auto-scroll has nothing to sync to before then.
-  turnTimings Json?
+  turnTimings     Json?
   // Per turn, where each of its sentences starts in the rendered audio (see
   // markTimingsForTurn in audio-overview-render.ts, from Polly's sentence speech marks) —
   // { time, start, end }[][], index-aligned with `turns`; start/end are string indices into
@@ -491,8 +503,8 @@ model MessageAudioOverview {
   sentenceTimings Json?
   // Same shape as sentenceTimings, per word (Polly's word speech marks) — the player fills the
   // active turn in word by word. Null on overviews rendered before it existed.
-  wordTimings Json?
-  createdAt   DateTime             @default(now())
+  wordTimings     Json?
+  createdAt       DateTime             @default(now())
 
   message   Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
   case      Case?    @relation(fields: [caseId], references: [id], onDelete: Cascade)
@@ -591,7 +603,7 @@ model ConsultationTraceEvent {
 
   consultation Consultation? @relation(fields: [consultationId], references: [id], onDelete: Cascade)
   case         Case?         @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([consultationId, seq])
   @@index([caseId, turnId, seq])
@@ -836,7 +848,7 @@ enum ClientSide {
 }
 
 model Case {
-  id                    String     @id @default(uuid())
+  id                    String                   @id @default(uuid())
   traceEvents           ConsultationTraceEvent[]
   userId                String?
   createdByName         String?
@@ -846,7 +858,7 @@ model Case {
   copiedAt              DateTime?
   /// Client app only: chat credits left. Each message to the AI takes one; a case payment and
   /// top-ups add them (ClientBillingSvc). 0 on lawyer cases, which never read it.
-  clientCredits         Int        @default(0)
+  clientCredits         Int                      @default(0)
   /// Client app only: Jev's last check of whether the case has enough in it to suggest a lawyer
   /// (ClientCaseSvc.lawyerReadiness), with the AI message it was based on. Null until checked.
   lawyerReadiness       Json?
@@ -857,64 +869,64 @@ model Case {
   /// The kind of problem, one of CLIENT_CASE_AREAS (constants/client-case.constants.ts). Set by the
   /// client app; lawyer matching reads it. Null on cases made in the lawyer app.
   practiceArea          String?
-  language              String     @default("en")
-  notes                 String?    @db.Text
+  language              String                   @default("en")
+  notes                 String?                  @db.Text
   lastRefreshedAt       DateTime?
-  status                CaseStatus @default(ACTIVE)
-  confidential          Boolean    @default(false)
+  status                CaseStatus               @default(ACTIVE)
+  confidential          Boolean                  @default(false)
   readySetFingerprint   String?
   findingsFormatVersion Int?
   clientSide            ClientSide?
-  createdAt             DateTime   @default(now())
-  updatedAt             DateTime   @updatedAt
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
 
-  user                 User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  organization         Organization?             @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  documents            Document[]
-  parties              Party[]
-  consultations        Consultation[]
-  transcriptions       Transcription[]
-  events               Event[]
-  timelineEvents       CaseTimelineEvent[]
-  risks                CaseRisk[]
-  evidenceMatrix       EvidenceMatrixItem[]
-  contradictions       EvidenceContradiction[]
-  missingEvidence      CaseMissingEvidence[]
-  crossExamQuestions   CrossExamQuestion[]
-  factPairChecks       FactPairCheck[]
-  citationChecks       CitationCheck[]
-  authorities          CaseAuthority[]
-  deadlines            ProceduralDeadline[]
-  procedureItems       ProcedureItem[]
-  accesses             CaseAccess[]
-  auditEvents          AuditEvent[]
-  findings             CaseFinding[]
-  witnesses            Witness[]
-  damageClaims         DamageClaim[]
-  damageClaimDismissals DamageClaimDismissal[]
-  claims               CaseClaim[]
-  citationGrounds      CitationGround[]
-  reconstruction       CaseReconstruction?
-  reconstructionEvents CaseReconstructionEvents?
-  redTeamAssessment    RedTeamAssessment?
-  audioOverviews       MessageAudioOverview[]
-  graphNodes           CaseGraphNode[]
-  graphEdges           CaseGraphEdge[]
-  edges                CaseEdge[]
-  decisionRecords      DecisionRecord[]
-  theories             CaseTheory[]
-  theoryDiffs          TheoryDiff[]
-  briefExports         CaseBriefExport[]
-  views                CaseView[]
-  terminalWorkspaces   TerminalWorkspace[]
+  user                        User?                        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization                Organization?                @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  documents                   Document[]
+  parties                     Party[]
+  consultations               Consultation[]
+  transcriptions              Transcription[]
+  events                      Event[]
+  timelineEvents              CaseTimelineEvent[]
+  risks                       CaseRisk[]
+  evidenceMatrix              EvidenceMatrixItem[]
+  contradictions              EvidenceContradiction[]
+  missingEvidence             CaseMissingEvidence[]
+  crossExamQuestions          CrossExamQuestion[]
+  factPairChecks              FactPairCheck[]
+  citationChecks              CitationCheck[]
+  authorities                 CaseAuthority[]
+  deadlines                   ProceduralDeadline[]
+  procedureItems              ProcedureItem[]
+  accesses                    CaseAccess[]
+  auditEvents                 AuditEvent[]
+  findings                    CaseFinding[]
+  witnesses                   Witness[]
+  damageClaims                DamageClaim[]
+  damageClaimDismissals       DamageClaimDismissal[]
+  claims                      CaseClaim[]
+  citationGrounds             CitationGround[]
+  reconstruction              CaseReconstruction?
+  reconstructionEvents        CaseReconstructionEvents?
+  redTeamAssessment           RedTeamAssessment?
+  audioOverviews              MessageAudioOverview[]
+  graphNodes                  CaseGraphNode[]
+  graphEdges                  CaseGraphEdge[]
+  edges                       CaseEdge[]
+  decisionRecords             DecisionRecord[]
+  theories                    CaseTheory[]
+  theoryDiffs                 TheoryDiff[]
+  briefExports                CaseBriefExport[]
+  views                       CaseView[]
+  terminalWorkspaces          TerminalWorkspace[]
   terminalWorkspaceSelections TerminalWorkspaceSelection[]
-  annotations          Annotation[]
-  outlooks             CaseOutlook[]
-  mindMap              CaseMindMap?
-  changeSummaries      CaseChangeSummary[]
-  manualEdits          CaseManualEdit[]
-  clientPayments       ClientPayment[]
-  clientRequests       ClientRequest[]
+  annotations                 Annotation[]
+  outlooks                    CaseOutlook[]
+  mindMap                     CaseMindMap?
+  changeSummaries             CaseChangeSummary[]
+  manualEdits                 CaseManualEdit[]
+  clientPayments              ClientPayment[]
+  clientRequests              ClientRequest[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1249,30 +1261,30 @@ enum ClaimOutcome {
 }
 
 model ClientRequestClaim {
-  id             String        @id @default(uuid())
-  requestId      String
-  openRequestId  String?       @unique
-  lawyerId       String
+  id               String         @id @default(uuid())
+  requestId        String
+  openRequestId    String?        @unique
+  lawyerId         String
   // The lawyer's organization when they claimed: the one the per-case fee is charged to (#513).
   // Null for a solo lawyer, who pays with their own card (UserBilling).
-  organizationId String?
-  claimedAt      DateTime      @default(now())
-  expiresAt      DateTime
+  organizationId   String?
+  claimedAt        DateTime       @default(now())
+  expiresAt        DateTime
   // When the 2h-before reminder went out (#510).
-  reminderSentAt DateTime?
-  endedAt        DateTime?
-  outcome        ClaimOutcome?
+  reminderSentAt   DateTime?
+  endedAt          DateTime?
+  outcome          ClaimOutcome?
   // Why the lawyer gave the request back (#512), with their note. Set when outcome is RELEASED.
-  releaseReason  ReleaseReason?
-  releaseNote    String?
+  releaseReason    ReleaseReason?
+  releaseNote      String?
   // The client's reason when they declined the quote (#513), if they gave one. Kept on the claim only.
-  declineReason  String?
+  declineReason    String?
   // The lawyer's quote to the client (#512), kept on the claim it was made under so a declined or
   // released quote stays in the lawyer's history. quoteAmountMinor is in pence (quoteCurrency GBP).
   quoteType        QuoteType?
   quoteAmountMinor Int?
   quoteCurrency    String?
-  quoteMessage     String?    @db.Text
+  quoteMessage     String?        @db.Text
   quotedAt         DateTime?
 
   request      ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
@@ -1285,16 +1297,16 @@ model ClientRequestClaim {
 }
 
 model Party {
-  id          String  @id @default(uuid())
+  id           String  @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the party in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
-  caseId      String
-  name        String
-  designation String
+  caseId       String
+  name         String
+  designation  String
   // Lawyer-entered free text shown under the party name (e.g. "Rep. by Hollis & Marr").
   // Never AI-written.
-  descriptor  String?
+  descriptor   String?
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -1304,24 +1316,24 @@ model Party {
 // ── Case Documents ───────────────────────────────────────────────────────────
 
 model Document {
-  id               String    @id @default(uuid())
-  copiedFromId String?
-  userId           String
-  organizationId   String?
-  caseId           String?
-  consultationId   String?
-  messageId        String?
-  name             String
-  fileId           String?
-  documentType     String?
-  category         String?
-  fileSize         Int?
-  mimeType         String?
-  ragStatus        RagStatus @default(PENDING)
-  language         String    @default("en")
-  pageCount        Int?
-  extractionMethod String?
-  ocrAttempted     Boolean   @default(false)
+  id                   String    @id @default(uuid())
+  copiedFromId         String?
+  userId               String
+  organizationId       String?
+  caseId               String?
+  consultationId       String?
+  messageId            String?
+  name                 String
+  fileId               String?
+  documentType         String?
+  category             String?
+  fileSize             Int?
+  mimeType             String?
+  ragStatus            RagStatus @default(PENDING)
+  language             String    @default("en")
+  pageCount            Int?
+  extractionMethod     String?
+  ocrAttempted         Boolean   @default(false)
   isExhibit            Boolean   @default(false)
   witnessesExtractedAt DateTime?
   damagesExtractedAt   DateTime?
@@ -1535,9 +1547,9 @@ model Law {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
-  citedFrom      CitationEdge[]  @relation("CitedFrom")
-  citedTo        CitationEdge[]  @relation("CitedTo")
-  citationChecks CitationCheck[] @relation("ResolvedLaw")
+  citedFrom      CitationEdge[]    @relation("CitedFrom")
+  citedTo        CitationEdge[]    @relation("CitedTo")
+  citationChecks CitationCheck[]   @relation("ResolvedLaw")
   authorities    CaseAuthority[]
   documentCopies LawDocumentCopy[]
 
@@ -1643,7 +1655,7 @@ model Bookmark {
   facts          String?      @db.Text
   createdAt      DateTime     @default(now())
 
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   // Uniqueness moves to the org: bookmarks are a shared resource, so two members bookmarking
@@ -1675,7 +1687,7 @@ model Event {
   id                   String    @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the event in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
-  copiedFromId String? @map("copied_from_id")
+  copiedFromId         String?   @map("copied_from_id")
   userId               String
   // Null in a lawyer's own workspace (no organization).
   organizationId       String?   @map("organization_id")
@@ -1706,9 +1718,9 @@ model Event {
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  case         Case?        @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  case         Case?         @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
   @@unique([googleEventId, userId], map: "events_google_event_id_user_id_key")
   @@index([userId])
@@ -1729,7 +1741,7 @@ model Note {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -2014,22 +2026,22 @@ model ScreenPreset {
 }
 
 model CaseTimelineEvent {
-  id          String         @id @default(uuid())
+  id           String         @id @default(uuid())
   // On a portfolio copy (see CaseCopySvc): the timeline entry in the original case this was copied
   // from, so the copy can later be compared with the original item by item. No foreign key.
   copiedFromId String?
-  caseId      String
-  title       String
-  occurredOn  DateTime?
-  description String?        @db.Text
-  status      String         @default("pending")
-  source      TimelineSource @default(LAWYER)
-  documentId  String?
-  chunkId     String?
-  pageNumber  Int?
-  createdBy   String?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  caseId       String
+  title        String
+  occurredOn   DateTime?
+  description  String?        @db.Text
+  status       String         @default("pending")
+  source       TimelineSource @default(LAWYER)
+  documentId   String?
+  chunkId      String?
+  pageNumber   Int?
+  createdBy    String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -2169,8 +2181,8 @@ enum MissingEvidenceStatus {
 /// AI_MISSING_EVIDENCE_NOTE) but leaves a lawyer-edited one (lawyerEditedAt) alone, matched by
 /// label — see MissingEvidenceRepo.replaceAiItems.
 model CaseMissingEvidence {
-  id     String @id @default(uuid())
-  caseId String
+  id              String                  @id @default(uuid())
+  caseId          String
   // The claim this gap would support, as a plain id — not a relation, so re-extracting the
   // case's claims never orphans or blocks a row. Null for a gap that isn't tied to one claim.
   claimId         String?
@@ -2234,12 +2246,12 @@ enum OfficialTextSource {
 }
 
 model CitationCheck {
-  id             String                 @id @default(uuid())
-  caseId         String
-  quotedText     String                 @db.Text
-  citedReference String?
-  sourceUrl      String?
-  officialText   String?                @db.Text
+  id                 String                  @id @default(uuid())
+  caseId             String
+  quotedText         String                  @db.Text
+  citedReference     String?
+  sourceUrl          String?
+  officialText       String?                 @db.Text
   // Where officialText came from (#364): pasted by the lawyer, or fetched from the authority the
   // citation resolved to — narrowed to the passage the quote is about. Null on rows from before.
   officialTextSource OfficialTextSource?
@@ -2249,9 +2261,9 @@ model CitationCheck {
   // doesn't extend to the case's legal system. Advisory: separate from `status`, which is only
   // about whether the quote matches the text.
   sourceWarnings     CitationSourceWarning[] @default([])
-  status         CitationValidityStatus @default(UNVERIFIED)
-  notes          String?                @db.Text
-  checkedAt      DateTime               @default(now())
+  status             CitationValidityStatus  @default(UNVERIFIED)
+  notes              String?                 @db.Text
+  checkedAt          DateTime                @default(now())
 
   // Lazily resolved the first time this case's Citation Map is opened — matches citedReference's
   // free text against the Law corpus (see resolveCitationToLaw). Null until resolution is
@@ -2269,8 +2281,8 @@ model CitationCheck {
   // no officialText to classify against at all.
   propositionType CitationPropositionType?
 
-  case        Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  resolvedLaw Law?                 @relation("ResolvedLaw", fields: [resolvedLawId], references: [id], onDelete: SetNull)
+  case        Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  resolvedLaw Law?             @relation("ResolvedLaw", fields: [resolvedLawId], references: [id], onDelete: SetNull)
   grounds     CitationGround[]
 
   @@index([caseId])
@@ -2319,35 +2331,35 @@ model ProceduralDeadlineConfirmation {
 }
 
 model ProcedureItem {
-  id          String   @id @default(uuid())
-  caseId      String
-  kind        String
-  label       String
-  done        Boolean  @default(false)
-  notes       String?  @db.Text
+  id               String    @id @default(uuid())
+  caseId           String
+  kind             String
+  label            String
+  done             Boolean   @default(false)
+  notes            String?   @db.Text
   // Which source document an AI-generated STRATEGY/TODO item is grounded in (see
   // CaseStrategySvc, case-strategy-parse.ts). Null for lawyer-entered items and for AI items
   // the model didn't attribute to a specific document.
-  sourceLabel String?
+  sourceLabel      String?
   // Jev's verdict on a STRATEGY item against the case data (case-strategy-jev.ts):
   // { verdict, confidence, checkedAt }. Null for to-dos, lawyer-entered items, and when
   // USE_JEV_CASE_STRATEGY is off.
-  check       Json?
+  check            Json?
   // A to-do sent over from another panel ("To checklist") remembers the item it was raised on, so
   // the item reaching its fixed state can tick it (utils/procedure-link.ts): FINDING, DAMAGE or
   // WITNESS_NEED, that row's id, and for a witness need the need's key. Not a foreign key — the
   // sources live in different tables, and the to-do outlives a deleted source.
-  sourceKind  String?
-  sourceId    String?
-  sourceKey   String?
+  sourceKind       String?
+  sourceId         String?
+  sourceKey        String?
   // Set when the source ticked this to-do, with why (a ProcedureAutoCloseReason). Cleared when a
   // lawyer reopens it.
   autoClosedAt     DateTime?
   autoClosedReason String?
   // A to-do sent from a Damages & Remedies entry carries that entry's due date, and follows it.
   dueDate          DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -2393,35 +2405,35 @@ enum FindingTag {
 // as ProcedureItem's AI_PROCEDURE_NOTE — replaced wholesale on each AI (re)generation while
 // manually-created rows (different/no notes) are left alone.
 model CaseFinding {
-  id           String          @id @default(uuid())
-  caseId       String
-  category     FindingCategory
-  label        String
-  notes        String?
+  id             String          @id @default(uuid())
+  caseId         String
+  category       FindingCategory
+  label          String
+  notes          String?
   // Which source document an AI-generated finding is grounded in (see CaseFindingAiSvc,
   // case-finding-parse.ts). Null for lawyer-entered findings and for AI findings the model
   // didn't attribute to a specific document.
-  sourceLabel  String?
+  sourceLabel    String?
   // The row's sub-line: who bears the burden (Legal Issues), the work that would close it
   // (Weaknesses), or the document reference (Strengths).
-  detail       String?
-  tag          FindingTag?
+  detail         String?
+  tag            FindingTag?
   // -10..10, the same scale as Red Team's argument impact. Null when nothing scored it.
-  impact       Int?
+  impact         Int?
   // Display order within a category; null rows sort by createdAt after the ordered ones.
-  position     Int?
+  position       Int?
   // Jev's check of this finding (per-category shape, see the *-jev.ts utils). Null when Jev
   // wasn't run or its call failed; tag/impact are then the model's or the lawyer's own.
-  jev          Json?
+  jev            Json?
   // The drafting model's own tag/impact, kept for comparison once Jev has replaced them.
-  modelTag     FindingTag?
-  modelImpact  Int?
-  jevCheckedAt DateTime?
+  modelTag       FindingTag?
+  modelImpact    Int?
+  jevCheckedAt   DateTime?
   // When a lawyer last changed an AI row's label, detail or tag. A regeneration
   // (replaceAiFindings) keeps such rows instead of replacing them. Null for untouched rows.
   lawyerEditedAt DateTime?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   case        Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
   authorities CaseAuthority[]
@@ -2526,9 +2538,9 @@ model Witness {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  sourceDocument    Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
-  sponsoredEvidence EvidenceMatrixItem[]
+  case               Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceDocument     Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  sponsoredEvidence  EvidenceMatrixItem[]
   crossExamQuestions CrossExamQuestion[]
 
   @@index([caseId])
@@ -2600,29 +2612,29 @@ enum DamageAmountBasis {
 // remedies), whether it has been awarded or received, and the date it is due. The case total is
 // the sum of accepted amounts (utils/damages-compute.ts).
 model DamageClaim {
-  id               String       @id @default(uuid())
+  id               String             @id @default(uuid())
   caseId           String
-  kind             DamageKind   @default(DAMAGE)
+  kind             DamageKind         @default(DAMAGE)
   title            String
-  description      String?      @db.Text
+  description      String?            @db.Text
   amount           Float?
   // Where an AI entry's amount came from (a quoted figure, rate × period from quoted lines, or an
   // AI estimate to review) and its working. Cleared when a lawyer changes the amount.
   amountBasis      DamageAmountBasis?
-  amountNote       String?      @db.Text
+  amountNote       String?            @db.Text
   // Awarded by the tribunal or received by the client.
-  done             Boolean      @default(false)
+  done             Boolean            @default(false)
   dueDate          DateTime?
   // AI = proposed by DamagesExtractSvc from `sourceDocumentId`; `sourceQuote` is the verbatim
   // line it relied on, checked against that document's text before the row is written.
-  source           DamageSource @default(MANUAL)
+  source           DamageSource       @default(MANUAL)
   sourceDocumentId String?
-  sourceQuote      String?      @db.Text
+  sourceQuote      String?            @db.Text
   // An AI proposal is a suggestion until a lawyer accepts it, and isn't counted in the total
   // until then. Lawyer-entered rows start accepted.
-  accepted         Boolean      @default(true)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  accepted         Boolean            @default(true)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
   sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
@@ -2809,7 +2821,7 @@ model RedTeamAssessment {
 // labels, contradiction values, document names), so it goes with the case — unlike AuditEvent,
 // which outlives it.
 model CaseChangeSummary {
-  id               String   @id @default(uuid())
+  id               String    @id @default(uuid())
   caseId           String
   // "manual" (Refresh analysis), "post-extraction" (the automatic run after a corpus change), or
   // "regenerate" (one pane's own Regenerate — perPaneDeltas holds that pane alone, and the
@@ -2817,22 +2829,22 @@ model CaseChangeSummary {
   reason           String
   actorId          String?
   // READY, unarchived documents this run read (mindMapDocumentIds) — the next run diffs against it.
-  readyDocumentIds String[] @default([])
+  readyDocumentIds String[]  @default([])
   // [{ id, name }] relative to the previous summary's readyDocumentIds. Both empty on a case's
   // first summary, and on a manual run with no document change.
-  documentsAdded   Json     @default("[]")
-  documentsRemoved Json     @default("[]")
+  documentsAdded   Json      @default("[]")
+  documentsRemoved Json      @default("[]")
   // countChanges(perPaneDeltas) — what the modal's headline counts.
-  totalChanges     Int      @default(0)
+  totalChanges     Int       @default(0)
   // The case's first analysis: every pane was empty before it, so everything it wrote reads as
   // "added". The modal stays quiet for it; there was nothing to change.
-  firstAnalysis    Boolean  @default(false)
+  firstAnalysis    Boolean   @default(false)
   // CaseChangeDeltas (types/case-change.ts), one entry per pane the refresh tracks.
   perPaneDeltas    Json
   // When the run began (createdAt is when it saved). Lawyers' edits between the previous run's
   // save and this start are "edits since the previous run". Null on rows from before it existed.
   startedAt        DateTime?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime  @default(now())
 
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
@@ -2990,11 +3002,11 @@ model CaseEdgeArchive {
 }
 
 model Organization {
-  id          String     @id @default(uuid())
-  name        String
-  slug        String     @unique
-  packageSku  PackageSku @default(PROFESSIONAL)
-  isPersonal  Boolean    @default(false)
+  id                     String             @id @default(uuid())
+  name                   String
+  slug                   String             @unique
+  packageSku             PackageSku         @default(PROFESSIONAL)
+  isPersonal             Boolean            @default(false)
   // Firm details, all optional (set at onboarding or on the Organization page). The firm regulator
   // and its number are UK only (LAWYER_REGULATORS); the address country is the tenant's.
   phone                  String?
@@ -3004,34 +3016,34 @@ model Organization {
   postcode               String?
   firmRegulator          String?
   firmRegistrationNumber String?
-  createdById String
-  tenantId    String
-  status              OrganizationStatus @default(ACTIVE)
-  archivedAt          DateTime?
-  archivedById        String?
-  deletionScheduledAt DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdById            String
+  tenantId               String
+  status                 OrganizationStatus @default(ACTIVE)
+  archivedAt             DateTime?
+  archivedById           String?
+  deletionScheduledAt    DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
-  createdBy      User                   @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
-  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  members        OrganizationMember[]
-  invites        OrganizationInvite[]
-  emailInvites   OrganizationEmailInvite[]
-  caseCopies     CaseCopy[]
-  consultationCopies ConsultationCopy[]
-  cases          Case[]
-  documents      Document[]
-  consultations  Consultation[]
-  bookmarks      Bookmark[]
-  events         Event[]
-  notes          Note[]
-  notifications  Notification[]
-  transcriptions Transcription[]
-  connectors     IntegrationConnector[]
+  createdBy           User                      @relation("OrgCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  tenant              Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  members             OrganizationMember[]
+  invites             OrganizationInvite[]
+  emailInvites        OrganizationEmailInvite[]
+  caseCopies          CaseCopy[]
+  consultationCopies  ConsultationCopy[]
+  cases               Case[]
+  documents           Document[]
+  consultations       Consultation[]
+  bookmarks           Bookmark[]
+  events              Event[]
+  notes               Note[]
+  notifications       Notification[]
+  transcriptions      Transcription[]
+  connectors          IntegrationConnector[]
   clientRequestClaims ClientRequestClaim[]
-  billing        OrganizationBilling?
-  charges        OrganizationCharge[]
+  billing             OrganizationBilling?
+  charges             OrganizationCharge[]
 
   @@index([createdById])
   @@index([tenantId])
@@ -3113,8 +3125,8 @@ model OrganizationCharge {
   createdAt       DateTime                 @default(now())
   updatedAt       DateTime                 @updatedAt
 
-  organization Organization?               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  request      ClientRequest?              @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  organization Organization?              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request      ClientRequest?             @relation(fields: [requestId], references: [id], onDelete: SetNull)
   refunds      OrganizationChargeRefund[]
 
   @@index([organizationId, createdAt])
@@ -3163,6 +3175,7 @@ model Tenant {
   legalSourceAnalysisCaches LegalSourceAnalysisCache[]
   laws                      Law[]
   settings                  TenantSetting[]
+  paymentPlans              PaymentPlan[]
 }
 
 // Admin-editable settings scoped to one Tenant (PH / UK) — one row per (tenant, key).
@@ -3183,6 +3196,91 @@ model TenantSetting {
   @@index([updatedById])
 }
 
+enum PaymentPlanType {
+  B2B_SUBSCRIPTION // lawyer-side tiers (AccountLimitsSvc)
+  B2C_CASE // reserved for ClientBillingSvc's pricing, not populated yet
+}
+
+enum PaymentPlanSubscriptionStatus {
+  PENDING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+// One row per named tier per tenant (Standard/Pro/Max are placeholders, admin-managed via
+// PaymentPlanSvc). Real columns, not a Json blob, so User.paymentPlanId can hold a real FK and
+// admin CRUD doesn't need to hand-roll ids/ordering inside an array.
+model PaymentPlan {
+  id                     String          @id @default(uuid())
+  tenantId               String
+  // Only B2B_SUBSCRIPTION is populated today; B2C_CASE is reserved for ClientBillingSvc's pricing.
+  planType               PaymentPlanType @default(B2B_SUBSCRIPTION)
+  // Stable machine slug ("standard"/"pro"/"max"), set once by admin.
+  code                   String
+  // Display name — explicitly a placeholder per product (not a fixed enum).
+  name                   String
+  // Admin-chosen rank for display order and upgrade-direction comparisons. Not used for access
+  // control.
+  level                  Int             @default(0)
+  feeUsd                 Float
+  includedAllowanceUsd   Float
+  // 0 = unlimited, matching MAX_CASES_PER_ACCOUNT's off-by-default convention.
+  caseLimit              Int             @default(0)
+  // Soft-disable only — never hard-delete a tier with users still on it; see PaymentPlanSvc.
+  isActive               Boolean         @default(true)
+  stripeProductId        String?         @unique
+  // The Stripe Price new checkouts/upgrades use. Existing subscribers keep whatever Price they
+  // already have — editing feeUsd here never changes what an active subscriber is charged.
+  stripePriceId          String?
+  // unit_amount (cents) the current stripePriceId was created with. Compared against feeUsd to
+  // detect drift that requires minting a new Price (see payment-plan-stripe-sync.service.ts).
+  stripePriceAmountMinor Int?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  updatedById            String?
+
+  tenant        Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updatedBy     User?                     @relation("PaymentPlanUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  lawyers       User[]                    @relation("UserPaymentPlan")
+  subscriptions PaymentPlanSubscription[]
+
+  @@unique([tenantId, planType, code])
+  @@index([tenantId, planType])
+  @@index([updatedById])
+}
+
+// One row per checkout attempt / Stripe subscription, mirroring AccountAiTopUp's PENDING->settled
+// shape. userId is the payer (billing is per-lawyer, not per-organization, in v1 — see
+// docs/payment-plan-tiers handoff).
+model PaymentPlanSubscription {
+  id                   String                        @id @default(cuid())
+  userId               String
+  paymentPlanId        String
+  // STRIPE, or DUMMY for LAWYER_PAYMENT_PROVIDER=dummy in tests/dev.
+  provider             String
+  checkoutSessionId    String?                       @unique
+  stripeSubscriptionId String?                       @unique
+  // The Price this subscriber is actually locked to (may differ from the tier's current
+  // stripePriceId after an admin fee edit).
+  stripePriceId        String?
+  status               PaymentPlanSubscriptionStatus @default(PENDING)
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean                       @default(false)
+  // Fences invoice.paid handling so the allowance period rolls at most once per invoice.
+  lastPeriodInvoiceId  String?
+  failureReason        String?
+  createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id])
+
+  @@index([userId, status])
+}
+
 // userId is globally unique — a user belongs to at most one Organization (see
 // OrganizationMemberRepo's find()/findAnyForUser() comment; multi-org membership
 // isn't supported yet).
@@ -3200,6 +3298,7 @@ model OrganizationMember {
 
   @@index([organizationId])
 }
+
 model OrganizationInvite {
   id             String           @id @default(uuid())
   organizationId String
@@ -3258,7 +3357,7 @@ model CaseCopy {
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 
-  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   targetOrganization Organization? @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
@@ -3282,7 +3381,7 @@ model ConsultationCopy {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
-  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   targetOrganization Organization? @relation(fields: [targetOrganizationId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
@@ -3485,17 +3584,17 @@ enum LlmUsageSource {
 // never delete their usage history, so the ids are plain strings. Unlike SecurityAuditEvent this
 // table is not append-only — it holds counts, not a legal record — so there are no triggers.
 model LlmUsage {
-  id                String         @id @default(uuid())
-  createdAt         DateTime       @default(now())
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
 
-  provider          LlmProvider
+  provider LlmProvider
   /// "chat-wonder" | "direct"
-  via               String?
+  via      String?
   /// Null when unknown (Chat Wonder doesn't say until #104).
-  model             String?
+  model    String?
   /// An AiGenerationKind, "chat", "embedding", "jev:citation-validity", ...
-  feature           String
-  source            LlmUsageSource
+  feature  String
+  source   LlmUsageSource
 
   inputTokens       Int
   outputTokens      Int
@@ -3507,12 +3606,12 @@ model LlmUsage {
   /// From the price table (#401); null when the model is unknown, never 0.
   estimatedCostUsd  Float?
 
-  userId            String?
-  organizationId    String?
-  caseId            String?
-  consultationId    String?
-  durationMs        Int?
-  success           Boolean        @default(true)
+  userId         String?
+  organizationId String?
+  caseId         String?
+  consultationId String?
+  durationMs     Int?
+  success        Boolean @default(true)
 
   @@index([createdAt])
   @@index([organizationId, createdAt])
@@ -3559,17 +3658,17 @@ model IntegrationConnector {
 // relation — it's a caseId for the case-level kinds above, a Law.id for citationExpand — this
 // is a generic lock, not a domain entity. See AiGenerationLockSvc.
 model AiGenerationJob {
-  id         String             @id @default(uuid())
-  subjectId  String
-  kind       String
-  status     AiGenerationStatus @default(IN_PROGRESS)
-  startedAt  DateTime           @default(now())
-  finishedAt DateTime?
-  error      String?
+  id          String             @id @default(uuid())
+  subjectId   String
+  kind        String
+  status      AiGenerationStatus @default(IN_PROGRESS)
+  startedAt   DateTime           @default(now())
+  finishedAt  DateTime?
+  error       String?
   /// Where an IN_PROGRESS job has got to, for a progress indicator — null until the job reports
   /// one (AiGenerationLockSvc.setStage). Only Chat-Wonder-backed chat turns report stages today
   /// ("answering", then "extras"); every other kind leaves it null throughout.
-  stage      String?
+  stage       String?
   /// Stamped every few seconds while the job's work is running (AiGenerationLockSvc.finishWith).
   /// A run whose heartbeat stopped was lost — the API process restarted or crashed mid-run — and
   /// is treated as abandoned no matter how long legitimate runs of its kind take. Null until the
