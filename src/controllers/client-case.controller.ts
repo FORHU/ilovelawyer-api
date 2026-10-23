@@ -4,6 +4,7 @@ import type { ObjectSchema } from "joi";
 import ClientCaseSvc from "../services/client-case.service";
 import ClientBillingSvc from "../services/client-billing.service";
 import HttpError from "../utils/http-error";
+import { ALLOWED_DOCUMENT_EXTENSIONS, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "../constants";
 import {
   addClientDocumentSchema,
   createClientCaseSchema,
@@ -12,6 +13,7 @@ import {
   quoteClientCaseSchema,
   sendClientMessageSchema,
   topUpClientCaseSchema,
+  updateClientCaseSchema,
 } from "../validation/client-case.validation";
 
 function validate<T>(schema: ObjectSchema<T>, body: unknown): T {
@@ -24,7 +26,12 @@ function validate<T>(schema: ObjectSchema<T>, body: unknown): T {
  * client's personal workspace. */
 export default class ClientCaseCtrl {
   static async list(req: Request, res: Response) {
-    res.status(200).json(await ClientCaseSvc.list(clientWorkspaceOf(req)));
+    res.status(200).json(await ClientCaseSvc.list(clientWorkspaceOf(req), req.query.archived === "true"));
+  }
+
+  /** What the app tells the client before they upload: the file types and size the API accepts. */
+  static async limits(_req: Request, res: Response) {
+    res.status(200).json({ upload: { extensions: ALLOWED_DOCUMENT_EXTENSIONS, maxBytes: DOCUMENT_UPLOAD_BATCH_MAX_BYTES } });
   }
 
   static async get(req: Request, res: Response) {
@@ -34,6 +41,25 @@ export default class ClientCaseCtrl {
   static async create(req: Request, res: Response) {
     const input = validate(createClientCaseSchema, req.body);
     res.status(201).json(await ClientCaseSvc.create(clientWorkspaceOf(req), req.user.userId, input));
+  }
+
+  static async update(req: Request, res: Response) {
+    const input = validate(updateClientCaseSchema, req.body);
+    res.status(200).json(await ClientCaseSvc.update(clientWorkspaceOf(req), req.user.userId, req.params.caseId, input));
+  }
+
+  static async archive(req: Request, res: Response) {
+    await ClientCaseSvc.archive(clientWorkspaceOf(req), req.user.userId, req.params.caseId);
+    res.status(204).end();
+  }
+
+  static async unarchive(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.unarchive(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
+  }
+
+  static async remove(req: Request, res: Response) {
+    await ClientCaseSvc.remove(clientWorkspaceOf(req), req.user.userId, req.params.caseId);
+    res.status(204).end();
   }
 
   static async listMessages(req: Request, res: Response) {

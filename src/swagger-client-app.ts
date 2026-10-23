@@ -37,6 +37,7 @@ const clientCase = {
     area: { type: "string", enum: [...CLIENT_CASE_AREAS] },
     ukJurisdiction: { type: "string", enum: [...UK_JURISDICTIONS], nullable: true, description: "Null: outside the UK" },
     where: { type: "string", description: "Town or city, free text" },
+    notes: { type: "string", description: "What happened and what the client wants, in their words" },
     side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
     others: {
       type: "array",
@@ -303,6 +304,7 @@ export const clientAppPaths: Paths = {
       tags: [TAG],
       summary: "The client's cases, most recently changed first",
       security,
+      parameters: [{ name: "archived", in: "query", schema: { type: "boolean", default: false }, description: "true: the archived cases instead" }],
       responses: { 200: { description: "Cases", content: json({ type: "array", items: clientCase }) }, 403: err("Not a client account") },
     },
     post: {
@@ -322,6 +324,7 @@ export const clientAppPaths: Paths = {
             where: { type: "string" },
             side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
             others: { type: "array", items: { type: "object", properties: { name: { type: "string" }, role: { type: "string", enum: [...CLIENT_PARTY_ROLES] } } } },
+            notes: { type: "string", maxLength: 2000, description: "What happened and what the client wants" },
           },
         }),
       },
@@ -333,6 +336,19 @@ export const clientAppPaths: Paths = {
       },
     },
   },
+  "/client/limits": {
+    get: {
+      tags: [TAG],
+      summary: "What the API accepts in an upload",
+      security,
+      responses: {
+        200: {
+          description: "Upload limits",
+          content: json({ type: "object", properties: { upload: { type: "object", properties: { extensions: { type: "array", items: { type: "string" } }, maxBytes: { type: "integer" } } } } }),
+        },
+      },
+    },
+  },
   "/client/cases/{caseId}": {
     get: {
       tags: [TAG],
@@ -340,6 +356,65 @@ export const clientAppPaths: Paths = {
       security,
       parameters: [caseId],
       responses: { 200: { description: "Case", content: json(clientCase) }, 404: err("Not one of this client's cases") },
+    },
+    patch: {
+      tags: [TAG],
+      summary: "Edit the case's details",
+      description: "Send only what changes. Clears the stored lawyer-readiness check. While a lawyer holds the lawyer request the type of issue, the part of the UK and the people are fixed.",
+      security,
+      parameters: [caseId],
+      requestBody: {
+        required: true,
+        content: json({
+          type: "object",
+          minProperties: 1,
+          properties: {
+            title: { type: "string", maxLength: 150 },
+            area: { type: "string", enum: [...CLIENT_CASE_AREAS] },
+            ukJurisdiction: { type: "string", enum: [...UK_JURISDICTIONS], nullable: true },
+            where: { type: "string" },
+            side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
+            others: { type: "array", description: "Replaces the whole list", items: { type: "object", properties: { name: { type: "string" }, role: { type: "string", enum: [...CLIENT_PARTY_ROLES] } } } },
+            notes: { type: "string", maxLength: 2000 },
+          },
+        }),
+      },
+      responses: {
+        200: { description: "The updated case", content: json(clientCase) },
+        400: err("Validation error"),
+        404: err("Not one of this client's cases"),
+        409: err("CASE_LOCKED_BY_REQUEST: a lawyer holds the request, or the case can't leave the UK while a request is open"),
+      },
+    },
+    delete: {
+      tags: [TAG],
+      summary: "Delete the case, its chat and documents",
+      description: "Withdraws an open lawyer request first. Payments stay on record and credits are not refunded.",
+      security,
+      parameters: [caseId],
+      responses: {
+        204: { description: "Deleted" },
+        404: err("Not one of this client's cases"),
+        409: err("CASE_HAS_ACTIVE_ENGAGEMENT: a lawyer is confirmed or engaged; end the engagement first"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/archive": {
+    post: {
+      tags: [TAG],
+      summary: "Set the case aside (out of the list, restorable)",
+      security,
+      parameters: [caseId],
+      responses: { 204: { description: "Archived" }, 404: err("Not one of this client's cases"), 409: err("CASE_HAS_ACTIVE_ENGAGEMENT") },
+    },
+  },
+  "/client/cases/{caseId}/unarchive": {
+    post: {
+      tags: [TAG],
+      summary: "Bring an archived case back",
+      security,
+      parameters: [caseId],
+      responses: { 200: { description: "The restored case", content: json(clientCase) }, 404: err("Not one of this client's cases") },
     },
   },
   "/client/cases/{caseId}/messages": {

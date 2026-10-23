@@ -22,12 +22,14 @@ export const TRIAL_SAMPLE_CASE_ID = process.env.TRIAL_SAMPLE_CASE_ID || "";
  * and the server logs an error at startup. */
 const freeCreditUsd = Number(process.env.FREE_CREDIT_USD);
 export const FREE_CREDIT_USD = freeCreditUsd > 0 ? freeCreditUsd : null;
-/** Cases one account may own. A missing or invalid value uses 3; 0 turns the limit off. */
+/** Cases one account may own. Off (0) by default now that cases aren't billed individually — a
+ * missing value no longer defaults to 3. A positive value still reinstates a cap. */
 const maxCasesPerAccountRaw = process.env.MAX_CASES_PER_ACCOUNT?.trim();
 const maxCasesPerAccount = maxCasesPerAccountRaw ? Math.floor(Number(maxCasesPerAccountRaw)) : NaN;
-export const MAX_CASES_PER_ACCOUNT = Number.isFinite(maxCasesPerAccount) && maxCasesPerAccount >= 0 ? maxCasesPerAccount : 3;
-/** What one case may cost in AI (USD, all providers) before it starts no new AI work. A missing or
- * invalid value uses 20; 0 turns the limit off. */
+export const MAX_CASES_PER_ACCOUNT = Number.isFinite(maxCasesPerAccount) && maxCasesPerAccount >= 0 ? maxCasesPerAccount : 0;
+/** AccountLimitsSvc's fallback included AI allowance (USD, all providers, across every case) for a
+ * tenant with no subscription plan row yet (AccountTopUpPricingSvc.plan) — superseded per tenant
+ * once an admin sets one. A missing or invalid value uses 20; 0 turns the limit off entirely. */
 const caseSpendLimitUsdRaw = process.env.CASE_SPEND_LIMIT_USD?.trim();
 const caseSpendLimitUsd = caseSpendLimitUsdRaw ? Number(caseSpendLimitUsdRaw) : NaN;
 export const CASE_SPEND_LIMIT_USD = Number.isFinite(caseSpendLimitUsd) && caseSpendLimitUsd >= 0 ? caseSpendLimitUsd : 20;

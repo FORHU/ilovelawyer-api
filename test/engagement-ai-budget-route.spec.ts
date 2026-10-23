@@ -10,7 +10,7 @@ import app from "../src/app";
 import prisma from "../src/lib/prisma";
 import loginToken from "../src/utils/loginToken";
 import CaseCopyQueue from "../src/queues/case-copy.queue";
-import { caseSpendLimit } from "../src/middleware/case-spend-limit.middleware";
+import { accountSpendLimit } from "../src/middleware/account-spend-limit.middleware";
 import EngagementAiBudgetSvc from "../src/services/engagement-ai-budget.service";
 import { ENGAGEMENT_AI_BUDGET_GBP_PER_USD, ENGAGEMENT_AI_BUDGET_INCLUDED_USD } from "../src/config";
 import { setOrganizationCardProvider, type CardChargeRequest, type CardChargeResult, type HostedOrganizationCardProvider } from "../src/payments/organization-card-provider";
@@ -140,16 +140,18 @@ describe("engagement AI budget", () => {
     });
   });
 
-  // The route-level block (caseSpendLimit, mounted on /my-cases) is exercised directly here, the
-  // same way CaseLimitsSvc's own block is tested in case-limits.spec.ts — a real document upload
-  // would also exercise S3 and extraction, neither of which this is about.
+  // The route-level block (accountSpendLimit, mounted on /my-cases) is exercised directly here, the
+  // same way AccountLimitsSvc's own block is tested in account-limits.spec.ts — a real document
+  // upload would also exercise S3 and extraction, neither of which this is about. lawyerId isn't a
+  // real User row, so AccountLimitsSvc.assertAccountHasBudget resolves unlimited (no matching
+  // LAWYER) without needing its own stub — only EngagementAiBudgetSvc is under test here.
   describe("the route-level block on further AI work", () => {
     let restore: () => void;
     afterEach(() => restore?.());
 
     const next = () => new Promise<unknown>((resolve) => {
-      const req = { path: `/${copyCaseId}/documents`, method: "POST" } as any;
-      caseSpendLimit(req, {} as any, resolve);
+      const req = { path: `/${copyCaseId}/documents`, method: "POST", user: { userId: lawyerId } } as any;
+      accountSpendLimit(req, {} as any, resolve);
     });
 
     it("lets a write through while there's budget left", async () => {

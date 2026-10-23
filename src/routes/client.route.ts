@@ -17,9 +17,15 @@ router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.quoteCase));
 router.post("/payments/case", asyncHandler(ClientCaseCtrl.payForCase));
 router.get("/payments/:paymentId", asyncHandler(ClientCaseCtrl.paymentStatus));
 
+router.get("/limits", asyncHandler(ClientCaseCtrl.limits));
+
 router.get("/cases", asyncHandler(ClientCaseCtrl.list));
 router.post("/cases", asyncHandler(ClientCaseCtrl.create));
 router.get("/cases/:caseId", asyncHandler(ClientCaseCtrl.get));
+router.patch("/cases/:caseId", asyncHandler(ClientCaseCtrl.update));
+router.delete("/cases/:caseId", asyncHandler(ClientCaseCtrl.remove));
+router.post("/cases/:caseId/archive", asyncHandler(ClientCaseCtrl.archive));
+router.post("/cases/:caseId/unarchive", asyncHandler(ClientCaseCtrl.unarchive));
 router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages));
 router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
