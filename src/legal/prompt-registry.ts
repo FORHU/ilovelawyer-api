@@ -15,6 +15,7 @@ import {
   buildMindMapExpandPrompt,
   buildMindMapDocumentsPrompt,
   buildMissingEvidencePrompt,
+  buildCrossExaminationPrompt,
 } from "./ph/prompts";
 import {
   buildUKRedTeamPrompt,
@@ -31,6 +32,7 @@ import {
   buildUKMindMapExpandPrompt,
   buildUKMindMapDocumentsPrompt,
   buildUKMissingEvidencePrompt,
+  buildUKCrossExaminationPrompt,
 } from "./uk/prompts";
 
 /** Every getter below selects strictly by tenantCode — never by client input — and throws
@@ -55,6 +57,17 @@ export function getMissingEvidencePromptBuilder(tenantCode: TenantCode) {
       return buildUKMissingEvidencePrompt;
     default:
       throw new HttpError(`No missing-evidence prompt builder configured for tenantCode: ${tenantCode}`, 501);
+  }
+}
+
+export function getCrossExaminationPromptBuilder(tenantCode: TenantCode) {
+  switch (tenantCode) {
+    case "PH":
+      return buildCrossExaminationPrompt;
+    case "UK":
+      return buildUKCrossExaminationPrompt;
+    default:
+      throw new HttpError(`No cross-examination prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }
 }
 

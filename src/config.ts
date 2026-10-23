@@ -31,6 +31,20 @@ export const MAX_CASES_PER_ACCOUNT = Number.isFinite(maxCasesPerAccount) && maxC
 const caseSpendLimitUsdRaw = process.env.CASE_SPEND_LIMIT_USD?.trim();
 const caseSpendLimitUsd = caseSpendLimitUsdRaw ? Number(caseSpendLimitUsdRaw) : NaN;
 export const CASE_SPEND_LIMIT_USD = Number.isFinite(caseSpendLimitUsd) && caseSpendLimitUsd >= 0 ? caseSpendLimitUsd : 20;
+/** US dollars of AI usage bundled with the per-case fee, before an engagement needs a top-up
+ * (#515, #516). A PLACEHOLDER until the price is signed off (FORHU/ilovelawyer-app#846). A missing
+ * or invalid value uses 20. */
+const engagementAiBudgetIncludedUsdRaw = process.env.ENGAGEMENT_AI_BUDGET_INCLUDED_USD?.trim();
+const engagementAiBudgetIncludedUsd = engagementAiBudgetIncludedUsdRaw ? Number(engagementAiBudgetIncludedUsdRaw) : NaN;
+export const ENGAGEMENT_AI_BUDGET_INCLUDED_USD =
+  Number.isFinite(engagementAiBudgetIncludedUsd) && engagementAiBudgetIncludedUsd >= 0 ? engagementAiBudgetIncludedUsd : 20;
+/** GBP per US dollar, for showing the engagement's AI budget (tracked internally in USD) to the
+ * lawyer in GBP. A PLACEHOLDER rate until a real one is wired up (FORHU/ilovelawyer-app#846). A
+ * missing or invalid value uses 0.8. */
+const engagementAiBudgetGbpPerUsdRaw = process.env.ENGAGEMENT_AI_BUDGET_GBP_PER_USD?.trim();
+const engagementAiBudgetGbpPerUsd = engagementAiBudgetGbpPerUsdRaw ? Number(engagementAiBudgetGbpPerUsdRaw) : NaN;
+export const ENGAGEMENT_AI_BUDGET_GBP_PER_USD =
+  Number.isFinite(engagementAiBudgetGbpPerUsd) && engagementAiBudgetGbpPerUsd > 0 ? engagementAiBudgetGbpPerUsd : 0.8;
 export const MAILER_FROM = (process.env.MAILER_FROM || process.env.MAILER_EMAIL) as string;
 export const MAILER_TRANSPORT_HOST = process.env.MAILER_TRANSPORT_HOST as string;
 export const MAILER_TRANSPORT_PORT = Number(process.env.MAILER_TRANSPORT_PORT || 587);

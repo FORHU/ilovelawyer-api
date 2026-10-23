@@ -6,6 +6,7 @@ import DamagesExtractSvc from "../services/damages-extract.service";
 import ClaimExtractSvc from "../services/claim-extract.service";
 import CitationGroundSvc from "../services/citation-ground.service";
 import MissingEvidenceAiSvc from "../services/missing-evidence-ai.service";
+import CrossExaminationSvc from "../services/cross-examination.service";
 import CaseFindingAiSvc from "../services/case-finding-ai.service";
 import CaseOutlookAiSvc from "../services/case-outlook-ai.service";
 import AudioOverviewSvc from "../services/audio-overview.service";
@@ -51,7 +52,8 @@ export type QueuedAiGenerationKind =
   | "contradictions"
   | "caseMindMapGenerate"
   | "caseMindMapResync"
-  | "missingEvidence";
+  | "missingEvidence"
+  | "crossExamination";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -60,6 +62,8 @@ export interface QueuedAiGenerationJob {
   // theoryDiff only — which pair to diff. Every other kind ignores these.
   theoryAId?: string;
   theoryBId?: string;
+  // crossExamination only — the witness to prepare for.
+  witnessId?: string;
 }
 
 // Each of caseRefresh/redTeam/caseReconstruction/caseTheoryPropose/theoryDiff/
@@ -106,6 +110,9 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // The Missing Evidence pane's own Regenerate: the controller already claimed the lock
   // (MissingEvidenceAiSvc.beginQueued).
   missingEvidence: (job) => MissingEvidenceAiSvc.runQueued(job.caseId),
+  // A witness's "Prepare cross-examination": the controller already claimed the lock
+  // (CrossExaminationSvc.beginQueued).
+  crossExamination: (job) => CrossExaminationSvc.runQueued(job.caseId, job.witnessId!, job.userId),
   caseFinding: (job) => CaseFindingAiSvc.runQueued(job.caseId),
   // A panel's Regenerate: the controller already claimed the lock (CaseFindingAiSvc.beginCategory).
   weaknessRegenerate: (job) => CaseFindingAiSvc.runQueuedCategory(job.caseId, "WEAKNESS", job.userId),

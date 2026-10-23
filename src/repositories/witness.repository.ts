@@ -13,6 +13,8 @@ export interface WitnessInput {
   credibilityOverride?: number | null;
   statementDueOn?: Date | null;
   statementReceived?: boolean;
+  /** Which side calls the witness; null clears it. Gates cross-examination prep. */
+  calledBy?: "OURS" | "THEIRS" | null;
   /** Ticked-off "what's needed" items, each with its proof document. Built by WitnessSvc. */
   needsDone?: unknown[];
   contact?: string | null;

@@ -16,7 +16,8 @@ const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASS
 /** What the lawyer app reads of a request (#511): the case's practice area and jurisdiction for
  * matching, and every claim on it, newest first, with the claiming lawyer's name. */
 const FOR_LAWYER = {
-  case: { select: { practiceArea: true, ukJurisdiction: true } },
+  case: { select: { caseName: true, practiceArea: true, ukJurisdiction: true, organizationId: true, organization: { select: { name: true } } } },
+  client: { select: { id: true, name: true, username: true } },
   claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } } } },
   // The per-case fee (#513), from CONFIRMED.
   charges: { where: { kind: "PER_CASE_FEE" } },
@@ -34,6 +35,7 @@ const FOR_CLIENT = {
       organization: { select: { name: true, isPersonal: true } },
     },
   },
+  feedback: true,
 } satisfies Prisma.ClientRequestInclude;
 
 export type ClientRequestForClient = Prisma.ClientRequestGetPayload<{ include: typeof FOR_CLIENT }>;
@@ -45,6 +47,40 @@ export default class ClientRequestRepo {
 
   static async findOpenForCase(caseId: string) {
     return prisma.clientRequest.findFirst({ where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } }, select: { id: true } });
+  }
+
+  /** Records the engaged lawyer's finished workspace copy (#514), once CaseCopyQueue makes one. */
+  static async setCopyCaseId(id: string, copyCaseId: string) {
+    await prisma.clientRequest.update({ where: { id }, data: { copyCaseId } });
+  }
+
+  /** The lawyer with live, read-only access to this case right now, and who to credit a new
+   * document to (#514) — null when nobody's engaged on it. */
+  static async findEngagedLawyerForCase(caseId: string) {
+    const request = await prisma.clientRequest.findFirst({
+      where: { caseId, status: "ENGAGED" },
+      select: {
+        id: true,
+        client: { select: { id: true, name: true, username: true } },
+        claims: { where: { outcome: null }, select: { lawyerId: true } },
+      },
+    });
+    const lawyerId = request?.claims[0]?.lawyerId;
+    if (!request || !lawyerId) return null;
+    return { requestId: request.id, lawyerId, client: { id: request.client.id, name: request.client.name || request.client.username } };
+  }
+
+  /** The engagement a lawyer's workspace copy belongs to (#515), with who to tell about its AI
+   * budget — null for a case that isn't one, or whose engagement has no assigned lawyer any more
+   * (closed and reassigned have both kept the same claim's outcome, so this still resolves after
+   * close; a withdrawn or expired request was never engaged, so it was never copied). */
+  static async findByCopyCaseId(caseId: string) {
+    const request = await prisma.clientRequest.findFirst({
+      where: { copyCaseId: caseId },
+      select: { id: true, copyCaseId: true, claims: { where: { outcome: "ENGAGED" }, select: { lawyerId: true } } },
+    });
+    if (!request) return null;
+    return { id: request.id, copyCaseId: request.copyCaseId!, lawyerId: request.claims[0]?.lawyerId ?? null };
   }
 
   /** Only the client's own. */
@@ -77,6 +113,24 @@ export default class ClientRequestRepo {
   static async transition(id: string, from: ClientRequestStatus[], data: { status: ClientRequestStatus; withdrawnAt?: Date }) {
     const { count } = await prisma.clientRequest.updateMany({ where: { id, status: { in: from } }, data });
     return count === 1;
+  }
+
+  /** Either side ending the engagement (#519): ENGAGED -> CLOSED, once. True when this call moved
+   * it; false when it had already closed, expired or moved on some other way. */
+  static async close(id: string, closedBy: "LAWYER" | "CLIENT", now: Date = new Date()): Promise<boolean> {
+    const { count } = await prisma.clientRequest.updateMany({ where: { id, status: "ENGAGED" }, data: { status: "CLOSED", closedAt: now, closedBy } });
+    return count === 1;
+  }
+
+  /** The client's rating of the lawyer, once the engagement is CLOSED. Null when already given:
+   * EngagementFeedback.requestId is unique, so a second attempt would otherwise throw. */
+  static async createFeedback(requestId: string, rating: number, comment: string | null) {
+    try {
+      return await prisma.engagementFeedback.create({ data: { requestId, rating, comment } });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return null;
+      throw err;
+    }
   }
 
   /** Everything the brief is written from (#508): the case, its parties and documents (names only,

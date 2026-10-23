@@ -63,3 +63,17 @@ export const confirmClientRequestSchema = Joi.object({
 export const declineClientRequestSchema = Joi.object({
   reason: Joi.string().trim().allow("").max(500).optional(),
 });
+
+/** POST /client-requests/:id/close (lawyer) and /client/lawyer-requests/:id/end (client). */
+export const closeClientRequestSchema = Joi.object({
+  note: Joi.string().trim().allow("").max(1000).optional(),
+});
+export const endClientRequestSchema = Joi.object({
+  reason: Joi.string().trim().allow("").max(1000).optional(),
+});
+
+/** POST /client/lawyer-requests/:id/feedback. */
+export const feedbackClientRequestSchema = Joi.object({
+  rating: Joi.number().integer().min(1).max(5).required(),
+  comment: Joi.string().trim().allow("").max(2000).optional(),
+});

@@ -5,6 +5,7 @@ import OrganizationBillingRepo, { payerOf } from "../repositories/organization-b
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import { organizationCardProviderNamed, type CardChargeResult } from "../payments/organization-card-provider";
+import EngagementAccessSvc from "./engagement-access.service";
 import NotificationSvc from "./notification.service";
 import { emitToUser } from "../lib/socket";
 import logger from "../utils/logger";
@@ -160,6 +161,7 @@ export default class OrganizationChargeSvc {
       const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "ENGAGED", updatedAt: now };
       emitToUser(request.clientId, "client-request:updated", updated);
       if (charge.lawyerId) {
+        await EngagementAccessSvc.grant({ requestId: request.id, caseId: request.caseId, lawyerId: charge.lawyerId, organizationId: charge.organizationId });
         emitToUser(charge.lawyerId, "client-request:updated", updated);
         await OrganizationChargeSvc.notify(charge.lawyerId, {
           title: "You're engaged on a client request",

@@ -8,6 +8,8 @@ import {
   confirmClientRequestSchema,
   createClientRequestSchema,
   declineClientRequestSchema,
+  endClientRequestSchema,
+  feedbackClientRequestSchema,
   listClientRequestsSchema,
 } from "../validation/client-request.validation";
 
@@ -55,5 +57,15 @@ export default class ClientRequestCtrl {
 
   static async withdraw(req: Request, res: Response) {
     res.status(200).json(await ClientRequestSvc.withdraw(req.user.userId, req.params.id));
+  }
+
+  static async end(req: Request, res: Response) {
+    const body = validate(endClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestSvc.end(req.user.userId, req.params.id, body));
+  }
+
+  static async feedback(req: Request, res: Response) {
+    const body = validate(feedbackClientRequestSchema, req.body ?? {});
+    res.status(201).json(await ClientRequestSvc.feedback(req.user.userId, req.params.id, body));
   }
 }

@@ -108,7 +108,7 @@ function normalizeRow(row: unknown, knownIds: Set<string>): WitnessFactorRow | n
   return { witnessId, factors, reasons, needs };
 }
 
-function normalizeForMatch(text: string): string {
+export function normalizeForMatch(text: string): string {
   return text
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')

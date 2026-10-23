@@ -1,6 +1,7 @@
 import { ClientSide, OrganizationRole, Prisma } from "@prisma/client";
 import ClientCaseRepo, { type ClientCaseRow } from "../repositories/client-case.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
+import ClientRequestRepo from "../repositories/client-request.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
@@ -8,6 +9,8 @@ import ChatSvc from "./chat.service";
 import DocumentSvc from "./document.service";
 import OrganizationSvc from "./organization.service";
 import HttpError from "../utils/http-error";
+import { emitToUser } from "../lib/socket";
+import { CLIENT_HANDOFF_SOCKET_EVENTS, type EngagementDocumentAddedEvent } from "../types/client-handoff";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
 import { JevUnavailableError } from "../utils/typesafeClient";
 import {
@@ -260,6 +263,18 @@ export default class ClientCaseSvc {
   static async addDocument(workspace: ClientWorkspace, userId: string, caseId: string, file: { key: string; name: string; contentType?: string; fileSize?: number }) {
     await ClientCaseSvc.load(workspace, caseId);
     const doc = await DocumentSvc.create(firmScope(workspace.id), userId, { ...file, caseId });
+    const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
+    if (engaged) {
+      const event: EngagementDocumentAddedEvent = {
+        requestId: engaged.requestId,
+        caseId,
+        documentId: doc.id,
+        filename: doc.name,
+        submittedBy: engaged.client,
+        submittedAt: doc.createdAt.toISOString(),
+      };
+      emitToUser(engaged.lawyerId, CLIENT_HANDOFF_SOCKET_EVENTS.ENGAGEMENT_DOCUMENT_ADDED, event);
+    }
     return { id: doc.id, name: doc.name, status: doc.ragStatus, createdAt: doc.createdAt };
   }
 

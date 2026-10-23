@@ -878,6 +878,7 @@ model Case {
   evidenceMatrix       EvidenceMatrixItem[]
   contradictions       EvidenceContradiction[]
   missingEvidence      CaseMissingEvidence[]
+  crossExamQuestions   CrossExamQuestion[]
   factPairChecks       FactPairCheck[]
   citationChecks       CitationCheck[]
   authorities          CaseAuthority[]
@@ -1149,17 +1150,42 @@ model ClientRequest {
   withdrawnAt       DateTime?
   // When the per-case fee went through and the request became ENGAGED (#513).
   engagedAt         DateTime?
+  // The lawyer's workspace copy of the client's case (#514), once POST /client-requests/{id}/copy
+  // has made one. Set from CaseCopy.requestId when the queued copy finishes.
+  copyCaseId        String?
+  // Either side can end the engagement (#519): the lawyer closes it, or the client ends it. Live
+  // access ends immediately either way; the lawyer's workspace copy, if any, is kept.
+  closedAt          DateTime?
+  closedBy          ClosedBy?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
-  case   Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  client  User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  claims  ClientRequestClaim[]
-  charges OrganizationCharge[]
+  case     Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client   User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  claims   ClientRequestClaim[]
+  charges  OrganizationCharge[]
+  feedback EngagementFeedback?
 
   @@index([caseId, status])
   @@index([clientId, createdAt])
   @@index([status])
+}
+
+// Who closed an engagement (ClientRequest.closedBy, #519).
+enum ClosedBy {
+  LAWYER
+  CLIENT
+}
+
+// The client's rating of the lawyer after an engagement closes (#519), once per request.
+model EngagementFeedback {
+  id        String   @id @default(uuid())
+  requestId String   @unique
+  rating    Int
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 }
 
 // types/client-handoff.ts QUOTE_TYPES: a fixed fee for the whole matter, or a paid first consultation.
@@ -1278,6 +1304,7 @@ model Document {
   file               File?               @relation(fields: [fileId], references: [id])
   chunks             CaseDocumentChunk[]
   extractedWitnesses Witness[]
+  crossExamQuestions CrossExamQuestion[]
   extractedDamages   DamageClaim[]
 
   @@index([userId])
@@ -2455,6 +2482,9 @@ model Witness {
   scoredAt            DateTime?
   statementDueOn      DateTime?
   statementReceived   Boolean        @default(false)
+  // Which side calls this witness. Null until a lawyer says. Cross-examination prep is only built
+  // for THEIRS: preparing our own witness's answers would be coaching (CrossExaminationSvc).
+  calledBy            WitnessSide?
   contact             String?
   notes               String?        @db.Text
   createdAt           DateTime       @default(now())
@@ -2463,8 +2493,53 @@ model Witness {
   case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
   sourceDocument    Document?            @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
   sponsoredEvidence EvidenceMatrixItem[]
+  crossExamQuestions CrossExamQuestion[]
 
   @@index([caseId])
+}
+
+enum WitnessSide {
+  OURS
+  THEIRS
+}
+
+enum CrossExamStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+}
+
+/// One proposed cross-examination question for a witness the other side calls, tied to the
+/// verbatim passage it puts to them. A row is only written when `sourceQuote` was found in
+/// `sourceDocumentId`'s text (CrossExaminationSvc). `supportVerdict` is Jev's read of whether the
+/// passage supports the point the question puts; null when unchecked, including after a lawyer
+/// rewrites the question. A regeneration replaces PROPOSED rows nobody edited and keeps the rest,
+/// matched by question text — see CrossExamRepo.replaceAiQuestions.
+model CrossExamQuestion {
+  id                String          @id @default(uuid())
+  caseId            String
+  witnessId         String
+  topic             String
+  question          String          @db.Text
+  // What the question is meant to establish, in one line, for the lawyer reading the pack.
+  purpose           String?         @db.Text
+  position          Int
+  sourceDocumentId  String?
+  sourceQuote       String          @db.Text
+  pageNumber        Int?
+  supportVerdict    String?
+  supportConfidence Float?
+  status            CrossExamStatus @default(PROPOSED)
+  lawyerEditedAt    DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  case           Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  witness        Witness   @relation(fields: [witnessId], references: [id], onDelete: Cascade)
+  sourceDocument Document? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
+  @@index([witnessId])
 }
 
 // Whether an entry is money the client is owed (DAMAGE) or another order the case asks for, such
@@ -3139,6 +3214,9 @@ model CaseCopy {
   targetOrganizationId   String?
   status                 CaseCopyStatus @default(PENDING)
   copyCaseId             String?
+  // Set when this copy is the lawyer's "Copy to my workspace" on an engaged client request (#514),
+  // so the queue can record the finished copy back onto ClientRequest.copyCaseId.
+  requestId              String?
   attempts               Int            @default(0)
   error                  String?        @db.Text
   createdAt              DateTime       @default(now())

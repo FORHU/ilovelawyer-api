@@ -95,6 +95,15 @@ export default class CaseCopyRepo {
     });
   }
 
+  /** The engaged lawyer's "Copy to my workspace" on a client request (#514), queued once. */
+  static async findForRequest(requestId: string) {
+    return prisma.caseCopy.findFirst({ where: { requestId } });
+  }
+
+  static async enqueueForRequest(input: { requestId: string; sourceCaseId: string; caseName: string; sourceOrganizationName: string; userId: string; targetOrganizationId: string }) {
+    return prisma.caseCopy.create({ data: input });
+  }
+
   /** Copies the portfolio still shows as in progress or failed (finished ones are real cases). */
   static async listUnfinishedForUser(userId: string, targetOrganizationId: string | null) {
     return prisma.caseCopy.findMany({

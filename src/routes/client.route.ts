@@ -39,5 +39,8 @@ router.post("/lawyer-requests/:id/withdraw", asyncHandler(ClientRequestCtrl.with
 // Answering the lawyer's quote (#513): confirming charges their organization the per-case fee.
 router.post("/lawyer-requests/:id/confirm", asyncHandler(ClientRequestCtrl.confirm));
 router.post("/lawyer-requests/:id/decline", asyncHandler(ClientRequestCtrl.decline));
+// The client's side of closing the engagement, and rating the lawyer afterwards (#519).
+router.post("/lawyer-requests/:id/end", asyncHandler(ClientRequestCtrl.end));
+router.post("/lawyer-requests/:id/feedback", asyncHandler(ClientRequestCtrl.feedback));
 
 export default router;
