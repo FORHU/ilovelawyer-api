@@ -1,8 +1,8 @@
 /**
  * The UK client-to-lawyer hand-off contract (FORHU/ilovelawyer-app#862, ilovelawyer-api#503):
  * the values and socket events both apps rely on. The REST endpoints and shapes are in
- * swagger/client-handoff.ts (served at /api-docs and /api-docs.json). Most of this is built
- * (#504–#519); routes still landing say so in their swagger description.
+ * swagger/client-handoff.ts (served at /api-docs and /api-docs.json). Nothing here is
+ * implemented yet. The routes land with #504–#520 and should import these, not redeclare them.
  *
  * The two frontends have no shared package, so ilovelawyer-app and ilovelawyer-client copy this
  * file as is. Change it here first.
@@ -25,48 +25,6 @@ export const CLIENT_REQUEST_STATUSES = [
   "WITHDRAWN", // the client withdrew before engagement
 ] as const;
 export type ClientRequestStatus = (typeof CLIENT_REQUEST_STATUSES)[number];
-
-/** The lifecycle's nine statuses, as a client or lawyer actually reads them: five stages for the
- * main path, plus EXPIRED and WITHDRAWN shown on their own. Each app's UI writes its own copy for
- * a stage (the client and the lawyer read the same stage differently) — stage() and
- * STAGE_LABELS below are the shared default, for anywhere a short, generic label is enough
- * (a list row, a badge). REQUESTED and ROUTED read the same ("waiting"): the client has nothing
- * to act on either way, and QUOTED/CONFIRMED both read as "accepted" (the fee is the platform's
- * business with the lawyer, not something the client watches). */
-export const CLIENT_REQUEST_STAGES = ["waiting", "review", "accepted", "ongoing", "done", "expired", "withdrawn"] as const;
-export type ClientRequestStage = (typeof CLIENT_REQUEST_STAGES)[number];
-
-export const CLIENT_REQUEST_STAGE_BY_STATUS: Record<ClientRequestStatus, ClientRequestStage> = {
-  REQUESTED: "waiting",
-  ROUTED: "waiting",
-  CLAIMED: "review",
-  QUOTED: "accepted",
-  CONFIRMED: "accepted",
-  ENGAGED: "ongoing",
-  CLOSED: "done",
-  EXPIRED: "expired",
-  WITHDRAWN: "withdrawn",
-};
-
-export const CLIENT_REQUEST_STAGE_LABELS: Record<ClientRequestStage, string> = {
-  waiting: "Looking for a lawyer",
-  review: "A lawyer is reviewing your case",
-  accepted: "Quote received",
-  ongoing: "Lawyer confirmed",
-  done: "Closed",
-  expired: "No lawyer found",
-  withdrawn: "Withdrawn",
-};
-
-export function clientRequestStage(status: ClientRequestStatus): ClientRequestStage {
-  return CLIENT_REQUEST_STAGE_BY_STATUS[status];
-}
-
-/** The shared default label for a status — a short, generic string fit for a list row or badge.
- * A fuller screen (a status timeline, a quote review) writes its own copy for the stage instead. */
-export function clientRequestStatusLabel(status: ClientRequestStatus): string {
-  return CLIENT_REQUEST_STAGE_LABELS[clientRequestStage(status)];
-}
 
 /** How a lawyer's claim on a request ended. */
 export const CLAIM_OUTCOMES = ["RELEASED", "LAPSED", "DECLINED", "REASSIGNED", "WITHDRAWN", "ENGAGED"] as const;

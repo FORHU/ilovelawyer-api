@@ -392,16 +392,13 @@ export default class ClientRequestLawyerSvc {
 
   /** Whether the request is one this lawyer is matched to (whatever state it's in now), or one
    * they've held. */
-  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerProfileRow & { openCount: number }) {
+  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerProfileRow) {
     if (r.claims.some((c) => c.lawyerId === lawyerId)) return true;
     return !r.excludedLawyerIds.includes(lawyerId) && ClientRequestMatchingSvc.matches(profile, criteriaOf(r));
   }
 
-  /** Client requests are UK only, for lawyers whose registration has been verified (#506).
-   * `openCount` (CLAIMED/QUOTED/CONFIRMED/ENGAGED) makes the result usable as LawyerForMatching
-   * directly — it only matters against capacity on a request this lawyer doesn't already hold,
-   * since every call site here checks `held` (their own claim) before falling back to matches(). */
-  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow & { openCount: number }> {
+  /** Client requests are UK only, for lawyers whose registration has been verified (#506). */
+  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow> {
     const who = await LawyerProfileRepo.findLawyerTenant(lawyer.userId);
     if (!who || who.role !== "LAWYER") throw new HttpError("Client requests are for lawyer accounts", 403, "NOT_A_LAWYER");
     if (lawyer.tenantCode !== "UK") throw new HttpError("Client requests are only available on the UK site", 403, "NOT_UK_TENANT");
@@ -409,7 +406,6 @@ export default class ClientRequestLawyerSvc {
     if (!profile || profile.verificationStatus !== "VERIFIED") {
       throw new HttpError("You can see client requests once we've verified your registration.", 403, "LAWYER_NOT_VERIFIED");
     }
-    const openCount = (await LawyerProfileRepo.countOpenForLawyers([lawyer.userId])).get(lawyer.userId) ?? 0;
-    return { ...profile, openCount };
+    return profile;
   }
 }

@@ -1,6 +1,7 @@
 /** ClientRequestMatchingSvc — the request matching engine (#509). A lawyer matches a request when
- * they're verified, accepting requests, enabled by their organization, not paused, under capacity,
- * and qualified for the case's practice area and UK jurisdiction.
+ * they're verified, accepting requests, enabled by their organization, not paused, and qualified
+ * for the case's practice area and UK jurisdiction. Under capacity is a stub (true) until
+ * Engagements exist (#514) — matches the openEngagements: 0 stub in LawyerProfileSvc.
  *
  * No live Postgres: repos are monkeypatched on their CommonJS module objects, same idiom as
  * test/lawyer-verification.spec.ts.
@@ -21,8 +22,6 @@ type Lawyer = {
   acceptingRequests: boolean;
   enabledByOrganization: boolean;
   pausedUntil: Date | null;
-  capacityLimit: number | null;
-  openCount: number;
   practiceAreas: string[];
   qualifiedJurisdictions: string[];
 };
@@ -32,8 +31,6 @@ const ELIGIBLE: Lawyer = {
   acceptingRequests: true,
   enabledByOrganization: true,
   pausedUntil: null,
-  capacityLimit: null,
-  openCount: 0,
   practiceAreas: ["EMPLOYMENT"],
   qualifiedJurisdictions: ["England and Wales"],
 };
@@ -77,26 +74,6 @@ describe("ClientRequestMatchingSvc.matches", () => {
 
   it("refuses when the case has no UK jurisdiction set", () => {
     expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { practiceArea: "EMPLOYMENT", ukJurisdiction: null })).to.equal(false);
-  });
-
-  it("matches a lawyer under their capacity limit", () => {
-    const underCapacity = { ...ELIGIBLE, capacityLimit: 3, openCount: 2 };
-    expect(ClientRequestMatchingSvc.matches(underCapacity, CRITERIA)).to.equal(true);
-  });
-
-  it("refuses a lawyer at their capacity limit", () => {
-    const atCapacity = { ...ELIGIBLE, capacityLimit: 3, openCount: 3 };
-    expect(ClientRequestMatchingSvc.matches(atCapacity, CRITERIA)).to.equal(false);
-  });
-
-  it("refuses a lawyer over their capacity limit", () => {
-    const overCapacity = { ...ELIGIBLE, capacityLimit: 3, openCount: 4 };
-    expect(ClientRequestMatchingSvc.matches(overCapacity, CRITERIA)).to.equal(false);
-  });
-
-  it("matches a lawyer with any open count when capacityLimit is null (unlimited)", () => {
-    const unlimited = { ...ELIGIBLE, capacityLimit: null, openCount: 999 };
-    expect(ClientRequestMatchingSvc.matches(unlimited, CRITERIA)).to.equal(true);
   });
 });
 
