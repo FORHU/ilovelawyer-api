@@ -90,7 +90,10 @@ function registrationDto(p: ProfileFields) {
   return { country: "UK" as const, regulator: p.regulator, registrationNumber: p.registrationNumber, qualifiedJurisdictions: p.qualifiedJurisdictions };
 }
 
-export function toDto(p: ProfileFields) {
+/** `openEngagements` defaults to 0 for callers that don't have it to hand (the admin verification
+ * queue, where it isn't meaningful yet) — pass LawyerProfileRepo.countOpenForLawyers's count for a
+ * lawyer looking at their own profile. */
+export function toDto(p: ProfileFields, openEngagements = 0) {
   const country = p.country as LawyerCountry;
   return {
     country,
@@ -103,8 +106,7 @@ export function toDto(p: ProfileFields) {
     enabledByOrganization: p.enabledByOrganization,
     pausedUntil: p.pausedUntil,
     capacityLimit: p.capacityLimit,
-    // Engagements don't exist yet (#514); matching will count them against capacityLimit.
-    openEngagements: 0,
+    openEngagements,
     verification: { status: p.verificationStatus, note: p.verificationNote, verifiedAt: p.verifiedAt },
     missing: missingFields(p),
   };
@@ -130,7 +132,8 @@ export default class LawyerProfileSvc {
   static async get(userId: string) {
     const country = await LawyerProfileSvc.countryOf(userId);
     const row = await LawyerProfileRepo.find(userId);
-    return toDto(row ?? empty(country));
+    const openEngagements = (await LawyerProfileRepo.countOpenForLawyers([userId])).get(userId) ?? 0;
+    return toDto(row ?? empty(country), openEngagements);
   }
 
   static async update(userId: string, patch: LawyerProfilePatch) {
@@ -170,7 +173,8 @@ export default class LawyerProfileSvc {
     }
 
     const saved = await LawyerProfileRepo.upsert(userId, after);
-    return toDto(saved);
+    const openEngagements = (await LawyerProfileRepo.countOpenForLawyers([userId])).get(userId) ?? 0;
+    return toDto(saved, openEngagements);
   }
 
   /** The country a lawyer applies in: their site. Only lawyers on a site with a Lawyer Application
