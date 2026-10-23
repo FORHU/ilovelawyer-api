@@ -17,7 +17,7 @@ export interface Engagement {
  * engagement, not by the lawyer.
  */
 export default class EngagementAccessSvc {
-  static async grant(engagement: Engagement & { organizationId: string }) {
+  static async grant(engagement: Engagement & { organizationId: string | null }) {
     const { requestId, caseId, lawyerId, organizationId } = engagement;
     await OrganizationRepo.grantCaseAccess(caseId, lawyerId, "VIEW");
     await SecurityAuditSvc.record({

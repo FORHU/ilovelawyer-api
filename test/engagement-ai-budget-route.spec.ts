@@ -70,8 +70,9 @@ describe("engagement AI budget", () => {
       data: { id: orgId, name: "Lena Law LLP", slug: `budget-${orgId}`, tenantId: tenant.id, createdById: lawyerId, members: { create: { userId: lawyerId, role: "OWNER", status: "ACCEPTED" } } },
     });
     await prisma.lawyerClientProfile.create({
-      data: { userId: lawyerId, regulator: "SRA", registrationNumber: "999", qualifiedJurisdictions: ["England and Wales"], practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED", verifiedAt: new Date() },
+      data: { userId: lawyerId, practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED", verifiedAt: new Date() },
     });
+    await prisma.lawyerUkRegistration.create({ data: { userId: lawyerId, regulator: "SRA", registrationNumber: "999", qualifiedJurisdictions: ["England and Wales"] } });
     await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Budget test case", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
     await prisma.organizationBilling.create({ data: { organizationId: orgId, provider: "STRIPE", customerId: "cus_budget", paymentMethodId: "stripe_pm_budget", brand: "visa", last4: "4242" } });
   });

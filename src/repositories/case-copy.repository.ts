@@ -100,7 +100,7 @@ export default class CaseCopyRepo {
     return prisma.caseCopy.findFirst({ where: { requestId } });
   }
 
-  static async enqueueForRequest(input: { requestId: string; sourceCaseId: string; caseName: string; sourceOrganizationName: string; userId: string; targetOrganizationId: string }) {
+  static async enqueueForRequest(input: { requestId: string; sourceCaseId: string; caseName: string; sourceOrganizationName: string; userId: string; targetOrganizationId: string | null }) {
     return prisma.caseCopy.create({ data: input });
   }
 
