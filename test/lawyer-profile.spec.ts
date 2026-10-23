@@ -96,7 +96,12 @@ describe("Lawyer Application", () => {
   });
 
   describe("LawyerProfileSvc", () => {
-    const original = { find: LawyerProfileRepo.find, upsert: LawyerProfileRepo.upsert, findLawyerTenant: LawyerProfileRepo.findLawyerTenant };
+    const original = {
+      find: LawyerProfileRepo.find,
+      upsert: LawyerProfileRepo.upsert,
+      findLawyerTenant: LawyerProfileRepo.findLawyerTenant,
+      countOpenForLawyers: LawyerProfileRepo.countOpenForLawyers,
+    };
     let stored: any;
     let who: { role: string; tenantCode: string | null } | null;
 
@@ -106,6 +111,7 @@ describe("Lawyer Application", () => {
       (LawyerProfileRepo as any).find = async () => stored;
       (LawyerProfileRepo as any).upsert = async (_userId: string, data: any) => (stored = { userId: "u1", ...data });
       (LawyerProfileRepo as any).findLawyerTenant = async () => who;
+      (LawyerProfileRepo as any).countOpenForLawyers = async () => new Map();
     });
     afterEach(() => Object.assign(LawyerProfileRepo, original));
 

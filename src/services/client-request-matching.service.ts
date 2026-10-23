@@ -7,11 +7,15 @@ export interface MatchCriteria {
 }
 
 /** What matches() needs from a lawyer. Verification is checked by the repo query (VERIFIED only) —
- * everything else is checked here, so the rule itself stays testable without a database. */
+ * everything else is checked here, so the rule itself stays testable without a database.
+ * `openCount` is how many requests they're currently holding (LawyerProfileRepo.countOpenForLawyers);
+ * `capacityLimit` null means unlimited. */
 export interface LawyerForMatching {
   acceptingRequests: boolean;
   enabledByOrganization: boolean;
   pausedUntil: Date | null;
+  capacityLimit: number | null;
+  openCount: number;
   practiceAreas: string[];
   qualifiedJurisdictions: string[];
 }
@@ -19,9 +23,7 @@ export interface LawyerForMatching {
 /**
  * The request matching engine (#509): which lawyers a client request is routed to. A lawyer
  * matches when they're verified, accepting requests, enabled by their organization (#518), not
- * paused, under capacity, and qualified for the case's practice area and UK jurisdiction. Under
- * capacity is a stub (always true) until Engagements exist (#514) — same stub as
- * LawyerProfileSvc's openEngagements.
+ * paused, under capacity, and qualified for the case's practice area and UK jurisdiction.
  */
 export default class ClientRequestMatchingSvc {
   static matches(lawyer: LawyerForMatching, criteria: MatchCriteria, now: Date = new Date()): boolean {
@@ -29,6 +31,7 @@ export default class ClientRequestMatchingSvc {
     if (!lawyer.acceptingRequests) return false;
     if (!lawyer.enabledByOrganization) return false;
     if (lawyer.pausedUntil && lawyer.pausedUntil > now) return false;
+    if (lawyer.capacityLimit !== null && lawyer.openCount >= lawyer.capacityLimit) return false;
     if (!lawyer.practiceAreas.includes(criteria.practiceArea)) return false;
     if (!lawyer.qualifiedJurisdictions.includes(criteria.ukJurisdiction)) return false;
     return true;

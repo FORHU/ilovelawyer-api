@@ -142,7 +142,7 @@ export default class LawyerProfileRepo {
   /** Candidates for matching (#509): verified UK lawyers, minus anyone already excluded from this
    * request. Accepting, not paused, enabled-by-org, capacity, practice area and jurisdiction are
    * checked in ClientRequestMatchingSvc.matches — the single source of truth for the rule, so it
-   * stays unit-testable without a database. */
+   * stays unit-testable without a database. `openCount` comes from countOpenForLawyers below. */
   static async findVerified(excludeUserIds: string[]) {
     const rows = await prisma.lawyerClientProfile.findMany({
       where: { country: "UK", verificationStatus: "VERIFIED", userId: { notIn: excludeUserIds } },
@@ -151,11 +151,38 @@ export default class LawyerProfileRepo {
         acceptingRequests: true,
         enabledByOrganization: true,
         pausedUntil: true,
+        capacityLimit: true,
         practiceAreas: true,
         ukRegistration: { select: { qualifiedJurisdictions: true } },
       },
     });
-    return rows.map(({ ukRegistration, ...r }) => ({ ...r, qualifiedJurisdictions: ukRegistration?.qualifiedJurisdictions ?? [] }));
+    const openCounts = await LawyerProfileRepo.countOpenForLawyers(rows.map((r) => r.userId));
+    return rows.map(({ ukRegistration, ...r }) => ({
+      ...r,
+      qualifiedJurisdictions: ukRegistration?.qualifiedJurisdictions ?? [],
+      openCount: openCounts.get(r.userId) ?? 0,
+    }));
+  }
+
+  /** How many open client requests (#514) each of these lawyers is holding: CLAIMED, QUOTED,
+   * CONFIRMED or ENGAGED (CLOSED doesn't count, even though the ENGAGED claim's outcome stays set).
+   * A claim counts only while it's the request's current hold — `openRequestId` is set for
+   * CLAIMED/QUOTED/CONFIRMED, and cleared to null once ENGAGED (organization-charge.repository.ts),
+   * so an ENGAGED claim is picked up by `outcome: "ENGAGED"` instead. A lawyer's past released or
+   * declined claim on a request someone else now holds matches neither and isn't counted. Used by
+   * ClientRequestMatchingSvc.matches for the capacity rule. */
+  static async countOpenForLawyers(lawyerIds: string[]): Promise<Map<string, number>> {
+    if (lawyerIds.length === 0) return new Map();
+    const rows = await prisma.clientRequestClaim.groupBy({
+      by: ["lawyerId"],
+      where: {
+        lawyerId: { in: lawyerIds },
+        OR: [{ openRequestId: { not: null } }, { outcome: "ENGAGED" }],
+        request: { status: { in: ["CLAIMED", "QUOTED", "CONFIRMED", "ENGAGED"] } },
+      },
+      _count: { _all: true },
+    });
+    return new Map(rows.map((r) => [r.lawyerId, r._count._all]));
   }
 
   /** Where to email these lawyers (#510's client request emails). */
