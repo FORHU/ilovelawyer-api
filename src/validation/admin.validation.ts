@@ -72,8 +72,20 @@ export const rejectLawyerSchema = Joi.object({
 
 export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid("PH", "UK").required() });
 
-// strict(): only a real JSON boolean — "true"/"false"/1/0 are rejected, not coerced.
-export const updateTenantSettingsSchema = Joi.object({ autoApproveSignups: Joi.boolean().strict().required() });
+// strict(): only a real JSON boolean — "true"/"false"/1/0 are rejected, not coerced. At least one of
+// the three independent settings groups (signup auto-approve, account top-up fee, subscription
+// plan) must be present; each group's own fields travel together.
+export const updateTenantSettingsSchema = Joi.object({
+  autoApproveSignups: Joi.boolean().strict().optional(),
+  accountTopUpFeeType: Joi.string().valid("FIXED", "PERCENT").optional(),
+  accountTopUpFeeAmount: Joi.number().min(0).optional(),
+  subscriptionPlanName: Joi.string().trim().min(1).max(100).optional(),
+  subscriptionPlanMonthlyPriceUsd: Joi.number().min(0).optional(),
+  subscriptionPlanIncludedAllowanceUsd: Joi.number().min(0).optional(),
+})
+  .and("accountTopUpFeeType", "accountTopUpFeeAmount")
+  .and("subscriptionPlanName", "subscriptionPlanMonthlyPriceUsd", "subscriptionPlanIncludedAllowanceUsd")
+  .or("autoApproveSignups", "accountTopUpFeeType", "subscriptionPlanName");
 
 export const lawSearchSchema = Joi.object({
   category: Joi.string().valid("jurisprudence", "republic-acts").required(),

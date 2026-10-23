@@ -3,6 +3,7 @@ import AdminSvc from "../services/admin.service";
 import LawyerVerificationSvc from "../services/lawyer-verification.service";
 import LawSvc, { parseLawCategory } from "../services/law.service";
 import TenantSettingSvc from "../services/tenant-setting.service";
+import AccountTopUpPricingSvc from "../services/account-topup-pricing.service";
 import BulkApprovalRunner from "../queues/bulk-approval.runner";
 import SecurityAuditSvc from "../services/security-audit.service";
 import HttpError from "../utils/http-error";
@@ -196,10 +197,12 @@ export default class AdminCtrl {
     return res.status(200).json(row);
   }
 
-  /** GET /api/admin/settings — per-Tenant signup settings, pending backlog and bulk-run progress. */
+  /** GET /api/admin/settings — per-Tenant signup settings, pending backlog, bulk-run progress, the
+   * account top-up platform fee, and the subscription plan (placeholder price + included allowance). */
   static async getSettings(_req: Request, res: Response) {
-    const tenants = await TenantSettingSvc.listForAdmin();
-    return res.status(200).json({ tenants });
+    const [tenants, topUpPricing] = await Promise.all([TenantSettingSvc.listForAdmin(), AccountTopUpPricingSvc.listForAdmin()]);
+    const merged = tenants.map((t) => ({ ...t, accountTopUp: topUpPricing.find((p) => p.code === t.code) ?? null }));
+    return res.status(200).json({ tenants: merged });
   }
 
   static async updateTenantSettings(req: Request, res: Response) {
@@ -207,8 +210,21 @@ export default class AdminCtrl {
     const { error, value } = updateTenantSettingsSchema.validate(req.body ?? {});
     if (error) throw new HttpError(error.message, 400);
 
-    const tenant = await TenantSettingSvc.setAutoApprove(code, value.autoApproveSignups, req.user.userId);
-    return res.status(200).json(tenant);
+    let tenant;
+    if (value.autoApproveSignups !== undefined) tenant = await TenantSettingSvc.setAutoApprove(code, value.autoApproveSignups, req.user.userId);
+    if (value.accountTopUpFeeType !== undefined) {
+      await AccountTopUpPricingSvc.setFee(code, value.accountTopUpFeeType, value.accountTopUpFeeAmount, req.user.userId);
+    }
+    if (value.subscriptionPlanName !== undefined) {
+      await AccountTopUpPricingSvc.setPlan(
+        code,
+        { name: value.subscriptionPlanName, monthlyPriceUsd: value.subscriptionPlanMonthlyPriceUsd, includedAllowanceUsd: value.subscriptionPlanIncludedAllowanceUsd },
+        req.user.userId,
+      );
+    }
+    if (!tenant) tenant = (await TenantSettingSvc.listForAdmin()).find((t) => t.code === code);
+    const accountTopUp = await AccountTopUpPricingSvc.listForAdmin().then((all) => all.find((p) => p.code === code));
+    return res.status(200).json({ ...tenant, accountTopUp });
   }
 
   /** POST /api/admin/tenants/:code/approve-pending — starts a background run; poll GET /settings. */

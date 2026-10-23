@@ -37,6 +37,9 @@ model User {
   updatedAt          DateTime  @updatedAt
   provider           String?
   googleId           String?   @unique
+  // Staff/self-serve top-up credit on top of the subscription plan's included AI allowance
+  // (AccountLimitsSvc). Internal: never shown to lawyers as a ceiling, only the balance/percentage.
+  extraAiAllowanceUsd Float    @default(0)
   googleAccessToken  String?
   googleRefreshToken String?
   // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
@@ -149,6 +152,7 @@ model User {
   clientRequestClaims     ClientRequestClaim[]
   updatedTenantSettings   TenantSetting[]
   clientPayments          ClientPayment[]
+  accountAiTopUps         AccountAiTopUp[]
   clientRequestProfile    LawyerClientProfile?
   tenant                  Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
@@ -831,8 +835,6 @@ model Case {
   copiedFromCaseId      String?
   copiedFromOrgName     String?
   copiedAt              DateTime?
-  /// Staff-added AI allowance for this case, on top of the standard one (CaseLimitsSvc). Internal: never shown to users.
-  extraAiAllowanceUsd   Float      @default(0)
   /// Client app only: chat credits left. Each message to the AI takes one; a case payment and
   /// top-ups add them (ClientBillingSvc). 0 on lawyer cases, which never read it.
   clientCredits         Int        @default(0)
@@ -1059,6 +1061,40 @@ model StripeWebhookEvent {
   id         String   @id
   type       String
   receivedAt DateTime @default(now())
+}
+
+enum AccountAiTopUpStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+}
+
+// A lawyer self-serve topping up their own account's hidden AI allowance (AccountLimitsSvc),
+// unrelated to ClientPayment (a client paying for their case). Account-level, not per case: a
+// lawyer may own any number of cases (MAX_CASES_PER_ACCOUNT is effectively off) and the allowance
+// is shared across all of them. `topUpAmountUsd` is credited to User.extraAiAllowanceUsd in full on
+// success; `feeAmountUsd` (the platform fee, from the tenant's AccountTopUpPricingSvc config) is
+// added on top of it for what Stripe actually charges (totalChargedUsd). `grantedAt` is the
+// idempotency fence: the allowance increment is applied at most once, inside the same transaction
+// that flips status PENDING -> SUCCEEDED (AccountAiTopUpRepo.settle).
+model AccountAiTopUp {
+  id              String               @id @default(cuid())
+  userId          String
+  topUpAmountUsd  Float
+  feeAmountUsd    Float
+  totalChargedUsd Float
+  provider        String
+  externalId      String?
+  status          AccountAiTopUpStatus @default(PENDING)
+  failureReason   String?
+  grantedAt       DateTime?
+  createdAt       DateTime             @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([externalId])
+  @@index([userId])
 }
 
 // See types/client-handoff.ts CLIENT_REQUEST_STATUSES for what each one means.

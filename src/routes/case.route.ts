@@ -4,7 +4,7 @@ import requireConsent from "../middleware/require-consent.middleware";
 import validSession from "../middleware/valid-session.middleware";
 import { resolveOrganizationAllowingGuests } from "../middleware/resolve-organization.middleware";
 import recordCaseItemDeletions from "../middleware/record-case-item-deletions.middleware";
-import { caseSpendLimit } from "../middleware/case-spend-limit.middleware";
+import { accountSpendLimit } from "../middleware/account-spend-limit.middleware";
 import CaseCtrl from "../controllers/case.controller";
 import CaseTerminalCtrl from "../controllers/case-terminal.controller";
 import TraceCtrl from "../controllers/trace.controller";
@@ -17,8 +17,9 @@ const router = express.Router();
 router.use(validSession, asyncHandler(resolveOrganizationAllowingGuests));
 // Every DELETE /:caseId/... below lands in the security audit log as case.item_deleted.
 router.use(recordCaseItemDeletions);
-// A case that has used its AI (CASE_SPEND_LIMIT_USD) starts no new AI work; reads and deletes pass.
-router.use(caseSpendLimit);
+// An account that has used its AI allowance (AccountLimitsSvc) starts no new AI work on any of its
+// cases; reads and deletes pass.
+router.use(accountSpendLimit);
 
 router.post("/", asyncHandler(CaseCtrl.create));
 router.get("/", asyncHandler(CaseCtrl.list));

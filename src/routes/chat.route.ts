@@ -2,7 +2,7 @@ import express from "express";
 import asyncHandler from "../utils/async-handler";
 import requireConsent from "../middleware/require-consent.middleware";
 import { blockTrialWrites, trialMessageLimit } from "../middleware/trial.middleware";
-import { consultationSpendLimit } from "../middleware/case-spend-limit.middleware";
+import { consultationSpendLimit } from "../middleware/account-spend-limit.middleware";
 import validSession from "../middleware/valid-session.middleware";
 import { resolveOrganizationAllowingGuests } from "../middleware/resolve-organization.middleware";
 import { consultationCaseOf, guestItemNeedsCase, guestListNeedsCase, guestRefused } from "../middleware/guest-case-items.middleware";

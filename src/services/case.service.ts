@@ -13,7 +13,7 @@ import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { IncomingCaseDocument, CaseWithParties } from "../types/case.types";
 import { CasePermission, CaseStatus, OrganizationRole } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
-import CaseLimitsSvc from "./case-limits.service";
+import AccountLimitsSvc from "./account-limits.service";
 
 export default class CaseSvc {
   /** Creating a case gives the creator the access their role doesn't: a MANAGER/MEMBER gets an
@@ -27,7 +27,7 @@ export default class CaseSvc {
     role: OrganizationRole,
     data: CaseData & { caseName: string; confidential?: boolean },
   ) {
-    await CaseLimitsSvc.assertCanCreateCase(userId);
+    await AccountLimitsSvc.assertCanCreateCase(userId);
     const { confidential = false, ...fields } = data;
     if (confidential && (await OrganizationRepo.isPersonal(organizationId))) {
       throw new HttpError("A case in your portfolio is already private to you", 400);
@@ -95,7 +95,8 @@ export default class CaseSvc {
 
   /** The case, for a user who can open it (CaseAccess — a confidential case 404s for anyone walled
    * off from it, #346) in this organization. A portfolio copy also says how it relates to its
-   * original (see CaseRepo.withCopyContext) — what the case page shows. */
+   * original (see CaseRepo.withCopyContext) — what the case page shows. The AI allowance is
+   * account-level now, not per case — see GET /api/users/me/ai-allowance (AccountLimitsSvc). */
   static async getById(id: string, organizationId: string, userId: string) {
     await CaseAccess.loadAccessibleCase(id, userId);
     const caseRecord = await CaseRepo.findById(id, organizationId);
