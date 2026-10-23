@@ -1,3 +1,4 @@
+import { workspaceOf } from "../utils/workspace";
 import { Request, Response } from "express";
 import ChatSvc from "../services/chat.service";
 import MindMapSvc from "../services/mind-map.service";
@@ -25,7 +26,7 @@ export default class ChatCtrl {
     const { error, value } = listConsultationsSchema.validate(req.query);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultations = await ChatSvc.listConsultations(req.organization!.id, req.user.userId, value.caseId, value.status);
+    const consultations = await ChatSvc.listConsultations(workspaceOf(req), req.user.userId, value.caseId, value.status);
     return res.status(200).json(consultations);
   }
 
@@ -33,7 +34,7 @@ export default class ChatCtrl {
     const { error, value } = createConsultationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultation = await ChatSvc.createConsultation(req.organization!.id, req.user.userId, value.title, value.caseId);
+    const consultation = await ChatSvc.createConsultation(workspaceOf(req), req.user.userId, value.title, value.caseId);
     return res.status(201).json(consultation);
   }
 
@@ -41,36 +42,36 @@ export default class ChatCtrl {
     const { error, value } = renameConsultationSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const consultation = await ChatSvc.renameConsultation(req.organization!.id, req.user.userId, req.params.consultationId, value.title);
+    const consultation = await ChatSvc.renameConsultation(workspaceOf(req), req.user.userId, req.params.consultationId, value.title);
     return res.status(200).json(consultation);
   }
 
   static async archiveConsultation(req: Request, res: Response) {
-    const consultation = await ChatSvc.archiveConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
+    const consultation = await ChatSvc.archiveConsultation(workspaceOf(req), req.user.userId, req.params.consultationId);
     return res.status(200).json(consultation);
   }
 
   static async unarchiveConsultation(req: Request, res: Response) {
-    const consultation = await ChatSvc.unarchiveConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
+    const consultation = await ChatSvc.unarchiveConsultation(workspaceOf(req), req.user.userId, req.params.consultationId);
     return res.status(200).json(consultation);
   }
 
   /** Schedules permanent deletion after the grace period — the consultation must be archived
    * first (409 otherwise). Answers with when it takes effect. */
   static async deleteConsultation(req: Request, res: Response) {
-    const result = await ChatSvc.deleteConsultation(req.organization!.id, req.user.userId, req.params.consultationId);
+    const result = await ChatSvc.deleteConsultation(workspaceOf(req), req.user.userId, req.params.consultationId);
     return res.status(200).json(result);
   }
 
   static async listMessages(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const messages = await ChatSvc.listMessages(req.organization!.id, req.user.userId, consultationId);
+    const messages = await ChatSvc.listMessages(workspaceOf(req), req.user.userId, consultationId);
     return res.status(200).json(messages);
   }
 
   static async getRelatedCases(req: Request, res: Response) {
     const { consultationId } = req.params;
-    const relatedCases = await ChatSvc.getRelatedCases(req.organization!.id, req.user.userId, req.organization!.tenantCode, consultationId);
+    const relatedCases = await ChatSvc.getRelatedCases(workspaceOf(req), req.user.userId, workspaceOf(req).tenantCode, consultationId);
     return res.status(200).json({ relatedCases });
   }
 
@@ -80,7 +81,7 @@ export default class ChatCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     // Access check — throws 404 if missing or this user can't use it.
-    await ChatSvc.assertConsultationAccess(req.organization!.id, req.user.userId, req.params.consultationId);
+    await ChatSvc.assertConsultationAccess(workspaceOf(req), req.user.userId, req.params.consultationId);
 
     const result = await DocumentChunkSvc.relevantChunksForConsultation(
       req.params.consultationId,
@@ -91,13 +92,13 @@ export default class ChatCtrl {
   }
 
   static async deleteMessage(req: Request, res: Response) {
-    await ChatSvc.deleteMessage(req.organization!.id, req.user.userId, req.params.consultationId, req.params.messageId);
+    await ChatSvc.deleteMessage(workspaceOf(req), req.user.userId, req.params.consultationId, req.params.messageId);
     return res.status(204).send();
   }
 
   static async generateAudioOverviewAudio(req: Request, res: Response) {
     const result = await ChatSvc.startAudioOverviewAudio(
-      req.organization!.id,
+      workspaceOf(req),
       req.user.userId,
       req.params.consultationId,
       req.params.messageId,
@@ -107,7 +108,7 @@ export default class ChatCtrl {
 
   static async pollAudioOverviewAudio(req: Request, res: Response) {
     const result = await ChatSvc.pollAudioOverviewAudio(
-      req.organization!.id,
+      workspaceOf(req),
       req.user.userId,
       req.params.consultationId,
       req.params.messageId,
@@ -137,8 +138,8 @@ export default class ChatCtrl {
     }
 
     const result = await ChatSvc.enqueueChatGeneration(
-      req.organization!.id,
-      req.organization!.tenantCode,
+      workspaceOf(req),
+      workspaceOf(req).tenantCode,
       req.user.userId,
       consultationId,
       sessionId,
@@ -159,7 +160,7 @@ export default class ChatCtrl {
   static async cancelMessage(req: Request, res: Response) {
     const { consultationId, messageId } = req.params;
     const result = await ChatSvc.cancelChatGeneration(
-      req.organization!.id,
+      workspaceOf(req),
       req.user.userId,
       consultationId,
       messageId,
@@ -172,7 +173,7 @@ export default class ChatCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     const result = await MindMapSvc.expandNode({
-      organizationId: req.organization!.id,
+      organizationId: workspaceOf(req).organizationId,
       userId: req.user.userId,
       consultationId: req.params.consultationId,
       messageId: value.messageId,
@@ -187,7 +188,7 @@ export default class ChatCtrl {
     if (error) throw new HttpError(error.message, 400);
     const { messageId, ...edit } = value;
     const result = await MindMapSvc.editNode({
-      organizationId: req.organization!.id,
+      organizationId: workspaceOf(req).organizationId,
       userId: req.user.userId,
       consultationId: req.params.consultationId,
       messageId,
@@ -201,7 +202,7 @@ export default class ChatCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     const result = await MindMapSvc.revert({
-      organizationId: req.organization!.id,
+      organizationId: workspaceOf(req).organizationId,
       userId: req.user.userId,
       consultationId: req.params.consultationId,
       messageId: value.messageId,

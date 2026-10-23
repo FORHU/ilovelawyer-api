@@ -20,7 +20,9 @@ export interface ChatGenerationJob {
    * existing Message.replyStatus (PENDING/DONE/FAILED) and pendingReplyContent checkpoint
    * ARE the job's status/progress, exactly as they were before this turn was queue-driven. */
   jobId: string;
-  organizationId: string;
+  /** The firm, or null when asked in a lawyer's own workspace (the worker rebuilds the scope with
+   * userId as its owner). */
+  organizationId: string | null;
   tenantCode: TenantCode;
   userId: string;
   consultationId: string;
@@ -230,7 +232,7 @@ export default class ChatGenerationQueue {
       parsed &&
       typeof parsed.jobId === "string" &&
       typeof parsed.consultationId === "string" &&
-      typeof parsed.organizationId === "string" &&
+      (typeof parsed.organizationId === "string" || parsed.organizationId === null) &&
       typeof parsed.userId === "string" &&
       typeof parsed.sessionId === "string" &&
       typeof parsed.userInput === "string"

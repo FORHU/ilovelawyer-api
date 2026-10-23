@@ -1,3 +1,4 @@
+import { firmIdOf } from "../utils/workspace";
 import { Request, Response } from "express";
 import Joi from "joi";
 import SecurityAuditSvc from "../services/security-audit.service";
@@ -52,18 +53,18 @@ function adminOrganizationFilter(organizationId: string | undefined): SecurityAu
 
 export default class SecurityAuditCtrl {
   /** GET /api/organizations/:id/audit-log — the firm's own security audit log, for its Owners
-   * and Admins (requireOrgRole in the route). Scoped to req.organization, never a client value. */
+   * and Admins (requireOrgRole in the route). Scoped to the firm in the URL, never a client value. */
   static async listForOrganization(req: Request, res: Response) {
     const query = validate<QueryFilter>(securityAuditListSchema, req.query);
-    const result = await SecurityAuditSvc.list(toFilter(query, req.organization!.id), query.page!, query.limit!, toSort(query));
+    const result = await SecurityAuditSvc.list(toFilter(query, firmIdOf(req)), query.page!, query.limit!, toSort(query));
     return res.status(200).json(result);
   }
 
   /** GET /api/organizations/:id/audit-log/export — the same filters, as a PDF table. */
   static async exportForOrganization(req: Request, res: Response) {
     const query = validate<QueryFilter>(securityAuditExportSchema, req.query);
-    const organization = await OrganizationRepo.findById(req.organization!.id);
-    const { pdf } = await SecurityAuditSvc.exportPdf(toFilter(query, req.organization!.id), organization?.name ?? "Organization", toSort(query));
+    const organization = await OrganizationRepo.findById(firmIdOf(req));
+    const { pdf } = await SecurityAuditSvc.exportPdf(toFilter(query, firmIdOf(req)), organization?.name ?? "Organization", toSort(query));
     return sendPdf(res, pdf, "audit-log");
   }
 

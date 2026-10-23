@@ -1,10 +1,11 @@
 import BookmarkRepo from "../repositories/bookmark.repository";
 import HttpError from "../utils/http-error";
 import { BookmarkType } from "@prisma/client";
+import type { WorkspaceScope } from "../utils/workspace";
 
 export default class BookmarkSvc {
   static async create(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     data: {
       itemId: string;
@@ -17,28 +18,28 @@ export default class BookmarkSvc {
       facts?: string;
     },
   ) {
-    const existing = await BookmarkRepo.findByItemId(organizationId, data.itemId);
+    const existing = await BookmarkRepo.findByItemId(scope, data.itemId);
     if (existing) throw new HttpError("Item already bookmarked", 409);
-    return BookmarkRepo.create(organizationId, userId, data);
+    return BookmarkRepo.create(scope, userId, data);
   }
 
-  static async list(organizationId: string) {
-    return BookmarkRepo.list(organizationId);
+  static async list(scope: WorkspaceScope) {
+    return BookmarkRepo.list(scope);
   }
 
-  static async getById(id: string, organizationId: string) {
-    const bookmark = await BookmarkRepo.findById(id, organizationId);
+  static async getById(id: string, scope: WorkspaceScope) {
+    const bookmark = await BookmarkRepo.findById(id, scope);
     if (!bookmark) throw new HttpError("Bookmark not found", 404);
     return bookmark;
   }
 
-  static async checkByItemId(organizationId: string, itemId: string) {
-    const row = await BookmarkRepo.findByItemId(organizationId, itemId);
+  static async checkByItemId(scope: WorkspaceScope, itemId: string) {
+    const row = await BookmarkRepo.findByItemId(scope, itemId);
     return { bookmarkId: row?.id ?? null };
   }
 
-  static async delete(id: string, organizationId: string) {
-    const deleted = await BookmarkRepo.delete(id, organizationId);
+  static async delete(id: string, scope: WorkspaceScope) {
+    const deleted = await BookmarkRepo.delete(id, scope);
     if (!deleted) throw new HttpError("Bookmark not found", 404);
   }
 }

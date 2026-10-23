@@ -53,6 +53,12 @@ const swaggerSpec: OAS3Definition = {
           isEmailVerified: { type: "boolean" },
           onboardingCompleted: { type: "boolean", description: "Every product tour finished" },
           setupCompletedAt: { type: "string", format: "date-time", nullable: true, description: "Account setup after sign-up finished or skipped; null sends a lawyer to /onboarding" },
+          soloChosenAt: {
+            type: "string",
+            format: "date-time",
+            nullable: true,
+            description: "When the lawyer chose to work solo (POST /users/me/solo). A solo lawyer has no organization: their work is in their own workspace, reached with no X-Organization-Id (docs/adr/0022)",
+          },
           provider: { type: "string", nullable: true },
           avatarId: { type: "string", nullable: true },
           avatarUrl: {
@@ -831,6 +837,20 @@ const swaggerSpec: OAS3Definition = {
         responses: {
           204: { description: "Account deleted" },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/solo": {
+      post: {
+        tags: ["Users"],
+        summary: "Work solo: no organization is created",
+        description:
+          "Sets soloChosenAt (once; a second call keeps the first date) and returns the user. A solo lawyer's cases, consultations, documents, notes and calendar live in their own workspace, which has no organization: the app sends no X-Organization-Id for it, and its site is the account's own. They can create or join a firm later; what they made solo stays theirs. Lawyers only. See docs/adr/0022.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "The user", content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } },
+          403: { description: "NOT_A_LAWYER", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: { description: "NO_SITE: the account has no site (UK or PH)", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },

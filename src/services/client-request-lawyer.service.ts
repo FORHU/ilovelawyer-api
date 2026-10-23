@@ -13,10 +13,11 @@ import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
 
-/** Who's asking, from the lawyer app's resolved organization (X-Organization-Id). */
+/** Who's asking, from the lawyer app's resolved workspace (X-Organization-Id): their firm, or null
+ * for a solo lawyer, who has no organization and is charged on their own card (docs/adr/0022). */
 export interface LawyerContext {
   userId: string;
-  organizationId: string;
+  organizationId: string | null;
   tenantCode: TenantCode;
 }
 

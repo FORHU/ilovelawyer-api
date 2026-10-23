@@ -95,8 +95,7 @@ export default class AdminSvc {
       // A tenant-scoped account's login link should land on its own subdomain (uk./ph.), not
       // the bare CLIENT_URL[0] — see originForTenantCode. Unresolved (no org yet) falls back
       // to CLIENT_URL[0] there.
-      const membership = await OrganizationMemberRepo.findAnyForUser(userId);
-      const origin = originForTenantCode(membership?.organization.tenant.code);
+      const origin = originForTenantCode((await AuthRepo.findSiteCode(userId)) ?? undefined);
       loginLink = `${origin}/login-link?token=${token}`;
     }
 

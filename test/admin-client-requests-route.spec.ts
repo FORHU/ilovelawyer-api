@@ -212,7 +212,7 @@ describe("admin client requests, fees and refunds", () => {
     it("totals paid fees per organization, leaving out failed charges", async () => {
       const { body } = await summary().expect(200);
       const byId = Object.fromEntries(body.map((r: any) => [r.id, r]));
-      expect(byId[org1]).to.deep.equal({ id: org1, name: "One Law LLP", engagements: 1, perCaseFees: { amountMinor: 5000, currency: "GBP" }, topUps: { amountMinor: 0, currency: "GBP" }, refunds: { amountMinor: 0, currency: "GBP" } });
+      expect(byId[org1]).to.deep.equal({ id: org1, solo: false, name: "One Law LLP", engagements: 1, perCaseFees: { amountMinor: 5000, currency: "GBP" }, topUps: { amountMinor: 0, currency: "GBP" }, refunds: { amountMinor: 0, currency: "GBP" } });
       expect(byId[org2]).to.deep.include({ name: "Two Law LLP", engagements: 1 });
     });
 

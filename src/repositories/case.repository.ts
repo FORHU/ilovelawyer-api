@@ -2,20 +2,25 @@ import prisma from "../lib/prisma";
 import CaseAccess from "../utils/case-access";
 import { CaseStatus, ClientSide, Prisma } from "@prisma/client";
 import { getStableProxyFileUrl } from "../utils/s3";
+import { organizationIdOf, scopeWhere, type WorkspaceScope } from "../utils/workspace";
 
 /** Case Portfolio's sort: Created, Last updated or Last opened (by the requesting user). */
 export type CaseListSort = "created" | "updated" | "opened";
 export type CaseListOrder = "asc" | "desc";
 
-/** The creator, for "Created by" — with whether they're still in the case's organization. */
-function creatorSelect(organizationId: string) {
+/** The creator, for "Created by" — with whether they're still in the case's organization. In a
+ * lawyer's own workspace there is no organization: the creator is the owner, always "in" it, so no
+ * membership is looked up (withCreator then reports them as a member). */
+function creatorSelect(scope: WorkspaceScope) {
   return {
     select: {
       id: true,
       name: true,
       username: true,
       avatar: { select: { s3Key: true } },
-      organizationMemberships: { where: { organizationId, status: "ACCEPTED" as const }, select: { id: true } },
+      organizationMemberships: scope.organizationId
+        ? { where: { organizationId: scope.organizationId, status: "ACCEPTED" as const }, select: { id: true } }
+        : { take: 0, select: { id: true } },
     },
   };
 }
@@ -30,7 +35,7 @@ type CreatorRow = {
 
 /** Swaps the raw `user` relation for `createdBy`: null once the account is deleted, in which case
  * the row's createdByName still names them. */
-function withCreator<T extends { user: CreatorRow | null }>({ user, ...row }: T) {
+function withCreator<T extends { user: CreatorRow | null }>({ user, ...row }: T, ownWorkspace = false) {
   return {
     ...row,
     createdBy: user
@@ -38,7 +43,7 @@ function withCreator<T extends { user: CreatorRow | null }>({ user, ...row }: T)
           id: user.id,
           name: user.name || user.username,
           avatarUrl: user.avatar?.s3Key ? getStableProxyFileUrl(user.avatar.s3Key) : null,
-          isMember: user.organizationMemberships.length > 0,
+          isMember: ownWorkspace || user.organizationMemberships.length > 0,
         }
       : null,
   };
@@ -64,17 +69,18 @@ export interface CaseData {
 
 export default class CaseRepo {
   /**
-   * userId is stamped for "created by" attribution only — every read/update/delete
-   * below scopes by organizationId, since a Case is a shared org resource once created.
+   * userId is stamped for "created by" attribution only — every read/update/delete below scopes
+   * by the workspace (scopeWhere): a firm's case is a shared org resource once created, and an own
+   * workspace's is the owner's.
    * createdByName keeps the creator's name for after their account is gone.
    */
-  static async create(organizationId: string, userId: string, data: CaseData & { caseName: string; confidential?: boolean }) {
+  static async create(scope: WorkspaceScope, userId: string, data: CaseData & { caseName: string; confidential?: boolean }) {
     const { parties, ...caseFields } = data;
     const creator = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, username: true } });
 
     return prisma.case.create({
       data: {
-        organizationId,
+        organizationId: organizationIdOf(scope),
         userId,
         createdByName: creator?.name || creator?.username,
         ...caseFields,
@@ -89,7 +95,7 @@ export default class CaseRepo {
    * raw `views` relation. */
   /** `createdBy` narrows to one creator's cases (the "Created by me" / per-member filter). */
   static async list(
-    organizationId: string,
+    scope: WorkspaceScope,
     userId: string,
     page: number,
     limit: number,
@@ -103,10 +109,10 @@ export default class CaseRepo {
 
     // A confidential case (#346) is left out for anyone walled off from it (D4).
     const where: Prisma.CaseWhereInput = {
-      organizationId,
+      ...scopeWhere(scope),
       status,
       AND: [CaseAccess.visibleWhere(userId)],
-      ...(createdBy ? { userId: createdBy } : {}),
+      ...(createdBy && scope.organizationId ? { userId: createdBy } : {}),
       ...(search
         ? {
             OR: [
@@ -120,7 +126,7 @@ export default class CaseRepo {
     const include = {
       parties: true,
       views: { where: { userId }, select: { lastOpenedAt: true } },
-      user: creatorSelect(organizationId),
+      user: creatorSelect(scope),
     };
 
     let total: number;
@@ -141,7 +147,7 @@ export default class CaseRepo {
       ]);
     }
 
-    const data = rows.map(({ views, ...row }) => ({ ...withCreator(row), lastOpenedAt: views[0]?.lastOpenedAt ?? null }));
+    const data = rows.map(({ views, ...row }) => ({ ...withCreator(row, !scope.organizationId), lastOpenedAt: views[0]?.lastOpenedAt ?? null }));
     return { total, data };
   }
 
@@ -231,20 +237,28 @@ export default class CaseRepo {
    * same original in order (leave, rejoin, leave again makes a second one) — null for the only
    * one. `original` is set while the user is back in the original's organization, so the copy
    * can link to it and say whether it has changed since the copy was made; null when they can't
-   * open it there (not a member, or it was deleted). Other rows get null for both.
+   * open it there (not a member, or it was deleted). Other rows get null for both. Copies are
+   * grouped by the workspace they're in: an organization, or a lawyer's own workspace (no
+   * organization, docs/adr/0022), which is keyed by its lawyer.
    */
   static async withCopyContext<
-    T extends { id: string; organizationId: string | null; copiedFromCaseId: string | null; copiedAt: Date | null },
+    T extends { id: string; organizationId: string | null; userId: string | null; copiedFromCaseId: string | null; copiedAt: Date | null },
   >(rows: T[], userId: string) {
-    const copies = rows.filter((r) => r.copiedFromCaseId && r.organizationId);
+    const workspaceOf = (r: { organizationId: string | null; userId: string | null }) =>
+      r.organizationId ?? (r.userId ? `user:${r.userId}` : null);
+    const copies = rows.filter((r) => r.copiedFromCaseId && workspaceOf(r));
     if (copies.length === 0) return rows.map((r) => ({ ...r, copyVersion: null, original: null }));
 
     const sourceIds = [...new Set(copies.map((c) => c.copiedFromCaseId!))];
-    const portfolioIds = [...new Set(copies.map((c) => c.organizationId!))];
+    const portfolioIds = [...new Set(copies.flatMap((c) => (c.organizationId ? [c.organizationId] : [])))];
+    const ownerIds = [...new Set(copies.flatMap((c) => (!c.organizationId && c.userId ? [c.userId] : [])))];
     const [siblings, originals] = await Promise.all([
       prisma.case.findMany({
-        where: { copiedFromCaseId: { in: sourceIds }, organizationId: { in: portfolioIds } },
-        select: { id: true, copiedFromCaseId: true, organizationId: true },
+        where: {
+          copiedFromCaseId: { in: sourceIds },
+          OR: [{ organizationId: { in: portfolioIds } }, { organizationId: null, userId: { in: ownerIds } }],
+        },
+        select: { id: true, copiedFromCaseId: true, organizationId: true, userId: true },
         orderBy: [{ copiedAt: "asc" }, { createdAt: "asc" }],
       }),
       prisma.case.findMany({
@@ -255,14 +269,14 @@ export default class CaseRepo {
 
     const groups = new Map<string, string[]>();
     for (const s of siblings) {
-      const key = `${s.organizationId}:${s.copiedFromCaseId}`;
+      const key = `${workspaceOf(s)}:${s.copiedFromCaseId}`;
       groups.set(key, [...(groups.get(key) ?? []), s.id]);
     }
     const originalById = new Map(originals.map((o) => [o.id, o]));
 
     return rows.map((r) => {
-      if (!r.copiedFromCaseId || !r.organizationId) return { ...r, copyVersion: null, original: null };
-      const group = groups.get(`${r.organizationId}:${r.copiedFromCaseId}`) ?? [];
+      if (!r.copiedFromCaseId || !workspaceOf(r)) return { ...r, copyVersion: null, original: null };
+      const group = groups.get(`${workspaceOf(r)}:${r.copiedFromCaseId}`) ?? [];
       const number = group.indexOf(r.id) + 1;
       const original = originalById.get(r.copiedFromCaseId);
       return {
@@ -279,12 +293,12 @@ export default class CaseRepo {
     });
   }
 
-  static async findById(id: string, organizationId: string) {
+  static async findById(id: string, scope: WorkspaceScope) {
     const record = await prisma.case.findFirst({
-      where: { id, organizationId },
-      include: { parties: true, user: creatorSelect(organizationId) },
+      where: { id, ...scopeWhere(scope) },
+      include: { parties: true, user: creatorSelect(scope) },
     });
-    return record ? withCreator(record) : null;
+    return record ? withCreator(record, !scope.organizationId) : null;
   }
 
   /** Unscoped by organization — for background AI jobs that already hold a checked caseId. */
@@ -300,10 +314,10 @@ export default class CaseRepo {
     });
   }
 
-  static async update(id: string, organizationId: string, data: CaseData) {
+  static async update(id: string, scope: WorkspaceScope, data: CaseData) {
     const { parties, ...caseFields } = data;
 
-    const existing = await prisma.case.findFirst({ where: { id, organizationId }, select: { id: true } });
+    const existing = await prisma.case.findFirst({ where: { id, ...scopeWhere(scope) }, select: { id: true } });
     if (!existing) return false;
 
     await prisma.$transaction(async (tx) => {
@@ -320,8 +334,8 @@ export default class CaseRepo {
     return true;
   }
 
-  static async delete(id: string, organizationId: string) {
-    const result = await prisma.case.deleteMany({ where: { id, organizationId } });
+  static async delete(id: string, scope: WorkspaceScope) {
+    const result = await prisma.case.deleteMany({ where: { id, ...scopeWhere(scope) } });
     return result.count > 0;
   }
 
@@ -329,8 +343,8 @@ export default class CaseRepo {
    * that flips it. Find-then-update (not updateMany) since this is a genuine user-initiated
    * action with a real 404 to report, not a best-effort background write like markRefreshed
    * below, which deliberately tolerates a case having vanished mid-flight. */
-  static async setStatus(id: string, organizationId: string, status: CaseStatus) {
-    const existing = await prisma.case.findFirst({ where: { id, organizationId }, select: { id: true } });
+  static async setStatus(id: string, scope: WorkspaceScope, status: CaseStatus) {
+    const existing = await prisma.case.findFirst({ where: { id, ...scopeWhere(scope) }, select: { id: true } });
     if (!existing) return null;
     return prisma.case.update({ where: { id }, data: { status }, include: { parties: true } });
   }

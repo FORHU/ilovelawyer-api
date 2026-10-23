@@ -3,6 +3,7 @@ import NotificationSvc from "./notification.service";
 import GoogleCalendarSyncSvc, { GOOGLE_SYNCED_EVENT_FIELDS } from "./google-calendar-sync.service";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import type { WorkspaceScope } from "../utils/workspace";
 
 /** Fields the system itself writes on an event (reminder sent, acknowledgement, Google link) —
  * still allowed once the appointment is past, unlike anything the user would edit. */
@@ -22,7 +23,7 @@ function formatEventDateTime(dateTime: Date): string {
 }
 
 export default class EventSvc {
-  static async list(organizationId: string, userId: string, userEmail: string, filters: {
+  static async list(scope: WorkspaceScope, userId: string, userEmail: string, filters: {
     startRange?: string;
     endRange?: string;
     excludeId?: string;
@@ -30,16 +31,16 @@ export default class EventSvc {
     limitOne?: boolean;
     caseId?: string;
   }) {
-    return EventRepo.findMany(organizationId, userId, userEmail, filters);
+    return EventRepo.findMany(scope, userId, userEmail, filters);
   }
 
-  static async getById(id: string, organizationId: string, userId: string, userEmail: string) {
-    const event = await EventRepo.findById(id, organizationId, userId, userEmail);
+  static async getById(id: string, scope: WorkspaceScope, userId: string, userEmail: string) {
+    const event = await EventRepo.findById(id, scope, userId, userEmail);
     if (!event) throw new HttpError("Event not found", 404);
     return event;
   }
 
-  static async create(organizationId: string, userId: string, body: {
+  static async create(scope: WorkspaceScope, userId: string, body: {
     title?: string;
     type?: string;
     date_time?: string;
@@ -61,7 +62,7 @@ export default class EventSvc {
   }) {
     const endDateTimeSource = body.end_date_time || body.endDateTime;
     assertReminderNotInPast(new Date(body.date_time || body.dateTime || ""), body.reminderLeadMinutes ?? body.reminder_lead_minutes);
-    const event = await EventRepo.create(organizationId, userId, {
+    const event = await EventRepo.create(scope, userId, {
       title: body.title || "Consultation",
       type: body.type || "Meeting",
       dateTime: new Date(body.date_time || body.dateTime || ""),
@@ -82,7 +83,7 @@ export default class EventSvc {
     // (GoogleCalendarPullSvc) writes through EventRepo directly and never creates events.
     NotificationSvc.create({
       userId,
-      organizationId,
+      organizationId: scope.organizationId ?? undefined,
       type: "EVENT_REMINDER",
       title: "Appointment scheduled",
       message: `${event.title} — ${formatEventDateTime(event.dateTime)}`,
@@ -95,7 +96,7 @@ export default class EventSvc {
     return event;
   }
 
-  static async updateById(id: string, organizationId: string, userId: string, userEmail: string, body: any) {
+  static async updateById(id: string, scope: WorkspaceScope, userId: string, userEmail: string, body: any) {
     // A cancelled appointment is only allowed to change its own `status` field (e.g. restoring
     // it back to "pending") — every other field (time, title, notes, etc.) is frozen once
     // cancelled. The frontend already hides the Edit button for cancelled rows, but that's
@@ -107,7 +108,7 @@ export default class EventSvc {
     const userFieldsPresent = Object.keys(body).some((key) => !BOOKKEEPING_FIELDS.has(key));
     let existing: Awaited<ReturnType<typeof EventRepo.findById>> = null;
     if (nonStatusFieldsPresent || userFieldsPresent) {
-      existing = await EventRepo.findById(id, organizationId, userId, userEmail);
+      existing = await EventRepo.findById(id, scope, userId, userEmail);
       if (!existing) throw new HttpError("Event not found", 404);
       if (userFieldsPresent && existing.dateTime.getTime() <= Date.now()) {
         throw new HttpError("Past appointments can't be changed.", 400);
@@ -166,7 +167,7 @@ export default class EventSvc {
     const syncsToGoogle = GOOGLE_SYNCED_EVENT_FIELDS.some((field) => field in data);
     if (syncsToGoogle) data.googleDirtyAt = new Date();
 
-    const result = await EventRepo.updateById(id, organizationId, userId, userEmail, data);
+    const result = await EventRepo.updateById(id, scope, userId, userEmail, data);
     if (result.count === 0) throw new HttpError("Event not found", 404);
 
     // Not awaited; never fails this.
@@ -176,7 +177,7 @@ export default class EventSvc {
       const title = data.title ?? existing!.title;
       NotificationSvc.create({
         userId,
-        organizationId,
+        organizationId: scope.organizationId ?? undefined,
         type: "EVENT_REMINDER",
         title: "Appointment rescheduled",
         message: `${title} — ${formatEventDateTime(data.dateTime)}`,
@@ -186,7 +187,7 @@ export default class EventSvc {
     return { success: true };
   }
 
-  static async updateByGoogleEventId(googleEventId: string, organizationId: string, userId: string, userEmail: string, body: any) {
+  static async updateByGoogleEventId(googleEventId: string, scope: WorkspaceScope, userId: string, userEmail: string, body: any) {
     const data: any = {};
     if (body.status !== undefined) data.status = body.status;
     if (body.google_link !== undefined) data.googleLink = body.google_link;
@@ -196,18 +197,18 @@ export default class EventSvc {
     if (body.client_email !== undefined || body.clientEmail !== undefined) data.clientEmail = body.client_email || body.clientEmail;
     if (body.notes !== undefined) data.notes = body.notes;
 
-    const result = await EventRepo.updateByGoogleEventId(googleEventId, organizationId, userId, userEmail, data);
+    const result = await EventRepo.updateByGoogleEventId(googleEventId, scope, userId, userEmail, data);
     return { success: true, count: result.count };
   }
 
-  static async deleteById(id: string, organizationId: string, userId: string) {
+  static async deleteById(id: string, scope: WorkspaceScope, userId: string) {
     // Read first: the Google copy's id is only on the row being deleted.
     const existing = await EventRepo.findRawById(id);
-    const result = await EventRepo.deleteById(id, organizationId, userId);
+    const result = await EventRepo.deleteById(id, scope, userId);
     if (existing && result.count > 0) void GoogleCalendarSyncSvc.removeDeletedEvent(existing);
   }
 
-  static async deleteByGoogleEventId(googleEventId: string, organizationId: string, userId: string) {
-    await EventRepo.deleteByGoogleEventId(googleEventId, organizationId, userId);
+  static async deleteByGoogleEventId(googleEventId: string, scope: WorkspaceScope, userId: string) {
+    await EventRepo.deleteByGoogleEventId(googleEventId, scope, userId);
   }
 }

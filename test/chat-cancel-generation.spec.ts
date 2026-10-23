@@ -6,6 +6,7 @@
  * statics and emitToUser are monkeypatched, and Chat Wonder is a local `ws` server that sends
  * a couple of chunks and then stays open (a turn that is still generating).
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import { AddressInfo } from "net";
@@ -149,7 +150,7 @@ describe("Stopping a generation", () => {
     const job = ChatSvc.processChatGenerationJob(baseJob);
     await flush(150); // both chunks have streamed by now; the turn is still generating
 
-    const result = await ChatSvc.cancelChatGeneration("org1", "user1", "c1", baseJob.jobId);
+    const result = await ChatSvc.cancelChatGeneration(firmScope("org1"), "user1", "c1", baseJob.jobId);
     await job; // resolves promptly because the abort closed the stream
 
     expect(result.replyStatus).to.equal("CANCELLED");
@@ -168,7 +169,7 @@ describe("Stopping a generation", () => {
   it("chunks that arrive after the Stop are not emitted", async () => {
     const job = ChatSvc.processChatGenerationJob(baseJob);
     await flush(150);
-    await ChatSvc.cancelChatGeneration("org1", "user1", "c1", baseJob.jobId);
+    await ChatSvc.cancelChatGeneration(firmScope("org1"), "user1", "c1", baseJob.jobId);
     const chunksAtStop = emitted.filter((e) => e.event === "chat:chunk").length;
     try {
       sockets[0]?.send("late chunk");
@@ -182,7 +183,7 @@ describe("Stopping a generation", () => {
 
   it("is idempotent: cancelling a turn that is no longer PENDING changes nothing and emits nothing", async () => {
     replyStatus = "DONE";
-    const result = await ChatSvc.cancelChatGeneration("org1", "user1", "c1", baseJob.jobId);
+    const result = await ChatSvc.cancelChatGeneration(firmScope("org1"), "user1", "c1", baseJob.jobId);
     expect(result).to.deep.equal({ messageId: baseJob.jobId, replyStatus: "DONE" });
     expect(created).to.deep.equal([]);
     expect(emitted).to.deep.equal([]);
@@ -191,7 +192,7 @@ describe("Stopping a generation", () => {
   it("with nothing streamed yet, saves no assistant message", async () => {
     ChatRepo.findReplyState = async () =>
       ({ id: "m-user-1", consultationId: "c1", role: "user", userId: "user1", replyStatus, pendingReplyContent: null }) as any;
-    const result = await ChatSvc.cancelChatGeneration("org1", "user1", "c1", baseJob.jobId);
+    const result = await ChatSvc.cancelChatGeneration(firmScope("org1"), "user1", "c1", baseJob.jobId);
     expect(result.replyStatus).to.equal("CANCELLED");
     expect(result.assistantMessageId).to.equal(undefined);
     expect(created).to.deep.equal([]);
@@ -208,7 +209,7 @@ describe("Stopping a generation", () => {
     ChatRepo.findConsultationById = async () => null;
     let err: Error | undefined;
     try {
-      await ChatSvc.cancelChatGeneration("org1", "user1", "c1", baseJob.jobId);
+      await ChatSvc.cancelChatGeneration(firmScope("org1"), "user1", "c1", baseJob.jobId);
     } catch (e) {
       err = e as Error;
     }
@@ -217,7 +218,7 @@ describe("Stopping a generation", () => {
     ChatRepo.findConsultationById = async () => ({ id: "c1", organizationId: "other-org" }) as any;
     err = undefined;
     try {
-      await ChatSvc.cancelChatGeneration("org1", "user1", "c1", baseJob.jobId);
+      await ChatSvc.cancelChatGeneration(firmScope("org1"), "user1", "c1", baseJob.jobId);
     } catch (e) {
       err = e as Error;
     }
@@ -228,7 +229,7 @@ describe("Stopping a generation", () => {
       ({ id: "x", consultationId: "c2", role: "user", userId: "u", replyStatus: "PENDING", pendingReplyContent: null }) as any;
     err = undefined;
     try {
-      await ChatSvc.cancelChatGeneration("org1", "user1", "c1", "x");
+      await ChatSvc.cancelChatGeneration(firmScope("org1"), "user1", "c1", "x");
     } catch (e) {
       err = e as Error;
     }

@@ -6,6 +6,7 @@
  * refuse "walled" and allow "allowed", and each path is checked to consult it — with the acting
  * user — before handing anything back. No live Postgres: repos and prisma are monkeypatched.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import prisma from "../src/lib/prisma";
@@ -67,7 +68,7 @@ describe("#346 — confidential cases don't leak", () => {
       stub(prisma.case, "findMany", (args: any) => (wheres.push(args.where), Promise.resolve([])));
       stub(prisma, "$transaction", (ops: Promise<unknown>[]) => Promise.all(ops));
 
-      await CaseRepo.list("org-1", "user-1", 1, 20);
+      await CaseRepo.list(firmScope("org-1"), "user-1", 1, 20);
 
       expect(wheres).to.have.length(2);
       for (const where of wheres) {
@@ -79,17 +80,17 @@ describe("#346 — confidential cases don't leak", () => {
     it("CaseSvc.getById 404s for a walled user before reading the case", async () => {
       let read = false;
       stub(CaseRepo, "findById", async () => ((read = true), { id: "case-1" }));
-      const err = await rejection(CaseSvc.getById("case-1", "org-1", WALLED));
+      const err = await rejection(CaseSvc.getById("case-1", firmScope("org-1"), WALLED));
       expect(err.statusCode).to.equal(404);
       expect(read).to.equal(false);
     });
 
     it("CaseSvc.getById checks as the acting user and still scopes to the organization", async () => {
-      stub(CaseRepo, "findById", async (id: string, organizationId: string) => (organizationId === "org-1" ? { id } : null));
+      stub(CaseRepo, "findById", async (id: string, { organizationId }: { organizationId: string }) => (organizationId === "org-1" ? { id } : null));
       stub(CaseRepo, "withCopyContext", async (rows: unknown[]) => rows);
-      await CaseSvc.getById("case-1", "org-1", ALLOWED);
+      await CaseSvc.getById("case-1", firmScope("org-1"), ALLOWED);
       expect(checks).to.deep.equal([{ caseId: "case-1", userId: ALLOWED }]);
-      const err = await rejection(CaseSvc.getById("case-1", "org-2", ALLOWED));
+      const err = await rejection(CaseSvc.getById("case-1", firmScope("org-2"), ALLOWED));
       expect(err.statusCode).to.equal(404);
     });
 
@@ -99,7 +100,7 @@ describe("#346 — confidential cases don't leak", () => {
       stub(CaseRepo, "markOpened", async () => {
         stamped = true;
       });
-      const err = await rejection(CaseSvc.markOpened("case-1", "org-1", WALLED));
+      const err = await rejection(CaseSvc.markOpened("case-1", firmScope("org-1"), WALLED));
       expect(err.statusCode).to.equal(404);
       expect(stamped).to.equal(false);
     });
@@ -112,7 +113,7 @@ describe("#346 — confidential cases don't leak", () => {
     it("the org-wide list leaves out documents of cases the user can't open", async () => {
       let where: any;
       stub(prisma.document, "findMany", async (args: any) => ((where = args.where), []));
-      await DocumentRepo.list("org-1", "ACTIVE", "user-1");
+      await DocumentRepo.list(firmScope("org-1"), "ACTIVE", "user-1");
       expect(where.AND).to.deep.equal([
         { OR: [{ organizationId: "org-1" }, { organizationId: null, userId: "user-1" }] },
         { OR: [{ caseId: null }, { case: CaseAccess.visibleWhere("user-1") }] },
@@ -122,20 +123,20 @@ describe("#346 — confidential cases don't leak", () => {
     it("listByCase 404s for a walled user before listing", async () => {
       let listed = false;
       stub(DocumentRepo, "listByCase", async () => ((listed = true), []));
-      const err = await rejection(DocumentSvc.listByCase("org-1", "case-1", WALLED));
+      const err = await rejection(DocumentSvc.listByCase(firmScope("org-1"), "case-1", WALLED));
       expect(err.statusCode).to.equal(404);
       expect(listed).to.equal(false);
     });
 
     it("getById and the text preview 404 for a walled user on a case document", async () => {
       stub(DocumentRepo, "findById", async () => caseDoc);
-      expect((await rejection(DocumentSvc.getById("doc-1", "org-1", WALLED))).statusCode).to.equal(404);
-      expect((await rejection(DocumentSvc.getTextPreview("doc-1", "org-1", WALLED))).statusCode).to.equal(404);
+      expect((await rejection(DocumentSvc.getById("doc-1", firmScope("org-1"), WALLED))).statusCode).to.equal(404);
+      expect((await rejection(DocumentSvc.getTextPreview("doc-1", firmScope("org-1"), WALLED))).statusCode).to.equal(404);
     });
 
     it("a document with no case needs no case check", async () => {
       stub(DocumentRepo, "findById", async () => looseDoc);
-      await DocumentSvc.getById("doc-2", "org-1", WALLED);
+      await DocumentSvc.getById("doc-2", firmScope("org-1"), WALLED);
       expect(checks).to.deep.equal([]);
     });
   });
@@ -146,7 +147,7 @@ describe("#346 — confidential cases don't leak", () => {
     it("the org-wide list leaves out transcriptions of cases the user can't open", async () => {
       let where: any;
       stub(prisma.transcription, "findMany", async (args: any) => ((where = args.where), []));
-      await TranscriptionRepo.findAllByUser("org-1", "user-1");
+      await TranscriptionRepo.findAllByUser(firmScope("org-1"), "user-1");
       expect(where.organizationId).to.equal("org-1");
       expect(where.OR).to.deep.equal([{ caseId: null }, { case: CaseAccess.visibleWhere("user-1") }]);
     });
@@ -154,7 +155,7 @@ describe("#346 — confidential cases don't leak", () => {
     it("listByCase 404s for a walled user before listing", async () => {
       let listed = false;
       stub(TranscriptionRepo, "findAllByCase", async () => ((listed = true), []));
-      const err = await rejection(TranscriptionSvc.listByCase("org-1", "case-1", WALLED));
+      const err = await rejection(TranscriptionSvc.listByCase(firmScope("org-1"), "case-1", WALLED));
       expect(err.statusCode).to.equal(404);
       expect(listed).to.equal(false);
     });
@@ -165,12 +166,12 @@ describe("#346 — confidential cases don't leak", () => {
       stub(TranscriptionRepo, "update", async () => ((wrote = true), caseItem));
       stub(TranscriptionRepo, "delete", async () => ((wrote = true), caseItem));
       for (const call of [
-        () => TranscriptionSvc.getById("tr-1", "org-1", WALLED),
-        () => TranscriptionSvc.update("tr-1", "org-1", WALLED, { title: "x" }),
-        () => TranscriptionSvc.delete("tr-1", "org-1", WALLED),
-        () => TranscriptionSvc.startBatchJob("tr-1", "org-1", WALLED),
-        () => TranscriptionSvc.pollJobStatus("tr-1", "org-1", WALLED),
-        () => TranscriptionSvc.chunk("tr-1", "org-1", WALLED),
+        () => TranscriptionSvc.getById("tr-1", firmScope("org-1"), WALLED),
+        () => TranscriptionSvc.update("tr-1", firmScope("org-1"), WALLED, { title: "x" }),
+        () => TranscriptionSvc.delete("tr-1", firmScope("org-1"), WALLED),
+        () => TranscriptionSvc.startBatchJob("tr-1", firmScope("org-1"), WALLED),
+        () => TranscriptionSvc.pollJobStatus("tr-1", firmScope("org-1"), WALLED),
+        () => TranscriptionSvc.chunk("tr-1", firmScope("org-1"), WALLED),
       ]) {
         expect((await rejection(call())).statusCode).to.equal(404);
       }
@@ -184,7 +185,7 @@ describe("#346 — confidential cases don't leak", () => {
     it("a consultation's creator loses it once its case is confidential and walled to them", async () => {
       stub(ChatRepo, "findConsultationById", async () => consultation);
       stub(CaseAccess, "isConfidential", async () => true);
-      const err = await rejection(ChatSvc.assertConsultationAccess("org-1", WALLED, "c-1"));
+      const err = await rejection(ChatSvc.assertConsultationAccess(firmScope("org-1"), WALLED, "c-1"));
       expect(err.statusCode).to.equal(404);
     });
 
@@ -192,14 +193,14 @@ describe("#346 — confidential cases don't leak", () => {
       stub(ChatRepo, "findConsultationById", async () => ({ ...consultation, userId: "someone-else" }));
       stub(ParticipantRepo, "exists", async () => true);
       stub(CaseAccess, "isConfidential", async () => true);
-      const err = await rejection(ChatSvc.assertConsultationAccess("org-1", WALLED, "c-1"));
+      const err = await rejection(ChatSvc.assertConsultationAccess(firmScope("org-1"), WALLED, "c-1"));
       expect(err.statusCode).to.equal(404);
     });
 
     it("on an ordinary case the creator keeps their consultation, as before", async () => {
       stub(ChatRepo, "findConsultationById", async () => consultation);
       stub(CaseAccess, "isConfidential", async () => false);
-      const result = await ChatSvc.assertConsultationAccess("org-1", WALLED, "c-1");
+      const result = await ChatSvc.assertConsultationAccess(firmScope("org-1"), WALLED, "c-1");
       expect(result.id).to.equal("c-1");
     });
   });

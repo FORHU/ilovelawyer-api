@@ -6,6 +6,7 @@
  * CaseAccess and CaseSvc are monkeypatched on their module objects, same idiom as
  * test/chat-list-messages-download-link.spec.ts.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import ChatSvc from "../src/services/chat.service";
@@ -146,17 +147,17 @@ describe("Consultation access", () => {
   describe("reading a case-linked Consultation", () => {
     it("lets the creator, a colleague on the Case and an invited participant read it", async () => {
       participants.add("guest");
-      expect(await statusOf(ChatSvc.listMessages("org-1", "creator", "c1"))).to.equal("ok");
-      expect(await statusOf(ChatSvc.listMessages("org-1", "colleague", "c1"))).to.equal("ok");
-      expect(await statusOf(ChatSvc.listMessages("org-1", "guest", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.listMessages(firmScope("org-1"), "creator", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.listMessages(firmScope("org-1"), "colleague", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.listMessages(firmScope("org-1"), "guest", "c1"))).to.equal("ok");
     });
 
     it("404s for an org member who can't open the Case", async () => {
-      expect(await statusOf(ChatSvc.listMessages("org-1", "outsider", "c1"))).to.equal(404);
+      expect(await statusOf(ChatSvc.listMessages(firmScope("org-1"), "outsider", "c1"))).to.equal(404);
     });
 
     it("404s across organizations even for the creator", async () => {
-      expect(await statusOf(ChatSvc.listMessages("org-2", "creator", "c1"))).to.equal(404);
+      expect(await statusOf(ChatSvc.listMessages(firmScope("org-2"), "creator", "c1"))).to.equal(404);
     });
   });
 
@@ -166,8 +167,8 @@ describe("Consultation access", () => {
     });
 
     it("lets the creator read and rename it", async () => {
-      expect(await statusOf(ChatSvc.listMessages("org-1", "creator", "c1"))).to.equal("ok");
-      expect(await statusOf(ChatSvc.renameConsultation("org-1", "creator", "c1", "Remedies"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.listMessages(firmScope("org-1"), "creator", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.renameConsultation(firmScope("org-1"), "creator", "c1", "Remedies"))).to.equal("ok");
     });
 
     it("stays reachable by its creator from any workspace — joining an organization doesn't hide it", async () => {
@@ -176,9 +177,9 @@ describe("Consultation access", () => {
       for (const stored of ["personal-ws", null]) {
         consultation = { ...STANDALONE_CONSULTATION, organizationId: stored };
         for (const workspace of ["org-1", "org-2", "joined-org"]) {
-          expect(await statusOf(ChatSvc.listMessages(workspace, "creator", "c1"))).to.equal("ok");
-          expect(await statusOf(ChatSvc.renameConsultation(workspace, "creator", "c1", "Remedies"))).to.equal("ok");
-          expect(await statusOf(ChatSvc.archiveConsultation(workspace, "creator", "c1"))).to.equal("ok");
+          expect(await statusOf(ChatSvc.listMessages(firmScope(workspace), "creator", "c1"))).to.equal("ok");
+          expect(await statusOf(ChatSvc.renameConsultation(firmScope(workspace), "creator", "c1", "Remedies"))).to.equal("ok");
+          expect(await statusOf(ChatSvc.archiveConsultation(firmScope(workspace), "creator", "c1"))).to.equal("ok");
         }
       }
     });
@@ -186,18 +187,18 @@ describe("Consultation access", () => {
     it("is still 404 for someone else, whichever workspace they open it from", async () => {
       consultation = { ...STANDALONE_CONSULTATION, organizationId: null };
       for (const workspace of ["org-1", "org-2"]) {
-        expect(await statusOf(ChatSvc.listMessages(workspace, "colleague", "c1"))).to.equal(404);
+        expect(await statusOf(ChatSvc.listMessages(firmScope(workspace), "colleague", "c1"))).to.equal(404);
       }
     });
 
     it("is created with no organization, whichever workspace is active", async () => {
-      const created: any = await ChatSvc.createConsultation("org-1", "creator", "Remedies");
+      const created: any = await ChatSvc.createConsultation(firmScope("org-1"), "creator", "Remedies");
       expect(created.organizationId).to.equal(null);
       expect(created.caseId).to.equal(undefined);
     });
 
     it("lists by user alone, so the same chats show in every workspace", async () => {
-      await ChatSvc.listConsultations("joined-org", "creator");
+      await ChatSvc.listConsultations(firmScope("joined-org"), "creator");
       expect(listedWith).to.deep.equal(["joined-org", undefined, "ACTIVE", "creator"]);
     });
 
@@ -205,18 +206,18 @@ describe("Consultation access", () => {
       // Roles don't enter into it: an Owner or Admin is just another user here.
       for (const other of ["colleague", "org-admin", "org-owner"]) {
         const attempts: Promise<unknown>[] = [
-          ChatSvc.listMessages("org-1", other, "c1"),
-          ChatSvc.renameConsultation("org-1", other, "c1", "Remedies"),
-          ChatSvc.archiveConsultation("org-1", other, "c1"),
-          ChatSvc.unarchiveConsultation("org-1", other, "c1"),
-          ChatSvc.deleteConsultation("org-1", other, "c1"),
-          ChatSvc.deleteMessage("org-1", other, "c1", "m1"),
-          ChatSvc.enqueueChatGeneration("org-1", "PH" as any, other, "c1", "session", "hello"),
-          ChatSvc.cancelChatGeneration("org-1", other, "c1", "m1"),
-          ChatSvc.getRelatedCases("org-1", other, "PH" as any, "c1"),
-          ChatSvc.startAudioOverviewAudio("org-1", other, "c1", "m1"),
-          ChatSvc.pollAudioOverviewAudio("org-1", other, "c1", "m1"),
-          ChatSvc.assertConsultationAccess("org-1", other, "c1"),
+          ChatSvc.listMessages(firmScope("org-1"), other, "c1"),
+          ChatSvc.renameConsultation(firmScope("org-1"), other, "c1", "Remedies"),
+          ChatSvc.archiveConsultation(firmScope("org-1"), other, "c1"),
+          ChatSvc.unarchiveConsultation(firmScope("org-1"), other, "c1"),
+          ChatSvc.deleteConsultation(firmScope("org-1"), other, "c1"),
+          ChatSvc.deleteMessage(firmScope("org-1"), other, "c1", "m1"),
+          ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, other, "c1", "session", "hello"),
+          ChatSvc.cancelChatGeneration(firmScope("org-1"), other, "c1", "m1"),
+          ChatSvc.getRelatedCases(firmScope("org-1"), other, "PH" as any, "c1"),
+          ChatSvc.startAudioOverviewAudio(firmScope("org-1"), other, "c1", "m1"),
+          ChatSvc.pollAudioOverviewAudio(firmScope("org-1"), other, "c1", "m1"),
+          ChatSvc.assertConsultationAccess(firmScope("org-1"), other, "c1"),
         ];
         for (const attempt of attempts) expect(await statusOf(attempt)).to.equal(404);
       }
@@ -226,13 +227,13 @@ describe("Consultation access", () => {
 
     it("gives a leftover participant (from before sharing was Case-only) no access", async () => {
       participants.add("guest");
-      expect(await statusOf(ChatSvc.listMessages("org-1", "guest", "c1"))).to.equal(404);
+      expect(await statusOf(ChatSvc.listMessages(firmScope("org-1"), "guest", "c1"))).to.equal(404);
     });
 
     it("lists only the caller's own standalone Consultations", async () => {
-      await ChatSvc.listConsultations("org-1", "colleague");
+      await ChatSvc.listConsultations(firmScope("org-1"), "colleague");
       expect(listedWith).to.deep.equal(["org-1", undefined, "ACTIVE", "colleague"]);
-      await ChatSvc.listConsultations("org-1", "colleague", undefined, "ARCHIVED");
+      await ChatSvc.listConsultations(firmScope("org-1"), "colleague", undefined, "ARCHIVED");
       expect(listedWith).to.deep.equal(["org-1", undefined, "ARCHIVED", "colleague"]);
     });
 
@@ -257,32 +258,32 @@ describe("Consultation access", () => {
   });
 
   it("rename follows the same rule as reading", async () => {
-    expect(await statusOf(ChatSvc.renameConsultation("org-1", "colleague", "c1", "Remedies"))).to.equal("ok");
-    expect(await statusOf(ChatSvc.renameConsultation("org-1", "outsider", "c1", "Remedies"))).to.equal(404);
+    expect(await statusOf(ChatSvc.renameConsultation(firmScope("org-1"), "colleague", "c1", "Remedies"))).to.equal("ok");
+    expect(await statusOf(ChatSvc.renameConsultation(firmScope("org-1"), "outsider", "c1", "Remedies"))).to.equal(404);
   });
 
   describe("archiving and restoring", () => {
     it("lets the creator archive their own and restore it", async () => {
-      expect(await statusOf(ChatSvc.archiveConsultation("org-1", "creator", "c1"))).to.equal("ok");
-      expect(await statusOf(ChatSvc.unarchiveConsultation("org-1", "creator", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.archiveConsultation(firmScope("org-1"), "creator", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.unarchiveConsultation(firmScope("org-1"), "creator", "c1"))).to.equal("ok");
       expect(statusChanges).to.deep.equal([["c1", "ARCHIVED"], ["c1", "ACTIVE"]]);
     });
 
     it("lets a case editor archive a colleague's", async () => {
       caseEditors.add("editor");
-      expect(await statusOf(ChatSvc.archiveConsultation("org-1", "editor", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.archiveConsultation(firmScope("org-1"), "editor", "c1"))).to.equal("ok");
     });
 
     it("refuses a read-only colleague (403) and an outsider (404), changing nothing", async () => {
-      expect(await statusOf(ChatSvc.archiveConsultation("org-1", "colleague", "c1"))).to.equal(403);
-      expect(await statusOf(ChatSvc.archiveConsultation("org-1", "outsider", "c1"))).to.equal(404);
-      expect(await statusOf(ChatSvc.unarchiveConsultation("org-1", "colleague", "c1"))).to.equal(403);
+      expect(await statusOf(ChatSvc.archiveConsultation(firmScope("org-1"), "colleague", "c1"))).to.equal(403);
+      expect(await statusOf(ChatSvc.archiveConsultation(firmScope("org-1"), "outsider", "c1"))).to.equal(404);
+      expect(await statusOf(ChatSvc.unarchiveConsultation(firmScope("org-1"), "colleague", "c1"))).to.equal(403);
       expect(statusChanges).to.deep.equal([]);
     });
 
     it("refuses to archive while a reply is still generating (409 REPLY_GENERATING)", async () => {
       generating = true;
-      const err = await ChatSvc.archiveConsultation("org-1", "creator", "c1").catch((e) => e);
+      const err = await ChatSvc.archiveConsultation(firmScope("org-1"), "creator", "c1").catch((e) => e);
       expect(err).to.be.instanceOf(HttpError);
       expect(err.statusCode).to.equal(409);
       expect(err.code).to.equal("REPLY_GENERATING");
@@ -291,21 +292,21 @@ describe("Consultation access", () => {
 
     it("takes no new messages while archived", async () => {
       consultation = { ...CASE_CONSULTATION, status: "ARCHIVED" };
-      const send = ChatSvc.enqueueChatGeneration("org-1", "PH" as any, "creator", "c1", "session", "hello");
+      const send = ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, "creator", "c1", "session", "hello");
       expect(await statusOf(send)).to.equal(409);
     });
   });
 
   describe("deleting permanently (scheduled after the grace period)", () => {
     it("refuses a consultation that isn't archived yet (409), deleting nothing", async () => {
-      expect(await statusOf(ChatSvc.deleteConsultation("org-1", "creator", "c1"))).to.equal(409);
+      expect(await statusOf(ChatSvc.deleteConsultation(firmScope("org-1"), "creator", "c1"))).to.equal(409);
       expect(deleted).to.deep.equal([]);
     });
 
     it("lets the creator schedule their own once archived, 30 days out", async () => {
       consultation = { ...CASE_CONSULTATION, status: "ARCHIVED" };
       const before = Date.now();
-      const { deletionScheduledFor } = await ChatSvc.deleteConsultation("org-1", "creator", "c1");
+      const { deletionScheduledFor } = await ChatSvc.deleteConsultation(firmScope("org-1"), "creator", "c1");
       expect(deleted).to.deep.equal(["c1"]);
       const days = (deletionScheduledFor.getTime() - before) / (24 * 60 * 60 * 1000);
       expect(days).to.be.closeTo(30, 0.01);
@@ -314,54 +315,54 @@ describe("Consultation access", () => {
 
     it("refuses scheduling it twice (409)", async () => {
       consultation = { ...CASE_CONSULTATION, status: "FOR_DELETION", deletionRequestedAt: new Date() };
-      expect(await statusOf(ChatSvc.deleteConsultation("org-1", "creator", "c1"))).to.equal(409);
+      expect(await statusOf(ChatSvc.deleteConsultation(firmScope("org-1"), "creator", "c1"))).to.equal(409);
       expect(deleted).to.deep.equal([]);
     });
 
     it("won't re-archive one scheduled for deletion (that would cancel it), but restores it", async () => {
       consultation = { ...CASE_CONSULTATION, status: "FOR_DELETION", deletionRequestedAt: new Date() };
-      expect(await statusOf(ChatSvc.archiveConsultation("org-1", "creator", "c1"))).to.equal(409);
-      expect(await statusOf(ChatSvc.unarchiveConsultation("org-1", "creator", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.archiveConsultation(firmScope("org-1"), "creator", "c1"))).to.equal(409);
+      expect(await statusOf(ChatSvc.unarchiveConsultation(firmScope("org-1"), "creator", "c1"))).to.equal("ok");
       expect(statusChanges).to.deep.equal([["c1", "ACTIVE"]]);
     });
 
     it("takes no new messages while scheduled for deletion", async () => {
       consultation = { ...CASE_CONSULTATION, status: "FOR_DELETION", deletionRequestedAt: new Date() };
-      const send = ChatSvc.enqueueChatGeneration("org-1", "PH" as any, "creator", "c1", "session", "hello");
+      const send = ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, "creator", "c1", "session", "hello");
       expect(await statusOf(send)).to.equal(409);
     });
 
     it("lets a case editor delete a colleague's archived one", async () => {
       consultation = { ...CASE_CONSULTATION, status: "ARCHIVED" };
       caseEditors.add("editor");
-      expect(await statusOf(ChatSvc.deleteConsultation("org-1", "editor", "c1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.deleteConsultation(firmScope("org-1"), "editor", "c1"))).to.equal("ok");
     });
 
     it("refuses a read-only colleague (403) and an outsider (404), deleting nothing", async () => {
       consultation = { ...CASE_CONSULTATION, status: "ARCHIVED" };
-      expect(await statusOf(ChatSvc.deleteConsultation("org-1", "colleague", "c1"))).to.equal(403);
-      expect(await statusOf(ChatSvc.deleteConsultation("org-1", "outsider", "c1"))).to.equal(404);
+      expect(await statusOf(ChatSvc.deleteConsultation(firmScope("org-1"), "colleague", "c1"))).to.equal(403);
+      expect(await statusOf(ChatSvc.deleteConsultation(firmScope("org-1"), "outsider", "c1"))).to.equal(404);
       expect(deleted).to.deep.equal([]);
     });
   });
 
   describe("listing and creating on a Case", () => {
     it("lists a Case's Consultations only for someone who can open the Case", async () => {
-      expect(await statusOf(ChatSvc.listConsultations("org-1", "colleague", "case-1"))).to.equal("ok");
-      expect(await statusOf(ChatSvc.listConsultations("org-1", "outsider", "case-1"))).to.equal(404);
-      expect(await statusOf(ChatSvc.listConsultations("org-1", "outsider"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.listConsultations(firmScope("org-1"), "colleague", "case-1"))).to.equal("ok");
+      expect(await statusOf(ChatSvc.listConsultations(firmScope("org-1"), "outsider", "case-1"))).to.equal(404);
+      expect(await statusOf(ChatSvc.listConsultations(firmScope("org-1"), "outsider"))).to.equal("ok");
     });
 
     it("lists every Consultation on the Case, not just the caller's own", async () => {
-      await ChatSvc.listConsultations("org-1", "colleague", "case-1");
+      await ChatSvc.listConsultations(firmScope("org-1"), "colleague", "case-1");
       expect(listedWith).to.deep.equal(["org-1", "case-1", "ACTIVE", undefined]);
     });
 
     it("creates on a Case only for someone who can open it, and passes the draft's title through", async () => {
-      const created: any = await ChatSvc.createConsultation("org-1", "colleague", "Remedies", "case-1");
+      const created: any = await ChatSvc.createConsultation(firmScope("org-1"), "colleague", "Remedies", "case-1");
       // A case's consultation lives with the case's organization.
       expect(created).to.include({ userId: "colleague", title: "Remedies", caseId: "case-1", organizationId: "org-1" });
-      expect(await statusOf(ChatSvc.createConsultation("org-1", "outsider", undefined, "case-1"))).to.equal(404);
+      expect(await statusOf(ChatSvc.createConsultation(firmScope("org-1"), "outsider", undefined, "case-1"))).to.equal(404);
     });
   });
 });

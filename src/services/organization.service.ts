@@ -38,10 +38,10 @@ function blanksToNull<T extends Record<string, unknown>>(data: T): T {
 }
 
 export default class OrganizationSvc {
-  /** `personal` is onboarding's "Skip for now": a private workspace the app never presents as
-   * an organization (see Organization.isPersonal). A real organization is always a new one —
-   * the personal workspace stays behind as the user's portfolio, so cases made solo never
-   * become the organization's (see getPortfolio). */
+  /** Creates a firm. `personal` is a client-app account's private workspace, which the app never
+   * presents as an organization (see Organization.isPersonal); lawyers never get one — a solo
+   * lawyer has no organization at all (docs/adr/0022). A firm is always a new organization, and
+   * what its creator made solo stays in their own workspace (see getPortfolio). */
   static async create(
     userId: string,
     name: string,
@@ -62,6 +62,11 @@ export default class OrganizationSvc {
     }
 
     if (personal) {
+      // A solo lawyer has no organization at all (docs/adr/0022): Solo is POST /users/me/solo. A
+      // personal workspace is only for client-app accounts (ClientCaseSvc.workspaceFor).
+      if ((await AuthRepo.findById(userId))?.role === "LAWYER") {
+        throw new HttpError("Solo lawyers work without an organization. Choose Solo instead.", 400, "SOLO_HAS_NO_ORGANIZATION");
+      }
       // Idempotent — a retried Skip just returns the workspace they already have.
       if (inPersonal) return OrganizationRepo.activatePersonal(existing!.organizationId, userId, { addMember: false });
       const dormant = await OrganizationRepo.findDormantPersonal(userId, tenantId);
@@ -87,29 +92,50 @@ export default class OrganizationSvc {
     return org;
   }
 
-  /** The caller's portfolio: their personal workspace, which holds the cases they made solo and
-   * the copies they keep of cases they made in organizations they've left. Created on demand,
-   * in their current organization's tenant. While they're in an organization they reach it
-   * without being its member (see requireMembership); if they're in it, it's their workspace. */
-  static async getPortfolio(userId: string) {
-    const current = await OrganizationMemberRepo.findAnyForUser(userId);
-    if (!current) throw new HttpError("Join or create a workspace first", 409);
-    const portfolio = current.organization.isPersonal
-      ? await OrganizationRepo.findById(current.organizationId)
-      : await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
-    if (!portfolio) throw new HttpError("Organization not found", 404);
-    const tenant = { code: current.organization.tenant.code };
-    const copies = await CaseCopyRepo.listUnfinishedForUser(userId, portfolio.id);
-    return { ...portfolio, tenant, role: OrganizationRole.OWNER, copies };
+  /**
+   * Undoes a firm its founder just made, during account setup: they went back to choose Solo or Law
+   * firm again. Only while their setup isn't finished, only by the one who created it, only with
+   * nobody else in it and nothing made in it yet. Then nothing is lost, so it's deleted outright
+   * (not archived for 30 days, like a firm its last member leaves), with the invites they sent.
+   * They're left with no organization, back at the choice.
+   */
+  static async discardDuringSetup(organizationId: string, userId: string) {
+    const [user, organization, members] = await Promise.all([
+      AuthRepo.findById(userId),
+      OrganizationRepo.findById(organizationId),
+      OrganizationMemberRepo.list(organizationId),
+    ]);
+    if (!organization || organization.isPersonal || organization.createdById !== userId) {
+      throw new HttpError("Organization not found", 404);
+    }
+    if (!user || user.setupCompletedAt) {
+      throw new HttpError("A firm can only be undone during account setup. Leave it from the Organization page instead.", 409, "SETUP_FINISHED");
+    }
+    if (members.some((m) => m.userId !== userId && m.status === OrganizationMemberStatus.ACCEPTED)) {
+      throw new HttpError("Someone has already joined this firm.", 409, "FIRM_HAS_MEMBERS");
+    }
+    if (await OrganizationRepo.hasWork(organizationId)) {
+      throw new HttpError("This firm already has work in it.", 409, "FIRM_HAS_WORK");
+    }
+    await OrganizationRepo.deleteEmpty(organizationId);
+    await SecurityAuditSvc.record({
+      action: "org.deleted",
+      actorId: userId,
+      targetType: "organization",
+      targetId: organizationId,
+      targetName: organization.name,
+      payload: { reason: "discarded_during_setup" },
+    });
   }
 
-  /** The user's personal workspace in `tenantId`, made (without a membership) if they have none. */
-  private static async ensurePersonal(userId: string, tenantId: string) {
-    const existing = await OrganizationRepo.findPersonal(userId, tenantId);
-    if (existing) return existing;
-    const user = await AuthRepo.findById(userId);
-    const name = user?.name || user?.username || "Personal workspace";
-    return OrganizationRepo.createPersonalWithoutMember(userId, name, await OrganizationSvc.generateUniqueSlug(name), tenantId);
+  /** The caller's own workspace ("My work"): the cases they made solo and the copies they keep of
+   * cases they made in firms they've left. It has no organization (docs/adr/0022), so there's
+   * nothing to create: it's reached with no X-Organization-Id. Its site is the account's own. */
+  static async getPortfolio(userId: string) {
+    const site = await OrganizationRepo.findOwnSite(userId);
+    if (!site) throw new HttpError("Your account has no site (UK or PH).", 409, "NO_SITE");
+    const copies = await CaseCopyRepo.listUnfinishedForUser(userId, null);
+    return { own: true as const, tenant: { code: site }, role: OrganizationRole.OWNER, copies };
   }
 
   private static async generateUniqueSlug(name: string): Promise<string> {
@@ -385,14 +411,14 @@ export default class OrganizationSvc {
     }
 
     await this.assertCanLeave(current.organizationId, current.role);
-    const portfolio = await OrganizationSvc.ensurePersonal(userId, current.organization.tenantId);
     let archived = false;
     const member = await OrganizationInviteRepo.accept(invite, current, async (tx) => {
+      // Their work in the firm they're leaving is copied to their own workspace (no organization).
       await CaseCopyRepo.carryOverIn(tx, {
         sourceOrganizationId: current.organizationId,
         sourceOrganizationName: current.organization.name,
         userId,
-        targetOrganizationId: portfolio.id,
+        targetOrganizationId: null,
       });
       archived = await OrganizationRepo.archiveIfEmptyIn(tx, current.organizationId, userId);
     });
@@ -428,11 +454,6 @@ export default class OrganizationSvc {
       payload: { role: invite.role },
     });
     await AuditSvc.record({ action: AuditAction.OrgInviteDeclined, actorId: userId, payload: { organizationId } });
-    // Invites used to park a personal workspace when sent (before 20261007150000_organization_invites)
-    // — someone declining one of those gets it back instead of being left with no workspace.
-    if (await OrganizationMemberRepo.findAnyForUser(userId)) return;
-    const dormant = await OrganizationRepo.findDormantPersonal(userId);
-    if (dormant) await OrganizationRepo.activatePersonal(dormant.id, userId, { addMember: true });
   }
 
   /** Changes a member's role. Guards against granting OWNER without being one, and against demoting the last OWNER. */
@@ -542,27 +563,26 @@ export default class OrganizationSvc {
   }
 
   /** How a member stops belonging to an organization, whether they left or were removed: the
-   * membership goes, their work there is carried over to their portfolio in the same transaction
-   * (copies queued of the cases they created and the standalone consultations they started, their
-   * own calendar moved — see CaseCopyRepo.carryOverIn), and they land in that portfolio — their
-   * personal workspace, in this organization's tenant, made if they had none. The organization
-   * keeps its originals — and if they were its last member, it's archived for deletion in that
-   * same transaction (`archived`). */
+   * membership goes, and their work there is carried over to their own workspace (no
+   * organization, docs/adr/0022) in the same transaction (copies queued of the cases they
+   * created, their own calendar moved — see CaseCopyRepo.carryOverIn). They're then a solo lawyer
+   * until they join or create another firm. The organization keeps its originals — and if they
+   * were its last member, it's archived for deletion in that same transaction (`archived`). */
   private static async exit(organizationId: string, userId: string) {
     const organization = await OrganizationRepo.findById(organizationId);
     if (!organization) throw new HttpError("Organization not found", 404);
-    const portfolio = await OrganizationSvc.ensurePersonal(userId, organization.tenantId);
     let archived = false;
     await OrganizationMemberRepo.remove(organizationId, userId, async (tx) => {
       await CaseCopyRepo.carryOverIn(tx, {
         sourceOrganizationId: organizationId,
         sourceOrganizationName: organization.name,
         userId,
-        targetOrganizationId: portfolio.id,
+        targetOrganizationId: null,
       });
       archived = await OrganizationRepo.archiveIfEmptyIn(tx, organizationId, userId);
     });
-    await OrganizationRepo.activatePersonal(portfolio.id, userId, { addMember: true });
+    // They work solo now, so the app doesn't ask them to choose again.
+    await AuthRepo.setSoloChosen(userId);
     CaseCopyQueue.kick();
     return { archived };
   }
@@ -745,10 +765,10 @@ export default class OrganizationSvc {
   private static async listPortfolioAccess(
     caseId: string,
     actorId: string,
-    portfolio: { copiedFromCaseId: string | null; organization: { createdById: string } | null },
+    portfolio: { copiedFromCaseId: string | null; ownerId: string | null },
     confidential: boolean,
   ) {
-    const isOwner = portfolio.organization?.createdById === actorId;
+    const isOwner = portfolio.ownerId === actorId;
     const shares = isOwner ? await CaseShareSvc.listShares(caseId) : [];
     const people = shares
       .filter((share) => share.user.id !== actorId)

@@ -914,6 +914,42 @@ export const clientHandoffPaths: Paths = {
       responses: { 200: ok("Charges", page("Charge")), 403: err("Not the organization's OWNER/ADMIN") },
     }),
   },
+  "/users/me/billing/card": {
+    get: op({
+      tag: BILLING_TAG,
+      issue: "docs/adr/0022", built: true,
+      summary: "A solo lawyer's own card on file",
+      description:
+        "A solo lawyer has no organization, so the per-case fee is charged to their own card. Same shape and setupSessionId handling as GET /organizations/{id}/billing/card.",
+      parameters: [{ name: "setupSessionId", in: "query", schema: { type: "string" }, description: "The session returnUrl came back with" }],
+      responses: { 200: ok("The card, or null", { ...ref("PaymentCard"), nullable: true }) },
+    }),
+  },
+  "/users/me/billing/card/setup-session": {
+    post: op({
+      tag: BILLING_TAG,
+      issue: "docs/adr/0022", built: true,
+      summary: "Start a Stripe-hosted setup of a solo lawyer's own card",
+      description:
+        "As POST /organizations/{id}/billing/card/setup-session, for the lawyer's own card (their own Stripe customer). Audited as account.payment_card_updated.",
+      body: { type: "object", required: ["returnUrl"], properties: { returnUrl: { type: "string", description: "Must be on an allowed app origin" } } },
+      responses: {
+        200: ok("Setup session", { type: "object", properties: { url: { type: "string" } } }),
+        400: err("RETURN_URL_NOT_ALLOWED: not on one of the app's origins (CLIENT_URL)"),
+        502: err("PAYMENT_PROVIDER_ERROR: Stripe couldn't start the setup"),
+      },
+    }),
+  },
+  "/users/me/billing/fees": {
+    get: op({
+      tag: BILLING_TAG,
+      issue: "docs/adr/0022", built: true,
+      summary: "A solo lawyer's own fee history",
+      description: "Charges for client requests the lawyer took in their own workspace (no organization).",
+      parameters: [{ name: "kind", in: "query", schema: enumOf(CHARGE_KINDS) }, ...pageParams],
+      responses: { 200: ok("Charges", page("Charge")) },
+    }),
+  },
   "/billing/top-up-packs": {
     get: op({
       tag: BILLING_TAG,

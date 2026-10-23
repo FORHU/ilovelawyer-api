@@ -1,7 +1,8 @@
 import prisma from "../lib/prisma";
 import { CaseCopyStatus, Prisma } from "@prisma/client";
 
-type CarryOver = { sourceOrganizationId: string; sourceOrganizationName: string; userId: string; targetOrganizationId: string };
+/** targetOrganizationId null: the lawyer's own workspace (no organization). */
+type CarryOver = { sourceOrganizationId: string; sourceOrganizationName: string; userId: string; targetOrganizationId: string | null };
 
 export default class CaseCopyRepo {
   /** Everything a member takes with them when they stop belonging to an organization, into their
@@ -64,7 +65,7 @@ export default class CaseCopyRepo {
 
     // Leaving, rejoining and leaving again copies only what changed in between.
     const copies = await tx.event.findMany({
-      where: { organizationId: targetOrganizationId, copiedFromId: { in: onOthersCases.map((e) => e.id) } },
+      where: { organizationId: targetOrganizationId, userId, copiedFromId: { in: onOthersCases.map((e) => e.id) } },
       select: { copiedFromId: true, createdAt: true },
     });
     const copiedAt = new Map<string, Date>();
@@ -95,7 +96,7 @@ export default class CaseCopyRepo {
   }
 
   /** Copies the portfolio still shows as in progress or failed (finished ones are real cases). */
-  static async listUnfinishedForUser(userId: string, targetOrganizationId: string) {
+  static async listUnfinishedForUser(userId: string, targetOrganizationId: string | null) {
     return prisma.caseCopy.findMany({
       where: { userId, targetOrganizationId, status: { not: CaseCopyStatus.DONE } },
       select: { id: true, sourceCaseId: true, caseName: true, sourceOrganizationName: true, status: true, createdAt: true },

@@ -200,12 +200,10 @@ export default class AuthSvc {
    * would be wrong here (the email *is* verified) and would loop back into a verify-otp 400. */
   private static async assertTenantAccess(userId: string, requestTenantCode: TenantCode | null) {
     if (!requestTenantCode) return;
-    const membership = await OrganizationMemberRepo.findAnyForUser(userId);
-    if (!membership || membership.organization.tenant.code === requestTenantCode) return;
-    throw new HttpError(
-      `This account belongs to the ${membership.organization.tenant.code} tenant and cannot sign in from ${requestTenantCode}.`,
-      409,
-    );
+    // The organization's site, or a solo lawyer's own (they have no organization).
+    const site = await AuthRepo.findSiteCode(userId);
+    if (!site || site === requestTenantCode) return;
+    throw new HttpError(`This account belongs to the ${site} tenant and cannot sign in from ${requestTenantCode}.`, 409);
   }
 
   /** An account signs in only to its own app: LAWYER to ilovelawyer-app, USER to the client app
@@ -485,8 +483,8 @@ export default class AuthSvc {
     // login()/loginWithGoogle() use 409 instead. The token isn't deleted on this path (unlike
     // a normal rotation below) — it's still good for a refresh from its actual tenant.
     if (requestTenantCode) {
-      const membership = await OrganizationMemberRepo.findAnyForUser(payload.userId);
-      if (membership && membership.organization.tenant.code !== requestTenantCode) {
+      const site = await AuthRepo.findSiteCode(payload.userId);
+      if (site && site !== requestTenantCode) {
         throw new HttpError("Invalid or expired refresh token", 401);
       }
     }

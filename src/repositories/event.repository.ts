@@ -1,14 +1,16 @@
 import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import CaseRepo from "./case.repository";
+import { organizationIdOf, scopeWhere, type WorkspaceScope } from "../utils/workspace";
 
 export default class EventRepo {
   /**
    * clientEmail matching lets an event be found by the client's email even though they're not
    * an org member — kept as an OR alongside userId, but both are still nested inside a hard
-   * organizationId AND so a match can never cross an org boundary.
+   * workspace AND (scopeWhere) so a match can never cross a firm, or another lawyer's own
+   * workspace.
    */
-  static async findMany(organizationId: string, userId: string, userEmail: string, filters: {
+  static async findMany(scope: WorkspaceScope, userId: string, userEmail: string, filters: {
     startRange?: string;
     endRange?: string;
     excludeId?: string;
@@ -17,7 +19,7 @@ export default class EventRepo {
     caseId?: string;
   } = {}) {
     const andConditions: any[] = [
-      { organizationId },
+      scopeWhere(scope),
       {
         OR: [
           { userId },
@@ -42,11 +44,11 @@ export default class EventRepo {
     });
   }
 
-  static async findById(id: string, organizationId: string, userId: string, userEmail: string) {
+  static async findById(id: string, scope: WorkspaceScope, userId: string, userEmail: string) {
     return prisma.event.findFirst({
       where: {
         id,
-        organizationId,
+        ...scopeWhere(scope),
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -58,11 +60,11 @@ export default class EventRepo {
     });
   }
 
-  static async findByGoogleEventId(googleEventId: string, organizationId: string, userId: string, userEmail: string) {
+  static async findByGoogleEventId(googleEventId: string, scope: WorkspaceScope, userId: string, userEmail: string) {
     return prisma.event.findFirst({
       where: {
         googleEventId,
-        organizationId,
+        ...scopeWhere(scope),
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -71,7 +73,7 @@ export default class EventRepo {
     });
   }
 
-  static async create(organizationId: string, userId: string, data: {
+  static async create(scope: WorkspaceScope, userId: string, data: {
     title: string;
     type?: string;
     dateTime: Date;
@@ -86,16 +88,16 @@ export default class EventRepo {
     reminderLeadMinutes?: number;
     googleDirtyAt?: Date;
   }) {
-    const created = await prisma.event.create({ data: { organizationId, userId, ...data } });
+    const created = await prisma.event.create({ data: { organizationId: organizationIdOf(scope), userId, ...data } });
     CaseRepo.touchSafe(data.caseId);
     return created;
   }
 
-  static async updateById(id: string, organizationId: string, userId: string, userEmail: string, data: object) {
+  static async updateById(id: string, scope: WorkspaceScope, userId: string, userEmail: string, data: object) {
     return prisma.event.updateMany({
       where: {
         id,
-        organizationId,
+        ...scopeWhere(scope),
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -105,11 +107,11 @@ export default class EventRepo {
     });
   }
 
-  static async updateByGoogleEventId(googleEventId: string, organizationId: string, userId: string, userEmail: string, data: object) {
+  static async updateByGoogleEventId(googleEventId: string, scope: WorkspaceScope, userId: string, userEmail: string, data: object) {
     return prisma.event.updateMany({
       where: {
         googleEventId,
-        organizationId,
+        ...scopeWhere(scope),
         OR: [
           { userId },
           { clientEmail: { contains: userEmail, mode: "insensitive" } },
@@ -157,12 +159,12 @@ export default class EventRepo {
     return prisma.event.updateMany({ where: { id }, data });
   }
 
-  static async deleteById(id: string, organizationId: string, userId: string) {
-    return prisma.event.deleteMany({ where: { id, organizationId, userId } });
+  static async deleteById(id: string, scope: WorkspaceScope, userId: string) {
+    return prisma.event.deleteMany({ where: { id, ...scopeWhere(scope), userId } });
   }
 
-  static async deleteByGoogleEventId(googleEventId: string, organizationId: string, userId: string) {
-    return prisma.event.deleteMany({ where: { googleEventId, organizationId, userId } });
+  static async deleteByGoogleEventId(googleEventId: string, scope: WorkspaceScope, userId: string) {
+    return prisma.event.deleteMany({ where: { googleEventId, ...scopeWhere(scope), userId } });
   }
 
   /**

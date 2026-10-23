@@ -106,6 +106,22 @@ export default class OrganizationRepo {
     });
   }
 
+  /** A lawyer's own workspace's site: their account's tenant (they have no organization). */
+  static async findOwnSite(userId: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { tenant: { select: { code: true } } } });
+    return user?.tenant?.code ?? null;
+  }
+
+  /** Whether `userId` holds a share of a case in `ownerId`'s own workspace (no organization): what
+   * lets them in there as a read-only guest. Copies don't count, as with a shared portfolio. */
+  static async holdsShareInOwnWorkspace(ownerId: string, userId: string) {
+    const shared = await prisma.case.findFirst({
+      where: { userId: ownerId, organizationId: null, copiedFromCaseId: null, accesses: { some: { userId } } },
+      select: { id: true },
+    });
+    return !!shared;
+  }
+
   static async findBySlug(slug: string) {
     return prisma.organization.findUnique({ where: { slug } });
   }
@@ -228,6 +244,79 @@ export default class OrganizationRepo {
       }
       return { casesDeleted, consultationsDeleted: consultations.length, filesMarkedForDeletion };
     });
+  }
+
+  /** Permanently deletes a lawyer's own workspace (no organization, docs/adr/0022) as their account
+   * goes: its standalone and case consultations through the same purge as a deleted consultation,
+   * then its cases, documents and transcriptions, marking files nothing else references
+   * FOR_DELETION. Without this, Case.user being SetNull would leave the cases behind with no owner.
+   * With `dueBy`, does nothing unless the account's deletion is still due by then (the user may
+   * have signed in meanwhile — see AccountDeletionSvc.purgeIfStillDue). */
+  static async deleteOwnWorkspace(userId: string, dueBy?: Date) {
+    const stillDue = async () =>
+      !dueBy || !!(await prisma.user.findFirst({ where: { id: userId, deletionRequestedAt: { lte: dueBy } }, select: { id: true } }));
+    if (!(await stillDue())) return null;
+
+    const consultations = await prisma.consultation.findMany({ where: { userId, organizationId: null }, select: { id: true } });
+    let filesMarkedForDeletion = 0;
+    for (const { id } of consultations) {
+      filesMarkedForDeletion += (await ChatRepo.deleteConsultationPermanently(id)).filesMarkedForDeletion;
+    }
+
+    return prisma.$transaction(async (tx) => {
+      const own = { userId, organizationId: null };
+      const [documents, transcriptions] = await Promise.all([
+        tx.document.findMany({ where: { ...own, fileId: { not: null } }, select: { fileId: true } }),
+        tx.transcription.findMany({ where: { ...own, audioFileId: { not: null } }, select: { audioFileId: true } }),
+      ]);
+      const fileIds = new Set<string>([
+        ...documents.flatMap((d) => (d.fileId ? [d.fileId] : [])),
+        ...transcriptions.flatMap((t) => (t.audioFileId ? [t.audioFileId] : [])),
+      ]);
+
+      const { count: casesDeleted } = await tx.case.deleteMany({ where: own });
+      await tx.document.deleteMany({ where: own });
+      await tx.transcription.deleteMany({ where: own });
+
+      if (fileIds.size > 0) {
+        const [stillDocuments, stillTranscriptions] = await Promise.all([
+          tx.document.findMany({ where: { fileId: { in: [...fileIds] } }, select: { fileId: true } }),
+          tx.transcription.findMany({ where: { audioFileId: { in: [...fileIds] } }, select: { audioFileId: true } }),
+        ]);
+        for (const { fileId } of stillDocuments) if (fileId) fileIds.delete(fileId);
+        for (const { audioFileId } of stillTranscriptions) if (audioFileId) fileIds.delete(audioFileId);
+        const { count } = await tx.file.updateMany({
+          where: { id: { in: [...fileIds] } },
+          data: { fileStatus: "FOR_DELETION", deletedAt: new Date() },
+        });
+        filesMarkedForDeletion += count;
+      }
+      return { casesDeleted, consultationsDeleted: consultations.length, filesMarkedForDeletion };
+    });
+  }
+
+  /** Whether anything has been made in the organization yet: cases, consultations, documents,
+   * transcriptions, calendar entries, notes, client-request claims or charges. */
+  static async hasWork(organizationId: string): Promise<boolean> {
+    const where = { organizationId };
+    const counts = await prisma.$transaction([
+      prisma.case.count({ where }),
+      prisma.consultation.count({ where }),
+      prisma.document.count({ where }),
+      prisma.transcription.count({ where }),
+      prisma.event.count({ where }),
+      prisma.note.count({ where }),
+      prisma.clientRequestClaim.count({ where }),
+      prisma.organizationCharge.count({ where }),
+    ]);
+    return counts.some((n) => n > 0);
+  }
+
+  /** Deletes an organization outright, with its members, invites and billing (they cascade). Only
+   * for one with no work in it (see hasWork): Case.organization is SetNull, so a case would be left
+   * behind. */
+  static async deleteEmpty(organizationId: string) {
+    await prisma.organization.delete({ where: { id: organizationId } });
   }
 
   static async update(id: string, data: { name?: string; slug?: string } & FirmDetails) {

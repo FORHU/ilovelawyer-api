@@ -5,12 +5,11 @@ import ChatRepo from "../repositories/chat.repository";
 import { redis } from "../lib/redis";
 import { trialSampleKey } from "../utils/chat.utils";
 import TenantRepo from "../repositories/tenant.repository";
-import OrganizationSvc from "./organization.service";
 import ConsentSvc from "./consent.service";
 import SecurityAuditSvc from "./security-audit.service";
 import HttpError from "../utils/http-error";
 import loginToken from "../utils/loginToken";
-import { OrganizationStatus, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import TerminalWorkspaceRepo from "../repositories/terminal-workspace.repository";
 import TerminalWorkspaceSvc from "./terminal-workspace.service";
 import { buildDefaultLayout, normalizeLayout } from "../utils/terminal-layout";
@@ -26,8 +25,8 @@ const GUEST_PANES = ["command", "evidence", "procedure", "witnesses", "redTeam",
 const GUEST_LAYOUT_NAME = "Case overview";
 
 export default class TrialSvc {
-  /** The landing page's "Start a consultation" for someone with no account: a throwaway guest in
-   * its own personal UK workspace, signed in like any other user so every existing chat route
+  /** The landing page's "Start a consultation" for someone with no account: a throwaway UK guest
+   * working in its own workspace (no organization, like a solo lawyer — docs/adr/0022), signed in like any other user so every existing chat route
    * works unchanged. What makes it a trial is User.trialExpiresAt: a session that ends with it,
    * a cap on AI answers (trialMessageLimit) and no uploads or sharing (blockTrialWrites). The
    * caller has shown the guest the AI-processing notice; their acceptance is recorded as consent.
@@ -45,7 +44,6 @@ export default class TrialSvc {
     const tag = id.slice(0, 8);
     const trialExpiresAt = new Date(Date.now() + TRIAL_DURATION_MS);
     await AuthRepo.createTrialUser({ id, username: `guest.${tag}`, email: `trial-${id}@trial.invalid`, tenantId, trialExpiresAt });
-    await OrganizationSvc.create(id, `Guest ${tag}`, undefined, "UK", true);
     await ConsentSvc.set(id, "AI_PROCESSING", true, "trial");
     const consultationId = await TrialSvc.seedSampleConsultation(id);
     // "Explore a sample case file": view-only access to the shared sample case, no copy. Removed
@@ -67,31 +65,21 @@ export default class TrialSvc {
       refreshToken,
       consultationId,
       caseId: sampleCase?.id ?? null,
-      // The sample case lives in its owner's portfolio; the app opens it with this organization.
-      caseOrganizationId: sampleCase?.organizationId ?? null,
+      // The sample case lives in its owner's portfolio; the app opens it with this X-Organization-Id:
+      // `user:<owner>` for a lawyer's own workspace, else the (client-era) personal workspace's id.
+      caseOrganizationId: sampleCase ? (sampleCase.organizationId ?? (sampleCase.userId ? `user:${sampleCase.userId}` : null)) : null,
     };
   }
 
-  /** Deletes every trial guest whose trial ended before `now`, with everything they had: first
-   * their own workspace (its cases, chats, documents — never the shared sample case — through
-   * OrganizationRepo.deletePermanently, which also marks the files FOR_DELETION), then the
-   * user itself (AccountDeletionSvc.purge). Only a personal workspace whose sole member is the
-   * guest is touched. Run by TrialGuestPurgeQueue and by hand through scripts/purge-trial-users. Returns how many
-   * guests were deleted. */
+  /** Deletes every trial guest whose trial ended before `now`, with everything they had: their own
+   * workspace (its cases, chats, documents — never the shared sample case, which isn't theirs) and
+   * then the user itself, both through AccountDeletionSvc.purge (see
+   * OrganizationRepo.deleteOwnWorkspace, which also marks the files FOR_DELETION). Run by
+   * TrialGuestPurgeQueue and by hand through scripts/purge-trial-users. Returns how many guests
+   * were deleted. */
   static async purgeExpired(now: Date = new Date()): Promise<number> {
     const expired = await prisma.user.findMany({ where: { trialExpiresAt: { lt: now } }, select: { id: true } });
-    for (const { id } of expired) {
-      const workspaces = await prisma.organization.findMany({
-        where: { isPersonal: true, members: { some: { userId: id }, every: { userId: id } } },
-        select: { id: true },
-      });
-      for (const workspace of workspaces) {
-        // deletePermanently only deletes an organization that is PENDING_DELETION.
-        await prisma.organization.update({ where: { id: workspace.id }, data: { status: OrganizationStatus.PENDING_DELETION } });
-        await OrganizationRepo.deletePermanently(workspace.id);
-      }
-      await AccountDeletionSvc.purge(id);
-    }
+    for (const { id } of expired) await AccountDeletionSvc.purge(id);
     return expired.length;
   }
 
@@ -132,12 +120,17 @@ export default class TrialSvc {
   }
 
   /** The shared sample case, when TRIAL_SAMPLE_CASE_ID names a case in someone's portfolio (a
-   * personal workspace): only a portfolio case can be shared to view. Null otherwise. */
+   * lawyer's own workspace, or a client-era personal workspace): only a portfolio case can be
+   * shared to view. Null otherwise. */
   private static async findSampleCase() {
     if (!TRIAL_SAMPLE_CASE_ID) return null;
     return prisma.case.findFirst({
-      where: { id: TRIAL_SAMPLE_CASE_ID, copiedFromCaseId: null, organization: { isPersonal: true } },
-      select: { id: true, organizationId: true },
+      where: {
+        id: TRIAL_SAMPLE_CASE_ID,
+        copiedFromCaseId: null,
+        OR: [{ organizationId: null, userId: { not: null } }, { organization: { isPersonal: true } }],
+      },
+      select: { id: true, organizationId: true, userId: true },
     });
   }
 

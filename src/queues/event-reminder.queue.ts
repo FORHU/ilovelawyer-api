@@ -24,7 +24,8 @@ function formatEventDateTimeShort(dateTime: Date): string {
 interface ReminderCandidate {
   id: string;
   userId: string;
-  organizationId: string;
+  /** Null for an event in a lawyer's own workspace (no organization). */
+  organizationId: string | null;
   title: string;
   type: string;
   dateTime: Date;
@@ -117,7 +118,7 @@ export default class EventReminderQueue {
     // necessarily an app user and has no notification inbox to receive it in.
     await NotificationSvc.create({
       userId: event.userId,
-      organizationId: event.organizationId,
+      organizationId: event.organizationId ?? undefined,
       type: "EVENT_REMINDER",
       title: `Upcoming ${eventType}`,
       message: `${event.title} — ${when}`,

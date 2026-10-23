@@ -1,3 +1,4 @@
+import { workspaceOf, type WorkspaceScope } from "../utils/workspace";
 import { Request, Response } from "express";
 import { ClientSide } from "@prisma/client";
 import CaseSvc from "../services/case.service";
@@ -20,7 +21,7 @@ export default class CaseCtrl {
     const { error, value } = createCaseSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.create(req.organization!.id, req.user.userId, req.organization!.role, normalizeCaseBody(value) as {
+    const result = await CaseSvc.create(workspaceOf(req), req.user.userId, workspaceOf(req).role, normalizeCaseBody(value) as {
       caseName: string;
       actionType?: string;
       jurisdiction?: string;
@@ -38,7 +39,7 @@ export default class CaseCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     const result = await CaseSvc.list(
-      req.organization!.id,
+      workspaceOf(req),
       req.user.userId,
       value.page,
       value.limit,
@@ -55,12 +56,12 @@ export default class CaseCtrl {
    * Terminal or detail page). Explicit POST rather than stamping inside GET /:id, so plain reads
    * (which the app also does in the background) stay side-effect free. */
   static async markOpened(req: Request, res: Response) {
-    await CaseSvc.markOpened(req.params.id, req.organization!.id, req.user.userId);
+    await CaseSvc.markOpened(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(204).send();
   }
 
   static async getById(req: Request, res: Response) {
-    const result = await CaseSvc.getById(req.params.id, req.organization!.id, req.user.userId);
+    const result = await CaseSvc.getById(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -68,22 +69,22 @@ export default class CaseCtrl {
     const { error, value } = updateCaseSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.update(req.params.id, req.organization!.id, req.user.userId, normalizeCaseBody(value));
+    const result = await CaseSvc.update(req.params.id, workspaceOf(req), req.user.userId, normalizeCaseBody(value));
     return res.status(200).json(result);
   }
 
   static async delete(req: Request, res: Response) {
-    await CaseSvc.delete(req.params.id, req.organization!.id, req.user.userId);
+    await CaseSvc.delete(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(204).send();
   }
 
   static async archive(req: Request, res: Response) {
-    const result = await CaseSvc.archive(req.params.id, req.organization!.id, req.user.userId);
+    const result = await CaseSvc.archive(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
   static async unarchive(req: Request, res: Response) {
-    const result = await CaseSvc.unarchive(req.params.id, req.organization!.id, req.user.userId);
+    const result = await CaseSvc.unarchive(req.params.id, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -93,7 +94,7 @@ export default class CaseCtrl {
     const { error, value } = bulkCaseIdsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.archiveMany(value.ids, req.organization!.id, req.user.userId);
+    const result = await CaseSvc.archiveMany(value.ids, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -103,7 +104,7 @@ export default class CaseCtrl {
     const { error, value } = bulkCaseIdsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.unarchiveMany(value.ids, req.organization!.id, req.user.userId);
+    const result = await CaseSvc.unarchiveMany(value.ids, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -113,7 +114,7 @@ export default class CaseCtrl {
     const { error, value } = bulkCaseIdsSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await CaseSvc.deleteMany(value.ids, req.organization!.id, req.user.userId);
+    const result = await CaseSvc.deleteMany(value.ids, workspaceOf(req), req.user.userId);
     return res.status(200).json(result);
   }
 
@@ -126,9 +127,9 @@ export default class CaseCtrl {
     const { error, value } = createCaseWithDocumentSchema.validate(input);
     if (error) throw new HttpError(error.message, 400);
 
-    const caseData: { caseId: string; organizationId: string; userId: string } = {
+    const caseData: { caseId: string; scope: WorkspaceScope; userId: string } = {
       caseId: value.caseId,
-      organizationId: req.organization!.id,
+      scope: workspaceOf(req),
       userId: req.user.userId,
     };
 
@@ -149,7 +150,7 @@ export default class CaseCtrl {
     if (error) throw new HttpError(error.message, 400);
 
     // Throws 404 if the case is missing, not in this organization, or one this user can't open.
-    await CaseSvc.getById(req.params.caseId, req.organization!.id, req.user.userId);
+    await CaseSvc.getById(req.params.caseId, workspaceOf(req), req.user.userId);
 
     const result = await DocumentChunkSvc.relevantChunksForCase(
       req.params.caseId,

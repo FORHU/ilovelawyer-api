@@ -4,6 +4,7 @@ import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import UsersCtrl from "../controllers/users.controller";
 import LawyerProfileCtrl from "../controllers/lawyer-profile.controller";
+import OrganizationCardCtrl from "../controllers/organization-card.controller";
 import { freeCreditState } from "../middleware/free-credit.middleware";
 import { AVATAR_MAX_BYTES } from "../constants";
 
@@ -32,6 +33,12 @@ router.delete("/me/google-calendar", asyncHandler(UsersCtrl.disconnectGoogleCale
 router.get("/me/tour/:track", asyncHandler(UsersCtrl.getTour));
 // Account setup after sign-up (the app's /onboarding) is finished or skipped; sets setupCompletedAt.
 router.post("/me/setup/complete", asyncHandler(UsersCtrl.completeSetup));
+// The lawyer works solo: no organization is created (docs/adr/0022); sets soloChosenAt.
+router.post("/me/solo", asyncHandler(UsersCtrl.chooseSolo));
+// A solo lawyer's own card on file and fee history (a firm's are under /organizations/:id/billing).
+router.get("/me/billing/card", asyncHandler(OrganizationCardCtrl.getOwn));
+router.post("/me/billing/card/setup-session", asyncHandler(OrganizationCardCtrl.startOwnSetup));
+router.get("/me/billing/fees", asyncHandler(OrganizationCardCtrl.ownFees));
 router.put("/me/tour/:track", asyncHandler(UsersCtrl.saveTour));
 // A lawyer's Lawyer Application (UK and PH; the path predates PH).
 router.get("/me/client-request-profile", asyncHandler(LawyerProfileCtrl.get));

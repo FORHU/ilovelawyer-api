@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import UsersSvc from "../services/users.service";
 import AuthRepo from "../repositories/auth.repository";
+import OrganizationRepo from "../repositories/organization.repository";
 import { sendExportZip, exportAuditPayload } from "../utils/export-response";
 import SecurityAuditSvc from "../services/security-audit.service";
 import AvatarSvc from "../services/avatar.service";
@@ -18,6 +19,18 @@ export default class UsersCtrl {
   }
 
   /** POST /api/users/me/setup/complete — returns the user, setupCompletedAt now set. */
+  /** POST /api/users/me/solo — the lawyer works solo: no organization is created (docs/adr/0022).
+   * Their work lives in their own workspace, reached with no X-Organization-Id, on their account's
+   * site. They can create or join a firm later. */
+  static async chooseSolo(req: Request, res: Response) {
+    const user = await AuthRepo.findById(req.user.userId);
+    if (!user) throw new HttpError("User not found", 404);
+    if (user.role !== "LAWYER") throw new HttpError("Only a lawyer account works solo", 403, "NOT_A_LAWYER");
+    if (!(await OrganizationRepo.findOwnSite(user.id))) throw new HttpError("Your account has no site (UK or PH).", 409, "NO_SITE");
+    await AuthRepo.setSoloChosen(user.id);
+    return res.status(200).json(await UsersSvc.getMe(user.id));
+  }
+
   static async completeSetup(req: Request, res: Response) {
     await AuthRepo.setSetupCompleted(req.user.userId);
     return res.status(200).json(await UsersSvc.getMe(req.user.userId));

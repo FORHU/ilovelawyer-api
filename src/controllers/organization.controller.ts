@@ -1,3 +1,4 @@
+import { workspaceOf } from "../utils/workspace";
 import { Request, Response } from "express";
 import OrganizationSvc from "../services/organization.service";
 import HttpError from "../utils/http-error";
@@ -56,7 +57,7 @@ export default class OrganizationCtrl {
 
     const result = await OrganizationSvc.inviteMember(
       req.params.id,
-      req.organization!.role,
+      workspaceOf(req).role,
       req.user.userId,
       value.email,
       value.role,
@@ -89,17 +90,23 @@ export default class OrganizationCtrl {
     const { error, value } = changeMemberRoleSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
-    const result = await OrganizationSvc.changeMemberRole(req.params.id, req.organization!.role, req.params.userId, value.role, req.user.userId);
+    const result = await OrganizationSvc.changeMemberRole(req.params.id, workspaceOf(req).role, req.params.userId, value.role, req.user.userId);
     return res.status(200).json(result);
   }
 
   static async removeMember(req: Request, res: Response) {
-    await OrganizationSvc.removeMember(req.params.id, req.organization!.role, req.user.userId, req.params.userId);
+    await OrganizationSvc.removeMember(req.params.id, workspaceOf(req).role, req.user.userId, req.params.userId);
     return res.status(204).send();
   }
 
   static async leave(req: Request, res: Response) {
     await OrganizationSvc.leave(req.params.id, req.user.userId);
+    return res.status(204).send();
+  }
+
+  /** POST /api/organizations/:id/discard — the founder undoes the firm during account setup. */
+  static async discard(req: Request, res: Response) {
+    await OrganizationSvc.discardDuringSetup(req.params.id, req.user.userId);
     return res.status(204).send();
   }
 

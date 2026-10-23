@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import CaseLimitsSvc from "../services/case-limits.service";
 import { consultationCaseOf } from "./guest-case-items.middleware";
+import { workspaceOf } from "../utils/workspace";
 
 const CASE_PATH = /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/.*)?$/i;
 
@@ -39,7 +40,7 @@ export async function caseSpendLimit(req: Request, _res: Response, next: NextFun
  * consultation on no case has no case budget. */
 export async function consultationSpendLimit(req: Request, _res: Response, next: NextFunction) {
   try {
-    const consultation = await consultationCaseOf(req.params.consultationId, req.organization!.id);
+    const consultation = await consultationCaseOf(req.params.consultationId, workspaceOf(req));
     if (consultation?.caseId) await CaseLimitsSvc.assertCaseHasBudget(consultation.caseId);
     next();
   } catch (err) {

@@ -5,6 +5,7 @@
  * Google Calendar (events, PATCH-with-null semantics, deletions, syncTokens) answers the global
  * fetch — same monkeypatch idiom as test/avatar-and-google-calendar.spec.ts.
  */
+import { firmScope } from "../src/utils/workspace";
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import type { Request as ExpressRequest, Response as ExpressResponse } from "express";
@@ -127,7 +128,7 @@ describe("Two-way Google Calendar sync — scenarios", () => {
   };
 
   async function createInApp(overrides: Row = {}) {
-    const event = await EventSvc.create(ORG, OWNER, {
+    const event = await EventSvc.create(firmScope(ORG), OWNER, {
       title: "Consultation",
       type: "Meeting",
       date_time: "2099-10-03T05:00:00.000Z",
@@ -139,7 +140,7 @@ describe("Two-way Google Calendar sync — scenarios", () => {
     return rows.get(event.id)!;
   }
   const editInApp = async (id: string, body: Row) => {
-    await EventSvc.updateById(id, ORG, OWNER, "owner@x.com", body);
+    await EventSvc.updateById(id, firmScope(ORG), OWNER, "owner@x.com", body);
     await whenSyncIdle();
   };
   const poll = async () => {
@@ -255,7 +256,7 @@ describe("Two-way Google Calendar sync — scenarios", () => {
 
   it("5. deleted in the app → removed from Google", async () => {
     const row = await createInApp();
-    await EventSvc.deleteById(row.id, ORG, OWNER);
+    await EventSvc.deleteById(row.id, firmScope(ORG), OWNER);
     await whenSyncIdle();
     expect(google.events.get(row.googleEventId)!.status).to.equal("cancelled");
   });
