@@ -77,20 +77,36 @@ export const rejectLawyerSchema = Joi.object({
 
 export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid("PH", "UK").required() });
 
-// strict(): only a real JSON boolean — "true"/"false"/1/0 are rejected, not coerced. At least one of
-// the three independent settings groups (signup auto-approve, account top-up fee, subscription
-// plan) must be present; each group's own fields travel together.
+// strict(): only a real JSON boolean — "true"/"false"/1/0 are rejected, not coerced. At least one
+// of the two independent settings groups (signup auto-approve, account top-up fee) must be
+// present; each group's own fields travel together. The old flat subscriptionPlan* fields are
+// retired — per-tier pricing now goes through the payment-plans endpoints below.
 export const updateTenantSettingsSchema = Joi.object({
   autoApproveSignups: Joi.boolean().strict().optional(),
   accountTopUpFeeType: Joi.string().valid("FIXED", "PERCENT").optional(),
   accountTopUpFeeAmount: Joi.number().min(0).optional(),
-  subscriptionPlanName: Joi.string().trim().min(1).max(100).optional(),
-  subscriptionPlanMonthlyPriceUsd: Joi.number().min(0).optional(),
-  subscriptionPlanIncludedAllowanceUsd: Joi.number().min(0).optional(),
 })
   .and("accountTopUpFeeType", "accountTopUpFeeAmount")
-  .and("subscriptionPlanName", "subscriptionPlanMonthlyPriceUsd", "subscriptionPlanIncludedAllowanceUsd")
-  .or("autoApproveSignups", "accountTopUpFeeType", "subscriptionPlanName");
+  .or("autoApproveSignups", "accountTopUpFeeType");
+
+export const createPaymentPlanSchema = Joi.object({
+  code: Joi.string().trim().min(1).max(40).required(),
+  name: Joi.string().trim().min(1).max(100).required(),
+  level: Joi.number().integer().min(0).optional(),
+  feeUsd: Joi.number().min(0).required(),
+  includedAllowanceUsd: Joi.number().min(0).required(),
+  caseLimit: Joi.number().integer().min(0).required(),
+});
+
+export const updatePaymentPlanSchema = Joi.object({
+  code: Joi.string().trim().min(1).max(40).optional(),
+  name: Joi.string().trim().min(1).max(100).optional(),
+  level: Joi.number().integer().min(0).optional(),
+  feeUsd: Joi.number().min(0).optional(),
+  includedAllowanceUsd: Joi.number().min(0).optional(),
+  caseLimit: Joi.number().integer().min(0).optional(),
+  isActive: Joi.boolean().strict().optional(),
+}).min(1);
 
 export const lawSearchSchema = Joi.object({
   category: Joi.string().valid("jurisprudence", "republic-acts").required(),
