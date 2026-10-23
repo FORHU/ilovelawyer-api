@@ -362,9 +362,9 @@ export default class OrganizationSvc {
       payload: { organizationId, inviteeEmail: email, role },
     });
 
-    // The sign-up tab with the address filled in; after verifying they continue to the
-    // Organization page to accept.
-    const params = new URLSearchParams({ tab: "signup", email, next: "/homepage/organization" });
+    // The sign-up tab with the address filled in, and locked (`invite`): the invite is for this
+    // address only. After verifying they continue to the Organization page to accept.
+    const params = new URLSearchParams({ tab: "signup", email, invite: "1", next: "/homepage/organization" });
     const html = await renderTemplate("org-invite-signup", {
       inviterName,
       orgName,
