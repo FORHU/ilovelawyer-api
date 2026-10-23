@@ -58,12 +58,13 @@ export interface PartyInput {
 export interface CaseData {
   caseName?: string;
   actionType?: string;
-  jurisdiction?: string;
-  ukJurisdiction?: string;
+  jurisdiction?: string | null;
+  /** Null: outside the UK (a client moved their case out of it). */
+  ukJurisdiction?: string | null;
   /** Client app only (CLIENT_CASE_AREAS). */
   practiceArea?: string;
   clientSide?: ClientSide | null;
-  notes?: string;
+  notes?: string | null;
   parties?: PartyInput[];
 }
 

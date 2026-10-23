@@ -1,11 +1,13 @@
-import { ClientSide, OrganizationRole, Prisma } from "@prisma/client";
+import { ClientRequestStatus, ClientSide, OrganizationRole, Prisma } from "@prisma/client";
 import ClientCaseRepo, { type ClientCaseRow } from "../repositories/client-case.repository";
+import type { CaseData } from "../repositories/case.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
 import ChatSvc from "./chat.service";
+import ClientRequestSvc from "./client-request.service";
 import DocumentSvc from "./document.service";
 import OrganizationSvc from "./organization.service";
 import HttpError from "../utils/http-error";
@@ -25,7 +27,7 @@ import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
 import type { ClientCaseArea } from "../constants/client-case.constants";
 import { firmScope } from "../utils/workspace";
 
-/** The client's personal workspace, as req.organization carries it. */
+/** The client's personal workspace, as clientWorkspaceOf(req) gives it. */
 export interface ClientWorkspace {
   id: string;
   role: OrganizationRole;
@@ -42,7 +44,25 @@ export interface NewClientCase {
   where?: string;
   side?: ClientSide | null;
   others?: { name: string; role: string }[];
+  /** What happened and what the client wants, as one block of text. */
+  notes?: string;
 }
+
+/** What the client may change on a case they've made. Anything left out stays as it is. */
+export interface ClientCaseChanges {
+  title?: string;
+  area?: ClientCaseArea;
+  ukJurisdiction?: string | null;
+  where?: string;
+  side?: ClientSide | null;
+  others?: { name: string; role: string }[];
+  notes?: string;
+}
+
+/** Once a lawyer holds the request, their conflict check and quote rest on the case's problem, place
+ * and people, so those stop being editable. CONFIRMED and ENGAGED also stop the case being removed. */
+const LAWYER_HELD: ClientRequestStatus[] = ["CLAIMED", "QUOTED", "CONFIRMED", "ENGAGED"];
+const LAWYER_COMMITTED: ClientRequestStatus[] = ["CONFIRMED", "ENGAGED"];
 
 /** A Consultation title is VarChar(80). */
 const CONSULTATION_TITLE_MAX = 80;
@@ -54,6 +74,7 @@ function toDto(row: ClientCaseRow) {
     area: (row.practiceArea ?? "OTHER") as ClientCaseArea,
     ukJurisdiction: row.ukJurisdiction,
     where: row.jurisdiction ?? "",
+    notes: row.notes ?? "",
     side: row.clientSide,
     others: row.parties.map((p) => ({ id: p.id, name: p.name, role: p.designation })),
     documents: row.documents.map((d) => ({ id: d.id, name: d.name, status: d.ragStatus, createdAt: d.createdAt })),
@@ -83,6 +104,14 @@ export interface LawyerReadiness {
   checkedAt: string | null;
   /** The AI answer this check read up to. A newer answer means a fresh check. */
   basedOnMessageId: string | null;
+}
+
+/** Whether two lists name the same people in the same roles, in any order. */
+function samePeople(next: { name: string; role: string }[], current: { name: string; designation: string }[]) {
+  const key = (name: string, role: string) => `${name.trim().toLowerCase()}|${role}`;
+  const a = next.map((p) => key(p.name, p.role)).sort();
+  const b = current.map((p) => key(p.name, p.designation)).sort();
+  return a.length === b.length && a.every((k, i) => k === b[i]);
 }
 
 function unchecked(ukJurisdiction: string | null, unavailable = false): LawyerReadiness {
@@ -127,8 +156,8 @@ export default class ClientCaseSvc {
     return { id: member.organizationId, role: member.role, tenantCode: asTenantCode(member.organization.tenant.code) };
   }
 
-  static async list(workspace: ClientWorkspace) {
-    return (await ClientCaseRepo.list(workspace.id)).map(toDto);
+  static async list(workspace: ClientWorkspace, archived = false) {
+    return (await ClientCaseRepo.list(workspace.id, archived ? "ARCHIVED" : "ACTIVE")).map(toDto);
   }
 
   static async get(workspace: ClientWorkspace, caseId: string) {
@@ -149,6 +178,7 @@ export default class ClientCaseSvc {
         jurisdiction: input.where || undefined,
         clientSide: input.side ?? null,
         parties: (input.others ?? []).map((o) => ({ name: o.name, designation: o.role })),
+        ...(input.notes ? { notes: input.notes } : {}),
       });
     } catch (err) {
       await ClientPaymentRepo.releaseCasePayment(input.paymentId);
@@ -157,6 +187,89 @@ export default class ClientCaseSvc {
     await ClientPaymentRepo.attachToCase(input.paymentId, created.id, credits);
     await ChatSvc.createConsultation(firmScope(workspace.id), userId, input.title.slice(0, CONSULTATION_TITLE_MAX), created.id);
     return ClientCaseSvc.get(workspace, created.id);
+  }
+
+  /**
+   * Changes a case's details. The lawyer-request brief rewrites itself when it next reads the case
+   * (its fingerprint covers these fields), but the stored readiness check is keyed by the last AI
+   * answer, so it's cleared here to be asked again. While a lawyer holds the request the problem,
+   * the place and the people are fixed (409 CASE_LOCKED_BY_REQUEST), and a case can't move outside
+   * the UK while any request is open, since a lawyer can't be asked for one.
+   */
+  static async update(workspace: ClientWorkspace, userId: string, caseId: string, input: ClientCaseChanges) {
+    const row = await ClientCaseSvc.load(workspace, caseId);
+    const live = await ClientRequestRepo.findLiveForCase(caseId);
+    if (live) {
+      const held = LAWYER_HELD.includes(live.status);
+      const movesOutsideUk = input.ukJurisdiction === null && row.ukJurisdiction !== null;
+      const changesFixed =
+        (input.area !== undefined && input.area !== row.practiceArea) ||
+        (input.ukJurisdiction !== undefined && input.ukJurisdiction !== row.ukJurisdiction) ||
+        (input.others !== undefined && !samePeople(input.others, row.parties));
+      if ((held && changesFixed) || movesOutsideUk) {
+        throw new HttpError(
+          movesOutsideUk && !held
+            ? "Withdraw your lawyer request before moving this case outside the UK."
+            : "A lawyer is working on your request, so the type of issue, the part of the UK and the people involved can't change now.",
+          409,
+          "CASE_LOCKED_BY_REQUEST",
+          { status: live.status },
+        );
+      }
+    }
+
+    const data: CaseData = {};
+    if (input.title !== undefined) data.caseName = input.title;
+    if (input.area !== undefined) data.practiceArea = input.area;
+    if (input.ukJurisdiction !== undefined) data.ukJurisdiction = input.ukJurisdiction;
+    if (input.where !== undefined) data.jurisdiction = input.where || null;
+    if (input.side !== undefined) data.clientSide = input.side;
+    if (input.notes !== undefined) data.notes = input.notes || null;
+    if (input.others !== undefined) data.parties = input.others.map((o) => ({ name: o.name, designation: o.role }));
+
+    await CaseSvc.update(caseId, firmScope(workspace.id), userId, data);
+    await ClientCaseRepo.clearReadiness(caseId);
+    return ClientCaseSvc.get(workspace, caseId);
+  }
+
+  /** Sets the case aside. Out of the client's list, restorable. */
+  static async archive(workspace: ClientWorkspace, userId: string, caseId: string) {
+    await ClientCaseSvc.load(workspace, caseId);
+    await ClientCaseSvc.stepAsideRequest(userId, caseId);
+    await CaseSvc.archive(caseId, firmScope(workspace.id), userId);
+  }
+
+  static async unarchive(workspace: ClientWorkspace, userId: string, caseId: string) {
+    const row = await ClientCaseRepo.findAnyById(caseId, workspace.id);
+    if (!row) throw new HttpError("Case not found", 404);
+    await CaseSvc.unarchive(caseId, firmScope(workspace.id), userId);
+    return ClientCaseSvc.get(workspace, caseId);
+  }
+
+  /** Deletes the case with its chat, documents and any lawyer request on it. Payments are kept (the
+   * payment row only loses its link to the case), and credits aren't refunded. */
+  static async remove(workspace: ClientWorkspace, userId: string, caseId: string) {
+    const row = await ClientCaseRepo.findAnyById(caseId, workspace.id);
+    if (!row) throw new HttpError("Case not found", 404);
+    await ClientCaseSvc.stepAsideRequest(userId, caseId);
+    await CaseSvc.delete(caseId, firmScope(workspace.id), userId);
+  }
+
+  /** Before the case goes away or is set aside: an open request nobody has committed to is withdrawn
+   * (a lawyer holding it is told); one with a confirmed or engaged lawyer blocks it, because the
+   * request, its fee and the lawyer's access all hang off the case. */
+  private static async stepAsideRequest(clientId: string, caseId: string) {
+    const live = await ClientRequestRepo.findLiveForCase(caseId);
+    if (!live) return;
+    if (LAWYER_COMMITTED.includes(live.status)) {
+      throw new HttpError(
+        "A lawyer is engaged on this case, or being confirmed. End the engagement first, then you can remove the case.",
+        409,
+        "CASE_HAS_ACTIVE_ENGAGEMENT",
+        { requestId: live.id, status: live.status },
+      );
+    }
+    await ClientRequestSvc.withdraw(clientId, live.id);
   }
 
   /** The chat, oldest first. `replying` is true while the AI is still answering the last message,
@@ -218,6 +331,7 @@ export default class ClientCaseSvc {
           where: row.jurisdiction,
           side: row.clientSide,
           otherParties: row.parties.map((p) => `${p.name} (${p.designation})`),
+          notes: row.notes,
         },
         conversation: messages.map((m) => ({ from: m.role === "user" ? "client" : "ai", text: m.text })),
       });

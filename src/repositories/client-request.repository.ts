@@ -45,6 +45,11 @@ export default class ClientRequestRepo {
     return prisma.clientRequest.create({ data });
   }
 
+  /** The case's open request with its status, for deciding what a change to the case may do. */
+  static async findLiveForCase(caseId: string) {
+    return prisma.clientRequest.findFirst({ where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } }, select: { id: true, status: true } });
+  }
+
   static async findOpenForCase(caseId: string) {
     return prisma.clientRequest.findFirst({ where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } }, select: { id: true } });
   }

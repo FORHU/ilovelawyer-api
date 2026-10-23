@@ -16,9 +16,10 @@ import CaseSvc from "../src/services/case.service";
 import ChatSvc from "../src/services/chat.service";
 import DocumentSvc from "../src/services/document.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
+import ClientRequestSvc from "../src/services/client-request.service";
 import requireClientAccount from "../src/middleware/require-client-account.middleware";
 import clientRoute from "../src/routes/client.route";
-import { createClientCaseSchema } from "../src/validation/client-case.validation";
+import { createClientCaseSchema, updateClientCaseSchema } from "../src/validation/client-case.validation";
 import { listRoutes } from "./support/list-routes";
 import * as socket from "../src/lib/socket";
 
@@ -150,16 +151,19 @@ describe("Client app cases", () => {
     let restore: () => void;
     let row: ReturnType<typeof caseRow> | null;
     let calls: Record<string, unknown[]>;
+    let live: { id: string; status: string } | null;
 
     beforeEach(() => {
+      live = null;
       const fns = [
-        stash(ClientCaseRepo, ["findById", "list"]),
-        stash(CaseSvc, ["create"]),
+        stash(ClientCaseRepo, ["findById", "findAnyById", "list", "clearReadiness"]),
+        stash(CaseSvc, ["create", "update", "archive", "unarchive", "delete"]),
+        stash(ClientRequestSvc, ["withdraw"]),
         stash(ChatSvc, ["createConsultation", "listMessages", "enqueueChatGeneration"]),
         // Paying and credits are test/client-billing.spec.ts's; here a payment is always good.
         stash(ClientPaymentRepo, ["claimCasePayment", "attachToCase", "spendCredit", "addCredits"]),
         stash(DocumentSvc, ["create"]),
-        stash(ClientRequestRepo, ["findEngagedLawyerForCase"]),
+        stash(ClientRequestRepo, ["findEngagedLawyerForCase", "findLiveForCase"]),
         stash(socket, ["emitToUser"]),
       ];
       (ClientPaymentRepo as any).claimCasePayment = async () => 50;
@@ -168,6 +172,7 @@ describe("Client app cases", () => {
       (ClientPaymentRepo as any).addCredits = async () => 50;
       (DocumentSvc as any).create = async () => ({ id: "d2", name: "Payslip.pdf", ragStatus: "PENDING", createdAt: new Date("2026-10-22") });
       (ClientRequestRepo as any).findEngagedLawyerForCase = async () => null;
+      (ClientRequestRepo as any).findLiveForCase = async () => live;
       (socket as any).emitToUser = () => {};
       restore = () => fns.forEach((f) => f());
       row = caseRow();
@@ -176,6 +181,13 @@ describe("Client app cases", () => {
         calls[name] = args;
       };
       (ClientCaseRepo as any).findById = async (id: string, orgId: string) => (row && id === row.id && orgId === workspace.id ? row : null);
+      (ClientCaseRepo as any).findAnyById = (ClientCaseRepo as any).findById;
+      (ClientCaseRepo as any).clearReadiness = async (...args: unknown[]) => record("clearReadiness")(...args);
+      (CaseSvc as any).update = async (...args: unknown[]) => record("caseUpdate")(...args);
+      (CaseSvc as any).archive = async (...args: unknown[]) => record("caseArchive")(...args);
+      (CaseSvc as any).unarchive = async (...args: unknown[]) => record("caseUnarchive")(...args);
+      (CaseSvc as any).delete = async (...args: unknown[]) => record("caseDelete")(...args);
+      (ClientRequestSvc as any).withdraw = async (...args: unknown[]) => record("withdraw")(...args);
       (CaseSvc as any).create = async (...args: unknown[]) => {
         record("caseCreate")(...args);
         return { id: "case-1" };
@@ -223,6 +235,17 @@ describe("Client app cases", () => {
       expect(dto.documents).to.deep.equal([{ id: "d1", name: "Contract.pdf", status: "READY", createdAt: new Date("2026-10-20") }]);
     });
 
+    it("stores what the client said happened and wants as the case's notes", async () => {
+      await ClientCaseSvc.create(workspace, "u1", {
+        paymentId: "pay-1",
+        title: "Holiday refund",
+        area: "CONSUMER",
+        ukJurisdiction: null,
+        notes: "What happened: Flight cancelled.\n\nWhat I want: A refund.",
+      });
+      expect((calls.caseCreate as any[])[3]).to.include({ notes: "What happened: Flight cancelled.\n\nWhat I want: A refund." });
+    });
+
     it("stores no UK jurisdiction for a case outside the UK", async () => {
       await ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "Holiday refund", area: "CONSUMER", ukJurisdiction: null });
       expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, jurisdiction: undefined, clientSide: null });
@@ -268,6 +291,84 @@ describe("Client app cases", () => {
       });
     });
 
+    describe("update", () => {
+      it("changes only what was sent, and has the readiness check run again", async () => {
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { title: "Unfair dismissal", where: "", notes: "Sacked on 3 Oct. I want my job back." });
+        expect(calls.caseUpdate).to.deep.equal(["case-1", { organizationId: "org-personal", ownerId: null }, "u1", { caseName: "Unfair dismissal", jurisdiction: null, notes: "Sacked on 3 Oct. I want my job back." }]);
+        expect(calls.clearReadiness).to.deep.equal(["case-1"]);
+      });
+
+      it("maps the people and the side onto the Case", async () => {
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { side: "RESPONDENT", others: [{ name: "Bea Ltd", role: "Witness" }], ukJurisdiction: null });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ clientSide: "RESPONDENT", parties: [{ name: "Bea Ltd", designation: "Witness" }], ukJurisdiction: null });
+      });
+
+      it("answers 404 for a case that is not the client's", async () => {
+        row = null;
+        expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { title: "x" }))).to.deep.include({ status: 404 });
+        expect(calls.caseUpdate).to.equal(undefined);
+      });
+
+      it("fixes the type, place and people once a lawyer holds the request, but not the title", async () => {
+        live = { id: "req-1", status: "CLAIMED" };
+        for (const change of [{ area: "FAMILY" as const }, { ukJurisdiction: "Scotland" }, { others: [] }]) {
+          expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", change))).to.deep.equal({ status: 409, code: "CASE_LOCKED_BY_REQUEST" });
+        }
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { title: "New title", area: "EMPLOYMENT", others: [{ name: "acme ltd", role: "Opposing party" }] });
+        expect((calls.caseUpdate as any[])[3]).to.include({ caseName: "New title" });
+      });
+
+      it("keeps a case with an open request inside the UK", async () => {
+        live = { id: "req-1", status: "ROUTED" };
+        expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { ukJurisdiction: null }))).to.deep.equal({ status: 409, code: "CASE_LOCKED_BY_REQUEST" });
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { area: "FAMILY" });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ practiceArea: "FAMILY" });
+      });
+    });
+
+    describe("archive and remove", () => {
+      it("archives a case with no request", async () => {
+        await ClientCaseSvc.archive(workspace, "u1", "case-1");
+        expect(calls.caseArchive).to.deep.equal(["case-1", { organizationId: "org-personal", ownerId: null }, "u1"]);
+        expect(calls.withdraw).to.equal(undefined);
+      });
+
+      it("withdraws an open request nobody has committed to before it deletes", async () => {
+        live = { id: "req-1", status: "ROUTED" };
+        await ClientCaseSvc.remove(workspace, "u1", "case-1");
+        expect(calls.withdraw).to.deep.equal(["u1", "req-1"]);
+        expect(calls.caseDelete).to.deep.equal(["case-1", { organizationId: "org-personal", ownerId: null }, "u1"]);
+      });
+
+      it("refuses to delete or archive while a lawyer is confirmed or engaged", async () => {
+        for (const status of ["CONFIRMED", "ENGAGED"]) {
+          live = { id: "req-1", status };
+          expect(await errorOf(ClientCaseSvc.remove(workspace, "u1", "case-1"))).to.deep.equal({ status: 409, code: "CASE_HAS_ACTIVE_ENGAGEMENT" });
+          expect(await errorOf(ClientCaseSvc.archive(workspace, "u1", "case-1"))).to.deep.equal({ status: 409, code: "CASE_HAS_ACTIVE_ENGAGEMENT" });
+        }
+        expect(calls.caseDelete).to.equal(undefined);
+        expect(calls.caseArchive).to.equal(undefined);
+      });
+
+      it("answers 404 for a case that is not the client's", async () => {
+        row = null;
+        expect(await errorOf(ClientCaseSvc.remove(workspace, "u1", "case-1"))).to.deep.include({ status: 404 });
+        expect(await errorOf(ClientCaseSvc.unarchive(workspace, "u1", "case-1"))).to.deep.include({ status: 404 });
+      });
+
+      it("lists archived cases separately", async () => {
+        let asked: unknown[] = [];
+        (ClientCaseRepo as any).list = async (...args: unknown[]) => {
+          asked = args;
+          return [];
+        };
+        await ClientCaseSvc.list(workspace, true);
+        expect(asked).to.deep.equal(["org-personal", "ARCHIVED"]);
+        await ClientCaseSvc.list(workspace);
+        expect(asked).to.deep.equal(["org-personal", "ACTIVE"]);
+      });
+    });
+
     describe("addDocument", () => {
       const file = { key: "k1", name: "Payslip.pdf" };
 
@@ -310,6 +411,18 @@ describe("Client app cases", () => {
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: "Wales" }).error).to.not.equal(undefined);
     });
 
+    it("takes the notes from the wizard, with a length cap", () => {
+      expect(createClientCaseSchema.validate({ ...valid, notes: "Sacked on 3 Oct." }).error).to.equal(undefined);
+      expect(createClientCaseSchema.validate({ ...valid, notes: "x".repeat(2001) }).error).to.not.equal(undefined);
+    });
+
+    it("takes an edit with at least one field, from the same sets as a new case", () => {
+      expect(updateClientCaseSchema.validate({}).error).to.not.equal(undefined);
+      expect(updateClientCaseSchema.validate({ title: "New" }).error).to.equal(undefined);
+      expect(updateClientCaseSchema.validate({ ukJurisdiction: null }).error).to.equal(undefined);
+      expect(updateClientCaseSchema.validate({ area: "PERSONAL_INJURY" }).error).to.not.equal(undefined);
+    });
+
     it("only takes the client app's areas, and no personal injury", () => {
       expect(createClientCaseSchema.validate({ ...valid, area: "PERSONAL_INJURY" }).error).to.not.equal(undefined);
     });
@@ -321,9 +434,14 @@ describe("Client app cases", () => {
       "POST /payments/case/quote",
       "POST /payments/case",
       "GET /payments/:paymentId",
+      "GET /limits",
       "GET /cases",
       "POST /cases",
       "GET /cases/:caseId",
+      "PATCH /cases/:caseId",
+      "DELETE /cases/:caseId",
+      "POST /cases/:caseId/archive",
+      "POST /cases/:caseId/unarchive",
       "GET /cases/:caseId/messages",
       "POST /cases/:caseId/messages",
       "POST /cases/:caseId/documents/presign",
