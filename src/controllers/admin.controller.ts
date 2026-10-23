@@ -4,6 +4,8 @@ import LawyerVerificationSvc from "../services/lawyer-verification.service";
 import LawSvc, { parseLawCategory } from "../services/law.service";
 import TenantSettingSvc from "../services/tenant-setting.service";
 import AccountTopUpPricingSvc from "../services/account-topup-pricing.service";
+import PaymentPlanSvc from "../services/payment-plan.service";
+import TenantRepo from "../repositories/tenant.repository";
 import BulkApprovalRunner from "../queues/bulk-approval.runner";
 import SecurityAuditSvc from "../services/security-audit.service";
 import HttpError from "../utils/http-error";
@@ -22,6 +24,8 @@ import {
   listLawsSchema,
   updateTenantSettingsSchema,
   updateUserTenantSchema,
+  createPaymentPlanSchema,
+  updatePaymentPlanSchema,
 } from "../validation/admin.validation";
 
 function parseTenantCode(raw: string): TenantCode {
@@ -199,10 +203,18 @@ export default class AdminCtrl {
   }
 
   /** GET /api/admin/settings — per-Tenant signup settings, pending backlog, bulk-run progress, the
-   * account top-up platform fee, and the subscription plan (placeholder price + included allowance). */
+   * account top-up platform fee, and each tenant's B2B subscription tiers (Standard/Pro/Max). */
   static async getSettings(_req: Request, res: Response) {
-    const [tenants, topUpPricing] = await Promise.all([TenantSettingSvc.listForAdmin(), AccountTopUpPricingSvc.listForAdmin()]);
-    const merged = tenants.map((t) => ({ ...t, accountTopUp: topUpPricing.find((p) => p.code === t.code) ?? null }));
+    const [tenants, topUpPricing, paymentPlans] = await Promise.all([
+      TenantSettingSvc.listForAdmin(),
+      AccountTopUpPricingSvc.listForAdmin(),
+      PaymentPlanSvc.listForAdmin(),
+    ]);
+    const merged = tenants.map((t) => ({
+      ...t,
+      accountTopUp: topUpPricing.find((p) => p.code === t.code) ?? null,
+      paymentPlans: paymentPlans.find((p) => p.code === t.code)?.paymentPlans ?? [],
+    }));
     return res.status(200).json({ tenants: merged });
   }
 
@@ -216,16 +228,44 @@ export default class AdminCtrl {
     if (value.accountTopUpFeeType !== undefined) {
       await AccountTopUpPricingSvc.setFee(code, value.accountTopUpFeeType, value.accountTopUpFeeAmount, req.user.userId);
     }
-    if (value.subscriptionPlanName !== undefined) {
-      await AccountTopUpPricingSvc.setPlan(
-        code,
-        { name: value.subscriptionPlanName, monthlyPriceUsd: value.subscriptionPlanMonthlyPriceUsd, includedAllowanceUsd: value.subscriptionPlanIncludedAllowanceUsd },
-        req.user.userId,
-      );
-    }
     if (!tenant) tenant = (await TenantSettingSvc.listForAdmin()).find((t) => t.code === code);
     const accountTopUp = await AccountTopUpPricingSvc.listForAdmin().then((all) => all.find((p) => p.code === code));
     return res.status(200).json({ ...tenant, accountTopUp });
+  }
+
+  /** GET /api/admin/settings/tenants/:code/payment-plans — one tenant's B2B subscription tiers. */
+  static async listPaymentPlans(req: Request, res: Response) {
+    const code = parseTenantCode(req.params.code);
+    const tenant = await TenantRepo.findByCode(code);
+    if (!tenant) throw new HttpError(`Unknown tenant ${code}`, 404);
+    const plans = await PaymentPlanSvc.listForTenant(tenant.id);
+    return res.status(200).json({ paymentPlans: plans });
+  }
+
+  /** POST /api/admin/settings/tenants/:code/payment-plans — add a new tier. */
+  static async createPaymentPlan(req: Request, res: Response) {
+    const code = parseTenantCode(req.params.code);
+    const { error, value } = createPaymentPlanSchema.validate(req.body ?? {});
+    if (error) throw new HttpError(error.message, 400);
+    const plan = await PaymentPlanSvc.create(code, value, req.user.userId);
+    return res.status(201).json(plan);
+  }
+
+  /** PATCH /api/admin/settings/tenants/:code/payment-plans/:planId — edit or (re)activate a tier. */
+  static async updatePaymentPlan(req: Request, res: Response) {
+    const { error, value } = updatePaymentPlanSchema.validate(req.body ?? {});
+    if (error) throw new HttpError(error.message, 400);
+    const { isActive, ...patch } = value;
+    let plan = Object.keys(patch).length ? await PaymentPlanSvc.update(req.params.planId, patch, req.user.userId) : undefined;
+    if (isActive !== undefined) plan = await PaymentPlanSvc.setActive(req.params.planId, isActive, req.user.userId);
+    return res.status(200).json(plan);
+  }
+
+  /** DELETE /api/admin/settings/tenants/:code/payment-plans/:planId — soft-disable only; a tier is
+   * never hard-deleted, so lawyers already on it keep working. */
+  static async deactivatePaymentPlan(req: Request, res: Response) {
+    const plan = await PaymentPlanSvc.setActive(req.params.planId, false, req.user.userId);
+    return res.status(200).json(plan);
   }
 
   /** POST /api/admin/tenants/:code/approve-pending — starts a background run; poll GET /settings. */

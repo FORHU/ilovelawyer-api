@@ -60,9 +60,13 @@ describe("engagement AI budget", () => {
 
   before(async () => {
     const tenant = await prisma.tenant.upsert({ where: { code: "UK" }, update: {}, create: { code: "UK", name: "United Kingdom" } });
+    // Every real tenant-scoped LAWYER has a PaymentPlan tier (migration backfill, or assigned at
+    // signup) — a tenant-scoped lawyer with no tier is now locked (AccountLimitsSvc treats it as
+    // unsubscribed/canceled), so this fixture gets the tenant's own Standard tier to match.
+    const standardPlan = await prisma.paymentPlan.findFirstOrThrow({ where: { tenantId: tenant.id, planType: "B2B_SUBSCRIPTION", code: "standard" } });
     await prisma.user.createMany({
       data: [
-        { id: lawyerId, email: `budget-lawyer-${lawyerId}@example.com`, username: `budget-lawyer-${lawyerId}`, name: "Lena Lawyer", role: "LAWYER", tenantId: tenant.id },
+        { id: lawyerId, email: `budget-lawyer-${lawyerId}@example.com`, username: `budget-lawyer-${lawyerId}`, name: "Lena Lawyer", role: "LAWYER", tenantId: tenant.id, paymentPlanId: standardPlan.id },
         { id: clientId, email: `budget-client-${clientId}@example.com`, username: `budget-client-${clientId}`, name: "Clara Client", role: "USER", tenantId: tenant.id },
       ],
     });
@@ -142,9 +146,10 @@ describe("engagement AI budget", () => {
 
   // The route-level block (accountSpendLimit, mounted on /my-cases) is exercised directly here, the
   // same way AccountLimitsSvc's own block is tested in account-limits.spec.ts — a real document
-  // upload would also exercise S3 and extraction, neither of which this is about. lawyerId isn't a
-  // real User row, so AccountLimitsSvc.assertAccountHasBudget resolves unlimited (no matching
-  // LAWYER) without needing its own stub — only EngagementAiBudgetSvc is under test here.
+  // upload would also exercise S3 and extraction, neither of which this is about. lawyerId is a
+  // real LAWYER on the tenant's Standard tier with no spend recorded, so
+  // AccountLimitsSvc.assertAccountHasBudget resolves under budget without needing its own stub —
+  // only EngagementAiBudgetSvc is under test here.
   describe("the route-level block on further AI work", () => {
     let restore: () => void;
     afterEach(() => restore?.());

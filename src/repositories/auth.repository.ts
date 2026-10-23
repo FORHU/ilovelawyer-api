@@ -98,6 +98,7 @@ export default class AuthRepo {
     name: string;
     role: Role;
     tenantId?: string | null;
+    paymentPlanId?: string | null;
     termsVersion?: string | null;
   }) {
     return bustUsersList(
@@ -109,6 +110,7 @@ export default class AuthRepo {
           name: data.name,
           role: data.role,
           tenantId: data.tenantId,
+          paymentPlanId: data.paymentPlanId,
           freeCreditUsd: FREE_CREDIT_USD,
           ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
         },
@@ -119,7 +121,7 @@ export default class AuthRepo {
   /** A trial guest (see TrialSvc): no password, a placeholder address nobody can receive mail at,
    * and already verified and approved, since there is no inbox to verify and no admin to wait for.
    * Always a LAWYER: the trial runs in ilovelawyer-app. */
-  static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; trialExpiresAt: Date }) {
+  static async createTrialUser(data: { id: string; username: string; email: string; tenantId: string; paymentPlanId: string | null; trialExpiresAt: Date }) {
     return bustUsersList(
       await prisma.user.create({
         data: { ...data, name: "Guest", role: "LAWYER", isEmailVerified: true, approvalStatus: "ACTIVE", onboardingCompleted: true, setupCompletedAt: new Date(), soloChosenAt: new Date() },
@@ -655,15 +657,16 @@ export default class AuthRepo {
   static async findTenantById(userId: string) {
     return prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, tenantId: true, tenant: { select: { code: true } } },
+      select: { id: true, role: true, tenantId: true, paymentPlanId: true, tenant: { select: { code: true } } },
     });
   }
 
-  static async setTenant(userId: string, tenantId: string) {
+  /** `paymentPlanId` left undefined keeps the user's tier as it is. */
+  static async setTenant(userId: string, tenantId: string, paymentPlanId?: string | null) {
     return bustUsersList(
       await prisma.user.update({
         where: { id: userId },
-        data: { tenantId },
+        data: { tenantId, paymentPlanId },
         select: { id: true, tenant: { select: { code: true, name: true } } },
       })
     );

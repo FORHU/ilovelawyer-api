@@ -12,6 +12,7 @@ import AuthRepo from "../src/repositories/auth.repository";
 import TenantRepo from "../src/repositories/tenant.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
+import PaymentPlanSvc from "../src/services/payment-plan.service";
 import { updateUserTenantSchema } from "../src/validation/admin.validation";
 
 function stash<T extends object>(target: T, keys: (keyof T)[]) {
@@ -23,9 +24,9 @@ const TENANT_IDS: Record<string, string> = { PH: "tenant-ph", UK: "tenant-uk" };
 
 describe("AdminSvc.changeTenant", () => {
   let restore: (() => void)[];
-  let current: { id: string; tenantId: string | null; tenant: { code: string } | null } | null;
+  let current: { id: string; role?: string; tenantId: string | null; paymentPlanId?: string | null; tenant: { code: string } | null } | null;
   let orgTenant: string | null;
-  let writes: { userId: string; tenantId: string }[];
+  let writes: { userId: string; tenantId: string; paymentPlanId?: string | null }[];
   let audits: { actorId?: string | null; action: string; payload?: object }[];
 
   beforeEach(() => {
@@ -39,11 +40,12 @@ describe("AdminSvc.changeTenant", () => {
       stash(TenantRepo, ["findIdByCode"]),
       stash(OrganizationMemberRepo, ["findAnyForUser"]),
       stash(SecurityAuditSvc, ["record"]),
+      stash(PaymentPlanSvc, ["equivalentIdInTenant"]),
     ];
 
     (AuthRepo as any).findTenantById = async (id: string) => (current && id === current.id ? current : null);
-    (AuthRepo as any).setTenant = async (userId: string, tenantId: string) => {
-      writes.push({ userId, tenantId });
+    (AuthRepo as any).setTenant = async (userId: string, tenantId: string, paymentPlanId?: string | null) => {
+      writes.push({ userId, tenantId, ...(paymentPlanId !== undefined ? { paymentPlanId } : {}) });
       const code = Object.keys(TENANT_IDS).find((c) => TENANT_IDS[c] === tenantId)!;
       return { id: userId, tenant: { code, name: code } };
     };
@@ -51,9 +53,33 @@ describe("AdminSvc.changeTenant", () => {
     (OrganizationMemberRepo as any).findAnyForUser = async () =>
       orgTenant ? { organization: { tenant: { code: orgTenant } } } : null;
     (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
+    (PaymentPlanSvc as any).equivalentIdInTenant = async (planId: string | null, tenantId: string) => `${planId ?? "default"}@${tenantId}`;
   });
 
   afterEach(() => restore.forEach((r) => r()));
+
+  it("moves a lawyer's tier to the same tier in their new tenant", async () => {
+    current = { id: "user-1", role: "LAWYER", tenantId: "tenant-ph", paymentPlanId: "pro-ph", tenant: { code: "PH" } };
+    await AdminSvc.changeTenant("user-1", "UK", "admin-1");
+    expect(writes).to.deep.equal([{ userId: "user-1", tenantId: "tenant-uk", paymentPlanId: "pro-ph@tenant-uk" }]);
+  });
+
+  it("gives a tenant-less lawyer their new tenant's default tier", async () => {
+    current = { id: "user-1", role: "LAWYER", tenantId: null, paymentPlanId: null, tenant: null };
+    await AdminSvc.changeTenant("user-1", "UK", "admin-1");
+    expect(writes).to.deep.equal([{ userId: "user-1", tenantId: "tenant-uk", paymentPlanId: "default@tenant-uk" }]);
+  });
+
+  it("leaves a canceled lawyer (a tenant, no tier) and non-lawyers without one", async () => {
+    current = { id: "user-1", role: "LAWYER", tenantId: "tenant-ph", paymentPlanId: null, tenant: { code: "PH" } };
+    await AdminSvc.changeTenant("user-1", "UK", "admin-1");
+    current = { id: "user-1", role: "USER", tenantId: null, paymentPlanId: null, tenant: null };
+    await AdminSvc.changeTenant("user-1", "UK", "admin-1");
+    expect(writes).to.deep.equal([
+      { userId: "user-1", tenantId: "tenant-uk" },
+      { userId: "user-1", tenantId: "tenant-uk" },
+    ]);
+  });
 
   it("sets a tenant-less user's tenant and audits the change", async () => {
     const result = await AdminSvc.changeTenant("user-1", "UK", "admin-1");

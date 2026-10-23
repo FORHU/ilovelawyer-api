@@ -7,6 +7,7 @@ import { trialSampleKey } from "../utils/chat.utils";
 import TenantRepo from "../repositories/tenant.repository";
 import ConsentSvc from "./consent.service";
 import SecurityAuditSvc from "./security-audit.service";
+import PaymentPlanSvc from "./payment-plan.service";
 import HttpError from "../utils/http-error";
 import loginToken from "../utils/loginToken";
 import { Prisma } from "@prisma/client";
@@ -43,7 +44,9 @@ export default class TrialSvc {
     const id = crypto.randomUUID();
     const tag = id.slice(0, 8);
     const trialExpiresAt = new Date(Date.now() + TRIAL_DURATION_MS);
-    await AuthRepo.createTrialUser({ id, username: `guest.${tag}`, email: `trial-${id}@trial.invalid`, tenantId, trialExpiresAt });
+    // The tenant's default tier: with none, AccountLimitsSvc would lock the guest out of the AI.
+    const paymentPlanId = await PaymentPlanSvc.defaultIdForTenant(tenantId);
+    await AuthRepo.createTrialUser({ id, username: `guest.${tag}`, email: `trial-${id}@trial.invalid`, tenantId, paymentPlanId, trialExpiresAt });
     await ConsentSvc.set(id, "AI_PROCESSING", true, "trial");
     const consultationId = await TrialSvc.seedSampleConsultation(id);
     // "Explore a sample case file": view-only access to the shared sample case, no copy. Removed
