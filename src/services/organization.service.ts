@@ -12,6 +12,7 @@ import AuthRepo from "../repositories/auth.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
+import { PH_ZIP_CODE_PATTERN, UK_POSTCODE_PATTERN } from "../constants/field-rules";
 import { hasOrgRole } from "../utils/org-role";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
@@ -29,6 +30,14 @@ import logger from "../utils/logger";
 function assertFirmDetailsFitTenant(details: FirmDetails, tenantCode: TenantCode) {
   if (tenantCode !== "UK" && (details.firmRegulator || details.firmRegistrationNumber)) {
     throw new HttpError("A firm regulator and number are only for UK firms", 400);
+  }
+  // A UK postcode, or a PH 4-digit ZIP code: the address is in the firm's own country.
+  const postcode = details.postcode?.trim();
+  if (postcode && tenantCode === "UK" && !UK_POSTCODE_PATTERN.test(postcode)) {
+    throw new HttpError("Enter a UK postcode, e.g. SW1A 1AA.", 400, "INVALID_POSTCODE");
+  }
+  if (postcode && tenantCode === "PH" && !PH_ZIP_CODE_PATTERN.test(postcode)) {
+    throw new HttpError("Enter a 4-digit ZIP code.", 400, "INVALID_POSTCODE");
   }
 }
 
