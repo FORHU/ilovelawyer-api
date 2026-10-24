@@ -1,4 +1,4 @@
-import type Stripe from "stripe";
+import Stripe from "stripe";
 import { STRIPE_PUBLISHABLE_KEY } from "../config";
 import { stripeClient } from "./stripe-client";
 import HttpError from "../utils/http-error";
@@ -67,4 +67,60 @@ export async function expirePaymentPlanCheckout(sessionId: string): Promise<void
 
 export async function retrievePaymentPlanSubscription(subscriptionId: string): Promise<Stripe.Subscription> {
   return stripeClient().subscriptions.retrieve(subscriptionId);
+}
+
+/** What moving a subscription's one item onto `stripePriceId` right now would charge (the prorated
+ * difference for the rest of the period), in the smallest currency unit, without changing anything. */
+export async function previewPaymentPlanUpgrade(subscription: Stripe.Subscription, stripePriceId: string): Promise<{ amountDueMinor: number; currency: string }> {
+  const invoice = await stripeClient().invoices.createPreview({
+    subscription: subscription.id,
+    subscription_details: { items: [{ id: subscription.items.data[0].id, price: stripePriceId }], proration_behavior: "always_invoice" },
+  });
+  return { amountDueMinor: invoice.amount_due, currency: invoice.currency };
+}
+
+/** Moves a subscription onto a higher tier's Price now and charges the prorated difference to the
+ * card on file in the same request: a declined card (or one that needs the cardholder) fails the
+ * request with 402 PAYMENT_DECLINED and changes nothing (payment_behavior: error_if_incomplete). */
+export async function upgradePaymentPlanSubscription(subscription: Stripe.Subscription, stripePriceId: string, idempotencyKey: string): Promise<Stripe.Subscription> {
+  try {
+    return await stripeClient().subscriptions.update(
+      subscription.id,
+      {
+        items: [{ id: subscription.items.data[0].id, price: stripePriceId }],
+        proration_behavior: "always_invoice",
+        payment_behavior: "error_if_incomplete",
+      },
+      { idempotencyKey },
+    );
+  } catch (err) {
+    if (err instanceof Stripe.errors.StripeCardError) {
+      throw new HttpError("Your card was declined, so your plan wasn't changed. Nothing was charged.", 402, "PAYMENT_DECLINED");
+    }
+    throw err;
+  }
+}
+
+/** Moves a subscription onto a lower tier's Price at the end of the period already paid for, with no
+ * refund: a Subscription Schedule whose current phase keeps today's Price until then and whose next
+ * one bills the new Price, released afterwards so the subscription simply carries on. Reuses the
+ * subscription's schedule when it already has one (a downgrade chosen again). Returns its id. */
+export async function schedulePaymentPlanDowngrade(subscription: Stripe.Subscription, stripePriceId: string): Promise<string> {
+  const stripe = stripeClient();
+  const existing = typeof subscription.schedule === "string" ? subscription.schedule : subscription.schedule?.id;
+  const schedule = existing ? await stripe.subscriptionSchedules.retrieve(existing) : await stripe.subscriptionSchedules.create({ from_subscription: subscription.id });
+  const item = subscription.items.data[0];
+  await stripe.subscriptionSchedules.update(schedule.id, {
+    end_behavior: "release",
+    phases: [
+      { items: [{ price: item.price.id, quantity: 1 }], start_date: item.current_period_start, end_date: item.current_period_end, proration_behavior: "none" },
+      { items: [{ price: stripePriceId, quantity: 1 }], duration: { interval: "month", interval_count: 1 }, proration_behavior: "none" },
+    ],
+  });
+  return schedule.id;
+}
+
+/** Drops a scheduled downgrade: the subscription stays on the Price it has now. */
+export async function releasePaymentPlanSchedule(scheduleId: string): Promise<void> {
+  await stripeClient().subscriptionSchedules.release(scheduleId);
 }
