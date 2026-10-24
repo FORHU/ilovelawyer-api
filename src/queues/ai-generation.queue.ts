@@ -17,6 +17,7 @@ import TheoryDiffSvc from "../services/theory-diff.service";
 import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseMindMapSvc from "../services/case-mind-map.service";
 import CaseStrategySvc from "../services/case-strategy.service";
+import ClientOverviewSvc from "../services/client-overview.service";
 import ConsentSvc from "../services/consent.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
@@ -53,7 +54,8 @@ export type QueuedAiGenerationKind =
   | "caseMindMapGenerate"
   | "caseMindMapResync"
   | "missingEvidence"
-  | "crossExamination";
+  | "crossExamination"
+  | "clientOverview";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -131,6 +133,9 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // No controller either: the one coalesced retry after a document change found a map build
   // running (CaseMindMapSvc.scheduleResync). Claims the "caseMindMap" lock itself.
   caseMindMapResync: (job) => CaseMindMapSvc.runResync(job.caseId, job.userId),
+  // The client app's Overview tab: the controller (beginQueued) or the post-extraction auto
+  // trigger (beginAuto) already claimed the "clientOverview" lock.
+  clientOverview: (job) => ClientOverviewSvc.runQueued(job.caseId, job.userId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,

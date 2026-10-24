@@ -411,4 +411,17 @@ export default class CaseRepo {
   static async setReadySetFingerprint(id: string, fingerprint: string) {
     return prisma.case.updateMany({ where: { id }, data: { readySetFingerprint: fingerprint } });
   }
+
+  /** Whether a case lives in a client's personal workspace (ilovelawyer-client, USER accounts) —
+   * used by case-post-extraction.ts to run ClientOverviewSvc instead of the lawyer's
+   * CaseRefreshSvc pipeline. A client never joins an organization (ClientCaseSvc.workspaceFor),
+   * so "personal org, created by a USER account" is the same test requireClientAccount runs on
+   * the user directly, just reached from a caseId. False for a case that no longer exists. */
+  static async isClientWorkspaceCase(id: string): Promise<boolean> {
+    const row = await prisma.case.findUnique({
+      where: { id },
+      select: { organization: { select: { isPersonal: true, createdBy: { select: { role: true } } } } },
+    });
+    return !!row?.organization?.isPersonal && row.organization.createdBy.role === "USER";
+  }
 }

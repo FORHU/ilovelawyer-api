@@ -37,6 +37,10 @@ export const AI_GENERATION_KINDS = [
   "citationGrounds",
   "missingEvidence",
   "crossExamination",
+  // The client app's own Overview tab (ClientOverviewSvc) — a client-shaped job that runs only
+  // the panes a client needs (key dates/timeline, helps/hurts, what to gather), never the full
+  // caseRefresh pipeline. Never a PANE_REGENERATE_KINDS member: client cases have no Terminal.
+  "clientOverview",
 ] as const;
 
 export type AiGenerationKind = (typeof AI_GENERATION_KINDS)[number];

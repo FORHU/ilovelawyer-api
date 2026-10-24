@@ -451,6 +451,21 @@ model CaseMindMap {
   revisions MindMapRevision[]
 }
 
+
+model CaseClientOverview {
+  caseId String @id
+  generatedAt         DateTime?
+  readySetFingerprint String?
+  documentIds         String[]  @default([])
+  summary             String?   @db.Text
+  panes               Json?
+  runDay    DateTime? @db.Date
+  runsOnDay Int       @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
 model MessageRelatedCases {
   id        String   @id @default(uuid())
   messageId String   @unique
@@ -927,6 +942,7 @@ model Case {
   manualEdits                 CaseManualEdit[]
   clientPayments              ClientPayment[]
   clientRequests              ClientRequest[]
+  clientOverview              CaseClientOverview?
 
   @@index([userId])
   @@index([organizationId])
