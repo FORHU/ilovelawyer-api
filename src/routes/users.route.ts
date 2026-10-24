@@ -25,12 +25,13 @@ router.get(
 // The account's AI usage allowance (AccountLimitsSvc, account-level — cases aren't billed
 // individually): only consumedPct is shown to the lawyer, never the dollar amount (product
 // decision — a lawyer sees how much of their plan they've used, not a balance to watch drain);
-// { limited: false } for an account with no allowance at all (not LAWYER-owned).
+// { limited: false } for an account with no allowance at all (not LAWYER-owned). trialEnded: locked
+// because a solo lawyer's free trial is over and they don't subscribe; trialEndsAt is when it ends.
 router.get(
   "/me/ai-allowance",
   asyncHandler(async (req, res) => {
-    const { limited, locked, consumedPct } = await AccountLimitsSvc.allowanceInfo(req.user!.userId);
-    res.json({ limited, locked, consumedPct });
+    const { limited, locked, consumedPct, trialEnded, trialEndsAt } = await AccountLimitsSvc.allowanceInfo(req.user!.userId);
+    res.json({ limited, locked, consumedPct, trialEnded, trialEndsAt });
   }),
 );
 router.patch("/me", asyncHandler(UsersCtrl.updateMe));

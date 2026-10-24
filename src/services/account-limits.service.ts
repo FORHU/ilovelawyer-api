@@ -3,8 +3,19 @@ import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import { MAX_CASES_PER_ACCOUNT, CASE_SPEND_LIMIT_USD } from "../config";
 import { emitToUser } from "../lib/socket";
+import { LIVE_SUBSCRIPTION_STATUSES } from "../constants/plan-trial.constants";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
+
+export interface AllowanceInfo {
+  limited: boolean;
+  locked: boolean;
+  remainingUsd: number | null;
+  consumedPct: number | null;
+  thresholdUsd: number;
+  trialEnded: boolean;
+  trialEndsAt: Date | null;
+}
 
 /** Two limits on a lawyer account: how many cases it may own (from the lawyer's PaymentPlan tier,
  * PaymentPlanSvc — per-tier, admin-configurable, replacing the old flat MAX_CASES_PER_ACCOUNT
@@ -18,6 +29,10 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
  * locked (read-only) exactly like hitting $0 — the same UX, no new state. Only a lawyer with no
  * tenant at all (a legacy/edge case) still falls back to the global CASE_SPEND_LIMIT_USD off-switch.
  *
+ * A solo lawyer whose free trial is over (User.planTrialEndsAt, PlanTrialSvc) and who has no live
+ * subscription is locked the same way, whatever is left of their allowance or top-up credit: they
+ * read everything, but start no AI work and create no case until they subscribe (PLAN_TRIAL_ENDED).
+ *
  * The ceiling itself is still never stated as a fixed number in an error. The dollar amount *left*
  * and the percentage used, however, ARE shown to the lawyer (remainingAllowanceUsd/consumedPct on
  * the account — product decision, so a lawyer can see a top-up applied and isn't "being cheated"). */
@@ -29,9 +44,12 @@ export default class AccountLimitsSvc {
   static async assertCanCreateCase(userId: string, db: typeof prisma = prisma) {
     const user = await db.user.findUnique({
       where: { id: userId },
-      select: { role: true, tenantId: true, caseLimitNotifiedAt: true, paymentPlan: { select: { caseLimit: true } } },
+      select: { role: true, tenantId: true, caseLimitNotifiedAt: true, planTrialEndsAt: true, paymentPlan: { select: { caseLimit: true } } },
     });
     if (user?.role !== "LAWYER") return;
+    if (await AccountLimitsSvc.planTrialOver(userId, user.planTrialEndsAt, db)) {
+      throw new HttpError("Your free trial has ended. Choose a plan to create new cases.", 403, "PLAN_TRIAL_ENDED");
+    }
 
     // No tier (no tenant, or canceled): the global MAX_CASES_PER_ACCOUNT fallback.
     const limit = user.paymentPlan?.caseLimit ?? MAX_CASES_PER_ACCOUNT;
@@ -66,25 +84,34 @@ export default class AccountLimitsSvc {
    * known after a call ends, so the request that crosses the line still finishes. */
   static async assertAccountHasBudget(userId: string, db: typeof prisma = prisma) {
     const info = await AccountLimitsSvc.allowanceInfo(userId, db);
+    if (info.trialEnded) {
+      throw new HttpError("Your free trial has ended. You can still read everything. Choose a plan to keep going.", 403, "PLAN_TRIAL_ENDED");
+    }
     if (info.locked) {
       throw new HttpError("Your account has reached its AI usage allowance. You can still read everything. Top up to keep going.", 403, "ACCOUNT_ALLOWANCE_REACHED");
     }
   }
 
   /** The dollar amount left before the account locks, and whether it already has — null when the
-   * account isn't allowance-limited at all (not LAWYER-owned). `remainingUsd`/`consumedPct` are
+   * account isn't allowance-limited at all (not LAWYER-owned). `trialEnded`: locked because the
+   * solo lawyer's free trial is over and they don't subscribe (`trialEndsAt` is when it ends or
+   * ended, null with no trial). `remainingUsd`/`consumedPct` are
    * shown to the lawyer; the ceiling itself (`thresholdUsd`) is returned for internal callers only
    * (e.g. the top-up quote) and is never put in a user-facing response as a bare figure out of
    * context. */
   static async allowanceInfo(
     userId: string,
     db: typeof prisma = prisma,
-  ): Promise<{ limited: boolean; locked: boolean; remainingUsd: number | null; consumedPct: number | null; thresholdUsd: number }> {
+  ): Promise<AllowanceInfo> {
     const user = await db.user.findUnique({
       where: { id: userId },
-      select: { role: true, extraAiAllowanceUsd: true, tenantId: true, allowancePeriodStart: true, paymentPlan: { select: { includedAllowanceUsd: true } } },
+      select: { role: true, extraAiAllowanceUsd: true, tenantId: true, allowancePeriodStart: true, planTrialEndsAt: true, paymentPlan: { select: { includedAllowanceUsd: true } } },
     });
-    if (user?.role !== "LAWYER") return { limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0 };
+    if (user?.role !== "LAWYER") return { limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0, trialEnded: false, trialEndsAt: null };
+    const trial = { trialEnded: false, trialEndsAt: user.planTrialEndsAt ?? null };
+    if (await AccountLimitsSvc.planTrialOver(userId, user.planTrialEndsAt, db)) {
+      return { limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0, ...trial, trialEnded: true };
+    }
 
     // A tenant-less lawyer (legacy/edge case) still honors the global off-switch: threshold 0
     // there really does mean "unlimited". A tenant-scoped lawyer with no tier (never subscribed,
@@ -94,8 +121,8 @@ export default class AccountLimitsSvc {
     const threshold = included + user.extraAiAllowanceUsd;
     if (!threshold) {
       return user.tenantId
-        ? { limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0 }
-        : { limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0 };
+        ? { limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0, ...trial }
+        : { limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0, ...trial };
     }
 
     const { _sum } = await db.llmUsage.aggregate({
@@ -109,7 +136,22 @@ export default class AccountLimitsSvc {
       remainingUsd: Math.max(0, threshold - spent),
       consumedPct: Math.min(100, Math.round((spent / threshold) * 1000) / 10),
       thresholdUsd: threshold,
+      ...trial,
     };
+  }
+
+  /** Whether a lawyer can still work only by subscribing: their free trial (`planTrialEndsAt`) is
+   * over and no subscription is live. Asks about subscriptions only once a trial has ended. */
+  static async planTrialOver(userId: string, planTrialEndsAt: Date | null, db: typeof prisma = prisma, now: Date = new Date()): Promise<boolean> {
+    if (!planTrialEndsAt || planTrialEndsAt > now) return false;
+    const live = await db.paymentPlanSubscription.findFirst({ where: { userId, status: { in: LIVE_SUBSCRIPTION_STATUSES } }, select: { id: true } });
+    return !live;
+  }
+
+  /** planTrialOver for a lawyer by id alone (the top-up checkout). */
+  static async planTrialOverFor(userId: string, db: typeof prisma = prisma): Promise<boolean> {
+    const user = await db.user.findUnique({ where: { id: userId }, select: { planTrialEndsAt: true } });
+    return AccountLimitsSvc.planTrialOver(userId, user?.planTrialEndsAt ?? null, db);
   }
 
   /** Starts a new allowance period on `paymentPlanId` (a paid subscription's first or next billing

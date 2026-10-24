@@ -5,6 +5,7 @@ import { GOOGLE_USERNAME_MAX_ATTEMPTS, USERS_LIST_VERSION_KEY } from "../constan
 import { isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
 import { getStableProxyFileUrl } from "../utils/s3";
 import { FREE_CREDIT_USD, TRIAL_MESSAGE_LIMIT } from "../config";
+import { DAY_MS, LIVE_SUBSCRIPTION_STATUSES, PLAN_TRIAL_DAYS } from "../constants/plan-trial.constants";
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
@@ -219,6 +220,27 @@ export default class AuthRepo {
    * call keeps the first date. Busts the users list, which shows solo lawyers as such. */
   static async setSoloChosen(userId: string) {
     await bustUsersList(await prisma.user.updateMany({ where: { id: userId, soloChosenAt: null }, data: { soloChosenAt: new Date() } }));
+    await AuthRepo.startPlanTrial(userId);
+  }
+
+  /** Starts a solo lawyer's free trial of their tier (PLAN_TRIAL_DAYS), once: when the account is
+   * both approved and solo, whichever happens last — so a UK lawyer waiting on approval doesn't
+   * spend trial days in the queue. Never for a trial guest, a firm lawyer, a lawyer already paying,
+   * or one whose trial already started (a re-approval doesn't restart it). */
+  static async startPlanTrial(userId: string, now: Date = new Date()) {
+    await prisma.user.updateMany({
+      where: {
+        id: userId,
+        role: "LAWYER",
+        tenantId: { not: null },
+        approvalStatus: "ACTIVE",
+        soloChosenAt: { not: null },
+        trialExpiresAt: null,
+        planTrialEndsAt: null,
+        paymentPlanSubscriptions: { none: { status: { in: LIVE_SUBSCRIPTION_STATUSES } } },
+      },
+      data: { planTrialEndsAt: new Date(now.getTime() + PLAN_TRIAL_DAYS * DAY_MS) },
+    });
   }
 
   /** No bustUsersList: onboardingCompleted isn't a column AdminSvc.listUsers shows. */
@@ -690,6 +712,7 @@ export default class AuthRepo {
         lastLoginAt: true,
       },
     });
+    if (status === "ACTIVE") await AuthRepo.startPlanTrial(userId);
     return bustUsersList(user);
   }
 }

@@ -1,0 +1,5 @@
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">Your free trial ends soon</mj-text>
+<mj-text>Hello,</mj-text>
+<mj-text>Your free trial ends on {{endsOn}}.</mj-text>
+<mj-text>After that your account becomes read-only: you can still open and read everything, but you won't be able to use the AI or create new cases until you choose a plan.</mj-text>
+<mj-button href="{{plansLink}}">Choose a plan</mj-button>

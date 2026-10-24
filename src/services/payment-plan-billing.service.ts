@@ -76,18 +76,27 @@ async function lawyerOf(userId: string) {
  */
 export default class PaymentPlanBillingSvc {
   /** The tiers a lawyer can choose from (their tenant's active ones, cheapest first), the one their
-   * account is on now, and whether they already pay for it. */
+   * account is on now, whether they already pay for it, and their free trial: when it ends (null
+   * with none) and whether it already has, leaving the account read-only until they subscribe. */
   static async options(userId: string) {
     const user = await lawyerOf(userId);
-    const [plans, live] = await Promise.all([
+    const [plans, live, trial] = await Promise.all([
       prisma.paymentPlan.findMany({
         where: { tenantId: user.tenantId, planType: "B2B_SUBSCRIPTION", isActive: true },
         orderBy: { level: "asc" },
         select: { code: true, name: true, description: true, level: true, feeUsd: true, includedAllowanceUsd: true, caseLimit: true },
       }),
       PaymentPlanSubscriptionRepo.findLiveForUser(userId),
+      prisma.user.findUnique({ where: { id: userId }, select: { planTrialEndsAt: true } }),
     ]);
-    return { plans, currentPlanCode: user.paymentPlan?.code ?? null, subscribed: !!live };
+    const trialEndsAt = trial?.planTrialEndsAt ?? null;
+    return {
+      plans,
+      currentPlanCode: user.paymentPlan?.code ?? null,
+      subscribed: !!live,
+      trialEndsAt,
+      trialEnded: !live && !!trialEndsAt && trialEndsAt <= new Date(),
+    };
   }
 
   static async startCheckout(userId: string, planCode: string, origin: string | undefined) {

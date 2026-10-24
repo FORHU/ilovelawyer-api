@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 import prisma from "../lib/prisma";
 import AccountAiTopUpRepo from "../repositories/account-ai-topup.repository";
 import AccountTopUpPricingSvc from "./account-topup-pricing.service";
+import AccountLimitsSvc from "./account-limits.service";
 import { createAccountTopUpCheckout, accountTopUpCheckoutOutcome, ACCOUNT_TOPUP_METADATA_KIND, type AccountTopUpCheckout } from "../payments/account-topup-provider";
 import { stripeClient } from "../payments/stripe-client";
 import { returnOrigin } from "./client-billing.service";
@@ -41,6 +42,10 @@ export default class AccountTopUpBillingSvc {
 
   static async startCheckout(userId: string, topUpAmountUsd: number, origin: string | undefined) {
     const tenantId = await tenantIdOf(userId);
+    // A top-up adds to a plan; it isn't a way to keep going once the free trial is over.
+    if (await AccountLimitsSvc.planTrialOverFor(userId)) {
+      throw new HttpError("Your free trial has ended. Choose a plan to keep going; you can top up once you're on one.", 409, "PLAN_TRIAL_ENDED");
+    }
     const quote = await AccountTopUpPricingSvc.quote(tenantId, topUpAmountUsd);
 
     // Reuse an already-open checkout for the exact same amount (the lawyer re-opening the modal, or
