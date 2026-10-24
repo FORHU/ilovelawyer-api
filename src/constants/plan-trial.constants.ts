@@ -14,6 +14,6 @@ export const PLAN_TRIAL_REMINDER_DAYS = 3;
 export const LIVE_SUBSCRIPTION_STATUSES: PaymentPlanSubscriptionStatus[] = ["ACTIVE", "PAST_DUE"];
 
 /** The lawyer app's page listing every tier, where the trial emails send the lawyer. */
-export const PLANS_PAGE_PATH = "/plans";
+export const PLANS_PAGE_PATH = "/homepage/plans";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;

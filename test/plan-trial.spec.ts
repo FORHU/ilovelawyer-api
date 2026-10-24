@@ -172,7 +172,7 @@ describe("Solo lawyer plan trial", () => {
       await PlanTrialSvc.remindDue(NOW);
 
       const mine = notifications.filter((n) => ([soon, notYet] as string[]).includes(n.userId));
-      expect(mine.map((n) => [n.userId, n.title, n.link])).to.deep.equal([[soon, "Your free trial ends soon", "/plans"]]);
+      expect(mine.map((n) => [n.userId, n.title, n.link])).to.deep.equal([[soon, "Your free trial ends soon", "/homepage/plans"]]);
       expect(emails.filter((e) => e.subject === "Your free trial ends soon" && [soon, notYet].map(emailOf).includes(e.to)).map((e) => e.to)).to.deep.equal([emailOf(soon)]);
     });
 
