@@ -115,7 +115,7 @@ Stripe creates a test checkout and sends its events, and the `stripe:listen` ter
 
 ## Deployed environments
 
-These don't use the CLI. Each one has a webhook endpoint in the Stripe dashboard (**Developers → Webhooks → Add endpoint**) with the eight events above (the four `checkout.session.*` ones, `refund.updated`, `refund.failed`, `payment_intent.succeeded` and `payment_intent.payment_failed`), and its own signing secret in GitHub.
+These don't use the CLI. Each one has a webhook endpoint in the Stripe dashboard (**Developers → Webhooks → Add endpoint**) with the twelve events `stripe:listen` forwards (the four `checkout.session.*` ones, `refund.updated`, `refund.failed`, `payment_intent.succeeded`, `payment_intent.payment_failed`, and for a lawyer's subscription `invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated` and `customer.subscription.deleted`), and its own signing secret in GitHub. An endpoint missing the subscription events never sees a renewal or a cancellation: the lawyer keeps last period's allowance, or keeps a plan they no longer pay for.
 
 | Environment | Endpoint URL | GitHub environment | Variables (var) and secrets (secret) |
 | --- | --- | --- | --- |

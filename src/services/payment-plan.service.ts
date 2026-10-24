@@ -8,6 +8,10 @@ import { TenantCode } from "../types/tenant-code";
 export interface PaymentPlanInput {
   code: string;
   name: string;
+  /** Shown to the lawyer on the plan picker. */
+  description?: string;
+  /** Admin-only — never returned to a lawyer. */
+  adminNotes?: string;
   level?: number;
   feeUsd: number;
   includedAllowanceUsd: number;
@@ -103,6 +107,8 @@ export default class PaymentPlanSvc {
           planType: "B2B_SUBSCRIPTION",
           code: input.code.trim(),
           name: input.name.trim(),
+          description: input.description?.trim() || null,
+          adminNotes: input.adminNotes?.trim() || null,
           level,
           feeUsd: input.feeUsd,
           includedAllowanceUsd: input.includedAllowanceUsd,
@@ -138,6 +144,8 @@ export default class PaymentPlanSvc {
       where: { id: planId },
       data: {
         name: patch.name?.trim(),
+        description: patch.description !== undefined ? patch.description.trim() || null : undefined,
+        adminNotes: patch.adminNotes !== undefined ? patch.adminNotes.trim() || null : undefined,
         level: patch.level,
         feeUsd: patch.feeUsd,
         includedAllowanceUsd: patch.includedAllowanceUsd,

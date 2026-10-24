@@ -3270,6 +3270,11 @@ model PaymentPlan {
   code                   String
   // Display name — explicitly a placeholder per product (not a fixed enum).
   name                   String
+  // Shown to the lawyer on the plan picker — what this tier is for, not just its numbers.
+  description            String?
+  // Admin-only — never returned to a lawyer. Context for whoever edits this tier next, since the
+  // fee/allowance numbers alone don't say why they're set that way.
+  adminNotes             String?
   // Admin-chosen rank for display order and upgrade-direction comparisons. Not used for access
   // control.
   level                  Int             @default(0)
