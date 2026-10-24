@@ -236,6 +236,14 @@ function targetText(event: SecurityAuditEvent, names: AuditNames): string {
       return `AI model for ${id}`;
     case "jurisdiction_module":
       return `${id} jurisdiction module`;
+    case "client_price": {
+      const [tenant, code] = id.split(":");
+      return code === "case" ? `${tenant} client app case price` : `${tenant} client app top-up pack ${code}`;
+    }
+    case "client_promo": {
+      const [tenant, code] = id.split(":");
+      return `${tenant} promo code ${code}`;
+    }
     default:
       return "";
   }

@@ -22,7 +22,7 @@ export const TERMS_VERSION = "2026-10";
 
 // The client app's (ilovelawyer-client, USER accounts) own Terms, versioned independently of the
 // lawyer Terms above. Bump this whenever ilovelawyer-client/src/lib/auth/terms.ts materially changes.
-export const CLIENT_TERMS_VERSION = "client-2026-10";
+export const CLIENT_TERMS_VERSION = "client-2026-10.2";
 
 /** The Tenant every client account (USER) belongs to. The client app is served from one domain
  * for every region (ilovelawyer.com, app.ilovelawyer.com for staging), so the request's host can't

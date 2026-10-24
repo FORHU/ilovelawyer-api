@@ -79,6 +79,20 @@ export default class ClientPaymentRepo {
     return (await prisma.clientPayment.count({ where: { userId, kind: "CASE", status: "SUCCEEDED" } })) > 0;
   }
 
+  /** Case payments that used a tenant's promo code, paid or still at checkout (so a code with one
+   * use left can't be taken twice at once). Codes are per tenant, so the payer's tenant is matched
+   * too. With `userId`, only that client's. */
+  static async countPromoRedemptions(tenantId: string, promoCode: string, userId?: string): Promise<number> {
+    return prisma.clientPayment.count({
+      where: { promoCode, kind: "CASE", status: { in: ["SUCCEEDED", "PENDING"] }, user: { tenantId }, ...(userId ? { userId } : {}) },
+    });
+  }
+
+  /** The client's tenant: whose prices and promo codes apply to them. */
+  static async findTenantId(userId: string): Promise<string | null> {
+    return (await prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true } }))?.tenantId ?? null;
+  }
+
   /** Marks a successful case payment as used, once: the update only matches while it's unused, so
    * two requests with the same payment can't both create a case. Returns its credits, or null when
    * it's not this client's, didn't succeed, or was already used. */

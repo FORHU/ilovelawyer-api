@@ -174,6 +174,7 @@ model User {
   tenant                      Tenant?                          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   paymentPlan                 PaymentPlan?                     @relation("UserPaymentPlan", fields: [paymentPlanId], references: [id], onDelete: SetNull)
   updatedPaymentPlans         PaymentPlan[]                    @relation("PaymentPlanUpdatedBy")
+  updatedClientPromos         ClientPromo[]                    @relation("ClientPromoUpdatedBy")
   paymentPlanSubscriptions    PaymentPlanSubscription[]
   manualEdits                 CaseManualEdit[]
 
@@ -1055,6 +1056,36 @@ model LawyerPhRegistration {
   profile LawyerClientProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 }
 
+// A promo code for a client's case payment (ClientPricingSvc, ClientBillingSvc.quoteCase), per
+// tenant: a client can only use their own tenant's codes. Admin edited. `code` is stored uppercase
+// and matched case-insensitively. Redemptions are counted from ClientPayment.promoCode (joined to
+// the payer's tenant), so there's no counter to keep in step. Never hard-deleted: past payments
+// name the code.
+model ClientPromo {
+  id             String    @id @default(uuid())
+  tenantId       String
+  code           String
+  description    String
+  discountMinor  Int
+  // Must match the case price's currency for the code to apply.
+  currency       String
+  firstCaseOnly  Boolean   @default(false)
+  oncePerClient  Boolean   @default(false)
+  expiresAt      DateTime?
+  // Null = no limit. Counts SUCCEEDED and PENDING case payments that used the code.
+  maxRedemptions Int?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  updatedById    String?
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updatedBy User?  @relation("ClientPromoUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, code])
+  @@index([updatedById])
+}
+
 // A payment in the client app, failed ones included (ClientBillingSvc). `provider` says who took it:
 // "DUMMY" charges nothing and settles at once; "STRIPE" starts PENDING with a Stripe Checkout
 // Session (`externalId`) and settles on its webhook (StripeWebhookEvent) or when the app asks. A CASE
@@ -1083,6 +1114,7 @@ model ClientPayment {
   @@index([userId, kind, status])
   @@index([caseId])
   @@index([externalId])
+  @@index([promoCode, status])
   @@index([createdAt])
 }
 
@@ -3176,6 +3208,7 @@ model Tenant {
   laws                      Law[]
   settings                  TenantSetting[]
   paymentPlans              PaymentPlan[]
+  clientPromos              ClientPromo[]
 }
 
 // Admin-editable settings scoped to one Tenant (PH / UK) — one row per (tenant, key).
@@ -3198,7 +3231,8 @@ model TenantSetting {
 
 enum PaymentPlanType {
   B2B_SUBSCRIPTION // lawyer-side tiers (AccountLimitsSvc)
-  B2C_CASE // reserved for ClientBillingSvc's pricing, not populated yet
+  B2C_CASE // the client app's case price, one per tenant (ClientPricingSvc)
+  B2C_TOP_UP // the client app's credit top-up packs, per tenant (ClientPricingSvc)
 }
 
 enum PaymentPlanSubscriptionStatus {
@@ -3215,7 +3249,6 @@ enum PaymentPlanSubscriptionStatus {
 model PaymentPlan {
   id                     String          @id @default(uuid())
   tenantId               String
-  // Only B2B_SUBSCRIPTION is populated today; B2C_CASE is reserved for ClientBillingSvc's pricing.
   planType               PaymentPlanType @default(B2B_SUBSCRIPTION)
   // Stable machine slug ("standard"/"pro"/"max"), set once by admin.
   code                   String
@@ -3237,6 +3270,13 @@ model PaymentPlan {
   // unit_amount (cents) the current stripePriceId was created with. Compared against feeUsd to
   // detect drift that requires minting a new Price (the Stripe price sync, not built yet).
   stripePriceAmountMinor Int?
+  // B2C rows only (ClientPricingSvc); B2B tiers leave them null and use feeUsd. B2C rows set feeUsd
+  // and includedAllowanceUsd to 0 and use `level` as their display order.
+  priceMinor             Int?
+  credits                Int?
+  currency               String?
+  // The top-up pack the client app preselects. Exactly one active B2C_TOP_UP row has it.
+  isDefault              Boolean         @default(false)
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
   updatedById            String?

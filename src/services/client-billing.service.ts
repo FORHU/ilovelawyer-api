@@ -10,16 +10,9 @@ import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "..
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { CLIENT_URL, USER_APP_URL } from "../config";
-import {
-  CLIENT_CASE_CREDITS,
-  CLIENT_CASE_PRICE_MINOR,
-  CLIENT_CURRENCY,
-  CLIENT_DEFAULT_TOP_UP_PACK,
-  CLIENT_PROMOS,
-  CLIENT_TOP_UP_PACKS,
-} from "../constants/client-pricing.constants";
+import ClientPricingSvc from "./client-pricing.service";
 
-const money = (amountMinor: number) => ({ amountMinor, currency: CLIENT_CURRENCY });
+const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
 
 type TestOutcome = "decline" | undefined;
 
@@ -57,31 +50,30 @@ export interface StartedPayment {
  * can't create a case, and a PENDING top-up adds no credits, until it's paid.
  */
 export default class ClientBillingSvc {
-  static pricing() {
-    return {
-      case: { price: money(CLIENT_CASE_PRICE_MINOR), credits: CLIENT_CASE_CREDITS },
-      topUpPacks: CLIENT_TOP_UP_PACKS.map((p) => ({ id: p.id, name: p.name, credits: p.credits, price: money(p.priceMinor) })),
-      defaultPackId: CLIENT_DEFAULT_TOP_UP_PACK,
-    };
+  /** The prices an admin set for this client's tenant (ClientPricingSvc): the case, the active
+   * packs and the default pack. */
+  static async pricing(userId: string) {
+    return ClientPricingSvc.priceList(await ClientPricingSvc.tenantIdForClient(userId));
   }
 
   /** What a new case costs this client, with a promo code applied if it can be. */
   static async quoteCase(userId: string, promoCode?: string) {
-    const price = CLIENT_CASE_PRICE_MINOR;
+    const tenantId = await ClientPricingSvc.tenantIdForClient(userId);
+    const { case: casePrice } = await ClientPricingSvc.priceList(tenantId);
+    const { amountMinor: price, currency } = casePrice.price;
     const quote = (discountMinor: number, promo: { code: string; applied: boolean; message: string } | null) => ({
-      price: money(price),
-      discount: money(discountMinor),
-      total: money(price - discountMinor),
+      price: money(price, currency),
+      discount: money(discountMinor, currency),
+      total: money(price - discountMinor, currency),
+      credits: casePrice.credits,
       promo,
     });
     const code = promoCode?.trim();
     if (!code) return quote(0, null);
 
-    const promo = CLIENT_PROMOS.find((p) => p.code.toLowerCase() === code.toLowerCase());
-    if (!promo) return quote(0, { code, applied: false, message: "That code isn't valid." });
-    if (promo.firstCaseOnly && (await ClientPaymentRepo.hasPaidForCase(userId))) {
-      return quote(0, { code: promo.code, applied: false, message: `${promo.code} only applies to your first case.` });
-    }
+    const check = await ClientPricingSvc.checkPromo(tenantId, userId, code, casePrice.price);
+    if (!check.ok) return quote(0, { code: check.code, applied: false, message: check.message });
+    const { promo } = check;
     return quote(Math.min(promo.discountMinor, price), { code: promo.code, applied: true, message: `${promo.code} applied: ${promo.description}.` });
   }
 
@@ -94,13 +86,14 @@ export default class ClientBillingSvc {
       kind: "CASE",
       caseId: null,
       amountMinor: quote.total.amountMinor,
-      credits: CLIENT_CASE_CREDITS,
+      currency: quote.total.currency,
+      credits: quote.credits,
       promoCode: quote.promo?.code ?? null,
       description: "New case on ilovelawyer",
       testOutcome: input.testOutcome,
       origin: input.origin,
     });
-    return { paymentId: payment.id, status: payment.status, amount: money(payment.amountMinor), credits: payment.credits, checkout: checkoutDto(checkout) };
+    return { paymentId: payment.id, status: payment.status, amount: money(payment.amountMinor, payment.currency), credits: payment.credits, checkout: checkoutDto(checkout) };
   }
 
   /** The caller has already checked the case is this client's. */
@@ -108,12 +101,13 @@ export default class ClientBillingSvc {
    * now; with Stripe they're added when the payment settles, so `credits` is the balance as it
    * stands (unchanged until then). */
   static async topUp(userId: string, caseId: string, input: { packId: string; testOutcome?: TestOutcome; origin?: string }) {
-    const pack = CLIENT_TOP_UP_PACKS.find((p) => p.id === input.packId);
+    const pack = (await ClientBillingSvc.pricing(userId)).topUpPacks.find((p) => p.id === input.packId);
     if (!pack) throw new HttpError("No such top-up pack", 400);
     const { payment, checkout } = await ClientBillingSvc.start(userId, {
       kind: "TOP_UP",
       caseId,
-      amountMinor: pack.priceMinor,
+      amountMinor: pack.price.amountMinor,
+      currency: pack.price.currency,
       credits: pack.credits,
       promoCode: null,
       description: `${pack.credits} chat credits on ilovelawyer`,
@@ -121,7 +115,7 @@ export default class ClientBillingSvc {
       origin: input.origin,
     });
     const credits = payment.status === "SUCCEEDED" ? await ClientPaymentRepo.addCredits(caseId, pack.credits) : await ClientPaymentRepo.creditsOf(caseId);
-    return { paymentId: payment.id, status: payment.status, credits, added: pack.credits, amount: money(pack.priceMinor), checkout: checkoutDto(checkout) };
+    return { paymentId: payment.id, status: payment.status, credits, added: pack.credits, amount: pack.price, checkout: checkoutDto(checkout) };
   }
 
   /**
@@ -140,7 +134,7 @@ export default class ClientBillingSvc {
       paymentId: payment.id,
       kind: payment.kind,
       status: payment.status,
-      amount: money(payment.amountMinor),
+      amount: money(payment.amountMinor, payment.currency),
       credits: payment.credits,
       caseId: payment.caseId,
       failureReason: payment.failureReason,
@@ -228,6 +222,7 @@ export default class ClientBillingSvc {
       kind: "CASE" | "TOP_UP";
       caseId: string | null;
       amountMinor: number;
+      currency: string;
       credits: number;
       promoCode: string | null;
       description: string;
@@ -241,13 +236,13 @@ export default class ClientBillingSvc {
       caseId: p.caseId,
       kind: p.kind,
       amountMinor: p.amountMinor,
-      currency: CLIENT_CURRENCY,
+      currency: p.currency,
       credits: p.credits,
       promoCode: p.promoCode,
     };
 
     if (provider.mode === "immediate") {
-      const result = await provider.charge({ userId, amountMinor: p.amountMinor, currency: CLIENT_CURRENCY, description: p.description, testOutcome: p.testOutcome });
+      const result = await provider.charge({ userId, amountMinor: p.amountMinor, currency: p.currency, description: p.description, testOutcome: p.testOutcome });
       const payment = await ClientPaymentRepo.create({
         ...row,
         provider: provider.name,
@@ -274,7 +269,7 @@ export default class ClientBillingSvc {
         userId,
         customerEmail: await ClientPaymentRepo.findEmail(userId),
         amountMinor: p.amountMinor,
-        currency: CLIENT_CURRENCY,
+        currency: p.currency,
         description: p.description,
         returnUrl: `${returnUrl}?paymentId=${encodeURIComponent(pending.id)}`,
       });
