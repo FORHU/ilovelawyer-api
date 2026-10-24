@@ -56,6 +56,81 @@ const clientCase = {
   },
 };
 
+const overviewPoint = {
+  type: "object",
+  properties: { id: { type: "string" }, title: { type: "string" }, detail: { type: "string", nullable: true } },
+};
+const sectionStatus = { type: "string", enum: ["EMPTY", "RUNNING", "READY", "FAILED", "STALE"] };
+/** The client app's Overview tab (ilovelawyer-api#571, C1). Mirrors src/types/client-overview.ts;
+ * test/client-case-overview.spec.ts freezes the field list. Deliberately has no outlook, win
+ * likelihood, strategy or attack/defense fields — those stay Terminal-only. */
+const caseOverview = {
+  type: "object",
+  properties: {
+    generatedAt: { type: "string", format: "date-time", nullable: true },
+    job: {
+      type: "object",
+      nullable: true,
+      description: "The live generate job; null when nothing is running",
+      properties: {
+        startedAt: { type: "string", format: "date-time" },
+        panesDone: { type: "array", items: { type: "string", enum: ["strategy", "findings", "missingEvidence"] } },
+      },
+    },
+    changedSince: {
+      type: "object",
+      nullable: true,
+      description: "READY documents added or removed since generatedAt; null when nothing changed",
+      properties: { added: { type: "integer" }, removed: { type: "integer" } },
+    },
+    updates: {
+      type: "object",
+      properties: {
+        allowed: { type: "boolean", description: "False while a job is running" },
+        leftToday: { type: "integer", description: "Generate/Update presses left today (D1)" },
+      },
+    },
+    sections: {
+      type: "object",
+      description: "Each section's own status. keyDates is only READY or EMPTY, and is absent outside the UK.",
+      properties: Object.fromEntries(["summary", "timeline", "keyDates", "toGather", "helps", "mayHurt"].map((k) => [k, sectionStatus])),
+    },
+    summary: { type: "string", nullable: true },
+    timeline: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          date: { type: "string", format: "date-time", nullable: true },
+          label: { type: "string" },
+          sourceDocumentId: { type: "string", nullable: true, description: "Null when the document is no longer on the case" },
+          sourceDocumentName: { type: "string", nullable: true },
+        },
+      },
+    },
+    keyDates: {
+      type: "array",
+      description: "Procedural deadlines. Absent for a case outside the UK (D5).",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          label: { type: "string" },
+          date: { type: "string", format: "date-time" },
+          status: { type: "string", enum: ["CONFIRMED", "ESTIMATED"] },
+        },
+      },
+    },
+    toGather: {
+      type: "array",
+      items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, why: { type: "string" } } },
+    },
+    helps: { type: "array", items: overviewPoint },
+    mayHurt: { type: "array", items: overviewPoint },
+  },
+};
+
 const ADMIN_TAG = "Admin: Client Billing";
 const pageParams = [
   { name: "page", in: "query", schema: { type: "integer", minimum: 1, default: 1 } },
@@ -492,6 +567,30 @@ export const clientAppPaths: Paths = {
         content: json({ type: "object", required: ["key", "name"], properties: { key: { type: "string" }, name: { type: "string" }, contentType: { type: "string" }, fileSize: { type: "integer" } } }),
       },
       responses: { 201: { description: "Added (status PENDING until it's read)" }, 404: err("Not one of this client's cases") },
+    },
+  },
+  "/client/cases/{caseId}/overview": {
+    get: {
+      tags: [TAG],
+      summary: "The Overview tab's content and status — a plain read, no AI call",
+      security,
+      parameters: [caseId],
+      responses: { 200: { description: "Overview", content: json(caseOverview) }, 404: err("Not one of this client's cases") },
+    },
+  },
+  "/client/cases/{caseId}/overview/generate": {
+    post: {
+      tags: [TAG],
+      summary: "Generate (first run) or Update (after STALE) the Overview. Two quick requests start one job.",
+      security,
+      parameters: [caseId],
+      responses: {
+        202: { description: "The job has started (or was already running)", content: json(caseOverview) },
+        402: err("The case's AI usage budget for the overview is used up"),
+        403: err("AI processing consent has been withdrawn"),
+        404: err("Not one of this client's cases"),
+        429: err("Today's update limit for this case has been used (the body's nextUpdateAt says when it resets)"),
+      },
     },
   },
   // ── Admin: client billing (ilovelawyer-admin, ADMIN accounts only) ───────

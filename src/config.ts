@@ -45,6 +45,22 @@ export const ENGAGEMENT_AI_BUDGET_INCLUDED_USD =
 /** GBP per US dollar, for showing the engagement's AI budget (tracked internally in USD) to the
  * lawyer in GBP. A PLACEHOLDER rate until a real one is wired up (FORHU/ilovelawyer-app#846). A
  * missing or invalid value uses 0.8. */
+/** US dollars of AI usage a single client case may spend on its Overview (ClientOverviewSvc) before
+ * a Generate/Update is refused (B7, FORHU/ilovelawyer-app#572) — separate from CASE_SPEND_LIMIT_USD
+ * above, which is a lawyer-account-wide allowance and never applies to USER accounts
+ * (AccountLimitsSvc.allowanceInfo is a no-op for any role but LAWYER). A missing or invalid value
+ * uses 2. */
+const clientOverviewAiBudgetUsdRaw = process.env.CLIENT_OVERVIEW_AI_BUDGET_USD?.trim();
+const clientOverviewAiBudgetUsd = clientOverviewAiBudgetUsdRaw ? Number(clientOverviewAiBudgetUsdRaw) : NaN;
+export const CLIENT_OVERVIEW_AI_BUDGET_USD =
+  Number.isFinite(clientOverviewAiBudgetUsd) && clientOverviewAiBudgetUsd >= 0 ? clientOverviewAiBudgetUsd : 2;
+/** How many times a client may press Generate/Update on one case's Overview per UK calendar day
+ * (D1) — counts both manual presses and the automatic first-document run. A missing or invalid
+ * value uses 3. */
+const clientOverviewDailyCapRaw = process.env.CLIENT_OVERVIEW_DAILY_CAP?.trim();
+const clientOverviewDailyCap = clientOverviewDailyCapRaw ? Number(clientOverviewDailyCapRaw) : NaN;
+export const CLIENT_OVERVIEW_DAILY_CAP =
+  Number.isFinite(clientOverviewDailyCap) && clientOverviewDailyCap > 0 ? Math.floor(clientOverviewDailyCap) : 3;
 const engagementAiBudgetGbpPerUsdRaw = process.env.ENGAGEMENT_AI_BUDGET_GBP_PER_USD?.trim();
 const engagementAiBudgetGbpPerUsd = engagementAiBudgetGbpPerUsdRaw ? Number(engagementAiBudgetGbpPerUsdRaw) : NaN;
 export const ENGAGEMENT_AI_BUDGET_GBP_PER_USD =

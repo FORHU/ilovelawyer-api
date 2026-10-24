@@ -2,6 +2,8 @@ import { clientWorkspaceOf } from "../middleware/require-client-account.middlewa
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import ClientCaseSvc from "../services/client-case.service";
+import ClientOverviewSvc from "../services/client-overview.service";
+import ClientCaseOverviewSvc from "../services/client-case-overview.service";
 import ClientBillingSvc from "../services/client-billing.service";
 import HttpError from "../utils/http-error";
 import { ALLOWED_DOCUMENT_EXTENSIONS, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "../constants";
@@ -79,6 +81,14 @@ export default class ClientCaseCtrl {
   static async addDocument(req: Request, res: Response) {
     const file = validate(addClientDocumentSchema, req.body);
     res.status(201).json(await ClientCaseSvc.addDocument(clientWorkspaceOf(req), req.user.userId, req.params.caseId, file));
+  }
+
+  static async overview(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseOverviewSvc.get(clientWorkspaceOf(req), req.params.caseId));
+  }
+
+  static async generateOverview(req: Request, res: Response) {
+    res.status(202).json(await ClientOverviewSvc.beginQueued(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
   }
 
   static async lawyerReadiness(req: Request, res: Response) {

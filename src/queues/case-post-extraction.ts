@@ -2,6 +2,7 @@ import DocumentRepo from "../repositories/document.repository";
 import CaseRepo from "../repositories/case.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
+import ClientOverviewSvc from "../services/client-overview.service";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import WitnessExtractSvc from "../services/witness-extract.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
@@ -77,6 +78,22 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     const fingerprint = computeReadySetFingerprint(docs);
     const previousFingerprint = await CaseRepo.getReadySetFingerprint(caseId);
     const readySetChanged = fingerprint !== previousFingerprint;
+
+    // A client case (ilovelawyer-client, USER accounts) never runs the lawyer's CaseRefreshSvc
+    // pipeline — contradictions, outlook, red team, the mind map, Case Reconstruction and
+    // witness/damages extraction are all Terminal-only and a client case never had them. Its own,
+    // much smaller job (ClientOverviewSvc) runs instead, only on a changed READY set, and only
+    // this function's own run counts as "the last successful refresh" for readySetChanged — a
+    // client case's Case.readySetFingerprint is otherwise never written, so this check is what
+    // keeps a quiet (unchanged) re-trigger from spending an overview run for nothing.
+    if (await CaseRepo.isClientWorkspaceCase(caseId)) {
+      if (readySetChanged && (await ClientOverviewSvc.beginAuto(caseId))) {
+        await ClientOverviewSvc.runQueued(caseId, userId, "post-extraction");
+        logger.info("Client overview: automatic run completed", { caseId });
+      }
+      await CaseRepo.setReadySetFingerprint(caseId, fingerprint);
+      return;
+    }
 
     if (readySetChanged) {
       // Reuses the exact same pipeline (contradictions + case strategy + case findings + AI

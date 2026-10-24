@@ -229,6 +229,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/cases/:caseId/messages": AI_RUN,
   "POST /client/cases/:caseId/documents/presign": UPLOAD,
   "POST /client/cases/:caseId/documents": UPLOAD,
+  "POST /client/cases/:caseId/overview/generate": AI_RUN,
   "PATCH /users/me/client-request-profile": { exempt: "A lawyer's own professional details; the admin's verification of them is audited (#506)" },
   "POST /client/lawyer-requests": { exempt: "A client asking for a lawyer on their own case; consent and its version are stored on the request" },
   "POST /client/lawyer-requests/:id/withdraw": { exempt: "A client taking back their own request" },

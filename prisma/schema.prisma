@@ -451,6 +451,45 @@ model CaseMindMap {
   revisions MindMapRevision[]
 }
 
+/// The client app's Overview tab (ClientOverviewSvc, ilovelawyer-client#45 / ilovelawyer-api#572):
+/// a client-shaped summary of a case, written by a job that runs only the panes a client needs
+/// (key dates/timeline, helps/hurts, what to gather) — never the lawyer's full caseRefresh. One
+/// row per case; AiGenerationJob(caseId, "clientOverview") is the live run, this is the last
+/// result. Key dates and the timeline are read live from CaseTimelineEvent (no separate
+/// storage); this row holds only what the job writes nowhere else: the summary text, which panes
+/// last succeeded, and the daily-cap counter.
+model CaseClientOverview {
+  caseId String @id
+
+  /// When the job that produced the current content last finished successfully. Null before the
+  /// first run ever completes — EMPTY, not STALE.
+  generatedAt         DateTime?
+  /// Case.readySetFingerprint as of generatedAt — compared against the case's current one so the
+  /// client app can report STALE (GET /cases/:caseId/overview) without re-running anything.
+  readySetFingerprint String?
+  /// The READY document ids generatedAt was built from, so a STALE banner can say how many were
+  /// added or removed since.
+  documentIds         String[]  @default([])
+  /// Deterministic, templated from the panes below — see ClientOverviewSvc.composeSummary. Not
+  /// AI-authored prose: the client-facing wording here goes to solicitor review
+  /// (FORHU/ilovelawyer-app#846) before any model-generated phrasing ships.
+  summary             String?   @db.Text
+  /// Each pane's own outcome on the last completed run — {"strategy": "DONE" | "FAILED",
+  /// "findings": "DONE" | "FAILED", "missingEvidence": "DONE" | "FAILED"}. A pane status this
+  /// row doesn't have yet (the very first run) means that section is still EMPTY.
+  panes               Json?
+
+  /// D1's daily cap: how many Generate/Update runs (manual or the automatic first run) have
+  /// started on runDay. Reset to 0 the first time a run starts on a new day.
+  runDay    DateTime? @db.Date
+  runsOnDay Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
 model MessageRelatedCases {
   id        String   @id @default(uuid())
   messageId String   @unique
@@ -927,6 +966,7 @@ model Case {
   manualEdits                 CaseManualEdit[]
   clientPayments              ClientPayment[]
   clientRequests              ClientRequest[]
+  clientOverview              CaseClientOverview?
 
   @@index([userId])
   @@index([organizationId])

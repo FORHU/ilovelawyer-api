@@ -30,6 +30,11 @@ router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages))
 router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
 router.post("/cases/:caseId/documents", asyncHandler(ClientCaseCtrl.addDocument));
+// The Overview tab (#45/#572): a client-shaped summary, read for free and regenerated through a
+// small job of its own — see ClientOverviewSvc. Generate reads documents already on the case, so
+// it needs AI-processing consent like the chat does; the GET is a plain read and doesn't.
+router.get("/cases/:caseId/overview", asyncHandler(ClientCaseCtrl.overview));
+router.post("/cases/:caseId/overview/generate", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.generateOverview));
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 // A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
 router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
