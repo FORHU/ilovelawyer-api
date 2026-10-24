@@ -48,6 +48,15 @@ model User {
   allowancePeriodStart    DateTime?
   // One-time fence for the "you're over your tier's case limit" notice (grandfathering).
   caseLimitNotifiedAt     DateTime?
+
+  // A solo lawyer's free trial of their tier (PlanTrialSvc): set once, PLAN_TRIAL_DAYS after the
+  // account is approved and solo, never cleared. Past it with no live subscription, the account is
+  // read-only (AccountLimitsSvc). Null: no trial (firm lawyers, guests, not approved yet).
+  planTrialEndsAt          DateTime?
+  // One-time fences for the "trial ends soon" and "trial ended" emails (PlanTrialSweepQueue).
+  planTrialReminderSentAt  DateTime?
+  planTrialEndedNotifiedAt DateTime?
+
   googleAccessToken       String?
   googleRefreshToken      String?
   // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
@@ -182,6 +191,7 @@ model User {
   @@index([deletionRequestedAt])
   @@index([trialExpiresAt])
   @@index([paymentPlanId])
+  @@index([planTrialEndsAt])
 }
 
 model Session {

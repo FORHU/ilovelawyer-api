@@ -138,7 +138,7 @@ describe("an account's AI allowance", () => {
     const err = await rejection(() => AccountLimitsSvc.assertAccountHasBudget("u", db({ role: "LAWYER", tenantId: "t1", hasPlan: false, spend: 0 })));
     expect(err?.code).to.equal("ACCOUNT_ALLOWANCE_REACHED");
     const info = await AccountLimitsSvc.allowanceInfo("u", db({ role: "LAWYER", tenantId: "t1", hasPlan: false, spend: 0 }));
-    expect(info).to.deep.equal({ limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0 });
+    expect(info).to.deep.equal({ limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0, trialEnded: false, trialEndsAt: null });
   });
 
   it("a canceled lawyer with leftover top-up credit can still work until that credit runs out", async () => {
@@ -185,7 +185,7 @@ describe("an account's AI allowance", () => {
 
   it("allowanceInfo is unlimited for a non-lawyer", async () => {
     const info = await AccountLimitsSvc.allowanceInfo("u", db({ role: "USER", spend: 500 }));
-    expect(info).to.deep.equal({ limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0 });
+    expect(info).to.deep.equal({ limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0, trialEnded: false, trialEndsAt: null });
   });
 
   it("lets staff/top-up add to one account's allowance", async () => {
