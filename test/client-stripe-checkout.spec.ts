@@ -16,7 +16,7 @@ import {
   type ClientCheckoutRequest,
 } from "../src/payments/client-payment-provider";
 import { verifyStripeWebhook } from "../src/payments/stripe-client";
-import { CLIENT_CASE_CREDITS, CLIENT_CASE_PRICE_MINOR } from "../src/constants/client-pricing.constants";
+import { CASE_CREDITS as CLIENT_CASE_CREDITS, CASE_PRICE_MINOR as CLIENT_CASE_PRICE_MINOR, clientPriceRows, installClientPricing, welcomePromo, type ClientPricingState } from "./support/client-pricing-fixture";
 import { CLIENT_URL, USER_APP_URL } from "../src/config";
 
 function stash<T extends object>(target: T, keys: string[]) {
@@ -122,6 +122,11 @@ describe("Client app payments through Stripe Checkout", () => {
     setClientPaymentProvider(fakeStripe);
   });
 
+  let restorePricing: () => void;
+  beforeEach(() => {
+    restorePricing = installClientPricing({ rows: clientPriceRows(), promos: [welcomePromo()], redemptions: {} } as ClientPricingState);
+  });
+  afterEach(() => restorePricing());
   afterEach(() => {
     restore();
     setClientPaymentProvider(null);

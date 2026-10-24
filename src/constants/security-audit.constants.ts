@@ -61,6 +61,10 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.settings.payment_plan_created",
   "admin.settings.payment_plan_changed",
   "admin.settings.payment_plan_deactivated",
+  "admin.settings.client_price_created",
+  "admin.settings.client_price_changed",
+  "admin.settings.client_promo_created",
+  "admin.settings.client_promo_changed",
   "admin.model_settings.updated",
   "admin.jurisdiction_module.toggled",
   "admin.lawyer.verified",
@@ -115,7 +119,9 @@ export type SecurityAuditTargetType =
   | "integration"
   | "tenant"
   | "model_setting"
-  | "jurisdiction_module";
+  | "jurisdiction_module"
+  | "client_price"
+  | "client_promo";
 
 /** How long rows are kept before SecurityAuditRetentionQueue deletes them: 7 years by default,
  * overridable with SECURITY_AUDIT_RETENTION_DAYS. Never below the 365-day floor the database
@@ -185,6 +191,10 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.settings.payment_plan_created": "Subscription tier created",
   "admin.settings.payment_plan_changed": "Subscription tier changed",
   "admin.settings.payment_plan_deactivated": "Subscription tier deactivated",
+  "admin.settings.client_price_created": "Client app top-up pack created",
+  "admin.settings.client_price_changed": "Client app price changed",
+  "admin.settings.client_promo_created": "Client app promo code created",
+  "admin.settings.client_promo_changed": "Client app promo code changed",
   "admin.model_settings.updated": "AI model setting changed",
   "admin.jurisdiction_module.toggled": "Jurisdiction module switched",
   "admin.lawyer.verified": "Lawyer's client-request profile verified by ilovelawyer",

@@ -7,6 +7,7 @@ import SecurityAuditCtrl from "../controllers/security-audit.controller";
 import LlmUsageCtrl from "../controllers/llm-usage.controller";
 import ClientBillingAdminCtrl from "../controllers/client-billing-admin.controller";
 import ClientRequestAdminCtrl from "../controllers/client-request-admin.controller";
+import ClientPricingAdminCtrl from "../controllers/client-pricing-admin.controller";
 
 const router = express.Router();
 
@@ -40,6 +41,15 @@ router.post("/settings/tenants/:code/payment-plans", asyncHandler(AdminCtrl.crea
 router.patch("/settings/tenants/:code/payment-plans/:planId", asyncHandler(AdminCtrl.updatePaymentPlan));
 router.delete("/settings/tenants/:code/payment-plans/:planId", asyncHandler(AdminCtrl.deactivatePaymentPlan));
 router.post("/tenants/:code/approve-pending", asyncHandler(AdminCtrl.approvePending));
+
+// The client app's per-tenant prices and promo codes (ClientPricingSvc).
+router.get("/settings/client-pricing", asyncHandler(ClientPricingAdminCtrl.get));
+router.patch("/settings/tenants/:code/client-pricing/case", asyncHandler(ClientPricingAdminCtrl.updateCase));
+router.post("/settings/tenants/:code/client-pricing/packs", asyncHandler(ClientPricingAdminCtrl.createPack));
+router.patch("/settings/client-pricing/packs/:id", asyncHandler(ClientPricingAdminCtrl.updatePack));
+router.post("/settings/client-pricing/packs/:id/default", asyncHandler(ClientPricingAdminCtrl.setDefaultPack));
+router.post("/settings/tenants/:code/client-promos", asyncHandler(ClientPricingAdminCtrl.createPromo));
+router.patch("/settings/client-promos/:id", asyncHandler(ClientPricingAdminCtrl.updatePromo));
 
 router.get("/audit-log", asyncHandler(SecurityAuditCtrl.listForAdmin));
 router.get("/audit-log/export", asyncHandler(SecurityAuditCtrl.exportForAdmin));

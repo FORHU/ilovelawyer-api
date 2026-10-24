@@ -130,7 +130,8 @@ export default class PaymentPlanSvc {
 
   static async update(planId: string, patch: PaymentPlanPatch, adminId: string): Promise<PaymentPlan> {
     const before = await prisma.paymentPlan.findUnique({ where: { id: planId }, include: { tenant: { select: { code: true } } } });
-    if (!before) throw new HttpError("Unknown subscription tier", 404);
+    // The client app's B2C rows share this table; they're edited through ClientPricingSvc.
+    if (!before || before.planType !== "B2B_SUBSCRIPTION") throw new HttpError("Unknown subscription tier", 404);
     validateNumbers(patch);
 
     const plan = await prisma.paymentPlan.update({
@@ -161,7 +162,8 @@ export default class PaymentPlanSvc {
    * stay valid. */
   static async setActive(planId: string, isActive: boolean, adminId: string): Promise<PaymentPlan> {
     const before = await prisma.paymentPlan.findUnique({ where: { id: planId }, include: { tenant: { select: { code: true } } } });
-    if (!before) throw new HttpError("Unknown subscription tier", 404);
+    // The client app's B2C rows share this table; they're edited through ClientPricingSvc.
+    if (!before || before.planType !== "B2B_SUBSCRIPTION") throw new HttpError("Unknown subscription tier", 404);
 
     const plan = await prisma.paymentPlan.update({ where: { id: planId }, data: { isActive, updatedById: adminId } });
     await SecurityAuditSvc.record({

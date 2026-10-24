@@ -11,7 +11,7 @@ import ClientCaseRepo from "../src/repositories/client-case.repository";
 import CaseSvc from "../src/services/case.service";
 import ChatSvc from "../src/services/chat.service";
 import { dummyClientPaymentProvider, setClientPaymentProvider } from "../src/payments/client-payment-provider";
-import { CLIENT_CASE_CREDITS, CLIENT_CASE_PRICE_MINOR } from "../src/constants/client-pricing.constants";
+import { CASE_CREDITS as CLIENT_CASE_CREDITS, CASE_PRICE_MINOR as CLIENT_CASE_PRICE_MINOR, clientPriceRows, installClientPricing, welcomePromo, type ClientPricingState } from "./support/client-pricing-fixture";
 
 function stash<T extends object>(target: T, keys: string[]) {
   const saved = keys.map((k) => [k, (target as any)[k]] as const);
@@ -51,9 +51,16 @@ describe("Client app billing", () => {
       return true;
     };
   });
+  let pricing: ClientPricingState;
+  let restorePricing: () => void;
+  beforeEach(() => {
+    pricing = { rows: clientPriceRows(), promos: [welcomePromo()], redemptions: {} };
+    restorePricing = installClientPricing(pricing);
+  });
   beforeEach(() => setClientPaymentProvider(dummyClientPaymentProvider));
   afterEach(() => {
     restore();
+    restorePricing();
     setClientPaymentProvider(null);
   });
 
@@ -79,6 +86,32 @@ describe("Client app billing", () => {
 
     it("says so for a code that doesn't exist", async () => {
       expect((await ClientBillingSvc.quoteCase("u1", "FREE")).promo).to.deep.equal({ code: "FREE", applied: false, message: "That code isn't valid." });
+    });
+
+    it("uses the price an admin set, in its currency", async () => {
+      pricing.rows[0] = { ...pricing.rows[0], priceMinor: 1999, credits: 80, currency: "GBP" };
+      const q = await ClientBillingSvc.quoteCase("u1");
+      expect(q.total).to.deep.equal({ amountMinor: 1999, currency: "GBP" });
+      expect(q.credits).to.equal(80);
+    });
+
+    it("refuses a code that's turned off, expired or in another currency", async () => {
+      pricing.promos = [welcomePromo({ isActive: false })];
+      expect((await ClientBillingSvc.quoteCase("u1", "WELCOME5")).promo).to.include({ applied: false, message: "That code isn't valid." });
+      pricing.promos = [welcomePromo({ expiresAt: new Date(Date.now() - 1000) })];
+      expect((await ClientBillingSvc.quoteCase("u1", "WELCOME5")).promo).to.include({ applied: false, message: "WELCOME5 has expired." });
+      pricing.promos = [welcomePromo({ currency: "EUR" })];
+      expect((await ClientBillingSvc.quoteCase("u1", "WELCOME5")).promo).to.include({ applied: false });
+    });
+
+    it("refuses a code the client already used, or that has run out", async () => {
+      pricing.promos = [welcomePromo({ firstCaseOnly: false, oncePerClient: true })];
+      pricing.redemptions["WELCOME5:u1"] = 1;
+      expect((await ClientBillingSvc.quoteCase("u1", "WELCOME5")).promo).to.include({ applied: false, message: "You've already used WELCOME5." });
+      expect((await ClientBillingSvc.quoteCase("u2", "WELCOME5")).promo).to.include({ applied: true });
+      pricing.promos = [welcomePromo({ firstCaseOnly: false, maxRedemptions: 1 })];
+      pricing.redemptions.WELCOME5 = 1;
+      expect((await ClientBillingSvc.quoteCase("u2", "WELCOME5")).promo).to.include({ applied: false, message: "WELCOME5 has been fully used." });
     });
   });
 
@@ -123,6 +156,11 @@ describe("Client app billing", () => {
     it("adds nothing when the top-up is declined", async () => {
       expect(await errorOf(ClientBillingSvc.topUp("u1", "case-1", { packId: "p25", testOutcome: "decline" }))).to.deep.include({ status: 402 });
       expect(credits["case-1"]).to.equal(3);
+    });
+
+    it("refuses a pack an admin turned off", async () => {
+      pricing.rows = pricing.rows.map((r) => (r.code === "p25" ? { ...r, isActive: false } : r));
+      expect(await errorOf(ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" }))).to.deep.include({ status: 400 });
     });
 
     it("refuses an unknown pack", async () => {
