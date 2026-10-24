@@ -534,6 +534,11 @@ function streamChatWonderMessageOnce(
    * answer (CaseMindMapSvc's document-built map), where a quotation/contradiction audit only adds a
    * rewrite round. */
   opts?: {
+    /** Overrides withLegalTag below for this one call: sent as the tag prefix on user_input
+     * instead of `[legal ai]`/`[legal ai uk]`. The only caller today is the client consultation
+     * path (ChatSvc.runChatGenerationJob), which passes INTAKE_TAG — see chatWonder.constants.ts.
+     * Every other caller leaves this unset and keeps today's legal-tag behaviour. */
+    personaTag?: string;
     resolveOnAnswerEnd?: boolean;
     mindMapRequested?: boolean;
     mindMapContext?: string;
@@ -717,7 +722,7 @@ function streamChatWonderMessageOnce(
             trace_turn_id?: string;
           } = {
             type: "chat",
-            user_input: withLegalTag(userInput, tenantCode) + (caseId ? MINDMAP_RULE : ""),
+            user_input: (opts?.personaTag ?? withLegalTag(userInput, tenantCode)) + (caseId ? MINDMAP_RULE : ""),
             session_id: sessionId,
             use_full_legal_chain: false,
           };

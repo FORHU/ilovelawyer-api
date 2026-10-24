@@ -12,6 +12,7 @@ import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding, ChatWonderStage } from "../utils/chatWonder";
+import { INTAKE_TAG } from "../constants/chatWonder.constants";
 import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
@@ -1159,6 +1160,12 @@ export default class ChatSvc {
               mindMapContext: mindMapContext || undefined,
               caseDamages,
               onStage,
+              // This whole pipeline (enqueueChatGeneration -> ChatGenerationQueue ->
+              // runChatGenerationJob) has exactly one producer: ClientCaseSvc.sendMessage. It is
+              // never reached by ilovelawyer-app's own AI features (case-strategy, mind-map,
+              // etc.), which call streamChatWonderMessage directly -- so this is safe to set
+              // unconditionally here rather than threading a client/lawyer flag through.
+              personaTag: INTAKE_TAG,
               // A question is traced as "chat"; the mind map and audio overview triggers, which go
               // through this same path, are traced under their own names.
               trace: {
@@ -1691,6 +1698,9 @@ export default class ChatSvc {
       onStage?: (stage: ChatWonderStage) => void;
       /** Set on a real user turn: records its customer-facing trace for the Terminal's trace pane. */
       trace?: TraceTurn;
+      /** Forwarded to streamChatWonderMessage's opts.personaTag — see its doc comment. Only
+       * runChatGenerationJob sets this (INTAKE_TAG, the client consultation path). */
+      personaTag?: string;
     },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
@@ -1699,6 +1709,7 @@ export default class ChatSvc {
       ...(extras?.caseDamages ? { caseDamages: extras.caseDamages } : {}),
       ...(extras?.onStage ? { onStage: extras.onStage } : {}),
       ...(extras?.trace ? { traceTurnId: extras.trace.turnId } : {}),
+      ...(extras?.personaTag ? { personaTag: extras.personaTag } : {}),
       // The turn's LlmUsage row (epic #399). A real user turn names its user, organization and case
       // through its trace; the mind map and audio overview triggers are recorded under their own names.
       usage: {
