@@ -3341,6 +3341,13 @@ model PaymentPlanSubscription {
   cancelAtPeriodEnd    Boolean                       @default(false)
   // Fences invoice.paid handling so the allowance period rolls at most once per invoice.
   lastPeriodInvoiceId  String?
+
+  // A downgrade the lawyer asked for, taking effect at currentPeriodEnd (PaymentPlanBillingSvc
+  // .changePlan): the lower tier, and the Stripe Subscription Schedule that switches the Price then.
+  // Cleared once Stripe moves the subscription onto it, or when the lawyer keeps their tier.
+  scheduledPaymentPlanId String?
+  stripeScheduleId       String?
+
   failureReason        String?
   createdAt            DateTime                      @default(now())
   updatedAt            DateTime                      @updatedAt

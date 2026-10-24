@@ -88,15 +88,26 @@ export default class PaymentPlanSubscriptionRepo {
     return count === 1;
   }
 
-  /** Stripe's view of a live subscription (status, period, cancel-at-period-end, tier). A tier change
-   * also moves the lawyer onto it. Never touches a PENDING row (activate does that) or an ended one. */
-  static async sync(id: string, data: { status: PaymentPlanSubscriptionStatus; paymentPlanId: string } & SubscriptionPeriod) {
+  /** Stripe's view of a live subscription (status, period, cancel-at-period-end, tier, and the Price
+   * it bills when known). A tier change also moves the lawyer onto it, and lands a scheduled downgrade
+   * once it's the tier the schedule was moving to. Never touches a PENDING row (activate does that)
+   * or an ended one. */
+  static async sync(id: string, data: { status: PaymentPlanSubscriptionStatus; paymentPlanId: string; stripePriceId?: string } & SubscriptionPeriod) {
     await prisma.$transaction(async (tx) => {
       const { count } = await tx.paymentPlanSubscription.updateMany({ where: { id, status: { in: LIVE_STATUSES } }, data });
       if (count !== 1) return;
-      const row = await tx.paymentPlanSubscription.findUniqueOrThrow({ where: { id }, select: { userId: true } });
+      const row = await tx.paymentPlanSubscription.findUniqueOrThrow({ where: { id }, select: { userId: true, scheduledPaymentPlanId: true } });
+      if (row.scheduledPaymentPlanId === data.paymentPlanId) {
+        await tx.paymentPlanSubscription.update({ where: { id }, data: { scheduledPaymentPlanId: null, stripeScheduleId: null } });
+      }
       if (LIVE_STATUSES.includes(data.status)) await tx.user.update({ where: { id: row.userId }, data: { paymentPlanId: data.paymentPlanId } });
     });
+  }
+
+  /** A downgrade the lawyer chose, to `scheduledPaymentPlanId` at the end of the period (or null and
+   * null: they kept their tier, or upgraded instead). */
+  static async setScheduledChange(id: string, scheduledPaymentPlanId: string | null, stripeScheduleId: string | null) {
+    await prisma.paymentPlanSubscription.update({ where: { id }, data: { scheduledPaymentPlanId, stripeScheduleId } });
   }
 
   /** The subscription ended: the lawyer has no tier any more, which AccountLimitsSvc treats as a
