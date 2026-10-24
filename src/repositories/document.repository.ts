@@ -205,10 +205,20 @@ export default class DocumentRepo {
     return prisma.document.count({ where: { messageId } });
   }
 
-  static async linkToMessage(ids: string[], messageId: string, scope: WorkspaceScope, consultationId: string, userId?: string) {
+  /** `caseId` is the consultation's case: documents uploaded to the case (the client app's, which
+   * carry no consultationId) can be sent with a message in that case's chat too. */
+  static async linkToMessage(ids: string[], messageId: string, scope: WorkspaceScope, consultationId: string, userId?: string, caseId?: string | null) {
     await prisma.document.updateMany({
-      where: { id: { in: ids }, ...inWorkspace(scope, userId), consultationId },
+      where: { id: { in: ids }, AND: [inWorkspace(scope, userId), { OR: [{ consultationId }, ...(caseId ? [{ caseId }] : [])] }] },
       data: { messageId },
+    });
+  }
+
+  /** The case's active documents among `ids`, with what's needed to say which aren't read yet. */
+  static async findManyForCase(ids: string[], caseId: string, scope: WorkspaceScope) {
+    return prisma.document.findMany({
+      where: { id: { in: ids }, caseId, status: "ACTIVE", ...inWorkspace(scope) },
+      select: { id: true, name: true, ragStatus: true },
     });
   }
 

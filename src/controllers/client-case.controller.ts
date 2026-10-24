@@ -69,8 +69,8 @@ export default class ClientCaseCtrl {
   }
 
   static async sendMessage(req: Request, res: Response) {
-    const { text } = validate(sendClientMessageSchema, req.body);
-    res.status(202).json(await ClientCaseSvc.sendMessage(clientWorkspaceOf(req), req.user.userId, req.params.caseId, text));
+    const { text, documentIds } = validate(sendClientMessageSchema, req.body);
+    res.status(202).json(await ClientCaseSvc.sendMessage(clientWorkspaceOf(req), req.user.userId, req.params.caseId, text, documentIds));
   }
 
   static async presignDocument(req: Request, res: Response) {

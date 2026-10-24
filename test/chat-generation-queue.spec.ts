@@ -174,6 +174,24 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     expect(err?.message).to.equal("Case not found");
     expect(enqueued).to.equal(false);
   });
+
+  it("links attachments on the consultation's case, so case documents with no consultation are found", async () => {
+    const originalLink = DocumentRepo.linkToMessage;
+    ChatRepo.findConsultationWithCase = async () => ({ id: "c1", organizationId: "org1", userId: "user1", status: "ACTIVE", caseId: "case-1", case: null, title: "Existing" }) as any;
+    ChatRepo.createMessage = async () => ({ id: "m-user-1" }) as any;
+    redis.get = (async (key: string) => (key.includes("session") ? "sess-1" : null)) as any;
+    ChatGenerationQueue.enqueue = () => {};
+    let linked: unknown[] = [];
+    DocumentRepo.linkToMessage = async (...args: unknown[]) => {
+      linked = args;
+    };
+    try {
+      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "read this", undefined, undefined, undefined, ["d1"]);
+    } finally {
+      DocumentRepo.linkToMessage = originalLink;
+    }
+    expect(linked).to.deep.equal([["d1"], "m-user-1", firmScope("org1"), "c1", "user1", "case-1"]);
+  });
 });
 
 // --- ChatSvc.processChatGenerationJob: the worker-owned lifecycle ---

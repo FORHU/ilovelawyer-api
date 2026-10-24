@@ -93,8 +93,8 @@ describe("Lawyer readiness", () => {
         lawyerReadiness: null,
       };
       messages = [
-        { id: "m1", role: "user", content: "I was dismissed by text.", replyStatus: "DONE", createdAt: "t1" },
-        { id: "m2", role: "assistant", content: "That may be unfair dismissal.", replyStatus: null, createdAt: "t2" },
+        { id: "m1", role: "user", content: "I was dismissed by text.", replyStatus: "DONE", createdAt: "t1", documents: [] },
+        { id: "m2", role: "assistant", content: "That may be unfair dismissal.", replyStatus: null, createdAt: "t2", documents: [] },
       ];
       saved = [];
       (ClientCaseRepo as any).findById = async () => row;
@@ -137,7 +137,7 @@ describe("Lawyer readiness", () => {
       row.lawyerReadiness = await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
       await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
       expect(jevCalls).to.have.length(1);
-      messages.push({ id: "m3", role: "user", content: "I want compensation.", replyStatus: "DONE" }, { id: "m4", role: "assistant", content: "OK." });
+      messages.push({ id: "m3", role: "user", content: "I want compensation.", replyStatus: "DONE", documents: [] }, { id: "m4", role: "assistant", content: "OK.", documents: [] });
       await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
       expect(jevCalls).to.have.length(2);
     });
