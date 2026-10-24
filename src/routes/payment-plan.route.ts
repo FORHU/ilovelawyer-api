@@ -12,5 +12,8 @@ router.use(validSession);
 router.get("/", asyncHandler(PaymentPlanBillingCtrl.options));
 router.post("/checkout", asyncHandler(PaymentPlanBillingCtrl.startCheckout));
 router.get("/checkout/:subscriptionId", asyncHandler(PaymentPlanBillingCtrl.status));
+// A lawyer who already pays moving to another tier: what it costs (?planCode=), then the change.
+router.get("/change", asyncHandler(PaymentPlanBillingCtrl.previewChange));
+router.post("/change", asyncHandler(PaymentPlanBillingCtrl.changePlan));
 
 export default router;

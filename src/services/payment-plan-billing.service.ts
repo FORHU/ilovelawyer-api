@@ -9,6 +9,10 @@ import {
   expirePaymentPlanCheckout,
   paymentPlanCheckoutSession,
   retrievePaymentPlanSubscription,
+  previewPaymentPlanUpgrade,
+  upgradePaymentPlanSubscription,
+  schedulePaymentPlanDowngrade,
+  releasePaymentPlanSchedule,
   PAYMENT_PLAN_METADATA_KIND,
   type PaymentPlanCheckout,
 } from "../payments/payment-plan-subscription-provider";
@@ -32,6 +36,11 @@ const STATUS_FROM_STRIPE: Partial<Record<Stripe.Subscription.Status, PaymentPlan
   canceled: "CANCELED",
   incomplete_expired: "EXPIRED",
 };
+
+/** What choosing another tier does to a live subscription: a dearer one now, with the prorated
+ * difference charged; a cheaper one at the end of the paid period; their own tier again, with a
+ * downgrade scheduled, keeps it. */
+export type PlanChangeKind = "UPGRADE" | "DOWNGRADE" | "KEEP";
 
 function checkoutDto(checkout: PaymentPlanCheckout) {
   return { provider: "STRIPE" as const, clientSecret: checkout.clientSecret, publishableKey: checkout.publishableKey };
@@ -70,9 +79,10 @@ async function lawyerOf(userId: string) {
  * (AccountLimitsSvc.startAllowancePeriod). A subscription that ends leaves the lawyer with no tier,
  * which locks the account read-only, the same as running out of allowance.
  *
- * Billing is per lawyer (PaymentPlanSubscription.userId), even for a lawyer in a firm. Changing tier
- * on a live subscription (upgrade, Stripe's billing portal) isn't built yet: a lawyer with one gets
- * 409 ALREADY_SUBSCRIBED.
+ * Billing is per lawyer (PaymentPlanSubscription.userId), even for a lawyer in a firm. A lawyer who
+ * already pays changes tier with previewChange/changePlan instead of a second checkout (409
+ * ALREADY_SUBSCRIBED): an upgrade starts now and charges the prorated difference to the card Stripe
+ * keeps from the first checkout; a downgrade waits for the end of the period already paid for.
  */
 export default class PaymentPlanBillingSvc {
   /** The tiers a lawyer can choose from (their tenant's active ones, cheapest first), the one their
@@ -90,10 +100,16 @@ export default class PaymentPlanBillingSvc {
       prisma.user.findUnique({ where: { id: userId }, select: { planTrialEndsAt: true } }),
     ]);
     const trialEndsAt = trial?.planTrialEndsAt ?? null;
+    const scheduled = live?.scheduledPaymentPlanId
+      ? await prisma.paymentPlan.findUnique({ where: { id: live.scheduledPaymentPlanId }, select: { code: true } })
+      : null;
     return {
       plans,
       currentPlanCode: user.paymentPlan?.code ?? null,
       subscribed: !!live,
+      // When the paid period ends: the next charge, and when a scheduled downgrade happens.
+      renewsAt: live?.currentPeriodEnd ?? null,
+      scheduledPlanCode: scheduled?.code ?? null,
       trialEndsAt,
       trialEnded: !live && !!trialEndsAt && trialEndsAt <= new Date(),
     };
@@ -113,7 +129,7 @@ export default class PaymentPlanBillingSvc {
       open = await PaymentPlanSubscriptionRepo.findOpenForUser(userId);
     }
     if (await PaymentPlanSubscriptionRepo.findLiveForUser(userId)) {
-      throw new HttpError("You already have a plan. Changing plans isn't available yet.", 409, "ALREADY_SUBSCRIBED");
+      throw new HttpError("You already have a plan. Change it from the plans page instead.", 409, "ALREADY_SUBSCRIBED");
     }
 
     // Re-opening the same tier's checkout (the step shown again, a second tab) reuses it. A checkout
@@ -156,6 +172,102 @@ export default class PaymentPlanBillingSvc {
     }
     await PaymentPlanSubscriptionRepo.setCheckoutSession(pending.id, checkout.externalId);
     return { subscriptionId: pending.id, status: "PENDING" as const, planCode: plan.code, checkout: checkoutDto(checkout) };
+  }
+
+  /** What changing a live subscription to `planCode` would do, before the lawyer confirms: for an
+   * upgrade, the prorated amount charged now (Stripe's own preview, so it's what the card will be
+   * charged); for a downgrade, when it takes effect. Nothing changes. */
+  static async previewChange(userId: string, planCode: string) {
+    const { row, plan, kind } = await PaymentPlanBillingSvc.changeContext(userId, planCode);
+    const base = { kind, planCode: plan.code, renewsAt: row.currentPeriodEnd };
+    if (kind !== "UPGRADE") return { ...base, amountDueNow: 0, currency: "USD", effectiveAt: kind === "DOWNGRADE" ? row.currentPeriodEnd : null };
+    const stripePriceId = await PaymentPlanBillingSvc.priceOf(plan);
+    const preview = await PaymentPlanBillingSvc.provider(async () =>
+      previewPaymentPlanUpgrade(await retrievePaymentPlanSubscription(row.stripeSubscriptionId!), stripePriceId),
+    );
+    return { ...base, amountDueNow: preview.amountDueMinor / 100, currency: preview.currency.toUpperCase(), effectiveAt: null };
+  }
+
+  /** Changes a live subscription's tier (see previewChange). An upgrade is applied here as soon as
+   * Stripe has taken the payment, so the new limits hold before any webhook arrives; it also drops a
+   * downgrade the lawyer had scheduled. A downgrade is a Stripe Subscription Schedule, recorded on the
+   * row; customer.subscription.updated moves the lawyer onto it when the period ends. Choosing their
+   * own tier again keeps it. Returns the lawyer's plans as options() does. */
+  static async changePlan(userId: string, planCode: string) {
+    const { row, current, plan, kind } = await PaymentPlanBillingSvc.changeContext(userId, planCode);
+
+    if (kind === "KEEP") {
+      await PaymentPlanBillingSvc.dropScheduledChange(row);
+      return PaymentPlanBillingSvc.options(userId);
+    }
+
+    const stripePriceId = await PaymentPlanBillingSvc.priceOf(plan);
+    if (kind === "UPGRADE") {
+      await PaymentPlanBillingSvc.dropScheduledChange(row);
+      const subscription = await PaymentPlanBillingSvc.provider(() => retrievePaymentPlanSubscription(row.stripeSubscriptionId!));
+      // A retried click after the change went through: nothing left to charge.
+      const updated =
+        subscription.items.data[0]?.price.id === stripePriceId
+          ? subscription
+          : await PaymentPlanBillingSvc.provider(() =>
+              upgradePaymentPlanSubscription(subscription, stripePriceId, `payment-plan-upgrade-${row.id}-${plan.id}-${row.updatedAt.getTime()}`),
+            );
+      await PaymentPlanSubscriptionRepo.sync(row.id, { status: STATUS_FROM_STRIPE[updated.status] ?? row.status, paymentPlanId: plan.id, stripePriceId, ...periodOf(updated) });
+      await PaymentPlanBillingSvc.notify(userId, `You're on ${plan.name} now`, `Your plan changed from ${current.name} to ${plan.name}, and its limits apply from now.`);
+    } else {
+      const scheduleId = await PaymentPlanBillingSvc.provider(async () =>
+        schedulePaymentPlanDowngrade(await retrievePaymentPlanSubscription(row.stripeSubscriptionId!), stripePriceId),
+      );
+      await PaymentPlanSubscriptionRepo.setScheduledChange(row.id, plan.id, scheduleId);
+    }
+    return PaymentPlanBillingSvc.options(userId);
+  }
+
+  /** The lawyer's live Stripe subscription, its tier, the tier asked for, and which change that is.
+   * Dearer means upgrade (a tie on fee goes by level); the same tier is only a change while a
+   * downgrade is scheduled. */
+  private static async changeContext(userId: string, planCode: string) {
+    const user = await lawyerOf(userId);
+    const row = await PaymentPlanSubscriptionRepo.findLiveForUser(userId);
+    if (!row) throw new HttpError("You don't have a plan to change yet. Choose one first.", 409, "NOT_SUBSCRIBED");
+    if (!row.stripeSubscriptionId) throw new HttpError("This plan can't be changed here. Contact us to change it.", 409, "PLAN_NOT_CHANGEABLE");
+    const [current, plan] = await Promise.all([
+      prisma.paymentPlan.findUniqueOrThrow({ where: { id: row.paymentPlanId } }),
+      prisma.paymentPlan.findUnique({ where: { tenantId_planType_code: { tenantId: user.tenantId, planType: "B2B_SUBSCRIPTION", code: planCode } } }),
+    ]);
+    if (!plan?.isActive) throw new HttpError("That plan isn't available", 404, "PAYMENT_PLAN_NOT_FOUND");
+    let kind: PlanChangeKind;
+    if (plan.id === current.id) {
+      if (!row.scheduledPaymentPlanId) throw new HttpError(`You're already on ${plan.name}.`, 409, "SAME_PLAN");
+      kind = "KEEP";
+    } else {
+      kind = plan.feeUsd > current.feeUsd || (plan.feeUsd === current.feeUsd && plan.level > current.level) ? "UPGRADE" : "DOWNGRADE";
+    }
+    return { row, current, plan, kind };
+  }
+
+  /** Lets go of a scheduled downgrade, at Stripe and on the row. */
+  private static async dropScheduledChange(row: PaymentPlanSubscription) {
+    if (!row.stripeScheduleId) return;
+    await PaymentPlanBillingSvc.provider(() => releasePaymentPlanSchedule(row.stripeScheduleId!));
+    await PaymentPlanSubscriptionRepo.setScheduledChange(row.id, null, null);
+  }
+
+  /** The tier's Stripe Price, created on first use (PaymentPlanStripeSyncSvc). */
+  private static async priceOf(plan: Parameters<typeof PaymentPlanStripeSyncSvc.ensureStripePrice>[0]): Promise<string> {
+    return PaymentPlanBillingSvc.provider(() => PaymentPlanStripeSyncSvc.ensureStripePrice(plan));
+  }
+
+  /** A Stripe call: our own HttpErrors (a declined card) pass through; anything else is logged and
+   * answered 502, without Stripe's message. */
+  private static async provider<T>(call: () => Promise<T>): Promise<T> {
+    try {
+      return await call();
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      logger.error("Stripe call failed while changing a plan", { err: err instanceof Error ? err.message : String(err) });
+      throw new HttpError("We couldn't reach the payment provider. Nothing was changed. Try again in a moment.", 502, "PAYMENT_PROVIDER_ERROR");
+    }
   }
 
   /** Where a subscription checkout stands. A PENDING one is checked with Stripe first and settled if
@@ -224,7 +336,8 @@ export default class PaymentPlanBillingSvc {
         if (!row) return { handled: false };
         const status = STATUS_FROM_STRIPE[subscription.status] ?? row.status;
         const paymentPlanId = (await PaymentPlanBillingSvc.tierOfSubscription(subscription)) ?? row.paymentPlanId;
-        await PaymentPlanSubscriptionRepo.sync(row.id, { status, paymentPlanId, ...periodOf(subscription) });
+        const stripePriceId = subscription.items.data[0]?.price.id;
+        await PaymentPlanSubscriptionRepo.sync(row.id, { status, paymentPlanId, ...(stripePriceId ? { stripePriceId } : {}), ...periodOf(subscription) });
         return { handled: true };
       }
       case "customer.subscription.deleted": {
