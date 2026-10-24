@@ -39,6 +39,7 @@ const PROFILE = {
   acceptingRequests: true,
   enabledByOrganization: true,
   pausedUntil: null as Date | null,
+  capacityLimit: null as number | null,
   practiceAreas: ["EMPLOYMENT"],
   qualifiedJurisdictions: ["England and Wales"],
 };
@@ -52,6 +53,7 @@ describe("ClientRequestLawyerSvc", () => {
   let claims: any[];
   let profiles: Map<string, any>;
   let roles: Map<string, string>;
+  let openCounts: Map<string, number>;
   let emitted: [string, string, any][];
   let audits: any[];
   let securityAudits: any[];
@@ -91,7 +93,7 @@ describe("ClientRequestLawyerSvc", () => {
     restore = [
       stash(ClientRequestRepo, ["findForMatching", "findForLawyer", "listRoutedFor", "listHeldBy", "exclude"]),
       stash(ClientRequestClaimRepo, ["claim"]),
-      stash(LawyerProfileRepo, ["find", "findLawyerTenant", "findVerified"]),
+      stash(LawyerProfileRepo, ["find", "findLawyerTenant", "findVerified", "countOpenForLawyers"]),
       stash(OrganizationRepo, ["writeAudit"]),
       stash(SecurityAuditSvc, ["record"]),
       stash(ClientRequestBriefSvc, ["current"]),
@@ -110,6 +112,7 @@ describe("ClientRequestLawyerSvc", () => {
       ["lawyer-third", "LAWYER"],
       ["client-x", "USER"],
     ]);
+    openCounts = new Map();
     emitted = [];
     audits = [];
     securityAudits = [];
@@ -117,7 +120,8 @@ describe("ClientRequestLawyerSvc", () => {
     (LawyerProfileRepo as any).find = async (userId: string) => profiles.get(userId) ?? null;
     (LawyerProfileRepo as any).findLawyerTenant = async (userId: string) => (roles.has(userId) ? { role: roles.get(userId), tenantCode: "UK" } : null);
     (LawyerProfileRepo as any).findVerified = async (exclude: string[]) =>
-      [...profiles.values()].filter((p) => p.verificationStatus === "VERIFIED" && !exclude.includes(p.userId));
+      [...profiles.values()].filter((p) => p.verificationStatus === "VERIFIED" && !exclude.includes(p.userId)).map((p) => ({ ...p, openCount: openCounts.get(p.userId) ?? 0 }));
+    (LawyerProfileRepo as any).countOpenForLawyers = async (ids: string[]) => new Map(ids.map((id) => [id, openCounts.get(id) ?? 0]));
     (ClientRequestRepo as any).findForMatching = async (id: string) => {
       const r = requests.get(id);
       return r ? { excludedLawyerIds: r.excludedLawyerIds, case: r.case } : null;
@@ -242,6 +246,22 @@ describe("ClientRequestLawyerSvc", () => {
 
     it("answers 404 for no such request", async () => {
       expect(await errorOf(ClientRequestLawyerSvc.claim(me, "nope"))).to.deep.include({ status: 404 });
+    });
+
+    it("answers 404 for a lawyer already at their capacity limit", async () => {
+      profiles.set("lawyer-me", { ...PROFILE, capacityLimit: 2 });
+      openCounts.set("lawyer-me", 2);
+      routed("req-1");
+      expect(await errorOf(ClientRequestLawyerSvc.claim(me, "req-1"))).to.deep.include({ status: 404 });
+      expect(claims).to.have.length(0);
+    });
+
+    it("lets a lawyer under their capacity limit claim", async () => {
+      profiles.set("lawyer-me", { ...PROFILE, capacityLimit: 2 });
+      openCounts.set("lawyer-me", 1);
+      routed("req-1");
+      const dto = await ClientRequestLawyerSvc.claim(me, "req-1");
+      expect(dto.status).to.equal("CLAIMED");
     });
   });
 
