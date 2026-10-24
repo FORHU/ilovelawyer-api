@@ -92,6 +92,10 @@ export const updateTenantSettingsSchema = Joi.object({
 export const createPaymentPlanSchema = Joi.object({
   code: Joi.string().trim().min(1).max(40).required(),
   name: Joi.string().trim().min(1).max(100).required(),
+  // Shown to the lawyer on the plan picker.
+  description: Joi.string().trim().max(300).allow("").optional(),
+  // Admin-only — never returned to a lawyer.
+  adminNotes: Joi.string().trim().max(1000).allow("").optional(),
   level: Joi.number().integer().min(0).optional(),
   feeUsd: Joi.number().min(0).required(),
   includedAllowanceUsd: Joi.number().min(0).required(),
@@ -101,6 +105,8 @@ export const createPaymentPlanSchema = Joi.object({
 // No `code`: it's the stable slug signup and upgrades refer to, set once at create.
 export const updatePaymentPlanSchema = Joi.object({
   name: Joi.string().trim().min(1).max(100).optional(),
+  description: Joi.string().trim().max(300).allow("").optional(),
+  adminNotes: Joi.string().trim().max(1000).allow("").optional(),
   level: Joi.number().integer().min(0).optional(),
   feeUsd: Joi.number().min(0).optional(),
   includedAllowanceUsd: Joi.number().min(0).optional(),
