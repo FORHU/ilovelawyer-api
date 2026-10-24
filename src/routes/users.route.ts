@@ -23,13 +23,14 @@ router.get(
   asyncHandler(async (req, res) => res.json((await freeCreditState(req.user!.userId)) ?? { creditUsd: null })),
 );
 // The account's AI usage allowance (AccountLimitsSvc, account-level — cases aren't billed
-// individually): remainingUsd/consumedPct are shown to the lawyer; { limited: false } for an
-// account with no allowance at all (not LAWYER-owned).
+// individually): only consumedPct is shown to the lawyer, never the dollar amount (product
+// decision — a lawyer sees how much of their plan they've used, not a balance to watch drain);
+// { limited: false } for an account with no allowance at all (not LAWYER-owned).
 router.get(
   "/me/ai-allowance",
   asyncHandler(async (req, res) => {
-    const { limited, locked, remainingUsd, consumedPct } = await AccountLimitsSvc.allowanceInfo(req.user!.userId);
-    res.json({ limited, locked, remainingUsd, consumedPct });
+    const { limited, locked, consumedPct } = await AccountLimitsSvc.allowanceInfo(req.user!.userId);
+    res.json({ limited, locked, consumedPct });
   }),
 );
 router.patch("/me", asyncHandler(UsersCtrl.updateMe));
