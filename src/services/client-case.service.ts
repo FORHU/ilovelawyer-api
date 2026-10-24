@@ -3,6 +3,7 @@ import ClientCaseRepo, { type ClientCaseRow } from "../repositories/client-case.
 import type { CaseData } from "../repositories/case.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
+import DocumentRepo from "../repositories/document.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
@@ -112,6 +113,24 @@ function samePeople(next: { name: string; role: string }[], current: { name: str
   const a = next.map((p) => key(p.name, p.role)).sort();
   const b = current.map((p) => key(p.name, p.designation)).sort();
   return a.length === b.length && a.every((k, i) => k === b[i]);
+}
+
+/** "A.pdf", "A.pdf and B.pdf", "A.pdf, B.pdf and C.pdf" */
+function listNames(names: string[]) {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+}
+
+/** What the app shows when a message's documents aren't all READY. */
+function notReadyMessage(docs: { name: string; ragStatus: string }[]) {
+  const reading = docs.filter((d) => d.ragStatus === "PENDING").map((d) => d.name);
+  const failed = docs.filter((d) => d.ragStatus === "FAILED").map((d) => d.name);
+  const sentences: string[] = [];
+  if (reading.length) sentences.push(`Still reading ${listNames(reading)}. Send again once ${reading.length > 1 ? "they're" : "it's"} ready.`);
+  if (failed.length) {
+    const them = failed.length > 1 ? "them" : "it";
+    sentences.push(`We couldn't read ${listNames(failed)}. Upload ${them} again to use ${them}.`);
+  }
+  return sentences.join(" ");
 }
 
 function unchecked(ukJurisdiction: string | null, unavailable = false): LawyerReadiness {
@@ -286,6 +305,8 @@ export default class ClientCaseSvc {
         text: m.content,
         /** User messages only: whether the AI's answer to it arrived. */
         replyStatus: m.role === "user" ? m.replyStatus : null,
+        /** The case documents sent with a user message (sendMessage's documentIds). */
+        documents: m.role === "user" ? m.documents.map((d) => ({ id: d.id, name: d.name, status: d.ragStatus })) : [],
         createdAt: m.createdAt,
       })),
     };
@@ -293,12 +314,27 @@ export default class ClientCaseSvc {
 
   /** Asks the AI, for one chat credit. The answer is generated in the background
    * (ChatGenerationQueue) and shows up in listMessages. A message that couldn't be queued gets its
-   * credit back; one the AI then fails to answer keeps it spent, like any other AI work. */
-  static async sendMessage(workspace: ClientWorkspace, userId: string, caseId: string, text: string) {
+   * credit back; one the AI then fails to answer keeps it spent, like any other AI work.
+   * `documentIds` are the case's documents sent with it, each READY (checked before the credit is
+   * spent, so a refused send costs nothing). */
+  static async sendMessage(workspace: ClientWorkspace, userId: string, caseId: string, text: string, documentIds: string[] = []) {
     const consultationId = await ClientCaseSvc.consultationOf(workspace, userId, caseId);
+    const ids = [...new Set(documentIds)];
+    if (ids.length) await ClientCaseSvc.assertAttachable(workspace, caseId, ids);
     await ClientBillingSvc.spendCredit(caseId);
     try {
-      return await ChatSvc.enqueueChatGeneration(firmScope(workspace.id), workspace.tenantCode, userId, consultationId, "", text, undefined, undefined, caseId);
+      return await ChatSvc.enqueueChatGeneration(
+        firmScope(workspace.id),
+        workspace.tenantCode,
+        userId,
+        consultationId,
+        "",
+        text,
+        undefined,
+        undefined,
+        caseId,
+        ids.length ? ids : undefined,
+      );
     } catch (err) {
       await ClientBillingSvc.refundCredit(caseId);
       throw err;
@@ -390,6 +426,19 @@ export default class ClientCaseSvc {
       emitToUser(engaged.lawyerId, CLIENT_HANDOFF_SOCKET_EVENTS.ENGAGEMENT_DOCUMENT_ADDED, event);
     }
     return { id: doc.id, name: doc.name, status: doc.ragStatus, createdAt: doc.createdAt };
+  }
+
+  /** Every id must be an active document on this case (404 otherwise, never saying whose it is),
+   * and READY, so the AI never answers before it has read what was sent (409, naming the rest). */
+  private static async assertAttachable(workspace: ClientWorkspace, caseId: string, ids: string[]) {
+    const docs = await DocumentRepo.findManyForCase(ids, caseId, firmScope(workspace.id));
+    if (docs.length !== ids.length) throw new HttpError("Document not found", 404);
+    const notReady = docs.filter((d) => d.ragStatus !== "READY");
+    if (notReady.length) {
+      throw new HttpError(notReadyMessage(notReady), 409, "DOCUMENTS_NOT_READY", {
+        documents: notReady.map((d) => ({ id: d.id, name: d.name, status: d.ragStatus })),
+      });
+    }
   }
 
   private static async load(workspace: ClientWorkspace, caseId: string) {

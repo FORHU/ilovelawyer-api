@@ -515,6 +515,14 @@ export const clientAppPaths: Paths = {
                     role: { type: "string", enum: ["user", "ai"] },
                     text: { type: "string" },
                     replyStatus: { type: "string", enum: ["PENDING", "DONE", "FAILED", "CANCELLED"], nullable: true },
+                    documents: {
+                      type: "array",
+                      description: "The case documents sent with a user message. Always empty on the AI's",
+                      items: {
+                        type: "object",
+                        properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["PENDING", "READY", "FAILED"] } },
+                      },
+                    },
                     createdAt: { type: "string", format: "date-time" },
                   },
                 },
@@ -530,13 +538,25 @@ export const clientAppPaths: Paths = {
       summary: "Ask the AI about the case",
       security,
       parameters: [caseId],
-      requestBody: { required: true, content: json({ type: "object", required: ["text"], properties: { text: { type: "string", maxLength: 4000 } } }) },
+      requestBody: {
+        required: true,
+        content: json({
+          type: "object",
+          required: ["text"],
+          properties: {
+            text: { type: "string", maxLength: 4000 },
+            documentIds: { type: "array", maxItems: 5, items: { type: "string" }, description: "The case's documents to send with this message. Each must be READY" },
+          },
+        }),
+      },
       responses: {
         202: { description: "Queued; the answer appears in GET messages. Uses one chat credit" },
         402: err("OUT_OF_CREDITS: top up the case"),
         403: err("CONSENT_REQUIRED (AI processing withdrawn)"),
-        404: err("Not one of this client's cases"),
-        409: err("A reply is already generating"),
+        404: err("Not one of this client's cases, or a documentId that isn't on this case"),
+        409: err(
+          "DOCUMENTS_NOT_READY: a document is still being read or couldn't be read; `message` names them and `documents` lists { id, name, status }. Otherwise a reply is already generating. Neither uses a credit",
+        ),
       },
     },
   },

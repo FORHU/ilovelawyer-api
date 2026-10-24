@@ -15,11 +15,12 @@ import OrganizationSvc from "../src/services/organization.service";
 import CaseSvc from "../src/services/case.service";
 import ChatSvc from "../src/services/chat.service";
 import DocumentSvc from "../src/services/document.service";
+import DocumentRepo from "../src/repositories/document.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientRequestSvc from "../src/services/client-request.service";
 import requireClientAccount from "../src/middleware/require-client-account.middleware";
 import clientRoute from "../src/routes/client.route";
-import { createClientCaseSchema, updateClientCaseSchema } from "../src/validation/client-case.validation";
+import { createClientCaseSchema, sendClientMessageSchema, updateClientCaseSchema } from "../src/validation/client-case.validation";
 import { listRoutes } from "./support/list-routes";
 import * as socket from "../src/lib/socket";
 
@@ -152,9 +153,13 @@ describe("Client app cases", () => {
     let row: ReturnType<typeof caseRow> | null;
     let calls: Record<string, unknown[]>;
     let live: { id: string; status: string } | null;
+    let caseDocs: { id: string; name: string; ragStatus: string }[];
+    let creditsSpent: number;
 
     beforeEach(() => {
       live = null;
+      caseDocs = [];
+      creditsSpent = 0;
       const fns = [
         stash(ClientCaseRepo, ["findById", "findAnyById", "list", "clearReadiness"]),
         stash(CaseSvc, ["create", "update", "archive", "unarchive", "delete"]),
@@ -163,12 +168,20 @@ describe("Client app cases", () => {
         // Paying and credits are test/client-billing.spec.ts's; here a payment is always good.
         stash(ClientPaymentRepo, ["claimCasePayment", "attachToCase", "spendCredit", "addCredits"]),
         stash(DocumentSvc, ["create"]),
+        stash(DocumentRepo, ["findManyForCase"]),
         stash(ClientRequestRepo, ["findEngagedLawyerForCase", "findLiveForCase"]),
         stash(socket, ["emitToUser"]),
       ];
       (ClientPaymentRepo as any).claimCasePayment = async () => 50;
       (ClientPaymentRepo as any).attachToCase = async () => undefined;
-      (ClientPaymentRepo as any).spendCredit = async () => true;
+      (ClientPaymentRepo as any).spendCredit = async () => {
+        creditsSpent++;
+        return true;
+      };
+      (DocumentRepo as any).findManyForCase = async (...args: unknown[]) => {
+        calls.findManyForCase = args;
+        return caseDocs.filter((d) => (args[0] as string[]).includes(d.id));
+      };
       (ClientPaymentRepo as any).addCredits = async () => 50;
       (DocumentSvc as any).create = async () => ({ id: "d2", name: "Payslip.pdf", ragStatus: "PENDING", createdAt: new Date("2026-10-22") });
       (ClientRequestRepo as any).findEngagedLawyerForCase = async () => null;
@@ -255,10 +268,17 @@ describe("Client app cases", () => {
       (ChatSvc as any).listMessages = async (...args: unknown[]) => {
         calls.listMessages = args;
         return [
-          { id: "m1", role: "user", content: "Is this legal?", replyStatus: "DONE", createdAt: "t1" },
-          { id: "m2", role: "assistant", content: "Usually not.", replyStatus: null, createdAt: "t2" },
-          { id: "m3", role: "system", content: "internal", replyStatus: null, createdAt: "t3" },
-          { id: "m4", role: "user", content: "What now?", replyStatus: "PENDING", createdAt: "t4" },
+          {
+            id: "m1",
+            role: "user",
+            content: "Is this legal?",
+            replyStatus: "DONE",
+            createdAt: "t1",
+            documents: [{ id: "d1", name: "Contract.pdf", ragStatus: "READY", fileUrl: "https://files/x", caseId: "case-1" }],
+          },
+          { id: "m2", role: "assistant", content: "Usually not.", replyStatus: null, createdAt: "t2", documents: [] },
+          { id: "m3", role: "system", content: "internal", replyStatus: null, createdAt: "t3", documents: [] },
+          { id: "m4", role: "user", content: "What now?", replyStatus: "PENDING", createdAt: "t4", documents: [] },
         ];
       };
       const result = await ClientCaseSvc.listMessages(workspace, "u1", "case-1");
@@ -269,11 +289,63 @@ describe("Client app cases", () => {
         ["m2", "ai", null],
         ["m4", "user", "PENDING"],
       ]);
+      // Only what the app shows under the message: no file link, no other document fields.
+      expect(result.messages[0].documents).to.deep.equal([{ id: "d1", name: "Contract.pdf", status: "READY" }]);
+      expect(result.messages[1].documents).to.deep.equal([]);
     });
 
     it("asks the AI in the case's consultation, on the UK tenant, scoped to the case", async () => {
       await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "What are my rights?");
-      expect(calls.enqueue).to.deep.equal([firmScope("org-personal"), "UK", "u1", "cons-1", "", "What are my rights?", undefined, undefined, "case-1"]);
+      expect(calls.enqueue).to.deep.equal([firmScope("org-personal"), "UK", "u1", "cons-1", "", "What are my rights?", undefined, undefined, "case-1", undefined]);
+      expect(calls.findManyForCase).to.equal(undefined);
+    });
+
+    describe("sending documents with a message", () => {
+      it("attaches the case's READY documents to the message", async () => {
+        caseDocs = [{ id: "d1", name: "Contract.pdf", ragStatus: "READY" }];
+        await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read this", ["d1"]);
+        expect(calls.findManyForCase).to.deep.equal([["d1"], "case-1", firmScope("org-personal")]);
+        expect((calls.enqueue as unknown[]).slice(8)).to.deep.equal(["case-1", ["d1"]]);
+        expect(creditsSpent).to.equal(1);
+      });
+
+      it("refuses a document still being read, by name, and keeps the credit", async () => {
+        caseDocs = [
+          { id: "d1", name: "Contract.pdf", ragStatus: "READY" },
+          { id: "d2", name: "Payslip.pdf", ragStatus: "PENDING" },
+        ];
+        const err: any = await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read this", ["d1", "d2"]).catch((e) => e);
+        expect(err.statusCode).to.equal(409);
+        expect(err.code).to.equal("DOCUMENTS_NOT_READY");
+        expect(err.message).to.equal("Still reading Payslip.pdf. Send again once it's ready.");
+        expect(err.details).to.deep.equal({ documents: [{ id: "d2", name: "Payslip.pdf", status: "PENDING" }] });
+        expect(calls.enqueue).to.equal(undefined);
+        expect(creditsSpent).to.equal(0);
+      });
+
+      it("names every document not ready, and says when one couldn't be read", async () => {
+        caseDocs = [
+          { id: "d1", name: "A.pdf", ragStatus: "PENDING" },
+          { id: "d2", name: "B.pdf", ragStatus: "PENDING" },
+          { id: "d3", name: "C.pdf", ragStatus: "FAILED" },
+        ];
+        const err: any = await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read these", ["d1", "d2", "d3"]).catch((e) => e);
+        expect(err.message).to.equal("Still reading A.pdf and B.pdf. Send again once they're ready. We couldn't read C.pdf. Upload it again to use it.");
+      });
+
+      it("404s a document that isn't on this case, without spending a credit", async () => {
+        caseDocs = [{ id: "d1", name: "Contract.pdf", ragStatus: "READY" }];
+        expect(await errorOf(ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read this", ["d1", "other-case-doc"]))).to.deep.include({ status: 404 });
+        expect(calls.enqueue).to.equal(undefined);
+        expect(creditsSpent).to.equal(0);
+      });
+
+      it("takes a repeated id once", async () => {
+        caseDocs = [{ id: "d1", name: "Contract.pdf", ragStatus: "READY" }];
+        await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read this", ["d1", "d1"]);
+        expect((calls.findManyForCase as unknown[])[0]).to.deep.equal(["d1"]);
+        expect((calls.enqueue as unknown[])[9]).to.deep.equal(["d1"]);
+      });
     });
 
     it("gives a case that lost its chat a new one", async () => {
@@ -421,6 +493,14 @@ describe("Client app cases", () => {
       expect(updateClientCaseSchema.validate({ title: "New" }).error).to.equal(undefined);
       expect(updateClientCaseSchema.validate({ ukJurisdiction: null }).error).to.equal(undefined);
       expect(updateClientCaseSchema.validate({ area: "PERSONAL_INJURY" }).error).to.not.equal(undefined);
+    });
+
+    it("takes up to 5 documents with a message", () => {
+      const ids = (n: number) => Array.from({ length: n }, (_, i) => `d${i}`);
+      expect(sendClientMessageSchema.validate({ text: "Hi" }).error).to.equal(undefined);
+      expect(sendClientMessageSchema.validate({ text: "Hi", documentIds: ids(5) }).error).to.equal(undefined);
+      expect(sendClientMessageSchema.validate({ text: "Hi", documentIds: ids(6) }).error).to.not.equal(undefined);
+      expect(sendClientMessageSchema.validate({ text: "Hi", documentIds: [""] }).error).to.not.equal(undefined);
     });
 
     it("only takes the client app's areas, and no personal injury", () => {

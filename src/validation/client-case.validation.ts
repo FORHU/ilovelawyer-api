@@ -5,6 +5,7 @@ import {
   CLIENT_CASE_NOTES_MAX_LENGTH,
   CLIENT_CASE_TITLE_MAX_LENGTH,
   CLIENT_CASE_WHERE_MAX_LENGTH,
+  CLIENT_MESSAGE_DOCUMENTS_MAX,
   CLIENT_MESSAGE_MAX_LENGTH,
   CLIENT_PARTY_ROLES,
 } from "../constants/client-case.constants";
@@ -84,6 +85,8 @@ export const topUpClientCaseSchema = Joi.object({
 
 export const sendClientMessageSchema = Joi.object({
   text: Joi.string().trim().min(1).max(CLIENT_MESSAGE_MAX_LENGTH).required(),
+  // The case's documents to send with it. Repeats are folded in ClientCaseSvc.sendMessage.
+  documentIds: Joi.array().items(Joi.string().trim().min(1)).max(CLIENT_MESSAGE_DOCUMENTS_MAX).optional(),
 });
 
 export const presignClientDocumentSchema = Joi.object({

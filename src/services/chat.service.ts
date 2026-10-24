@@ -519,7 +519,7 @@ export default class ChatSvc {
     logger.info("Chat: user message created", { consultationId, messageId: userMessage.id, elapsedMs: Date.now() - t0 });
 
     if (documentIds?.length) {
-      await DocumentRepo.linkToMessage(documentIds, userMessage.id, scope, consultationId, userId);
+      await DocumentRepo.linkToMessage(documentIds, userMessage.id, scope, consultationId, userId, effectiveCaseId);
     }
 
     ChatGenerationQueue.enqueue({
