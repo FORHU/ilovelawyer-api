@@ -54,6 +54,19 @@ const pageParams: Parameter[] = [
   { name: "page", in: "query", schema: { type: "integer", default: 1 } },
   { name: "limit", in: "query", schema: { type: "integer", default: 20, maximum: 100 } },
 ];
+/** A thread is short and read whole: up to 200 a page, 100 by default (#517). */
+const threadParams: Parameter[] = [
+  { name: "page", in: "query", schema: { type: "integer", default: 1 } },
+  { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 200 } },
+];
+const threadPage: Schema = {
+  type: "object",
+  properties: {
+    total: { type: "integer" },
+    unread: { type: "integer", description: "The other side's messages since you last read the thread (POST .../messages/read, or your own last post)" },
+    data: { type: "array", items: ref("EngagementMessage") },
+  },
+};
 
 interface Op {
   tag: string;
@@ -120,7 +133,7 @@ export const clientHandoffTags: Tags = [
       "| `client-request:updated` | `{ requestId, status, updatedAt }` | A request you hold changed |",
       "| `client-request:claim-expiring` | `{ requestId, claimExpiresAt }` | 2h before your hold ends |",
       "| `engagement:message` | `{ requestId, message }` | The client posts in the thread |",
-      "| `engagement:document-added` | `{ requestId, caseId, documentId, filename, submittedBy, submittedAt }` | The client adds a document to the case |",
+      "| `engagement:document-added` | `{ requestId, caseId, documentId, filename, submittedBy, submittedAt }` | The client adds a document to the case, or shares one in the thread |",
       "| `engagement:ai-budget` | `{ requestId, percentUsed, state }` | Crossed 80% or 100%, or topped up |",
       "| `shared-cases:changed` (existing) | `{ caseId, shared: false }` | Engagement closed: live access ended |",
     ].join("\n"),
@@ -600,19 +613,36 @@ export const clientHandoffPaths: Paths = {
   "/client/lawyer-requests/{id}/messages": {
     get: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#517",
+      issue: "ilovelawyer-api#517", built: true,
       summary: "The engagement thread, oldest first",
-      parameters: [...requestId, ...pageParams],
-      responses: { 200: ok("Messages", page("EngagementMessage")), 404: NOT_FOUND, 409: BAD_STATUS },
+      description: "Open from ENGAGED, and still readable once CLOSED. 409 before a lawyer is engaged.",
+      parameters: [...requestId, ...threadParams],
+      responses: { 200: ok("Messages", threadPage), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
     post: op({
       tag: CLIENT_TAG,
-      issue: "ilovelawyer-api#517",
+      issue: "ilovelawyer-api#517", built: true,
       summary: "Post in the thread, optionally sharing a document from the case",
-      description: "Sharing a document that is already on the case also sends engagement:document-added to the lawyer.",
+      description:
+        "Text, a document already on the case (documentId), or both. Sharing a document also sends engagement:document-added to the lawyer. The lawyer gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
       parameters: requestId,
       body: { type: "object", properties: { body: { type: "string", maxLength: 5000 }, documentId: { type: "string", format: "uuid" } } },
-      responses: { 201: ok("Posted", ref("EngagementMessage")), 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or INVALID_REQUEST_STATUS") },
+      responses: {
+        201: ok("Posted", ref("EngagementMessage")),
+        400: err("Neither text nor a document"),
+        404: err("Not your request, or the document isn't on the case"),
+        409: err("ENGAGEMENT_CLOSED (read-only after close) or INVALID_REQUEST_STATUS"),
+      },
+    }),
+  },
+  "/client/lawyer-requests/{id}/messages/read": {
+    post: op({
+      tag: CLIENT_TAG,
+      issue: "ilovelawyer-api#517", built: true,
+      summary: "Mark the thread read",
+      description: "The lawyer's messages up to now stop counting as unread.",
+      parameters: requestId,
+      responses: { 204: { description: "Marked read" }, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
   "/client/lawyer-requests/{id}/end": {
@@ -815,19 +845,31 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/messages": {
     get: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#517",
+      issue: "ilovelawyer-api#517", built: true,
       summary: "The engagement thread, oldest first",
-      parameters: [...requestId, ...pageParams],
-      responses: { 200: ok("Messages", page("EngagementMessage")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
+      description: "Only the lawyer it's engaged on (404 for anyone else). Still readable once CLOSED.",
+      parameters: [...requestId, ...threadParams],
+      responses: { 200: ok("Messages", threadPage), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
     post: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#517",
+      issue: "ilovelawyer-api#517", built: true,
       summary: "Post in the thread",
-      description: "The lawyer can't add documents to the client's case (read-only), so no documentId here.",
+      description:
+        "The lawyer can't add documents to the client's case (read-only), so no documentId here. The client gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
       parameters: requestId,
       body: { type: "object", required: ["body"], properties: { body: { type: "string", maxLength: 5000 } } },
-      responses: { 201: ok("Posted", ref("EngagementMessage")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or INVALID_REQUEST_STATUS") },
+      responses: { 201: ok("Posted", ref("EngagementMessage")), 400: err("No text"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or INVALID_REQUEST_STATUS") },
+    }),
+  },
+  "/client-requests/{id}/messages/read": {
+    post: op({
+      tag: LAWYER_TAG,
+      issue: "ilovelawyer-api#517", built: true,
+      summary: "Mark the thread read",
+      description: "The client's messages up to now stop counting as unread (the Messages button's count).",
+      parameters: requestId,
+      responses: { 204: { description: "Marked read" }, 403: LAWYER_ONLY, 404: NOT_FOUND },
     }),
   },
   "/client-requests/{id}/close": {

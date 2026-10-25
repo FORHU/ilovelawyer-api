@@ -26,6 +26,10 @@ router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));
 router.get("/:id/ai-budget", asyncHandler(ClientRequestLawyerCtrl.aiBudget));
 // Buying an AI top-up pack for it, once the lawyer approves the charge (#516).
 router.post("/:id/ai-top-ups", asyncHandler(ClientRequestLawyerCtrl.topUp));
+// The engagement thread with the client (#517). The client's side is /client/lawyer-requests/:id/messages.
+router.get("/:id/messages", asyncHandler(ClientRequestLawyerCtrl.messages));
+router.post("/:id/messages", asyncHandler(ClientRequestLawyerCtrl.postMessage));
+router.post("/:id/messages/read", asyncHandler(ClientRequestLawyerCtrl.readMessages));
 // The lawyer's side of closing the engagement (#519). The client's side is /client/lawyer-requests/:id/end.
 router.post("/:id/close", asyncHandler(ClientRequestLawyerCtrl.close));
 

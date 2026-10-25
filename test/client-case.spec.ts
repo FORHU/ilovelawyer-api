@@ -540,6 +540,9 @@ describe("Client app cases", () => {
       "POST /lawyer-requests/:id/decline",
       "POST /lawyer-requests/:id/end",
       "POST /lawyer-requests/:id/feedback",
+      "GET /lawyer-requests/:id/messages",
+      "POST /lawyer-requests/:id/messages",
+      "POST /lawyer-requests/:id/messages/read",
     ]);
   });
 });

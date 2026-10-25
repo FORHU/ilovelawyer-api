@@ -174,6 +174,7 @@ model User {
   caseBriefExports            CaseBriefExport[]
   caseViews                   CaseView[]
   clientRequests              ClientRequest[]
+  engagementMessages          EngagementMessage[]
   clientRequestClaims         ClientRequestClaim[]
   updatedTenantSettings       TenantSetting[]
   clientPayments              ClientPayment[]
@@ -1263,6 +1264,10 @@ model ClientRequest {
   // access ends immediately either way; the lawyer's workspace copy, if any, is kept.
   closedAt          DateTime?
   closedBy          ClosedBy?
+  // When each side last read the engagement thread (#517): messages from the other side after it
+  // are unread.
+  lawyerReadAt      DateTime?
+  clientReadAt      DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -1271,6 +1276,7 @@ model ClientRequest {
   claims   ClientRequestClaim[]
   charges  OrganizationCharge[]
   feedback EngagementFeedback?
+  messages EngagementMessage[]
 
   @@index([caseId, status])
   @@index([clientId, createdAt])
@@ -1281,6 +1287,34 @@ model ClientRequest {
 enum ClosedBy {
   LAWYER
   CLIENT
+}
+
+// Who wrote an engagement message. SYSTEM: written by the platform (none yet).
+enum EngagementMessageSide {
+  CLIENT
+  LAWYER
+  SYSTEM
+}
+
+// The thread between the client and their engaged lawyer (#517), from ENGAGED and read-only once
+// CLOSED. `body` is sealed like chat messages (label "EngagementMessage.body", utils/field-crypto).
+// A client's message can share a document already on the case. The author is kept only as a link:
+// a deleted account leaves the message, with no name.
+model EngagementMessage {
+  id         String                @id @default(uuid())
+  requestId  String
+  authorId   String?
+  side       EngagementMessageSide
+  body       String                @db.Text
+  documentId String?
+  createdAt  DateTime              @default(now())
+
+  request  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  author   User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  document Document?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([requestId, createdAt])
+  @@index([authorId])
 }
 
 // The client's rating of the lawyer after an engagement closes (#519), once per request.
@@ -1412,6 +1446,7 @@ model Document {
   extractedWitnesses Witness[]
   crossExamQuestions CrossExamQuestion[]
   extractedDamages   DamageClaim[]
+  engagementMessages EngagementMessage[]
 
   @@index([userId])
   @@index([organizationId])

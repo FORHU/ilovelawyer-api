@@ -214,6 +214,14 @@ export interface EngagementMessage {
   createdAt: string;
 }
 
+/** A page of the engagement thread, oldest first, with how many of the other side's messages the
+ * reader hasn't read (#517). */
+export interface EngagementThreadPage {
+  total: number;
+  unread: number;
+  data: EngagementMessage[];
+}
+
 export const CLIENT_HANDOFF_SOCKET_EVENTS = {
   REQUEST_NEW: "client-request:new",
   REQUEST_TAKEN: "client-request:taken",

@@ -1,9 +1,10 @@
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import ClientRequestLawyerSvc, { type LawyerContext } from "../services/client-request-lawyer.service";
+import EngagementMessageSvc from "../services/engagement-message.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
-import { aiTopUpSchema, closeClientRequestSchema, listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
+import { aiTopUpSchema, closeClientRequestSchema, listEngagementMessagesSchema, postEngagementMessageSchema, listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
 
 function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
   const { error, value } = schema.validate(input, { stripUnknown: true, convert: true });
@@ -62,6 +63,24 @@ export default class ClientRequestLawyerCtrl {
   static async topUp(req: Request, res: Response) {
     const body = validate(aiTopUpSchema, req.body ?? {});
     res.status(202).json(await ClientRequestLawyerSvc.topUp(lawyerOf(req), req.params.id, body));
+  }
+
+  /** The engagement thread (#517), oldest first, with how many of the client's messages are unread. */
+  static async messages(req: Request, res: Response) {
+    const query = validate(listEngagementMessagesSchema, req.query);
+    const thread = await EngagementMessageSvc.forLawyer(lawyerOf(req).userId, req.params.id);
+    res.status(200).json(await EngagementMessageSvc.list(thread, "LAWYER", query));
+  }
+
+  static async postMessage(req: Request, res: Response) {
+    const body = validate(postEngagementMessageSchema, req.body ?? {});
+    const thread = await EngagementMessageSvc.forLawyer(lawyerOf(req).userId, req.params.id);
+    res.status(201).json(await EngagementMessageSvc.post(thread, "LAWYER", lawyerOf(req).userId, { body: body.body }));
+  }
+
+  static async readMessages(req: Request, res: Response) {
+    await EngagementMessageSvc.markRead(await EngagementMessageSvc.forLawyer(lawyerOf(req).userId, req.params.id), "LAWYER");
+    res.status(204).end();
   }
 
   static async close(req: Request, res: Response) {

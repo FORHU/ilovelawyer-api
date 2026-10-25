@@ -67,7 +67,8 @@ export default class ClientRequestRepo {
       select: {
         id: true,
         client: { select: { id: true, name: true, username: true } },
-        claims: { where: { outcome: null }, select: { lawyerId: true } },
+        // The engaged lawyer's claim: confirming ends it ENGAGED (OrganizationChargeRepo.settle).
+        claims: { where: { outcome: "ENGAGED" }, select: { lawyerId: true } },
       },
     });
     const lawyerId = request?.claims[0]?.lawyerId;
