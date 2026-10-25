@@ -53,5 +53,9 @@ router.post("/lawyer-requests/:id/decline", asyncHandler(ClientRequestCtrl.decli
 // The client's side of closing the engagement, and rating the lawyer afterwards (#519).
 router.post("/lawyer-requests/:id/end", asyncHandler(ClientRequestCtrl.end));
 router.post("/lawyer-requests/:id/feedback", asyncHandler(ClientRequestCtrl.feedback));
+// The engagement thread with the lawyer (#517).
+router.get("/lawyer-requests/:id/messages", asyncHandler(ClientRequestCtrl.messages));
+router.post("/lawyer-requests/:id/messages", asyncHandler(ClientRequestCtrl.postMessage));
+router.post("/lawyer-requests/:id/messages/read", asyncHandler(ClientRequestCtrl.readMessages));
 
 export default router;

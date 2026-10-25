@@ -2,6 +2,7 @@ import { clientWorkspaceOf } from "../middleware/require-client-account.middlewa
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import ClientRequestSvc from "../services/client-request.service";
+import EngagementMessageSvc from "../services/engagement-message.service";
 import HttpError from "../utils/http-error";
 import {
   clientRequestEligibilitySchema,
@@ -11,6 +12,8 @@ import {
   endClientRequestSchema,
   feedbackClientRequestSchema,
   listClientRequestsSchema,
+  listEngagementMessagesSchema,
+  postEngagementMessageSchema,
 } from "../validation/client-request.validation";
 
 function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
@@ -62,6 +65,24 @@ export default class ClientRequestCtrl {
   static async end(req: Request, res: Response) {
     const body = validate(endClientRequestSchema, req.body ?? {});
     res.status(200).json(await ClientRequestSvc.end(req.user.userId, req.params.id, body));
+  }
+
+  /** The engagement thread (#517), oldest first, with how many of the lawyer's messages are unread. */
+  static async messages(req: Request, res: Response) {
+    const query = validate(listEngagementMessagesSchema, req.query);
+    const thread = await EngagementMessageSvc.forClient(req.user.userId, req.params.id);
+    res.status(200).json(await EngagementMessageSvc.list(thread, "CLIENT", query));
+  }
+
+  static async postMessage(req: Request, res: Response) {
+    const body = validate(postEngagementMessageSchema, req.body ?? {});
+    const thread = await EngagementMessageSvc.forClient(req.user.userId, req.params.id);
+    res.status(201).json(await EngagementMessageSvc.post(thread, "CLIENT", req.user.userId, body));
+  }
+
+  static async readMessages(req: Request, res: Response) {
+    await EngagementMessageSvc.markRead(await EngagementMessageSvc.forClient(req.user.userId, req.params.id), "CLIENT");
+    res.status(204).end();
   }
 
   static async feedback(req: Request, res: Response) {

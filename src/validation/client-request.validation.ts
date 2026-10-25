@@ -85,3 +85,15 @@ export const feedbackClientRequestSchema = Joi.object({
   rating: Joi.number().integer().min(1).max(5).required(),
   comment: Joi.string().trim().allow("").max(2000).optional(),
 });
+
+/** GET /client-requests/:id/messages and /client/lawyer-requests/:id/messages (#517): oldest first. */
+export const listEngagementMessagesSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(200).default(100),
+});
+
+/** POST .../messages (#517). The lawyer sends text; the client may also share a case document. */
+export const postEngagementMessageSchema = Joi.object({
+  body: Joi.string().trim().allow("").max(5000).optional(),
+  documentId: Joi.string().uuid().optional(),
+});
