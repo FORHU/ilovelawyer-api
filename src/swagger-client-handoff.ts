@@ -408,6 +408,7 @@ export const clientHandoffSchemas: Schemas = {
       kind: enumOf(CHARGE_KINDS),
       status: enumOf(CHARGE_STATUSES),
       amount: money(),
+      credit: { ...money("AI_TOP_UP only: the AI credit it adds to the engagement's budget"), nullable: true },
       refunded: money(),
       requestId: { type: "string" },
       lawyer: { type: "object", nullable: true, properties: { id: { type: "string" }, name: { type: "string" } } },
@@ -796,12 +797,20 @@ export const clientHandoffPaths: Paths = {
   "/client-requests/{id}/ai-top-ups": {
     post: op({
       tag: LAWYER_TAG,
-      issue: "ilovelawyer-api#516",
+      issue: "ilovelawyer-api#516", built: true,
       summary: "Buy a top-up pack, after the lawyer approves it",
-      description: "Never automatic. The credit is added when Stripe confirms the payment (webhook), then engagement:ai-budget is sent. The charge shows in the fee history.",
+      description:
+        "Never automatic: refused (400) without approved: true. Charged at once to the same card as the per-case fee (the firm's, or a solo lawyer's own). The credit is added once Stripe confirms the payment, from its direct answer or the webhook, then engagement:ai-budget is sent. A charge still PENDING (the bank is deciding) adds nothing yet. The charge, with its credit, shows in the fee history; a declined one shows as FAILED and adds nothing.",
       parameters: requestId,
       body: { type: "object", required: ["packId", "approved"], properties: { packId: { type: "string" }, approved: { type: "boolean", enum: [true] } } },
-      responses: { 202: ok("Charge started", ref("Charge")), 402: err("CARD_REQUIRED or CHARGE_FAILED"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
+      responses: {
+        202: ok("Charged (SUCCEEDED), or PENDING while the bank decides", ref("Charge")),
+        400: err("Not approved, or no pack with that id"),
+        402: err("CARD_REQUIRED: no card on file (nothing is charged or recorded). CHARGE_FAILED: declined"),
+        403: LAWYER_ONLY,
+        404: NOT_FOUND,
+        409: err("INVALID_REQUEST_STATUS: not engaged, or another top-up is still being charged (chargeStatus PENDING)"),
+      },
     }),
   },
   "/client-requests/{id}/messages": {
@@ -954,8 +963,9 @@ export const clientHandoffPaths: Paths = {
   "/billing/top-up-packs": {
     get: op({
       tag: BILLING_TAG,
-      issue: "ilovelawyer-api#516",
+      issue: "ilovelawyer-api#516", built: true,
       summary: "The AI top-up packs on offer",
+      description: "Placeholder prices until FORHU/ilovelawyer-app#846.",
       responses: { 200: ok("Packs", { type: "array", items: ref("TopUpPack") }) },
     }),
   },

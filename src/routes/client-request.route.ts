@@ -24,6 +24,8 @@ router.post("/:id/charge/retry", asyncHandler(ClientRequestLawyerCtrl.retryCharg
 router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));
 // The engagement's AI budget meter (#515).
 router.get("/:id/ai-budget", asyncHandler(ClientRequestLawyerCtrl.aiBudget));
+// Buying an AI top-up pack for it, once the lawyer approves the charge (#516).
+router.post("/:id/ai-top-ups", asyncHandler(ClientRequestLawyerCtrl.topUp));
 // The lawyer's side of closing the engagement (#519). The client's side is /client/lawyer-requests/:id/end.
 router.post("/:id/close", asyncHandler(ClientRequestLawyerCtrl.close));
 

@@ -15,13 +15,13 @@ import * as socket from "../src/lib/socket";
 const stash = {
   findByCopyCaseId: ClientRequestRepo.findByCopyCaseId,
   sumCostUsd: LlmUsageRepo.sumCostUsd,
-  sumSucceeded: OrganizationChargeRepo.sumSucceeded,
+  sumTopUpCredit: OrganizationChargeRepo.sumTopUpCredit,
   emitToUser: socket.emitToUser,
 };
 const restore = () => {
   Object.assign(ClientRequestRepo, { findByCopyCaseId: stash.findByCopyCaseId });
   Object.assign(LlmUsageRepo, { sumCostUsd: stash.sumCostUsd });
-  Object.assign(OrganizationChargeRepo, { sumSucceeded: stash.sumSucceeded });
+  Object.assign(OrganizationChargeRepo, { sumTopUpCredit: stash.sumTopUpCredit });
   Object.assign(socket, { emitToUser: stash.emitToUser });
 };
 
@@ -30,7 +30,7 @@ describe("EngagementAiBudgetSvc", () => {
 
   describe("forRequest", () => {
     it("has no spend before the lawyer has a workspace copy", async () => {
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       const budget = await EngagementAiBudgetSvc.forRequest("r1", null);
       expect(budget.used).to.deep.equal({ amountMinor: 0, currency: "GBP" });
       expect(budget.state).to.equal("OK");
@@ -38,21 +38,21 @@ describe("EngagementAiBudgetSvc", () => {
 
     it("converts the copy's USD spend to GBP at the configured placeholder rate", async () => {
       (LlmUsageRepo as any).sumCostUsd = async () => 5;
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       const budget = await EngagementAiBudgetSvc.forRequest("r1", "copy-case-1");
       expect(budget.used).to.deep.equal({ amountMinor: EngagementAiBudgetSvc.gbpMinorFromUsd(5), currency: "GBP" });
     });
 
     it("adds any succeeded AI top-ups to the total available", async () => {
       (LlmUsageRepo as any).sumCostUsd = async () => 0;
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 2000;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 2000;
       const budget = await EngagementAiBudgetSvc.forRequest("r1", "copy-case-1");
       expect(budget.toppedUp).to.deep.equal({ amountMinor: 2000, currency: "GBP" });
       expect(budget.remaining.amountMinor).to.equal(budget.included.amountMinor + 2000);
     });
 
     it("is OK under 80%, WARNING from 80%, and EXHAUSTED at 100%", async () => {
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       const totalUsd = 20; // matches the default ENGAGEMENT_AI_BUDGET_INCLUDED_USD
 
       (LlmUsageRepo as any).sumCostUsd = async () => totalUsd * 0.5;
@@ -67,7 +67,7 @@ describe("EngagementAiBudgetSvc", () => {
 
     it("never shows negative remaining or over 100%, however much was spent", async () => {
       (LlmUsageRepo as any).sumCostUsd = async () => 1_000_000;
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       const budget = await EngagementAiBudgetSvc.forRequest("r1", "c1");
       expect(budget.remaining).to.deep.equal({ amountMinor: 0, currency: "GBP" });
       expect(budget.percentUsed).to.equal(100);
@@ -83,14 +83,14 @@ describe("EngagementAiBudgetSvc", () => {
     it("lets AI work through while there's budget left", async () => {
       (ClientRequestRepo as any).findByCopyCaseId = async () => ({ id: "r1", copyCaseId: "c1", lawyerId: "lawyer-1" });
       (LlmUsageRepo as any).sumCostUsd = async () => 1;
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       await EngagementAiBudgetSvc.assertHasBudget("c1");
     });
 
     it("refuses AI work with ENGAGEMENT_AI_BUDGET_SPENT once the budget is exhausted", async () => {
       (ClientRequestRepo as any).findByCopyCaseId = async () => ({ id: "r1", copyCaseId: "c1", lawyerId: "lawyer-1" });
       (LlmUsageRepo as any).sumCostUsd = async () => 1_000_000;
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       try {
         await EngagementAiBudgetSvc.assertHasBudget("c1");
         expect.fail("expected a refusal");
@@ -105,7 +105,7 @@ describe("EngagementAiBudgetSvc", () => {
   describe("checkThresholds", () => {
     it("tells the engaged lawyer when a call crosses from OK to WARNING", async () => {
       (ClientRequestRepo as any).findByCopyCaseId = async () => ({ id: "r1", copyCaseId: "c1", lawyerId: "lawyer-1" });
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       // After this call: 80% of the 20 USD included budget. Before it: 79%, still OK.
       (LlmUsageRepo as any).sumCostUsd = async () => 16;
       const emitted: unknown[] = [];
@@ -118,7 +118,7 @@ describe("EngagementAiBudgetSvc", () => {
 
     it("says nothing when the state didn't change", async () => {
       (ClientRequestRepo as any).findByCopyCaseId = async () => ({ id: "r1", copyCaseId: "c1", lawyerId: "lawyer-1" });
-      (OrganizationChargeRepo as any).sumSucceeded = async () => 0;
+      (OrganizationChargeRepo as any).sumTopUpCredit = async () => 0;
       (LlmUsageRepo as any).sumCostUsd = async () => 5;
       const emitted: unknown[] = [];
       (socket as any).emitToUser = (...args: unknown[]) => emitted.push(args);

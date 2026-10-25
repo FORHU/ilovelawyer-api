@@ -3172,6 +3172,9 @@ model OrganizationCharge {
   feeRequestId    String?                  @unique
   // The lawyer whose claim the fee is for.
   lawyerId        String?
+  // Set on an AI_TOP_UP only (#516): the AI credit it adds to the engagement's budget, in the same
+  // currency. The price (amountMinor) is more than the credit.
+  creditMinor     Int?
   // The provider's payment for the latest attempt (Stripe pi_...), and its receipt once paid.
   paymentIntentId String?
   receiptUrl      String?
