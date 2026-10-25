@@ -60,6 +60,14 @@ export default class OrganizationChargeSvc {
     return { amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" };
   }
 
+  /** 402 CARD_REQUIRED unless the payer has a card on file: the firm (`organizationId`), or for a
+   * solo lawyer their own. Before anything that will be charged to it: sending a quote (#933) and
+   * buying a top-up (#516). */
+  static async assertCardOnFile(organizationId: string | null, lawyerId: string): Promise<void> {
+    const billing = await OrganizationBillingRepo.find(payerOf(organizationId, lawyerId)!);
+    if (!billing?.paymentMethodId) throw new HttpError(organizationId ? NO_CARD : NO_OWN_CARD, 402, "CARD_REQUIRED");
+  }
+
   /** The AI top-up packs on offer (TopUpPack in the contract). Placeholders until #846. */
   static topUpPacks() {
     return ENGAGEMENT_AI_TOP_UP_PACKS.map((p) => ({
@@ -81,8 +89,7 @@ export default class OrganizationChargeSvc {
   static async buyTopUp(input: { requestId: string; organizationId: string | null; lawyerId: string; packId: string }): Promise<OrganizationCharge> {
     const pack = ENGAGEMENT_AI_TOP_UP_PACKS.find((p) => p.id === input.packId);
     if (!pack) throw new HttpError("There's no top-up pack with that id.", 400);
-    const billing = await OrganizationBillingRepo.find(payerOf(input.organizationId, input.lawyerId)!);
-    if (!billing?.paymentMethodId) throw new HttpError(input.organizationId ? NO_CARD : NO_OWN_CARD, 402, "CARD_REQUIRED");
+    await OrganizationChargeSvc.assertCardOnFile(input.organizationId, input.lawyerId);
 
     const charge = await OrganizationChargeRepo.createTopUp({
       requestId: input.requestId,

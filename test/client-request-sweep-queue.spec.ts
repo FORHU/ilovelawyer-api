@@ -1,4 +1,5 @@
 /** ClientRequestSweepQueue.tick — the client request timers: a claim's 24h hold lapsing (#511), and
+ * a confirmed request whose introduction fee never went through going back after 48h (#933),
  * the 48h expiry, the 2h reminder and announcing (#510, ClientRequestNotifySvc, tested in
  * test/client-request-notify.spec.ts). No live Postgres: the claim repo is monkeypatched, same idiom as
  * test/account-deletion-queue.spec.ts. The lapse's own guard runs against the database in
@@ -31,9 +32,20 @@ const LAPSED = {
   request: { caseId: "case-1", clientId: "client-1" },
 };
 
+const UNPAID = {
+  chargeId: "fee-1",
+  requestId: "req-2",
+  caseId: "case-2",
+  clientId: "client-2",
+  claim: { id: "claim-2", lawyerId: "lawyer-2", organizationId: null },
+};
+
 describe("ClientRequestSweepQueue.tick", () => {
   let restore: (() => void)[];
   let due: (typeof LAPSED)[];
+  let unpaid: (typeof UNPAID)[];
+  let unpaidWins: boolean;
+  let unpaidReleased: string[];
   let lapseWins: boolean;
   let lapsed: { claimId: string; now: Date }[];
   let notifications: any[];
@@ -44,7 +56,7 @@ describe("ClientRequestSweepQueue.tick", () => {
 
   beforeEach(() => {
     restore = [
-      stash(ClientRequestClaimRepo, ["findLapsed", "lapse"]),
+      stash(ClientRequestClaimRepo, ["findLapsed", "lapse", "findUnpaid", "lapseUnpaid"]),
       stash(OrganizationRepo, ["writeAudit"]),
       stash(NotificationSvc, ["create"]),
       stash(SecurityAuditSvc, ["record"]),
@@ -58,6 +70,11 @@ describe("ClientRequestSweepQueue.tick", () => {
     due = [LAPSED];
     lapseWins = true;
     lapsed = [];
+    unpaid = [];
+    unpaidWins = true;
+    unpaidReleased = [];
+    (ClientRequestClaimRepo as any).findUnpaid = async () => unpaid;
+    (ClientRequestClaimRepo as any).lapseUnpaid = async (u: typeof UNPAID) => (unpaidReleased.push(u.requestId), unpaidWins);
     notifications = [];
     emitted = [];
     securityAudits = [];
@@ -115,8 +132,11 @@ describe("ClientRequestSweepQueue.tick", () => {
     (ClientRequestNotifySvc as any).remindDue = async () => (steps.push("remind"), 3);
     (ClientRequestNotifySvc as any).announceDue = async () => (steps.push("announce"), 4);
 
-    expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.equal({ lapsed: 1, expired: 2, reminded: 3, announced: 4 });
-    expect(steps).to.deep.equal(["lapse", "expire", "remind", "announce"]);
+    unpaid = [UNPAID];
+    (ClientRequestClaimRepo as any).lapseUnpaid = async () => (steps.push("unpaid"), true);
+
+    expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.equal({ lapsed: 1, unpaid: 1, expired: 2, reminded: 3, announced: 4 });
+    expect(steps).to.deep.equal(["lapse", "unpaid", "expire", "remind", "announce"]);
   });
 
   it("still runs the later steps when one fails", async () => {
@@ -125,6 +145,42 @@ describe("ClientRequestSweepQueue.tick", () => {
     };
     (ClientRequestNotifySvc as any).announceDue = async () => (steps.push("announce"), 1);
     expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.include({ lapsed: 1, expired: 0, announced: 1 });
+  });
+
+  describe("a confirmed request whose fee never went through (#933)", () => {
+    beforeEach(() => {
+      due = [];
+      unpaid = [UNPAID];
+    });
+
+    it("goes back to other lawyers", async () => {
+      expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.include({ unpaid: 1 });
+      expect(unpaidReleased).to.deep.equal(["req-2"]);
+    });
+
+    it("tells the lawyer why, and both sides live", async () => {
+      await ClientRequestSweepQueue.tick(NOW);
+      expect(notifications).to.have.length(1);
+      expect(notifications[0]).to.deep.include({ userId: "lawyer-2", type: "CLIENT_REQUEST", title: "A client request went back to other lawyers" });
+      expect(notifications[0].message).to.include("introduction fee couldn't be charged for 48 hours");
+      const updates = emitted.filter(([, event]) => event === "client-request:updated");
+      expect(updates.map(([userId]) => userId).sort()).to.deep.equal(["client-2", "lawyer-2"]);
+      expect(updates[0]![2]).to.deep.equal({ requestId: "req-2", status: "ROUTED", updatedAt: NOW.toISOString() });
+    });
+
+    it("records it as the hold lapsing, with the reason", async () => {
+      await ClientRequestSweepQueue.tick(NOW);
+      expect(audits[0]).to.deep.include({ caseId: "case-2", action: "client_request.claim_lapsed" });
+      expect(audits[0].payload).to.deep.include({ requestId: "req-2", chargeId: "fee-1", reason: "fee_unpaid" });
+      expect(securityAudits[0]).to.deep.include({ action: "client_request.claim_lapsed", actorId: null, targetId: "lawyer-2", caseId: "case-2" });
+    });
+
+    it("tells nobody when a retry or the client got there first", async () => {
+      unpaidWins = false;
+      expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.include({ unpaid: 0 });
+      expect(notifications).to.deep.equal([]);
+      expect(emitted).to.deep.equal([]);
+    });
   });
 
   it("keeps going when one lapse fails", async () => {

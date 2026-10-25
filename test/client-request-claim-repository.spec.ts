@@ -28,6 +28,7 @@ describe("ClientRequestClaimRepo.claim", () => {
   });
 
   beforeEach(async () => {
+    await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     const request = await prisma.clientRequest.create({
       data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: new Date(), status: "ROUTED", routingExpiresAt: new Date(Date.now() + 48 * HOUR_MS) },
@@ -123,6 +124,71 @@ describe("ClientRequestClaimRepo.claim", () => {
       expect(await ClientRequestClaimRepo.lapse(due!, new Date())).to.equal(false);
       expect((await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: due!.id } })).outcome).to.equal(null);
       expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("QUOTED");
+    });
+  });
+
+  describe("findUnpaid / lapseUnpaid (#933)", () => {
+    /** The client confirmed `hoursAgo`, and the lawyer's per-case fee is `status`. */
+    async function confirmedWithFee(hoursAgo: number, status: "FAILED" | "PENDING" = "FAILED") {
+      const claim = (await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId))!;
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED" } });
+      const fee = await prisma.organizationCharge.create({
+        data: {
+          organizationId: orgId,
+          kind: "PER_CASE_FEE",
+          status,
+          amountMinor: 5000,
+          currency: "GBP",
+          requestId,
+          feeRequestId: requestId,
+          lawyerId: lawyerIds[0]!,
+          failureReason: "Your card was declined.",
+          createdAt: new Date(Date.now() - hoursAgo * HOUR_MS),
+        },
+      });
+      return { claim, fee };
+    }
+    const dueFor = async () => (await ClientRequestClaimRepo.findUnpaid(new Date())).filter((u) => u.requestId === requestId);
+
+    it("finds a confirmed request whose fee has failed for 48h, and not before", async () => {
+      await confirmedWithFee(47);
+      expect(await dueFor()).to.have.length(0);
+      await prisma.organizationCharge.updateMany({ where: { requestId }, data: { createdAt: new Date(Date.now() - 49 * HOUR_MS) } });
+      const [due] = await dueFor();
+      expect(due).to.deep.include({ requestId, caseId, clientId });
+      expect(due!.claim.lawyerId).to.equal(lawyerIds[0]);
+    });
+
+    it("leaves a fee that's being retried alone", async () => {
+      await confirmedWithFee(49, "PENDING");
+      expect(await dueFor()).to.have.length(0);
+    });
+
+    it("ends the claim, puts the request back without that lawyer, and frees the request's fee slot", async () => {
+      const { fee } = await confirmedWithFee(49);
+      const [due] = await dueFor();
+      const now = new Date();
+
+      expect(await ClientRequestClaimRepo.lapseUnpaid(due!, now)).to.equal(true);
+
+      expect(await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: due!.claim.id } })).to.deep.include({ outcome: "LAPSED", openRequestId: null });
+      const request = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
+      expect(request).to.deep.include({ status: "ROUTED", excludedLawyerIds: [lawyerIds[0]!], announcedAt: null });
+      expect(request.routingExpiresAt!.getTime()).to.equal(now.getTime() + 48 * HOUR_MS);
+      // The failed fee stays in the history, but the next lawyer's confirmation can record its own.
+      expect(await prisma.organizationCharge.findUniqueOrThrow({ where: { id: fee.id } })).to.deep.include({ status: "FAILED", feeRequestId: null, requestId });
+      await prisma.organizationCharge.create({ data: { organizationId: orgId, kind: "PER_CASE_FEE", status: "PENDING", amountMinor: 5000, currency: "GBP", requestId, feeRequestId: requestId } });
+      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[1]!, orgId)).to.not.equal(null);
+    });
+
+    it("does nothing when a retry started in the meantime", async () => {
+      await confirmedWithFee(49);
+      const [due] = await dueFor();
+      await prisma.organizationCharge.updateMany({ where: { requestId }, data: { status: "PENDING" } });
+
+      expect(await ClientRequestClaimRepo.lapseUnpaid(due!, new Date())).to.equal(false);
+      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("CONFIRMED");
+      expect((await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: due!.claim.id } })).outcome).to.equal(null);
     });
   });
 

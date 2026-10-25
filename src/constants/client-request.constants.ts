@@ -36,3 +36,7 @@ export const CLIENT_REQUEST_PER_CASE_FEE_MINOR = 5000;
  * (FORHU/ilovelawyer-app#846: 50 USD for 30 USD of credit, here in GBP at the budget's placeholder
  * rate). */
 export const ENGAGEMENT_AI_TOP_UP_PACKS = [{ id: "standard", priceMinor: 4000, creditMinor: 2400, currency: "GBP" }] as const;
+
+/** How long a confirmed client waits on a lawyer's failing introduction fee before the request goes
+ * back to other lawyers (#933, ClientRequestSweepQueue): from when the client confirmed. */
+export const CLIENT_REQUEST_UNPAID_FEE_HOURS = 48;
