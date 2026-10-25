@@ -5,7 +5,7 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { redactBrief, labelForDesignation, type RedactionContext } from "../src/utils/brief-redaction";
-import ClientRequestBriefSvc, { parseBriefReply } from "../src/services/client-request-brief.service";
+import ClientRequestBriefSvc, { parseBriefReply, ukDay, urgencyFor } from "../src/services/client-request-brief.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ChatRepo from "../src/repositories/chat.repository";
 import * as chatWonder from "../src/utils/chatWonder";
@@ -49,15 +49,77 @@ describe("Anonymised case brief", () => {
   });
 
   describe("parseBriefReply", () => {
+    const now = new Date("2026-11-15T12:00:00Z");
+
     it("reads the JSON even with text around it, and checks each field", () => {
-      expect(parseBriefReply('Here you go: {"summary": " A summary. ", "urgency": "SOON", "knownDeadline": "2026-12-01"} Thanks')).to.deep.equal({
+      expect(parseBriefReply('Here you go: {"summary": " A summary. ", "urgency": "SOON", "knownDeadline": "2026-12-01"} Thanks', now)).to.deep.equal({
         summary: "A summary.",
         urgency: "SOON",
         knownDeadline: "2026-12-01",
       });
-      expect(parseBriefReply('{"summary": "x", "urgency": "ASAP", "knownDeadline": "next week"}')).to.deep.equal({ summary: "x", urgency: "ROUTINE", knownDeadline: null });
-      expect(parseBriefReply('{"summary": ""}')).to.equal(null);
-      expect(parseBriefReply("not json")).to.equal(null);
+      expect(parseBriefReply('{"summary": "x", "urgency": "ASAP", "knownDeadline": "next week"}', now)).to.deep.equal({ summary: "x", urgency: "ROUTINE", knownDeadline: null });
+      expect(parseBriefReply('{"summary": ""}', now)).to.equal(null);
+      expect(parseBriefReply("not json", now)).to.equal(null);
+    });
+
+    // #597: "the tribunal deadline is in about 2 months" came back as 2027-12-24, rated SOON.
+    it("drops a deadline in the wrong year, and SOON with it", () => {
+      const asOf = new Date("2026-10-23T10:00:00Z");
+      expect(parseBriefReply('{"summary": "x", "urgency": "SOON", "knownDeadline": "2028-12-24"}', asOf)).to.deep.equal({ summary: "x", urgency: "SOON", knownDeadline: null });
+      expect(parseBriefReply('{"summary": "x", "urgency": "SOON", "knownDeadline": "2025-01-10"}', asOf)!.knownDeadline).to.equal(null);
+    });
+
+    it("drops a date that doesn't exist", () => {
+      expect(parseBriefReply('{"summary": "x", "urgency": "ROUTINE", "knownDeadline": "2026-02-30"}', now)!.knownDeadline).to.equal(null);
+    });
+
+    it("rates the urgency from a rough time when the client gave no date", () => {
+      const reply = (urgency: string, days: unknown) => parseBriefReply(JSON.stringify({ summary: "x", urgency, knownDeadline: null, daysUntilDeadline: days }), now)!;
+      expect(reply("SOON", 60)).to.deep.equal({ summary: "x", urgency: "ROUTINE", knownDeadline: null }); // "in about two months"
+      expect(reply("ROUTINE", 14).urgency).to.equal("SOON");
+      expect(reply("ROUTINE", 3).urgency).to.equal("URGENT");
+      expect(reply("SOON", "soon").urgency).to.equal("SOON"); // not a number: the AI's own label
+      expect(reply("SOON", 5000).urgency).to.equal("SOON"); // implausible: ignored
+    });
+
+    it("prefers the client's date over the rough count", () => {
+      const reply = parseBriefReply('{"summary": "x", "urgency": "ROUTINE", "knownDeadline": "2026-11-20", "daysUntilDeadline": 90}', now)!;
+      expect(reply.urgency).to.equal("URGENT");
+    });
+
+    it("rates the urgency from the deadline, not the AI's label", () => {
+      const reply = (urgency: string, deadline: string) => parseBriefReply(`{"summary": "x", "urgency": "${urgency}", "knownDeadline": "${deadline}"}`, now)!.urgency;
+      expect(reply("SOON", "2027-03-01")).to.equal("ROUTINE"); // months away
+      expect(reply("ROUTINE", "2026-11-20")).to.equal("URGENT"); // 5 days
+      expect(reply("ROUTINE", "2026-11-10")).to.equal("URGENT"); // passed
+      expect(reply("ROUTINE", "2026-12-10")).to.equal("SOON"); // 25 days
+    });
+  });
+
+  describe("urgencyFor", () => {
+    it("keeps the AI's rating when there's no deadline", () => {
+      expect(urgencyFor("SOON", null)).to.equal("SOON");
+      expect(urgencyFor("URGENT", null)).to.equal("URGENT");
+    });
+
+    it("keeps URGENT with a later deadline: the AI may know of something sooner", () => {
+      expect(urgencyFor("URGENT", 25)).to.equal("URGENT");
+      expect(urgencyFor("URGENT", 100)).to.equal("URGENT");
+    });
+
+    it("counts 7 and 30 days inclusive", () => {
+      expect(urgencyFor("ROUTINE", 7)).to.equal("URGENT");
+      expect(urgencyFor("ROUTINE", 8)).to.equal("SOON");
+      expect(urgencyFor("ROUTINE", 30)).to.equal("SOON");
+      expect(urgencyFor("SOON", 31)).to.equal("ROUTINE");
+      expect(urgencyFor("ROUTINE", -2)).to.equal("URGENT");
+    });
+  });
+
+  describe("ukDay", () => {
+    it("is the UK date, so just after midnight in summer time is already the next day", () => {
+      expect(ukDay(new Date("2026-07-01T23:30:00Z"))).to.equal("2026-07-02");
+      expect(ukDay(new Date("2026-12-01T23:30:00Z"))).to.equal("2026-12-01");
     });
   });
 
@@ -76,11 +138,12 @@ describe("Anonymised case brief", () => {
     let saved: any[];
     let aiReply: string | Error;
     let aiCalls: number;
+    let prompts: string[];
 
     beforeEach(() => {
       messages = [
-        { id: "m1", role: "user", content: "Acme Logistics Ltd fired me by text. My manager John Smith signed it." },
-        { id: "m2", role: "assistant", content: "That may be unfair dismissal." },
+        { id: "m1", role: "user", content: "Acme Logistics Ltd fired me by text. My manager John Smith signed it.", createdAt: new Date("2026-10-20T09:00:00Z") },
+        { id: "m2", role: "assistant", content: "That may be unfair dismissal.", createdAt: new Date("2026-10-20T09:00:05Z") },
       ];
       source = {
         id: "req-1",
@@ -104,6 +167,7 @@ describe("Anonymised case brief", () => {
       };
       saved = [];
       aiCalls = 0;
+      prompts = [];
       announced = [];
       (ClientRequestNotifySvc as any).announceInBackground = (id: string) => announced.push(id);
       // The AI "slips" and names everyone: the stored brief must not.
@@ -115,8 +179,9 @@ describe("Anonymised case brief", () => {
       };
       (ChatRepo as any).listMessagesByConsultation = async () => messages;
       (chatWonder as any).getChatWonderSessionId = async () => "session-1";
-      (chatWonder as any).callChatWonderRest = async () => {
+      (chatWonder as any).callChatWonderRest = async (prompt: string) => {
         aiCalls++;
+        prompts.push(prompt);
         if (aiReply instanceof Error) throw aiReply;
         return { response: aiReply };
       };
@@ -133,6 +198,14 @@ describe("Anonymised case brief", () => {
     it("announces the request to its lawyers once there's a brief for them to read (#510)", async () => {
       await ClientRequestBriefSvc.generate("req-1");
       expect(announced).to.deep.equal(["req-1"]);
+    });
+
+    it("tells the AI today's date and when each message was sent (#597)", async () => {
+      await ClientRequestBriefSvc.generate("req-1");
+      expect(prompts[0]).to.include(`Today's date is ${ukDay(new Date())}.`);
+      expect(prompts[0]).to.include("Client (2026-10-20): ");
+      expect(prompts[0]).to.include("AI (2026-10-20): That may be unfair dismissal.");
+      expect(prompts[0]).to.include("Never work out a date yourself.");
     });
 
     it("announces nothing when the brief couldn't be written", async () => {
