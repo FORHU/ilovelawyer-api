@@ -63,6 +63,10 @@ function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
       mine?.outcome === "ENGAGED"
         ? {
             caseId: r.caseId,
+            // The client's workspace the case lives in: what the lawyer app sends as
+            // X-Organization-Id to open it read-only, as for any case shared to view
+            // (CaseShareRepo's workspaceId: the case's organization, else the owner's own).
+            workspaceId: r.case.organizationId ?? `user:${r.client.id}`,
             clientName: r.client.name || r.client.username,
             engagedAt: r.engagedAt!,
             closedAt: r.closedAt,

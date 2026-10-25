@@ -319,6 +319,11 @@ describe("client confirms, the firm is charged the per-case fee", () => {
       await confirm().expect(200);
     });
 
+    it("tells the lawyer which workspace to open the client's case in", async () => {
+      const { body } = await lawyerView().expect(200);
+      expect(body.engagement).to.include({ caseId, workspaceId: clientOrgId });
+    });
+
     it("lets the engaged lawyer read the client's case as a guest of their portfolio", async () => {
       const { body } = await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
       expect(body.id).to.equal(caseId);

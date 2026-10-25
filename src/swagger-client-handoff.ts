@@ -283,6 +283,7 @@ export const clientHandoffSchemas: Schemas = {
         nullable: true,
         properties: {
           caseId: { type: "string", description: "The client's case, open read-only through /my-cases/{caseId}" },
+          workspaceId: { type: "string", description: "The client's workspace the case lives in: send it as X-Organization-Id to open the case" },
           clientName: { type: "string" },
           engagedAt: dateTime(),
           closedAt: dateTime(undefined, true),
