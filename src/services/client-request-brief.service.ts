@@ -25,6 +25,50 @@ const BRIEF_REFRESH_STATUSES: ClientRequestStatus[] = ["REQUESTED", "ROUTED"];
 const MAX_MESSAGES = 30;
 const MAX_MESSAGE_CHARS = 2000;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** A deadline outside these is a misreading (the wrong year, #597), not a real one: dropped. */
+const DEADLINE_MAX_PAST_DAYS = 365;
+const DEADLINE_MAX_AHEAD_DAYS = 730;
+
+/** A day as the client sees it, YYYY-MM-DD: UK time, so a message sent at 00:30 BST is that day. */
+export function ukDay(at: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+}
+
+/** Days from today (UK) to `day` (YYYY-MM-DD): negative once it has passed. */
+function daysUntil(day: string, now: Date): number {
+  return Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${ukDay(now)}T00:00:00Z`)) / DAY_MS);
+}
+
+/**
+ * The urgency, from how many days away the nearest deadline is when that's known, as the prompt
+ * defines it: URGENT within 7 days or past, SOON within 30. Further off, SOON can't be right, so
+ * it's ROUTINE; URGENT stays, as the AI may know of something sooner (a hearing tomorrow). With no
+ * deadline at all, the AI's own rating.
+ */
+export function urgencyFor(rated: RequestUrgency, days: number | null): RequestUrgency {
+  if (days === null) return rated;
+  if (days <= 7) return "URGENT";
+  if (days <= 30) return rated === "URGENT" ? "URGENT" : "SOON";
+  return rated === "URGENT" ? "URGENT" : "ROUTINE";
+}
+
+/** The AI's rough count of days to the nearest deadline: a whole number in the plausible range, or null. */
+function plausibleDays(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const days = Math.round(value);
+  return days < -DEADLINE_MAX_PAST_DAYS || days > DEADLINE_MAX_AHEAD_DAYS ? null : days;
+}
+
+/** A real calendar date, close enough to now to be one the client gave; otherwise null. */
+function plausibleDeadline(value: unknown, now: Date): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const at = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(at.getTime()) || at.toISOString().slice(0, 10) !== value) return null;
+  const days = daysUntil(value, now);
+  return days < -DEADLINE_MAX_PAST_DAYS || days > DEADLINE_MAX_AHEAD_DAYS ? null : value;
+}
+
 type BriefSource = NonNullable<Awaited<ReturnType<typeof ClientRequestRepo.findForBrief>>>;
 
 /** What the brief is written from, without the parts that only change bookkeeping (Case.updatedAt
@@ -53,7 +97,15 @@ function redactionContext(source: BriefSource): RedactionContext {
   return { people, documentNames: source.case.documents.map((d) => d.name) };
 }
 
-function buildPrompt(source: BriefSource, conversation: { from: string; text: string }[]): string {
+interface ConversationMessage {
+  from: string;
+  text: string;
+  at: Date;
+}
+
+/** The AI is told today's date and when each message was sent, so it can place "on Tuesday" or "in
+ * two months" in time and judge "within 7 days" (#597): without them it guessed the year. */
+function buildPrompt(source: BriefSource, conversation: ConversationMessage[], now: Date): string {
   const c = source.case;
   const details = [
     `Case title: ${c.caseName}`,
@@ -64,15 +116,22 @@ function buildPrompt(source: BriefSource, conversation: { from: string; text: st
     `Others involved: ${c.parties.map((p) => `${p.designation}`).join(", ") || "none listed"}`,
     `The client's note to the lawyer: ${source.note || "none"}`,
   ].join("\n");
-  const chat = conversation.map((m) => `${m.from === "user" ? "Client" : "AI"}: ${m.text}`).join("\n\n");
+  const chat = conversation.map((m) => `${m.from === "user" ? "Client" : "AI"} (${ukDay(m.at)}): ${m.text}`).join("\n\n");
+  const today = ukDay(now);
   return `You are preparing an anonymised case summary for UK solicitors deciding whether to take on a new client.
+
+Today's date is ${today}. Each message below shows the date it was sent. Work out any relative dates ("on Tuesday", "in two months") from those dates.
 
 Write for a solicitor, in plain English, 80 to 180 words: what happened and when, where things stand now, what the client wants, and anything time-sensitive. Refer to people only by their role (the client, the employer, the landlord, the seller), never by name. Do not mention document names, addresses, email addresses or phone numbers. Do not give legal advice. Use only the case details and the conversation below.
 
-Then rate the urgency: URGENT if a hearing, deadline or time limit is within 7 days or has passed, SOON if within 30 days, otherwise ROUTINE. If the conversation states a specific deadline date, give it as YYYY-MM-DD, otherwise null.
+Then rate the urgency, counting from today: URGENT if a hearing, deadline or time limit is within 7 days or has passed, SOON if within 30 days, otherwise ROUTINE. Rate a rough time the same way: "in about two months" is ROUTINE, "in a couple of weeks" is SOON.
+
+knownDeadline: only when the client gives a specific calendar date for a deadline, hearing or time limit, that date as YYYY-MM-DD. If they only give a rough time ("in about two months") or none, use null, and say what they said in the summary. Never work out a date yourself.
+
+daysUntilDeadline: roughly how many days from today until the nearest deadline, hearing or time limit the client mentions, exact or rough ("in about two months" is about 60), as a whole number, negative if it has passed. null if they mention none.
 
 Reply with only this JSON and nothing else:
-{"summary": "...", "urgency": "ROUTINE", "knownDeadline": null}
+{"summary": "...", "urgency": "ROUTINE", "knownDeadline": null, "daysUntilDeadline": null}
 
 Case details:
 ${details}
@@ -81,12 +140,15 @@ Conversation between the client and the AI:
 ${chat || "(no conversation yet)"}`;
 }
 
-/** The AI's reply as { summary, urgency, knownDeadline }, or null when it isn't usable. */
-export function parseBriefReply(reply: string): { summary: string; urgency: RequestUrgency; knownDeadline: string | null } | null {
+/** The AI's reply as { summary, urgency, knownDeadline }, or null when it isn't usable. A deadline
+ * that isn't a real date, or is implausibly far from `now`, is dropped. The urgency follows the
+ * deadline (urgencyFor) rather than the AI's own label: the date when the client gave one, else the
+ * AI's rough count of days (daysUntilDeadline, never shown). */
+export function parseBriefReply(reply: string, now: Date = new Date()): { summary: string; urgency: RequestUrgency; knownDeadline: string | null } | null {
   const start = reply.indexOf("{");
   const end = reply.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
-  let parsed: { summary?: unknown; urgency?: unknown; knownDeadline?: unknown };
+  let parsed: { summary?: unknown; urgency?: unknown; knownDeadline?: unknown; daysUntilDeadline?: unknown };
   try {
     parsed = JSON.parse(reply.slice(start, end + 1));
   } catch {
@@ -94,9 +156,10 @@ export function parseBriefReply(reply: string): { summary: string; urgency: Requ
   }
   const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
   if (!summary) return null;
-  const urgency = (REQUEST_URGENCIES as readonly unknown[]).includes(parsed.urgency) ? (parsed.urgency as RequestUrgency) : "ROUTINE";
-  const deadline = typeof parsed.knownDeadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.knownDeadline) ? parsed.knownDeadline : null;
-  return { summary, urgency, knownDeadline: deadline };
+  const rated = (REQUEST_URGENCIES as readonly unknown[]).includes(parsed.urgency) ? (parsed.urgency as RequestUrgency) : "ROUTINE";
+  const deadline = plausibleDeadline(parsed.knownDeadline, now);
+  const days = deadline ? daysUntil(deadline, now) : plausibleDays(parsed.daysUntilDeadline);
+  return { summary, urgency: urgencyFor(rated, days), knownDeadline: deadline };
 }
 
 /**
@@ -115,10 +178,11 @@ export default class ClientRequestBriefSvc {
     try {
       const { conversation, latestMessageId } = await ClientRequestBriefSvc.conversationOf(source);
       const session = await getChatWonderSessionId();
-      const reply = await callChatWonderRest(buildPrompt(source, conversation), session, undefined, "UK", {
+      const now = new Date();
+      const reply = await callChatWonderRest(buildPrompt(source, conversation, now), session, undefined, "UK", {
         usage: { feature: "clientRequestBrief", userId: source.clientId, caseId: source.caseId },
       });
-      const parsed = parseBriefReply(String(reply.response ?? reply.intermediate_response ?? ""));
+      const parsed = parseBriefReply(String(reply.response ?? reply.intermediate_response ?? ""), now);
       if (!parsed) throw new Error("The AI's reply had no usable summary");
 
       const ctx = redactionContext(source);
@@ -170,7 +234,7 @@ export default class ClientRequestBriefSvc {
     if (!consultationId) return { conversation: [], latestMessageId: null };
     const messages = (await ChatRepo.listMessagesByConsultation(consultationId)).filter((m) => m.role === "user" || m.role === "assistant");
     return {
-      conversation: messages.slice(-MAX_MESSAGES).map((m) => ({ from: m.role, text: m.content.slice(0, MAX_MESSAGE_CHARS) })),
+      conversation: messages.slice(-MAX_MESSAGES).map((m): ConversationMessage => ({ from: m.role, text: m.content.slice(0, MAX_MESSAGE_CHARS), at: m.createdAt })),
       latestMessageId: messages.at(-1)?.id ?? null,
     };
   }
