@@ -49,6 +49,62 @@ const rejection = async (run: () => Promise<unknown>) => {
   return null;
 };
 
+describe("client requests a lawyer may take on", () => {
+  /** One lawyer, their tier's monthly limit, a free trial (ended or not) and what they've taken on:
+   * the count the claim query would return, captured so the test can check what it asked for. */
+  const world = (opts: { role?: string; limit?: number; taken?: number; trialEndsAt?: Date | null; liveSubscription?: boolean }) => {
+    const asked: any[] = [];
+    const db = {
+      user: {
+        findUnique: async () => ({ role: opts.role ?? "LAWYER", planTrialEndsAt: opts.trialEndsAt ?? null, paymentPlan: { clientRequestLimit: opts.limit ?? 0 } }),
+      },
+      paymentPlanSubscription: { findFirst: async () => (opts.liveSubscription ? { id: "sub" } : null) },
+      clientRequestClaim: { count: async (args: unknown) => (asked.push(args), opts.taken ?? 0) },
+    } as never;
+    return { db, asked };
+  };
+  const NOW = new Date("2026-11-20T10:00:00Z");
+
+  it("lets a lawyer under their tier's monthly limit take one on", async () => {
+    const { db } = world({ limit: 3, taken: 2 });
+    expect(await rejection(() => AccountLimitsSvc.assertCanTakeClientRequest("u", db, NOW))).to.equal(null);
+  });
+
+  it("stops them at the limit, saying how many their plan includes", async () => {
+    const { db } = world({ limit: 3, taken: 3 });
+    const err = await rejection(() => AccountLimitsSvc.assertCanTakeClientRequest("u", db, NOW));
+    expect(err?.statusCode).to.equal(403);
+    expect(err?.code).to.equal("CLIENT_REQUEST_LIMIT_REACHED");
+    expect(err?.message).to.contain("up to 3 client cases a month");
+  });
+
+  it("counts what they hold now and what they were engaged on this calendar month", async () => {
+    const { db, asked } = world({ limit: 3, taken: 0 });
+    await AccountLimitsSvc.assertCanTakeClientRequest("u", db, NOW);
+    expect(asked[0]).to.deep.equal({
+      where: { lawyerId: "u", OR: [{ outcome: null }, { outcome: "ENGAGED", request: { engagedAt: { gte: new Date("2026-11-01T00:00:00Z") } } }] },
+    });
+  });
+
+  it("is unlimited on a tier with no limit, without counting", async () => {
+    const { db, asked } = world({ limit: 0, taken: 50 });
+    expect(await rejection(() => AccountLimitsSvc.assertCanTakeClientRequest("u", db, NOW))).to.equal(null);
+    expect(asked).to.have.length(0);
+  });
+
+  it("refuses a lawyer whose free trial is over and who doesn't pay", async () => {
+    const { db } = world({ limit: 0, trialEndsAt: new Date("2026-11-01T00:00:00Z") });
+    expect((await rejection(() => AccountLimitsSvc.assertCanTakeClientRequest("u", db, NOW)))?.code).to.equal("PLAN_TRIAL_ENDED");
+    const paying = world({ limit: 0, trialEndsAt: new Date("2026-11-01T00:00:00Z"), liveSubscription: true });
+    expect(await rejection(() => AccountLimitsSvc.assertCanTakeClientRequest("u", paying.db, NOW))).to.equal(null);
+  });
+
+  it("never limits anyone who isn't a lawyer", async () => {
+    const { db } = world({ role: "USER", limit: 1, taken: 9 });
+    expect(await rejection(() => AccountLimitsSvc.assertCanTakeClientRequest("u", db, NOW))).to.equal(null);
+  });
+});
+
 describe("cases a lawyer may own", () => {
   it("lets a lawyer create a case while under their tier's limit", async () => {
     expect(await rejection(() => AccountLimitsSvc.assertCanCreateCase("u", db({ role: "LAWYER", tenantId: "t1", caseLimit: 3, cases: 2 })))).to.equal(null);

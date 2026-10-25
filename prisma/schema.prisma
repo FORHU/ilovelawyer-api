@@ -3292,6 +3292,10 @@ model PaymentPlan {
   includedAllowanceUsd   Float
   // 0 = unlimited, matching MAX_CASES_PER_ACCOUNT's off-by-default convention.
   caseLimit              Int             @default(0)
+  // Client requests (the UK client hand-off) a lawyer on this tier can take on per calendar month:
+  // the ones they hold plus the ones they were engaged on that month (AccountLimitsSvc
+  // .assertCanTakeClientRequest). 0 = unlimited.
+  clientRequestLimit     Int             @default(0)
   // Soft-disable only — never hard-delete a tier with users still on it; see PaymentPlanSvc.
   isActive               Boolean         @default(true)
   stripeProductId        String?         @unique

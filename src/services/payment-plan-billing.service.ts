@@ -94,7 +94,7 @@ export default class PaymentPlanBillingSvc {
       prisma.paymentPlan.findMany({
         where: { tenantId: user.tenantId, planType: "B2B_SUBSCRIPTION", isActive: true },
         orderBy: { level: "asc" },
-        select: { code: true, name: true, description: true, level: true, feeUsd: true, includedAllowanceUsd: true, caseLimit: true },
+        select: { code: true, name: true, description: true, level: true, feeUsd: true, includedAllowanceUsd: true, caseLimit: true, clientRequestLimit: true },
       }),
       PaymentPlanSubscriptionRepo.findLiveForUser(userId),
       prisma.user.findUnique({ where: { id: userId }, select: { planTrialEndsAt: true } }),

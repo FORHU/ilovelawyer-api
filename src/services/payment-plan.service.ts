@@ -16,16 +16,21 @@ export interface PaymentPlanInput {
   feeUsd: number;
   includedAllowanceUsd: number;
   caseLimit: number;
+  /** Client requests a lawyer can take on per calendar month; 0 = unlimited. */
+  clientRequestLimit?: number;
 }
 
 /** `code` is set once at create: it's the stable slug signup and upgrades refer to. */
 export type PaymentPlanPatch = Partial<Omit<PaymentPlanInput, "code">>;
 
-function validateNumbers(input: { feeUsd?: number; includedAllowanceUsd?: number; caseLimit?: number }) {
+function validateNumbers(input: { feeUsd?: number; includedAllowanceUsd?: number; caseLimit?: number; clientRequestLimit?: number }) {
   if (input.feeUsd !== undefined && input.feeUsd < 0) throw new HttpError("Fee can't be negative", 400);
   if (input.includedAllowanceUsd !== undefined && input.includedAllowanceUsd < 0) throw new HttpError("Included AI allowance can't be negative", 400);
   if (input.caseLimit !== undefined && (!Number.isInteger(input.caseLimit) || input.caseLimit < 0)) {
     throw new HttpError("Case limit must be a non-negative whole number", 400);
+  }
+  if (input.clientRequestLimit !== undefined && (!Number.isInteger(input.clientRequestLimit) || input.clientRequestLimit < 0)) {
+    throw new HttpError("Client request limit must be a non-negative whole number", 400);
   }
 }
 
@@ -113,6 +118,7 @@ export default class PaymentPlanSvc {
           feeUsd: input.feeUsd,
           includedAllowanceUsd: input.includedAllowanceUsd,
           caseLimit: input.caseLimit,
+          clientRequestLimit: input.clientRequestLimit ?? 0,
           updatedById: adminId,
         },
       });
@@ -150,6 +156,7 @@ export default class PaymentPlanSvc {
         feeUsd: patch.feeUsd,
         includedAllowanceUsd: patch.includedAllowanceUsd,
         caseLimit: patch.caseLimit,
+        clientRequestLimit: patch.clientRequestLimit,
         updatedById: adminId,
       },
     });

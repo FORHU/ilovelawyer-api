@@ -100,6 +100,9 @@ export const createPaymentPlanSchema = Joi.object({
   feeUsd: Joi.number().min(0).required(),
   includedAllowanceUsd: Joi.number().min(0).required(),
   caseLimit: Joi.number().integer().min(0).required(),
+  // Client requests a lawyer can take on per calendar month; 0 = unlimited. Optional: older admin
+  // builds don't send it, and it defaults to 0.
+  clientRequestLimit: Joi.number().integer().min(0).optional(),
 });
 
 // No `code`: it's the stable slug signup and upgrades refer to, set once at create.
@@ -111,6 +114,7 @@ export const updatePaymentPlanSchema = Joi.object({
   feeUsd: Joi.number().min(0).optional(),
   includedAllowanceUsd: Joi.number().min(0).optional(),
   caseLimit: Joi.number().integer().min(0).optional(),
+  clientRequestLimit: Joi.number().integer().min(0).optional(),
   isActive: Joi.boolean().strict().optional(),
 }).min(1);
 

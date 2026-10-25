@@ -64,6 +64,38 @@ export default class AccountLimitsSvc {
     }
   }
 
+  /** Throws when a lawyer can't take on another client request (the UK client hand-off) right now:
+   * their free trial is over with no plan (PLAN_TRIAL_ENDED), or they've reached their tier's
+   * clientRequestLimit for the calendar month (CLIENT_REQUEST_LIMIT_REACHED). What counts is what
+   * they hold now (accepted, quoted, or confirmed and being charged) plus what they were engaged on
+   * this month; a request given back, lapsed or declined doesn't. Called when they accept one, so
+   * requests already taken on carry on. Non-lawyers are never limited. */
+  static async assertCanTakeClientRequest(userId: string, db: typeof prisma = prisma, now: Date = new Date()) {
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      select: { role: true, planTrialEndsAt: true, paymentPlan: { select: { clientRequestLimit: true } } },
+    });
+    if (user?.role !== "LAWYER") return;
+    if (await AccountLimitsSvc.planTrialOver(userId, user.planTrialEndsAt, db, now)) {
+      throw new HttpError("Your free trial has ended. Choose a plan to take on new clients.", 403, "PLAN_TRIAL_ENDED");
+    }
+
+    const limit = user.paymentPlan?.clientRequestLimit ?? 0;
+    if (!limit) return;
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const taken = await db.clientRequestClaim.count({
+      where: { lawyerId: userId, OR: [{ outcome: null }, { outcome: "ENGAGED", request: { engagedAt: { gte: monthStart } } }] },
+    });
+    if (taken >= limit) {
+      throw new HttpError(
+        `Your plan includes up to ${limit} client ${limit === 1 ? "case" : "cases"} a month. Move to a higher plan to take on more, or accept new ones next month.`,
+        403,
+        "CLIENT_REQUEST_LIMIT_REACHED",
+        { limit },
+      );
+    }
+  }
+
   /** One-time notice for a lawyer already over their (newly introduced or newly downgraded) tier's
    * case limit — never retroactive on their existing cases, only on creating more. Fenced by
    * User.caseLimitNotifiedAt so it fires exactly once per lawyer. */
