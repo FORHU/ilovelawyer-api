@@ -236,11 +236,14 @@ export default class ClientRequestLawyerSvc {
   /**
    * Sends the lawyer's quote to the client (#512): CLAIMED -> QUOTED, inside the 24h hold. A fixed
    * fee needs an amount; a first consultation may be free. The fee is the lawyer's own, paid to them
-   * directly: the platform's per-case fee (#513) is separate.
+   * directly: the platform's per-case fee (#513) is separate, and is charged when the client
+   * confirms, so the quote needs a card on file to charge it to (402 CARD_REQUIRED, #933): the
+   * client only ever sees a quote that can go through. Accepting needs none.
    */
   static async quote(lawyer: LawyerContext, id: string, input: { type: QuoteType; amount: { amountMinor: number; currency: string }; message: string }) {
     if (input.type === "FIXED_FEE" && input.amount.amountMinor <= 0) throw new HttpError("A fixed fee needs an amount.", 400);
     const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CLAIMED"]);
+    await OrganizationChargeSvc.assertCardOnFile(claim.organizationId, lawyer.userId);
     const now = new Date();
     const saved = await ClientRequestClaimRepo.quote(
       { id: claim.id, requestId: id },

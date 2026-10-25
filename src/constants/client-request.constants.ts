@@ -27,3 +27,6 @@ export const CLIENT_REQUEST_QUOTE_MAX_MINOR = 10_000_000;
 /** A lawyer's note when releasing a request (#512). Kept on the claim only. */
 export const CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH = 500;
 
+/** How long a confirmed client waits on a lawyer's failing introduction fee before the request goes
+ * back to other lawyers (#933, ClientRequestSweepQueue): from when the client confirmed. */
+export const CLIENT_REQUEST_UNPAID_FEE_HOURS = 48;

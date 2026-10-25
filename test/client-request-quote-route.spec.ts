@@ -85,9 +85,14 @@ describe("client request conflict check, release and quote", () => {
         parties: { create: [{ name: "Acme Widgets Ltd", designation: "Employer" }, { name: "Dan Manager", designation: "Witness" }] },
       },
     });
+    // A quote needs a card on file for the fee confirming will charge (#933).
+    for (const id of [orgId, otherOrgId]) {
+      await prisma.organizationBilling.create({ data: { organizationId: id, provider: "DUMMY", customerId: `cus_${id}`, paymentMethodId: `pm_${id}`, brand: "visa", last4: "4242" } });
+    }
   });
 
   after(async () => {
+    await prisma.organizationBilling.deleteMany({ where: { organizationId: { in: [orgId, otherOrgId] } } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.auditEvent.deleteMany({ where: { caseId } });
     await prisma.case.deleteMany({ where: { id: caseId } });
@@ -285,6 +290,22 @@ describe("client request conflict check, release and quote", () => {
     it("refuses a lawyer who doesn't hold it", async () => {
       await claim().expect(200);
       await quote(FIXED_FEE, otherLawyerId, otherOrgId).expect(404);
+    });
+
+    // #933: the client only ever sees a quote whose introduction fee can be charged.
+    it("needs a card on file: accepting doesn't, sending the quote does (402 CARD_REQUIRED)", async () => {
+      await prisma.organizationBilling.update({ where: { organizationId: orgId }, data: { paymentMethodId: null } });
+      try {
+        await claim().expect(200);
+        const { body } = await quote(FIXED_FEE).expect(402);
+        expect(body.code).to.equal("CARD_REQUIRED");
+        const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true } });
+        expect(row.status).to.equal("CLAIMED");
+        expect(row.claims[0]!.quotedAt).to.equal(null);
+      } finally {
+        await prisma.organizationBilling.update({ where: { organizationId: orgId }, data: { paymentMethodId: `pm_${orgId}` } });
+      }
+      await quote(FIXED_FEE).expect(200);
     });
 
     it("checks the quote: type, GBP, a message, and an amount for a fixed fee", async () => {
