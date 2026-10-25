@@ -699,11 +699,10 @@ export const clientHandoffPaths: Paths = {
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#511", built: true,
       summary: "Accept: hold the request for 24h",
-      description: "Only one lawyer can win. The others get client-request:taken. Needs a card on the organization (not checked yet: card on file lands with ilovelawyer-api#505). Nothing is charged until the client confirms.",
+      description: "Only one lawyer can win. The others get client-request:taken. Needs no card: sending the quote does (FORHU/ilovelawyer-app#933). Nothing is charged until the client confirms.",
       parameters: requestId,
       responses: {
         200: ok("Claimed (CLAIMED)", ref("ClientRequestForLawyer")),
-        402: err("CARD_REQUIRED: add one with POST /organizations/{id}/billing/card/setup-session"),
         403: LAWYER_ONLY,
         404: NOT_FOUND,
         409: err("REQUEST_ALREADY_CLAIMED or INVALID_REQUEST_STATUS"),
@@ -748,14 +747,14 @@ export const clientHandoffPaths: Paths = {
       issue: "ilovelawyer-api#512", built: true,
       summary: "Send your quote to the client",
       description:
-        "Allowed while CLAIMED and inside the 24h hold (409 CLAIM_EXPIRED after it). Moves to QUOTED, once. GBP only. A FIXED_FEE needs an amount above 0; a FIRST_CONSULTATION may be free. Once quoted, the hold no longer lapses: the request waits for the client to confirm or decline (#513). The client then sees the quote and the lawyer's public profile on GET /client/lawyer-requests/{id}.",
+        "Allowed while CLAIMED and inside the 24h hold (409 CLAIM_EXPIRED after it). Moves to QUOTED, once. GBP only. A FIXED_FEE needs an amount above 0; a FIRST_CONSULTATION may be free. Once quoted, the hold no longer lapses: the request waits for the client to confirm or decline (#513). The client then sees the quote and the lawyer's public profile on GET /client/lawyer-requests/{id}. Needs a card on file for the per-case fee confirming will charge (the firm's, or a solo lawyer's own): 402 CARD_REQUIRED otherwise (FORHU/ilovelawyer-app#933).",
       parameters: requestId,
       body: {
         type: "object",
         required: ["type", "amount", "message"],
         properties: { type: enumOf(QUOTE_TYPES), amount: money(), message: { type: "string", maxLength: 2000 } },
       },
-      responses: { 200: ok("Quoted (QUOTED)", ref("ClientRequestForLawyer")), 400: err("Validation error"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED or INVALID_REQUEST_STATUS") },
+      responses: { 200: ok("Quoted (QUOTED)", ref("ClientRequestForLawyer")), 400: err("Validation error"), 402: err("CARD_REQUIRED: no card on file"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED or INVALID_REQUEST_STATUS") },
     }),
   },
   "/client-requests/{id}/charge/retry": {
@@ -764,7 +763,7 @@ export const clientHandoffPaths: Paths = {
       issue: "ilovelawyer-api#513", built: true,
       summary: "Retry the per-case fee after updating the card",
       description:
-        "Only the lawyer holding the request, while CONFIRMED with a FAILED charge (409 otherwise, including while a payment is still processing). Each retry is a new payment on the current card; two at once can't both run. An attempt that got no answer from Stripe is retried with the same idempotency key, so it can't charge twice.",
+        "Only the lawyer holding the request, while CONFIRMED with a FAILED charge (409 otherwise, including while a payment is still processing). Each retry is a new payment on the current card; two at once can't both run. An attempt that got no answer from Stripe is retried with the same idempotency key, so it can't charge twice. If it still hasn't gone through 48h after the client confirmed, the request goes back to other lawyers (the claim ends LAPSED) and the lawyer is told (#933).",
       parameters: requestId,
       responses: { 200: ok("Engaged, or still failed", ref("ClientRequestForLawyer")), 402: err("CHARGE_FAILED"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
     }),

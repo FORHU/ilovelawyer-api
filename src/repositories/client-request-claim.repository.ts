@@ -1,6 +1,7 @@
 import type { QuoteType, ReleaseReason } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { ROUTING_WINDOW_MS } from "./client-request.repository";
+import { CLIENT_REQUEST_UNPAID_FEE_HOURS } from "../constants/client-request.constants";
 
 /** How long a claim holds a request before it lapses back to the pool (#511). */
 export const CLAIM_HOLD_MS = 24 * 60 * 60 * 1000;
@@ -141,6 +142,68 @@ export default class ClientRequestClaimRepo {
           data: { outcome: "DECLINED", endedAt: now, openRequestId: null, declineReason: reason },
         });
         if (ended.count !== 1 || rerouted.count !== 1) throw new RequestMovedOn();
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof RequestMovedOn) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * Confirmed requests whose per-case fee is still FAILED `CLIENT_REQUEST_UNPAID_FEE_HOURS` after
+   * the client confirmed (the fee's createdAt) (#933): the lawyer never fixed their card. A fee being
+   * retried (PENDING) isn't one. With the open claim the fee is for.
+   */
+  static async findUnpaid(now: Date) {
+    const rows = await prisma.organizationCharge.findMany({
+      where: {
+        kind: "PER_CASE_FEE",
+        status: "FAILED",
+        feeRequestId: { not: null },
+        createdAt: { lte: new Date(now.getTime() - CLIENT_REQUEST_UNPAID_FEE_HOURS * 60 * 60 * 1000) },
+        request: { status: "CONFIRMED" },
+      },
+      select: {
+        id: true,
+        requestId: true,
+        request: { select: { caseId: true, clientId: true, claims: { where: { outcome: null }, select: { id: true, lawyerId: true, organizationId: true } } } },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    return rows.flatMap((r) => {
+      const claim = r.request?.claims[0];
+      return claim && r.requestId ? [{ chargeId: r.id, requestId: r.requestId, claim, caseId: r.request!.caseId, clientId: r.request!.clientId }] : [];
+    });
+  }
+
+  /**
+   * Gives a confirmed request back because its per-case fee was never paid (#933): the claim ends
+   * LAPSED and the request goes back in the pool without this lawyer, as a lapse does. The failed fee
+   * stays in the fee history but stops being the request's fee (feeRequestId cleared), so the next
+   * lawyer's confirmation records its own. Request, then charge, then claim (REQUEST_ROW_FIRST). Both
+   * or neither: false when the client or a retry got there first (the fee is no longer FAILED, or the
+   * request no longer CONFIRMED).
+   */
+  static async lapseUnpaid(unpaid: { chargeId: string; requestId: string; claim: { id: string; lawyerId: string } }, now: Date = new Date()): Promise<boolean> {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const rerouted = await tx.clientRequest.updateMany({
+          where: { id: unpaid.requestId, status: "CONFIRMED" },
+          data: {
+            status: "ROUTED",
+            routedAt: now,
+            routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS),
+            announcedAt: null,
+            excludedLawyerIds: { push: unpaid.claim.lawyerId },
+          },
+        });
+        const fee = await tx.organizationCharge.updateMany({ where: { id: unpaid.chargeId, status: "FAILED" }, data: { feeRequestId: null } });
+        const ended = await tx.clientRequestClaim.updateMany({
+          where: { id: unpaid.claim.id, outcome: null },
+          data: { outcome: "LAPSED", endedAt: now, openRequestId: null },
+        });
+        if (rerouted.count !== 1 || fee.count !== 1 || ended.count !== 1) throw new RequestMovedOn();
       });
       return true;
     } catch (err) {
