@@ -11,6 +11,8 @@ import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import ClientRequestBriefSvc from "../src/services/client-request-brief.service";
 import SecurityAuditSvc from "../src/services/security-audit.service";
+import AccountLimitsSvc from "../src/services/account-limits.service";
+import HttpError from "../src/utils/http-error";
 import * as socket from "../src/lib/socket";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -96,6 +98,7 @@ describe("ClientRequestLawyerSvc", () => {
       stash(LawyerProfileRepo, ["find", "findLawyerTenant", "findVerified", "countOpenForLawyers"]),
       stash(OrganizationRepo, ["writeAudit"]),
       stash(SecurityAuditSvc, ["record"]),
+      stash(AccountLimitsSvc, ["assertCanTakeClientRequest"]),
       stash(ClientRequestBriefSvc, ["current"]),
       stash(socket, ["emitToUser"]),
     ];
@@ -182,6 +185,18 @@ describe("ClientRequestLawyerSvc", () => {
   });
 
   describe("claim", () => {
+    it("asks the lawyer's plan first, and holds nothing when it says no", async () => {
+      routed("req-1");
+      const asked: string[] = [];
+      (AccountLimitsSvc as any).assertCanTakeClientRequest = async (userId: string) => {
+        asked.push(userId);
+        throw new HttpError("Your plan includes up to 3 client cases a month.", 403, "CLIENT_REQUEST_LIMIT_REACHED");
+      };
+      expect(await errorOf(ClientRequestLawyerSvc.claim(me, "req-1"))).to.deep.include({ status: 403, code: "CLIENT_REQUEST_LIMIT_REACHED" });
+      expect(asked).to.deep.equal(["lawyer-me"]);
+      expect(claims).to.have.length(0);
+    });
+
     it("holds the request for 24h and shows it as theirs", async () => {
       routed("req-1");
       const dto = await ClientRequestLawyerSvc.claim(me, "req-1");

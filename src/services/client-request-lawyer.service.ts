@@ -12,6 +12,7 @@ import CaseCopyQueue from "../queues/case-copy.queue";
 import EngagementAccessSvc from "./engagement-access.service";
 import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
 import SecurityAuditSvc from "./security-audit.service";
+import AccountLimitsSvc from "./account-limits.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
@@ -130,6 +131,8 @@ export default class ClientRequestLawyerSvc {
     const request = await ClientRequestRepo.findForLawyer(id);
     // Whatever its status, so a lawyer who lost the race hears why rather than "not found".
     if (!request || !ClientRequestLawyerSvc.isFor(request, lawyer.userId, profile)) throw NOT_FOUND();
+    // Their plan: a trial that's over, or this month's client requests already taken.
+    await AccountLimitsSvc.assertCanTakeClientRequest(lawyer.userId);
 
     const claim = await ClientRequestClaimRepo.claim(id, lawyer.userId, lawyer.organizationId);
     if (!claim) {
@@ -286,6 +289,8 @@ export default class ClientRequestLawyerSvc {
 
     const existing = await CaseCopyRepo.findForRequest(id);
     if (existing) return { caseCopyId: existing.id, status: existing.status };
+    // The copy is a case of their own, so their plan's case limit applies (and a trial that's over).
+    await AccountLimitsSvc.assertCanCreateCase(lawyer.userId);
 
     const job = await CaseCopyRepo.enqueueForRequest({
       requestId: id,
