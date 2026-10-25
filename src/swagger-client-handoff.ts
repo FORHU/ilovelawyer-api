@@ -128,7 +128,7 @@ export const clientHandoffTags: Tags = [
   {
     name: BILLING_TAG,
     description:
-      "The organization's card on file (Stripe-hosted setup, so no card data reaches this API), the per-case fee and AI top-up history, and the Stripe webhook. Prices are placeholders until FORHU/ilovelawyer-app#846 and come from config. Organization OWNER/ADMIN only, except the top-up packs list.",
+      "The organization's card on file (Stripe-hosted setup, so no card data reaches this API), the per-case fee and AI top-up history, and the Stripe webhook. The introduction fee and top-up packs are set per region in ilovelawyer-admin (ilovelawyer-api#598). Organization OWNER/ADMIN only, except the top-up packs list.",
   },
   {
     name: ADMIN_TAG,
@@ -276,7 +276,7 @@ export const clientHandoffSchemas: Schemas = {
       routingExpiresAt: dateTime("48h after routing, while unclaimed", true),
       claim: { ...ref("ClaimSummary"), nullable: true },
       quote: { ...ref("Quote"), nullable: true },
-      perCaseFee: { ...money("What confirming will charge the organization"), readOnly: true },
+      perCaseFee: { ...money("What confirming will charge the organization now: the region's introduction fee, set in admin"), readOnly: true },
       charge: { ...ref("ChargeSummary"), nullable: true, description: "The per-case fee, from CONFIRMED" },
       engagement: {
         type: "object",
@@ -387,8 +387,8 @@ export const clientHandoffSchemas: Schemas = {
   },
   TopUpPack: {
     type: "object",
-    properties: { id: { type: "string" }, price: money(), credit: money("AI credit added to the engagement") },
-    example: { id: "standard", price: { amountMinor: 4000, currency: "GBP" }, credit: { amountMinor: 2400, currency: "GBP" } },
+    properties: { id: { type: "string" }, name: { type: "string" }, price: money(), credit: money("AI credit added to the engagement") },
+    example: { id: "standard", name: "Standard", price: { amountMinor: 4000, currency: "GBP" }, credit: { amountMinor: 2400, currency: "GBP" } },
   },
   PaymentCard: {
     type: "object",
@@ -964,7 +964,7 @@ export const clientHandoffPaths: Paths = {
       tag: BILLING_TAG,
       issue: "ilovelawyer-api#516", built: true,
       summary: "The AI top-up packs on offer",
-      description: "Placeholder prices until FORHU/ilovelawyer-app#846.",
+      description: "The active packs of the caller's region, set in ilovelawyer-admin (Settings, Lawyer fees; ilovelawyer-api#598).",
       responses: { 200: ok("Packs", { type: "array", items: ref("TopUpPack") }) },
     }),
   },

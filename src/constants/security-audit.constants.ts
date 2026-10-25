@@ -63,6 +63,8 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.settings.payment_plan_deactivated",
   "admin.settings.client_price_created",
   "admin.settings.client_price_changed",
+  "admin.settings.lawyer_price_created",
+  "admin.settings.lawyer_price_changed",
   "admin.settings.client_promo_created",
   "admin.settings.client_promo_changed",
   "admin.model_settings.updated",
@@ -122,6 +124,7 @@ export type SecurityAuditTargetType =
   | "model_setting"
   | "jurisdiction_module"
   | "client_price"
+  | "lawyer_price"
   | "client_promo";
 
 /** How long rows are kept before SecurityAuditRetentionQueue deletes them: 7 years by default,
@@ -194,6 +197,8 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.settings.payment_plan_deactivated": "Subscription tier deactivated",
   "admin.settings.client_price_created": "Client app top-up pack created",
   "admin.settings.client_price_changed": "Client app price changed",
+  "admin.settings.lawyer_price_created": "Lawyer AI top-up pack created",
+  "admin.settings.lawyer_price_changed": "Lawyer introduction fee or top-up pack changed",
   "admin.settings.client_promo_created": "Client app promo code created",
   "admin.settings.client_promo_changed": "Client app promo code changed",
   "admin.model_settings.updated": "AI model setting changed",

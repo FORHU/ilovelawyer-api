@@ -4,6 +4,7 @@ import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import OrganizationChargeSvc from "./organization-charge.service";
+import ClientPricingSvc from "./client-pricing.service";
 import EngagementAccessSvc from "./engagement-access.service";
 import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
@@ -183,7 +184,10 @@ export default class ClientRequestSvc {
       throw new HttpError("Read and acknowledge how ilovelawyer is paid before confirming.", 400, "DISCLOSURE_NOT_ACKNOWLEDGED");
     }
     const request = await ClientRequestSvc.load(clientId, id);
-    const confirmed = await OrganizationChargeRepo.confirm(id, OrganizationChargeSvc.perCaseFee());
+    // The fee is the region's (set in admin, #598): the client's, which is the lawyer's too, as the
+    // hand-off is UK-only.
+    const fee = await OrganizationChargeSvc.perCaseFee(await ClientPricingSvc.tenantIdForClient(clientId));
+    const confirmed = await OrganizationChargeRepo.confirm(id, fee);
     if (!confirmed) {
       const now = await ClientRequestSvc.load(clientId, id);
       throw new HttpError("This lawyer can't be confirmed now.", 409, "INVALID_REQUEST_STATUS", { status: now.status ?? request.status });

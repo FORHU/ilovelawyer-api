@@ -15,11 +15,13 @@ import * as socket from "../src/lib/socket";
 import CaseCopyQueue from "../src/queues/case-copy.queue";
 import OrganizationChargeSvc from "../src/services/organization-charge.service";
 import { ENGAGEMENT_AI_BUDGET_GBP_PER_USD, ENGAGEMENT_AI_BUDGET_INCLUDED_USD } from "../src/config";
-import { ENGAGEMENT_AI_TOP_UP_PACKS } from "../src/constants/client-request.constants";
+import { LAWYER_PRICING_DEFAULTS } from "../src/constants/lawyer-pricing.constants";
 import { setOrganizationCardProvider, type CardChargeRequest, type CardChargeResult, type HostedOrganizationCardProvider } from "../src/payments/organization-card-provider";
 
 const INCLUDED_MINOR = Math.round(ENGAGEMENT_AI_BUDGET_INCLUDED_USD * ENGAGEMENT_AI_BUDGET_GBP_PER_USD * 100);
-const PACK = ENGAGEMENT_AI_TOP_UP_PACKS[0];
+// The UK tenant's pack, as seeded (lawyer_pricing_seed): these tests don't edit it.
+const SEEDED = LAWYER_PRICING_DEFAULTS.packs[0];
+const PACK = { id: SEEDED.code, name: SEEDED.name, priceMinor: SEEDED.priceMinor, creditMinor: SEEDED.creditMinor };
 
 const SUCCEEDED = (req: CardChargeRequest): CardChargeResult => ({ status: "SUCCEEDED", paymentIntentId: `pi_${req.chargeId}_${req.attempt}`, receiptUrl: "https://pay.stripe.com/receipts/x", failureReason: null });
 const DECLINED = (req: CardChargeRequest): CardChargeResult => ({ status: "FAILED", paymentIntentId: `pi_${req.chargeId}_${req.attempt}`, receiptUrl: null, failureReason: "Your card was declined." });
@@ -137,7 +139,7 @@ describe("engagement AI top-ups", () => {
   describe("GET /billing/top-up-packs", () => {
     it("lists the packs, price and credit", async () => {
       const { body } = await request(app).get("/api/billing/top-up-packs").set(auth(lawyerId)).expect(200);
-      expect(body).to.deep.equal([{ id: PACK.id, price: { amountMinor: PACK.priceMinor, currency: "GBP" }, credit: { amountMinor: PACK.creditMinor, currency: "GBP" } }]);
+      expect(body).to.deep.equal([{ id: PACK.id, name: PACK.name, price: { amountMinor: PACK.priceMinor, currency: "GBP" }, credit: { amountMinor: PACK.creditMinor, currency: "GBP" } }]);
     });
 
     it("needs a session", async () => {

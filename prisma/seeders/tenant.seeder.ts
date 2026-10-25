@@ -1,6 +1,7 @@
 import prisma from "../../src/lib/prisma";
 import { PAYMENT_PLAN_DEFAULT_TIERS } from "../../src/constants/tenant-settings.constants";
 import { CLIENT_PRICING_DEFAULTS } from "../../src/constants/client-pricing.constants";
+import { LAWYER_PRICING_DEFAULTS } from "../../src/constants/lawyer-pricing.constants";
 
 // The deployment-region boundary Tenant rows — see docs/adr/0002-tenant-region-boundary.md.
 // `code` matches the Jurisdiction enum / subdomain convention already used by
@@ -44,6 +45,20 @@ export async function seedTenants() {
         where: { tenantId_planType_code: { tenantId, planType, code } },
         update: {},
         create: { tenantId, planType, code, ...row, currency, feeUsd: 0, includedAllowanceUsd: 0, caseLimit: 0, createdAt: now, updatedAt: now },
+      });
+    }
+    // What lawyers pay (#598), same create-only rule (lawyer_pricing_seed seeded the tenants that
+    // existed when it ran).
+    const lawyer = [
+      { planType: "LAWYER_INTRO_FEE" as const, ...LAWYER_PRICING_DEFAULTS.introFee, level: 0, creditMinor: null },
+      ...LAWYER_PRICING_DEFAULTS.packs.map((p) => ({ planType: "LAWYER_AI_TOP_UP" as const, ...p })),
+    ];
+    for (const { planType, code, ...row } of lawyer) {
+      const now = new Date();
+      await prisma.paymentPlan.upsert({
+        where: { tenantId_planType_code: { tenantId, planType, code } },
+        update: {},
+        create: { tenantId, planType, code, ...row, currency: LAWYER_PRICING_DEFAULTS.currency, feeUsd: 0, includedAllowanceUsd: 0, caseLimit: 0, createdAt: now, updatedAt: now },
       });
     }
     for (const promo of CLIENT_PRICING_DEFAULTS.promos) {

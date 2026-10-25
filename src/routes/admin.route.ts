@@ -8,6 +8,7 @@ import LlmUsageCtrl from "../controllers/llm-usage.controller";
 import ClientBillingAdminCtrl from "../controllers/client-billing-admin.controller";
 import ClientRequestAdminCtrl from "../controllers/client-request-admin.controller";
 import ClientPricingAdminCtrl from "../controllers/client-pricing-admin.controller";
+import LawyerPricingAdminCtrl from "../controllers/lawyer-pricing-admin.controller";
 
 const router = express.Router();
 
@@ -50,6 +51,11 @@ router.patch("/settings/client-pricing/packs/:id", asyncHandler(ClientPricingAdm
 router.post("/settings/client-pricing/packs/:id/default", asyncHandler(ClientPricingAdminCtrl.setDefaultPack));
 router.post("/settings/tenants/:code/client-promos", asyncHandler(ClientPricingAdminCtrl.createPromo));
 router.patch("/settings/client-promos/:id", asyncHandler(ClientPricingAdminCtrl.updatePromo));
+// What lawyers pay per tenant: the introduction fee and the AI top-up packs (LawyerPricingSvc, #598).
+router.get("/settings/lawyer-pricing", asyncHandler(LawyerPricingAdminCtrl.get));
+router.patch("/settings/tenants/:code/lawyer-pricing/intro-fee", asyncHandler(LawyerPricingAdminCtrl.updateIntroFee));
+router.post("/settings/tenants/:code/lawyer-pricing/packs", asyncHandler(LawyerPricingAdminCtrl.createPack));
+router.patch("/settings/lawyer-pricing/packs/:id", asyncHandler(LawyerPricingAdminCtrl.updatePack));
 
 router.get("/audit-log", asyncHandler(SecurityAuditCtrl.listForAdmin));
 router.get("/audit-log/export", asyncHandler(SecurityAuditCtrl.exportForAdmin));
