@@ -249,6 +249,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client-requests/:id/charge/retry": { exempt: "Retries the firm's fee for a request the lawyer already holds; recorded in the case activity feed" },
   "POST /client-requests/:id/quote": { exempt: "A quote to the client; it changes nobody's access. Recorded in the case activity feed" },
   "POST /client-requests/:id/copy": ["client_request.copied"],
+  "POST /client-requests/:id/ai-top-ups": ["client_request.ai_top_up_approved"],
   "POST /client-requests/:id/close": ["client_request.closed"],
   "POST /client/lawyer-requests/:id/end": ["client_request.closed"],
   "POST /client/lawyer-requests/:id/feedback": { exempt: "The client's own rating of the lawyer after the engagement closes; no access change" },

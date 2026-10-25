@@ -1,6 +1,7 @@
-import { OrganizationChargeKind, Prisma } from "@prisma/client";
+import { OrganizationChargeKind, Prisma, type OrganizationCharge } from "@prisma/client";
 import prisma from "../lib/prisma";
 import type { CardChargeResult } from "../payments/organization-card-provider";
+import { PAID_CHARGE_STATUSES } from "./client-request-admin.repository";
 
 /** Rolls a transaction back when the request or charge had already moved on. */
 class MovedOn extends Error {}
@@ -52,11 +53,44 @@ export default class OrganizationChargeRepo {
     return prisma.organizationCharge.findUnique({ where: { feeRequestId: requestId } });
   }
 
-  /** How much of `kind` has actually been paid for a request — AI top-ups (#515, #516), in pence.
-   * A refunded top-up still counts: it bought AI credit that was used. */
-  static async sumSucceeded(requestId: string, kind: OrganizationChargeKind): Promise<number> {
-    const { _sum } = await prisma.organizationCharge.aggregate({ where: { requestId, kind, status: "SUCCEEDED" }, _sum: { amountMinor: true } });
-    return _sum.amountMinor ?? 0;
+  /** The AI credit a request's paid top-ups have added to its engagement's budget (#515, #516), in
+   * pence: their credit, not their price. A refunded top-up still counts: it bought AI credit that
+   * was used. */
+  static async sumTopUpCredit(requestId: string): Promise<number> {
+    const { _sum } = await prisma.organizationCharge.aggregate({
+      where: { requestId, kind: "AI_TOP_UP", status: { in: PAID_CHARGE_STATUSES } },
+      _sum: { creditMinor: true },
+    });
+    return _sum.creditMinor ?? 0;
+  }
+
+  /**
+   * The lawyer approves a top-up (#516): an AI_TOP_UP charge recorded PENDING, never tried, against
+   * the same payer as the per-case fee. Only while the request is ENGAGED, and not while another
+   * top-up for it is still being charged, so a double click can't buy two. The request row is
+   * locked first (REQUEST_ROW_FIRST), so two at once wait for each other. Null when the request
+   * isn't ENGAGED; "BUSY" when a top-up is already PENDING.
+   */
+  static async createTopUp(input: {
+    requestId: string;
+    organizationId: string | null;
+    lawyerId: string;
+    amountMinor: number;
+    creditMinor: number;
+    currency: string;
+  }): Promise<OrganizationCharge | "BUSY" | null> {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const { count } = await tx.clientRequest.updateMany({ where: { id: input.requestId, status: "ENGAGED" }, data: { updatedAt: new Date() } });
+        if (count !== 1) throw new MovedOn();
+        const pending = await tx.organizationCharge.count({ where: { requestId: input.requestId, kind: "AI_TOP_UP", status: "PENDING" } });
+        if (pending > 0) return "BUSY" as const;
+        return tx.organizationCharge.create({ data: { ...input, kind: "AI_TOP_UP", status: "PENDING" } });
+      });
+    } catch (err) {
+      if (err instanceof MovedOn) return null;
+      throw err;
+    }
   }
 
   static async findByPaymentIntent(paymentIntentId: string) {

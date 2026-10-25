@@ -6,11 +6,13 @@ import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import { organizationCardProviderNamed, type CardChargeResult } from "../payments/organization-card-provider";
 import EngagementAccessSvc from "./engagement-access.service";
+import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
 import NotificationSvc from "./notification.service";
 import { emitToUser } from "../lib/socket";
 import logger from "../utils/logger";
-import { CLIENT_REQUEST_PER_CASE_FEE_MINOR } from "../constants/client-request.constants";
-import type { ClientRequestUpdatedEvent } from "../types/client-handoff";
+import HttpError from "../utils/http-error";
+import { CLIENT_REQUEST_PER_CASE_FEE_MINOR, ENGAGEMENT_AI_TOP_UP_PACKS } from "../constants/client-request.constants";
+import { CLIENT_HANDOFF_SOCKET_EVENTS, type ClientRequestUpdatedEvent, type EngagementAiBudgetEvent } from "../types/client-handoff";
 
 const NO_CARD = "There's no card on file. An owner or admin can add one in the organization's billing settings.";
 /** A solo lawyer pays with their own card (docs/adr/0022). */
@@ -18,6 +20,8 @@ const NO_OWN_CARD = "There's no card on file. Add one in your profile's billing 
 const UNREACHABLE = "We couldn't reach the payment provider. Try again in a moment.";
 
 export type ChargeOutcome = "SUCCEEDED" | "PENDING" | "FAILED";
+
+type SettledCharge = Pick<OrganizationCharge, "id" | "kind" | "requestId" | "organizationId" | "lawyerId" | "failureReason">;
 
 /** Charge in the contract: one of a firm's charges, with what's been refunded of it (#520). Shared by
  * the firm's fee history and the admin app. */
@@ -28,6 +32,8 @@ export function chargeDto(c: OrganizationCharge & { refunds: OrganizationChargeR
     kind: c.kind,
     status: c.status,
     amount: { amountMinor: c.amountMinor, currency: c.currency },
+    /** An AI top-up's credit to the engagement's AI budget (#516); null on a per-case fee. */
+    credit: c.creditMinor === null ? null : { amountMinor: c.creditMinor, currency: c.currency },
     refunded: { amountMinor: refunded, currency: c.currency },
     requestId: c.requestId,
     lawyer: c.lawyerId ? { id: c.lawyerId, name: lawyerName ?? "" } : null,
@@ -44,13 +50,55 @@ export function chargeDto(c: OrganizationCharge & { refunds: OrganizationChargeR
  * a client confirms the firm's lawyer: once it goes through, the request is ENGAGED. A declined card
  * leaves the request CONFIRMED, and the lawyer retries once the card is updated. Each attempt goes
  * through the provider the card was saved with (organizationCardProviderNamed), so a test card is
- * never charged for real. AI top-ups (#516) will charge the same way.
+ * never charged for real. AI top-ups (#516) charge the same way, to the same card, and add their
+ * credit to the engagement's AI budget once paid.
  */
 export default class OrganizationChargeSvc {
   /** What confirming a lawyer charges their organization. A placeholder until the price is signed off
    * (FORHU/ilovelawyer-app#846). */
   static perCaseFee() {
     return { amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" };
+  }
+
+  /** The AI top-up packs on offer (TopUpPack in the contract). Placeholders until #846. */
+  static topUpPacks() {
+    return ENGAGEMENT_AI_TOP_UP_PACKS.map((p) => ({
+      id: p.id,
+      price: { amountMinor: p.priceMinor, currency: p.currency },
+      credit: { amountMinor: p.creditMinor, currency: p.currency },
+    }));
+  }
+
+  /**
+   * Buys an AI top-up pack for an engaged request (#516), after the lawyer has approved it: never
+   * automatic. Charged to the same payer as the per-case fee (the firm, or a solo lawyer's own
+   * card), at once. The credit counts once the payment goes through, from Stripe's direct answer or
+   * its webhook (applyStripeIntent). Returns the charge after that attempt: SUCCEEDED, or PENDING
+   * while the bank decides. 402 CARD_REQUIRED with no card on file (nothing is recorded), 402
+   * CHARGE_FAILED when declined (the failed charge stays in the fee history), 409 while the
+   * request isn't engaged or another top-up is still being charged.
+   */
+  static async buyTopUp(input: { requestId: string; organizationId: string | null; lawyerId: string; packId: string }): Promise<OrganizationCharge> {
+    const pack = ENGAGEMENT_AI_TOP_UP_PACKS.find((p) => p.id === input.packId);
+    if (!pack) throw new HttpError("There's no top-up pack with that id.", 400);
+    const billing = await OrganizationBillingRepo.find(payerOf(input.organizationId, input.lawyerId)!);
+    if (!billing?.paymentMethodId) throw new HttpError(input.organizationId ? NO_CARD : NO_OWN_CARD, 402, "CARD_REQUIRED");
+
+    const charge = await OrganizationChargeRepo.createTopUp({
+      requestId: input.requestId,
+      organizationId: input.organizationId,
+      lawyerId: input.lawyerId,
+      amountMinor: pack.priceMinor,
+      creditMinor: pack.creditMinor,
+      currency: pack.currency,
+    });
+    if (charge === null) throw new HttpError("This request isn't engaged.", 409, "INVALID_REQUEST_STATUS");
+    if (charge === "BUSY") throw new HttpError("A top-up is already being charged. Wait for it to finish.", 409, "INVALID_REQUEST_STATUS", { chargeStatus: "PENDING" });
+
+    const outcome = await OrganizationChargeSvc.attempt(charge.id);
+    const after = (await OrganizationChargeRepo.findById(charge.id))!;
+    if (outcome === "FAILED") throw new HttpError(after.failureReason ?? "The card was declined.", 402, "CHARGE_FAILED");
+    return after;
   }
 
   /**
@@ -148,8 +196,10 @@ export default class OrganizationChargeSvc {
   }
 
   /** What follows a settled charge. For a per-case fee: engaged, both sides are told; declined, the
-   * lawyer and the organization's owners and admins are told to update the card. */
-  private static async after(charge: Pick<OrganizationCharge, "id" | "kind" | "requestId" | "organizationId" | "lawyerId" | "failureReason">, outcome: ChargeOutcome, engaged: boolean) {
+   * lawyer and the organization's owners and admins are told to update the card. For a top-up, see
+   * afterTopUp. */
+  private static async after(charge: SettledCharge, outcome: ChargeOutcome, engaged: boolean) {
+    if (charge.kind === "AI_TOP_UP") return OrganizationChargeSvc.afterTopUp(charge, outcome);
     if (charge.kind !== "PER_CASE_FEE" || !charge.requestId || outcome === "PENDING") return;
     const request = await ClientRequestRepo.findForLawyer(charge.requestId);
     if (!request) return;
@@ -186,6 +236,26 @@ export default class OrganizationChargeSvc {
         link: `/client-requests/${request.id}`,
       });
     }
+  }
+
+  /** A top-up that went through: the lawyer's AI meter is sent the new budget (engagement:ai-budget),
+   * so blocked AI work can carry on. One that was declined, perhaps later by the bank: the lawyer is
+   * told no credit was added. Nobody else is waiting on it. */
+  private static async afterTopUp(charge: SettledCharge, outcome: ChargeOutcome) {
+    if (!charge.requestId || !charge.lawyerId || outcome === "PENDING") return;
+    if (outcome === "SUCCEEDED") {
+      const request = await ClientRequestRepo.findForLawyer(charge.requestId);
+      const budget = await EngagementAiBudgetSvc.forRequest(charge.requestId, request?.copyCaseId ?? null);
+      const event: EngagementAiBudgetEvent = { requestId: charge.requestId, percentUsed: budget.percentUsed, state: budget.state };
+      emitToUser(charge.lawyerId, CLIENT_HANDOFF_SOCKET_EVENTS.ENGAGEMENT_AI_BUDGET, event);
+      return;
+    }
+    await OrganizationChargeSvc.notify(charge.lawyerId, {
+      organizationId: charge.organizationId ?? undefined,
+      title: "Your AI top-up couldn't be charged",
+      message: `${charge.failureReason ?? "The card was declined."} No AI credit was added.`,
+      link: `/client-requests/${charge.requestId}`,
+    });
   }
 
   private static async notify(userId: string, n: { organizationId?: string; title: string; message: string; link: string }) {

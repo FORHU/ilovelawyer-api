@@ -5,7 +5,7 @@ import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
-import OrganizationChargeSvc from "./organization-charge.service";
+import OrganizationChargeSvc, { chargeDto } from "./organization-charge.service";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import CaseCopyRepo from "../repositories/case-copy.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
@@ -308,6 +308,31 @@ export default class ClientRequestLawyerSvc {
     });
     CaseCopyQueue.kick();
     return { caseCopyId: job.id, status: job.status };
+  }
+
+  /**
+   * Buys an AI top-up pack for the engagement (#516). The route has already required the lawyer's
+   * explicit approval (approved: true). Only the lawyer it's engaged on, while ENGAGED; charged to
+   * the same payer as the per-case fee (the claim's firm, or their own card), see
+   * OrganizationChargeSvc.buyTopUp. Recorded in the case activity feed and the security audit log
+   * before it's charged, so the approval is kept even if the card is then declined.
+   */
+  static async topUp(lawyer: LawyerContext, id: string, input: { packId: string }) {
+    const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "Top up once you're engaged on this request.");
+    const claim = request.claims.find((c) => c.lawyerId === lawyer.userId && c.outcome === "ENGAGED")!;
+    const payload = { requestId: id, packId: input.packId };
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.ai_top_up_approved", payload });
+    await SecurityAuditSvc.record({
+      action: "client_request.ai_top_up_approved",
+      actorId: lawyer.userId,
+      organizationId: claim.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload,
+    });
+    const charge = await OrganizationChargeSvc.buyTopUp({ requestId: id, organizationId: claim.organizationId, lawyerId: lawyer.userId, packId: input.packId });
+    return chargeDto({ ...charge, refunds: [] }, claim.lawyer.name);
   }
 
   /** The engagement's AI budget meter (#515): what's included, any top-ups, what's been spent on

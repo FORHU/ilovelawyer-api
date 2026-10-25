@@ -35,7 +35,7 @@ export default class EngagementAiBudgetSvc {
   static async forRequest(requestId: string, copyCaseId: string | null): Promise<AiBudgetDto> {
     const [usedUsd, toppedUpMinor] = await Promise.all([
       copyCaseId ? LlmUsageRepo.sumCostUsd(copyCaseId) : Promise.resolve(0),
-      OrganizationChargeRepo.sumSucceeded(requestId, "AI_TOP_UP"),
+      OrganizationChargeRepo.sumTopUpCredit(requestId),
     ]);
     return EngagementAiBudgetSvc.budgetOf(usedUsd, toppedUpMinor);
   }
@@ -59,7 +59,7 @@ export default class EngagementAiBudgetSvc {
     try {
       const engagement = await ClientRequestRepo.findByCopyCaseId(caseId);
       if (!engagement?.lawyerId) return;
-      const [afterUsd, toppedUpMinor] = await Promise.all([LlmUsageRepo.sumCostUsd(caseId), OrganizationChargeRepo.sumSucceeded(engagement.id, "AI_TOP_UP")]);
+      const [afterUsd, toppedUpMinor] = await Promise.all([LlmUsageRepo.sumCostUsd(caseId), OrganizationChargeRepo.sumTopUpCredit(engagement.id)]);
       const after = EngagementAiBudgetSvc.budgetOf(afterUsd, toppedUpMinor);
       const before = EngagementAiBudgetSvc.budgetOf(Math.max(0, afterUsd - justSpentUsd), toppedUpMinor);
       if (after.state === before.state) return;

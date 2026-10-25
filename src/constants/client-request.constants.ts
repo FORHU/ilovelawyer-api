@@ -30,3 +30,9 @@ export const CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH = 500;
 /** What confirming a lawyer charges their organization (#513), in pence: the introduction fee. A
  * PLACEHOLDER until the price is signed off (FORHU/ilovelawyer-app#846). */
 export const CLIENT_REQUEST_PER_CASE_FEE_MINOR = 5000;
+
+/** The AI top-up packs an engaged lawyer can buy (#516), in pence: what the card is charged, and the
+ * AI credit it adds to the engagement's budget. PLACEHOLDERS until the prices are signed off
+ * (FORHU/ilovelawyer-app#846: 50 USD for 30 USD of credit, here in GBP at the budget's placeholder
+ * rate). */
+export const ENGAGEMENT_AI_TOP_UP_PACKS = [{ id: "standard", priceMinor: 4000, creditMinor: 2400, currency: "GBP" }] as const;
