@@ -20,7 +20,10 @@ import {
   type CardChargeResult,
   type HostedOrganizationCardProvider,
 } from "../src/payments/organization-card-provider";
-import { CLIENT_REQUEST_PER_CASE_FEE_MINOR } from "../src/constants/client-request.constants";
+import { LAWYER_PRICING_DEFAULTS } from "../src/constants/lawyer-pricing.constants";
+
+// The UK tenant's introduction fee, as seeded (lawyer_pricing_seed): these tests don't edit it.
+const CLIENT_REQUEST_PER_CASE_FEE_MINOR = LAWYER_PRICING_DEFAULTS.introFee.priceMinor;
 
 const HOUR_MS = 60 * 60 * 1000;
 

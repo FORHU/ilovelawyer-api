@@ -4,7 +4,6 @@ import {
   CLIENT_REQUEST_QUOTE_MAX_MINOR,
   CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH,
   CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH,
-  ENGAGEMENT_AI_TOP_UP_PACKS,
 } from "../constants/client-request.constants";
 import { QUOTE_TYPES, RELEASE_REASONS } from "../types/client-handoff";
 
@@ -76,9 +75,8 @@ export const endClientRequestSchema = Joi.object({
 /** POST /client-requests/:id/ai-top-ups (#516): which pack, and the lawyer's explicit approval of
  * the charge. Nothing is ever topped up without it. */
 export const aiTopUpSchema = Joi.object({
-  packId: Joi.string()
-    .valid(...ENGAGEMENT_AI_TOP_UP_PACKS.map((p) => p.id))
-    .required(),
+  // Which packs exist is the tenant's (LawyerPricingSvc): an unknown one is refused when buying.
+  packId: Joi.string().trim().min(1).max(32).required(),
   approved: Joi.boolean().valid(true).required().messages({ "any.only": "Approve the charge to buy a top-up." }),
 });
 

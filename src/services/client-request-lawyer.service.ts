@@ -6,6 +6,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import OrganizationChargeSvc, { chargeDto } from "./organization-charge.service";
+import LawyerPricingSvc, { type Money } from "./lawyer-pricing.service";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import CaseCopyRepo from "../repositories/case-copy.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
@@ -45,8 +46,9 @@ function quoteOf(claim: LawyerRequest["claims"][number] | undefined) {
 }
 
 /** ClientRequestForLawyer in the contract, as `lawyerId` sees it. The engagement is filled by #514;
- * until then it's always empty. The per-case fee's charge shows only to the lawyer it's for. */
-function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
+ * until then it's always empty. The per-case fee's charge shows only to the lawyer it's for.
+ * `perCaseFee` is what confirming would charge now: the lawyer's tenant's (feeOf). */
+function toDto(r: LawyerRequest, lawyerId: string, perCaseFee: Money, brief: unknown = r.brief) {
   const mine = r.claims.find((c) => c.lawyerId === lawyerId);
   return {
     id: r.id,
@@ -58,7 +60,7 @@ function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
       ? { byMe: true, lawyer: { id: mine.lawyer.id, name: mine.lawyer.name ?? "" }, claimedAt: mine.claimedAt, claimExpiresAt: mine.expiresAt }
       : null,
     quote: quoteOf(mine),
-    perCaseFee: OrganizationChargeSvc.perCaseFee(),
+    perCaseFee,
     charge: chargeOf(r, lawyerId),
     engagement:
       mine?.outcome === "ENGAGED"
@@ -76,6 +78,11 @@ function toDto(r: LawyerRequest, lawyerId: string, brief: unknown = r.brief) {
           }
         : null,
   };
+}
+
+/** What confirming would charge this lawyer: their tenant's introduction fee, set in admin (#598). */
+async function feeOf(lawyer: LawyerContext): Promise<Money> {
+  return (await LawyerPricingSvc.forTenantCode(lawyer.tenantCode)).introFee;
 }
 
 function chargeOf(r: LawyerRequest, lawyerId: string) {
@@ -98,9 +105,10 @@ export default class ClientRequestLawyerSvc {
    * history: ones they held that ended. */
   static async list(lawyer: LawyerContext, query: { view: "inbox" | "mine" | "history"; page: number; limit: number }) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
+    const fee = await feeOf(lawyer);
     if (query.view !== "inbox") {
       const { total, data } = await ClientRequestRepo.listHeldBy(lawyer.userId, query.view, query.page, query.limit);
-      return { total, data: data.map((r) => toDto(r, lawyer.userId)) };
+      return { total, data: data.map((r) => toDto(r, lawyer.userId, fee)) };
     }
 
     // The database narrows to the lawyer's practice areas and jurisdictions; matches() is still the
@@ -110,7 +118,7 @@ export default class ClientRequestLawyerSvc {
     const candidates = await ClientRequestRepo.listRoutedFor(lawyer.userId, { practiceAreas: profile.practiceAreas, jurisdictions: profile.qualifiedJurisdictions }, now);
     const inbox = candidates.filter((r) => ClientRequestMatchingSvc.matches(profile, criteriaOf(r), now));
     const start = (query.page - 1) * query.limit;
-    return { total: inbox.length, data: inbox.slice(start, start + query.limit).map((r) => toDto(r, lawyer.userId)) };
+    return { total: inbox.length, data: inbox.slice(start, start + query.limit).map((r) => toDto(r, lawyer.userId, fee)) };
   }
 
   /** One request: routed to them and still open to a claim, or one they've held. */
@@ -122,7 +130,7 @@ export default class ClientRequestLawyerSvc {
     const open = request.status === "ROUTED" && !!request.routingExpiresAt && request.routingExpiresAt > new Date();
     if (!held && !(open && ClientRequestLawyerSvc.isFor(request, lawyer.userId, profile))) throw NOT_FOUND();
     // Rewritten first if the case changed and nobody has claimed it yet (#508).
-    return toDto(request, lawyer.userId, await ClientRequestBriefSvc.current(id));
+    return toDto(request, lawyer.userId, await feeOf(lawyer), await ClientRequestBriefSvc.current(id));
   }
 
   /** Accept: the first claim wins a 24h hold, and every other matching lawyer is told it's gone. */
@@ -161,7 +169,7 @@ export default class ClientRequestLawyerSvc {
     emitToUser(request.clientId, "client-request:updated", updated);
 
     const after = (await ClientRequestRepo.findForLawyer(id))!;
-    return toDto(after, lawyer.userId);
+    return toDto(after, lawyer.userId, await feeOf(lawyer));
   }
 
   /**
@@ -222,7 +230,7 @@ export default class ClientRequestLawyerSvc {
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "ROUTED", updatedAt: now.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
 
-    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
   }
 
   /**
@@ -254,7 +262,7 @@ export default class ClientRequestLawyerSvc {
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "QUOTED", updatedAt: now.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
 
-    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
   }
 
   /**
@@ -275,7 +283,7 @@ export default class ClientRequestLawyerSvc {
       const after = await OrganizationChargeRepo.findById(fee.id);
       throw new HttpError(after?.failureReason ?? "The card was declined.", 402, "CHARGE_FAILED");
     }
-    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
   }
 
   /**
@@ -336,7 +344,7 @@ export default class ClientRequestLawyerSvc {
       caseId: request.caseId,
       payload,
     });
-    const charge = await OrganizationChargeSvc.buyTopUp({ requestId: id, organizationId: claim.organizationId, lawyerId: lawyer.userId, packId: input.packId });
+    const charge = await OrganizationChargeSvc.buyTopUp({ tenantCode: lawyer.tenantCode, requestId: id, organizationId: claim.organizationId, lawyerId: lawyer.userId, packId: input.packId });
     return chargeDto({ ...charge, refunds: [] }, claim.lawyer.name);
   }
 
@@ -375,7 +383,7 @@ export default class ClientRequestLawyerSvc {
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CLOSED", updatedAt: now.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
 
-    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId);
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
   }
 
   /** `id` is ENGAGED and `lawyer` is the one it's engaged on — what both copy() and close() need

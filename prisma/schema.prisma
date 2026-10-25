@@ -3262,6 +3262,8 @@ enum PaymentPlanType {
   B2B_SUBSCRIPTION // lawyer-side tiers (AccountLimitsSvc)
   B2C_CASE // the client app's case price, one per tenant (ClientPricingSvc)
   B2C_TOP_UP // the client app's credit top-up packs, per tenant (ClientPricingSvc)
+  LAWYER_INTRO_FEE // what a lawyer pays when a client confirms them, one per tenant (LawyerPricingSvc)
+  LAWYER_AI_TOP_UP // the AI top-up packs an engaged lawyer can buy, per tenant (LawyerPricingSvc)
 }
 
 enum PaymentPlanSubscriptionStatus {
@@ -3312,6 +3314,8 @@ model PaymentPlan {
   // and includedAllowanceUsd to 0 and use `level` as their display order.
   priceMinor             Int?
   credits                Int?
+  // LAWYER_AI_TOP_UP only: the AI credit the pack adds to an engagement's budget, in pence.
+  creditMinor            Int?
   currency               String?
   // The top-up pack the client app preselects. Exactly one active B2C_TOP_UP row has it.
   isDefault              Boolean         @default(false)

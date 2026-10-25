@@ -11,7 +11,8 @@ import NotificationSvc from "./notification.service";
 import { emitToUser } from "../lib/socket";
 import logger from "../utils/logger";
 import HttpError from "../utils/http-error";
-import { CLIENT_REQUEST_PER_CASE_FEE_MINOR, ENGAGEMENT_AI_TOP_UP_PACKS } from "../constants/client-request.constants";
+import LawyerPricingSvc from "./lawyer-pricing.service";
+import type { TenantCode } from "../types/tenant-code";
 import { CLIENT_HANDOFF_SOCKET_EVENTS, type ClientRequestUpdatedEvent, type EngagementAiBudgetEvent } from "../types/client-handoff";
 
 const NO_CARD = "There's no card on file. An owner or admin can add one in the organization's billing settings.";
@@ -54,19 +55,16 @@ export function chargeDto(c: OrganizationCharge & { refunds: OrganizationChargeR
  * credit to the engagement's AI budget once paid.
  */
 export default class OrganizationChargeSvc {
-  /** What confirming a lawyer charges their organization. A placeholder until the price is signed off
-   * (FORHU/ilovelawyer-app#846). */
-  static perCaseFee() {
-    return { amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" };
+  /** What confirming a lawyer charges their organization: the tenant's introduction fee, set in
+   * admin (LawyerPricingSvc, #598). */
+  static async perCaseFee(tenantId: string) {
+    return (await LawyerPricingSvc.forTenant(tenantId)).introFee;
   }
 
-  /** The AI top-up packs on offer (TopUpPack in the contract). Placeholders until #846. */
-  static topUpPacks() {
-    return ENGAGEMENT_AI_TOP_UP_PACKS.map((p) => ({
-      id: p.id,
-      price: { amountMinor: p.priceMinor, currency: p.currency },
-      credit: { amountMinor: p.creditMinor, currency: p.currency },
-    }));
+  /** The AI top-up packs on offer to the tenant's lawyers (TopUpPack in the contract), set in admin
+   * (LawyerPricingSvc, #598). */
+  static async topUpPacks(tenantId: string) {
+    return (await LawyerPricingSvc.forTenant(tenantId)).topUpPacks;
   }
 
   /**
@@ -78,8 +76,8 @@ export default class OrganizationChargeSvc {
    * CHARGE_FAILED when declined (the failed charge stays in the fee history), 409 while the
    * request isn't engaged or another top-up is still being charged.
    */
-  static async buyTopUp(input: { requestId: string; organizationId: string | null; lawyerId: string; packId: string }): Promise<OrganizationCharge> {
-    const pack = ENGAGEMENT_AI_TOP_UP_PACKS.find((p) => p.id === input.packId);
+  static async buyTopUp(input: { tenantCode: TenantCode; requestId: string; organizationId: string | null; lawyerId: string; packId: string }): Promise<OrganizationCharge> {
+    const pack = (await LawyerPricingSvc.forTenantCode(input.tenantCode)).topUpPacks.find((p) => p.id === input.packId);
     if (!pack) throw new HttpError("There's no top-up pack with that id.", 400);
     const billing = await OrganizationBillingRepo.find(payerOf(input.organizationId, input.lawyerId)!);
     if (!billing?.paymentMethodId) throw new HttpError(input.organizationId ? NO_CARD : NO_OWN_CARD, 402, "CARD_REQUIRED");
@@ -88,9 +86,9 @@ export default class OrganizationChargeSvc {
       requestId: input.requestId,
       organizationId: input.organizationId,
       lawyerId: input.lawyerId,
-      amountMinor: pack.priceMinor,
-      creditMinor: pack.creditMinor,
-      currency: pack.currency,
+      amountMinor: pack.price.amountMinor,
+      creditMinor: pack.credit.amountMinor,
+      currency: pack.price.currency,
     });
     if (charge === null) throw new HttpError("This request isn't engaged.", 409, "INVALID_REQUEST_STATUS");
     if (charge === "BUSY") throw new HttpError("A top-up is already being charged. Wait for it to finish.", 409, "INVALID_REQUEST_STATUS", { chargeStatus: "PENDING" });
