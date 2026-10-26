@@ -3,6 +3,7 @@ import CaseRepo from "../repositories/case.repository";
 import CaseReconstructionRepo from "../repositories/case-reconstruction.repository";
 import AiGenerationLockSvc from "../services/ai-generation-lock.service";
 import ClientOverviewSvc from "../services/client-overview.service";
+import ClientIntakeSvc from "../services/client-intake.service";
 import { computeReadySetFingerprint } from "../utils/ready-set-fingerprint";
 import WitnessExtractSvc from "../services/witness-extract.service";
 import DamagesExtractSvc from "../services/damages-extract.service";
@@ -91,6 +92,11 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
         await ClientOverviewSvc.runQueued(caseId, userId, "post-extraction");
         logger.info("Client overview: automatic run completed", { caseId });
       }
+      // The Intake tab's own trigger (ClientIntakeSvc), run alongside the overview's while both
+      // exist (docs/plans/client-side-compressed-meteor.md Phase 6 retires the overview once the
+      // client app has moved over). scheduleAuto has its own fingerprint check, so this is safe
+      // to call on every quiet re-trigger too, not just when the READY set actually changed.
+      await ClientIntakeSvc.scheduleAuto(caseId, userId, "document");
       await CaseRepo.setReadySetFingerprint(caseId, fingerprint);
       return;
     }

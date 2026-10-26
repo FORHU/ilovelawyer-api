@@ -61,6 +61,28 @@ const clientOverviewDailyCapRaw = process.env.CLIENT_OVERVIEW_DAILY_CAP?.trim();
 const clientOverviewDailyCap = clientOverviewDailyCapRaw ? Number(clientOverviewDailyCapRaw) : NaN;
 export const CLIENT_OVERVIEW_DAILY_CAP =
   Number.isFinite(clientOverviewDailyCap) && clientOverviewDailyCap > 0 ? Math.floor(clientOverviewDailyCap) : 3;
+/** US dollars of AI usage a single client case may spend on its Intake tab (ClientIntakeSvc)
+ * before a manual Update is refused — separate from CLIENT_OVERVIEW_AI_BUDGET_USD so the two
+ * jobs never contend for the same cap while both exist (the overview retires once the client
+ * app ships the Intake tab). A missing or invalid value uses 2. */
+const clientIntakeAiBudgetUsdRaw = process.env.CLIENT_INTAKE_AI_BUDGET_USD?.trim();
+const clientIntakeAiBudgetUsd = clientIntakeAiBudgetUsdRaw ? Number(clientIntakeAiBudgetUsdRaw) : NaN;
+export const CLIENT_INTAKE_AI_BUDGET_USD =
+  Number.isFinite(clientIntakeAiBudgetUsd) && clientIntakeAiBudgetUsd >= 0 ? clientIntakeAiBudgetUsd : 2;
+/** How many times a client may press Update on one case's Intake tab per UK calendar day.
+ * Automatic runs (after a chat reply, a document going READY, or an edit to the case details)
+ * don't count against this — only a client's own button press does. A missing or invalid value
+ * uses 5. */
+const clientIntakeDailyCapRaw = process.env.CLIENT_INTAKE_DAILY_CAP?.trim();
+const clientIntakeDailyCap = clientIntakeDailyCapRaw ? Number(clientIntakeDailyCapRaw) : NaN;
+export const CLIENT_INTAKE_DAILY_CAP =
+  Number.isFinite(clientIntakeDailyCap) && clientIntakeDailyCap > 0 ? Math.floor(clientIntakeDailyCap) : 5;
+/** Tags a client's own chat messages with the intake interviewer persona (INTAKE_TAG_UK, ADR
+ * 0018) instead of the lawyer-research persona (LEGAL_TAG_UK) every chat turn gets today. Off
+ * by default: chat-wonder-v2-api's `intake_uk` persona is a separate team's work
+ * (docs/plans/intake-persona-contract.md) and this must stay off until it ships. Never affects a
+ * lawyer's own chat, which is never tagged through this flag. */
+export const CLIENT_INTAKE_PERSONA = process.env.CLIENT_INTAKE_PERSONA === "true";
 const engagementAiBudgetGbpPerUsdRaw = process.env.ENGAGEMENT_AI_BUDGET_GBP_PER_USD?.trim();
 const engagementAiBudgetGbpPerUsd = engagementAiBudgetGbpPerUsdRaw ? Number(engagementAiBudgetGbpPerUsdRaw) : NaN;
 export const ENGAGEMENT_AI_BUDGET_GBP_PER_USD =

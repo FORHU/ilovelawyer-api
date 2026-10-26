@@ -25,6 +25,7 @@ import {
   type ReadinessAssessment,
 } from "../utils/lawyer-readiness-jev";
 import logger from "../utils/logger";
+import ClientIntakeSvc from "./client-intake.service";
 import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
 import { CLIENT_DOCUMENT_LINK_SECONDS, type ClientCaseArea } from "../constants/client-case.constants";
 import { firmScope } from "../utils/workspace";
@@ -255,6 +256,9 @@ export default class ClientCaseSvc {
 
     await CaseSvc.update(caseId, firmScope(workspace.id), userId, data);
     await ClientCaseRepo.clearReadiness(caseId);
+    // The Intake tab's own trigger (ClientIntakeSvc): an edit to the case details is one of its
+    // three automatic refresh triggers. Fire-and-forget, same as the chat and document triggers.
+    void ClientIntakeSvc.scheduleAuto(caseId, userId, "case-details").catch((err) => logger.warn("Client intake: post-update schedule failed", { err, caseId }));
     return ClientCaseSvc.get(workspace, caseId);
   }
 

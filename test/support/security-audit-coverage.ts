@@ -241,6 +241,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "DELETE /client/cases/:caseId/documents/:documentId": ["document.deleted"],
   "POST /client/cases/:caseId/documents/:documentId/retry": { exempt: "Reads a document that failed again; no data is added, opened or removed" },
   "POST /client/cases/:caseId/overview/generate": AI_RUN,
+  "POST /client/cases/:caseId/intake/refresh": AI_RUN,
   "PATCH /users/me/client-request-profile": { exempt: "A lawyer's own professional details; the admin's verification of them is audited (#506)" },
   "POST /client/lawyer-requests": { exempt: "A client asking for a lawyer on their own case; consent and its version are stored on the request" },
   "POST /client/lawyer-requests/:id/withdraw": { exempt: "A client taking back their own request" },

@@ -40,6 +40,10 @@ router.post("/cases/:caseId/documents/:documentId/retry", asyncHandler(ClientCas
 // it needs AI-processing consent like the chat does; the GET is a plain read and doesn't.
 router.get("/cases/:caseId/overview", asyncHandler(ClientCaseCtrl.overview));
 router.post("/cases/:caseId/overview/generate", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.generateOverview));
+// The Intake tab (docs/plans/client-side-compressed-meteor.md): the Overview's traceable,
+// secretary-shaped replacement. Both tabs run side by side until the client app has moved over.
+router.get("/cases/:caseId/intake", asyncHandler(ClientCaseCtrl.intake));
+router.post("/cases/:caseId/intake/refresh", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.refreshIntake));
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 // A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
 router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
