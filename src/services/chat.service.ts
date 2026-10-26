@@ -38,6 +38,8 @@ import GroundingVerifierSvc from "./grounding-verifier.service";
 import CitationRankSvc from "./citation-rank.service";
 import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage, MessageTriage, ATTACHMENT_THRESHOLD } from "../utils/message-triage";
 import NotificationSvc from "./notification.service";
+import CaseRepo from "../repositories/case.repository";
+import ClientIntakeSvc from "./client-intake.service";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getProxyFileUrl } from "../utils/s3";
@@ -1327,6 +1329,17 @@ export default class ChatSvc {
         consultationId,
         assistantMessageId: assistantMessage.id,
       });
+    }
+
+    // The client app's Intake tab (ClientIntakeSvc): a reply finishing is one of its three
+    // automatic refresh triggers, client-workspace cases only — a lawyer's chat reply never
+    // touches it. Fire-and-forget: ClientIntakeSvc.scheduleAuto never throws, and a stale intake
+    // is never a chat problem.
+    if (assistantMessage && effectiveCaseId) {
+      const caseIdForIntake = effectiveCaseId;
+      void CaseRepo.isClientWorkspaceCase(caseIdForIntake)
+        .then((isClient) => (isClient ? ClientIntakeSvc.scheduleAuto(caseIdForIntake, userId, "chat") : undefined))
+        .catch((err) => logger.warn("Client intake: post-reply schedule failed", { err, caseId: caseIdForIntake }));
     }
 
     if (needsTitle && assistantMessage) {

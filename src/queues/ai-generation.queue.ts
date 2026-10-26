@@ -18,6 +18,7 @@ import CaseTimelineSvc from "../services/case-timeline.service";
 import CaseMindMapSvc from "../services/case-mind-map.service";
 import CaseStrategySvc from "../services/case-strategy.service";
 import ClientOverviewSvc from "../services/client-overview.service";
+import ClientIntakeSvc from "../services/client-intake.service";
 import ConsentSvc from "../services/consent.service";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
 import { AI_GENERATION_QUEUE_URL } from "../config";
@@ -55,7 +56,8 @@ export type QueuedAiGenerationKind =
   | "caseMindMapResync"
   | "missingEvidence"
   | "crossExamination"
-  | "clientOverview";
+  | "clientOverview"
+  | "clientIntake";
 
 export interface QueuedAiGenerationJob {
   kind: QueuedAiGenerationKind;
@@ -136,6 +138,9 @@ const RUNNERS: Record<QueuedAiGenerationKind, (job: QueuedAiGenerationJob) => Pr
   // The client app's Overview tab: the controller (beginQueued) or the post-extraction auto
   // trigger (beginAuto) already claimed the "clientOverview" lock.
   clientOverview: (job) => ClientOverviewSvc.runQueued(job.caseId, job.userId),
+  // The client app's Intake tab: the controller (beginQueued) or one of the automatic triggers
+  // (scheduleAuto) already claimed the "clientIntake" lock.
+  clientIntake: (job) => ClientIntakeSvc.runQueued(job.caseId, job.userId),
 };
 
 // caseRefresh chains three sequential Chat Wonder calls (contradictions scan, case strategy,

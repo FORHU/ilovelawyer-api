@@ -533,6 +533,8 @@ describe("Client app cases", () => {
       "POST /cases/:caseId/documents/:documentId/retry",
       "GET /cases/:caseId/overview",
       "POST /cases/:caseId/overview/generate",
+      "GET /cases/:caseId/intake",
+      "POST /cases/:caseId/intake/refresh",
       "POST /cases/:caseId/top-ups",
       "GET /cases/:caseId/lawyer-readiness",
       "GET /lawyer-requests/consent",
