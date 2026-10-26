@@ -30,6 +30,11 @@ router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages))
 router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
 router.post("/cases/:caseId/documents", asyncHandler(ClientCaseCtrl.addDocument));
+// The Documents tab's row actions (#574). Retry reads the file again like an upload does, so like
+// an upload it needs no AI-processing consent.
+router.delete("/cases/:caseId/documents/:documentId", asyncHandler(ClientCaseCtrl.removeDocument));
+router.get("/cases/:caseId/documents/:documentId/url", asyncHandler(ClientCaseCtrl.documentUrl));
+router.post("/cases/:caseId/documents/:documentId/retry", asyncHandler(ClientCaseCtrl.retryDocument));
 // The Overview tab (#45/#572): a client-shaped summary, read for free and regenerated through a
 // small job of its own — see ClientOverviewSvc. Generate reads documents already on the case, so
 // it needs AI-processing consent like the chat does; the GET is a plain read and doesn't.

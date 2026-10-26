@@ -222,6 +222,15 @@ export default class DocumentRepo {
     });
   }
 
+  /** One active document on the case, in the workspace, with what the client app shows of it and
+   * the key its file link is made from. */
+  static async findOneForCase(id: string, caseId: string, scope: WorkspaceScope) {
+    return prisma.document.findFirst({
+      where: { id, caseId, status: "ACTIVE", ...inWorkspace(scope) },
+      select: { id: true, name: true, ragStatus: true, fileSize: true, createdAt: true, file: { select: { s3Key: true } } },
+    });
+  }
+
   /** Count of a message's attachments still being extracted/indexed (see ChatSvc's attachment wait). */
   static async listNamesByMessage(messageId: string): Promise<string[]> {
     const rows = await prisma.document.findMany({ where: { messageId }, select: { name: true }, orderBy: { createdAt: "asc" } });

@@ -1,4 +1,4 @@
-import { ClientRequestStatus, ClientSide, OrganizationRole, Prisma } from "@prisma/client";
+import { ClientRequestStatus, ClientSide, OrganizationRole, Prisma, RagStatus } from "@prisma/client";
 import ClientCaseRepo, { type ClientCaseRow } from "../repositories/client-case.repository";
 import type { CaseData } from "../repositories/case.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
@@ -9,11 +9,12 @@ import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
 import ChatSvc from "./chat.service";
 import ClientRequestSvc from "./client-request.service";
-import DocumentSvc from "./document.service";
+import DocumentSvc, { documentFileUrl } from "./document.service";
 import OrganizationSvc from "./organization.service";
 import HttpError from "../utils/http-error";
 import { emitToUser } from "../lib/socket";
-import { CLIENT_HANDOFF_SOCKET_EVENTS, type EngagementDocumentAddedEvent } from "../types/client-handoff";
+import { CLIENT_HANDOFF_SOCKET_EVENTS, type EngagementDocumentAddedEvent, type EngagementDocumentRemovedEvent } from "../types/client-handoff";
+import DocumentExtractionQueue from "../queues/document-extraction.queue";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
 import { JevUnavailableError } from "../utils/typesafeClient";
 import {
@@ -25,7 +26,7 @@ import {
 } from "../utils/lawyer-readiness-jev";
 import logger from "../utils/logger";
 import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
-import type { ClientCaseArea } from "../constants/client-case.constants";
+import { CLIENT_DOCUMENT_LINK_SECONDS, type ClientCaseArea } from "../constants/client-case.constants";
 import { firmScope } from "../utils/workspace";
 
 /** The client's personal workspace, as clientWorkspaceOf(req) gives it. */
@@ -68,6 +69,12 @@ const LAWYER_COMMITTED: ClientRequestStatus[] = ["CONFIRMED", "ENGAGED"];
 /** A Consultation title is VarChar(80). */
 const CONSULTATION_TITLE_MAX = 80;
 
+/** A document as the client app lists it. A Document has no upload time of its own: it's made when
+ * the upload is confirmed, so createdAt is when it was uploaded. createdAt stays for older apps. */
+function toDocumentDto(d: { id: string; name: string; ragStatus: RagStatus; fileSize: number | null; createdAt: Date }) {
+  return { id: d.id, name: d.name, status: d.ragStatus, size: d.fileSize ?? null, uploadedAt: d.createdAt, createdAt: d.createdAt };
+}
+
 function toDto(row: ClientCaseRow) {
   return {
     id: row.id,
@@ -78,7 +85,7 @@ function toDto(row: ClientCaseRow) {
     notes: row.notes ?? "",
     side: row.clientSide,
     others: row.parties.map((p) => ({ id: p.id, name: p.name, role: p.designation })),
-    documents: row.documents.map((d) => ({ id: d.id, name: d.name, status: d.ragStatus, createdAt: d.createdAt })),
+    documents: row.documents.map(toDocumentDto),
     credits: row.clientCredits,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -425,7 +432,45 @@ export default class ClientCaseSvc {
       };
       emitToUser(engaged.lawyerId, CLIENT_HANDOFF_SOCKET_EVENTS.ENGAGEMENT_DOCUMENT_ADDED, event);
     }
-    return { id: doc.id, name: doc.name, status: doc.ragStatus, createdAt: doc.createdAt };
+    return toDocumentDto(doc);
+  }
+
+  /** Takes a document off the case for good, its file and timeline links with it. The overview
+   * reads STALE from then on if the document was READY (its READY-set fingerprint changes). */
+  static async removeDocument(workspace: ClientWorkspace, userId: string, caseId: string, documentId: string) {
+    const doc = await ClientCaseSvc.loadDocument(workspace, caseId, documentId);
+    await DocumentSvc.delete(doc.id, firmScope(workspace.id), userId);
+    const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
+    if (engaged) {
+      const event: EngagementDocumentRemovedEvent = { requestId: engaged.requestId, caseId, documentId: doc.id, filename: doc.name };
+      emitToUser(engaged.lawyerId, CLIENT_HANDOFF_SOCKET_EVENTS.ENGAGEMENT_DOCUMENT_REMOVED, event);
+    }
+  }
+
+  /** A link that opens the document in the browser, good for CLIENT_DOCUMENT_LINK_SECONDS. */
+  static async documentUrl(workspace: ClientWorkspace, caseId: string, documentId: string) {
+    const doc = await ClientCaseSvc.loadDocument(workspace, caseId, documentId);
+    if (!doc.file?.s3Key) throw new HttpError("Document has no file", 404);
+    const url = documentFileUrl(doc.file.s3Key, doc.name, { id: doc.id, caseId }, CLIENT_DOCUMENT_LINK_SECONDS);
+    return { url, expiresAt: new Date(Date.now() + CLIENT_DOCUMENT_LINK_SECONDS * 1000) };
+  }
+
+  /** Reads a document that couldn't be read again, now rather than at the next sweep. Only a FAILED
+   * one: a PENDING one is already queued, and a READY one has nothing to retry. */
+  static async retryDocument(workspace: ClientWorkspace, caseId: string, documentId: string) {
+    const doc = await ClientCaseSvc.loadDocument(workspace, caseId, documentId);
+    if (doc.ragStatus !== "FAILED") throw new HttpError("Only a document that couldn't be read can be tried again", 409, "NOT_FAILED");
+    await DocumentRepo.updateRagStatus(doc.id, "PENDING");
+    DocumentExtractionQueue.enqueue(doc.id);
+    return toDocumentDto({ ...doc, ragStatus: "PENDING" });
+  }
+
+  /** The case first (404 for another client's), then the document on it (404, never saying whose). */
+  private static async loadDocument(workspace: ClientWorkspace, caseId: string, documentId: string) {
+    await ClientCaseSvc.load(workspace, caseId);
+    const doc = await DocumentRepo.findOneForCase(documentId, caseId, firmScope(workspace.id));
+    if (!doc) throw new HttpError("Document not found", 404);
+    return doc;
   }
 
   /** Every id must be an active document on this case (404 otherwise, never saying whose it is),

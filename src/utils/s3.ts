@@ -133,7 +133,7 @@ export interface FileTokenPayload {
  * browser this way. */
 export function getProxyFileUrl(
   key: string,
-  opts: { filename?: string; disposition?: "attachment" | "inline"; orgId?: string; audit?: FileLinkAudit } = {},
+  opts: { filename?: string; disposition?: "attachment" | "inline"; orgId?: string; audit?: FileLinkAudit; expiresIn?: number } = {},
 ): string {
   const context = getRequestContext();
   const payload: FileTokenPayload = {
@@ -144,7 +144,7 @@ export function getProxyFileUrl(
     uid: context?.userId() ?? undefined,
     audit: opts.audit,
   };
-  const token = jwt.sign(payload, FILE_TOKEN_SECRET, { expiresIn: FILE_TOKEN_EXPIRY_SECONDS });
+  const token = jwt.sign(payload, FILE_TOKEN_SECRET, { expiresIn: opts.expiresIn ?? FILE_TOKEN_EXPIRY_SECONDS });
   return `/files/${token}`;
 }
 
