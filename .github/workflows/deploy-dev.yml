@@ -121,7 +121,6 @@ jobs:
           MAILER_PASSWORD: ${{ secrets.MAILER_PASSWORD }}
           SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
           CLIENT_URL: ${{ vars.DEV_CLIENT_URL }}
-          USER_APP_URL: ${{ vars.DEV_USER_APP_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_TOKEN_ENC_KEY: ${{ secrets.DEV_GOOGLE_TOKEN_ENC_KEY }}
@@ -200,7 +199,6 @@ jobs:
           add MAILER_PASSWORD           "${MAILER_PASSWORD:-}"
           add SERVICE_ACCOUNT           "${SERVICE_ACCOUNT:-}"
           add CLIENT_URL                "${CLIENT_URL:-}"
-          add USER_APP_URL              "${USER_APP_URL:-}"
           add GOOGLE_CLIENT_ID          "${GOOGLE_CLIENT_ID:-}"
           add GOOGLE_CLIENT_SECRET      "${GOOGLE_CLIENT_SECRET:-}"
           add GOOGLE_TOKEN_ENC_KEY      "${GOOGLE_TOKEN_ENC_KEY:-}"
