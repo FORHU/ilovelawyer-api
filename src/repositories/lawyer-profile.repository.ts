@@ -1,6 +1,7 @@
 import { LawyerClientProfile, LawyerPhRegistration, LawyerUkRegistration, LawyerVerificationStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import type { LawyerCountry } from "../constants/lawyer-application.constants";
+import type { MembershipForMatching } from "../services/client-request-matching.service";
 
 /** The PH registration fields, all null until the lawyer fills them in. */
 export interface PhRegistrationFields {
@@ -19,6 +20,12 @@ export interface UkRegistrationFields {
 }
 
 const REGISTRATIONS = { ukRegistration: true, phRegistration: true } satisfies Prisma.LawyerClientProfileInclude;
+
+/** A lawyer's membership as matching reads it (#558): solo, or which firm and whether it's open. */
+const MEMBERSHIP_SELECT = {
+  status: true,
+  organization: { select: { id: true, isPersonal: true, status: true, packageSku: true } },
+} satisfies Prisma.OrganizationMemberSelect;
 
 /** What the admin queue shows beside the application: who the lawyer is and their firm, details
  * included (a user is in at most one organization). */
@@ -142,7 +149,8 @@ export default class LawyerProfileRepo {
   /** Candidates for matching (#509): verified UK lawyers, minus anyone already excluded from this
    * request. Accepting, not paused, enabled-by-org, capacity, practice area and jurisdiction are
    * checked in ClientRequestMatchingSvc.matches — the single source of truth for the rule, so it
-   * stays unit-testable without a database. `openCount` comes from countOpenForLawyers below. */
+   * stays unit-testable without a database. `openCount` comes from countOpenForLawyers below, and
+   * `membership` is the lawyer's firm, if any (#558). */
   static async findVerified(excludeUserIds: string[]) {
     const rows = await prisma.lawyerClientProfile.findMany({
       where: { country: "UK", verificationStatus: "VERIFIED", userId: { notIn: excludeUserIds } },
@@ -154,14 +162,21 @@ export default class LawyerProfileRepo {
         capacityLimit: true,
         practiceAreas: true,
         ukRegistration: { select: { qualifiedJurisdictions: true } },
+        user: { select: { organizationMemberships: { select: MEMBERSHIP_SELECT } } },
       },
     });
     const openCounts = await LawyerProfileRepo.countOpenForLawyers(rows.map((r) => r.userId));
-    return rows.map(({ ukRegistration, ...r }) => ({
+    return rows.map(({ ukRegistration, user, ...r }) => ({
       ...r,
       qualifiedJurisdictions: ukRegistration?.qualifiedJurisdictions ?? [],
       openCount: openCounts.get(r.userId) ?? 0,
+      membership: user.organizationMemberships[0] ?? null,
     }));
+  }
+
+  /** The lawyer's one membership (OrganizationMember.userId is unique), or null with none (#558). */
+  static async findMembership(userId: string): Promise<MembershipForMatching | null> {
+    return prisma.organizationMember.findUnique({ where: { userId }, select: MEMBERSHIP_SELECT });
   }
 
   /** How many open client requests (#514) each of these lawyers is holding: CLAIMED, QUOTED,

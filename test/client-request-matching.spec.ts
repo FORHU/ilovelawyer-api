@@ -7,7 +7,7 @@
  */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
-import ClientRequestMatchingSvc from "../src/services/client-request-matching.service";
+import ClientRequestMatchingSvc, { type MembershipForMatching } from "../src/services/client-request-matching.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 
@@ -25,6 +25,7 @@ type Lawyer = {
   openCount: number;
   practiceAreas: string[];
   qualifiedJurisdictions: string[];
+  membership: MembershipForMatching | null;
 };
 
 const ELIGIBLE: Lawyer = {
@@ -36,7 +37,12 @@ const ELIGIBLE: Lawyer = {
   openCount: 0,
   practiceAreas: ["EMPLOYMENT"],
   qualifiedJurisdictions: ["England and Wales"],
+  membership: null,
 };
+
+/** An accepted member of an active firm. */
+const FIRM: MembershipForMatching = { status: "ACCEPTED", organization: { id: "org-1", isPersonal: false, status: "ACTIVE", packageSku: "PROFESSIONAL" } };
+const CLOSING_FIRM: MembershipForMatching = { ...FIRM, organization: { ...FIRM.organization, status: "PENDING_DELETION" } };
 
 const CRITERIA = { practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" };
 
@@ -98,6 +104,52 @@ describe("ClientRequestMatchingSvc.matches", () => {
     const unlimited = { ...ELIGIBLE, capacityLimit: null, openCount: 999 };
     expect(ClientRequestMatchingSvc.matches(unlimited, CRITERIA)).to.equal(true);
   });
+
+  describe("with client requests for firms on", () => {
+    beforeEach(() => (process.env.CLIENT_REQUESTS_FOR_FIRMS = "true"));
+    afterEach(() => delete process.env.CLIENT_REQUESTS_FOR_FIRMS);
+
+    it("matches a lawyer whose firm is active", () => {
+      expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, membership: FIRM }, CRITERIA)).to.equal(true);
+    });
+
+    it("refuses a lawyer whose firm is being deleted", () => {
+      expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, membership: CLOSING_FIRM }, CRITERIA)).to.equal(false);
+    });
+  });
+
+  describe("with client requests for firms off (the default, solo practitioners only)", () => {
+    it("refuses a lawyer in a firm", () => {
+      expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, membership: FIRM }, CRITERIA)).to.equal(false);
+    });
+
+    it("still matches a solo lawyer", () => {
+      expect(ClientRequestMatchingSvc.matches(ELIGIBLE, CRITERIA)).to.equal(true);
+    });
+
+    it("still matches a lawyer whose firm invite isn't accepted yet: they're solo", () => {
+      expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, membership: { ...FIRM, status: "PENDING" } }, CRITERIA)).to.equal(true);
+    });
+  });
+});
+
+/** iFindLawyer (#558): whether the lawyer works alone or for a firm, from their membership. */
+describe("ClientRequestMatchingSvc.affiliationOf", () => {
+  it("is SOLO with no membership", () => {
+    expect(ClientRequestMatchingSvc.affiliationOf(null)).to.deep.equal({ kind: "SOLO" });
+  });
+
+  it("is SOLO while the firm invite is still pending", () => {
+    expect(ClientRequestMatchingSvc.affiliationOf({ ...FIRM, status: "PENDING" })).to.deep.equal({ kind: "SOLO" });
+  });
+
+  it("is SOLO for a personal workspace", () => {
+    expect(ClientRequestMatchingSvc.affiliationOf({ ...FIRM, organization: { ...FIRM.organization, isPersonal: true } })).to.deep.equal({ kind: "SOLO" });
+  });
+
+  it("is ORGANIZATION for an accepted firm membership, with its id, package and status", () => {
+    expect(ClientRequestMatchingSvc.affiliationOf(FIRM)).to.deep.equal({ kind: "ORGANIZATION", organizationId: "org-1", packageSku: "PROFESSIONAL", organizationStatus: "ACTIVE" });
+  });
 });
 
 describe("ClientRequestMatchingSvc.route / reroute / eligibleLawyerIds", () => {
@@ -152,6 +204,21 @@ describe("ClientRequestMatchingSvc.route / reroute / eligibleLawyerIds", () => {
   it("drops a verified candidate who doesn't actually match the case", async () => {
     candidates = [{ ...ELIGIBLE, practiceAreas: ["FAMILY"] }];
     expect(await ClientRequestMatchingSvc.eligibleLawyerIds("req-1")).to.deep.equal([]);
+  });
+
+  it("leaves out a lawyer whose firm is being deleted", async () => {
+    process.env.CLIENT_REQUESTS_FOR_FIRMS = "true";
+    try {
+      candidates = [ELIGIBLE, { ...ELIGIBLE, userId: "lawyer-2", membership: CLOSING_FIRM }, { ...ELIGIBLE, userId: "lawyer-3", membership: FIRM }];
+      expect(await ClientRequestMatchingSvc.eligibleLawyerIds("req-1")).to.deep.equal(["lawyer-1", "lawyer-3"]);
+    } finally {
+      delete process.env.CLIENT_REQUESTS_FOR_FIRMS;
+    }
+  });
+
+  it("leaves out every firm lawyer while client requests for firms are off", async () => {
+    candidates = [ELIGIBLE, { ...ELIGIBLE, userId: "lawyer-3", membership: FIRM }];
+    expect(await ClientRequestMatchingSvc.eligibleLawyerIds("req-1")).to.deep.equal(["lawyer-1"]);
   });
 
   it("returns no eligible lawyers for an unknown request", async () => {
