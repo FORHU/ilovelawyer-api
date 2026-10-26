@@ -722,7 +722,9 @@ function streamChatWonderMessageOnce(
             trace_turn_id?: string;
           } = {
             type: "chat",
-            user_input: (opts?.personaTag ?? withLegalTag(userInput, tenantCode)) + (caseId ? MINDMAP_RULE : ""),
+            user_input:
+              (opts?.personaTag ? `${opts.personaTag} ${userInput}` : withLegalTag(userInput, tenantCode)) +
+              (caseId ? MINDMAP_RULE : ""),
             session_id: sessionId,
             use_full_legal_chain: false,
           };
