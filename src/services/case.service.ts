@@ -229,6 +229,7 @@ export default class CaseSvc {
   static formatForAiContext(caseRecord: CaseWithParties): string {
     const lines: string[] = [`Case: ${caseRecord.caseName}`];
 
+    if (caseRecord.practiceArea) lines.push(`Kind of Problem: ${caseRecord.practiceArea}`);
     if (caseRecord.actionType) lines.push(`Type of Action: ${caseRecord.actionType}`);
     if (caseRecord.jurisdiction) lines.push(`Jurisdiction: ${caseRecord.jurisdiction}`);
     if (caseRecord.ukJurisdiction) lines.push(`UK Jurisdiction: ${caseRecord.ukJurisdiction}`);
