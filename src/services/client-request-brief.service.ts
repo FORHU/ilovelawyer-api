@@ -5,6 +5,9 @@ import ClientRequestNotifySvc from "./client-request-notify.service";
 import ChatRepo from "../repositories/chat.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import { labelForDesignation, redactBrief, type RedactionContext } from "../utils/brief-redaction";
+import { toAnonymisedIntake } from "../utils/client-intake-redaction";
+import ClientIntakeRepo from "../repositories/client-intake.repository";
+import type { AnonymisedIntake, CaseIntake } from "../types/client-intake";
 import { REQUEST_URGENCIES, type RequestUrgency } from "../types/client-handoff";
 import logger from "../utils/logger";
 
@@ -17,6 +20,10 @@ export interface CaseBrief {
   knownDeadline: string | null;
   clientNote: string;
   generatedAt: string;
+  /** The client's intake (ClientIntakeSvc), redacted the same way `summary` and `clientNote`
+   * are — never party names, document names or raw source ids. Null until the intake has run
+   * at least once (ADR 0018). */
+  intake: AnonymisedIntake | null;
 }
 
 /** Once a lawyer holds the request they've seen the names anyway, and the brief stops changing. */
@@ -72,8 +79,11 @@ function plausibleDeadline(value: unknown, now: Date): string | null {
 type BriefSource = NonNullable<Awaited<ReturnType<typeof ClientRequestRepo.findForBrief>>>;
 
 /** What the brief is written from, without the parts that only change bookkeeping (Case.updatedAt
- * moves on every credit spent), so an unchanged case is never re-written. */
-export function briefFingerprint(source: BriefSource, latestMessageId: string | null): string {
+ * moves on every credit spent), so an unchanged case is never re-written. `intakeFingerprint` is
+ * ClientIntakeSvc's own fingerprint for this case (CaseClientIntake.fingerprint) — folded in so a
+ * brief also refreshes once the intake it quotes under `intake` has moved on, not only when the
+ * case/chat basis above changes. Omitted (undefined) for a case with no intake run yet. */
+export function briefFingerprint(source: BriefSource, latestMessageId: string | null, intakeFingerprint?: string | null): string {
   const c = source.case;
   const basis = JSON.stringify([
     c.caseName,
@@ -85,6 +95,7 @@ export function briefFingerprint(source: BriefSource, latestMessageId: string | 
     c.documents.map((d) => d.id),
     latestMessageId,
     source.note,
+    intakeFingerprint ?? null,
   ]);
   return crypto.createHash("sha256").update(basis).digest("hex");
 }
@@ -186,6 +197,8 @@ export default class ClientRequestBriefSvc {
       if (!parsed) throw new Error("The AI's reply had no usable summary");
 
       const ctx = redactionContext(source);
+      const storedIntake = await ClientIntakeRepo.find(source.caseId);
+      const intakeData = (storedIntake?.data as unknown as CaseIntake | null) ?? null;
       const brief: CaseBrief = {
         summary: redactBrief(parsed.summary, ctx),
         practiceArea: source.case.practiceArea,
@@ -194,10 +207,11 @@ export default class ClientRequestBriefSvc {
         knownDeadline: parsed.knownDeadline,
         clientNote: redactBrief(source.note, ctx),
         generatedAt: new Date().toISOString(),
+        intake: intakeData ? toAnonymisedIntake(intakeData, ctx) : null,
       };
       await ClientRequestRepo.saveBrief(requestId, {
         brief: brief as unknown as Prisma.InputJsonValue,
-        briefFingerprint: briefFingerprint(source, latestMessageId),
+        briefFingerprint: briefFingerprint(source, latestMessageId, storedIntake?.fingerprint),
         briefGeneratedAt: new Date(brief.generatedAt),
       });
       // Lawyers are told once there's a brief to read (#510). Only the first time: announcing is
@@ -220,7 +234,8 @@ export default class ClientRequestBriefSvc {
     const stored = source.brief as unknown as CaseBrief | null;
     if (!BRIEF_REFRESH_STATUSES.includes(source.status)) return stored;
     const { latestMessageId } = await ClientRequestBriefSvc.conversationOf(source);
-    if (stored && source.briefFingerprint === briefFingerprint(source, latestMessageId)) return stored;
+    const intakeFingerprint = (await ClientIntakeRepo.find(source.caseId))?.fingerprint;
+    if (stored && source.briefFingerprint === briefFingerprint(source, latestMessageId, intakeFingerprint)) return stored;
     return (await ClientRequestBriefSvc.generate(requestId)) ?? stored;
   }
 

@@ -22,6 +22,9 @@ router.post("/:id/quote", asyncHandler(ClientRequestLawyerCtrl.quote));
 router.post("/:id/charge/retry", asyncHandler(ClientRequestLawyerCtrl.retryCharge));
 // Copying the engaged client's case to the lawyer's own workspace (#514).
 router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));
+// The client's intake package (ADR 0018): the full CaseIntake, the transcript and the
+// documents, once engaged. Read-only; every read is audited.
+router.get("/:id/intake-package", asyncHandler(ClientRequestLawyerCtrl.intakePackage));
 // The engagement's AI budget meter (#515).
 router.get("/:id/ai-budget", asyncHandler(ClientRequestLawyerCtrl.aiBudget));
 // Buying an AI top-up pack for it, once the lawyer approves the charge (#516).

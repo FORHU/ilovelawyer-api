@@ -289,6 +289,36 @@ export default class ClientRequestRepo {
     });
   }
 
+  /** The engaged lawyer's full intake package (ADR 0018, #514-adjacent): everything FOR_LAWYER
+   * leaves out because it's party/client-identifying — the case's own fields, the client's note,
+   * and the case's documents. Its own query, like findForBrief/findParties, rather than widening
+   * FOR_LAWYER (read by every lawyer before they've engaged, and by the inbox list). */
+  static async findForIntakePackage(id: string) {
+    return prisma.clientRequest.findUnique({
+      where: { id },
+      select: {
+        caseId: true,
+        note: true,
+        case: {
+          select: {
+            caseName: true,
+            practiceArea: true,
+            ukJurisdiction: true,
+            jurisdiction: true,
+            clientSide: true,
+            parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } },
+            documents: {
+              where: { status: "ACTIVE" },
+              select: { id: true, name: true, ragStatus: true, category: true, file: { select: { s3Key: true, fileUrl: true, filename: true } } },
+              orderBy: { createdAt: "asc" },
+            },
+            consultations: { where: { status: "ACTIVE" }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 1 },
+          },
+        },
+      },
+    });
+  }
+
   /** Stops one lawyer seeing a request again (a pass, #511). Status untouched. */
   static async exclude(id: string, lawyerId: string) {
     await prisma.clientRequest.updateMany({

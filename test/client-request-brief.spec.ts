@@ -8,6 +8,7 @@ import { redactBrief, labelForDesignation, type RedactionContext } from "../src/
 import ClientRequestBriefSvc, { parseBriefReply, ukDay, urgencyFor } from "../src/services/client-request-brief.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ChatRepo from "../src/repositories/chat.repository";
+import ClientIntakeRepo from "../src/repositories/client-intake.repository";
 import * as chatWonder from "../src/utils/chatWonder";
 import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
 
@@ -131,6 +132,7 @@ describe("Anonymised case brief", () => {
       rest: chatWonder.callChatWonderRest,
       session: chatWonder.getChatWonderSessionId,
       announce: ClientRequestNotifySvc.announceInBackground,
+      intakeFind: ClientIntakeRepo.find,
     };
     let announced: string[];
     let source: any;
@@ -178,6 +180,11 @@ describe("Anonymised case brief", () => {
         if (data.brief) Object.assign(source, { brief: data.brief, briefFingerprint: data.briefFingerprint });
       };
       (ChatRepo as any).listMessagesByConsultation = async () => messages;
+      // No intake run yet for any case in this file's fixtures — ClientRequestBriefSvc folds
+      // CaseClientIntake.fingerprint into briefFingerprint and CaseIntake into brief.intake
+      // (ADR 0018); stubbed here the same way every other repo in this file is, with nothing
+      // live behind it.
+      (ClientIntakeRepo as any).find = async () => null;
       (chatWonder as any).getChatWonderSessionId = async () => "session-1";
       (chatWonder as any).callChatWonderRest = async (prompt: string) => {
         aiCalls++;
@@ -193,6 +200,7 @@ describe("Anonymised case brief", () => {
       (chatWonder as any).callChatWonderRest = originals.rest;
       (chatWonder as any).getChatWonderSessionId = originals.session;
       (ClientRequestNotifySvc as any).announceInBackground = originals.announce;
+      (ClientIntakeRepo as any).find = originals.intakeFind;
     });
 
     it("announces the request to its lawyers once there's a brief for them to read (#510)", async () => {
