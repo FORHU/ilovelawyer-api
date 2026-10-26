@@ -12,5 +12,8 @@ export const CLIENT_CASE_WHERE_MAX_LENGTH = 120;
 export const CLIENT_MESSAGE_MAX_LENGTH = 4000;
 /** Case documents one chat message can carry. */
 export const CLIENT_MESSAGE_DOCUMENTS_MAX = 5;
+/** How long the link the Documents tab opens a file with stays valid. The app fetches a fresh one
+ * on every View, so it only has to outlive the click. */
+export const CLIENT_DOCUMENT_LINK_SECONDS = 300;
 /** "What happened" and "what I want", kept together in Case.notes. */
 export const CLIENT_CASE_NOTES_MAX_LENGTH = 2000;

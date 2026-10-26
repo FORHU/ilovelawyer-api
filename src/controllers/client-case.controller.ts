@@ -83,6 +83,19 @@ export default class ClientCaseCtrl {
     res.status(201).json(await ClientCaseSvc.addDocument(clientWorkspaceOf(req), req.user.userId, req.params.caseId, file));
   }
 
+  static async removeDocument(req: Request, res: Response) {
+    await ClientCaseSvc.removeDocument(clientWorkspaceOf(req), req.user.userId, req.params.caseId, req.params.documentId);
+    res.status(204).end();
+  }
+
+  static async documentUrl(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.documentUrl(clientWorkspaceOf(req), req.params.caseId, req.params.documentId));
+  }
+
+  static async retryDocument(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.retryDocument(clientWorkspaceOf(req), req.params.caseId, req.params.documentId));
+  }
+
   static async overview(req: Request, res: Response) {
     res.status(200).json(await ClientCaseOverviewSvc.get(clientWorkspaceOf(req), req.params.caseId));
   }
