@@ -77,11 +77,11 @@ const clientIntakeDailyCapRaw = process.env.CLIENT_INTAKE_DAILY_CAP?.trim();
 const clientIntakeDailyCap = clientIntakeDailyCapRaw ? Number(clientIntakeDailyCapRaw) : NaN;
 export const CLIENT_INTAKE_DAILY_CAP =
   Number.isFinite(clientIntakeDailyCap) && clientIntakeDailyCap > 0 ? Math.floor(clientIntakeDailyCap) : 5;
-/** Tags a client's own chat messages with the intake interviewer persona (INTAKE_TAG_UK, ADR
- * 0018) instead of the lawyer-research persona (LEGAL_TAG_UK) every chat turn gets today. Off
- * by default: chat-wonder-v2-api's `intake_uk` persona is a separate team's work
- * (docs/plans/intake-persona-contract.md) and this must stay off until it ships. Never affects a
- * lawyer's own chat, which is never tagged through this flag. */
+/** Adds the intake interviewer's extras to a client's own chat turns (ADR 0018): the
+ * `intake_context` hint, no mind-map rule, and the legal-verify pass skipped. The `[intake]` tag
+ * itself (INTAKE_TAG) is sent on every client turn regardless. Off by default: chat-wonder does not
+ * read `intake_context` yet (docs/plans/intake-persona-contract.md). Never affects a lawyer's
+ * chat. */
 export const CLIENT_INTAKE_PERSONA = process.env.CLIENT_INTAKE_PERSONA === "true";
 const engagementAiBudgetGbpPerUsdRaw = process.env.ENGAGEMENT_AI_BUDGET_GBP_PER_USD?.trim();
 const engagementAiBudgetGbpPerUsd = engagementAiBudgetGbpPerUsdRaw ? Number(engagementAiBudgetGbpPerUsdRaw) : NaN;

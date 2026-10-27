@@ -1086,9 +1086,9 @@ export default class ChatSvc {
             })
           : undefined;
         // The client app's intake interviewer (ADR 0018), behind CLIENT_INTAKE_PERSONA: a
-        // client-workspace case's own chat turns are tagged INTAKE_TAG_UK instead of
-        // LEGAL_TAG_UK, with no mind map and the legal-verify pass skipped. Off by default —
-        // see docs/plans/intake-persona-contract.md, the other team's work this depends on.
+        // client-workspace case's own chat turns also get the intake_context hint, no mind map and
+        // the legal-verify pass skipped (the [intake] tag itself is personaTag, below). Off by
+        // default — see docs/plans/intake-persona-contract.md.
         const useIntakePersona = CLIENT_INTAKE_PERSONA && !!effectiveCaseId && (await CaseRepo.isClientWorkspaceCase(effectiveCaseId));
         const intakeContext = useIntakePersona ? await ClientIntakeSvc.promptContext(effectiveCaseId!) : undefined;
         // A locked generation (audio overview script, mind map) records its stage on the lock row,
