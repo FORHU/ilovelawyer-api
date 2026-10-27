@@ -552,6 +552,11 @@ function streamChatWonderMessageOnce(
      * its user. Only real chat turns set it — background generators don't, and a chat-wonder build
      * that doesn't know the field drops it. */
     traceTurnId?: string;
+    /** The client app's intake interviewer extras (ADR 0018), behind CLIENT_INTAKE_PERSONA: skips
+     * MINDMAP_RULE (this persona never requests a mind map) and sends `intakeContext` as
+     * `intake_context`. The `[intake]` tag itself is `personaTag`, set for every client turn. See docs/plans/intake-persona-contract.md for both fields' contract with chat-wonder-v2-api. */
+    intakePersona?: boolean;
+    intakeContext?: string;
     /** Records this call's reasoning trace for the AI Reasoning pane, under the run's source and
      * turn. Set by the panes' generations (witness scoring, case reconstruction, ...); chat turns
      * are traced by ChatSvc and pass `traceTurnId` instead. Makes the wrapper below start a
@@ -720,14 +725,18 @@ function streamChatWonderMessageOnce(
             skip_legal_verify?: boolean;
             case_damages?: unknown;
             trace_turn_id?: string;
+            intake_context?: string;
           } = {
             type: "chat",
             user_input:
               (opts?.personaTag ? `${opts.personaTag} ${userInput}` : withLegalTag(userInput, tenantCode)) +
-              (caseId ? MINDMAP_RULE : ""),
+              (caseId && !opts?.intakePersona ? MINDMAP_RULE : ""),
             session_id: sessionId,
             use_full_legal_chain: false,
           };
+          if (opts?.intakePersona && opts?.intakeContext) {
+            payload.intake_context = opts.intakeContext;
+          }
           if (documentContext) {
             payload.document_context = documentContext;
           }

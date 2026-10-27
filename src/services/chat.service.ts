@@ -41,6 +41,7 @@ import { triageMessage, triageContextFor, notificationFor, resolveReplyLanguage,
 import NotificationSvc from "./notification.service";
 import CaseRepo from "../repositories/case.repository";
 import ClientIntakeSvc from "./client-intake.service";
+import { CLIENT_INTAKE_PERSONA } from "../config";
 import ParticipantRepo from "../repositories/participant.repository";
 import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
 import { getProxyFileUrl } from "../utils/s3";
@@ -1084,6 +1085,12 @@ export default class ChatSvc {
               return undefined;
             })
           : undefined;
+        // The client app's intake interviewer (ADR 0018), behind CLIENT_INTAKE_PERSONA: a
+        // client-workspace case's own chat turns also get the intake_context hint, no mind map and
+        // the legal-verify pass skipped (the [intake] tag itself is personaTag, below). Off by
+        // default — see docs/plans/intake-persona-contract.md.
+        const useIntakePersona = CLIENT_INTAKE_PERSONA && !!effectiveCaseId && (await CaseRepo.isClientWorkspaceCase(effectiveCaseId));
+        const intakeContext = useIntakePersona ? await ClientIntakeSvc.promptContext(effectiveCaseId!) : undefined;
         // A locked generation (audio overview script, mind map) records its stage on the lock row,
         // which is what turns the panel's spinner into real steps. Fire-and-forget: setStage
         // never throws, and a late report for a finished job is dropped there.
@@ -1114,8 +1121,9 @@ export default class ChatSvc {
             replyLanguage,
             // Any turn that asks for a map, case or not: chat-wonder builds one only on this flag.
             {
-              mindMapRequested: wantsMindMap,
-              mindMapContext: mindMapContext || undefined,
+              // Never a mind map on the intake persona — see its own comment above.
+              mindMapRequested: useIntakePersona ? false : wantsMindMap,
+              mindMapContext: useIntakePersona ? undefined : mindMapContext || undefined,
               caseDamages,
               onStage,
               // This whole pipeline (enqueueChatGeneration -> ChatGenerationQueue ->
@@ -1124,6 +1132,8 @@ export default class ChatSvc {
               // etc.), which call streamChatWonderMessage directly -- so this is safe to set
               // unconditionally here rather than threading a client/lawyer flag through.
               personaTag: INTAKE_TAG,
+              intakePersona: useIntakePersona,
+              intakeContext,
               // A question is traced as "chat"; the mind map and audio overview triggers, which go
               // through this same path, are traced under their own names.
               trace: {
@@ -1655,6 +1665,9 @@ export default class ChatSvc {
       /** Forwarded to streamChatWonderMessage's opts.personaTag — see its doc comment. Only
        * runChatGenerationJob sets this (INTAKE_TAG, the client consultation path). */
       personaTag?: string;
+      /** The client app's intake persona (ADR 0018) — see streamChatWonderMessageOnce's opts. */
+      intakePersona?: boolean;
+      intakeContext?: string;
     },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
@@ -1664,6 +1677,7 @@ export default class ChatSvc {
       ...(extras?.onStage ? { onStage: extras.onStage } : {}),
       ...(extras?.trace ? { traceTurnId: extras.trace.turnId } : {}),
       ...(extras?.personaTag ? { personaTag: extras.personaTag } : {}),
+      ...(extras?.intakePersona ? { intakePersona: true, intakeContext: extras.intakeContext, skipLegalVerify: true } : {}),
       // The turn's LlmUsage row (epic #399). A real user turn names its user, organization and case
       // through its trace; the mind map and audio overview triggers are recorded under their own names.
       usage: {

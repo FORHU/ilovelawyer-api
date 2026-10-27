@@ -30,7 +30,7 @@ uploaded. Neither one assesses the case, proposes a strategy, predicts an outcom
 client what to do.**
 
 1. **Chat persona.** Client chat moves to its own persona, tagged separately from
-   `[legal ai uk]`/`[legal ai]` (`INTAKE_TAG_UK`, behind `CLIENT_INTAKE_PERSONA`), with
+   `[legal ai uk]`/`[legal ai]` (`INTAKE_TAG`; `CLIENT_INTAKE_PERSONA` adds the extras), with
    `skip_legal_verify: true` and no mind map. The persona's own prompt is chat-wonder-v2-api's to
    write (docs/plans/intake-persona-contract.md is its contract); this API only tags the request
    and supplies `intake_context`. Until that persona ships, the flag stays off and today's
