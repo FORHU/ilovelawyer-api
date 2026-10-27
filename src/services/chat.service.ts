@@ -12,6 +12,7 @@ import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding, ChatWonderStage } from "../utils/chatWonder";
+import { INTAKE_TAG } from "../constants/chatWonder.constants";
 import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
@@ -46,8 +47,8 @@ import DamageClaimSvc, { type CaseDamagesChatContext } from "./damage-claim.serv
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import DecisionRecordRepo from "../repositories/decision-record.repository";
 import { emitToUser } from "../lib/socket";
-import { TITLE_CACHE_TTL, RESPONSE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL, PROVISIONAL_UNCLEAR_TITLE, KEEP_TITLE_SENTINEL, SMALL_TALK_TITLE_SENTINEL, PROVISIONAL_GREETING_TITLE, TRIAL_RECAP_TURNS, TRIAL_RECAP_TURN_CHARS } from "../constants";
-import { chatWonderSessionKey, chatWonderRecapKey, trialSampleKey, titleCacheKey, responseCacheKey, groundingCacheKey } from "../utils/chat.utils";
+import { TITLE_CACHE_TTL, TITLE_MAX_CHARS, CHAT_WONDER_SESSION_TTL_S, ATTACHMENT_ONLY_PROMPT, UNCLEAR_TITLE_SENTINEL, PROVISIONAL_UNCLEAR_TITLE, KEEP_TITLE_SENTINEL, SMALL_TALK_TITLE_SENTINEL, PROVISIONAL_GREETING_TITLE, TRIAL_RECAP_TURNS, TRIAL_RECAP_TURN_CHARS } from "../constants";
+import { chatWonderSessionKey, chatWonderRecapKey, trialSampleKey, titleCacheKey } from "../utils/chat.utils";
 import { resolveRelatedCaseLibraryLinks, rewriteLegalCitationLinks } from "../utils/legal-citation-link-rewrite";
 import SecurityAuditSvc from "./security-audit.service";
 import { caseScope, firmScope, ownScope, type WorkspaceScope } from "../utils/workspace";
@@ -972,40 +973,17 @@ export default class ChatSvc {
       return;
     }
 
-    const cacheKey = responseCacheKey(
-      consultationId,
-      userInput,
-      resolvedContext,
-      groundingCacheKey(grounding),
-    );
-    const cached = await redis.get<{
-      content: string;
-      relatedCases: RelatedCase[];
-      mindMap?: MindMapItem;
-      timeline?: TimelineItem[];
-      audioOverview?: AudioOverviewTurn[];
-      reasoning?: ReasoningExplanation;
-      decisions?: DecisionRecordsPayload;
-      draftedDocument?: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string };
-      researchSteps?: TraceStep[];
-    }>(cacheKey);
-    // Map-generation turns used to cache text-only replies (the mind map arrives on a
-    // later Chat Wonder frame). A hit without mindMap would keep the tab empty for TTL.
+    // responseCacheKey is keyed on (consultationId, userMessage text, resolvedContext,
+    // groundingKey) — it has no notion of which turn this is or what the assistant last asked.
+    // That's fine for a one-shot legal Q&A (the same question really does deserve the same
+    // answer), but this whole pipeline has exactly one producer, ClientCaseSvc.sendMessage —
+    // the intake consultation's back-and-forth interview (see the comment on `personaTag`
+    // below). There, the correct reply depends entirely on conversation position: the user
+    // typing the same short answer ("employment", "yes") twice in one case must not replay
+    // whatever the model said the first time that text/context pair was seen. Caching is
+    // disabled for this pipeline until the key can account for turn position.
     const wantsMindMap = /visual strategy map|mind\s*map/i.test(userInput);
-    // Same trigger check as the_server.py's _wants_audio_overview. Unlike mind map, Audio
-    // Overview is meant to produce a fresh script on every explicit generate click (the tile's
-    // onClick always calls this) — so it must never read from the response cache, only skip
-    // writing to it would still leave the very next click hitting the stale entry from this one.
     const wantsAudioOverview = /audio overview/i.test(userInput);
-    const useCache =
-      Boolean(cached) && !wantsAudioOverview && (!wantsMindMap || cached?.mindMap);
-    logger.info("Chat: response cache checked", {
-      consultationId,
-      messageId: parentMessageId,
-      cacheHit: Boolean(cached),
-      useCache,
-      elapsedMs: Date.now() - t0,
-    });
 
     // Checkpoints the raw accumulated reply into the user message's pendingReplyContent every
     // CHECKPOINT_INTERVAL_MS, so a mid-generation browser refresh can show the partial answer
@@ -1049,35 +1027,14 @@ export default class ChatSvc {
     let relatedCases: RelatedCase[];
     let streamedMindMap: MindMapItem | undefined;
     let streamedTimeline: TimelineItem[] | undefined;
-    // Which case documents' full text actually went into this turn's payload. The grounding
-    // verifier needs the truth of what the model was given, not what the case holds (see
-    // GroundingVerifierSvc): a "not reproduced in the available extract" line is a defect only if
-    // the text was there. A cached reply leaves this empty, which is why the verifier is skipped
-    // on the cache path rather than told a comfortable lie.
     let inlinedCaseDocumentIds: string[] = [];
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
     let streamedDraftedDocument: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string } | undefined;
     let streamedResearchSteps: TraceStep[] | undefined;
-    // A cache hit replays a reply generated against some earlier turn's grounding, so this turn
-    // has no record of what text the model saw. The grounding verifier is skipped rather than run
-    // on that unknown — see the call site below.
-    let usedCachedResponse = false;
     try {
-      if (useCache && cached) {
-        usedCachedResponse = true;
-        checkpointedOnChunk(cached.content);
-        fullResponse = cached.content;
-        relatedCases = cached.relatedCases;
-        streamedMindMap = cached.mindMap;
-        streamedTimeline = cached.timeline;
-        streamedAudioOverview = cached.audioOverview;
-        streamedReasoning = cached.reasoning;
-        streamedDecisions = cached.decisions;
-        streamedDraftedDocument = cached.draftedDocument;
-        streamedResearchSteps = cached.researchSteps;
-      } else {
+      {
         // Guards against a duplicate mind-map/audio-overview generation if a page refresh mid-
         // stream makes the CTA look idle again (see AiGenerationJob) — ordinary chat turns are
         // untouched, since there's no "duplicate generate" concern for two different questions.
@@ -1159,6 +1116,12 @@ export default class ChatSvc {
               mindMapContext: mindMapContext || undefined,
               caseDamages,
               onStage,
+              // This whole pipeline (enqueueChatGeneration -> ChatGenerationQueue ->
+              // runChatGenerationJob) has exactly one producer: ClientCaseSvc.sendMessage. It is
+              // never reached by ilovelawyer-app's own AI features (case-strategy, mind-map,
+              // etc.), which call streamChatWonderMessage directly -- so this is safe to set
+              // unconditionally here rather than threading a client/lawyer flag through.
+              personaTag: INTAKE_TAG,
               // A question is traced as "chat"; the mind map and audio overview triggers, which go
               // through this same path, are traced under their own names.
               trace: {
@@ -1198,21 +1161,6 @@ export default class ChatSvc {
         streamedDraftedDocument = result.draftedDocument;
         streamedResearchSteps = result.researchSteps;
         inlinedCaseDocumentIds = result.inlinedCaseDocumentIds;
-        redis.set(
-          cacheKey,
-          {
-            content: fullResponse,
-            relatedCases,
-            mindMap: streamedMindMap,
-            timeline: streamedTimeline,
-            audioOverview: streamedAudioOverview,
-            reasoning: streamedReasoning,
-            decisions: streamedDecisions,
-            draftedDocument: streamedDraftedDocument,
-            researchSteps: streamedResearchSteps,
-          },
-          RESPONSE_CACHE_TTL,
-        );
       }
     } catch (err) {
       if (err instanceof GenerationCancelledError || signal.aborted) {
@@ -1348,7 +1296,7 @@ export default class ChatSvc {
     // its own failures, and this `void` is the second guarantee that a verification problem can
     // never become a chat problem. Skipped on the cache path, where inlinedCaseDocumentIds is
     // empty and every disclaimer would be misread as NOT_SUPPLIED.
-    if (assistantMessage && effectiveCaseId && GroundingVerifierSvc.enabled && !usedCachedResponse) {
+    if (assistantMessage && effectiveCaseId && GroundingVerifierSvc.enabled) {
       const verifiedMessageId = assistantMessage.id;
       void GroundingVerifierSvc.verifyAnswer({
         assistantMessageId: verifiedMessageId,
@@ -1691,6 +1639,9 @@ export default class ChatSvc {
       onStage?: (stage: ChatWonderStage) => void;
       /** Set on a real user turn: records its customer-facing trace for the Terminal's trace pane. */
       trace?: TraceTurn;
+      /** Forwarded to streamChatWonderMessage's opts.personaTag — see its doc comment. Only
+       * runChatGenerationJob sets this (INTAKE_TAG, the client consultation path). */
+      personaTag?: string;
     },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
@@ -1699,6 +1650,7 @@ export default class ChatSvc {
       ...(extras?.caseDamages ? { caseDamages: extras.caseDamages } : {}),
       ...(extras?.onStage ? { onStage: extras.onStage } : {}),
       ...(extras?.trace ? { traceTurnId: extras.trace.turnId } : {}),
+      ...(extras?.personaTag ? { personaTag: extras.personaTag } : {}),
       // The turn's LlmUsage row (epic #399). A real user turn names its user, organization and case
       // through its trace; the mind map and audio overview triggers are recorded under their own names.
       usage: {
