@@ -29,6 +29,20 @@ const checkout = {
   },
 };
 
+const documentId = { name: "documentId", in: "path", required: true, schema: { type: "string" } };
+
+const clientDocument = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    status: { type: "string", enum: ["PENDING", "READY", "FAILED"] },
+    size: { type: "integer", nullable: true, description: "Bytes; null when the upload didn't say" },
+    uploadedAt: { type: "string", format: "date-time" },
+    createdAt: { type: "string", format: "date-time", description: "Same as uploadedAt; kept for older apps" },
+  },
+};
+
 const clientCase = {
   type: "object",
   properties: {
@@ -43,13 +57,7 @@ const clientCase = {
       type: "array",
       items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, role: { type: "string", enum: [...CLIENT_PARTY_ROLES] } } },
     },
-    documents: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["PENDING", "READY", "FAILED"] }, createdAt: { type: "string", format: "date-time" } },
-      },
-    },
+    documents: { type: "array", items: clientDocument },
     credits: { type: "integer", description: "Chat credits left; each message to the AI uses one" },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
@@ -586,7 +594,46 @@ export const clientAppPaths: Paths = {
         required: true,
         content: json({ type: "object", required: ["key", "name"], properties: { key: { type: "string" }, name: { type: "string" }, contentType: { type: "string" }, fileSize: { type: "integer" } } }),
       },
-      responses: { 201: { description: "Added (status PENDING until it's read)" }, 404: err("Not one of this client's cases") },
+      responses: { 201: { description: "Added (status PENDING until it's read)", content: json(clientDocument) }, 404: err("Not one of this client's cases") },
+    },
+  },
+  "/client/cases/{caseId}/documents/{documentId}": {
+    delete: {
+      tags: [TAG],
+      summary: "Remove a document from the case for good",
+      description:
+        "Deletes the document and its file, and unlinks it from the overview's timeline. If it was READY, the overview reads STALE until it's updated. An engaged lawyer gets engagement:document-removed.",
+      security,
+      parameters: [caseId, documentId],
+      responses: { 204: { description: "Removed" }, 404: err("Not one of this client's cases, or not a document on it") },
+    },
+  },
+  "/client/cases/{caseId}/documents/{documentId}/url": {
+    get: {
+      tags: [TAG],
+      summary: "A short-lived link that opens the document in the browser",
+      security,
+      parameters: [caseId, documentId],
+      responses: {
+        200: {
+          description: "A same-origin /files/<token> path, good for five minutes. Fetch a new one for each open.",
+          content: json({ type: "object", properties: { url: { type: "string" }, expiresAt: { type: "string", format: "date-time" } } }),
+        },
+        404: err("Not one of this client's cases, or not a document on it"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/documents/{documentId}/retry": {
+    post: {
+      tags: [TAG],
+      summary: "Read a document that couldn't be read again",
+      security,
+      parameters: [caseId, documentId],
+      responses: {
+        200: { description: "Queued again (status PENDING)", content: json(clientDocument) },
+        404: err("Not one of this client's cases, or not a document on it"),
+        409: err("NOT_FAILED: only a FAILED document can be retried"),
+      },
     },
   },
   "/client/cases/{caseId}/overview": {

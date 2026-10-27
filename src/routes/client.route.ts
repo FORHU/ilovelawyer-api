@@ -30,11 +30,20 @@ router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages))
 router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
 router.post("/cases/:caseId/documents", asyncHandler(ClientCaseCtrl.addDocument));
+// The Documents tab's row actions (#574). Retry reads the file again like an upload does, so like
+// an upload it needs no AI-processing consent.
+router.delete("/cases/:caseId/documents/:documentId", asyncHandler(ClientCaseCtrl.removeDocument));
+router.get("/cases/:caseId/documents/:documentId/url", asyncHandler(ClientCaseCtrl.documentUrl));
+router.post("/cases/:caseId/documents/:documentId/retry", asyncHandler(ClientCaseCtrl.retryDocument));
 // The Overview tab (#45/#572): a client-shaped summary, read for free and regenerated through a
 // small job of its own — see ClientOverviewSvc. Generate reads documents already on the case, so
 // it needs AI-processing consent like the chat does; the GET is a plain read and doesn't.
 router.get("/cases/:caseId/overview", asyncHandler(ClientCaseCtrl.overview));
 router.post("/cases/:caseId/overview/generate", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.generateOverview));
+// The Intake tab (docs/plans/client-side-compressed-meteor.md): the Overview's traceable,
+// secretary-shaped replacement. Both tabs run side by side until the client app has moved over.
+router.get("/cases/:caseId/intake", asyncHandler(ClientCaseCtrl.intake));
+router.post("/cases/:caseId/intake/refresh", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.refreshIntake));
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 // A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
 router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));

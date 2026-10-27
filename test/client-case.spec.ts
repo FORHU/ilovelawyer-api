@@ -245,7 +245,9 @@ describe("Client app cases", () => {
       expect(caseId).to.equal("case-1");
       expect(dto).to.include({ id: "case-1", title: "Dismissed without notice", area: "EMPLOYMENT", where: "Leeds", credits: 50 });
       expect(dto.others).to.deep.equal([{ id: "p1", name: "Acme Ltd", role: "Opposing party" }]);
-      expect(dto.documents).to.deep.equal([{ id: "d1", name: "Contract.pdf", status: "READY", createdAt: new Date("2026-10-20") }]);
+      expect(dto.documents).to.deep.equal([
+        { id: "d1", name: "Contract.pdf", status: "READY", size: null, uploadedAt: new Date("2026-10-20"), createdAt: new Date("2026-10-20") },
+      ]);
     });
 
     it("stores what the client said happened and wants as the case's notes", async () => {
@@ -526,8 +528,13 @@ describe("Client app cases", () => {
       "POST /cases/:caseId/messages",
       "POST /cases/:caseId/documents/presign",
       "POST /cases/:caseId/documents",
+      "DELETE /cases/:caseId/documents/:documentId",
+      "GET /cases/:caseId/documents/:documentId/url",
+      "POST /cases/:caseId/documents/:documentId/retry",
       "GET /cases/:caseId/overview",
       "POST /cases/:caseId/overview/generate",
+      "GET /cases/:caseId/intake",
+      "POST /cases/:caseId/intake/refresh",
       "POST /cases/:caseId/top-ups",
       "GET /cases/:caseId/lawyer-readiness",
       "GET /lawyer-requests/consent",

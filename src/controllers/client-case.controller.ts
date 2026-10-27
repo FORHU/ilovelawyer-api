@@ -4,6 +4,7 @@ import type { ObjectSchema } from "joi";
 import ClientCaseSvc from "../services/client-case.service";
 import ClientOverviewSvc from "../services/client-overview.service";
 import ClientCaseOverviewSvc from "../services/client-case-overview.service";
+import ClientIntakeSvc from "../services/client-intake.service";
 import ClientBillingSvc from "../services/client-billing.service";
 import HttpError from "../utils/http-error";
 import { ALLOWED_DOCUMENT_EXTENSIONS, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "../constants";
@@ -83,12 +84,33 @@ export default class ClientCaseCtrl {
     res.status(201).json(await ClientCaseSvc.addDocument(clientWorkspaceOf(req), req.user.userId, req.params.caseId, file));
   }
 
+  static async removeDocument(req: Request, res: Response) {
+    await ClientCaseSvc.removeDocument(clientWorkspaceOf(req), req.user.userId, req.params.caseId, req.params.documentId);
+    res.status(204).end();
+  }
+
+  static async documentUrl(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.documentUrl(clientWorkspaceOf(req), req.params.caseId, req.params.documentId));
+  }
+
+  static async retryDocument(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.retryDocument(clientWorkspaceOf(req), req.params.caseId, req.params.documentId));
+  }
+
   static async overview(req: Request, res: Response) {
     res.status(200).json(await ClientCaseOverviewSvc.get(clientWorkspaceOf(req), req.params.caseId));
   }
 
   static async generateOverview(req: Request, res: Response) {
     res.status(202).json(await ClientOverviewSvc.beginQueued(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
+  }
+
+  static async intake(req: Request, res: Response) {
+    res.status(200).json(await ClientIntakeSvc.get(clientWorkspaceOf(req), req.params.caseId));
+  }
+
+  static async refreshIntake(req: Request, res: Response) {
+    res.status(202).json(await ClientIntakeSvc.beginQueued(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
   }
 
   static async lawyerReadiness(req: Request, res: Response) {

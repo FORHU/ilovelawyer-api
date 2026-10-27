@@ -197,6 +197,14 @@ export interface EngagementDocumentAddedEvent {
   submittedAt: string;
 }
 
+/** To the engaged lawyer when the client removes a document from the case. */
+export interface EngagementDocumentRemovedEvent {
+  requestId: string;
+  caseId: string;
+  documentId: string;
+  filename: string;
+}
+
 /** To the engaged lawyer when the budget crosses 80% or 100%, and after a top-up. */
 export interface EngagementAiBudgetEvent {
   requestId: string;
@@ -229,6 +237,7 @@ export const CLIENT_HANDOFF_SOCKET_EVENTS = {
   REQUEST_CLAIM_EXPIRING: "client-request:claim-expiring",
   ENGAGEMENT_MESSAGE: "engagement:message",
   ENGAGEMENT_DOCUMENT_ADDED: "engagement:document-added",
+  ENGAGEMENT_DOCUMENT_REMOVED: "engagement:document-removed",
   ENGAGEMENT_AI_BUDGET: "engagement:ai-budget",
 } as const;
 
@@ -239,5 +248,6 @@ export interface ClientHandoffSocketPayloads {
   "client-request:claim-expiring": ClientRequestClaimExpiringEvent;
   "engagement:message": EngagementMessageEvent;
   "engagement:document-added": EngagementDocumentAddedEvent;
+  "engagement:document-removed": EngagementDocumentRemovedEvent;
   "engagement:ai-budget": EngagementAiBudgetEvent;
 }
