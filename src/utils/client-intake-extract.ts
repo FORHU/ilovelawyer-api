@@ -147,6 +147,24 @@ function stableId(kind: string, text: string): string {
 
 const MAX_LIST = 40;
 
+/** The same text (or name) twice gets the same stable id, which breaks list keys downstream. Keeps
+ * the first and folds the later ones' sources into it, so nothing the AI cited is lost. */
+function dedupe<T extends { id: string; sources?: IntakeSource[] }>(items: T[]): T[] {
+  const seen = new Map<string, T>();
+  for (const item of items) {
+    const first = seen.get(item.id);
+    if (!first) {
+      seen.set(item.id, item);
+      continue;
+    }
+    if (first.sources && item.sources) {
+      const known = new Set(first.sources.map((s) => JSON.stringify(s)));
+      for (const s of item.sources) if (!known.has(JSON.stringify(s))) first.sources.push(s);
+    }
+  }
+  return [...seen.values()];
+}
+
 function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
@@ -183,7 +201,7 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
 
   const summary = str(parsed.summary) || null;
 
-  const people = arr(parsed.people)
+  const peopleAll = arr(parsed.people)
     .map((raw): CaseIntake["people"][number] | null => {
       const name = str(raw.name);
       if (!name) return null;
@@ -192,10 +210,10 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
       const role = str(raw.role) || "involved";
       return { id: stableId("person", name), name, role, text: role, sources };
     })
-    .filter((x): x is CaseIntake["people"][number] => x !== null)
-    .slice(0, MAX_LIST);
+    .filter((x): x is CaseIntake["people"][number] => x !== null);
+  const people = dedupe(peopleAll).slice(0, MAX_LIST);
 
-  const timeline = arr(parsed.timeline)
+  const timelineAll = arr(parsed.timeline)
     .map((raw): CaseIntake["timeline"][number] | null => {
       const text = str(raw.text);
       if (!text) return null;
@@ -205,12 +223,13 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
       const precision = (["DAY", "MONTH", "YEAR", "UNKNOWN"] as const).includes(raw.datePrecision as never) ? (raw.datePrecision as CaseIntake["timeline"][number]["datePrecision"]) : "UNKNOWN";
       return { id: stableId("event", text), text, date, datePrecision: date ? precision : "UNKNOWN", sources };
     })
-    .filter((x): x is CaseIntake["timeline"][number] => x !== null)
+    .filter((x): x is CaseIntake["timeline"][number] => x !== null);
+  const timeline = dedupe(timelineAll)
     .sort((a, b) => (a.date && b.date ? a.date.localeCompare(b.date) : a.date ? -1 : b.date ? 1 : 0))
     .slice(0, MAX_LIST);
 
   const simpleList = (key: string, kind: string) =>
-    arr(parsed[key])
+    dedupe(arr(parsed[key])
       .map((raw): CaseIntake["facts"][number] | null => {
         const text = str(raw.text);
         if (!text) return null;
@@ -218,7 +237,7 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
         if (!sources.length) return null;
         return { id: stableId(kind, text), text, sources };
       })
-      .filter((x): x is CaseIntake["facts"][number] => x !== null)
+      .filter((x): x is CaseIntake["facts"][number] => x !== null))
       .slice(0, MAX_LIST);
 
   const facts = simpleList("facts", "fact");
@@ -226,7 +245,7 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
   const concerns = simpleList("concerns", "concern");
   const questionsForLawyer = simpleList("questionsForLawyer", "question");
 
-  const deadlines = arr(parsed.deadlines)
+  const deadlinesAll = arr(parsed.deadlines)
     .map((raw): CaseIntake["deadlines"][number] | null => {
       const text = str(raw.text);
       if (!text) return null;
@@ -234,19 +253,19 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
       if (!sources.length) return null;
       return { id: stableId("deadline", text), text, date: plausibleIsoDate(raw.date), sources };
     })
-    .filter((x): x is CaseIntake["deadlines"][number] => x !== null)
-    .slice(0, MAX_LIST);
+    .filter((x): x is CaseIntake["deadlines"][number] => x !== null);
+  const deadlines = dedupe(deadlinesAll).slice(0, MAX_LIST);
 
-  const missing = arr(parsed.missing)
+  const missingAll = arr(parsed.missing)
     .map((raw): CaseIntake["missing"][number] | null => {
       const question = str(raw.question);
       if (!question) return null;
       return { id: stableId("gap", question), question, why: str(raw.why) };
     })
-    .filter((x): x is CaseIntake["missing"][number] => x !== null)
-    .slice(0, MAX_LIST);
+    .filter((x): x is CaseIntake["missing"][number] => x !== null);
+  const missing = dedupe(missingAll).slice(0, MAX_LIST);
 
-  const conflicts = arr(parsed.conflicts)
+  const conflictsAll = arr(parsed.conflicts)
     .map((raw): CaseIntake["conflicts"][number] | null => {
       const description = str(raw.description);
       if (!description) return null;
@@ -254,8 +273,8 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
       if (sources.length < 2) return null;
       return { id: stableId("conflict", description), description, sources };
     })
-    .filter((x): x is CaseIntake["conflicts"][number] => x !== null)
-    .slice(0, MAX_LIST);
+    .filter((x): x is CaseIntake["conflicts"][number] => x !== null);
+  const conflicts = dedupe(conflictsAll).slice(0, MAX_LIST);
 
   const nothingUsable = !summary && ![people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, missing, conflicts].some((l) => l.length);
   if (nothingUsable) return null;

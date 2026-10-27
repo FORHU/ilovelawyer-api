@@ -24,6 +24,21 @@ function reply(obj: unknown): string {
 
 describe("Client intake extraction", () => {
   describe("parseIntakeReply", () => {
+    it("merges items with identical text into one, keeping every cited source", () => {
+      const parsed = parseIntakeReply(
+        reply({
+          timeline: [
+            { text: "Dismissal", date: "2026-03-03", datePrecision: "DAY", sources: ["M1"] },
+            { text: "Dismissal", date: "2026-03-03", datePrecision: "DAY", sources: ["D2 p.1"] },
+          ],
+        }),
+        docs,
+        messages,
+      );
+      expect(parsed!.timeline).to.have.length(1);
+      expect(parsed!.timeline[0]!.sources).to.have.length(2);
+    });
+
     it("resolves a document handle with a page, and a message handle, to their real ids", () => {
       const parsed = parseIntakeReply(
         reply({
