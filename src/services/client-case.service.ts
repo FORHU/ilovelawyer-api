@@ -19,7 +19,6 @@ import { asTenantCode, type TenantCode } from "../types/tenant-code";
 import { JevUnavailableError } from "../utils/typesafeClient";
 import {
   READINESS_CRITERIA,
-  READINESS_MIN_CONFIDENCE,
   assessLawyerReadiness,
   isLawyerReadinessJevEnabled,
   type ReadinessAssessment,
@@ -27,7 +26,9 @@ import {
 import logger from "../utils/logger";
 import ClientIntakeSvc from "./client-intake.service";
 import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
-import { CLIENT_DOCUMENT_LINK_SECONDS, type ClientCaseArea } from "../constants/client-case.constants";
+import { CLIENT_DOCUMENT_LINK_SECONDS } from "../constants/client-case.constants";
+import CaseAreaSvc, { type CaseAreaRef } from "./case-area.service";
+import { OTHER_CASE_AREA } from "../constants/case-area.constants";
 import { firmScope } from "../utils/workspace";
 
 /** The client's personal workspace, as clientWorkspaceOf(req) gives it. */
@@ -41,7 +42,8 @@ export interface NewClientCase {
   /** A successful, unused case payment of this client's (ClientBillingSvc.payForCase). */
   paymentId: string;
   title: string;
-  area: ClientCaseArea;
+  /** CaseArea codes, one or more. */
+  areas: string[];
   /** Null when the client said it happened outside the UK. */
   ukJurisdiction: string | null;
   where?: string;
@@ -54,7 +56,8 @@ export interface NewClientCase {
 /** What the client may change on a case they've made. Anything left out stays as it is. */
 export interface ClientCaseChanges {
   title?: string;
-  area?: ClientCaseArea;
+  /** Replaces the case's areas. */
+  areas?: string[];
   ukJurisdiction?: string | null;
   where?: string;
   side?: ClientSide | null;
@@ -76,11 +79,15 @@ function toDocumentDto(d: { id: string; name: string; ragStatus: RagStatus; file
   return { id: d.id, name: d.name, status: d.ragStatus, size: d.fileSize ?? null, uploadedAt: d.createdAt, createdAt: d.createdAt };
 }
 
-function toDto(row: ClientCaseRow) {
+/** `label` names the case's areas (CaseAreaSvc.labeller). */
+function toDto(row: ClientCaseRow, label: (codes: string[]) => CaseAreaRef[]) {
   return {
     id: row.id,
     title: row.caseName,
-    area: (row.practiceArea ?? "OTHER") as ClientCaseArea,
+    /** In the site's order. A switched-off one the case still has is among them. */
+    areas: label(row.caseAreas),
+    /** The first area's code, for an app that predates several per case. */
+    area: row.caseAreas[0] ?? OTHER_CASE_AREA,
     ukJurisdiction: row.ukJurisdiction,
     where: row.jurisdiction ?? "",
     notes: row.notes ?? "",
@@ -104,8 +111,9 @@ export interface LawyerReadiness {
   enabled: boolean;
   ready: boolean;
   criteria: ReadinessAssessment["criteria"];
-  /** The kind of lawyer the case needs, once Jev has looked. */
-  practiceArea: ReadinessAssessment["practiceArea"] | null;
+  /** The kinds of lawyer the case needs, once Jev has looked: the case areas it's sure of. Empty
+   * before then, or when it's sure of none. */
+  caseAreas: (CaseAreaRef & { confidence: number })[];
   ukJurisdiction: string | null;
   blockedBy: ReadinessBlock | null;
   /** Jev couldn't be reached this time; nothing is claimed either way. */
@@ -121,6 +129,10 @@ function samePeople(next: { name: string; role: string }[], current: { name: str
   const a = next.map((p) => key(p.name, p.role)).sort();
   const b = current.map((p) => key(p.name, p.designation)).sort();
   return a.length === b.length && a.every((k, i) => k === b[i]);
+}
+
+function sameSet(a: string[], b: string[]) {
+  return a.length === b.length && a.every((x) => b.includes(x));
 }
 
 /** "A.pdf", "A.pdf and B.pdf", "A.pdf, B.pdf and C.pdf" */
@@ -146,7 +158,7 @@ function unchecked(ukJurisdiction: string | null, unavailable = false): LawyerRe
     enabled: true,
     ready: false,
     criteria: READINESS_CRITERIA.map((c) => ({ key: c.key, label: c.label, met: false, confidence: 0 })),
-    practiceArea: null,
+    caseAreas: [],
     ukJurisdiction,
     blockedBy: null,
     unavailable,
@@ -184,23 +196,27 @@ export default class ClientCaseSvc {
   }
 
   static async list(workspace: ClientWorkspace, archived = false) {
-    return (await ClientCaseRepo.list(workspace.id, archived ? "ARCHIVED" : "ACTIVE")).map(toDto);
+    const [rows, label] = await Promise.all([ClientCaseRepo.list(workspace.id, archived ? "ARCHIVED" : "ACTIVE"), CaseAreaSvc.labeller()]);
+    return rows.map((row) => toDto(row, label));
   }
 
   static async get(workspace: ClientWorkspace, caseId: string) {
-    return toDto(await ClientCaseSvc.load(workspace, caseId));
+    const [row, label] = await Promise.all([ClientCaseSvc.load(workspace, caseId), CaseAreaSvc.labeller()]);
+    return toDto(row, label);
   }
 
   /** Uses up the case payment first, so one payment can't make two cases, and gives it back if the
    * case then can't be made, so the client can retry without paying again. */
   static async create(workspace: ClientWorkspace, userId: string, input: NewClientCase) {
+    // Checked before the payment is used, so a bad pick costs nothing.
+    const caseAreas = await CaseAreaSvc.forCase(input.areas);
     const credits = await ClientPaymentRepo.claimCasePayment(input.paymentId, userId);
     if (credits === null) throw new HttpError("Pay for the case first.", 402, "PAYMENT_REQUIRED");
     let created: { id: string };
     try {
       created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
         caseName: input.title,
-        practiceArea: input.area,
+        caseAreas,
         ukJurisdiction: input.ukJurisdiction ?? undefined,
         jurisdiction: input.where || undefined,
         clientSide: input.side ?? null,
@@ -225,12 +241,13 @@ export default class ClientCaseSvc {
    */
   static async update(workspace: ClientWorkspace, userId: string, caseId: string, input: ClientCaseChanges) {
     const row = await ClientCaseSvc.load(workspace, caseId);
+    const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, row.caseAreas);
     const live = await ClientRequestRepo.findLiveForCase(caseId);
     if (live) {
       const held = LAWYER_HELD.includes(live.status);
       const movesOutsideUk = input.ukJurisdiction === null && row.ukJurisdiction !== null;
       const changesFixed =
-        (input.area !== undefined && input.area !== row.practiceArea) ||
+        (caseAreas !== undefined && !sameSet(caseAreas, row.caseAreas)) ||
         (input.ukJurisdiction !== undefined && input.ukJurisdiction !== row.ukJurisdiction) ||
         (input.others !== undefined && !samePeople(input.others, row.parties));
       if ((held && changesFixed) || movesOutsideUk) {
@@ -247,7 +264,7 @@ export default class ClientCaseSvc {
 
     const data: CaseData = {};
     if (input.title !== undefined) data.caseName = input.title;
-    if (input.area !== undefined) data.practiceArea = input.area;
+    if (caseAreas !== undefined) data.caseAreas = caseAreas;
     if (input.ukJurisdiction !== undefined) data.ukJurisdiction = input.ukJurisdiction;
     if (input.where !== undefined) data.jurisdiction = input.where || null;
     if (input.side !== undefined) data.clientSide = input.side;
@@ -366,14 +383,16 @@ export default class ClientCaseSvc {
     if (!latestAnswer) return unchecked(row.ukJurisdiction);
 
     const cached = row.lawyerReadiness as unknown as LawyerReadiness | null;
-    if (cached?.basedOnMessageId === latestAnswer.id) return cached;
+    // A check from before a case could have several areas (it has no caseAreas) is asked again.
+    if (cached?.basedOnMessageId === latestAnswer.id && Array.isArray(cached.caseAreas)) return cached;
 
+    const [options, label] = await Promise.all([CaseAreaSvc.forJev(), CaseAreaSvc.labeller()]);
     let assessment: ReadinessAssessment;
     try {
       assessment = await assessLawyerReadiness({
         caseDetails: {
           title: row.caseName,
-          area: row.practiceArea,
+          areas: label(row.caseAreas).map((a) => a.name),
           ukJurisdiction: row.ukJurisdiction,
           where: row.jurisdiction,
           side: row.clientSide,
@@ -381,6 +400,7 @@ export default class ClientCaseSvc {
           notes: row.notes,
         },
         conversation: messages.map((m) => ({ from: m.role === "user" ? "client" : "ai", text: m.text })),
+        caseAreas: options,
       });
     } catch (err) {
       if (!(err instanceof JevUnavailableError)) throw err;
@@ -388,23 +408,24 @@ export default class ClientCaseSvc {
       return unchecked(row.ukJurisdiction, true);
     }
 
-    const personalInjury = assessment.practiceArea.value === "PERSONAL_INJURY" && assessment.practiceArea.confidence >= READINESS_MIN_CONFIDENCE;
-    const blockedBy: ReadinessBlock | null = !row.ukJurisdiction ? "OUTSIDE_UK" : personalInjury ? "PERSONAL_INJURY" : null;
+    const blockedBy: ReadinessBlock | null = !row.ukJurisdiction ? "OUTSIDE_UK" : assessment.personalInjury.met ? "PERSONAL_INJURY" : null;
     const ready = !blockedBy && assessment.criteria.every((c) => c.met);
+    const confidence = new Map(assessment.caseAreas.map((a) => [a.code, a.confidence]));
     const result: LawyerReadiness = {
       enabled: true,
       ready,
       criteria: assessment.criteria,
-      practiceArea: assessment.practiceArea,
+      caseAreas: label(assessment.caseAreas.map((a) => a.code)).map((a) => ({ ...a, confidence: confidence.get(a.code)! })),
       ukJurisdiction: row.ukJurisdiction,
       blockedBy,
       unavailable: false,
       checkedAt: new Date().toISOString(),
       basedOnMessageId: latestAnswer.id,
     };
-    // Once the case is ready, Jev's area is the one matching uses, even if the client picked another.
-    const settledArea = ready && assessment.practiceArea.value !== "PERSONAL_INJURY" ? assessment.practiceArea.value : undefined;
-    await ClientCaseRepo.saveReadiness(caseId, result as unknown as Prisma.InputJsonValue, settledArea);
+    // Once the case is ready, Jev's areas are the ones matching uses, replacing the client's picks.
+    // When Jev is sure of none, the client's stay.
+    const settledAreas = ready && assessment.caseAreas.length ? assessment.caseAreas.map((a) => a.code) : undefined;
+    await ClientCaseRepo.saveReadiness(caseId, result as unknown as Prisma.InputJsonValue, settledAreas);
     return result;
   }
 

@@ -10,6 +10,7 @@ import ClientCaseSvc, { type ClientWorkspace } from "../src/services/client-case
 import ClientCaseRepo from "../src/repositories/client-case.repository";
 import CaseSvc from "../src/services/case.service";
 import ChatSvc from "../src/services/chat.service";
+import CaseAreaRepo from "../src/repositories/case-area.repository";
 import { dummyClientPaymentProvider, setClientPaymentProvider } from "../src/payments/client-payment-provider";
 import { CASE_CREDITS as CLIENT_CASE_CREDITS, CASE_PRICE_MINOR as CLIENT_CASE_PRICE_MINOR, clientPriceRows, installClientPricing, welcomePromo, type ClientPricingState } from "./support/client-pricing-fixture";
 
@@ -176,14 +177,15 @@ describe("Client app billing", () => {
 
   describe("creating and chatting in a paid case", () => {
     const workspace: ClientWorkspace = { id: "org-personal", role: "OWNER", tenantCode: "UK" };
-    const input = { title: "Deposit not returned", area: "PROPERTY" as const, ukJurisdiction: "Scotland" };
+    const input = { title: "Deposit not returned", areas: ["PROPERTY"], ukJurisdiction: "Scotland" };
     let restoreMore: () => void;
     let claimable: boolean;
     let calls: string[];
 
     beforeEach(() => {
-      const fns = [stash(CaseSvc, ["create"]), stash(ChatSvc, ["createConsultation", "enqueueChatGeneration"]), stash(ClientCaseRepo, ["findById"])];
+      const fns = [stash(CaseSvc, ["create"]), stash(ChatSvc, ["createConsultation", "enqueueChatGeneration"]), stash(ClientCaseRepo, ["findById"]), stash(CaseAreaRepo, ["list"])];
       restoreMore = () => fns.forEach((f) => f());
+      (CaseAreaRepo as any).list = async () => [{ id: "a", country: "UK", code: "PROPERTY", name: "Property", description: "", isActive: true, sortOrder: 0 }];
       claimable = true;
       calls = [];
       (ClientPaymentRepo as any).claimCasePayment = async () => {
@@ -211,7 +213,7 @@ describe("Client app billing", () => {
       (ClientCaseRepo as any).findById = async () => ({
         id: "case-1",
         caseName: "Deposit not returned",
-        practiceArea: "PROPERTY",
+        caseAreas: ["PROPERTY"],
         ukJurisdiction: "Scotland",
         jurisdiction: null,
         clientSide: null,

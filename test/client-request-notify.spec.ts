@@ -26,7 +26,7 @@ function stash<T extends object>(target: T, keys: (keyof T)[]) {
 
 const NOW = new Date("2026-10-22T09:00:00.000Z");
 const HOUR_MS = 60 * 60 * 1000;
-const BRIEF = { summary: "Dismissed by text after raising a grievance.", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales", urgency: "URGENT" };
+const BRIEF = { summary: "Dismissed by text after raising a grievance.", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", urgency: "URGENT" };
 
 describe("ClientRequestNotifySvc", () => {
   let restore: (() => void)[];
@@ -45,7 +45,7 @@ describe("ClientRequestNotifySvc", () => {
     brief: BRIEF,
     routedAt: new Date(NOW.getTime() - 48 * HOUR_MS),
     routingExpiresAt: new Date(NOW.getTime() - 60_000),
-    case: { practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" },
+    case: { caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" },
     client: { email: `client-${id}@example.com` },
     ...overrides,
   });
@@ -99,7 +99,7 @@ describe("ClientRequestNotifySvc", () => {
       expect(live.map(([userId]) => userId)).to.deep.equal(["lawyer-a", "lawyer-b"]);
       expect(live[0]![2]).to.deep.equal({
         requestId: "req-1",
-        practiceArea: "EMPLOYMENT",
+        caseAreas: ["Employment"],
         ukJurisdiction: "England and Wales",
         urgency: "URGENT",
         routingExpiresAt: new Date(NOW.getTime() + 47 * HOUR_MS).toISOString(),
@@ -149,7 +149,7 @@ describe("ClientRequestNotifySvc", () => {
     let expirable: Set<string>;
     beforeEach(() => {
       expirable = new Set(["req-1", "req-2"]);
-      (ClientRequestRepo as any).findExpired = async () => [request("req-1"), request("req-2", { case: { practiceArea: "FAMILY", ukJurisdiction: "Scotland" } })];
+      (ClientRequestRepo as any).findExpired = async () => [request("req-1"), request("req-2", { case: { caseAreas: ["FAMILY"], ukJurisdiction: "Scotland" } })];
       (ClientRequestRepo as any).expire = async (id: string) => expirable.delete(id);
     });
 

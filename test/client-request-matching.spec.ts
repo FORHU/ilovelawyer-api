@@ -7,7 +7,7 @@
  */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
-import ClientRequestMatchingSvc from "../src/services/client-request-matching.service";
+import ClientRequestMatchingSvc, { caseAreasOf, type MatchablePracticeArea } from "../src/services/client-request-matching.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 
@@ -23,9 +23,12 @@ type Lawyer = {
   pausedUntil: Date | null;
   capacityLimit: number | null;
   openCount: number;
-  practiceAreas: string[];
+  practiceAreas: MatchablePracticeArea[];
   qualifiedJurisdictions: string[];
 };
+
+/** A practice area the lawyer holds, mapped to a client case area (or not). */
+const mapped = (caseArea: string | null, isActive = true): MatchablePracticeArea => ({ caseArea, isActive });
 
 const ELIGIBLE: Lawyer = {
   userId: "lawyer-1",
@@ -34,11 +37,11 @@ const ELIGIBLE: Lawyer = {
   pausedUntil: null,
   capacityLimit: null,
   openCount: 0,
-  practiceAreas: ["EMPLOYMENT"],
+  practiceAreas: [mapped("EMPLOYMENT")],
   qualifiedJurisdictions: ["England and Wales"],
 };
 
-const CRITERIA = { practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" };
+const CRITERIA = { caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" };
 
 describe("ClientRequestMatchingSvc.matches", () => {
   it("matches a verified, accepting lawyer qualified for the case", () => {
@@ -64,19 +67,33 @@ describe("ClientRequestMatchingSvc.matches", () => {
   });
 
   it("refuses a lawyer without the case's practice area", () => {
-    expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, practiceAreas: ["FAMILY"] }, CRITERIA)).to.equal(false);
+    expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, practiceAreas: [mapped("FAMILY")] }, CRITERIA)).to.equal(false);
+  });
+
+  it("matches a case with several areas through any one of them", () => {
+    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { ...CRITERIA, caseAreas: ["CONSUMER", "EMPLOYMENT"] })).to.equal(true);
+    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { ...CRITERIA, caseAreas: ["CONSUMER", "FAMILY"] })).to.equal(false);
+  });
+
+  it("matches through any one of the lawyer's areas mapped to the case's area", () => {
+    expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, practiceAreas: [mapped(null), mapped("FAMILY"), mapped("EMPLOYMENT")] }, CRITERIA)).to.equal(true);
+  });
+
+  it("ignores an area an admin switched off, and one that isn't mapped to a case area", () => {
+    expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, practiceAreas: [mapped("EMPLOYMENT", false)] }, CRITERIA)).to.equal(false);
+    expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, practiceAreas: [mapped(null)] }, CRITERIA)).to.equal(false);
   });
 
   it("refuses a lawyer not qualified in the case's jurisdiction", () => {
     expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, qualifiedJurisdictions: ["Scotland"] }, CRITERIA)).to.equal(false);
   });
 
-  it("refuses when the case has no practice area set", () => {
-    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { practiceArea: null, ukJurisdiction: "England and Wales" })).to.equal(false);
+  it("refuses when the case has no case area", () => {
+    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { caseAreas: [], ukJurisdiction: "England and Wales" })).to.equal(false);
   });
 
   it("refuses when the case has no UK jurisdiction set", () => {
-    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { practiceArea: "EMPLOYMENT", ukJurisdiction: null })).to.equal(false);
+    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { caseAreas: ["EMPLOYMENT"], ukJurisdiction: null })).to.equal(false);
   });
 
   it("matches a lawyer under their capacity limit", () => {
@@ -100,12 +117,18 @@ describe("ClientRequestMatchingSvc.matches", () => {
   });
 });
 
+describe("caseAreasOf", () => {
+  it("gives the case areas a lawyer's active, mapped areas cover, each once", () => {
+    expect(caseAreasOf([mapped("PROPERTY"), mapped("PROPERTY"), mapped("FAMILY", false), mapped(null), mapped("OTHER")])).to.deep.equal(["PROPERTY", "OTHER"]);
+  });
+});
+
 describe("ClientRequestMatchingSvc.route / reroute / eligibleLawyerIds", () => {
   let restore: (() => void)[];
   let routed: { id: string }[];
   let rerouted: { id: string; excludeLawyerId: string }[];
   let rerouteResult: boolean;
-  let matchingRow: { excludedLawyerIds: string[]; case: { practiceArea: string | null; ukJurisdiction: string | null } } | null;
+  let matchingRow: { excludedLawyerIds: string[]; case: { caseAreas: string[]; ukJurisdiction: string | null } } | null;
   let candidates: Lawyer[];
   let requestedExcludeIds: string[][];
 
@@ -113,7 +136,7 @@ describe("ClientRequestMatchingSvc.route / reroute / eligibleLawyerIds", () => {
     routed = [];
     rerouted = [];
     rerouteResult = true;
-    matchingRow = { excludedLawyerIds: [], case: { practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } };
+    matchingRow = { excludedLawyerIds: [], case: { caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } };
     candidates = [ELIGIBLE];
     requestedExcludeIds = [];
 
@@ -150,7 +173,7 @@ describe("ClientRequestMatchingSvc.route / reroute / eligibleLawyerIds", () => {
   });
 
   it("drops a verified candidate who doesn't actually match the case", async () => {
-    candidates = [{ ...ELIGIBLE, practiceAreas: ["FAMILY"] }];
+    candidates = [{ ...ELIGIBLE, practiceAreas: [mapped("FAMILY")] }];
     expect(await ClientRequestMatchingSvc.eligibleLawyerIds("req-1")).to.deep.equal([]);
   });
 

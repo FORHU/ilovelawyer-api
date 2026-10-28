@@ -8,6 +8,7 @@ import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import request from "supertest";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
+import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import CaseCopyQueue from "../src/queues/case-copy.queue";
 import { accountSpendLimit } from "../src/middleware/account-spend-limit.middleware";
@@ -74,10 +75,11 @@ describe("engagement AI budget", () => {
       data: { id: orgId, name: "Lena Law LLP", slug: `budget-${orgId}`, tenantId: tenant.id, createdById: lawyerId, members: { create: { userId: lawyerId, role: "OWNER", status: "ACCEPTED" } } },
     });
     await prisma.lawyerClientProfile.create({
-      data: { userId: lawyerId, practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED", verifiedAt: new Date() },
+      data: { userId: lawyerId, acceptingRequests: true, verificationStatus: "VERIFIED", verifiedAt: new Date() },
     });
+    await givePracticeArea([lawyerId]);
     await prisma.lawyerUkRegistration.create({ data: { userId: lawyerId, regulator: "SRA", registrationNumber: "999", qualifiedJurisdictions: ["England and Wales"] } });
-    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Budget test case", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Budget test case", caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } });
     await prisma.organizationBilling.create({ data: { organizationId: orgId, provider: "STRIPE", customerId: "cus_budget", paymentMethodId: "stripe_pm_budget", brand: "visa", last4: "4242" } });
   });
 

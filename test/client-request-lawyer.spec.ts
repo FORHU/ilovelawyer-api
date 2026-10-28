@@ -5,6 +5,7 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import ClientRequestLawyerSvc, { type LawyerContext } from "../src/services/client-request-lawyer.service";
+import { caseAreasOf } from "../src/services/client-request-matching.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientRequestClaimRepo from "../src/repositories/client-request-claim.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
@@ -42,11 +43,11 @@ const PROFILE = {
   enabledByOrganization: true,
   pausedUntil: null as Date | null,
   capacityLimit: null as number | null,
-  practiceAreas: ["EMPLOYMENT"],
+  practiceAreas: [{ id: "uk-employment", name: "Employment Law", caseArea: "EMPLOYMENT", isActive: true, sortOrder: 0 }],
   qualifiedJurisdictions: ["England and Wales"],
 };
 
-const BRIEF = { summary: "Dismissed after raising a grievance.", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales", urgency: "SOON" };
+const BRIEF = { summary: "Dismissed after raising a grievance.", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", urgency: "SOON" };
 
 describe("ClientRequestLawyerSvc", () => {
   let restore: (() => void)[];
@@ -73,7 +74,7 @@ describe("ClientRequestLawyerSvc", () => {
       excludedLawyerIds: [] as string[],
       createdAt: new Date(Date.now() - HOUR_MS),
       updatedAt: new Date(),
-      case: { practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" },
+      case: { caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" },
       ...overrides,
     };
     requests.set(id, row);
@@ -84,7 +85,7 @@ describe("ClientRequestLawyerSvc", () => {
   function matchingLawyers(r: any) {
     return [...profiles.values()]
       .filter((p) => p.verificationStatus === "VERIFIED" && p.acceptingRequests && !r.excludedLawyerIds.includes(p.userId))
-      .filter((p) => p.practiceAreas.includes(r.case.practiceArea) && p.qualifiedJurisdictions.includes(r.case.ukJurisdiction))
+      .filter((p) => r.case.caseAreas.some((a: string) => caseAreasOf(p.practiceAreas).includes(a)) && p.qualifiedJurisdictions.includes(r.case.ukJurisdiction))
       .map((p) => p.userId);
   }
 
@@ -133,10 +134,10 @@ describe("ClientRequestLawyerSvc", () => {
       const r = requests.get(id);
       return r ? withClaims(r) : null;
     };
-    (ClientRequestRepo as any).listRoutedFor = async (lawyerId: string, areas: { practiceAreas: string[]; jurisdictions: string[] }, now: Date) =>
+    (ClientRequestRepo as any).listRoutedFor = async (lawyerId: string, areas: { caseAreas: string[]; jurisdictions: string[] }, now: Date) =>
       [...requests.values()]
         .filter((r) => r.status === "ROUTED" && r.brief && r.routingExpiresAt > now && !r.excludedLawyerIds.includes(lawyerId))
-        .filter((r) => areas.practiceAreas.includes(r.case.practiceArea) && areas.jurisdictions.includes(r.case.ukJurisdiction))
+        .filter((r) => r.case.caseAreas.some((a: string) => areas.caseAreas.includes(a)) && areas.jurisdictions.includes(r.case.ukJurisdiction))
         .sort((a, b) => b.routedAt - a.routedAt)
         .map(withClaims);
     (ClientRequestRepo as any).listHeldBy = async (lawyerId: string, view: "mine" | "history", page: number, limit: number) => {
@@ -249,7 +250,7 @@ describe("ClientRequestLawyerSvc", () => {
     });
 
     it("answers 404 for a request the lawyer doesn't match", async () => {
-      routed("req-1", { case: { practiceArea: "FAMILY", ukJurisdiction: "England and Wales" } });
+      routed("req-1", { case: { caseAreas: ["FAMILY"], ukJurisdiction: "England and Wales" } });
       expect(await errorOf(ClientRequestLawyerSvc.claim(me, "req-1"))).to.deep.include({ status: 404 });
       expect(claims).to.have.length(0);
     });
@@ -305,7 +306,7 @@ describe("ClientRequestLawyerSvc", () => {
     });
 
     it("answers 404 for a request not for them", async () => {
-      routed("req-1", { case: { practiceArea: "FAMILY", ukJurisdiction: "England and Wales" } });
+      routed("req-1", { case: { caseAreas: ["FAMILY"], ukJurisdiction: "England and Wales" } });
       expect(await errorOf(ClientRequestLawyerSvc.pass(me, "req-1"))).to.deep.include({ status: 404 });
     });
   });
@@ -316,7 +317,7 @@ describe("ClientRequestLawyerSvc", () => {
     it("inbox: routed to them, newest first, unclaimed, with a brief, inside the 48h", async () => {
       routed("older", { routedAt: new Date(Date.now() - 3 * HOUR_MS) });
       routed("newer");
-      routed("other-area", { case: { practiceArea: "FAMILY", ukJurisdiction: "England and Wales" } });
+      routed("other-area", { case: { caseAreas: ["FAMILY"], ukJurisdiction: "England and Wales" } });
       routed("no-brief-yet", { brief: null });
       routed("window-over", { routingExpiresAt: new Date(Date.now() - 1000) });
       routed("claimed", { status: "CLAIMED" });

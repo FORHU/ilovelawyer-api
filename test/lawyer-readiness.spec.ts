@@ -1,20 +1,28 @@
 /** When the client app suggests a lawyer (lawyer-readiness-jev.ts, ClientCaseSvc.lawyerReadiness):
- * Jev answers one yes/no per point a solicitor needs, a weak yes doesn't count, and the result is
- * stored per AI answer. Jev is stubbed at TypeSafeClient.prototype.systemOne, as in
- * audio-overview-jev.spec.ts; repositories are monkeypatched. No DB. */
+ * Jev answers one yes/no per point a solicitor needs and per case area, a weak yes doesn't count,
+ * and the result is stored per AI answer. Jev is stubbed at TypeSafeClient.prototype.systemOne, as
+ * in audio-overview-jev.spec.ts; repositories are monkeypatched. No DB. */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import { assessLawyerReadiness, READINESS_MIN_CONFIDENCE } from "../src/utils/lawyer-readiness-jev";
 import ClientCaseSvc, { type ClientWorkspace } from "../src/services/client-case.service";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
+import CaseAreaRepo from "../src/repositories/case-area.repository";
 import ChatSvc from "../src/services/chat.service";
 
 const KEYS = ["problem", "place", "otherSide", "events", "goal"] as const;
 
+const AREAS = [
+  { code: "EMPLOYMENT", name: "Employment", description: "Work, dismissal, pay." },
+  { code: "CONSUMER", name: "Consumer", description: "Goods, services, refunds." },
+  { code: "OTHER", name: "Other", description: "Anything else." },
+];
+
 const input = {
-  caseDetails: { title: "Dismissed", area: "EMPLOYMENT", ukJurisdiction: "England and Wales", where: "Leeds", side: "CLAIMANT", otherParties: ["Acme Ltd (Opposing party)"] },
+  caseDetails: { title: "Dismissed", areas: ["Employment"], ukJurisdiction: "England and Wales", where: "Leeds", side: "CLAIMANT", otherParties: ["Acme Ltd (Opposing party)"] },
   conversation: [{ from: "client" as const, text: "I was dismissed by text on 14 October after three years." }],
+  caseAreas: AREAS,
 };
 
 describe("Lawyer readiness", () => {
@@ -27,7 +35,10 @@ describe("Lawyer readiness", () => {
     jevCalls = [];
     answers = {
       ...Object.fromEntries(KEYS.map((k) => [k, { choice: "YES", confidence: 0.9 }])),
-      practiceArea: { choice: "EMPLOYMENT", confidence: 0.92 },
+      area_EMPLOYMENT: { choice: "YES", confidence: 0.92 },
+      area_CONSUMER: { choice: "NO", confidence: 0.8 },
+      area_OTHER: { choice: "NO", confidence: 0.8 },
+      personalInjury: { choice: "NO", confidence: 0.95 },
     };
     (TypeSafeClient.prototype as any).systemOne = async (req: any) => {
       jevCalls.push(req);
@@ -39,18 +50,31 @@ describe("Lawyer readiness", () => {
   });
 
   describe("assessLawyerReadiness", () => {
-    it("asks one question per point, plus the kind of lawyer, in a single call", async () => {
+    it("asks one question per point, per case area and for personal injury, in a single call", async () => {
       const result = await assessLawyerReadiness(input);
       expect(jevCalls).to.have.length(1);
-      expect(Object.keys(jevCalls[0].questions)).to.deep.equal([...KEYS, "practiceArea"]);
+      expect(Object.keys(jevCalls[0].questions)).to.deep.equal([...KEYS, "area_EMPLOYMENT", "area_CONSUMER", "area_OTHER", "personalInjury"]);
       expect(result.criteria.every((c) => c.met)).to.equal(true);
-      expect(result.practiceArea).to.deep.equal({ value: "EMPLOYMENT", confidence: 0.92 });
+      expect(result.caseAreas).to.deep.equal([{ code: "EMPLOYMENT", confidence: 0.92 }]);
+      expect(result.personalInjury.met).to.equal(false);
+    });
+
+    it("tells Jev what each area covers", async () => {
+      await assessLawyerReadiness(input);
+      expect(JSON.stringify(jevCalls[0].questions.area_CONSUMER)).to.include("Goods, services, refunds.");
+    });
+
+    it("gives every area Jev is sure of, so a problem can have several", async () => {
+      answers.area_CONSUMER = { choice: "YES", confidence: 0.75 };
+      expect((await assessLawyerReadiness(input)).caseAreas.map((a) => a.code)).to.deep.equal(["EMPLOYMENT", "CONSUMER"]);
     });
 
     it("doesn't count a yes Jev isn't sure of", async () => {
       answers.goal = { choice: "YES", confidence: READINESS_MIN_CONFIDENCE - 0.01 };
+      answers.area_EMPLOYMENT = { choice: "YES", confidence: READINESS_MIN_CONFIDENCE - 0.01 };
       const result = await assessLawyerReadiness(input);
       expect(result.criteria.find((c) => c.key === "goal")).to.include({ met: false });
+      expect(result.caseAreas).to.deep.equal([]);
     });
 
     it("reads an answer it doesn't recognise as no", async () => {
@@ -61,6 +85,7 @@ describe("Lawyer readiness", () => {
     it("offers NO before YES, so Jev's lean toward the first option errs on not suggesting yet", async () => {
       await assessLawyerReadiness(input);
       expect(Object.keys(jevCalls[0].questions.problem.criteria)).to.deep.equal(["NO", "YES"]);
+      expect(Object.keys(jevCalls[0].questions.area_EMPLOYMENT.criteria)).to.deep.equal(["NO", "YES"]);
     });
   });
 
@@ -74,17 +99,18 @@ describe("Lawyer readiness", () => {
 
     beforeEach(() => {
       process.env.USE_JEV_LAWYER_READINESS = "true";
-      const orig = { findById: ClientCaseRepo.findById, saveReadiness: ClientCaseRepo.saveReadiness, listMessages: ChatSvc.listMessages };
+      const orig = { findById: ClientCaseRepo.findById, saveReadiness: ClientCaseRepo.saveReadiness, listMessages: ChatSvc.listMessages, list: CaseAreaRepo.list };
       restore = () => {
         (ClientCaseRepo as any).findById = orig.findById;
         (ClientCaseRepo as any).saveReadiness = orig.saveReadiness;
         (ChatSvc as any).listMessages = orig.listMessages;
+        (CaseAreaRepo as any).list = orig.list;
         process.env.USE_JEV_LAWYER_READINESS = savedFlag;
       };
       row = {
         id: "case-1",
         caseName: "Dismissed",
-        practiceArea: "OTHER",
+        caseAreas: ["OTHER"],
         ukJurisdiction: "England and Wales",
         jurisdiction: "Leeds",
         clientSide: "CLAIMANT",
@@ -102,6 +128,9 @@ describe("Lawyer readiness", () => {
         saved.push(args);
       };
       (ChatSvc as any).listMessages = async () => messages;
+      // RETIRED is switched off, so Jev isn't asked about it.
+      (CaseAreaRepo as any).list = async () =>
+        [...AREAS, { code: "RETIRED", name: "Retired", description: "Old." }].map((a, sortOrder) => ({ ...a, id: a.code, country: "UK", isActive: a.code !== "RETIRED", sortOrder }));
     });
     afterEach(() => restore());
 
@@ -118,11 +147,30 @@ describe("Lawyer readiness", () => {
       expect(jevCalls).to.have.length(0);
     });
 
-    it("is ready when every point is covered, and settles the case's practice area", async () => {
+    it("asks only about switched-on areas, and tells Jev the client's picks by name", async () => {
+      await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
+      expect(Object.keys(jevCalls[0].questions)).to.not.include("area_RETIRED");
+      expect(jevCalls[0].state.caseDetails.areas).to.deep.equal(["Other"]);
+    });
+
+    it("is ready when every point is covered, and replaces the client's areas with Jev's", async () => {
+      answers.area_CONSUMER = { choice: "YES", confidence: 0.8 };
       const result = await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
       expect(result).to.include({ ready: true, blockedBy: null, basedOnMessageId: "m2" });
+      expect(result.caseAreas).to.deep.equal([
+        { code: "EMPLOYMENT", name: "Employment", confidence: 0.92 },
+        { code: "CONSUMER", name: "Consumer", confidence: 0.8 },
+      ]);
       expect(saved[0][0]).to.equal("case-1");
-      expect(saved[0][2]).to.equal("EMPLOYMENT");
+      expect(saved[0][2]).to.deep.equal(["EMPLOYMENT", "CONSUMER"]);
+    });
+
+    it("keeps the client's areas when Jev is sure of none", async () => {
+      answers.area_EMPLOYMENT = { choice: "NO", confidence: 0.9 };
+      const result = await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
+      expect(result).to.include({ ready: true });
+      expect(result.caseAreas).to.deep.equal([]);
+      expect(saved[0][2]).to.equal(undefined);
     });
 
     it("lists what's missing and changes nothing on the case while not ready", async () => {
@@ -142,13 +190,19 @@ describe("Lawyer readiness", () => {
       expect(jevCalls).to.have.length(2);
     });
 
+    it("asks again over a check from before a case could have several areas", async () => {
+      row.lawyerReadiness = { enabled: true, ready: true, basedOnMessageId: "m2", practiceArea: { value: "EMPLOYMENT", confidence: 0.9 } };
+      await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
+      expect(jevCalls).to.have.length(1);
+    });
+
     it("never suggests a lawyer outside the UK", async () => {
       row.ukJurisdiction = null;
       expect(await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1")).to.include({ ready: false, blockedBy: "OUTSIDE_UK" });
     });
 
-    it("never suggests a lawyer for personal injury, and doesn't store it as the case's area", async () => {
-      answers.practiceArea = { choice: "PERSONAL_INJURY", confidence: 0.9 };
+    it("never suggests a lawyer for personal injury, and leaves the case's areas alone", async () => {
+      answers.personalInjury = { choice: "YES", confidence: 0.9 };
       expect(await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1")).to.include({ ready: false, blockedBy: "PERSONAL_INJURY" });
       expect(saved[0][2]).to.equal(undefined);
     });

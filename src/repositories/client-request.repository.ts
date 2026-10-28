@@ -1,5 +1,6 @@
 import { ClaimOutcome, ClientRequestStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
+import { PRACTICE_AREAS_INCLUDE } from "./practice-area.repository";
 
 /** A request is open until it's closed, expired or withdrawn; a case has at most one open. */
 export const CLOSED_REQUEST_STATUSES: ClientRequestStatus[] = ["CLOSED", "EXPIRED", "WITHDRAWN"];
@@ -16,7 +17,7 @@ const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASS
 /** What the lawyer app reads of a request (#511): the case's practice area and jurisdiction for
  * matching, and every claim on it, newest first, with the claiming lawyer's name. */
 const FOR_LAWYER = {
-  case: { select: { caseName: true, practiceArea: true, ukJurisdiction: true, organizationId: true, organization: { select: { name: true } } } },
+  case: { select: { caseName: true, caseAreas: true, ukJurisdiction: true, organizationId: true, organization: { select: { name: true } } } },
   client: { select: { id: true, name: true, username: true } },
   claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } } } },
   // The per-case fee (#513), from CONFIRMED.
@@ -31,7 +32,14 @@ const FOR_CLIENT = {
     orderBy: { claimedAt: "desc" },
     take: 1,
     include: {
-      lawyer: { select: { id: true, name: true, avatar: { select: { s3Key: true } }, clientRequestProfile: { include: { ukRegistration: true } } } },
+      lawyer: {
+        select: {
+          id: true,
+          name: true,
+          avatar: { select: { s3Key: true } },
+          clientRequestProfile: { include: { ukRegistration: true, ...PRACTICE_AREAS_INCLUDE } },
+        },
+      },
       organization: { select: { name: true, isPersonal: true } },
     },
   },
@@ -149,7 +157,7 @@ export default class ClientRequestRepo {
         case: {
           select: {
             caseName: true,
-            practiceArea: true,
+            caseAreas: true,
             ukJurisdiction: true,
             jurisdiction: true,
             clientSide: true,
@@ -183,7 +191,7 @@ export default class ClientRequestRepo {
   static async findForMatching(id: string) {
     return prisma.clientRequest.findUnique({
       where: { id },
-      select: { excludedLawyerIds: true, case: { select: { practiceArea: true, ukJurisdiction: true } } },
+      select: { excludedLawyerIds: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
     });
   }
 
@@ -192,16 +200,16 @@ export default class ClientRequestRepo {
   }
 
   /** The inbox's candidates (#511): routed, inside the 48h, with a brief to read, not excluded
-   * for this lawyer, and in their practice areas and jurisdictions. Newest routing first.
-   * ClientRequestMatchingSvc.matches has the final say. */
-  static async listRoutedFor(lawyerId: string, areas: { practiceAreas: string[]; jurisdictions: string[] }, now: Date) {
+   * for this lawyer, and in the case areas their practice areas map to (caseAreasOf) and their
+   * jurisdictions. Newest routing first. ClientRequestMatchingSvc.matches has the final say. */
+  static async listRoutedFor(lawyerId: string, areas: { caseAreas: string[]; jurisdictions: string[] }, now: Date) {
     return prisma.clientRequest.findMany({
       where: {
         status: "ROUTED",
         routingExpiresAt: { gt: now },
         briefGeneratedAt: { not: null },
         NOT: { excludedLawyerIds: { has: lawyerId } },
-        case: { practiceArea: { in: areas.practiceAreas }, ukJurisdiction: { in: areas.jurisdictions } },
+        case: { caseAreas: { hasSome: areas.caseAreas }, ukJurisdiction: { in: areas.jurisdictions } },
       },
       orderBy: [{ routedAt: "desc" }, { id: "asc" }],
       include: FOR_LAWYER,
@@ -249,7 +257,7 @@ export default class ClientRequestRepo {
   static async findForAnnouncement(id: string) {
     return prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, brief: true, routingExpiresAt: true, case: { select: { practiceArea: true, ukJurisdiction: true } } },
+      select: { id: true, brief: true, routingExpiresAt: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
     });
   }
 
@@ -262,7 +270,7 @@ export default class ClientRequestRepo {
         caseId: true,
         clientId: true,
         routedAt: true,
-        case: { select: { practiceArea: true, ukJurisdiction: true } },
+        case: { select: { caseAreas: true, ukJurisdiction: true } },
         client: { select: { email: true } },
       },
       orderBy: { routingExpiresAt: "asc" },
@@ -302,7 +310,7 @@ export default class ClientRequestRepo {
         case: {
           select: {
             caseName: true,
-            practiceArea: true,
+            caseAreas: true,
             ukJurisdiction: true,
             jurisdiction: true,
             clientSide: true,

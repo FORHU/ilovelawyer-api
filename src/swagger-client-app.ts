@@ -1,5 +1,5 @@
 import type { OAS3Definition } from "swagger-jsdoc";
-import { CLIENT_CASE_AREAS, CLIENT_PARTY_ROLES } from "./constants/client-case.constants";
+import { CLIENT_PARTY_ROLES } from "./constants/client-case.constants";
 import { UK_JURISDICTIONS } from "./validation/case.validation";
 
 /** The client app's routes (client.route.ts), merged into swagger.ts. Client accounts only:
@@ -48,7 +48,12 @@ const clientCase = {
   properties: {
     id: { type: "string" },
     title: { type: "string" },
-    area: { type: "string", enum: [...CLIENT_CASE_AREAS] },
+    areas: {
+      type: "array",
+      items: { type: "object", properties: { code: { type: "string", example: "EMPLOYMENT" }, name: { type: "string", example: "Employment" } } },
+      description: "One or more, in the list's order (GET /client/case-areas). A switched-off one the case still has is among them",
+    },
+    area: { type: "string", deprecated: true, description: "The first area's code, for apps that predate several per case" },
     ukJurisdiction: { type: "string", enum: [...UK_JURISDICTIONS], nullable: true, description: "Null: outside the UK" },
     where: { type: "string", description: "Town or city, free text" },
     notes: { type: "string", description: "What happened and what the client wants, in their words" },
@@ -335,10 +340,11 @@ export const clientAppPaths: Paths = {
                   },
                 },
               },
-              practiceArea: {
-                type: "object",
-                nullable: true,
-                properties: { value: { type: "string", enum: [...CLIENT_CASE_AREAS, "PERSONAL_INJURY"] }, confidence: { type: "number" } },
+              caseAreas: {
+                type: "array",
+                description:
+                  "The case areas Jev is sure the problem falls under. Once ready, they replace the case's own. Empty before Jev has looked, or when it's sure of none",
+                items: { type: "object", properties: { code: { type: "string" }, name: { type: "string" }, confidence: { type: "number" } } },
               },
               ukJurisdiction: { type: "string", nullable: true },
               blockedBy: { type: "string", enum: ["OUTSIDE_UK", "PERSONAL_INJURY"], nullable: true },
@@ -398,11 +404,17 @@ export const clientAppPaths: Paths = {
         required: true,
         content: json({
           type: "object",
-          required: ["paymentId", "title", "area", "ukJurisdiction"],
+          required: ["paymentId", "title", "areas", "ukJurisdiction"],
           properties: {
             paymentId: { type: "string", description: "An unused case payment (POST /client/payments/case)" },
             title: { type: "string", maxLength: 150 },
-            area: { type: "string", enum: [...CLIENT_CASE_AREAS] },
+            areas: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+              description: "Codes from GET /client/case-areas, one or more (400 UNKNOWN_CASE_AREA or CASE_AREA_INACTIVE otherwise)",
+            },
+            area: { type: "string", deprecated: true, description: "One code, taken as areas: [area]. Send areas or area, not both" },
             ukJurisdiction: { type: "string", enum: [...UK_JURISDICTIONS], nullable: true },
             where: { type: "string" },
             side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
@@ -432,6 +444,20 @@ export const clientAppPaths: Paths = {
       },
     },
   },
+  "/client/case-areas": {
+    get: {
+      tags: [TAG],
+      summary: "The types of issue a case can be about",
+      description: "Switched-on ones only, in the order admins set (ilovelawyer-admin manages them). A case picks one or more by code.",
+      security,
+      responses: {
+        200: {
+          description: "Case areas",
+          content: json({ type: "array", items: { type: "object", properties: { code: { type: "string", example: "EMPLOYMENT" }, name: { type: "string", example: "Employment" } } } }),
+        },
+      },
+    },
+  },
   "/client/cases/{caseId}": {
     get: {
       tags: [TAG],
@@ -453,7 +479,13 @@ export const clientAppPaths: Paths = {
           minProperties: 1,
           properties: {
             title: { type: "string", maxLength: 150 },
-            area: { type: "string", enum: [...CLIENT_CASE_AREAS] },
+            areas: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+              description: "Replaces the case's areas. A switched-off one the case already has can stay",
+            },
+            area: { type: "string", deprecated: true, description: "One code, taken as areas: [area]" },
             ukJurisdiction: { type: "string", enum: [...UK_JURISDICTIONS], nullable: true },
             where: { type: "string" },
             side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },

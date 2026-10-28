@@ -9,6 +9,7 @@ import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import request from "supertest";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
+import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import SecurityAuditRepo from "../src/repositories/security-audit.repository";
 import ClaimRepo, { CLAIM_HOLD_MS } from "../src/repositories/client-request-claim.repository";
@@ -56,7 +57,6 @@ describe("client request conflict check, release and quote", () => {
       });
     }
     const profile = {
-      practiceAreas: ["EMPLOYMENT"],
       languages: ["English"],
       acceptingRequests: true,
       verificationStatus: "VERIFIED" as const,
@@ -68,6 +68,7 @@ describe("client request conflict check, release and quote", () => {
         { ...profile, userId: otherLawyerId },
       ],
     });
+    await givePracticeArea([lawyerId, otherLawyerId]);
     const registration = { regulator: "SRA", qualifiedJurisdictions: ["England and Wales"] };
     await prisma.lawyerUkRegistration.createMany({
       data: [
@@ -80,7 +81,7 @@ describe("client request conflict check, release and quote", () => {
         id: caseId,
         userId: clientId,
         caseName: "Unfair dismissal",
-        practiceArea: "EMPLOYMENT",
+        caseAreas: ["EMPLOYMENT"],
         ukJurisdiction: "England and Wales",
         parties: { create: [{ name: "Acme Widgets Ltd", designation: "Employer" }, { name: "Dan Manager", designation: "Witness" }] },
       },
@@ -113,7 +114,7 @@ describe("client request conflict check, release and quote", () => {
         status: "ROUTED",
         routedAt: new Date(),
         routingExpiresAt: new Date(Date.now() + 48 * HOUR_MS),
-        brief: { summary: "Dismissed after raising a grievance.", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales", urgency: "SOON" },
+        brief: { summary: "Dismissed after raising a grievance.", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", urgency: "SOON" },
         briefGeneratedAt: new Date(),
       },
     });
@@ -249,7 +250,7 @@ describe("client request conflict check, release and quote", () => {
         firmName: "Lena Law LLP",
         regulator: "SRA",
         registrationNumber: "123456",
-        practiceAreas: ["EMPLOYMENT"],
+        practiceAreas: ["Employment Law"],
         qualifiedJurisdictions: ["England and Wales"],
         languages: ["English"],
         bio: "Employment law for 12 years.",

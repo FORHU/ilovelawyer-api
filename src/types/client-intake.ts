@@ -128,7 +128,8 @@ export interface AnonymisedIntake {
  * as ClientRequestLawyerSvc.parties. */
 export interface IntakePackageCaseDetails {
   title: string;
-  practiceArea: string | null;
+  /** The case's areas by name. */
+  caseAreas: string[];
   ukJurisdiction: string | null;
   town: string | null;
   side: "CLAIMANT" | "RESPONDENT" | null;

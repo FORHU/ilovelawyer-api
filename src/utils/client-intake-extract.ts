@@ -48,7 +48,8 @@ export function caseDetailsPeople(parties: { name: string; designation: string }
 }
 
 export function buildIntakePrompt(input: {
-  caseDetails: { title: string; practiceArea: string | null; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null };
+  /** `caseAreas` are the case areas' names. */
+  caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null };
   parties: { name: string; designation: string }[];
   messages: IntakeMessageInput[];
   documents: IntakeDocumentInput[];
@@ -68,7 +69,7 @@ Today's date is ${input.today}.
 
 Known case details (already confirmed by the client, do not repeat them as new facts):
 Title: ${input.caseDetails.title}
-Type of problem: ${input.caseDetails.practiceArea ?? "not set"}
+Type of problem: ${input.caseDetails.caseAreas.join(", ") || "not set"}
 Part of the UK: ${input.caseDetails.ukJurisdiction ?? "not set"}
 Town or city: ${input.caseDetails.where ?? "not set"}
 The client is: ${input.caseDetails.side === "CLAIMANT" ? "bringing the complaint" : input.caseDetails.side === "RESPONDENT" ? "responding to one" : "not set"}

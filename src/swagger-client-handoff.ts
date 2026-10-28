@@ -7,13 +7,15 @@ import {
   CLIENT_REQUEST_STATUSES,
   LAWYER_REGULATORS,
   LAWYER_VERIFICATION_STATUSES,
-  PRACTICE_AREAS,
   QUOTE_TYPES,
   RELEASE_REASONS,
   REQUEST_URGENCIES,
   UK_JURISDICTIONS,
 } from "./types/client-handoff";
-import { LAWYER_COUNTRIES, LAWYER_REJECTION_REASONS, PH_PRACTICE_AREAS } from "./constants/lawyer-application.constants";
+import { LAWYER_COUNTRIES, LAWYER_REJECTION_REASONS } from "./constants/lawyer-application.constants";
+
+/** A case's areas, by name (CaseArea). */
+const caseAreaNames = (description = "The case's areas by name, one or more"): Schema => ({ type: "array", items: { type: "string" }, description, example: ["Employment"] });
 
 /**
  * The UK client-to-lawyer hand-off API contract (ilovelawyer-api#503), merged into swagger.ts.
@@ -128,7 +130,7 @@ export const clientHandoffTags: Tags = [
       "",
       "| Event | Payload | When |",
       "| --- | --- | --- |",
-      "| `client-request:new` | `{ requestId, practiceArea, ukJurisdiction, urgency, routingExpiresAt }` | Routed to you |",
+      "| `client-request:new` | `{ requestId, caseAreas, ukJurisdiction, urgency, routingExpiresAt }` | Routed to you |",
       "| `client-request:taken` | `{ requestId }` | Claimed by someone else, withdrawn or expired: drop it from the inbox |",
       "| `client-request:updated` | `{ requestId, status, updatedAt }` | A request you hold changed |",
       "| `client-request:claim-expiring` | `{ requestId, claimExpiresAt }` | 2h before your hold ends |",
@@ -145,7 +147,8 @@ export const clientHandoffTags: Tags = [
   },
   {
     name: ADMIN_TAG,
-    description: "ilovelawyer-admin (`ADMIN` accounts). Lawyer verification against the regulator's register, the request queue, fees and refunds. Every action is audited.",
+    description:
+      "ilovelawyer-admin (`ADMIN` accounts). Lawyer verification against the regulator's register, the practice areas lawyers pick from, the request queue, fees and refunds. Every action is audited.",
   },
 ];
 
@@ -162,7 +165,7 @@ export const clientHandoffSchemas: Schemas = {
     description: "What every matching lawyer sees before a claim. Generated from the case by AI. Never holds party names, document names or documents.",
     properties: {
       summary: { type: "string" },
-      practiceArea: enumOf(PRACTICE_AREAS),
+      caseAreas: caseAreaNames("The case's areas by name, as when the brief was written"),
       ukJurisdiction: enumOf(UK_JURISDICTIONS),
       urgency: enumOf(REQUEST_URGENCIES, "URGENT: a hearing or deadline within 7 days; SOON: within 30"),
       knownDeadline: { type: "string", format: "date", nullable: true },
@@ -172,7 +175,7 @@ export const clientHandoffSchemas: Schemas = {
     },
     example: {
       summary: "Employee dismissed after 3 years' service without a disciplinary process; wants to know whether to bring an unfair dismissal claim.",
-      practiceArea: "EMPLOYMENT",
+      caseAreas: ["Employment"],
       ukJurisdiction: "England and Wales",
       urgency: "SOON",
       knownDeadline: "2026-12-01",
@@ -232,7 +235,7 @@ export const clientHandoffSchemas: Schemas = {
         type: "object",
         properties: {
           title: { type: "string" },
-          practiceArea: enumOf(PRACTICE_AREAS),
+          caseAreas: caseAreaNames(),
           ukJurisdiction: enumOf(UK_JURISDICTIONS),
           town: { type: "string", nullable: true },
           side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
@@ -265,7 +268,7 @@ export const clientHandoffSchemas: Schemas = {
       firmName: { type: "string", nullable: true, description: "Null for a solo practitioner's personal workspace" },
       regulator: enumOf(LAWYER_REGULATORS),
       registrationNumber: { type: "string", description: "SRA number, or the Law Society of Scotland / Northern Ireland number" },
-      practiceAreas: { type: "array", items: enumOf(PRACTICE_AREAS) },
+      practiceAreas: { type: "array", items: { type: "string" }, description: "Names from the lawyer's site's list, which admins edit", example: ["Employment Law"] },
       qualifiedJurisdictions: { type: "array", items: enumOf(UK_JURISDICTIONS) },
       languages: { type: "array", items: { type: "string" }, example: ["English"] },
       bio: { type: "string" },
@@ -302,11 +305,7 @@ export const clientHandoffSchemas: Schemas = {
     properties: {
       country: enumOf(LAWYER_COUNTRIES),
       registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
-      practiceAreas: {
-        type: "array",
-        items: { type: "string", enum: [...new Set([...PRACTICE_AREAS, ...PH_PRACTICE_AREAS])] },
-        description: "UK: PRACTICE_AREAS. PH: PH_PRACTICE_AREAS.",
-      },
+      practiceAreas: { type: "array", items: ref("LawyerPracticeArea"), description: "From the site's list (GET /practice-areas), in its order" },
       bio: { type: "string", maxLength: 1500 },
       languages: { type: "array", items: { type: "string" } },
       firstConsultationFee: {
@@ -330,6 +329,51 @@ export const clientHandoffSchemas: Schemas = {
         },
       },
       missing: { type: "array", readOnly: true, items: { type: "string" }, description: "Fields still needed before verification can start" },
+    },
+  },
+  PracticeAreaOption: {
+    type: "object",
+    description: "One practice area a lawyer can pick on their site.",
+    properties: { id: { type: "string", format: "uuid" }, name: { type: "string", example: "Employment Law" } },
+  },
+  LawyerPracticeArea: {
+    type: "object",
+    description: "A practice area on a lawyer's application.",
+    properties: {
+      id: { type: "string", format: "uuid" },
+      name: { type: "string", example: "Employment Law" },
+      isActive: { type: "boolean", description: "False once an admin switches the area off: the lawyer keeps it until they drop it, but it no longer routes requests" },
+    },
+  },
+  AdminCaseArea: {
+    type: "object",
+    description: "A kind of problem a client's case can be about (the client app's \"Type of issue\").",
+    properties: {
+      id: { type: "string", format: "uuid" },
+      country: enumOf(LAWYER_COUNTRIES),
+      code: { type: "string", example: "EMPLOYMENT", description: "What cases and practice areas hold. Fixed once made" },
+      name: { type: "string", maxLength: 60 },
+      description: { type: "string", maxLength: 500, description: "What Jev is told the area covers when it decides a case's areas" },
+      isActive: { type: "boolean", description: "Off: hidden from the client's picker and from Jev, kept on cases that have it. OTHER is always on" },
+      sortOrder: { type: "integer" },
+      caseCount: { type: "integer", description: "Cases that have it" },
+      practiceAreaCount: { type: "integer", description: "Practice areas that map to it. Deleting needs both counts at 0" },
+      createdAt: dateTime(),
+      updatedAt: dateTime(),
+    },
+  },
+  AdminPracticeArea: {
+    type: "object",
+    properties: {
+      id: { type: "string", format: "uuid" },
+      country: enumOf(LAWYER_COUNTRIES),
+      name: { type: "string", maxLength: 100 },
+      caseArea: { type: "string", nullable: true, example: "EMPLOYMENT", description: "UK only. The code of the client case area (GET /admin/case-areas) a lawyer with this area is routed; null never routes" },
+      isActive: { type: "boolean", description: "Off: hidden from the picker and from matching, kept where held" },
+      sortOrder: { type: "integer" },
+      lawyerCount: { type: "integer", description: "Lawyers holding it. Deleting needs 0" },
+      createdAt: dateTime(),
+      updatedAt: dateTime(),
     },
   },
   ClaimSummary: {
@@ -557,7 +601,7 @@ export const clientHandoffSchemas: Schemas = {
       createdAt: dateTime(),
       ageHours: { type: "number" },
       unclaimedOver48h: { type: "boolean" },
-      practiceArea: enumOf(PRACTICE_AREAS),
+      caseAreas: caseAreaNames(),
       ukJurisdiction: enumOf(UK_JURISDICTIONS),
       matchedLawyers: { type: "integer" },
       claims: {
@@ -736,6 +780,17 @@ export const clientHandoffPaths: Paths = {
   },
 
   // ── Lawyer app: profile ─────────────────────────────────────────────────
+  "/practice-areas": {
+    get: op({
+      tag: LAWYER_TAG,
+      issue: "practice areas",
+      built: true,
+      summary: "The practice areas a lawyer can pick on a site",
+      description: "Switched-on areas only, in the order admins set. Pass the application's country (ClientRequestProfile.country).",
+      parameters: [{ name: "country", in: "query", required: true, schema: enumOf(LAWYER_COUNTRIES) }],
+      responses: { 200: ok("Areas", { type: "array", items: ref("PracticeAreaOption") }), 400: err("No country") },
+    }),
+  },
   "/users/me/client-request-profile": {
     get: op({
       tag: LAWYER_TAG,
@@ -753,7 +808,12 @@ export const clientHandoffPaths: Paths = {
         type: "object",
         properties: {
           registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
-          practiceAreas: { type: "array", items: { type: "string" }, description: "Your site's list" },
+          practiceAreaIds: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Replaces your areas. Ids from GET /practice-areas for your site (400 UNKNOWN_PRACTICE_AREA otherwise). An area an admin switched off can be kept but not added (400 PRACTICE_AREA_INACTIVE). Changing areas never sends the application back for verification",
+          },
           bio: { type: "string", maxLength: 1500 },
           languages: { type: "array", items: { type: "string" } },
           firstConsultationFee: {
@@ -1153,6 +1213,126 @@ export const clientHandoffPaths: Paths = {
         },
       },
       responses: { 200: ok("Rejected", ref("AdminLawyerVerification")), 400: err("Invalid body"), 403: err("Not an admin"), 404: err("No such lawyer"), 409: err("Not PENDING") },
+    }),
+  },
+  "/admin/practice-areas": {
+    get: op({
+      tag: ADMIN_TAG,
+      issue: "practice areas",
+      built: true,
+      summary: "One site's practice areas, switched-off ones too",
+      parameters: [{ name: "country", in: "query", required: true, schema: enumOf(LAWYER_COUNTRIES) }],
+      responses: { 200: ok("Areas, in picker order", { type: "array", items: ref("AdminPracticeArea") }), 400: err("No country"), 403: err("Not an admin") },
+    }),
+    post: op({
+      tag: ADMIN_TAG,
+      issue: "practice areas",
+      built: true,
+      summary: "Add a practice area to a site's list",
+      description: "Goes to the end of the list. A name already on the site, whatever its case, answers 409 PRACTICE_AREA_NAME_TAKEN. A caseArea on PH answers 400 CASE_AREA_UK_ONLY. Audited.",
+      body: {
+        type: "object",
+        required: ["country", "name"],
+        properties: { country: enumOf(LAWYER_COUNTRIES), name: { type: "string", maxLength: 100 }, caseArea: { type: "string", nullable: true, description: "A case area code (400 UNKNOWN_CASE_AREA otherwise)" } },
+      },
+      responses: { 201: ok("Added", ref("AdminPracticeArea")), 400: err("Invalid body"), 403: err("Not an admin"), 409: err("PRACTICE_AREA_NAME_TAKEN") },
+    }),
+  },
+  "/admin/practice-areas/reorder": {
+    post: op({
+      tag: ADMIN_TAG,
+      issue: "practice areas",
+      built: true,
+      summary: "Reorder a site's practice areas",
+      description: "`ids` is every area on the site, each once, in the new order (400 PRACTICE_AREA_ORDER_INCOMPLETE otherwise). Audited.",
+      body: { type: "object", required: ["country", "ids"], properties: { country: enumOf(LAWYER_COUNTRIES), ids: { type: "array", items: { type: "string" } } } },
+      responses: { 200: ok("The site's areas, reordered", { type: "array", items: ref("AdminPracticeArea") }), 400: err("Invalid body"), 403: err("Not an admin") },
+    }),
+  },
+  "/admin/practice-areas/{id}": {
+    patch: op({
+      tag: ADMIN_TAG,
+      issue: "practice areas",
+      built: true,
+      summary: "Rename, remap or switch a practice area on or off",
+      description:
+        "A rename shows on every lawyer holding the area at once, with no re-verification. Switching off hides the area from the picker and from matching; lawyers who hold it keep it. 409 PRACTICE_AREA_NAME_TAKEN, 400 CASE_AREA_UK_ONLY as on create. Audited.",
+      parameters: [idParam()],
+      body: {
+        type: "object",
+        minProperties: 1,
+        properties: { name: { type: "string", maxLength: 100 }, caseArea: { type: "string", nullable: true, description: "A case area code (400 UNKNOWN_CASE_AREA otherwise)" }, isActive: { type: "boolean" } },
+      },
+      responses: { 200: ok("Updated", ref("AdminPracticeArea")), 400: err("Invalid body"), 403: err("Not an admin"), 404: err("No such area"), 409: err("PRACTICE_AREA_NAME_TAKEN") },
+    }),
+    delete: op({
+      tag: ADMIN_TAG,
+      issue: "practice areas",
+      built: true,
+      summary: "Delete a practice area nobody holds",
+      description: "409 PRACTICE_AREA_IN_USE when a lawyer holds it: switch it off instead. Audited.",
+      parameters: [idParam()],
+      responses: { 204: ok("Deleted"), 403: err("Not an admin"), 404: err("No such area"), 409: err("PRACTICE_AREA_IN_USE") },
+    }),
+  },
+  "/admin/case-areas": {
+    get: op({
+      tag: ADMIN_TAG,
+      issue: "case areas",
+      built: true,
+      summary: "One site's client case types, switched-off ones too",
+      parameters: [{ name: "country", in: "query", required: true, schema: enumOf(LAWYER_COUNTRIES) }],
+      responses: { 200: ok("Areas, in picker order", { type: "array", items: ref("AdminCaseArea") }), 400: err("No country"), 403: err("Not an admin") },
+    }),
+    post: op({
+      tag: ADMIN_TAG,
+      issue: "case areas",
+      built: true,
+      summary: "Add a client case type",
+      description:
+        "Goes to the end of the list. The code is upper-cased and must be capitals, digits or _ (400 CASE_AREA_CODE_INVALID), never PERSONAL_INJURY. 409 CASE_AREA_CODE_TAKEN or CASE_AREA_NAME_TAKEN (whatever its case). Audited.",
+      body: {
+        type: "object",
+        required: ["country", "code", "name", "description"],
+        properties: { country: enumOf(LAWYER_COUNTRIES), code: { type: "string", maxLength: 40 }, name: { type: "string", maxLength: 60 }, description: { type: "string", maxLength: 500 } },
+      },
+      responses: { 201: ok("Added", ref("AdminCaseArea")), 400: err("Invalid body"), 403: err("Not an admin"), 409: err("CASE_AREA_CODE_TAKEN or CASE_AREA_NAME_TAKEN") },
+    }),
+  },
+  "/admin/case-areas/reorder": {
+    post: op({
+      tag: ADMIN_TAG,
+      issue: "case areas",
+      built: true,
+      summary: "Reorder a site's client case types",
+      description: "`ids` is every area on the site, each once, in the new order (400 CASE_AREA_ORDER_INCOMPLETE otherwise). Audited.",
+      body: { type: "object", required: ["country", "ids"], properties: { country: enumOf(LAWYER_COUNTRIES), ids: { type: "array", items: { type: "string" } } } },
+      responses: { 200: ok("The site's areas, reordered", { type: "array", items: ref("AdminCaseArea") }), 400: err("Invalid body"), 403: err("Not an admin") },
+    }),
+  },
+  "/admin/case-areas/{id}": {
+    patch: op({
+      tag: ADMIN_TAG,
+      issue: "case areas",
+      built: true,
+      summary: "Rename, redescribe or switch a client case type on or off",
+      description: "The code never changes. Switching OTHER off answers 409 CASE_AREA_REQUIRED_OTHER. Audited.",
+      parameters: [idParam()],
+      body: {
+        type: "object",
+        minProperties: 1,
+        properties: { name: { type: "string", maxLength: 60 }, description: { type: "string", maxLength: 500 }, isActive: { type: "boolean" } },
+      },
+      responses: { 200: ok("Updated", ref("AdminCaseArea")), 400: err("Invalid body"), 403: err("Not an admin"), 404: err("No such area"), 409: err("CASE_AREA_NAME_TAKEN or CASE_AREA_REQUIRED_OTHER") },
+    }),
+    delete: op({
+      tag: ADMIN_TAG,
+      issue: "case areas",
+      built: true,
+      summary: "Delete a client case type nothing uses",
+      description: "409 CASE_AREA_IN_USE when a case has it or a practice area maps to it (details: cases, practiceAreas): switch it off instead. Never OTHER. Audited.",
+      parameters: [idParam()],
+      responses: { 204: ok("Deleted"), 403: err("Not an admin"), 404: err("No such area"), 409: err("CASE_AREA_IN_USE or CASE_AREA_REQUIRED_OTHER") },
     }),
   },
   "/admin/client-requests": {

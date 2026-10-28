@@ -52,7 +52,7 @@ describe("engagement thread (#517)", () => {
         { id: otherClientId, email: `thread-other-${otherClientId}@example.com`, username: `thread-other-${otherClientId}`, name: "Someone Else", role: "USER", tenantId: tenant.id },
       ],
     });
-    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Thread test case", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Thread test case", caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } });
     await prisma.document.create({ data: { id: documentId, userId: clientId, caseId, name: "Dismissal letter.pdf", mimeType: "application/pdf" } });
   });
 

@@ -1,7 +1,6 @@
 import Joi from "joi";
 import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "../constants";
 import {
-  CLIENT_CASE_AREAS,
   CLIENT_CASE_NOTES_MAX_LENGTH,
   CLIENT_CASE_TITLE_MAX_LENGTH,
   CLIENT_CASE_WHERE_MAX_LENGTH,
@@ -30,12 +29,16 @@ const otherParties = Joi.array()
 
 const notes = Joi.string().trim().allow("").max(CLIENT_CASE_NOTES_MAX_LENGTH);
 
+// CaseArea codes, one or more; CaseAreaSvc.forCase checks them against the site's list. `area` (one
+// code) is what the app sent before a case could have several; still taken, as a list of one.
+const areas = Joi.array().items(Joi.string().max(40)).min(1).unique();
+const area = Joi.string().max(40);
+
 export const createClientCaseSchema = Joi.object({
   paymentId: Joi.string().required(),
   title: Joi.string().trim().min(1).max(CLIENT_CASE_TITLE_MAX_LENGTH).required(),
-  area: Joi.string()
-    .valid(...CLIENT_CASE_AREAS)
-    .required(),
+  areas,
+  area,
   // null: it happened outside the UK. The client still gets the AI, but no lawyer for now.
   ukJurisdiction: Joi.string()
     .valid(...UK_JURISDICTIONS)
@@ -48,12 +51,13 @@ export const createClientCaseSchema = Joi.object({
     .optional(),
   others: otherParties.optional(),
   notes: notes.optional(),
-});
+}).xor("areas", "area");
 
 /** Editing a case: any of the details the wizard asked for, but at least one. */
 export const updateClientCaseSchema = Joi.object({
   title: Joi.string().trim().min(1).max(CLIENT_CASE_TITLE_MAX_LENGTH),
-  area: Joi.string().valid(...CLIENT_CASE_AREAS),
+  areas,
+  area,
   ukJurisdiction: Joi.string()
     .valid(...UK_JURISDICTIONS)
     .allow(null),
@@ -63,7 +67,9 @@ export const updateClientCaseSchema = Joi.object({
     .allow(null),
   others: otherParties,
   notes,
-}).min(1);
+})
+  .min(1)
+  .oxor("areas", "area");
 
 // Asks the dummy payment provider to decline, to test the app's failure screen. A real provider
 // ignores it.

@@ -10,6 +10,7 @@ import request from "supertest";
 import type Stripe from "stripe";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
+import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import * as socket from "../src/lib/socket";
 import CaseCopyQueue from "../src/queues/case-copy.queue";
@@ -86,10 +87,11 @@ describe("engagement AI top-ups", () => {
       data: { id: orgId, name: "Topup Law LLP", slug: `topup-${orgId}`, tenantId: tenant.id, createdById: lawyerId, members: { create: { userId: lawyerId, role: "OWNER", status: "ACCEPTED" } } },
     });
     await prisma.lawyerClientProfile.create({
-      data: { userId: lawyerId, practiceAreas: ["EMPLOYMENT"], acceptingRequests: true, verificationStatus: "VERIFIED", verifiedAt: new Date() },
+      data: { userId: lawyerId, acceptingRequests: true, verificationStatus: "VERIFIED", verifiedAt: new Date() },
     });
+    await givePracticeArea([lawyerId]);
     await prisma.lawyerUkRegistration.create({ data: { userId: lawyerId, regulator: "SRA", registrationNumber: "998", qualifiedJurisdictions: ["England and Wales"] } });
-    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Top-up test case", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Top-up test case", caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } });
     await prisma.organizationBilling.create({ data: { organizationId: orgId, provider: "STRIPE", customerId: "cus_topup", paymentMethodId: "stripe_pm_topup", brand: "visa", last4: "4242" } });
   });
 

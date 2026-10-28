@@ -44,8 +44,8 @@ export default class ClientCaseRepo {
     await prisma.case.update({ where: { id }, data: { lawyerReadiness: Prisma.DbNull } });
   }
 
-  /** Stores Jev's readiness check, and the practice area it settled on once the case is ready. */
-  static async saveReadiness(id: string, readiness: Prisma.InputJsonValue, practiceArea?: string) {
-    await prisma.case.update({ where: { id }, data: { lawyerReadiness: readiness, ...(practiceArea ? { practiceArea } : {}) } });
+  /** Stores Jev's readiness check, and the case areas it settled on once the case is ready. */
+  static async saveReadiness(id: string, readiness: Prisma.InputJsonValue, caseAreas?: string[]) {
+    await prisma.case.update({ where: { id }, data: { lawyerReadiness: readiness, ...(caseAreas ? { caseAreas } : {}) } });
   }
 }

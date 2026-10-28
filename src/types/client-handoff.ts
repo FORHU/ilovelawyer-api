@@ -72,11 +72,6 @@ export function clientRequestStatusLabel(status: ClientRequestStatus): string {
 export const CLAIM_OUTCOMES = ["RELEASED", "LAPSED", "DECLINED", "REASSIGNED", "WITHDRAWN", "ENGAGED"] as const;
 export type ClaimOutcome = (typeof CLAIM_OUTCOMES)[number];
 
-/** Matches the client app's case areas. Personal injury is not one of them: referral fees are
- * banned in personal-injury cases, so they are refused (PERSONAL_INJURY_EXCLUDED). */
-export const PRACTICE_AREAS = ["EMPLOYMENT", "PROPERTY", "FAMILY", "CONSUMER", "OTHER"] as const;
-export type PracticeArea = (typeof PRACTICE_AREAS)[number];
-
 /** Same values as UK_JURISDICTIONS in validation/case.validation.ts. */
 export const UK_JURISDICTIONS = ["England and Wales", "Scotland", "Northern Ireland"] as const;
 export type UkJurisdiction = (typeof UK_JURISDICTIONS)[number];
@@ -153,7 +148,8 @@ export type ClientHandoffErrorCode = keyof typeof CLIENT_HANDOFF_ERROR_CODES;
 /** To each matching lawyer when a request is routed to them (also an email and a notification). */
 export interface ClientRequestNewEvent {
   requestId: string;
-  practiceArea: PracticeArea;
+  /** The case's areas by name. */
+  caseAreas: string[];
   ukJurisdiction: UkJurisdiction;
   urgency: RequestUrgency;
   /** When it expires if nobody claims it (48h after routing). */

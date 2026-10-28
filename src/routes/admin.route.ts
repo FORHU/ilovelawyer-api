@@ -9,6 +9,8 @@ import ClientBillingAdminCtrl from "../controllers/client-billing-admin.controll
 import ClientRequestAdminCtrl from "../controllers/client-request-admin.controller";
 import ClientPricingAdminCtrl from "../controllers/client-pricing-admin.controller";
 import LawyerPricingAdminCtrl from "../controllers/lawyer-pricing-admin.controller";
+import PracticeAreaAdminCtrl from "../controllers/practice-area-admin.controller";
+import CaseAreaAdminCtrl from "../controllers/case-area-admin.controller";
 
 const router = express.Router();
 
@@ -34,6 +36,20 @@ router.delete("/users/:id", asyncHandler(AdminCtrl.deleteUser));
 router.get("/lawyer-verifications", asyncHandler(AdminCtrl.listLawyerVerifications));
 router.post("/lawyer-verifications/:userId/verify", asyncHandler(AdminCtrl.verifyLawyer));
 router.post("/lawyer-verifications/:userId/reject", asyncHandler(AdminCtrl.rejectLawyer));
+
+// The practice areas lawyers pick on their Lawyer Application, per site (PracticeAreaSvc).
+router.get("/practice-areas", asyncHandler(PracticeAreaAdminCtrl.list));
+router.post("/practice-areas", asyncHandler(PracticeAreaAdminCtrl.create));
+router.post("/practice-areas/reorder", asyncHandler(PracticeAreaAdminCtrl.reorder));
+router.patch("/practice-areas/:id", asyncHandler(PracticeAreaAdminCtrl.update));
+router.delete("/practice-areas/:id", asyncHandler(PracticeAreaAdminCtrl.delete));
+
+// The kinds of problem a client's case can be about (CaseAreaSvc).
+router.get("/case-areas", asyncHandler(CaseAreaAdminCtrl.list));
+router.post("/case-areas", asyncHandler(CaseAreaAdminCtrl.create));
+router.post("/case-areas/reorder", asyncHandler(CaseAreaAdminCtrl.reorder));
+router.patch("/case-areas/:id", asyncHandler(CaseAreaAdminCtrl.update));
+router.delete("/case-areas/:id", asyncHandler(CaseAreaAdminCtrl.delete));
 
 router.get("/settings", asyncHandler(AdminCtrl.getSettings));
 router.patch("/settings/tenants/:code", asyncHandler(AdminCtrl.updateTenantSettings));

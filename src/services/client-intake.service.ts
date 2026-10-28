@@ -15,6 +15,7 @@ import { excerptsWithHandles } from "../utils/case-document-handles";
 import { buildIntakePrompt, parseIntakeReply, caseDetailsPeople, type IntakeMessageInput } from "../utils/client-intake-extract";
 import type { CaseIntake, IntakeCompleteness, IntakePerson } from "../types/client-intake";
 import logger from "../utils/logger";
+import CaseAreaSvc from "./case-area.service";
 
 const MAX_MESSAGES = 60;
 const MAX_MESSAGE_CHARS = 1500;
@@ -129,7 +130,7 @@ export default class ClientIntakeSvc {
       const prompt = buildIntakePrompt({
         caseDetails: {
           title: source.caseName,
-          practiceArea: source.practiceArea,
+          caseAreas: (await CaseAreaSvc.refsOf(source.caseAreas)).map((a) => a.name),
           ukJurisdiction: source.ukJurisdiction,
           where: source.jurisdiction,
           side: source.clientSide,
@@ -248,7 +249,7 @@ export default class ClientIntakeSvc {
       return JSON.stringify({
         caseDetails: {
           title: source.caseName,
-          practiceArea: source.practiceArea,
+          caseAreas: (await CaseAreaSvc.refsOf(source.caseAreas)).map((a) => a.name),
           ukJurisdiction: source.ukJurisdiction,
           where: source.jurisdiction,
           side: source.clientSide,
@@ -296,7 +297,7 @@ function ukDay(at: Date): string {
 export async function fingerprintOf(source: ClientIntakeCaseSource, latestMessageId: string | null): Promise<string> {
   const basis = JSON.stringify([
     source.caseName,
-    source.practiceArea,
+    source.caseAreas,
     source.ukJurisdiction,
     source.jurisdiction,
     source.clientSide,

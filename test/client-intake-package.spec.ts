@@ -58,7 +58,7 @@ describe("ClientRequestLawyerSvc.intakePackage", () => {
       note: "Please call after 5pm.",
       case: {
         caseName: "Smith v Acme",
-        practiceArea: "EMPLOYMENT",
+        caseAreas: ["EMPLOYMENT"],
         ukJurisdiction: "England and Wales",
         jurisdiction: "Leeds",
         clientSide: "CLAIMANT",
@@ -94,7 +94,7 @@ describe("ClientRequestLawyerSvc.intakePackage", () => {
     expect(pkg.caseId).to.equal(CASE_ID);
     expect(pkg.caseDetails).to.deep.equal({
       title: "Smith v Acme",
-      practiceArea: "EMPLOYMENT",
+      caseAreas: ["Employment"],
       ukJurisdiction: "England and Wales",
       town: "Leeds",
       side: "CLAIMANT",

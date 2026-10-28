@@ -188,7 +188,7 @@ describe("Client document actions", () => {
       (ClientCaseRepo as any).findById = async () => ({
         id: "case-1",
         caseName: "Fired by my boss",
-        practiceArea: "EMPLOYMENT",
+        caseAreas: ["EMPLOYMENT"],
         parties: [],
         consultations: [],
         documents: [

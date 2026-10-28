@@ -13,7 +13,7 @@ export interface IncomingCaseDocument {
 
 export interface CaseWithParties {
   caseName: string;
-  practiceArea?: string | null;
+  caseAreas?: string[];
   actionType?: string | null;
   jurisdiction?: string | null;
   ukJurisdiction?: string | null;

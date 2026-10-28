@@ -1,5 +1,6 @@
 import type { ClientRequestStatus } from "@prisma/client";
 import ClientRequestRepo, { type ClientRequestForClient } from "../repositories/client-request.repository";
+import { toPracticeAreaRefs } from "../repositories/practice-area.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
@@ -55,7 +56,8 @@ function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
     firmName: claim.organization && !claim.organization.isPersonal ? claim.organization.name : null,
     regulator: profile?.ukRegistration?.regulator ?? null,
     registrationNumber: profile?.ukRegistration?.registrationNumber ?? null,
-    practiceAreas: profile?.practiceAreas ?? [],
+    // By name: the list is the lawyer's site's, which admins edit (PracticeArea).
+    practiceAreas: profile ? toPracticeAreaRefs(profile.practiceAreas).map((a) => a.name) : [],
     qualifiedJurisdictions: profile?.ukRegistration?.qualifiedJurisdictions ?? [],
     languages: profile?.languages ?? [],
     bio: profile?.bio ?? "",

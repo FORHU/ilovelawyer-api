@@ -225,11 +225,12 @@ export default class CaseSvc {
    * Formats a Case's structured fields as plain text so the AI has the case's
    * details without the user re-explaining them each message. Re-run per message
    * (not cached) so edits to the Case are reflected immediately, never stale.
+   * `caseAreaNames` names a client case's areas (CaseAreaSvc.refsOf); without it, their codes.
    */
-  static formatForAiContext(caseRecord: CaseWithParties): string {
+  static formatForAiContext(caseRecord: CaseWithParties, caseAreaNames: string[] = caseRecord.caseAreas ?? []): string {
     const lines: string[] = [`Case: ${caseRecord.caseName}`];
 
-    if (caseRecord.practiceArea) lines.push(`Kind of Problem: ${caseRecord.practiceArea}`);
+    if (caseAreaNames.length) lines.push(`Kind of Problem: ${caseAreaNames.join(", ")}`);
     if (caseRecord.actionType) lines.push(`Type of Action: ${caseRecord.actionType}`);
     if (caseRecord.jurisdiction) lines.push(`Jurisdiction: ${caseRecord.jurisdiction}`);
     if (caseRecord.ukJurisdiction) lines.push(`UK Jurisdiction: ${caseRecord.ukJurisdiction}`);
