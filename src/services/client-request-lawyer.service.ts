@@ -3,7 +3,7 @@ import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import OrganizationRepo from "../repositories/organization.repository";
-import ClientRequestMatchingSvc from "./client-request-matching.service";
+import ClientRequestMatchingSvc, { type MembershipForMatching } from "./client-request-matching.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import OrganizationChargeSvc, { chargeDto } from "./organization-charge.service";
 import LawyerPricingSvc, { type Money } from "./lawyer-pricing.service";
@@ -156,16 +156,25 @@ export default class ClientRequestLawyerSvc {
     return toDto(request, lawyer.userId, await feeOf(lawyer), await ClientRequestBriefSvc.current(id));
   }
 
-  /** Accept: the first claim wins a 24h hold, and every other matching lawyer is told it's gone. */
+  /** Accept: the first claim wins a 24h hold, and every other matching lawyer is told it's gone.
+   * Whether it's taken solo or for a firm comes from the lawyer's membership when they accept, not
+   * the workspace they have open (iFindLawyer, #558); what an organization case then means is #557. */
   static async claim(lawyer: LawyerContext, id: string) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
     const request = await ClientRequestRepo.findForLawyer(id);
     // Whatever its status, so a lawyer who lost the race hears why rather than "not found".
     if (!request || !ClientRequestLawyerSvc.isFor(request, lawyer.userId, profile)) throw NOT_FOUND();
+    // A firm member accepts in their firm's workspace, so the claim (and the per-case fee) is the
+    // firm's. From their own workspace it would silently become a solo claim on their own card.
+    const affiliation = ClientRequestMatchingSvc.affiliationOf(profile.membership);
+    const organizationId = affiliation.kind === "ORGANIZATION" ? affiliation.organizationId : null;
+    if (organizationId && lawyer.organizationId !== organizationId) {
+      throw new HttpError("Accept this request from your firm's workspace.", 409, "CLAIM_WORKSPACE_MISMATCH", { organizationId });
+    }
     // Their plan: a trial that's over, or this month's client requests already taken.
     await AccountLimitsSvc.assertCanTakeClientRequest(lawyer.userId);
 
-    const claim = await ClientRequestClaimRepo.claim(id, lawyer.userId, lawyer.organizationId);
+    const claim = await ClientRequestClaimRepo.claim(id, lawyer.userId, organizationId);
     if (!claim) {
       const now = (await ClientRequestRepo.findForLawyer(id)) ?? request;
       if (HELD.includes(now.status) && now.claims.some((c) => c.outcome === null && c.lawyerId !== lawyer.userId)) {
@@ -174,15 +183,16 @@ export default class ClientRequestLawyerSvc {
       throw new HttpError("This request can't be accepted now.", 409, "INVALID_REQUEST_STATUS", { status: now.status });
     }
 
-    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.claimed", payload: { requestId: id, claimId: claim.id } });
+    const payload = { requestId: id, claimId: claim.id, assignment: affiliation.kind };
+    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.claimed", payload });
     await SecurityAuditSvc.record({
       action: "client_request.claimed",
       actorId: lawyer.userId,
-      organizationId: lawyer.organizationId,
+      organizationId,
       targetType: "case",
       targetId: request.caseId,
       caseId: request.caseId,
-      payload: { requestId: id, claimId: claim.id },
+      payload,
     });
 
     const others = (await ClientRequestMatchingSvc.eligibleLawyerIds(id)).filter((userId) => userId !== lawyer.userId);
@@ -512,16 +522,17 @@ export default class ClientRequestLawyerSvc {
 
   /** Whether the request is one this lawyer is matched to (whatever state it's in now), or one
    * they've held. */
-  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerProfileRow & { openCount: number }) {
+  private static isFor(r: LawyerRequest, lawyerId: string, profile: LawyerProfileRow & { openCount: number; membership: MembershipForMatching | null }) {
     if (r.claims.some((c) => c.lawyerId === lawyerId)) return true;
     return !r.excludedLawyerIds.includes(lawyerId) && ClientRequestMatchingSvc.matches(profile, criteriaOf(r));
   }
 
   /** Client requests are UK only, for lawyers whose registration has been verified (#506).
-   * `openCount` (CLAIMED/QUOTED/CONFIRMED/ENGAGED) makes the result usable as LawyerForMatching
-   * directly — it only matters against capacity on a request this lawyer doesn't already hold,
-   * since every call site here checks `held` (their own claim) before falling back to matches(). */
-  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow & { openCount: number }> {
+   * `openCount` (CLAIMED/QUOTED/CONFIRMED/ENGAGED) and `membership` (their firm, #558) make the
+   * result usable as LawyerForMatching directly. `openCount` only matters against capacity on a
+   * request this lawyer doesn't already hold, since every call site here checks `held` (their own
+   * claim) before falling back to matches(). */
+  private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow & { openCount: number; membership: MembershipForMatching | null }> {
     const who = await LawyerProfileRepo.findLawyerTenant(lawyer.userId);
     if (!who || who.role !== "LAWYER") throw new HttpError("Client requests are for lawyer accounts", 403, "NOT_A_LAWYER");
     if (lawyer.tenantCode !== "UK") throw new HttpError("Client requests are only available on the UK site", 403, "NOT_UK_TENANT");
@@ -529,7 +540,7 @@ export default class ClientRequestLawyerSvc {
     if (!profile || profile.verificationStatus !== "VERIFIED") {
       throw new HttpError("You can see client requests once we've verified your registration.", 403, "LAWYER_NOT_VERIFIED");
     }
-    const openCount = (await LawyerProfileRepo.countOpenForLawyers([lawyer.userId])).get(lawyer.userId) ?? 0;
-    return { ...profile, openCount };
+    const [openCounts, membership] = await Promise.all([LawyerProfileRepo.countOpenForLawyers([lawyer.userId]), LawyerProfileRepo.findMembership(lawyer.userId)]);
+    return { ...profile, openCount: openCounts.get(lawyer.userId) ?? 0, membership };
   }
 }

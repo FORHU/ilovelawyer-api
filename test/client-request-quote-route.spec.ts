@@ -118,6 +118,8 @@ describe("client request conflict check, release and quote", () => {
       },
     });
     requestId = row.id;
+    // Both lawyers here are in a firm, so client requests for firms must be on (#558).
+    process.env.CLIENT_REQUESTS_FOR_FIRMS = "true";
     auditRows = [];
     savedAuditCreate = (SecurityAuditRepo as any).create;
     (SecurityAuditRepo as any).create = async (data: object) => {
@@ -128,6 +130,7 @@ describe("client request conflict check, release and quote", () => {
 
   afterEach(() => {
     (SecurityAuditRepo as any).create = savedAuditCreate;
+    delete process.env.CLIENT_REQUESTS_FOR_FIRMS;
   });
 
   describe("party names for the conflict check", () => {

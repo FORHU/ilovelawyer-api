@@ -1,5 +1,26 @@
+import type { OrganizationMemberStatus, OrganizationStatus, PackageSku } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
+
+/** The lawyer's one membership (OrganizationMember.userId is unique), as matching reads it. */
+export interface MembershipForMatching {
+  status: OrganizationMemberStatus;
+  organization: { id: string; isPersonal: boolean; status: OrganizationStatus; packageSku: PackageSku };
+}
+
+/** iFindLawyer (#558): whether a lawyer takes a request on their own or for their firm. A personal
+ * workspace or a firm invite not yet accepted is still SOLO. `packageSku` is for #557 (premium firms
+ * have no case cap). */
+export type Affiliation =
+  | { kind: "SOLO" }
+  | { kind: "ORGANIZATION"; organizationId: string; packageSku: PackageSku; organizationStatus: OrganizationStatus };
+
+/** Whether lawyers in a firm take client requests at all. Off unless CLIENT_REQUESTS_FOR_FIRMS=true:
+ * for now only solo practitioners get them, and a firm member is left out of matching (no inbox,
+ * no notice, no new claim; one they already hold carries on). */
+export function clientRequestsForFirms(): boolean {
+  return process.env.CLIENT_REQUESTS_FOR_FIRMS === "true";
+}
 
 export interface MatchCriteria {
   practiceArea: string | null;
@@ -18,23 +39,33 @@ export interface LawyerForMatching {
   openCount: number;
   practiceAreas: string[];
   qualifiedJurisdictions: string[];
+  membership: MembershipForMatching | null;
 }
 
 /**
  * The request matching engine (#509): which lawyers a client request is routed to. A lawyer
- * matches when they're verified, accepting requests, enabled by their organization (#518), not
- * paused, under capacity, and qualified for the case's practice area and UK jurisdiction.
+ * matches when they're verified, accepting requests, enabled by their organization (#518), solo or
+ * in a firm that takes client requests and isn't being deleted (#558), not paused, under capacity,
+ * and qualified for the case's practice area and UK jurisdiction.
  */
 export default class ClientRequestMatchingSvc {
   static matches(lawyer: LawyerForMatching, criteria: MatchCriteria, now: Date = new Date()): boolean {
     if (!criteria.practiceArea || !criteria.ukJurisdiction) return false;
     if (!lawyer.acceptingRequests) return false;
     if (!lawyer.enabledByOrganization) return false;
+    const affiliation = ClientRequestMatchingSvc.affiliationOf(lawyer.membership);
+    if (affiliation.kind === "ORGANIZATION" && (!clientRequestsForFirms() || affiliation.organizationStatus !== "ACTIVE")) return false;
     if (lawyer.pausedUntil && lawyer.pausedUntil > now) return false;
     if (lawyer.capacityLimit !== null && lawyer.openCount >= lawyer.capacityLimit) return false;
     if (!lawyer.practiceAreas.includes(criteria.practiceArea)) return false;
     if (!lawyer.qualifiedJurisdictions.includes(criteria.ukJurisdiction)) return false;
     return true;
+  }
+
+  static affiliationOf(membership: MembershipForMatching | null): Affiliation {
+    if (!membership || membership.status !== "ACCEPTED" || membership.organization.isPersonal) return { kind: "SOLO" };
+    const { id, packageSku, status } = membership.organization;
+    return { kind: "ORGANIZATION", organizationId: id, packageSku, organizationStatus: status };
   }
 
   /** REQUESTED -> ROUTED, right after the request is created. Unconditional — the client sees

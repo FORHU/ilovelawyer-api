@@ -5,6 +5,7 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import ClientRequestLawyerSvc, { type LawyerContext } from "../src/services/client-request-lawyer.service";
+import type { MembershipForMatching } from "../src/services/client-request-matching.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientRequestClaimRepo from "../src/repositories/client-request-claim.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
@@ -46,6 +47,9 @@ const PROFILE = {
   qualifiedJurisdictions: ["England and Wales"],
 };
 
+/** lawyer-me's firm, matching `me`'s workspace. */
+const MY_FIRM: MembershipForMatching = { status: "ACCEPTED", organization: { id: "org-me", isPersonal: false, status: "ACTIVE", packageSku: "PROFESSIONAL" } };
+
 const BRIEF = { summary: "Dismissed after raising a grievance.", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales", urgency: "SOON" };
 
 describe("ClientRequestLawyerSvc", () => {
@@ -56,6 +60,7 @@ describe("ClientRequestLawyerSvc", () => {
   let profiles: Map<string, any>;
   let roles: Map<string, string>;
   let openCounts: Map<string, number>;
+  let memberships: Map<string, MembershipForMatching | null>;
   let emitted: [string, string, any][];
   let audits: any[];
   let securityAudits: any[];
@@ -95,7 +100,7 @@ describe("ClientRequestLawyerSvc", () => {
     restore = [
       stash(ClientRequestRepo, ["findForMatching", "findForLawyer", "listRoutedFor", "listHeldBy", "exclude"]),
       stash(ClientRequestClaimRepo, ["claim"]),
-      stash(LawyerProfileRepo, ["find", "findLawyerTenant", "findVerified", "countOpenForLawyers"]),
+      stash(LawyerProfileRepo, ["find", "findLawyerTenant", "findVerified", "countOpenForLawyers", "findMembership"]),
       stash(OrganizationRepo, ["writeAudit"]),
       stash(SecurityAuditSvc, ["record"]),
       stash(AccountLimitsSvc, ["assertCanTakeClientRequest"]),
@@ -116,6 +121,10 @@ describe("ClientRequestLawyerSvc", () => {
       ["client-x", "USER"],
     ]);
     openCounts = new Map();
+    memberships = new Map([["lawyer-me", { ...MY_FIRM }]]);
+    // lawyer-me is in a firm, so this world needs client requests for firms on; the "firms off"
+    // block below turns it off again.
+    process.env.CLIENT_REQUESTS_FOR_FIRMS = "true";
     emitted = [];
     audits = [];
     securityAudits = [];
@@ -123,7 +132,8 @@ describe("ClientRequestLawyerSvc", () => {
     (LawyerProfileRepo as any).find = async (userId: string) => profiles.get(userId) ?? null;
     (LawyerProfileRepo as any).findLawyerTenant = async (userId: string) => (roles.has(userId) ? { role: roles.get(userId), tenantCode: "UK" } : null);
     (LawyerProfileRepo as any).findVerified = async (exclude: string[]) =>
-      [...profiles.values()].filter((p) => p.verificationStatus === "VERIFIED" && !exclude.includes(p.userId)).map((p) => ({ ...p, openCount: openCounts.get(p.userId) ?? 0 }));
+      [...profiles.values()].filter((p) => p.verificationStatus === "VERIFIED" && !exclude.includes(p.userId)).map((p) => ({ ...p, openCount: openCounts.get(p.userId) ?? 0, membership: memberships.get(p.userId) ?? null }));
+    (LawyerProfileRepo as any).findMembership = async (userId: string) => memberships.get(userId) ?? null;
     (LawyerProfileRepo as any).countOpenForLawyers = async (ids: string[]) => new Map(ids.map((id) => [id, openCounts.get(id) ?? 0]));
     (ClientRequestRepo as any).findForMatching = async (id: string) => {
       const r = requests.get(id);
@@ -164,7 +174,10 @@ describe("ClientRequestLawyerSvc", () => {
     (socket as any).emitToUser = (userId: string, event: string, payload: unknown) => emitted.push([userId, event, payload]);
   });
 
-  afterEach(() => restore.forEach((r) => r()));
+  afterEach(() => {
+    restore.forEach((r) => r());
+    delete process.env.CLIENT_REQUESTS_FOR_FIRMS;
+  });
 
   describe("who can use it", () => {
     it("refuses an account that isn't a lawyer", async () => {
@@ -227,6 +240,61 @@ describe("ClientRequestLawyerSvc", () => {
       expect(audits[0]).to.deep.include({ caseId: "case-req-1", actorId: "lawyer-me", action: "client_request.claimed" });
       expect(securityAudits).to.have.length(1);
       expect(securityAudits[0]).to.deep.include({ action: "client_request.claimed", actorId: "lawyer-me", organizationId: "org-me", caseId: "case-req-1" });
+    });
+
+    describe("solo or firm (#558)", () => {
+      it("records a firm member's claim under their firm, as an organization assignment", async () => {
+        routed("req-1");
+        await ClientRequestLawyerSvc.claim(me, "req-1");
+
+        expect(claims[0]).to.deep.include({ lawyerId: "lawyer-me", organizationId: "org-me" });
+        expect(audits[0].payload).to.deep.include({ assignment: "ORGANIZATION" });
+        expect(securityAudits[0]).to.deep.include({ organizationId: "org-me" });
+        expect(securityAudits[0].payload).to.deep.include({ assignment: "ORGANIZATION" });
+      });
+
+      it("records a solo lawyer's claim with no organization", async () => {
+        routed("req-1");
+        memberships.set("lawyer-me", null);
+        await ClientRequestLawyerSvc.claim({ ...me, organizationId: null }, "req-1");
+
+        expect(claims[0]).to.deep.include({ organizationId: null });
+        expect(securityAudits[0]).to.deep.include({ organizationId: null });
+        expect(securityAudits[0].payload).to.deep.include({ assignment: "SOLO" });
+      });
+
+      it("answers CLAIM_WORKSPACE_MISMATCH when a firm member accepts from their own workspace, and holds nothing", async () => {
+        routed("req-1");
+        const asked: string[] = [];
+        (AccountLimitsSvc as any).assertCanTakeClientRequest = async (userId: string) => void asked.push(userId);
+
+        const err = await errorOf(ClientRequestLawyerSvc.claim({ ...me, organizationId: null }, "req-1"));
+        expect(err).to.deep.include({ status: 409, code: "CLAIM_WORKSPACE_MISMATCH" });
+        expect(err!.details).to.deep.equal({ organizationId: "org-me" });
+        expect(asked).to.deep.equal([]);
+        expect(claims).to.have.length(0);
+        expect(requests.get("req-1").status).to.equal("ROUTED");
+      });
+
+      it("treats a personal-workspace membership as solo, even with that workspace open", async () => {
+        routed("req-1");
+        memberships.set("lawyer-me", { status: "ACCEPTED", organization: { id: "personal-me", isPersonal: true, status: "ACTIVE", packageSku: "SOLO" } });
+        await ClientRequestLawyerSvc.claim({ ...me, organizationId: "personal-me" }, "req-1");
+
+        expect(claims[0]).to.deep.include({ organizationId: null });
+        expect(securityAudits[0].payload).to.deep.include({ assignment: "SOLO" });
+      });
+
+      it("reads the membership when they accept, not when the inbox was loaded", async () => {
+        routed("req-1");
+        const ownWorkspace = { ...me, organizationId: null };
+        memberships.set("lawyer-me", null);
+        expect((await ClientRequestLawyerSvc.list(ownWorkspace, { view: "inbox", page: 1, limit: 20 })).total).to.equal(1);
+        memberships.set("lawyer-me", { ...MY_FIRM }); // joined the firm in between
+
+        expect(await errorOf(ClientRequestLawyerSvc.claim(ownWorkspace, "req-1"))).to.deep.include({ status: 409, code: "CLAIM_WORKSPACE_MISMATCH" });
+        expect(claims).to.have.length(0);
+      });
     });
 
     it("answers REQUEST_ALREADY_CLAIMED when another lawyer won", async () => {
@@ -310,6 +378,37 @@ describe("ClientRequestLawyerSvc", () => {
     });
   });
 
+  describe("with client requests for firms off (solo practitioners only)", () => {
+    beforeEach(() => delete process.env.CLIENT_REQUESTS_FOR_FIRMS);
+
+    it("shows a firm lawyer an empty inbox", async () => {
+      routed("req-1");
+      expect(await ClientRequestLawyerSvc.list(me, { view: "inbox", page: 1, limit: 20 })).to.deep.include({ total: 0 });
+    });
+
+    it("answers 404 when a firm lawyer tries to accept", async () => {
+      routed("req-1");
+      expect(await errorOf(ClientRequestLawyerSvc.claim(me, "req-1"))).to.deep.include({ status: 404 });
+      expect(claims).to.have.length(0);
+    });
+
+    it("lets a solo lawyer accept as before", async () => {
+      routed("req-1");
+      memberships.set("lawyer-me", null);
+      await ClientRequestLawyerSvc.claim({ ...me, organizationId: null }, "req-1");
+      expect(claims[0]).to.deep.include({ lawyerId: "lawyer-me", organizationId: null });
+    });
+
+    it("still shows a firm lawyer a request they already hold", async () => {
+      routed("req-1");
+      process.env.CLIENT_REQUESTS_FOR_FIRMS = "true";
+      await ClientRequestLawyerSvc.claim(me, "req-1");
+      delete process.env.CLIENT_REQUESTS_FOR_FIRMS;
+
+      expect((await ClientRequestLawyerSvc.get(me, "req-1")).claim).to.deep.include({ byMe: true });
+    });
+  });
+
   describe("list", () => {
     const view = (v: "inbox" | "mine" | "history", lawyer = me, page = 1, limit = 20) => ClientRequestLawyerSvc.list(lawyer, { view: v, page, limit });
 
@@ -338,6 +437,12 @@ describe("ClientRequestLawyerSvc", () => {
       routed("req-1");
       profiles.get("lawyer-me")!.acceptingRequests = false;
       expect((await view("inbox")).data).to.deep.equal([]);
+    });
+
+    it("inbox: empty while the lawyer's firm is being deleted", async () => {
+      routed("req-1");
+      memberships.set("lawyer-me", { ...MY_FIRM, organization: { ...MY_FIRM.organization, status: "PENDING_DELETION" } });
+      expect(await view("inbox")).to.deep.include({ total: 0 });
     });
 
     it("mine: the request they hold; history: the hold that lapsed", async () => {
