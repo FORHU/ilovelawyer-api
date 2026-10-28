@@ -310,7 +310,7 @@ export default class ClientCaseSvc {
   }
 
   /** The chat, oldest first. `replying` is true while the AI is still answering the last message,
-   * so the app knows to keep checking. */
+   * so the app shows it's typing until chat:done or chat:error arrives over the socket. */
   static async listMessages(workspace: ClientWorkspace, userId: string, caseId: string) {
     const consultationId = await ClientCaseSvc.consultationOf(workspace, userId, caseId);
     const messages = await ChatSvc.listMessages(firmScope(workspace.id), userId, consultationId);
@@ -330,8 +330,9 @@ export default class ClientCaseSvc {
     };
   }
 
-  /** Asks the AI, for one chat credit. The answer is generated in the background
-   * (ChatGenerationQueue) and shows up in listMessages. A message that couldn't be queued gets its
+  /** Asks the AI, for one chat credit. The answer is generated in the background, on the client
+   * app's own queue (ClientChatGenerationQueue), shows up in listMessages, and is announced to the
+   * client by the chat:done / chat:error socket events. A message that couldn't be queued gets its
    * credit back; one the AI then fails to answer keeps it spent, like any other AI work.
    * `documentIds` are the case's documents sent with it, each READY (checked before the credit is
    * spent, so a refused send costs nothing). */
@@ -352,6 +353,7 @@ export default class ClientCaseSvc {
         undefined,
         caseId,
         ids.length ? ids : undefined,
+        { source: "client" },
       );
     } catch (err) {
       await ClientBillingSvc.refundCredit(caseId);

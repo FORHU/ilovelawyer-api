@@ -288,15 +288,16 @@ export default class ChatRepo {
   }
 
   /** Turns that have been PENDING longer than is ever legitimate (attachment wait +
-   * generation) — swept back to FAILED by ChatGenerationQueue's own sweep loop so a turn that
-   * got silently orphaned (two concurrent turns colliding on one Chat Wonder session, a worker
-   * that crashed before reaching its own catch block, a hung Chat Wonder connection that never
-   * sends a terminal frame) doesn't leave the client's "still generating" state waiting on an
-   * event that will never come. */
+   * generation) — swept back to FAILED by startStalePendingChatSweep (chat-generation.queue.ts)
+   * so a turn that got silently orphaned (two concurrent turns colliding on one Chat Wonder
+   * session, a worker that crashed before reaching its own catch block, a hung Chat Wonder
+   * connection that never sends a terminal frame) doesn't leave the client's "still generating"
+   * state waiting on an event that will never come. The case id rides along so the client app,
+   * which keys its chat by case, knows which chat the sweep's chat:error is for. */
   static async findStalePendingMessages(olderThan: Date) {
     return prisma.message.findMany({
       where: { role: "user", replyStatus: "PENDING", createdAt: { lt: olderThan } },
-      select: { id: true, consultationId: true, userId: true },
+      select: { id: true, consultationId: true, userId: true, consultation: { select: { caseId: true } } },
     });
   }
 

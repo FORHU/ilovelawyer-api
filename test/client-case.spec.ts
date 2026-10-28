@@ -333,9 +333,21 @@ describe("Client app cases", () => {
       expect(result.messages[1].documents).to.deep.equal([]);
     });
 
-    it("asks the AI in the case's consultation, on the UK tenant, scoped to the case", async () => {
+    it("asks the AI in the case's consultation, on the UK tenant, scoped to the case, on the client app's own queue", async () => {
       await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "What are my rights?");
-      expect(calls.enqueue).to.deep.equal([firmScope("org-personal"), "UK", "u1", "cons-1", "", "What are my rights?", undefined, undefined, "case-1", undefined]);
+      expect(calls.enqueue).to.deep.equal([
+        firmScope("org-personal"),
+        "UK",
+        "u1",
+        "cons-1",
+        "",
+        "What are my rights?",
+        undefined,
+        undefined,
+        "case-1",
+        undefined,
+        { source: "client" },
+      ]);
       expect(calls.findManyForCase).to.equal(undefined);
     });
 
@@ -344,7 +356,7 @@ describe("Client app cases", () => {
         caseDocs = [{ id: "d1", name: "Contract.pdf", ragStatus: "READY" }];
         await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read this", ["d1"]);
         expect(calls.findManyForCase).to.deep.equal([["d1"], "case-1", firmScope("org-personal")]);
-        expect((calls.enqueue as unknown[]).slice(8)).to.deep.equal(["case-1", ["d1"]]);
+        expect((calls.enqueue as unknown[]).slice(8, 10)).to.deep.equal(["case-1", ["d1"]]);
         expect(creditsSpent).to.equal(1);
       });
 

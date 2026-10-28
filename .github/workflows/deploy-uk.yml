@@ -311,6 +311,7 @@ jobs:
           CASE_RECONSTRUCTION_AUDIO_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/case-reconstruction-audio
           AI_GENERATION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/ai_generate
           MESSAGE_PERSISTENCE_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/message-queue
+          CLIENT_CHAT_GENERATION_QUEUE_URL=https://sqs.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ACCOUNT_ID }}/client-chat-generation
           EOF
 
           # CASE_GRAPH_PROMOTION_QUEUE_URL is deliberately absent. It was written

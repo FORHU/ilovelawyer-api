@@ -19,6 +19,7 @@ for q in \
   case-reconstruction-audio \
   ai-generation \
   message-persistence \
+  client-chat-generation \
   case-graph-promotion
 do
   awslocal sqs create-queue --region "$REGION" --queue-name "$q" --output text

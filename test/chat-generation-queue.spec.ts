@@ -28,7 +28,11 @@ import DocumentChunkSvc from "../src/services/document-chunk.service";
 import TranscriptionChunkSvc from "../src/services/transcription-chunk.service";
 import CaseSvc from "../src/services/case.service";
 import { redis } from "../src/lib/redis";
-import ChatGenerationQueue, { ChatGenerationJob } from "../src/queues/chat-generation.queue";
+import ChatGenerationQueue, {
+  ChatGenerationJob,
+  ClientChatGenerationQueue,
+  sweepStalePendingChats,
+} from "../src/queues/chat-generation.queue";
 import CaseGraphPromotionQueue from "../src/queues/case-graph-promotion.queue";
 
 function flush(ms = 20) {
@@ -192,6 +196,112 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     }
     expect(linked).to.deep.equal([["d1"], "m-user-1", firmScope("org1"), "c1", "user1", "case-1"]);
   });
+
+  it("a client-app turn goes onto the client queue only, and a lawyer turn onto the lawyer queue only", async () => {
+    const originalClientEnqueue = ClientChatGenerationQueue.enqueue;
+    ChatRepo.findConsultationWithCase = async () => ({ id: "c1", organizationId: "org1", userId: "user1", status: "ACTIVE", caseId: "case-1", case: null, title: "Existing" }) as any;
+    ChatRepo.createMessage = async () => ({ id: "m-user-1" }) as any;
+    redis.get = (async (key: string) => (key.includes("session") ? "sess-1" : null)) as any;
+    const lawyer: any[] = [];
+    const client: any[] = [];
+    ChatGenerationQueue.enqueue = (job: any) => {
+      lawyer.push(job);
+    };
+    ClientChatGenerationQueue.enqueue = (job: any) => {
+      client.push(job);
+    };
+    try {
+      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "UK", "user1", "c1", "", "hello", undefined, undefined, undefined, undefined, { source: "client" });
+      expect(client.map((j) => j.source)).to.deep.equal(["client"]);
+      expect(lawyer).to.have.length(0);
+
+      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "hello");
+      expect(lawyer.map((j) => j.source)).to.deep.equal(["lawyer"]);
+      expect(client).to.have.length(1);
+    } finally {
+      ClientChatGenerationQueue.enqueue = originalClientEnqueue;
+    }
+  });
+});
+
+// --- Two queues: each instance sends to and reads from its own URL only ---
+
+describe("ChatGenerationQueue: lawyer and client queues stay apart", () => {
+  const originals = {
+    sendMessage: (sqs as any).sendMessage,
+    lawyerUrl: config.MESSAGE_PERSISTENCE_QUEUE_URL,
+    clientUrl: config.CLIENT_CHAT_GENERATION_QUEUE_URL,
+  };
+  let sent: { url: string; body: any }[];
+
+  beforeEach(() => {
+    sent = [];
+    (sqs as any).sendMessage = async (url: string, body: string) => {
+      sent.push({ url, body: JSON.parse(body) });
+    };
+    (config as any).MESSAGE_PERSISTENCE_QUEUE_URL = "http://sqs/lawyer";
+    (config as any).CLIENT_CHAT_GENERATION_QUEUE_URL = "http://sqs/client";
+  });
+
+  afterEach(() => {
+    (sqs as any).sendMessage = originals.sendMessage;
+    (config as any).MESSAGE_PERSISTENCE_QUEUE_URL = originals.lawyerUrl;
+    (config as any).CLIENT_CHAT_GENERATION_QUEUE_URL = originals.clientUrl;
+  });
+
+  it("sends each job to its own queue's URL, stamped with its source", async () => {
+    ClientChatGenerationQueue.enqueue({ ...baseJob, jobId: "m-client" });
+    ChatGenerationQueue.enqueue({ ...baseJob, jobId: "m-lawyer" });
+    await flush();
+    expect(sent.map((s) => [s.url, s.body.jobId, s.body.source])).to.deep.equal([
+      ["http://sqs/client", "m-client", "client"],
+      ["http://sqs/lawyer", "m-lawyer", "lawyer"],
+    ]);
+  });
+
+  it("still accepts a job enqueued before `source` existed (in flight across a deploy)", () => {
+    const { source: _source, ...legacy } = { ...baseJob, source: "lawyer" };
+    const parsed = (ClientChatGenerationQueue as any).parse(JSON.stringify(legacy));
+    expect(parsed?.jobId).to.equal(baseJob.jobId);
+  });
+});
+
+// --- The stale-PENDING sweep: one loop for both queues ---
+
+describe("sweepStalePendingChats", () => {
+  const originals = {
+    findStale: ChatRepo.findStalePendingMessages,
+    setReplyStatus: ChatRepo.setReplyStatus,
+    emitToUser: socketLib.emitToUser,
+  };
+
+  afterEach(() => {
+    ChatRepo.findStalePendingMessages = originals.findStale;
+    ChatRepo.setReplyStatus = originals.setReplyStatus;
+    (socketLib as any).emitToUser = originals.emitToUser;
+  });
+
+  it("fails a stale turn once and tells the asker with chat:error, carrying the case id the client app keys its chat by", async () => {
+    ChatRepo.findStalePendingMessages = (async () => [
+      { id: "m-stale", consultationId: "c1", userId: "user1", consultation: { caseId: "case-1" } },
+    ]) as any;
+    const statuses: string[] = [];
+    ChatRepo.setReplyStatus = async (_id, status) => {
+      statuses.push(status);
+      return {} as any;
+    };
+    const emitted: { event: string; payload: any }[] = [];
+    (socketLib as any).emitToUser = (_userId: string, event: string, payload: any) => {
+      emitted.push({ event, payload });
+    };
+
+    await sweepStalePendingChats();
+
+    expect(statuses).to.deep.equal(["FAILED"]);
+    expect(emitted).to.have.length(1);
+    expect(emitted[0]!.event).to.equal("chat:error");
+    expect(emitted[0]!.payload).to.include({ messageId: "m-stale", consultationId: "c1", caseId: "case-1" });
+  });
 });
 
 // --- ChatSvc.processChatGenerationJob: the worker-owned lifecycle ---
@@ -349,6 +459,16 @@ describe("ChatSvc.processChatGenerationJob", () => {
       expect(e.payload.messageId).to.equal(baseJob.jobId);
       expect(e.payload.consultationId).to.equal(baseJob.consultationId);
     }
+  });
+
+  it("every chat event carries the case id, so the client app (which keys its chat by case) knows which chat a reply belongs to", async () => {
+    CaseSvc.getById = async () => ({ id: "case-1", caseName: "Test Case" }) as any;
+
+    await ChatSvc.processChatGenerationJob({ ...baseJob, effectiveCaseId: "case-1", source: "client" });
+
+    expect(emitted.length).to.be.greaterThan(0);
+    for (const e of emitted) expect(e.payload.caseId).to.equal("case-1");
+    expect(emitted.some((e) => e.event === "chat:done")).to.equal(true);
   });
 
   it("emits chat:answer-complete once the answer text has streamed (at __END__) and BEFORE chat:done, so the UI can stop showing 'generating' while the extras finish", async () => {
