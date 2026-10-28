@@ -21,6 +21,7 @@ import * as sqs from "../src/lib/sqs";
 import * as socketLib from "../src/lib/socket";
 import * as config from "../src/config";
 import ChatSvc from "../src/services/chat.service";
+import ChatCtrl from "../src/controllers/chat.controller";
 import ChatRepo from "../src/repositories/chat.repository";
 import DocumentRepo from "../src/repositories/document.repository";
 import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
@@ -179,6 +180,36 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     expect(enqueued.consultationId).to.equal("c1");
     expect(enqueued.userInput).to.equal("hello");
     expect(enqueued.effectiveCaseId).to.equal(null);
+    expect(enqueued.isClientIntake).to.equal(false);
+  });
+
+  it("ChatCtrl.sendMessage (ilovelawyer-app's Terminal) always enqueues isClientIntake: false — the other real caller of enqueueChatGeneration, not just a direct unit call", async () => {
+    // Regression for the 2026-10-28 bug: every Terminal turn was reaching chat-wonder tagged
+    // [intake] because nothing distinguished this controller's calls from ClientCaseSvc
+    // .sendMessage's. This exercises the actual controller, not enqueueChatGeneration directly,
+    // so a future change to ChatCtrl.sendMessage that drops or flips the flag fails here.
+    ChatRepo.findConsultationWithCase = async () => ({ id: "c1", organizationId: "org1", userId: "user1", status: "ACTIVE", caseId: null, case: null, title: "Existing" }) as any;
+    ChatRepo.createMessage = async () => ({ id: "m-user-1" }) as any;
+    redis.get = (async (key: string) => (key.includes("session") ? "sess-1" : null)) as any;
+    let enqueued: any = null;
+    ChatGenerationQueue.enqueue = (job: any) => {
+      enqueued = job;
+    };
+
+    const req = {
+      params: { consultationId: "c1" },
+      body: { message: "What are the risks here?", sessionId: "sess-1" },
+      workspace: { organizationId: "org1", ownerId: null, userId: "user1", role: "MEMBER", tenantCode: "PH" },
+      user: { userId: "user1" },
+    } as any;
+    const res: any = { statusCode: 0, body: undefined };
+    res.status = (code: number) => ((res.statusCode = code), res);
+    res.json = (body: unknown) => ((res.body = body), res);
+
+    await ChatCtrl.sendMessage(req, res);
+
+    expect(res.statusCode).to.equal(202);
+    expect(enqueued).to.not.equal(null);
     expect(enqueued.isClientIntake).to.equal(false);
   });
 
