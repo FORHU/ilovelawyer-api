@@ -116,7 +116,6 @@ export const CLIENT_HANDOFF_ERROR_CODES = {
   // Client app
   NOT_UK_CASE: "NOT_UK_CASE", // 422: the case has no UK jurisdiction ("Not available yet")
   PERSONAL_INJURY_EXCLUDED: "PERSONAL_INJURY_EXCLUDED", // 422
-  CASE_NOT_PAID: "CASE_NOT_PAID", // 422: the client hasn't paid for the case yet
   REQUEST_ALREADY_OPEN: "REQUEST_ALREADY_OPEN", // 409: the case already has a request that isn't closed, expired or withdrawn
   CONSENT_REQUIRED: "CONSENT_REQUIRED", // 400
   CONSENT_VERSION_STALE: "CONSENT_VERSION_STALE", // 409: the consent text changed; show the new one

@@ -39,8 +39,6 @@ export interface ClientWorkspace {
 }
 
 export interface NewClientCase {
-  /** A successful, unused case payment of this client's (ClientBillingSvc.payForCase). */
-  paymentId: string;
   title: string;
   /** CaseArea codes, one or more. */
   areas: string[];
@@ -172,8 +170,8 @@ function unchecked(ukJurisdiction: string | null, unavailable = false): LawyerRe
  * in their personal workspace on the client tenant, with one Consultation that the chat runs in,
  * so the AI, document extraction and access rules are the same ones lawyers use. This is a thin,
  * client-shaped layer over CaseSvc, ChatSvc and DocumentSvc. Its own rules: only your own cases,
- * a case is paid for before it's made, and each message to the AI takes a chat credit
- * (ClientBillingSvc).
+ * a case is free and starts with the tenant's chat credits, and each message to the AI takes one
+ * (ClientBillingSvc), with top-ups for more.
  */
 export default class ClientCaseSvc {
   /** The workspace every client request runs in, made the first time it's needed. A client never
@@ -205,29 +203,21 @@ export default class ClientCaseSvc {
     return toDto(row, label);
   }
 
-  /** Uses up the case payment first, so one payment can't make two cases, and gives it back if the
-   * case then can't be made, so the client can retry without paying again. */
+  /** Cases are free: a new one starts with the chat credits an admin set for the client's tenant
+   * (the B2C_CASE row, ClientPricingSvc), written with the case itself. */
   static async create(workspace: ClientWorkspace, userId: string, input: NewClientCase) {
-    // Checked before the payment is used, so a bad pick costs nothing.
     const caseAreas = await CaseAreaSvc.forCase(input.areas);
-    const credits = await ClientPaymentRepo.claimCasePayment(input.paymentId, userId);
-    if (credits === null) throw new HttpError("Pay for the case first.", 402, "PAYMENT_REQUIRED");
-    let created: { id: string };
-    try {
-      created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
-        caseName: input.title,
-        caseAreas,
-        ukJurisdiction: input.ukJurisdiction ?? undefined,
-        jurisdiction: input.where || undefined,
-        clientSide: input.side ?? null,
-        parties: (input.others ?? []).map((o) => ({ name: o.name, designation: o.role })),
-        ...(input.notes ? { notes: input.notes } : {}),
-      });
-    } catch (err) {
-      await ClientPaymentRepo.releaseCasePayment(input.paymentId);
-      throw err;
-    }
-    await ClientPaymentRepo.attachToCase(input.paymentId, created.id, credits);
+    const { credits } = (await ClientBillingSvc.pricing(userId)).case;
+    const created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
+      caseName: input.title,
+      caseAreas,
+      ukJurisdiction: input.ukJurisdiction ?? undefined,
+      jurisdiction: input.where || undefined,
+      clientSide: input.side ?? null,
+      parties: (input.others ?? []).map((o) => ({ name: o.name, designation: o.role })),
+      ...(input.notes ? { notes: input.notes } : {}),
+      clientCredits: credits,
+    });
     await ChatSvc.createConsultation(firmScope(workspace.id), userId, input.title.slice(0, CONSULTATION_TITLE_MAX), created.id);
     return ClientCaseSvc.get(workspace, created.id);
   }
@@ -429,7 +419,7 @@ export default class ClientCaseSvc {
     return result;
   }
 
-  static async topUp(workspace: ClientWorkspace, userId: string, caseId: string, input: { packId: string; testOutcome?: "decline"; origin?: string }) {
+  static async topUp(workspace: ClientWorkspace, userId: string, caseId: string, input: { packId: string; promoCode?: string; testOutcome?: "decline"; origin?: string }) {
     await ClientCaseSvc.load(workspace, caseId);
     return ClientBillingSvc.topUp(userId, caseId, input);
   }

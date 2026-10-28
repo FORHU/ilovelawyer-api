@@ -462,7 +462,7 @@ export const clientHandoffSchemas: Schemas = {
       reason: {
         type: "string",
         nullable: true,
-        enum: ["NOT_UK_CASE", "PERSONAL_INJURY_EXCLUDED", "CASE_NOT_PAID", "REQUEST_ALREADY_OPEN", null],
+        enum: ["NOT_UK_CASE", "PERSONAL_INJURY_EXCLUDED", "REQUEST_ALREADY_OPEN", null],
         description: "NOT_UK_CASE shows \"Not available yet\"",
       },
       openRequestId: { type: "string", nullable: true, description: "Set with REQUEST_ALREADY_OPEN" },
@@ -667,7 +667,7 @@ export const clientHandoffPaths: Paths = {
         400: err("CONSENT_REQUIRED, or a validation error"),
         404: err("No such case of yours"),
         409: err("REQUEST_ALREADY_OPEN or CONSENT_VERSION_STALE"),
-        422: err("NOT_UK_CASE, PERSONAL_INJURY_EXCLUDED or CASE_NOT_PAID"),
+        422: err("NOT_UK_CASE or PERSONAL_INJURY_EXCLUDED"),
       },
     }),
     get: op({

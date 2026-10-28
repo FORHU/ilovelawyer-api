@@ -25,12 +25,11 @@ import {
 } from "../constants/client-request.constants";
 
 /** Why the client can't ask for a lawyer on a case (CLIENT_HANDOFF_ERROR_CODES). */
-type IneligibleReason = "NOT_UK_CASE" | "PERSONAL_INJURY_EXCLUDED" | "CASE_NOT_PAID" | "REQUEST_ALREADY_OPEN";
+type IneligibleReason = "NOT_UK_CASE" | "PERSONAL_INJURY_EXCLUDED" | "REQUEST_ALREADY_OPEN";
 
 const REFUSALS: Record<IneligibleReason, { status: number; message: string }> = {
   NOT_UK_CASE: { status: 422, message: "Lawyers are only available for cases in the UK for now." },
   PERSONAL_INJURY_EXCLUDED: { status: 422, message: "We can't connect personal injury cases with a lawyer yet." },
-  CASE_NOT_PAID: { status: 422, message: "Pay for the case before asking for a lawyer." },
   REQUEST_ALREADY_OPEN: { status: 409, message: "You've already asked for a lawyer on this case." },
 };
 
@@ -96,7 +95,7 @@ function toDto(r: ClientRequestForClient) {
 }
 
 /**
- * A client asking for a lawyer on one of their own cases (#507): only on a paid UK case that isn't
+ * A client asking for a lawyer on one of their own cases (#507): only on a UK case that isn't
  * personal injury, one open request per case, with the consent text they agreed to recorded. Making
  * one starts its anonymised brief (#508) and routes it to every matching lawyer (#509); claiming
  * it is a later issue (#511).
@@ -115,7 +114,6 @@ export default class ClientRequestSvc {
     if (!row.ukJurisdiction) return no("NOT_UK_CASE");
     // Personal injury is spotted by the lawyer readiness check (Jev), which reads the chat.
     if ((row.lawyerReadiness as { blockedBy?: string } | null)?.blockedBy === "PERSONAL_INJURY") return no("PERSONAL_INJURY_EXCLUDED");
-    if (!(await ClientRequestRepo.hasCasePayment(caseId))) return no("CASE_NOT_PAID");
     const open = await ClientRequestRepo.findOpenForCase(caseId);
     if (open) return no("REQUEST_ALREADY_OPEN", open.id);
     return { eligible: true, reason: null, openRequestId: null };

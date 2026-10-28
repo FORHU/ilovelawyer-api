@@ -75,7 +75,7 @@ export default class CaseRepo {
    * workspace's is the owner's.
    * createdByName keeps the creator's name for after their account is gone.
    */
-  static async create(scope: WorkspaceScope, userId: string, data: CaseData & { caseName: string; confidential?: boolean }) {
+  static async create(scope: WorkspaceScope, userId: string, data: CaseData & { caseName: string; confidential?: boolean; clientCredits?: number }) {
     const { parties, ...caseFields } = data;
     const creator = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, username: true } });
 

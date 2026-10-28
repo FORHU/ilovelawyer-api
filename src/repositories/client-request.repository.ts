@@ -174,9 +174,6 @@ export default class ClientRequestRepo {
     await prisma.clientRequest.update({ where: { id }, data: "briefError" in data ? data : { ...data, briefError: null } });
   }
 
-  static async hasCasePayment(caseId: string): Promise<boolean> {
-    return (await prisma.clientPayment.count({ where: { caseId, kind: "CASE", status: "SUCCEEDED" } })) > 0;
-  }
 
   /** REQUESTED -> ROUTED, right after create() — nothing else touches a brand new request at the
    * same instant, so this doesn't need transition()'s guard. */

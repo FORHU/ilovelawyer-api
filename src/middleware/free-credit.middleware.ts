@@ -10,9 +10,9 @@ import { ACCESS_TOKEN_SECRET } from "../config";
  * payment. Everything else that is not a read is new work. */
 const ALWAYS_OPEN = /^\/api(?:\/v1)?\/(?:auth|users\/me|consents)(?:\/|$)/;
 
-/** The client app pays per case and counts chat credits per case (ClientBillingSvc), which take
- * the place of the account-wide free credit there. Without this a client who had used it up
- * couldn't even pay for a case. */
+/** The client app counts chat credits per case (ClientBillingSvc), which take the place of the
+ * account-wide free credit there. Without this a client who had used it up couldn't even make a
+ * case or top one up. */
 const CLIENT_APP = /^\/api(?:\/v1)?\/client(?:\/|$)/;
 
 /** A lawyer topping up their own account's AI allowance (AccountTopUpBillingSvc) — must keep

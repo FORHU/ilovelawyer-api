@@ -70,9 +70,9 @@ describe("Free AI credit", () => {
     }
   });
 
-  it("leaves the client app to its per-case chat credits, so a client can still pay and chat", async () => {
+  it("leaves the client app to its per-case chat credits, so a client can still make a case, chat and top up", async () => {
     spend.pricedUsd = 50;
-    for (const path of ["/client/payments/case", "/client/cases", "/client/cases/c1/messages", "/client/cases/c1/top-ups"]) {
+    for (const path of ["/client/payments/top-up/quote", "/client/cases", "/client/cases/c1/messages", "/client/cases/c1/top-ups"]) {
       expect(await run(req("POST", path)), path).to.equal(null);
     }
     // Only the client app's own routes: a lookalike prefix is still limited.

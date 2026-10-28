@@ -1,4 +1,4 @@
-/** A client asking for a lawyer (ClientRequestSvc, /api/client/lawyer-requests): only on a paid UK
+/** A client asking for a lawyer (ClientRequestSvc, /api/client/lawyer-requests): only on a UK
  * case that isn't personal injury, one open request per case, the consent version checked, and
  * withdrawing until a lawyer is confirmed. No live Postgres: repositories are monkeypatched, same
  * idiom as test/client-case.spec.ts. */
@@ -37,7 +37,6 @@ describe("Client lawyer requests", () => {
   let restore: (() => void)[];
   let briefsStarted: string[];
   let caseRow: any;
-  let paid: boolean;
   let open: { id: string } | null;
   let requests: Map<string, any>;
   let claims: any[];
@@ -46,7 +45,7 @@ describe("Client lawyer requests", () => {
   beforeEach(() => {
     restore = [
       stash(ClientCaseRepo, ["findById"]),
-      stash(ClientRequestRepo, ["hasCasePayment", "findOpenForCase", "create", "findForClient", "transition", "route", "withdraw"]),
+      stash(ClientRequestRepo, ["findOpenForCase", "create", "findForClient", "transition", "route", "withdraw"]),
       stash(ClientRequestBriefSvc, ["generateInBackground"]),
       stash(ClientRequestMatchingSvc, ["eligibleLawyerIds"]),
       stash(socket, ["emitToUser"]),
@@ -64,13 +63,11 @@ describe("Client lawyer requests", () => {
       return { moved: true, heldBy: open?.lawyerId ?? null };
     };
     caseRow = { id: CASE_ID, ukJurisdiction: "England and Wales", lawyerReadiness: null };
-    paid = true;
     open = null;
     requests = new Map();
     briefsStarted = [];
     (ClientRequestBriefSvc as any).generateInBackground = (id: string) => briefsStarted.push(id);
     (ClientCaseRepo as any).findById = async (id: string, orgId: string) => (caseRow && id === caseRow.id && orgId === workspace.id ? caseRow : null);
-    (ClientRequestRepo as any).hasCasePayment = async () => paid;
     (ClientRequestRepo as any).findOpenForCase = async () => open;
     (ClientRequestRepo as any).create = async (data: any) => {
       const row = { id: `req-${requests.size + 1}`, status: "REQUESTED", withdrawnAt: null, createdAt: new Date(), updatedAt: new Date(), ...data };
@@ -100,20 +97,17 @@ describe("Client lawyer requests", () => {
     ClientRequestSvc.create(workspace, "client-1", { caseId: CASE_ID, note: "  Prefer a fixed fee. ", consentVersion: CLIENT_REQUEST_CONSENT_VERSION, consentAccepted: true, ...overrides });
 
   describe("eligibility", () => {
-    it("is eligible on a paid UK case with no open request", async () => {
+    it("is eligible on a UK case with no open request (cases are free, so there's no payment to check)", async () => {
       expect(await ClientRequestSvc.eligibility(workspace, CASE_ID)).to.deep.equal({ eligible: true, reason: null, openRequestId: null });
     });
 
-    it("says why not, in order: outside the UK, personal injury, unpaid, already asked", async () => {
+    it("says why not, in order: outside the UK, personal injury, already asked", async () => {
       caseRow.ukJurisdiction = null;
       expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("NOT_UK_CASE");
       caseRow.ukJurisdiction = "Scotland";
       caseRow.lawyerReadiness = { blockedBy: "PERSONAL_INJURY" };
       expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("PERSONAL_INJURY_EXCLUDED");
       caseRow.lawyerReadiness = null;
-      paid = false;
-      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("CASE_NOT_PAID");
-      paid = true;
       open = { id: "req-9" };
       expect(await ClientRequestSvc.eligibility(workspace, CASE_ID)).to.deep.equal({ eligible: false, reason: "REQUEST_ALREADY_OPEN", openRequestId: "req-9" });
     });
