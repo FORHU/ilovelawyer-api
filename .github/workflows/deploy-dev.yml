@@ -181,6 +181,7 @@ jobs:
           printf 'CASE_RECONSTRUCTION_AUDIO_QUEUE_URL=%s/dev-case-reconstruction-audio\n' "$Q" >> env.tmp
           printf 'AI_GENERATION_QUEUE_URL=%s/dev-ai_generate\n'                        "$Q" >> env.tmp
           printf 'MESSAGE_PERSISTENCE_QUEUE_URL=%s/dev-message-queue\n'                "$Q" >> env.tmp
+          printf 'CLIENT_CHAT_GENERATION_QUEUE_URL=%s/dev-client-chat-generation\n' "$Q" >> env.tmp
 
           # CASE_GRAPH_PROMOTION_QUEUE_URL is deliberately absent: written empty
           # it reads as configured and the worker logs "refusing to start".

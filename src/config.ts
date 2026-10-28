@@ -218,6 +218,12 @@ export const AI_GENERATION_QUEUE_URL = process.env.AI_GENERATION_QUEUE_URL as st
  * queue-driven at all (it used to be where the chat message itself got persisted, back when
  * everything else ran synchronously in the request) — one queue, one consumer. */
 export const MESSAGE_PERSISTENCE_QUEUE_URL = process.env.MESSAGE_PERSISTENCE_QUEUE_URL as string;
+/** The client app's chat turns (ilovelawyer-client) — the same worker code as the lawyer app's
+ * chat, on its own queue so neither app's load holds up the other. See
+ * queues/chat-generation.queue.ts. Must NOT share a physical SQS queue with
+ * MESSAGE_PERSISTENCE_QUEUE_URL (or any other queue): two consumers polling one queue randomly
+ * steal each other's messages. */
+export const CLIENT_CHAT_GENERATION_QUEUE_URL = process.env.CLIENT_CHAT_GENERATION_QUEUE_URL as string;
 /** Case-graph enrichment for an already-persisted chat turn (timeline/decision-record
  * promotion) — see queues/case-graph-promotion.queue.ts. Its own dedicated queue: it must
  * NOT share a physical SQS queue with MESSAGE_PERSISTENCE_QUEUE_URL (or any other queue) —

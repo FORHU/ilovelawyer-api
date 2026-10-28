@@ -10,6 +10,7 @@ for q in \
   case-reconstruction-audio \
   ai-generation \
   message-persistence \
+  client-chat-generation \
   case-graph-promotion
 do
   echo "Creating queue: $q"

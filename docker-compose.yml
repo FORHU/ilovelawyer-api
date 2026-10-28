@@ -51,7 +51,7 @@ services:
       retries: 20
     restart: always
 
-  # One-shot: creates the 7 app queues in LocalStack once it's healthy. create-queue is
+  # One-shot: creates the 8 app queues in LocalStack once it's healthy. create-queue is
   # idempotent (returns the existing queue if one already exists by that name), so re-running
   # this on every `docker compose up` is safe — it's not a long-running service.
   sqs-init:

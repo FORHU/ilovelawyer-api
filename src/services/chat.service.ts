@@ -43,7 +43,7 @@ import NotificationSvc from "./notification.service";
 import CaseRepo from "../repositories/case.repository";
 import ClientIntakeSvc from "./client-intake.service";
 import ParticipantRepo from "../repositories/participant.repository";
-import ChatGenerationQueue, { ChatGenerationJob } from "../queues/chat-generation.queue";
+import { ChatGenerationJob, ChatGenerationSource, chatGenerationQueueFor } from "../queues/chat-generation.queue";
 import { getProxyFileUrl } from "../utils/s3";
 import CaseMindMapSvc from "./case-mind-map.service";
 import DamageClaimSvc, { type CaseDamagesChatContext } from "./damage-claim.service";
@@ -455,6 +455,9 @@ export default class ChatSvc {
    * common case) and both matter for the response — a bad/foreign caseId 404s immediately
    * instead of only surfacing after a round trip through SQS, and the effective session id is
    * returned to the client right away instead of arriving later over the socket.
+   *
+   * `source` picks the queue: the lawyer app's chat (the default) or the client app's, which
+   * ClientCaseSvc.sendMessage passes. Each runs on its own SQS queue and worker.
    */
   static async enqueueChatGeneration(
     scope: WorkspaceScope,
@@ -467,6 +470,7 @@ export default class ChatSvc {
     caseDocumentId?: string,
     caseId?: string,
     documentIds?: string[],
+    { source = "lawyer" }: { source?: ChatGenerationSource } = {},
   ): Promise<{ messageId: string; sessionId: string; replyStatus: "PENDING" }> {
     const t0 = Date.now();
     logger.info("Chat: enqueueChatGeneration started", { consultationId });
@@ -526,7 +530,7 @@ export default class ChatSvc {
       await DocumentRepo.linkToMessage(documentIds, userMessage.id, scope, consultationId, userId, effectiveCaseId);
     }
 
-    ChatGenerationQueue.enqueue({
+    chatGenerationQueueFor(source).enqueue({
       jobId: userMessage.id,
       organizationId: scope.organizationId,
       tenantCode,
@@ -537,11 +541,13 @@ export default class ChatSvc {
       documentContext,
       caseDocumentId,
       effectiveCaseId: effectiveCaseId ?? null,
+      source,
       enqueuedAt: Date.now(),
     });
 
     logger.info("Chat: enqueueChatGeneration completed — job handed to worker", {
       consultationId,
+      source,
       messageId: userMessage.id,
       elapsedMs: Date.now() - t0,
     });
@@ -574,6 +580,7 @@ export default class ChatSvc {
       try {
         emitToUser(job.userId, "chat:error", {
           consultationId: job.consultationId,
+          caseId: job.effectiveCaseId,
           messageId: job.jobId,
           message: "AI processing is switched off for your account.",
         });
@@ -709,9 +716,11 @@ export default class ChatSvc {
     // generation (or worse) over a live-push failure that has nothing to do with whether the
     // turn itself is succeeding. A disconnected/broken socket layer must never take an AI job
     // down with it (see the class-level "browser failure" invariant this queue is built on).
+    // `caseId` is for the client app, which keys its chat by case rather than consultation.
+    const eventCaseId = effectiveCaseId ?? consultation.caseId ?? null;
     const emitEvent = (event: string, payload: Record<string, unknown>) => {
       try {
-        emitToUser(userId, event, { consultationId, messageId: parentMessageId, ...payload });
+        emitToUser(userId, event, { consultationId, caseId: eventCaseId, messageId: parentMessageId, ...payload });
       } catch (err) {
         logger.warn("Chat generation: emitToUser failed, continuing without it", { err, event, jobId: parentMessageId });
       }

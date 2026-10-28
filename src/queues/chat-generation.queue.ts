@@ -2,9 +2,14 @@ import ChatSvc from "../services/chat.service";
 import ChatRepo from "../repositories/chat.repository";
 import { emitToUser } from "../lib/socket";
 import { sendMessage, receiveMessages, deleteMessage, withVisibilityHeartbeat } from "../lib/sqs";
-import { MESSAGE_PERSISTENCE_QUEUE_URL } from "../config";
+import * as config from "../config";
 import { TenantCode } from "../types/tenant-code";
 import logger from "../utils/logger";
+
+/** Which app's chat a turn came from — and so which queue (and worker) it runs on. The lawyer
+ * app's chat and the client app's chat each have their own SQS queue, so a burst on one never
+ * holds up the other. */
+export type ChatGenerationSource = "lawyer" | "client";
 
 /**
  * Everything ChatSvc.processChatGenerationJob needs to run a chat turn's full AI generation
@@ -43,6 +48,9 @@ export interface ChatGenerationJob {
    * check) at enqueue time — a bad/foreign caseId 404s immediately in the request instead of
    * surfacing only after a round trip through SQS. */
   effectiveCaseId: string | null;
+  /** Stamped by the queue it was enqueued on, for logs. Optional so a job enqueued before this
+   * field existed (still in flight across a deploy) still parses. */
+  source?: ChatGenerationSource;
   enqueuedAt?: number;
 }
 
@@ -54,7 +62,8 @@ export interface ChatGenerationJob {
 const VISIBILITY_TIMEOUT_SECONDS = 300;
 // Chat is the primary, highest-volume interactive feature (unlike the occasional Refresh/Red
 // Team actions on AiGenerationQueue) — I/O-bound (WebSocket to Chat Wonder), not CPU/memory
-// heavy, so a higher concurrency keeps response latency reasonable under load.
+// heavy, so a higher concurrency keeps response latency reasonable under load. Per queue: the
+// lawyer and client queues each get their own 10.
 const CONCURRENCY = 10;
 
 // Generous ceiling for a turn to legitimately still be PENDING — ChatSvc.processChatGenerationJob
@@ -86,12 +95,13 @@ function sleep(ms: number) {
  * synchronously in the request, then enqueue only the DB write" design with (see
  * ChatSvc.enqueueChatGeneration / ChatSvc.processChatGenerationJob).
  *
- * Queue URL: reuses MESSAGE_PERSISTENCE_QUEUE_URL — the one that used to be where the chat
- * message itself got persisted, before this turn was queue-driven (see that config constant's
- * doc comment). This is the ONLY consumer of that queue; CaseGraphPromotionQueue has its own,
- * separate CASE_GRAPH_PROMOTION_QUEUE_URL. Never point two queue classes' consumers at the
- * same physical SQS queue — each poller has no way to tell "not my message type" from
- * "malformed," so they'll randomly steal and drop each other's jobs.
+ * Two instances, one per app (see the exports below), each the ONLY consumer of its own queue:
+ * the lawyer app's chat on MESSAGE_PERSISTENCE_QUEUE_URL (the one that used to be where the chat
+ * message itself got persisted, before this turn was queue-driven — see that config constant's
+ * doc comment), the client app's on CLIENT_CHAT_GENERATION_QUEUE_URL. CaseGraphPromotionQueue has
+ * its own, separate CASE_GRAPH_PROMOTION_QUEUE_URL. Never point two consumers at the same
+ * physical SQS queue — each poller has no way to tell "not my message type" from "malformed," so
+ * they'll randomly steal and drop each other's jobs.
  *
  * Acking: unlike CaseGraphPromotionQueue (which leaves a failed job un-acked so SQS blindly
  * redelivers it), this queue ALWAYS acks in `runOne`'s `finally`, mirroring AiGenerationQueue's
@@ -104,34 +114,45 @@ function sleep(ms: number) {
  * ChatSvc.persistAssistantTurn's idempotency guard (findAssistantReplyByParent) makes that
  * redelivery safe even if the crash happened after the assistant message was already created.
  */
-export default class ChatGenerationQueue {
-  private static running = false;
-  private static active = 0;
-  private static memoryWait: WaitItem[] = [];
+export class ChatGenerationQueueWorker {
+  private running = false;
+  private active = 0;
+  private memoryWait: WaitItem[] = [];
 
-  static enqueue(job: ChatGenerationJob): void {
+  /** `queueUrl` is read on every use rather than once, so a test can swap the config value. */
+  constructor(
+    readonly source: ChatGenerationSource,
+    private readonly urlEnvName: string,
+    private readonly queueUrl: () => string,
+  ) {}
+
+  enqueue(job: ChatGenerationJob): void {
     if (!job?.jobId) return;
     job.enqueuedAt = job.enqueuedAt ?? Date.now();
+    job.source = job.source ?? this.source;
 
-    sendMessage(MESSAGE_PERSISTENCE_QUEUE_URL, JSON.stringify(job))
+    sendMessage(this.queueUrl(), JSON.stringify(job))
       .catch((err) => {
         logger.error("Failed to enqueue chat generation job — falling back to in-process", {
           err,
+          queue: this.source,
           jobId: job.jobId,
           consultationId: job.consultationId,
         });
         // Never drop a turn the user is actively waiting on. If the worker loop is running,
         // hand it to memoryWait so the CONCURRENCY cap still applies; if the queue never
-        // started (no URL configured), run it inline right here.
+        // started (no URL configured), run it inline right here. Never onto the other app's
+        // queue: the two stay apart even when one is misconfigured.
         if (this.running) {
-          logger.warn("Chat generation: SQS send failed, queued in-process instead", { jobId: job.jobId });
+          logger.warn("Chat generation: SQS send failed, queued in-process instead", { queue: this.source, jobId: job.jobId });
           this.memoryWait.push({ job, receiptHandle: null });
           this.pump();
         } else {
-          logger.warn("Chat generation: queue not running, processing this job fully inline", { jobId: job.jobId });
+          logger.warn("Chat generation: queue not running, processing this job fully inline", { queue: this.source, jobId: job.jobId });
           void ChatSvc.processChatGenerationJob(job).catch((e) => {
             logger.error("Chat generation: inline fallback failed", {
               err: e,
+              queue: this.source,
               jobId: job.jobId,
               consultationId: job.consultationId,
             });
@@ -140,63 +161,18 @@ export default class ChatGenerationQueue {
       });
   }
 
-  static start(): void {
+  start(): void {
     if (this.running) return;
-    if (!MESSAGE_PERSISTENCE_QUEUE_URL) {
-      logger.error("Chat generation queue: MESSAGE_PERSISTENCE_QUEUE_URL is not set, refusing to start");
+    if (!this.queueUrl()) {
+      logger.error(`Chat generation queue (${this.source}): ${this.urlEnvName} is not set, refusing to start`);
       return;
     }
     this.running = true;
-    void this.run();
-  }
-
-  private static async run(): Promise<void> {
     void this.fetchLoop();
-    void this.sweepLoop();
     this.pump();
   }
 
-  /** Independent of fetchLoop/pump on purpose: a turn stuck because ITS OWN worker hung (the
-   * exact failure mode this exists to catch) would never notice its own staleness — this has
-   * to be a separate loop that doesn't depend on any one job's promise ever settling. */
-  private static async sweepLoop(): Promise<void> {
-    while (this.running) {
-      await sleep(SWEEP_INTERVAL_MS);
-      try {
-        await this.sweepStalePending();
-      } catch (err) {
-        logger.error("Chat generation: stale-pending sweep failed", { err });
-      }
-    }
-  }
-
-  private static async sweepStalePending(): Promise<void> {
-    const cutoff = new Date(Date.now() - STALE_PENDING_CEILING_MS);
-    const stale = await ChatRepo.findStalePendingMessages(cutoff);
-    if (stale.length === 0) return;
-
-    logger.warn("Chat generation: sweeping stale PENDING turns to FAILED", {
-      count: stale.length,
-      messageIds: stale.map((m) => m.id),
-    });
-
-    for (const message of stale) {
-      try {
-        await ChatRepo.setReplyStatus(message.id, "FAILED", { clearPendingContent: true });
-        if (message.userId) {
-          emitToUser(message.userId, "chat:error", {
-            consultationId: message.consultationId,
-            messageId: message.id,
-            message: "Generation timed out",
-          });
-        }
-      } catch (err) {
-        logger.error("Chat generation: failed to sweep stale PENDING turn", { err, messageId: message.id });
-      }
-    }
-  }
-
-  private static async fetchLoop(): Promise<void> {
+  private async fetchLoop(): Promise<void> {
     while (this.running) {
       const available = CONCURRENCY - this.active - this.memoryWait.length;
       if (available <= 0) {
@@ -204,14 +180,14 @@ export default class ChatGenerationQueue {
         continue;
       }
 
-      const messages = await receiveMessages(MESSAGE_PERSISTENCE_QUEUE_URL, available, VISIBILITY_TIMEOUT_SECONDS);
+      const messages = await receiveMessages(this.queueUrl(), available, VISIBILITY_TIMEOUT_SECONDS);
       if (messages.length === 0) continue;
 
       for (const message of messages) {
         const job = this.parse(message.body);
         if (!job) {
-          logger.error("Chat generation: dropping malformed SQS message", { sqsMessageId: message.messageId });
-          void deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, message.receiptHandle).catch(() => {});
+          logger.error("Chat generation: dropping malformed SQS message", { queue: this.source, sqsMessageId: message.messageId });
+          void deleteMessage(this.queueUrl(), message.receiptHandle).catch(() => {});
           continue;
         }
         this.memoryWait.push({ job, receiptHandle: message.receiptHandle, sqsMessageId: message.messageId });
@@ -220,12 +196,12 @@ export default class ChatGenerationQueue {
     }
   }
 
-  private static parse(body: string): ChatGenerationJob | null {
+  private parse(body: string): ChatGenerationJob | null {
     let parsed: Partial<ChatGenerationJob> | undefined;
     try {
       parsed = JSON.parse(body) as Partial<ChatGenerationJob>;
     } catch (err) {
-      logger.error("Chat generation queue: message body is not valid JSON", { err, body });
+      logger.error("Chat generation queue: message body is not valid JSON", { err, queue: this.source, body });
       return null;
     }
     if (
@@ -239,17 +215,18 @@ export default class ChatGenerationQueue {
     ) {
       return parsed as ChatGenerationJob;
     }
-    // Valid JSON but the wrong shape — most likely MESSAGE_PERSISTENCE_QUEUE_URL got pointed at
-    // a queue another consumer is also polling (see the class doc comment on why that's unsafe).
+    // Valid JSON but the wrong shape — most likely this queue's URL got pointed at a queue
+    // another consumer is also polling (see the class doc comment on why that's unsafe).
     // Logging the keys actually present, not the full body, makes that misconfiguration obvious
     // without dumping potentially large chat payloads into the log.
     logger.error("Chat generation queue: message JSON doesn't match ChatGenerationJob's shape", {
+      queue: this.source,
       keysPresent: parsed ? Object.keys(parsed) : [],
     });
     return null;
   }
 
-  private static pump(): void {
+  private pump(): void {
     if (!this.running) return;
 
     while (this.active < CONCURRENCY && this.memoryWait.length > 0) {
@@ -259,10 +236,10 @@ export default class ChatGenerationQueue {
     }
   }
 
-  private static runOne(item: WaitItem): void {
+  private runOne(item: WaitItem): void {
     this.active += 1;
     const startedAt = Date.now();
-    void withVisibilityHeartbeat(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
+    void withVisibilityHeartbeat(this.queueUrl(), item.receiptHandle, VISIBILITY_TIMEOUT_SECONDS, () =>
       ChatSvc.processChatGenerationJob(item.job),
     )
       // processChatGenerationJob already records FAILED on the Message row and emits
@@ -271,6 +248,7 @@ export default class ChatGenerationQueue {
       .catch((err) => {
         logger.error("Chat generation: job failed", {
           err,
+          queue: this.source,
           jobId: item.job.jobId,
           consultationId: item.job.consultationId,
           sqsMessageId: item.sqsMessageId,
@@ -279,10 +257,11 @@ export default class ChatGenerationQueue {
       })
       .finally(async () => {
         if (item.receiptHandle) {
-          await deleteMessage(MESSAGE_PERSISTENCE_QUEUE_URL, item.receiptHandle)
+          await deleteMessage(this.queueUrl(), item.receiptHandle)
             .catch((err) => {
               logger.error("Chat generation queue: failed to delete message", {
                 err,
+                queue: this.source,
                 jobId: item.job.jobId,
                 sqsMessageId: item.sqsMessageId,
               });
@@ -291,5 +270,77 @@ export default class ChatGenerationQueue {
         this.active -= 1;
         this.pump();
       });
+  }
+}
+
+/** The lawyer app's chat (ilovelawyer-app). */
+const ChatGenerationQueue = new ChatGenerationQueueWorker(
+  "lawyer",
+  "MESSAGE_PERSISTENCE_QUEUE_URL",
+  () => config.MESSAGE_PERSISTENCE_QUEUE_URL,
+);
+
+/** The client app's chat (ilovelawyer-client), enqueued by ClientCaseSvc.sendMessage. */
+export const ClientChatGenerationQueue = new ChatGenerationQueueWorker(
+  "client",
+  "CLIENT_CHAT_GENERATION_QUEUE_URL",
+  () => config.CLIENT_CHAT_GENERATION_QUEUE_URL,
+);
+
+export function chatGenerationQueueFor(source: ChatGenerationSource): ChatGenerationQueueWorker {
+  return source === "client" ? ClientChatGenerationQueue : ChatGenerationQueue;
+}
+
+export default ChatGenerationQueue;
+
+/**
+ * Marks turns that have been PENDING past STALE_PENDING_CEILING_MS as FAILED and tells the asker
+ * (chat:error). One loop for both queues, started once in server.ts: the query covers every
+ * PENDING turn, so a loop per queue would sweep each turn twice. Independent of the queues on
+ * purpose: a turn stuck because ITS OWN worker hung (the exact failure mode this exists to catch)
+ * would never notice its own staleness — this has to be a separate loop that doesn't depend on
+ * any one job's promise ever settling.
+ */
+let sweeping = false;
+
+export function startStalePendingChatSweep(): void {
+  if (sweeping) return;
+  sweeping = true;
+  void (async () => {
+    while (sweeping) {
+      await sleep(SWEEP_INTERVAL_MS);
+      try {
+        await sweepStalePendingChats();
+      } catch (err) {
+        logger.error("Chat generation: stale-pending sweep failed", { err });
+      }
+    }
+  })();
+}
+
+export async function sweepStalePendingChats(): Promise<void> {
+  const cutoff = new Date(Date.now() - STALE_PENDING_CEILING_MS);
+  const stale = await ChatRepo.findStalePendingMessages(cutoff);
+  if (stale.length === 0) return;
+
+  logger.warn("Chat generation: sweeping stale PENDING turns to FAILED", {
+    count: stale.length,
+    messageIds: stale.map((m) => m.id),
+  });
+
+  for (const message of stale) {
+    try {
+      await ChatRepo.setReplyStatus(message.id, "FAILED", { clearPendingContent: true });
+      if (message.userId) {
+        emitToUser(message.userId, "chat:error", {
+          consultationId: message.consultationId,
+          caseId: message.consultation?.caseId ?? null,
+          messageId: message.id,
+          message: "Generation timed out",
+        });
+      }
+    } catch (err) {
+      logger.error("Chat generation: failed to sweep stale PENDING turn", { err, messageId: message.id });
+    }
   }
 }
