@@ -13,7 +13,6 @@ import TranscriptionChunkSvc from "./transcription-chunk.service";
 import { mapDocumentToDto } from "./document.service";
 import { enrichRelatedCaseTitles } from "../utils/related-case-titles";
 import { generateTitleViaWs, streamChatWonderMessage, getChatWonderSessionId, GenerationCancelledError, RelatedCase, CaseDocumentGrounding, ChatWonderStage } from "../utils/chatWonder";
-import { INTAKE_TAG } from "../constants/chatWonder.constants";
 import TraceCollectorSvc, { TraceTurn } from "./trace-collector.service";
 import { redis } from "../lib/redis";
 import HttpError from "../utils/http-error";
@@ -989,12 +988,12 @@ export default class ChatSvc {
     // responseCacheKey is keyed on (consultationId, userMessage text, resolvedContext,
     // groundingKey) — it has no notion of which turn this is or what the assistant last asked.
     // That's fine for a one-shot legal Q&A (the same question really does deserve the same
-    // answer), but this whole pipeline has exactly one producer, ClientCaseSvc.sendMessage —
-    // the intake consultation's back-and-forth interview (see the comment on `personaTag`
-    // below). There, the correct reply depends entirely on conversation position: the user
-    // typing the same short answer ("employment", "yes") twice in one case must not replay
-    // whatever the model said the first time that text/context pair was seen. Caching is
-    // disabled for this pipeline until the key can account for turn position.
+    // answer), but this pipeline is shared with ilovelawyer-client's case consultation
+    // (ClientCaseSvc.sendMessage) too — a back-and-forth interview, where the correct reply
+    // depends entirely on conversation position: the user typing the same short answer
+    // ("employment", "yes") twice in one case must not replay whatever the model said the first
+    // time that text/context pair was seen. Caching is disabled for this pipeline until the key
+    // can account for turn position.
     const wantsMindMap = /visual strategy map|mind\s*map/i.test(userInput);
     const wantsAudioOverview = /audio overview/i.test(userInput);
 
@@ -1129,12 +1128,6 @@ export default class ChatSvc {
               mindMapContext: mindMapContext || undefined,
               caseDamages,
               onStage,
-              // This whole pipeline (enqueueChatGeneration -> ChatGenerationQueue ->
-              // runChatGenerationJob) has exactly one producer: ClientCaseSvc.sendMessage. It is
-              // never reached by ilovelawyer-app's own AI features (case-strategy, mind-map,
-              // etc.), which call streamChatWonderMessage directly -- so this is safe to set
-              // unconditionally here rather than threading a client/lawyer flag through.
-              personaTag: INTAKE_TAG,
               // A question is traced as "chat"; the mind map and audio overview triggers, which go
               // through this same path, are traced under their own names.
               trace: {
@@ -1663,9 +1656,6 @@ export default class ChatSvc {
       onStage?: (stage: ChatWonderStage) => void;
       /** Set on a real user turn: records its customer-facing trace for the Terminal's trace pane. */
       trace?: TraceTurn;
-      /** Forwarded to streamChatWonderMessage's opts.personaTag — see its doc comment. Only
-       * runChatGenerationJob sets this (INTAKE_TAG, the client consultation path). */
-      personaTag?: string;
     },
   ) {
     // Map fields only on a turn that asked for a map; the damages model on any case turn.
@@ -1674,7 +1664,6 @@ export default class ChatSvc {
       ...(extras?.caseDamages ? { caseDamages: extras.caseDamages } : {}),
       ...(extras?.onStage ? { onStage: extras.onStage } : {}),
       ...(extras?.trace ? { traceTurnId: extras.trace.turnId } : {}),
-      ...(extras?.personaTag ? { personaTag: extras.personaTag } : {}),
       // The turn's LlmUsage row (epic #399). A real user turn names its user, organization and case
       // through its trace; the mind map and audio overview triggers are recorded under their own names.
       usage: {
