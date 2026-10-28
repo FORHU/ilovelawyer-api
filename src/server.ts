@@ -5,7 +5,8 @@ import AudioOverviewQueue from "./queues/audio-overview.queue";
 import CitationExtractionQueue from "./queues/citation-extraction.queue";
 import AiGenerationQueue from "./queues/ai-generation.queue";
 import CaseGraphPromotionQueue from "./queues/case-graph-promotion.queue";
-import ChatGenerationQueue, { ClientChatGenerationQueue, startStalePendingChatSweep } from "./queues/chat-generation.queue";
+import ChatGenerationQueue, { startStalePendingChatSweep } from "./queues/chat-generation.queue";
+import IntakeChatGenerationQueue, { startIntakeStalePendingSweep } from "./queues/intake-chat-generation.queue";
 import EventReminderQueue from "./queues/event-reminder.queue";
 import AccountDeletionQueue from "./queues/account-deletion.queue";
 import ConsultationDeletionQueue from "./queues/consultation-deletion.queue";
@@ -35,8 +36,13 @@ CitationExtractionQueue.start();
 AiGenerationQueue.start();
 CaseGraphPromotionQueue.start();
 ChatGenerationQueue.start();
-ClientChatGenerationQueue.start();
 startStalePendingChatSweep();
+// ClientChatGenerationQueue (chat-generation.queue.ts) is no longer started here: ClientCaseSvc
+// .sendMessage now dispatches to IntakeChatGenerationQueue below, a fully separate pipeline, so
+// nothing enqueues to it anymore. Left un-deleted for now (flagged as follow-up cleanup) rather
+// than removed as a side effect of this change.
+IntakeChatGenerationQueue.start();
+startIntakeStalePendingSweep();
 EventReminderQueue.start();
 AccountDeletionQueue.start();
 ConsultationDeletionQueue.start();

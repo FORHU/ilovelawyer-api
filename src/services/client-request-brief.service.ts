@@ -3,7 +3,7 @@ import type { ClientRequestStatus, Prisma } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestNotifySvc from "./client-request-notify.service";
 import CaseAreaSvc from "./case-area.service";
-import ChatRepo from "../repositories/chat.repository";
+import IntakeChatRepo from "../repositories/intake-chat.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import { labelForDesignation, redactBrief, type RedactionContext } from "../utils/brief-redaction";
 import { toAnonymisedIntake } from "../utils/client-intake-redaction";
@@ -248,9 +248,7 @@ export default class ClientRequestBriefSvc {
   }
 
   private static async conversationOf(source: BriefSource) {
-    const consultationId = source.case.consultations[0]?.id;
-    if (!consultationId) return { conversation: [], latestMessageId: null };
-    const messages = (await ChatRepo.listMessagesByConsultation(consultationId)).filter((m) => m.role === "user" || m.role === "assistant");
+    const messages = (await IntakeChatRepo.listByCase(source.caseId)).filter((m) => m.role === "user" || m.role === "assistant");
     return {
       conversation: messages.slice(-MAX_MESSAGES).map((m): ConversationMessage => ({ from: m.role, text: m.content.slice(0, MAX_MESSAGE_CHARS), at: m.createdAt })),
       latestMessageId: messages.at(-1)?.id ?? null,

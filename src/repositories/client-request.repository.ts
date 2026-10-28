@@ -163,7 +163,6 @@ export default class ClientRequestRepo {
             clientSide: true,
             parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } },
             documents: { where: { status: "ACTIVE" }, select: { id: true, name: true }, orderBy: { createdAt: "asc" } },
-            consultations: { where: { status: "ACTIVE" }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 1 },
           },
         },
       },
