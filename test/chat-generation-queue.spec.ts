@@ -44,6 +44,7 @@ const baseJob: ChatGenerationJob = {
   sessionId: "sess-1",
   userInput: "Hello, I need help.",
   effectiveCaseId: null,
+  isClientIntake: false,
 };
 
 // --- queue: always acks (Test 5 — worker crash relies on SQS redelivery, not blind retry) ---
@@ -126,7 +127,19 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     ChatRepo.findConsultationWithCase = async () => null;
     let err: Error | undefined;
     try {
-      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "hello");
+      await ChatSvc.enqueueChatGeneration(
+        firmScope("org1"),
+        "PH",
+        "user1",
+        "c1",
+        "sess-1",
+        "hello",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false,
+      );
     } catch (e) {
       err = e as Error;
     }
@@ -146,7 +159,19 @@ describe("ChatSvc.enqueueChatGeneration", () => {
       enqueued = job;
     };
 
-    const result = await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "hello");
+    const result = await ChatSvc.enqueueChatGeneration(
+      firmScope("org1"),
+      "PH",
+      "user1",
+      "c1",
+      "sess-1",
+      "hello",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
 
     expect(result).to.deep.equal({ messageId: "m-user-1", sessionId: "sess-1", replyStatus: "PENDING" });
     expect(enqueued).to.not.equal(null);
@@ -154,6 +179,7 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     expect(enqueued.consultationId).to.equal("c1");
     expect(enqueued.userInput).to.equal("hello");
     expect(enqueued.effectiveCaseId).to.equal(null);
+    expect(enqueued.isClientIntake).to.equal(false);
   });
 
   it("404s immediately on a bad/foreign caseId — before ever reaching the queue", async () => {
@@ -167,7 +193,19 @@ describe("ChatSvc.enqueueChatGeneration", () => {
     };
     let err: Error | undefined;
     try {
-      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "hello", undefined, undefined, "foreign-case");
+      await ChatSvc.enqueueChatGeneration(
+        firmScope("org1"),
+        "PH",
+        "user1",
+        "c1",
+        "sess-1",
+        "hello",
+        undefined,
+        undefined,
+        "foreign-case",
+        undefined,
+        false,
+      );
     } catch (e) {
       err = e as Error;
     }
@@ -186,7 +224,19 @@ describe("ChatSvc.enqueueChatGeneration", () => {
       linked = args;
     };
     try {
-      await ChatSvc.enqueueChatGeneration(firmScope("org1"), "PH", "user1", "c1", "sess-1", "read this", undefined, undefined, undefined, ["d1"]);
+      await ChatSvc.enqueueChatGeneration(
+        firmScope("org1"),
+        "PH",
+        "user1",
+        "c1",
+        "sess-1",
+        "read this",
+        undefined,
+        undefined,
+        undefined,
+        ["d1"],
+        false,
+      );
     } finally {
       DocumentRepo.linkToMessage = originalLink;
     }

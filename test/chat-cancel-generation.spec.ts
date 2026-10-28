@@ -34,6 +34,7 @@ const baseJob: ChatGenerationJob = {
   sessionId: "sess-1",
   userInput: "Hello, I need help.",
   effectiveCaseId: null,
+  isClientIntake: false,
 };
 
 describe("Stopping a generation", () => {

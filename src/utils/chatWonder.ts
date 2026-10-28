@@ -535,9 +535,11 @@ function streamChatWonderMessageOnce(
    * rewrite round. */
   opts?: {
     /** Overrides withLegalTag below for this one call: sent as the tag prefix on user_input
-     * instead of `[legal ai]`/`[legal ai uk]`. The only caller today is the client consultation
-     * path (ChatSvc.runChatGenerationJob), which passes INTAKE_TAG — see chatWonder.constants.ts.
-     * Every other caller leaves this unset and keeps today's legal-tag behaviour. */
+     * instead of `[legal ai]`/`[legal ai uk]`. The only caller today is ChatSvc.runChatGenerationJob
+     * — shared by both ilovelawyer-client's case chat and ilovelawyer-app's Terminal chat, so it
+     * only actually passes INTAKE_TAG when its own job carries isClientIntake (see
+     * ChatGenerationJob's doc comment) — a Terminal turn leaves this unset, same as every other
+     * caller, and keeps today's legal-tag behaviour. */
     personaTag?: string;
     resolveOnAnswerEnd?: boolean;
     mindMapRequested?: boolean;

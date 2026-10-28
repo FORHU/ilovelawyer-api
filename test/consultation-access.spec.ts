@@ -212,7 +212,7 @@ describe("Consultation access", () => {
           ChatSvc.unarchiveConsultation(firmScope("org-1"), other, "c1"),
           ChatSvc.deleteConsultation(firmScope("org-1"), other, "c1"),
           ChatSvc.deleteMessage(firmScope("org-1"), other, "c1", "m1"),
-          ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, other, "c1", "session", "hello"),
+          ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, other, "c1", "session", "hello", undefined, undefined, undefined, undefined, false),
           ChatSvc.cancelChatGeneration(firmScope("org-1"), other, "c1", "m1"),
           ChatSvc.getRelatedCases(firmScope("org-1"), other, "PH" as any, "c1"),
           ChatSvc.startAudioOverviewAudio(firmScope("org-1"), other, "c1", "m1"),
@@ -292,7 +292,7 @@ describe("Consultation access", () => {
 
     it("takes no new messages while archived", async () => {
       consultation = { ...CASE_CONSULTATION, status: "ARCHIVED" };
-      const send = ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, "creator", "c1", "session", "hello");
+      const send = ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, "creator", "c1", "session", "hello", undefined, undefined, undefined, undefined, false);
       expect(await statusOf(send)).to.equal(409);
     });
   });
@@ -328,7 +328,7 @@ describe("Consultation access", () => {
 
     it("takes no new messages while scheduled for deletion", async () => {
       consultation = { ...CASE_CONSULTATION, status: "FOR_DELETION", deletionRequestedAt: new Date() };
-      const send = ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, "creator", "c1", "session", "hello");
+      const send = ChatSvc.enqueueChatGeneration(firmScope("org-1"), "PH" as any, "creator", "c1", "session", "hello", undefined, undefined, undefined, undefined, false);
       expect(await statusOf(send)).to.equal(409);
     });
 

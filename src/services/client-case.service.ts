@@ -362,6 +362,8 @@ export default class ClientCaseSvc {
         undefined,
         caseId,
         ids.length ? ids : undefined,
+        // The one real caller of the intake persona tag — see ChatGenerationJob.isClientIntake.
+        true,
       );
     } catch (err) {
       await ClientBillingSvc.refundCredit(caseId);

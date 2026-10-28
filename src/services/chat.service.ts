@@ -463,10 +463,15 @@ export default class ChatSvc {
     consultationId: string,
     requestedSessionId: string,
     userInput: string,
-    documentContext?: string,
-    caseDocumentId?: string,
-    caseId?: string,
-    documentIds?: string[],
+    documentContext: string | undefined,
+    caseDocumentId: string | undefined,
+    caseId: string | undefined,
+    documentIds: string[] | undefined,
+    /** True only for ClientCaseSvc.sendMessage (ilovelawyer-client's case consultation) — see
+     * ChatGenerationJob.isClientIntake's doc comment for why this can't be inferred and must be
+     * passed explicitly by every caller. ChatCtrl.sendMessage (ilovelawyer-app's Terminal) passes
+     * false. */
+    isClientIntake: boolean,
   ): Promise<{ messageId: string; sessionId: string; replyStatus: "PENDING" }> {
     const t0 = Date.now();
     logger.info("Chat: enqueueChatGeneration started", { consultationId });
@@ -537,6 +542,7 @@ export default class ChatSvc {
       documentContext,
       caseDocumentId,
       effectiveCaseId: effectiveCaseId ?? null,
+      isClientIntake,
       enqueuedAt: Date.now(),
     });
 
@@ -673,7 +679,7 @@ export default class ChatSvc {
     const { signal } = control.abort;
     logger.info("Chat generation: processing started", { jobId: job.jobId, consultationId: job.consultationId });
 
-    const { jobId: parentMessageId, organizationId, tenantCode, userId, consultationId, sessionId, caseDocumentId, documentContext } = job;
+    const { jobId: parentMessageId, organizationId, tenantCode, userId, consultationId, sessionId, caseDocumentId, documentContext, isClientIntake } = job;
     // A job from a lawyer's own workspace carries no organization; the asker owns that workspace.
     const scope = organizationId ? firmScope(organizationId) : ownScope(userId);
     const effectiveCaseId = job.effectiveCaseId ?? undefined;
@@ -1120,12 +1126,18 @@ export default class ChatSvc {
               mindMapContext: mindMapContext || undefined,
               caseDamages,
               onStage,
-              // This whole pipeline (enqueueChatGeneration -> ChatGenerationQueue ->
-              // runChatGenerationJob) has exactly one producer: ClientCaseSvc.sendMessage. It is
-              // never reached by ilovelawyer-app's own AI features (case-strategy, mind-map,
-              // etc.), which call streamChatWonderMessage directly -- so this is safe to set
-              // unconditionally here rather than threading a client/lawyer flag through.
-              personaTag: INTAKE_TAG,
+              // This pipeline (enqueueChatGeneration -> ChatGenerationQueue ->
+              // runChatGenerationJob) is shared by BOTH ClientCaseSvc.sendMessage (ilovelawyer-
+              // client's case chat) and ChatCtrl.sendMessage (ilovelawyer-app's Terminal research
+              // chat, via components/chat/consultation-chat.tsx) — confirmed 2026-10-28 after an
+              // earlier version of this comment claimed the opposite and briefly sent every
+              // Terminal turn through the intake persona (f8af06f4's "single call site for
+              // ChatGenerationQueue.enqueue" check verified the wrong function: that queue method
+              // IS only called from one place, enqueueChatGeneration itself, which says nothing
+              // about how many callers feed INTO enqueueChatGeneration). isClientIntake is the
+              // explicit, per-call flag each of those two callers sets — see its doc comment on
+              // ChatGenerationJob.
+              ...(isClientIntake ? { personaTag: INTAKE_TAG } : {}),
               // A question is traced as "chat"; the mind map and audio overview triggers, which go
               // through this same path, are traced under their own names.
               trace: {

@@ -203,7 +203,19 @@ describe("#346 — Can view on a confidential case is read-only", () => {
 
     it("refuses asking in one, their own included, with a 403", async () => {
       const err = await rejection(
-        ChatSvc.enqueueChatGeneration(firmScope(ORG), "UK" as never, USER, "c-view", "session-1", "What are the risks?"),
+        ChatSvc.enqueueChatGeneration(
+          firmScope(ORG),
+          "UK" as never,
+          USER,
+          "c-view",
+          "session-1",
+          "What are the risks?",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          false,
+        ),
       );
       expect(err.statusCode).to.equal(403);
       expect(writes).to.deep.equal([]);

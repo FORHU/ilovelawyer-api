@@ -148,6 +148,10 @@ export default class ChatCtrl {
       caseDocumentId,
       caseId,
       documentIds,
+      // workspaceOf() only ever resolves a lawyer firm/own workspace (resolve-organization
+      // .middleware.ts) — ilovelawyer-client's case chat goes through ClientCaseSvc.sendMessage
+      // instead, a different controller entirely. This is always a Terminal turn.
+      false,
     );
 
     return res.status(202).json(result);

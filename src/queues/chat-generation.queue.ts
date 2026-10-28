@@ -43,6 +43,17 @@ export interface ChatGenerationJob {
    * check) at enqueue time — a bad/foreign caseId 404s immediately in the request instead of
    * surfacing only after a round trip through SQS. */
   effectiveCaseId: string | null;
+  /** Whether this turn came from ilovelawyer-client's case consultation (ClientCaseSvc.sendMessage)
+   * rather than ilovelawyer-app's Terminal research chat (ChatCtrl.sendMessage) — both call
+   * ChatSvc.enqueueChatGeneration and land on this same queue/job shape, so this is the only
+   * signal runChatGenerationJob has for which persona tag the turn should get (see its own use of
+   * this field). `organizationId` cannot stand in for it: it's also null for a solo lawyer's own
+   * workspace, not just for a client. Required, not defaulted — a caller that forgets to set it
+   * explicitly should fail to compile, not silently fall back to one side or the other (see
+   * 2026-10-24's f8af06f4, which mis-scoped this exact field as implicit and briefly sent every
+   * Terminal turn through the intake persona instead of legal_uk).
+   */
+  isClientIntake: boolean;
   enqueuedAt?: number;
 }
 
