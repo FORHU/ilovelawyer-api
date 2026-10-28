@@ -4,10 +4,7 @@ import SecurityAuditSvc from "./security-audit.service";
 import HttpError from "../utils/http-error";
 import type { LawyerCountry } from "../constants/lawyer-application.constants";
 import type { SecurityAuditAction } from "../constants/security-audit.constants";
-import { CASE_AREA_CODE_PATTERN, OTHER_CASE_AREA, PERSONAL_INJURY } from "../constants/case-area.constants";
-
-/** Client cases are UK only for now, so every case's areas are the UK list's. */
-export const CLIENT_CASE_COUNTRY: LawyerCountry = "UK";
+import { CASE_AREA_CODE_PATTERN, CLIENT_CASE_COUNTRY, OTHER_CASE_AREA, PERSONAL_INJURY } from "../constants/case-area.constants";
 
 export interface NewCaseArea {
   country: LawyerCountry;
@@ -87,16 +84,15 @@ export default class CaseAreaSvc {
     return unique;
   }
 
-  /** A practice area's mapping: one of the site's case areas, or null for none. */
-  static async assertMappable(country: string, code: string | null | undefined) {
+  /** A practice area's mapping: one of its own site's case areas, or null for none. */
+  static async assertMappable(country: LawyerCountry, code: string | null | undefined) {
     if (!code) return;
-    if (country !== CLIENT_CASE_COUNTRY) throw new HttpError("Only UK practice areas match client cases", 400, "CASE_AREA_UK_ONLY");
-    if (!(await CaseAreaRepo.findByCode(CLIENT_CASE_COUNTRY, code))) throw new HttpError(`No case area with code ${code}`, 400, "UNKNOWN_CASE_AREA");
+    if (!(await CaseAreaRepo.findByCode(country, code))) throw new HttpError(`${country} has no case area with code ${code}`, 400, "UNKNOWN_CASE_AREA");
   }
 
   static async listForAdmin(country: LawyerCountry) {
     const areas = await CaseAreaRepo.list(country);
-    const usage = await CaseAreaRepo.usage(areas.map((a) => a.code));
+    const usage = await CaseAreaRepo.usage(country, areas.map((a) => a.code));
     return areas.map((a) => CaseAreaSvc.adminDto(a, usage.get(a.code)!));
   }
 
@@ -144,7 +140,7 @@ export default class CaseAreaSvc {
       from: { name: before.name, description: before.description, isActive: before.isActive },
       to: { ...patch, name, description },
     });
-    return CaseAreaSvc.adminDto(row, (await CaseAreaRepo.usage([row.code])).get(row.code)!);
+    return CaseAreaSvc.adminDto(row, (await CaseAreaRepo.usage(row.country as LawyerCountry, [row.code])).get(row.code)!);
   }
 
   /** Only an area no case has and no practice area maps to; never OTHER. */
@@ -152,7 +148,7 @@ export default class CaseAreaSvc {
     const before = await CaseAreaRepo.find(id);
     if (!before) throw new HttpError("Unknown case area", 404);
     if (before.code === OTHER_CASE_AREA) throw new HttpError("Other can't be deleted: it's where a case nothing else fits goes", 409, "CASE_AREA_REQUIRED_OTHER");
-    const usage = (await CaseAreaRepo.usage([before.code])).get(before.code)!;
+    const usage = (await CaseAreaRepo.usage(before.country as LawyerCountry, [before.code])).get(before.code)!;
     if (usage.cases > 0 || usage.practiceAreas > 0) {
       throw new HttpError("Cases or practice areas use this case area. Switch it off instead.", 409, "CASE_AREA_IN_USE", usage);
     }

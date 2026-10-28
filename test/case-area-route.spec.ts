@@ -72,14 +72,22 @@ describe("Client case types", () => {
     await request(app).get("/api/admin/case-areas?country=UK").set({ Authorization: `Bearer ${tokenFor(lawyerId)}` }).expect(403);
   });
 
-  it("starts with today's five, described for Jev, and counts what uses each", async () => {
+  it("starts with the defaults, described for Jev, and counts what uses each", async () => {
     const list = (await admin.list().expect(200)).body as any[];
-    expect(list.map((a) => a.code)).to.include.members(DEFAULT_CASE_AREAS.map((a) => a.code));
+    expect(list.map((a) => a.code)).to.include.members(DEFAULT_CASE_AREAS.UK.map((a) => a.code));
     const employment = list.find((a) => a.code === "EMPLOYMENT");
     expect(employment).to.deep.include({ name: "Employment", isActive: true });
     expect(employment.description).to.include("dismissal");
     expect(employment.practiceAreaCount).to.be.greaterThan(0);
     expect(employment).to.have.property("caseCount");
+  });
+
+  it("keeps PH's own list, counting only PH's practice areas and no cases", async () => {
+    const ph = (await request(app).get("/api/admin/case-areas?country=PH").set(asAdmin).expect(200)).body as any[];
+    expect(ph.map((a) => a.code)).to.include.members(DEFAULT_CASE_AREAS.PH.map((a) => a.code));
+    const other = ph.find((a) => a.code === "OTHER");
+    const phMappedToOther = await prisma.practiceArea.count({ where: { country: "PH", caseArea: "OTHER" } });
+    expect(other).to.deep.include({ country: "PH", caseCount: 0, practiceAreaCount: phMappedToOther });
   });
 
   it("adds an area with an upper-cased code at the end, audited, and refuses a clash or a bad code", async () => {

@@ -1,6 +1,7 @@
 import type { CaseArea, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import type { LawyerCountry } from "../constants/lawyer-application.constants";
+import { CLIENT_CASE_COUNTRY } from "../constants/case-area.constants";
 
 const ORDER = [{ sortOrder: "asc" }, { name: "asc" }] satisfies Prisma.CaseAreaOrderByWithRelationInput[];
 
@@ -23,15 +24,18 @@ export default class CaseAreaRepo {
     return prisma.caseArea.findUnique({ where: { country_code: { country, code } } });
   }
 
-  /** How many cases have each of these codes, and how many practice areas map to each. */
-  static async usage(codes: string[]): Promise<Map<string, { cases: number; practiceAreas: number }>> {
+  /** How many cases have each of the site's codes, and how many of its practice areas map to each.
+   * Cases carry no site: they're all CLIENT_CASE_COUNTRY's, so another site's areas count none. */
+  static async usage(country: LawyerCountry, codes: string[]): Promise<Map<string, { cases: number; practiceAreas: number }>> {
     const usage = new Map(codes.map((code) => [code, { cases: 0, practiceAreas: 0 }]));
     if (codes.length === 0) return usage;
     const [cases, practiceAreas] = await Promise.all([
-      prisma.$queryRaw<{ code: string; n: number }[]>`
-        SELECT code, count(*)::int AS n FROM "Case", unnest("caseAreas") AS code
-        WHERE code = ANY(${codes}) GROUP BY code`,
-      prisma.practiceArea.groupBy({ by: ["caseArea"], where: { caseArea: { in: codes } }, _count: { _all: true } }),
+      country === CLIENT_CASE_COUNTRY
+        ? prisma.$queryRaw<{ code: string; n: number }[]>`
+            SELECT code, count(*)::int AS n FROM "Case", unnest("caseAreas") AS code
+            WHERE code = ANY(${codes}) GROUP BY code`
+        : [],
+      prisma.practiceArea.groupBy({ by: ["caseArea"], where: { country, caseArea: { in: codes } }, _count: { _all: true } }),
     ]);
     for (const { code, n } of cases) usage.get(code)!.cases = n;
     for (const row of practiceAreas) usage.get(row.caseArea!)!.practiceAreas = row._count._all;

@@ -71,17 +71,19 @@ describe("Practice areas", () => {
     await request(app).get("/api/admin/practice-areas?country=UK").set(asLawyer).expect(403);
   });
 
-  it("starts each site with its defaults, in order; only UK ones route cases", async () => {
+  it("starts each site with its defaults, in order, each mapped to one of its site's case areas", async () => {
     const uk = (await admin.list("UK").expect(200)).body;
     const ukDefaults = uk.filter((a: any) => !a.name.endsWith(suffix));
     expect(ukDefaults.map((a: any) => a.name)).to.include.members(DEFAULT_PRACTICE_AREAS.UK.map((a) => a.name));
     expect(ukDefaults.map((a: any) => a.name)).to.not.include.members(["Personal Injury Law", "Medical Negligence"]);
     expect(uk.find((a: any) => a.name === "Employment Law")).to.deep.include({ country: "UK", caseArea: "EMPLOYMENT", isActive: true });
+    expect(uk.find((a: any) => a.name === "Immigration Law")).to.deep.include({ caseArea: "IMMIGRATION" });
+    expect([...DEFAULT_PRACTICE_AREAS.UK, ...DEFAULT_PRACTICE_AREAS.PH].every((a) => a.caseArea)).to.equal(true);
     expect(uk[0]).to.have.property("lawyerCount");
 
     const ph = (await admin.list("PH").expect(200)).body;
     expect(ph.map((a: any) => a.name)).to.include.members(DEFAULT_PRACTICE_AREAS.PH.map((a) => a.name));
-    expect(ph.every((a: any) => a.caseArea === null)).to.equal(true);
+    expect(ph.find((a: any) => a.name === "Labor and Employment Law")).to.deep.include({ country: "PH", caseArea: "EMPLOYMENT" });
   });
 
   it("needs a site", async () => {
@@ -106,9 +108,11 @@ describe("Practice areas", () => {
     await admin.create({ country: "PH", name: named("Sports Law") }).expect(201);
   });
 
-  it("maps only UK areas to client cases", async () => {
-    const res = await admin.create({ country: "PH", name: named("Shipping Law"), caseArea: "EMPLOYMENT" }).expect(400);
-    expect(res.body.code).to.equal("CASE_AREA_UK_ONLY");
+  it("maps an area only to one of its own site's case areas", async () => {
+    // DEBT_INSOLVENCY is UK's; PH has no such case area.
+    const res = await admin.create({ country: "PH", name: named("Debt Law"), caseArea: "DEBT_INSOLVENCY" }).expect(400);
+    expect(res.body.code).to.equal("UNKNOWN_CASE_AREA");
+    await admin.create({ country: "PH", name: named("Shipping Law"), caseArea: "BUSINESS" }).expect(201);
     await admin.create({ country: "UK", name: named("Injury Law"), caseArea: "PERSONAL_INJURY" }).expect(400);
   });
 

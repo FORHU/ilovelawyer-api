@@ -4,7 +4,7 @@ import { PRACTICE_AREA_NAME_MAX_LENGTH } from "../constants/practice-area.consta
 
 const country = Joi.string().valid(...LAWYER_COUNTRIES);
 const name = Joi.string().trim().min(1).max(PRACTICE_AREA_NAME_MAX_LENGTH);
-// A CaseArea code; CaseAreaSvc.assertMappable checks it exists, and refuses one on PH.
+// A CaseArea code; CaseAreaSvc.assertMappable checks the site has it.
 const caseArea = Joi.string().max(40).allow(null);
 
 export const practiceAreaListSchema = Joi.object({ country: country.required() });

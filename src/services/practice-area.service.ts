@@ -74,7 +74,7 @@ export default class PracticeAreaSvc {
     const before = await PracticeAreaRepo.find(id);
     if (!before) throw new HttpError("Unknown practice area", 404);
     const name = patch.name?.trim();
-    await CaseAreaSvc.assertMappable(before.country, patch.caseArea);
+    await CaseAreaSvc.assertMappable(before.country as LawyerCountry, patch.caseArea);
     if (name !== undefined && name.toLowerCase() !== before.name.toLowerCase()) {
       if (await PracticeAreaRepo.findByName(before.country as LawyerCountry, name)) throw NAME_TAKEN(before.country, name);
     }
