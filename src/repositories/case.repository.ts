@@ -1,6 +1,6 @@
 import prisma from "../lib/prisma";
 import CaseAccess from "../utils/case-access";
-import { CaseStatus, ClientSide, Prisma } from "@prisma/client";
+import { CaseStatus, ClientSide, Prisma, QuoteType } from "@prisma/client";
 import { getStableProxyFileUrl } from "../utils/s3";
 import { organizationIdOf, scopeWhere, type WorkspaceScope } from "../utils/workspace";
 
@@ -66,6 +66,10 @@ export interface CaseData {
   clientSide?: ClientSide | null;
   notes?: string | null;
   parties?: PartyInput[];
+  /** Client app only: the Client Budget (utils/client-budget budgetColumns). */
+  budgetMinMinor?: number | null;
+  budgetMaxMinor?: number | null;
+  budgetFeePreference?: QuoteType | null;
 }
 
 export default class CaseRepo {

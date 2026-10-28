@@ -30,6 +30,7 @@ import { CLIENT_DOCUMENT_LINK_SECONDS } from "../constants/client-case.constants
 import CaseAreaSvc, { type CaseAreaRef } from "./case-area.service";
 import { OTHER_CASE_AREA } from "../constants/case-area.constants";
 import { firmScope } from "../utils/workspace";
+import { budgetColumns, budgetOf, type ClientBudget } from "../utils/client-budget";
 
 /** The client's personal workspace, as clientWorkspaceOf(req) gives it. */
 export interface ClientWorkspace {
@@ -49,6 +50,8 @@ export interface NewClientCase {
   others?: { name: string; role: string }[];
   /** What happened and what the client wants, as one block of text. */
   notes?: string;
+  /** What they can spend on a lawyer; null or left out: "Not sure". */
+  budget?: ClientBudget | null;
 }
 
 /** What the client may change on a case they've made. Anything left out stays as it is. */
@@ -61,6 +64,8 @@ export interface ClientCaseChanges {
   side?: ClientSide | null;
   others?: { name: string; role: string }[];
   notes?: string;
+  /** Replaces the budget; null clears it. */
+  budget?: ClientBudget | null;
 }
 
 /** Once a lawyer holds the request, their conflict check and quote rest on the case's problem, place
@@ -91,6 +96,8 @@ function toDto(row: ClientCaseRow, label: (codes: string[]) => CaseAreaRef[]) {
     notes: row.notes ?? "",
     side: row.clientSide,
     others: row.parties.map((p) => ({ id: p.id, name: p.name, role: p.designation })),
+    /** Null: the client set none ("Not sure"). */
+    budget: budgetOf(row),
     documents: row.documents.map(toDocumentDto),
     credits: row.clientCredits,
     createdAt: row.createdAt,
@@ -216,6 +223,7 @@ export default class ClientCaseSvc {
       clientSide: input.side ?? null,
       parties: (input.others ?? []).map((o) => ({ name: o.name, designation: o.role })),
       ...(input.notes ? { notes: input.notes } : {}),
+      ...budgetColumns(input.budget ?? null),
       clientCredits: credits,
     });
     await ChatSvc.createConsultation(firmScope(workspace.id), userId, input.title.slice(0, CONSULTATION_TITLE_MAX), created.id);
@@ -260,6 +268,9 @@ export default class ClientCaseSvc {
     if (input.side !== undefined) data.clientSide = input.side;
     if (input.notes !== undefined) data.notes = input.notes || null;
     if (input.others !== undefined) data.parties = input.others.map((o) => ({ name: o.name, designation: o.role }));
+    // Not among the fields a lawyer's hold fixes: the client can change it until they hire. The
+    // brief picks it up only before a lawyer claims, like every other change.
+    if (input.budget !== undefined) Object.assign(data, budgetColumns(input.budget));
 
     await CaseSvc.update(caseId, firmScope(workspace.id), userId, data);
     await ClientCaseRepo.clearReadiness(caseId);

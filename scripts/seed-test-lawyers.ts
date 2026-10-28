@@ -5,7 +5,7 @@
  * tenant, its tiers and the practice and case areas.
  *
  *   npm run seed:test-lawyers              create the 100, or put them back as seeded
- *   npm run seed:test-lawyers -- --clean   delete every seeded lawyer (emails @seed.test)
+ *   npm run seed:test-lawyers -- --clean   delete every seeded lawyer (emails @seed.example.com)
  *
  * Everything comes from a fixed random seed, so every run makes the same people: uk.lawyer.042 is
  * always the same lawyer. A run also deletes any other seeded lawyer (an older PH one, say), so the
@@ -22,7 +22,11 @@ import { USERS_LIST_VERSION_KEY } from "../src/constants/admin.constants";
 import { UK_JURISDICTIONS, type LawyerRegulator, type UkJurisdiction } from "../src/types/client-handoff";
 import PaymentPlanSvc from "../src/services/payment-plan.service";
 
-const EMAIL_DOMAIN = "seed.test";
+// A subdomain of the reserved example.com: Joi's email check rejects the reserved `.test` TLD, so
+// the API refused to sign these lawyers in, and other seeds already use plain @example.com.
+const EMAIL_DOMAIN = "seed.example.com";
+// The domain seeded lawyers used before; still deleted so a re-seed or --clean removes them.
+const LEGACY_EMAIL_DOMAIN = "seed.test";
 const PASSWORD = process.env.SEED_LAWYER_PASSWORD || "Seed-Lawyer-123!";
 const COUNT = 100;
 const SITE = "UK";
@@ -441,7 +445,13 @@ async function bustUsersList() {
 
 /** Seeded lawyers (by email domain), except those in `keep`. */
 async function deleteSeeded(keep: string[] = []) {
-  const { count } = await prisma.user.deleteMany({ where: { role: "LAWYER", email: { endsWith: `@${EMAIL_DOMAIN}`, notIn: keep } } });
+  const { count } = await prisma.user.deleteMany({
+    where: {
+      role: "LAWYER",
+      email: { notIn: keep },
+      OR: [EMAIL_DOMAIN, LEGACY_EMAIL_DOMAIN].map((domain) => ({ email: { endsWith: `@${domain}` } })),
+    },
+  });
   return count;
 }
 

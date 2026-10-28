@@ -1,7 +1,7 @@
 name: Seed test lawyers (dev)
 
 # Runs scripts/seed-test-lawyers.ts against the DEV database: 100 UK solo test lawyers
-# (uk.lawyer.001@seed.test …), or deletes them all. Dev only, and never copy it to production or
+# (uk.lawyer.001@seed.example.com …), or deletes them all. Dev only, and never copy it to production or
 # UK: 70 of them are verified and accepting, so on a real database they would be routed real
 # client requests.
 #
