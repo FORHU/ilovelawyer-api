@@ -168,6 +168,7 @@ export const clientHandoffSchemas: Schemas = {
       knownDeadline: { type: "string", format: "date", nullable: true },
       clientNote: { type: "string", description: "The client's note on the request, as written" },
       generatedAt: dateTime(),
+      intake: { ...ref("AnonymisedIntake"), nullable: true, description: "The client's intake (ADR 0018), redacted the same way summary/clientNote are. Null until the intake has run once." },
     },
     example: {
       summary: "Employee dismissed after 3 years' service without a disciplinary process; wants to know whether to bring an unfair dismissal claim.",
@@ -177,6 +178,71 @@ export const clientHandoffSchemas: Schemas = {
       knownDeadline: "2026-12-01",
       clientNote: "I'd prefer a fixed fee if possible.",
       generatedAt: "2026-10-20T09:00:00.000Z",
+      intake: null,
+    },
+  },
+  IntakeCompleteness: {
+    type: "object",
+    nullable: true,
+    description: "Lawyer Readiness (Jev), when that check is enabled; null when it's off or hasn't run.",
+    properties: {
+      ready: { type: "boolean" },
+      criteria: { type: "array", items: { type: "object", properties: { key: { type: "string" }, label: { type: "string" }, met: { type: "boolean" } } } },
+    },
+  },
+  AnonymisedIntake: {
+    type: "object",
+    description: "The client's intake with every name, document name and source id stripped (ADR 0018) — what a lawyer sees before claiming, folded into CaseBrief.intake.",
+    properties: {
+      timeline: { type: "array", items: { type: "object", properties: { id: { type: "string" }, date: { type: "string", format: "date", nullable: true }, datePrecision: enumOf(["DAY", "MONTH", "YEAR", "UNKNOWN"]), text: { type: "string" } } } },
+      goals: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } } },
+      concerns: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } } },
+      questionsForLawyer: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } } },
+      deadlines: { type: "array", items: { type: "object", properties: { id: { type: "string" }, date: { type: "string", format: "date", nullable: true }, text: { type: "string" } } } },
+      missing: { type: "array", items: { type: "object", properties: { id: { type: "string" }, question: { type: "string" }, why: { type: "string" } } } },
+      completeness: ref("IntakeCompleteness"),
+    },
+  },
+  CaseIntake: {
+    type: "object",
+    description: "The client's intake, in full (ADR 0018): real names and document names, each item carrying its source. Only through GET /client-requests/{id}/intake-package, once engaged.",
+    properties: {
+      generatedAt: dateTime(undefined, true),
+      status: enumOf(["EMPTY", "RUNNING", "READY", "FAILED", "STALE"]),
+      summary: { type: "string", nullable: true },
+      people: { type: "array", items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, role: { type: "string" } } } },
+      timeline: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, date: { type: "string", format: "date", nullable: true } } } },
+      facts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } } },
+      goals: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } } },
+      concerns: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } } },
+      questionsForLawyer: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" } } } },
+      deadlines: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, date: { type: "string", format: "date", nullable: true } } } },
+      missing: { type: "array", items: { type: "object", properties: { id: { type: "string" }, question: { type: "string" }, why: { type: "string" } } } },
+      conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, description: { type: "string" } } } },
+      completeness: ref("IntakeCompleteness"),
+    },
+  },
+  IntakePackageForLawyer: {
+    type: "object",
+    description: "The engaged lawyer's full read of the client's intake (ADR 0018): the case's own fields, the client's transcript and its documents, alongside the live CaseIntake.",
+    properties: {
+      requestId: { type: "string" },
+      caseId: { type: "string" },
+      caseDetails: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          practiceArea: enumOf(PRACTICE_AREAS),
+          ukJurisdiction: enumOf(UK_JURISDICTIONS),
+          town: { type: "string", nullable: true },
+          side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
+          otherParties: { type: "array", items: { type: "object", properties: { name: { type: "string" }, role: { type: "string" } } } },
+          clientNote: { type: "string" },
+        },
+      },
+      intake: ref("CaseIntake"),
+      transcript: { type: "array", items: { type: "object", properties: { id: { type: "string" }, role: { type: "string", enum: ["CLIENT", "AI"] }, text: { type: "string" }, createdAt: dateTime() } } },
+      documents: { type: "array", items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["PENDING", "READY", "FAILED"] }, category: { type: "string", nullable: true }, url: { type: "string", nullable: true } } } },
     },
   },
   Quote: {
@@ -757,6 +823,17 @@ export const clientHandoffPaths: Paths = {
         "The client (role \"Client\") first, then the case's other parties as the client entered them. Only for the lawyer holding the claim, while CLAIMED (inside the 24h hold) or QUOTED; 404 for anyone who never held it. Every read is audited (client_request.parties_viewed).",
       parameters: requestId,
       responses: { 200: ok("Parties", ref("ConflictParties")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED or INVALID_REQUEST_STATUS") },
+    }),
+  },
+  "/client-requests/{id}/intake-package": {
+    get: op({
+      tag: LAWYER_TAG,
+      issue: "docs/adr/0018-client-app-is-intake-not-advice.md", built: true,
+      summary: "The client's full intake: the case, the transcript, the documents and the live CaseIntake",
+      description:
+        "Only once ENGAGED, and only for the lawyer that engagement is for (404 otherwise, same as copy/close). Read-only; no redaction — the lawyer already has full case access through the engagement grant. Every read is audited (client_request.intake_package_viewed).",
+      parameters: requestId,
+      responses: { 200: ok("Intake package", ref("IntakePackageForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("INVALID_REQUEST_STATUS: this request isn't engaged") },
     }),
   },
   "/client-requests/{id}/release": {

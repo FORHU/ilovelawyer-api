@@ -478,6 +478,23 @@ model CaseClientOverview {
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 }
 
+/// The client app's Intake tab (ClientIntakeSvc): one AI-extracted CaseIntake (api's
+/// src/types/client-intake.ts), kept in `data` as Json so the shape can evolve without a
+/// migration. `fingerprint` is the latest message id + readySetFingerprint + Case.updatedAt this
+/// run was built from, so an unchanged case is never re-extracted. runDay/runsOnDay are the same
+/// daily-cap bookkeeping as CaseClientOverview.
+model CaseClientIntake {
+  caseId      String    @id
+  generatedAt DateTime?
+  fingerprint String?
+  data        Json?
+  runDay      DateTime? @db.Date
+  runsOnDay   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
 model MessageRelatedCases {
   id        String   @id @default(uuid())
   messageId String   @unique
@@ -955,6 +972,7 @@ model Case {
   clientPayments              ClientPayment[]
   clientRequests              ClientRequest[]
   clientOverview              CaseClientOverview?
+  clientIntake                CaseClientIntake?
 
   @@index([userId])
   @@index([organizationId])

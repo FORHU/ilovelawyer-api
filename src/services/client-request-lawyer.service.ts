@@ -18,6 +18,29 @@ import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
+import ChatRepo from "../repositories/chat.repository";
+import ClientIntakeRepo from "../repositories/client-intake.repository";
+import { documentFileUrl } from "./document.service";
+import type { CaseIntake, IntakePackageCaseDetails, IntakePackageDocument, IntakePackageForLawyer, IntakePackageMessage } from "../types/client-intake";
+
+/** What a case with no intake run yet looks like in the package — never undefined, so the lawyer
+ * app always has something to render rather than a special-casing null. */
+const EMPTY_INTAKE: CaseIntake = {
+  generatedAt: null,
+  status: "EMPTY",
+  updates: { allowed: true, leftToday: 0 },
+  summary: null,
+  people: [],
+  timeline: [],
+  facts: [],
+  goals: [],
+  concerns: [],
+  questionsForLawyer: [],
+  deadlines: [],
+  missing: [],
+  conflicts: [],
+  completeness: null,
+};
 
 /** Who's asking, from the lawyer app's resolved workspace (X-Organization-Id): their firm, or null
  * for a solo lawyer, who has no organization and is charged on their own card (docs/adr/0022). */
@@ -205,6 +228,58 @@ export default class ClientRequestLawyerSvc {
       payload: { requestId: id, claimId: claim.id, parties: parties.length },
     });
     return { parties };
+  }
+
+  /**
+   * The full intake package (ADR 0018, docs/plans/client-side-compressed-meteor.md §3.3): the
+   * live CaseIntake with real names/document names (no redaction — the lawyer is engaged and
+   * already has full case access), plus the case's own fields, the client's transcript and its
+   * documents. Read-only. Only the lawyer engaged on this request, and only while ENGAGED (same
+   * guard as copy()/close()); every read is audited, same reason as parties().
+   */
+  static async intakePackage(lawyer: LawyerContext, id: string): Promise<IntakePackageForLawyer> {
+    const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "This request isn't engaged.");
+    const found = await ClientRequestRepo.findForIntakePackage(id);
+    if (!found) throw NOT_FOUND();
+
+    const consultationId = found.case.consultations[0]?.id ?? null;
+    const rows = consultationId ? await ChatRepo.listMessagesByConsultation(consultationId) : [];
+    const transcript: IntakePackageMessage[] = rows
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ id: m.id, role: m.role === "user" ? ("CLIENT" as const) : ("AI" as const), text: m.content, createdAt: m.createdAt.toISOString() }));
+
+    const documents: IntakePackageDocument[] = found.case.documents.map((d) => ({
+      id: d.id,
+      name: d.name,
+      status: d.ragStatus,
+      category: d.category,
+      url: d.file?.s3Key ? documentFileUrl(d.file.s3Key, d.file.filename, { id: d.id, caseId: found.caseId }) : null,
+    }));
+
+    const stored = await ClientIntakeRepo.find(found.caseId);
+    const intake = (stored?.data as unknown as CaseIntake | null) ?? EMPTY_INTAKE;
+
+    const caseDetails: IntakePackageCaseDetails = {
+      title: found.case.caseName,
+      practiceArea: found.case.practiceArea,
+      ukJurisdiction: found.case.ukJurisdiction,
+      town: found.case.jurisdiction,
+      side: found.case.clientSide,
+      otherParties: found.case.parties.map((p) => ({ name: p.name, role: p.designation })),
+      clientNote: found.note,
+    };
+
+    await SecurityAuditSvc.record({
+      action: "client_request.intake_package_viewed",
+      actorId: lawyer.userId,
+      organizationId: lawyer.organizationId,
+      targetType: "case",
+      targetId: request.caseId,
+      caseId: request.caseId,
+      payload: { requestId: id },
+    });
+
+    return { requestId: id, caseId: found.caseId, caseDetails, intake, transcript, documents };
   }
 
   /**

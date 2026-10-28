@@ -38,6 +38,10 @@ export default class ClientRequestLawyerCtrl {
     res.status(200).json(await ClientRequestLawyerSvc.parties(lawyerOf(req), req.params.id));
   }
 
+  static async intakePackage(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.intakePackage(lawyerOf(req), req.params.id));
+  }
+
   static async release(req: Request, res: Response) {
     const body = validate(releaseClientRequestSchema, req.body ?? {});
     res.status(200).json(await ClientRequestLawyerSvc.release(lawyerOf(req), req.params.id, body));
