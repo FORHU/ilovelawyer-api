@@ -26,7 +26,7 @@ export default class CaseSvc {
     scope: WorkspaceScope,
     userId: string,
     role: OrganizationRole,
-    data: CaseData & { caseName: string; confidential?: boolean },
+    data: CaseData & { caseName: string; confidential?: boolean; clientCredits?: number },
   ) {
     await AccountLimitsSvc.assertCanCreateCase(userId);
     const { confidential = false, ...fields } = data;

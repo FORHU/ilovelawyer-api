@@ -10,6 +10,7 @@ import prisma from "../src/lib/prisma";
 import ClientCaseSvc, { type ClientWorkspace } from "../src/services/client-case.service";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
 import ClientPaymentRepo from "../src/repositories/client-payment.repository";
+import ClientBillingSvc from "../src/services/client-billing.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import OrganizationSvc from "../src/services/organization.service";
 import CaseSvc from "../src/services/case.service";
@@ -21,6 +22,7 @@ import ClientRequestSvc from "../src/services/client-request.service";
 import CaseAreaRepo from "../src/repositories/case-area.repository";
 import requireClientAccount from "../src/middleware/require-client-account.middleware";
 import clientRoute from "../src/routes/client.route";
+import ClientCaseCtrl from "../src/controllers/client-case.controller";
 import { createClientCaseSchema, sendClientMessageSchema, updateClientCaseSchema } from "../src/validation/client-case.validation";
 import { listRoutes } from "./support/list-routes";
 import * as socket from "../src/lib/socket";
@@ -175,8 +177,9 @@ describe("Client app cases", () => {
         stash(CaseSvc, ["create", "update", "archive", "unarchive", "delete"]),
         stash(ClientRequestSvc, ["withdraw"]),
         stash(ChatSvc, ["createConsultation", "listMessages", "enqueueChatGeneration"]),
-        // Paying and credits are test/client-billing.spec.ts's; here a payment is always good.
-        stash(ClientPaymentRepo, ["claimCasePayment", "attachToCase", "spendCredit", "addCredits"]),
+        // Credits are test/client-billing.spec.ts's; here a new case starts with 50.
+        stash(ClientPaymentRepo, ["spendCredit", "addCredits"]),
+        stash(ClientBillingSvc, ["pricing"]),
         stash(DocumentSvc, ["create"]),
         stash(DocumentRepo, ["findManyForCase"]),
         stash(ClientRequestRepo, ["findEngagedLawyerForCase", "findLiveForCase"]),
@@ -184,8 +187,7 @@ describe("Client app cases", () => {
         stash(CaseAreaRepo, ["list"]),
       ];
       (CaseAreaRepo as any).list = async () => CASE_AREAS;
-      (ClientPaymentRepo as any).claimCasePayment = async () => 50;
-      (ClientPaymentRepo as any).attachToCase = async () => undefined;
+      (ClientBillingSvc as any).pricing = async () => ({ case: { credits: 50 }, topUpPacks: [], defaultPackId: null });
       (ClientPaymentRepo as any).spendCredit = async () => {
         creditsSpent++;
         return true;
@@ -230,7 +232,6 @@ describe("Client app cases", () => {
 
     it("maps a client case onto a lawyer Case, and starts its chat", async () => {
       const dto = await ClientCaseSvc.create(workspace, "u1", {
-        paymentId: "pay-1",
         title: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
         areas: ["EMPLOYMENT"],
         ukJurisdiction: "England and Wales",
@@ -250,6 +251,8 @@ describe("Client app cases", () => {
           jurisdiction: "Leeds",
           clientSide: "CLAIMANT",
           parties: [{ name: "Acme Ltd", designation: "Opposing party" }],
+          // Free: no payment, and the case is written with the tenant's new-case credits.
+          clientCredits: 50,
         },
       ]);
       const [, , title, caseId] = calls.createConsultation as [string, string, string, string];
@@ -265,7 +268,6 @@ describe("Client app cases", () => {
 
     it("stores what the client said happened and wants as the case's notes", async () => {
       await ClientCaseSvc.create(workspace, "u1", {
-        paymentId: "pay-1",
         title: "Holiday refund",
         areas: ["CONSUMER"],
         ukJurisdiction: null,
@@ -275,27 +277,22 @@ describe("Client app cases", () => {
     });
 
     it("stores no UK jurisdiction for a case outside the UK", async () => {
-      await ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: null });
+      await ClientCaseSvc.create(workspace, "u1", { title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: null });
       expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, jurisdiction: undefined, clientSide: null });
     });
 
     it("takes several areas, each once, and shows them in the list's order", async () => {
       row = caseRow({ caseAreas: ["FAMILY", "EMPLOYMENT"] });
-      await ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "Split", areas: ["FAMILY", "EMPLOYMENT", "FAMILY"], ukJurisdiction: null });
+      await ClientCaseSvc.create(workspace, "u1", { title: "Split", areas: ["FAMILY", "EMPLOYMENT", "FAMILY"], ukJurisdiction: null });
       expect((calls.caseCreate as any[])[3].caseAreas).to.deep.equal(["FAMILY", "EMPLOYMENT"]);
       expect((await ClientCaseSvc.get(workspace, "case-1")).areas.map((a) => a.code)).to.deep.equal(["EMPLOYMENT", "FAMILY"]);
     });
 
-    it("refuses an area not on the list, or switched off, before the payment is used", async () => {
-      let claimed = false;
-      (ClientPaymentRepo as any).claimCasePayment = async () => {
-        claimed = true;
-        return 50;
-      };
+    it("refuses an area not on the list, or switched off, before the case is made", async () => {
       for (const [areas, code] of [[["PERSONAL_INJURY"], "UNKNOWN_CASE_AREA"], [["RETIRED"], "CASE_AREA_INACTIVE"], [[], "CASE_AREA_REQUIRED"]] as const) {
-        expect(await errorOf(ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "x", areas: [...areas], ukJurisdiction: null }))).to.deep.equal({ status: 400, code });
+        expect(await errorOf(ClientCaseSvc.create(workspace, "u1", { title: "x", areas: [...areas], ukJurisdiction: null }))).to.deep.equal({ status: 400, code });
       }
-      expect(claimed).to.equal(false);
+      expect(calls.caseCreate).to.equal(undefined);
     });
 
     it("lets a case keep a switched-off area it already has, but not add one", async () => {
@@ -515,13 +512,12 @@ describe("Client app cases", () => {
   });
 
   describe("validation", () => {
-    const valid = { paymentId: "pay-1", title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: "Scotland" };
+    const valid = { title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: "Scotland" };
 
     it("needs the part of the UK, or null for outside it", () => {
       expect(createClientCaseSchema.validate(valid).error).to.equal(undefined);
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: null }).error).to.equal(undefined);
-      expect(createClientCaseSchema.validate({ paymentId: "pay-1", title: "x", areas: ["CONSUMER"] }).error).to.not.equal(undefined);
-      expect(createClientCaseSchema.validate({ title: "x", areas: ["CONSUMER"], ukJurisdiction: null }).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ title: "x", areas: ["CONSUMER"] }).error).to.not.equal(undefined);
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: "Wales" }).error).to.not.equal(undefined);
     });
 
@@ -557,9 +553,20 @@ describe("Client app cases", () => {
     });
   });
 
+  it("answers the removed case payment routes with 410 CASES_ARE_FREE", async () => {
+    let caught: any;
+    try {
+      await ClientCaseCtrl.casePaymentGone({} as Request, {} as any);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).to.include({ statusCode: 410, code: "CASES_ARE_FREE" });
+  });
+
   it("serves exactly these routes", () => {
     expect(listRoutes(clientRoute).map((r) => `${r.method} ${r.path}`)).to.deep.equal([
       "GET /pricing",
+      "POST /payments/top-up/quote",
       "POST /payments/case/quote",
       "POST /payments/case",
       "GET /payments/:paymentId",

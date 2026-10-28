@@ -16,8 +16,17 @@ export interface NewClientPayment {
 }
 
 export default class ClientPaymentRepo {
+  /** A top-up that's already paid (the dummy, or FREE) adds its credits to the case in the same
+   * transaction, as settle() does for one that settles later, so a paid top-up is never left
+   * without its credits. */
   static async create(data: NewClientPayment) {
-    return prisma.clientPayment.create({ data });
+    if (data.status !== "SUCCEEDED" || data.kind !== "TOP_UP" || !data.caseId) return prisma.clientPayment.create({ data });
+    const caseId = data.caseId;
+    return prisma.$transaction(async (tx) => {
+      const payment = await tx.clientPayment.create({ data });
+      await tx.case.update({ where: { id: caseId }, data: { clientCredits: { increment: data.credits } } });
+      return payment;
+    });
   }
 
   static async setExternalId(id: string, externalId: string) {
@@ -74,49 +83,24 @@ export default class ClientPaymentRepo {
     return (await prisma.stripeWebhookEvent.count({ where: { id } })) > 0;
   }
 
-  /** Whether the client has ever paid for a case (for first-case-only promos). */
-  static async hasPaidForCase(userId: string): Promise<boolean> {
-    return (await prisma.clientPayment.count({ where: { userId, kind: "CASE", status: "SUCCEEDED" } })) > 0;
+  /** Whether the client has ever bought a top-up (for first-top-up-only promos). */
+  static async hasPaidTopUp(userId: string): Promise<boolean> {
+    return (await prisma.clientPayment.count({ where: { userId, kind: "TOP_UP", status: "SUCCEEDED" } })) > 0;
   }
 
-  /** Case payments that used a tenant's promo code, paid or still at checkout (so a code with one
-   * use left can't be taken twice at once). Codes are per tenant, so the payer's tenant is matched
-   * too. With `userId`, only that client's. */
+  /** Payments that used a tenant's promo code, paid or still at checkout (so a code with one use
+   * left can't be taken twice at once): top-ups, and the case payments promos applied to before
+   * cases were free. Codes are per tenant, so the payer's tenant is matched too. With `userId`,
+   * only that client's. */
   static async countPromoRedemptions(tenantId: string, promoCode: string, userId?: string): Promise<number> {
     return prisma.clientPayment.count({
-      where: { promoCode, kind: "CASE", status: { in: ["SUCCEEDED", "PENDING"] }, user: { tenantId }, ...(userId ? { userId } : {}) },
+      where: { promoCode, status: { in: ["SUCCEEDED", "PENDING"] }, user: { tenantId }, ...(userId ? { userId } : {}) },
     });
   }
 
   /** The client's tenant: whose prices and promo codes apply to them. */
   static async findTenantId(userId: string): Promise<string | null> {
     return (await prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true } }))?.tenantId ?? null;
-  }
-
-  /** Marks a successful case payment as used, once: the update only matches while it's unused, so
-   * two requests with the same payment can't both create a case. Returns its credits, or null when
-   * it's not this client's, didn't succeed, or was already used. */
-  static async claimCasePayment(paymentId: string, userId: string): Promise<number | null> {
-    const { count } = await prisma.clientPayment.updateMany({
-      where: { id: paymentId, userId, kind: "CASE", status: "SUCCEEDED", usedAt: null },
-      data: { usedAt: new Date() },
-    });
-    if (count !== 1) return null;
-    const row = await prisma.clientPayment.findUnique({ where: { id: paymentId }, select: { credits: true } });
-    return row?.credits ?? null;
-  }
-
-  /** Gives back a claimed payment whose case couldn't be created, so the client can try again. */
-  static async releaseCasePayment(paymentId: string): Promise<void> {
-    await prisma.clientPayment.updateMany({ where: { id: paymentId, caseId: null }, data: { usedAt: null } });
-  }
-
-  /** Ties a claimed payment to the case it paid for, and gives the case its credits. */
-  static async attachToCase(paymentId: string, caseId: string, credits: number): Promise<void> {
-    await prisma.$transaction([
-      prisma.clientPayment.update({ where: { id: paymentId }, data: { caseId } }),
-      prisma.case.update({ where: { id: caseId }, data: { clientCredits: credits } }),
-    ]);
   }
 
   /** Returns the case's new balance. */

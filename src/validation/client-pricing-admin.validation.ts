@@ -6,11 +6,10 @@ const amountMinor = Joi.number().integer().min(0);
 const credits = Joi.number().integer().min(1);
 const currency = Joi.string().trim().uppercase().length(3);
 
+// A new case is free: only the chat credits it starts with are set.
 export const updateClientCasePriceSchema = Joi.object({
-  priceMinor: amountMinor.optional(),
-  credits: credits.optional(),
-  currency: currency.optional(),
-}).min(1);
+  credits: credits.required(),
+});
 
 export const createClientPackSchema = Joi.object({
   code: Joi.string().trim().min(1).max(32).required(),
@@ -34,7 +33,7 @@ const promoFields = {
   description: Joi.string().trim().min(1).max(200),
   discountMinor: Joi.number().integer().min(1),
   currency,
-  firstCaseOnly: Joi.boolean().strict(),
+  firstTopUpOnly: Joi.boolean().strict(),
   oncePerClient: Joi.boolean().strict(),
   expiresAt: Joi.date().iso().allow(null),
   maxRedemptions: Joi.number().integer().min(1).allow(null),
@@ -46,7 +45,7 @@ export const createClientPromoSchema = Joi.object({
   description: promoFields.description.required(),
   discountMinor: promoFields.discountMinor.required(),
   currency: promoFields.currency.required(),
-  firstCaseOnly: promoFields.firstCaseOnly.default(false),
+  firstTopUpOnly: promoFields.firstTopUpOnly.default(false),
   oncePerClient: promoFields.oncePerClient.default(false),
   expiresAt: promoFields.expiresAt.default(null),
   maxRedemptions: promoFields.maxRedemptions.default(null),

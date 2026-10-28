@@ -35,7 +35,6 @@ const areas = Joi.array().items(Joi.string().max(40)).min(1).unique();
 const area = Joi.string().max(40);
 
 export const createClientCaseSchema = Joi.object({
-  paymentId: Joi.string().required(),
   title: Joi.string().trim().min(1).max(CLIENT_CASE_TITLE_MAX_LENGTH).required(),
   areas,
   area,
@@ -75,17 +74,16 @@ export const updateClientCaseSchema = Joi.object({
 // ignores it.
 const testOutcome = Joi.string().valid("decline").optional();
 
-export const quoteClientCaseSchema = Joi.object({
-  promoCode: Joi.string().trim().allow("").max(40).optional(),
-});
+const promoCode = Joi.string().trim().allow("").max(40).optional();
 
-export const payForClientCaseSchema = Joi.object({
-  promoCode: Joi.string().trim().allow("").max(40).optional(),
-  testOutcome,
+export const quoteClientTopUpSchema = Joi.object({
+  packId: Joi.string().required(),
+  promoCode,
 });
 
 export const topUpClientCaseSchema = Joi.object({
   packId: Joi.string().required(),
+  promoCode,
   testOutcome,
 });
 

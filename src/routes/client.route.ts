@@ -13,8 +13,10 @@ const router = express.Router();
 router.use(validSession, asyncHandler(requireClientAccount));
 
 router.get("/pricing", asyncHandler(ClientCaseCtrl.pricing));
-router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.quoteCase));
-router.post("/payments/case", asyncHandler(ClientCaseCtrl.payForCase));
+router.post("/payments/top-up/quote", asyncHandler(ClientCaseCtrl.quoteTopUp));
+// Removed with pay per case: 410 for a client app still open from before.
+router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.casePaymentGone));
+router.post("/payments/case", asyncHandler(ClientCaseCtrl.casePaymentGone));
 router.get("/payments/:paymentId", asyncHandler(ClientCaseCtrl.paymentStatus));
 
 router.get("/limits", asyncHandler(ClientCaseCtrl.limits));

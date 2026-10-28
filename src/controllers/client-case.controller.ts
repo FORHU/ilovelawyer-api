@@ -12,9 +12,8 @@ import { ALLOWED_DOCUMENT_EXTENSIONS, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "..
 import {
   addClientDocumentSchema,
   createClientCaseSchema,
-  payForClientCaseSchema,
   presignClientDocumentSchema,
-  quoteClientCaseSchema,
+  quoteClientTopUpSchema,
   sendClientMessageSchema,
   topUpClientCaseSchema,
   updateClientCaseSchema,
@@ -133,14 +132,15 @@ export default class ClientCaseCtrl {
     res.status(200).json(await ClientBillingSvc.pricing(req.user.userId));
   }
 
-  static async quoteCase(req: Request, res: Response) {
-    const { promoCode } = validate(quoteClientCaseSchema, req.body);
-    res.status(200).json(await ClientBillingSvc.quoteCase(req.user.userId, promoCode));
+  /** The old POST /payments/case and /payments/case/quote. Cases are free now (ADR 0019); a client
+   * app still open from before gets a clear answer instead of a 404. */
+  static async casePaymentGone(_req: Request, _res: Response) {
+    throw new HttpError("Cases are free now. Refresh the page to create your case.", 410, "CASES_ARE_FREE");
   }
 
-  static async payForCase(req: Request, res: Response) {
-    const input = validate(payForClientCaseSchema, req.body);
-    res.status(201).json(await ClientBillingSvc.payForCase(req.user.userId, { ...input, origin: req.headers.origin }));
+  static async quoteTopUp(req: Request, res: Response) {
+    const { packId, promoCode } = validate(quoteClientTopUpSchema, req.body);
+    res.status(200).json(await ClientBillingSvc.quoteTopUp(req.user.userId, packId, promoCode));
   }
 
   static async topUp(req: Request, res: Response) {
