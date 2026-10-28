@@ -158,7 +158,7 @@ describe("Anonymised case brief", () => {
         client: { name: "John Smith", username: "john.smith.1234" },
         case: {
           caseName: "Smith v Acme",
-          practiceArea: "EMPLOYMENT",
+          caseAreas: ["EMPLOYMENT"],
           ukJurisdiction: "England and Wales",
           jurisdiction: "Leeds",
           clientSide: "CLAIMANT",
@@ -226,7 +226,7 @@ describe("Anonymised case brief", () => {
       const brief = await ClientRequestBriefSvc.generate("req-1");
       const stored = JSON.stringify(saved[0].brief);
       for (const leak of ["John", "Smith", "Acme", "Logistics", "Dismissal letter", "07700"]) expect(stored, leak).to.not.include(leak);
-      expect(brief).to.include({ practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales", urgency: "SOON", knownDeadline: null });
+      expect(brief).to.deep.include({ caseAreas: ["Employment"], ukJurisdiction: "England and Wales", urgency: "SOON", knownDeadline: null });
       expect(brief!.summary).to.equal("the client was dismissed by the other side by text after 3 years; see a document. He wants compensation.");
       expect(brief!.clientNote).to.equal("Please call me on [phone removed], ask for the client.");
       expect(saved[0].briefFingerprint).to.match(/^[0-9a-f]{64}$/);

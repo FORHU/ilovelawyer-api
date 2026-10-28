@@ -9,26 +9,11 @@ import { renderTemplate } from "../utils/template";
 import { emailLinkOriginForAccount } from "../utils/tenant-host";
 import { OPS_ALERT_EMAILS } from "../config";
 import logger from "../utils/logger";
-import type {
-  ClientRequestClaimExpiringEvent,
-  ClientRequestNewEvent,
-  ClientRequestTakenEvent,
-  ClientRequestUpdatedEvent,
-  PracticeArea,
-  RequestUrgency,
-  UkJurisdiction,
-} from "../types/client-handoff";
+import CaseAreaSvc from "./case-area.service";
+import type { ClientRequestClaimExpiringEvent, ClientRequestNewEvent, ClientRequestTakenEvent, ClientRequestUpdatedEvent, RequestUrgency, UkJurisdiction } from "../types/client-handoff";
 
 /** The lawyer app's Client Requests page (ilovelawyer-app homepage/client-requests). */
 const LAWYER_INBOX_PATH = "/homepage/client-requests";
-
-const PRACTICE_AREA_LABELS: Record<string, string> = {
-  EMPLOYMENT: "Employment",
-  PROPERTY: "Property",
-  FAMILY: "Family",
-  CONSUMER: "Consumer",
-  OTHER: "Other",
-};
 
 const URGENCY_LABELS: Record<RequestUrgency, string> = {
   ROUTINE: "Routine",
@@ -36,7 +21,8 @@ const URGENCY_LABELS: Record<RequestUrgency, string> = {
   URGENT: "Urgent: a deadline within 7 days",
 };
 
-const areaLabel = (practiceArea: string | null) => (practiceArea && PRACTICE_AREA_LABELS[practiceArea]) || "Other";
+/** "Employment, Consumer" */
+const areasLabel = (names: string[]) => names.join(", ") || "Other";
 
 /** UK time, as a UK lawyer or client reads it: "Friday 23 October 2026 at 10:00". */
 function formatUk(date: Date): string {
@@ -72,15 +58,16 @@ export default class ClientRequestNotifySvc {
     if (lawyerIds.length === 0) return 0;
     const urgency = (request.brief as { urgency?: RequestUrgency } | null)?.urgency ?? "ROUTINE";
     const ukJurisdiction = request.case.ukJurisdiction ?? "";
+    const caseAreas = (await CaseAreaSvc.refsOf(request.case.caseAreas)).map((a) => a.name);
     const event: ClientRequestNewEvent = {
       requestId,
-      practiceArea: request.case.practiceArea as PracticeArea,
+      caseAreas,
       ukJurisdiction: ukJurisdiction as UkJurisdiction,
       urgency,
       routingExpiresAt: request.routingExpiresAt.toISOString(),
     };
     // The brief's summary stays behind sign-in: an email carries only what the inbox row shows.
-    const practiceArea = areaLabel(request.case.practiceArea);
+    const practiceArea = areasLabel(caseAreas);
     const closes = formatUk(request.routingExpiresAt);
     const subject = `New client request: ${practiceArea}, ${ukJurisdiction}`;
     const html = await renderTemplate("client-request-new", { practiceArea, ukJurisdiction, urgency: URGENCY_LABELS[urgency], routingExpiresAt: closes, inboxLink: lawyerInboxLink() });
@@ -128,6 +115,7 @@ export default class ClientRequestNotifySvc {
    * client is told they can ask again, and ops get one digest for the run. How many expired. */
   static async expireDue(now: Date): Promise<number> {
     const expired: { id: string; practiceArea: string; ukJurisdiction: string; routedAt: string; matchingLawyers: number }[] = [];
+    const label = await CaseAreaSvc.labeller();
     for (const request of await ClientRequestRepo.findExpired(now)) {
       try {
         if (!(await ClientRequestRepo.expire(request.id, now))) continue;
@@ -141,7 +129,7 @@ export default class ClientRequestNotifySvc {
         );
         expired.push({
           id: request.id,
-          practiceArea: areaLabel(request.case.practiceArea),
+          practiceArea: areasLabel(label(request.case.caseAreas).map((a) => a.name)),
           ukJurisdiction: request.case.ukJurisdiction ?? "",
           routedAt: request.routedAt ? formatUk(request.routedAt) : "unknown",
           matchingLawyers: lawyerIds.length,

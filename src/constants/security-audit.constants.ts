@@ -67,6 +67,15 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.settings.lawyer_price_changed",
   "admin.settings.client_promo_created",
   "admin.settings.client_promo_changed",
+  // The practice areas lawyers pick from. Mapping or switching one off changes who is routed
+  // client requests, so these are recorded.
+  "admin.practice_area.created",
+  "admin.practice_area.updated",
+  "admin.practice_area.deleted",
+  // The kinds of problem a client's case can be about. Like practice areas, they decide routing.
+  "admin.case_area.created",
+  "admin.case_area.updated",
+  "admin.case_area.deleted",
   "admin.model_settings.updated",
   "admin.jurisdiction_module.toggled",
   "admin.lawyer.verified",
@@ -126,7 +135,9 @@ export type SecurityAuditTargetType =
   | "jurisdiction_module"
   | "client_price"
   | "lawyer_price"
-  | "client_promo";
+  | "client_promo"
+  | "practice_area"
+  | "case_area";
 
 /** How long rows are kept before SecurityAuditRetentionQueue deletes them: 7 years by default,
  * overridable with SECURITY_AUDIT_RETENTION_DAYS. Never below the 365-day floor the database
@@ -202,6 +213,12 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.settings.lawyer_price_changed": "Lawyer introduction fee or top-up pack changed",
   "admin.settings.client_promo_created": "Client app promo code created",
   "admin.settings.client_promo_changed": "Client app promo code changed",
+  "admin.practice_area.created": "Practice area added",
+  "admin.practice_area.updated": "Practice area changed",
+  "admin.practice_area.deleted": "Practice area deleted",
+  "admin.case_area.created": "Client case type added",
+  "admin.case_area.updated": "Client case type changed",
+  "admin.case_area.deleted": "Client case type deleted",
   "admin.model_settings.updated": "AI model setting changed",
   "admin.jurisdiction_module.toggled": "Jurisdiction module switched",
   "admin.lawyer.verified": "Lawyer's client-request profile verified by ilovelawyer",

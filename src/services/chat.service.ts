@@ -6,6 +6,7 @@ import AuthRepo from "../repositories/auth.repository";
 import DocumentRepo from "../repositories/document.repository";
 import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import CaseSvc from "./case.service";
+import CaseAreaSvc from "./case-area.service";
 import CaseAccess from "../utils/case-access";
 import DocumentChunkSvc from "./document-chunk.service";
 import TranscriptionChunkSvc from "./transcription-chunk.service";
@@ -792,7 +793,8 @@ export default class ChatSvc {
     if (!caseRecord && effectiveCaseId) {
       caseRecord = await CaseSvc.getById(effectiveCaseId, scope, userId);
     }
-    const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord) : "";
+    const caseAreaNames = caseRecord?.caseAreas?.length ? (await CaseAreaSvc.refsOf(caseRecord.caseAreas)).map((a) => a.name) : [];
+    const caseContext = caseRecord ? CaseSvc.formatForAiContext(caseRecord, caseAreaNames) : "";
     // The lawyer's hand edits to the case's strategy map (added/reworded/removed points), so the
     // answer reflects their current view of the case. Empty unless they've edited it since its
     // last build; best-effort — a failed read just leaves it out of this turn.

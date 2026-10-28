@@ -127,7 +127,7 @@ describe("Client intake extraction", () => {
   describe("buildIntakePrompt", () => {
     it("tells the model it is not giving legal advice, and includes the conversation and document handles", () => {
       const prompt = buildIntakePrompt({
-        caseDetails: { title: "Dismissal", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales", where: "Leeds", side: "CLAIMANT", notes: null },
+        caseDetails: { title: "Dismissal", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", where: "Leeds", side: "CLAIMANT", notes: null },
         parties: [],
         messages,
         documents: docs,

@@ -2,8 +2,15 @@ import ClientRequestRepo from "../repositories/client-request.repository";
 import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
 
 export interface MatchCriteria {
-  practiceArea: string | null;
+  /** The case's areas (Case.caseAreas). */
+  caseAreas: string[];
   ukJurisdiction: string | null;
+}
+
+/** What matching reads from one of a lawyer's practice areas (PracticeArea). */
+export interface MatchablePracticeArea {
+  caseArea: string | null;
+  isActive: boolean;
 }
 
 /** What matches() needs from a lawyer. Verification is checked by the repo query (VERIFIED only) —
@@ -16,23 +23,31 @@ export interface LawyerForMatching {
   pausedUntil: Date | null;
   capacityLimit: number | null;
   openCount: number;
-  practiceAreas: string[];
+  practiceAreas: MatchablePracticeArea[];
   qualifiedJurisdictions: string[];
+}
+
+/** The client case areas (Case.caseAreas) a lawyer takes: those their active practice areas map
+ * to. An inactive area, or one an admin left unmapped, routes nothing. */
+export function caseAreasOf(practiceAreas: MatchablePracticeArea[]): string[] {
+  return [...new Set(practiceAreas.filter((a) => a.isActive && a.caseArea).map((a) => a.caseArea!))];
 }
 
 /**
  * The request matching engine (#509): which lawyers a client request is routed to. A lawyer
  * matches when they're verified, accepting requests, enabled by their organization (#518), not
- * paused, under capacity, and qualified for the case's practice area and UK jurisdiction.
+ * paused, under capacity, and qualified for any one of the case's areas (through caseAreasOf) and
+ * its UK jurisdiction.
  */
 export default class ClientRequestMatchingSvc {
   static matches(lawyer: LawyerForMatching, criteria: MatchCriteria, now: Date = new Date()): boolean {
-    if (!criteria.practiceArea || !criteria.ukJurisdiction) return false;
+    if (criteria.caseAreas.length === 0 || !criteria.ukJurisdiction) return false;
     if (!lawyer.acceptingRequests) return false;
     if (!lawyer.enabledByOrganization) return false;
     if (lawyer.pausedUntil && lawyer.pausedUntil > now) return false;
     if (lawyer.capacityLimit !== null && lawyer.openCount >= lawyer.capacityLimit) return false;
-    if (!lawyer.practiceAreas.includes(criteria.practiceArea)) return false;
+    const takes = caseAreasOf(lawyer.practiceAreas);
+    if (!criteria.caseAreas.some((area) => takes.includes(area))) return false;
     if (!lawyer.qualifiedJurisdictions.includes(criteria.ukJurisdiction)) return false;
     return true;
   }
@@ -49,7 +64,7 @@ export default class ClientRequestMatchingSvc {
     const request = await ClientRequestRepo.findForMatching(requestId);
     if (!request) return [];
     const candidates = await LawyerProfileRepo.findVerified(request.excludedLawyerIds);
-    const criteria: MatchCriteria = { practiceArea: request.case.practiceArea, ukJurisdiction: request.case.ukJurisdiction };
+    const criteria: MatchCriteria = { caseAreas: request.case.caseAreas, ukJurisdiction: request.case.ukJurisdiction };
     return candidates.filter((lawyer) => ClientRequestMatchingSvc.matches(lawyer, criteria)).map((lawyer) => lawyer.userId);
   }
 

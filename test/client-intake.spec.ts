@@ -53,7 +53,7 @@ describe("ClientIntakeSvc", () => {
     intakeSource = {
       id: CASE_ID,
       caseName: "Dismissal",
-      practiceArea: "EMPLOYMENT",
+      caseAreas: ["EMPLOYMENT"],
       ukJurisdiction: "England and Wales",
       jurisdiction: "Leeds",
       clientSide: "CLAIMANT",

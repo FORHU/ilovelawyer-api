@@ -1,0 +1,175 @@
+name: Seed test lawyers (dev)
+
+# Runs scripts/seed-test-lawyers.ts against the DEV database: 100 UK solo test lawyers
+# (uk.lawyer.001@seed.test …), or deletes them all. Dev only, and never copy it to production or
+# UK: 70 of them are verified and accepting, so on a real database they would be routed real
+# client requests.
+#
+# It runs the Dockerfile's builder stage (the "Build tools image" workflow's tools-<sha> image,
+# built here when that commit has none yet), because the deployable image has no scripts/ or src/.
+# The script reads the same env as the dev API container, including SEED_LAWYER_PASSWORD, which
+# Deploy Dev publishes from the `staging` environment's secret. NODE_ENV is overridden to `staging`
+# for this one run: the script refuses NODE_ENV=production.
+#
+# Run it from the commit dev is deployed on, so the migrations it needs are already applied.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to run the script from (blank = the branch you ran this from)"
+        required: false
+      action:
+        description: "seed: create the 100, or put them back as seeded. clean: delete them all."
+        type: choice
+        options: [seed, clean]
+        default: seed
+
+# Shares Deploy Dev's group, so it never runs while dev is migrating or swapping its container.
+concurrency:
+  group: forhu-dev-ilovelawyer
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  ACCOUNT_ID: "617163942417"
+  INSTANCE_ID: i-0f95a93145ea25e7a
+  ECR_REPOSITORY: ilovelawyer-api
+  NETWORK: forhu-dev
+  ENV_PARAM: /forhu-dev/ilovelawyer-api/env
+  SHARED_ENV: /opt/forhu-dev/credentials/ilovelawyer.env
+  # Its own file, removed after the run: the API container's merged env is left alone.
+  SEED_ENV: /opt/forhu-dev/ilovelawyer-api.seed.env
+
+jobs:
+  seed:
+    name: ${{ github.event.inputs.action }} test lawyers on dev
+    runs-on: ubuntu-24.04-arm
+    environment: staging
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref_name }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN || 'arn:aws:iam::617163942417:role/forhu-deploy' }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          # The same tag "Build tools image" pushes, so either workflow reuses the other's image.
+          echo "tag=tools-$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "registry=${{ env.ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing tools image
+        id: existing
+        run: |
+          if aws ecr describe-images --region "${{ env.AWS_REGION }}" --repository-name "${{ env.ECR_REPOSITORY }}" \
+              --image-ids imageTag="${{ steps.tag.outputs.tag }}" > /dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to Amazon ECR
+        if: steps.existing.outputs.found != 'true'
+        run: |
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ steps.tag.outputs.registry }}"
+
+      - name: Set up Docker Buildx
+        if: steps.existing.outputs.found != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # Native arm64: the host is Graviton (see Deploy Dev).
+      - name: Build and push the builder stage
+        if: steps.existing.outputs.found != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: builder
+          push: true
+          platforms: linux/arm64
+          provenance: false
+          tags: ${{ steps.tag.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+
+      - name: Run the script via SSM
+        id: send
+        env:
+          REGISTRY: ${{ steps.tag.outputs.registry }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          ACTION: ${{ github.event.inputs.action }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${{ env.ECR_REPOSITORY }}:${TAG}"
+          ARGS="scripts/seed-test-lawyers.ts"
+          if [ "$ACTION" = "clean" ]; then ARGS="$ARGS --clean"; fi
+
+          COMMANDS=(
+            "set -euo pipefail"
+            "trap 'rm -f ${{ env.SEED_ENV }}' EXIT"
+            "umask 077"
+            "cat ${{ env.SHARED_ENV }} > ${{ env.SEED_ENV }}"
+            "aws ssm get-parameter --name ${{ env.ENV_PARAM }} --with-decryption --region ${{ env.AWS_REGION }} --query Parameter.Value --output text >> ${{ env.SEED_ENV }}"
+            "aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${REGISTRY}"
+            "docker pull --platform linux/arm64 ${IMAGE}"
+            "docker run --rm --platform linux/arm64 --network ${{ env.NETWORK }} --env-file ${{ env.SEED_ENV }} -e NODE_ENV=staging --entrypoint npx ${IMAGE} ts-node --files ${ARGS}"
+            "docker image rm ${IMAGE} || true"
+          )
+
+          # jq builds the JSON, so a quote inside any command cannot break it.
+          PARAMS=$(printf '%s\n' "${COMMANDS[@]}" | jq -R . | jq -sc '{commands: .}')
+
+          CMD_ID=$(aws ssm send-command \
+            --region "${{ env.AWS_REGION }}" \
+            --instance-ids "${{ env.INSTANCE_ID }}" \
+            --document-name AWS-RunShellScript \
+            --comment "${ACTION} test lawyers ${TAG}" \
+            --timeout-seconds 1200 \
+            --parameters "${PARAMS}" \
+            --query Command.CommandId --output text)
+
+          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
+          echo "SSM command: $CMD_ID"
+
+      - name: Wait for the script
+        run: |
+          set -uo pipefail
+          STATUS=Pending
+          for _ in $(seq 1 120); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${{ env.AWS_REGION }}" \
+              --command-id "${{ steps.send.outputs.command_id }}" \
+              --instance-id "${{ env.INSTANCE_ID }}" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            echo "status: $STATUS"
+            case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 10
+          done
+
+          # The script's summary: counts, the coverage check and the special lawyers by email.
+          OUTPUT=$(aws ssm get-command-invocation \
+            --region "${{ env.AWS_REGION }}" \
+            --command-id "${{ steps.send.outputs.command_id }}" \
+            --instance-id "${{ env.INSTANCE_ID }}" \
+            --query '[StandardOutputContent,StandardErrorContent]' --output text)
+          echo "$OUTPUT"
+          {
+            echo "### ${{ github.event.inputs.action }} test lawyers on dev: $STATUS"
+            echo
+            echo '```'
+            echo "$OUTPUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$STATUS" = "Success" ] || { echo "::error::seed $STATUS"; exit 1; }

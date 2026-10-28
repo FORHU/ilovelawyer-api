@@ -53,7 +53,7 @@ function adminRow(p: StubProfile, org: Org = FIRM) {
   return {
     regulator: "SRA",
     registrationNumber: "123456",
-    practiceAreas: ["EMPLOYMENT"],
+    practiceAreas: [{ id: "uk-employment", name: "Employment Law", caseArea: "EMPLOYMENT", isActive: true, sortOrder: 0 }],
     bio: "",
     languages: [],
     firstConsultationFeeMinor: null,

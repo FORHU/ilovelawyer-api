@@ -19,7 +19,7 @@ export const PAID_CHARGE_STATUSES: OrganizationChargeStatus[] = ["SUCCEEDED", "P
 const HOLDING: OrganizationChargeRefundStatus[] = ["PENDING", "SUCCEEDED"];
 
 const FOR_ADMIN = {
-  case: { select: { practiceArea: true, ukJurisdiction: true } },
+  case: { select: { caseAreas: true, ukJurisdiction: true } },
   claims: {
     orderBy: { claimedAt: "desc" },
     include: { lawyer: { select: { id: true, name: true, email: true } }, organization: { select: { id: true, name: true } } },

@@ -1,6 +1,6 @@
 import Joi from "joi";
 import { LAWYER_REGULATORS, UK_JURISDICTIONS } from "../types/client-handoff";
-import { FEE_CURRENCY_BY_COUNTRY, PRACTICE_AREAS_BY_COUNTRY, type LawyerCountry } from "../constants/lawyer-application.constants";
+import { FEE_CURRENCY_BY_COUNTRY, type LawyerCountry } from "../constants/lawyer-application.constants";
 import { DIGITS_PATTERN, MCLE_NUMBER_PATTERN, NUMBER_MAX_DIGITS, ROMAN_NUMERAL_PATTERN, WORDS_PATTERN } from "../constants/field-rules";
 
 export const LAWYER_BIO_MAX_LENGTH = 1500;
@@ -32,15 +32,13 @@ const phRegistrationSchema = Joi.object({
   mclePeriod: registrationText(10, ROMAN_NUMERAL_PATTERN, "Roman numerals"),
 });
 
-/** A save to a lawyer's application. The registration, practice areas and fee currency are the
- * lawyer's own country's: UK ones never validate on a PH application, and the other way round. */
+/** A save to a lawyer's application. The registration and fee currency are the lawyer's own
+ * country's: UK ones never validate on a PH application, and the other way round. Practice areas
+ * are ids, checked against the site's list by PracticeAreaSvc.forLawyer. */
 export function updateLawyerProfileSchema(country: LawyerCountry) {
   return Joi.object({
     registration: country === "PH" ? phRegistrationSchema : ukRegistrationSchema,
-    // UK: never personal injury (referral fees are banned there), so it isn't in the list.
-    practiceAreas: Joi.array()
-      .items(Joi.string().valid(...PRACTICE_AREAS_BY_COUNTRY[country]))
-      .unique(),
+    practiceAreaIds: Joi.array().items(Joi.string().trim().min(1).max(64)).max(50).unique(),
     bio: Joi.string().allow("").max(LAWYER_BIO_MAX_LENGTH),
     languages: Joi.array().items(Joi.string().trim().min(1).max(40).pattern(WORDS_PATTERN, "letters")).max(10).unique(),
     firstConsultationFee: Joi.object({

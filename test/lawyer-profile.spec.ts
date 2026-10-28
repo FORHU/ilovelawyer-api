@@ -5,6 +5,7 @@ import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import LawyerProfileSvc, { missingFields, nextVerificationStatus } from "../src/services/lawyer-profile.service";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
+import PracticeAreaRepo from "../src/repositories/practice-area.repository";
 import usersRoute from "../src/routes/users.route";
 import { updateLawyerProfileSchema } from "../src/validation/lawyer-profile.validation";
 import { listRoutes } from "./support/list-routes";
@@ -18,11 +19,35 @@ async function errorOf(promise: Promise<unknown>): Promise<{ status?: number; co
   }
 }
 
+/** The sites' practice areas, as PracticeAreaRepo.findByIds gives them back. */
+const area = (id: string, country: string, name: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  country,
+  name,
+  caseArea: null,
+  isActive: true,
+  sortOrder: 0,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...extra,
+});
+const AREAS = [
+  area("uk-employment", "UK", "Employment Law", { caseArea: "EMPLOYMENT", sortOrder: 1 }),
+  area("uk-family", "UK", "Family Law", { caseArea: "FAMILY", sortOrder: 0 }),
+  area("uk-retired", "UK", "Retired Law", { isActive: false, sortOrder: 2 }),
+  area("ph-civil", "PH", "Civil Law"),
+];
+/** How a profile row carries an area. */
+const ref = (id: string) => {
+  const { id: _id, name, caseArea, isActive, sortOrder } = AREAS.find((a) => a.id === id)!;
+  return { id, name, caseArea, isActive, sortOrder };
+};
+
 /** A complete UK registration, as the repository flattens it onto the row. */
 const ukRegistration = { regulator: "SRA", registrationNumber: "123456", qualifiedJurisdictions: ["England and Wales"] };
-const complete = { ...ukRegistration, practiceAreas: ["EMPLOYMENT"] };
+const complete = { ...ukRegistration, practiceAreas: [ref("uk-employment")] };
 /** The same, as a lawyer sends it. */
-const completePatch = { registration: { country: "UK" as const, ...ukRegistration }, practiceAreas: ["EMPLOYMENT"] };
+const completePatch = { registration: { country: "UK" as const, ...ukRegistration }, practiceAreaIds: ["uk-employment"] };
 
 const noPh = { rollNumber: null, ibpChapter: null, ibpMembershipNumber: null, mcleNumber: null, mclePeriod: null };
 
@@ -61,7 +86,7 @@ describe("Lawyer Application", () => {
 
     it("needs the Roll number, IBP chapter and a practice area on PH, and nothing optional", () => {
       expect(missingFields(row({ country: "PH" }))).to.deep.equal(["rollNumber", "ibpChapter", "practiceAreas"]);
-      expect(missingFields(row({ country: "PH", ph: { ...noPh, rollNumber: "12345", ibpChapter: "Manila III" }, practiceAreas: ["CIVIL"] }))).to.deep.equal([]);
+      expect(missingFields(row({ country: "PH", ph: { ...noPh, rollNumber: "12345", ibpChapter: "Manila III" }, practiceAreas: [ref("ph-civil")] }))).to.deep.equal([]);
     });
 
     it("sends a newly complete profile to the admin queue", () => {
@@ -83,7 +108,7 @@ describe("Lawyer Application", () => {
 
     it("re-checks a PH profile on the Roll number or IBP chapter, not on MCLE or membership", () => {
       const ph = { ...noPh, rollNumber: "12345", ibpChapter: "Manila III" };
-      const before = row({ country: "PH", ph, practiceAreas: ["CIVIL"], verificationStatus: "VERIFIED" });
+      const before = row({ country: "PH", ph, practiceAreas: [ref("ph-civil")], verificationStatus: "VERIFIED" });
       expect(nextVerificationStatus(before, { ...before, ph: { ...ph, rollNumber: "54321" } })).to.equal("PENDING");
       expect(nextVerificationStatus(before, { ...before, ph: { ...ph, ibpChapter: "Cebu City" } })).to.equal("PENDING");
       expect(nextVerificationStatus(before, { ...before, ph: { ...ph, mcleNumber: "VII-0001", ibpMembershipNumber: "L-1" } })).to.equal("VERIFIED");
@@ -92,6 +117,11 @@ describe("Lawyer Application", () => {
     it("drops back to unsubmitted when a required field is cleared", () => {
       const verified = row({ ...complete, verificationStatus: "VERIFIED" });
       expect(nextVerificationStatus(verified, { ...verified, practiceAreas: [] })).to.equal("UNSUBMITTED");
+    });
+
+    it("keeps a verified profile verified when its practice areas change", () => {
+      const verified = row({ ...complete, verificationStatus: "VERIFIED" });
+      expect(nextVerificationStatus(verified, { ...verified, practiceAreas: [ref("uk-family")] })).to.equal("VERIFIED");
     });
   });
 
@@ -102,6 +132,7 @@ describe("Lawyer Application", () => {
       findLawyerTenant: LawyerProfileRepo.findLawyerTenant,
       countOpenForLawyers: LawyerProfileRepo.countOpenForLawyers,
     };
+    const originalFindByIds = PracticeAreaRepo.findByIds;
     let stored: any;
     let who: { role: string; tenantCode: string | null } | null;
 
@@ -112,8 +143,12 @@ describe("Lawyer Application", () => {
       (LawyerProfileRepo as any).upsert = async (_userId: string, data: any) => (stored = { userId: "u1", ...data });
       (LawyerProfileRepo as any).findLawyerTenant = async () => who;
       (LawyerProfileRepo as any).countOpenForLawyers = async () => new Map();
+      (PracticeAreaRepo as any).findByIds = async (ids: string[]) => AREAS.filter((a) => ids.includes(a.id));
     });
-    afterEach(() => Object.assign(LawyerProfileRepo, original));
+    afterEach(() => {
+      Object.assign(LawyerProfileRepo, original);
+      (PracticeAreaRepo as any).findByIds = originalFindByIds;
+    });
 
     it("shows an empty, unsubmitted UK application to a UK lawyer who hasn't filled it in", async () => {
       const dto = await LawyerProfileSvc.get("u1");
@@ -130,13 +165,36 @@ describe("Lawyer Application", () => {
 
       const dto = await LawyerProfileSvc.update("u1", {
         registration: { country: "PH", rollNumber: "12345", ibpChapter: "Manila III" },
-        practiceAreas: ["CIVIL"],
+        practiceAreaIds: ["ph-civil"],
         firstConsultationFee: { amountMinor: 150000, currency: "PHP" },
       });
       expect(stored.country).to.equal("PH");
       expect(stored.ph).to.include({ rollNumber: "12345", ibpChapter: "Manila III" });
       expect(dto.verification.status).to.equal("PENDING");
       expect(dto.firstConsultationFee).to.deep.equal({ amountMinor: 150000, currency: "PHP" });
+      expect(dto.practiceAreas).to.deep.equal([{ id: "ph-civil", name: "Civil Law", isActive: true }]);
+    });
+
+    it("saves practice areas in the site's order and gives them back by name", async () => {
+      const dto = await LawyerProfileSvc.update("u1", { practiceAreaIds: ["uk-employment", "uk-family"] });
+      expect(stored.practiceAreas.map((a: any) => a.id)).to.deep.equal(["uk-family", "uk-employment"]);
+      expect(dto.practiceAreas).to.deep.equal([
+        { id: "uk-family", name: "Family Law", isActive: true },
+        { id: "uk-employment", name: "Employment Law", isActive: true },
+      ]);
+    });
+
+    it("refuses another site's practice area, or one that doesn't exist", async () => {
+      expect(await errorOf(LawyerProfileSvc.update("u1", { practiceAreaIds: ["ph-civil"] }))).to.deep.equal({ status: 400, code: "UNKNOWN_PRACTICE_AREA" });
+      expect(await errorOf(LawyerProfileSvc.update("u1", { practiceAreaIds: ["nope"] }))).to.deep.equal({ status: 400, code: "UNKNOWN_PRACTICE_AREA" });
+    });
+
+    it("won't add a switched-off practice area, but keeps one the lawyer already holds", async () => {
+      expect(await errorOf(LawyerProfileSvc.update("u1", { practiceAreaIds: ["uk-retired"] }))).to.deep.equal({ status: 400, code: "PRACTICE_AREA_INACTIVE" });
+
+      stored = row({ ...complete, practiceAreas: [ref("uk-employment"), ref("uk-retired")] });
+      const dto = await LawyerProfileSvc.update("u1", { practiceAreaIds: ["uk-employment", "uk-retired"], bio: "Still here" });
+      expect(dto.practiceAreas).to.deep.include({ id: "uk-retired", name: "Retired Law", isActive: false });
     });
 
     it("refuses registration details for the other country", async () => {
@@ -172,7 +230,7 @@ describe("Lawyer Application", () => {
 
     it("never lets a PH lawyer accept client requests (UK only)", async () => {
       who = { role: "LAWYER", tenantCode: "PH" };
-      stored = row({ country: "PH", ph: { ...noPh, rollNumber: "1", ibpChapter: "Manila III" }, practiceAreas: ["CIVIL"], verificationStatus: "VERIFIED" });
+      stored = row({ country: "PH", ph: { ...noPh, rollNumber: "1", ibpChapter: "Manila III" }, practiceAreas: [ref("ph-civil")], verificationStatus: "VERIFIED" });
       expect(await errorOf(LawyerProfileSvc.update("u1", { acceptingRequests: true }))).to.deep.equal({ status: 403, code: "NOT_UK_TENANT" });
     });
 
@@ -222,20 +280,19 @@ describe("Lawyer Application", () => {
   });
 
   describe("validation", () => {
-    it("UK: takes only UK jurisdictions, the client app's practice areas (no personal injury) and GBP", () => {
+    it("UK: takes only UK jurisdictions, practice area ids (each once) and GBP", () => {
       const uk = updateLawyerProfileSchema("UK");
       expect(uk.validate(completePatch).error).to.equal(undefined);
       expect(uk.validate({ registration: { country: "UK", qualifiedJurisdictions: ["Wales"] } }).error).to.not.equal(undefined);
-      expect(uk.validate({ practiceAreas: ["PERSONAL_INJURY"] }).error).to.not.equal(undefined);
+      expect(uk.validate({ practiceAreaIds: ["a", "a"] }).error).to.not.equal(undefined);
       expect(uk.validate({ firstConsultationFee: { amountMinor: 100, currency: "PHP" } }).error).to.not.equal(undefined);
       expect(uk.validate({ capacityLimit: 0 }).error).to.not.equal(undefined);
       expect(uk.validate({ registration: { country: "PH", rollNumber: "1" } }).error).to.not.equal(undefined);
     });
 
-    it("PH: takes the PH registration, PH practice areas and pesos", () => {
+    it("PH: takes the PH registration, practice area ids and pesos", () => {
       const ph = updateLawyerProfileSchema("PH");
-      expect(ph.validate({ registration: { country: "PH", rollNumber: "12345", ibpChapter: "Manila III", mclePeriod: "VII" }, practiceAreas: ["LABOR"] }).error).to.equal(undefined);
-      expect(ph.validate({ practiceAreas: ["EMPLOYMENT"] }).error).to.not.equal(undefined);
+      expect(ph.validate({ registration: { country: "PH", rollNumber: "12345", ibpChapter: "Manila III", mclePeriod: "VII" }, practiceAreaIds: ["ph-civil"] }).error).to.equal(undefined);
       expect(ph.validate({ firstConsultationFee: { amountMinor: 100, currency: "GBP" } }).error).to.not.equal(undefined);
       expect(ph.validate({ registration: { country: "UK", regulator: "SRA" } }).error).to.not.equal(undefined);
     });

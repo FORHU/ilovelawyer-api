@@ -18,6 +18,8 @@ router.post("/payments/case", asyncHandler(ClientCaseCtrl.payForCase));
 router.get("/payments/:paymentId", asyncHandler(ClientCaseCtrl.paymentStatus));
 
 router.get("/limits", asyncHandler(ClientCaseCtrl.limits));
+// The "Type of issue" choices: the switched-on case areas, in order.
+router.get("/case-areas", asyncHandler(ClientCaseCtrl.caseAreas));
 
 router.get("/cases", asyncHandler(ClientCaseCtrl.list));
 router.post("/cases", asyncHandler(ClientCaseCtrl.create));

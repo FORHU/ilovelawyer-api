@@ -1,37 +1,17 @@
 /**
- * A Lawyer Application differs by country: what the admin checks, the practice areas a lawyer can
- * pick, the fee's currency and the reasons an admin can reject with. UK values that the client
- * hand-off also uses (PRACTICE_AREAS, UK_JURISDICTIONS, LAWYER_REGULATORS) stay in
- * types/client-handoff.ts; this file adds the country split and the PH values. The PH rules aren't
- * final, so expect the PH lists to change.
+ * A Lawyer Application differs by country: what the admin checks, the fee's currency and the
+ * reasons an admin can reject with. The practice areas a lawyer can pick are per country too, but
+ * admins manage them (PracticeArea; defaults in practice-area.constants.ts). UK values that the
+ * client hand-off also uses (UK_JURISDICTIONS, LAWYER_REGULATORS) stay in types/client-handoff.ts;
+ * this file adds the country split and the PH values. The PH rules aren't final, so expect the PH
+ * lists to change.
  */
-import { PRACTICE_AREAS } from "../types/client-handoff";
-
 export const LAWYER_COUNTRIES = ["UK", "PH"] as const;
 export type LawyerCountry = (typeof LAWYER_COUNTRIES)[number];
 
 export function isLawyerCountry(code: string | null | undefined): code is LawyerCountry {
   return !!code && (LAWYER_COUNTRIES as readonly string[]).includes(code);
 }
-
-export const PH_PRACTICE_AREAS = [
-  "CIVIL",
-  "CRIMINAL",
-  "FAMILY",
-  "LABOR",
-  "CORPORATE",
-  "PROPERTY",
-  "TAX",
-  "IMMIGRATION",
-  "ADMINISTRATIVE",
-  "OTHER",
-] as const;
-export type PhPracticeArea = (typeof PH_PRACTICE_AREAS)[number];
-
-export const PRACTICE_AREAS_BY_COUNTRY: Record<LawyerCountry, readonly string[]> = {
-  UK: PRACTICE_AREAS,
-  PH: PH_PRACTICE_AREAS,
-};
 
 export const FEE_CURRENCY_BY_COUNTRY = { UK: "GBP", PH: "PHP" } as const satisfies Record<LawyerCountry, string>;
 export type FeeCurrency = (typeof FEE_CURRENCY_BY_COUNTRY)[LawyerCountry];

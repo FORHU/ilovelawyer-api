@@ -1,5 +1,6 @@
 import type { LawyerVerificationStatus } from "@prisma/client";
 import LawyerProfileRepo, { type LawyerProfileRow, type PhRegistrationFields, type UkRegistrationFields } from "../repositories/lawyer-profile.repository";
+import PracticeAreaSvc from "./practice-area.service";
 import HttpError from "../utils/http-error";
 import { FEE_CURRENCY_BY_COUNTRY, isLawyerCountry, type LawyerCountry } from "../constants/lawyer-application.constants";
 
@@ -9,7 +10,8 @@ export type RegistrationPatch = ({ country: "UK" } & Partial<UkRegistrationField
 /** What a lawyer can change. Verification and the organization's switch are set elsewhere. */
 export interface LawyerProfilePatch {
   registration?: RegistrationPatch;
-  practiceAreas?: string[];
+  /** PracticeArea ids from the site's list; replaces the areas held. */
+  practiceAreaIds?: string[];
   bio?: string;
   languages?: string[];
   firstConsultationFee?: { amountMinor: number; currency: string } | null;
@@ -98,7 +100,8 @@ export function toDto(p: ProfileFields, openEngagements = 0) {
   return {
     country,
     registration: registrationDto(p),
-    practiceAreas: p.practiceAreas,
+    // isActive false: an admin has since switched the area off. The lawyer keeps it until they drop it.
+    practiceAreas: p.practiceAreas.map(({ id, name, isActive }) => ({ id, name, isActive })),
     bio: p.bio,
     languages: p.languages,
     firstConsultationFee: p.firstConsultationFeeMinor === null ? null : { amountMinor: p.firstConsultationFeeMinor, currency: FEE_CURRENCY_BY_COUNTRY[country] },
@@ -139,10 +142,11 @@ export default class LawyerProfileSvc {
   static async update(userId: string, patch: LawyerProfilePatch) {
     const country = await LawyerProfileSvc.countryOf(userId);
     const before: ProfileFields = (await LawyerProfileRepo.find(userId)) ?? empty(country);
-    const { registration, firstConsultationFee, ...rest } = patch;
+    const { registration, firstConsultationFee, practiceAreaIds, ...rest } = patch;
     const after: ProfileFields = {
       ...applyRegistration(before, registration),
       ...rest,
+      ...(practiceAreaIds !== undefined ? { practiceAreas: await PracticeAreaSvc.forLawyer(country, practiceAreaIds, before.practiceAreas) } : {}),
       ...(firstConsultationFee !== undefined ? { firstConsultationFeeMinor: firstConsultationFee?.amountMinor ?? null } : {}),
     };
     after.verificationStatus = nextVerificationStatus(before, after);

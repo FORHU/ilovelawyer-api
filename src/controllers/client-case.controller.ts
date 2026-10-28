@@ -1,7 +1,8 @@
 import { clientWorkspaceOf } from "../middleware/require-client-account.middleware";
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
-import ClientCaseSvc from "../services/client-case.service";
+import ClientCaseSvc, { type ClientCaseChanges, type NewClientCase } from "../services/client-case.service";
+import CaseAreaSvc from "../services/case-area.service";
 import ClientOverviewSvc from "../services/client-overview.service";
 import ClientCaseOverviewSvc from "../services/client-case-overview.service";
 import ClientIntakeSvc from "../services/client-intake.service";
@@ -25,6 +26,11 @@ function validate<T>(schema: ObjectSchema<T>, body: unknown): T {
   return value;
 }
 
+/** `area`, from an app that predates several areas per case, as a list of one. */
+function withAreas<T extends { area?: string; areas?: string[] }>({ area, ...rest }: T): Omit<T, "area"> {
+  return area === undefined ? rest : { ...rest, areas: [area] };
+}
+
 /** The client app's case routes. requireClientAccount has already set the request's workspace to the
  * client's personal workspace. */
 export default class ClientCaseCtrl {
@@ -41,13 +47,19 @@ export default class ClientCaseCtrl {
     res.status(200).json(await ClientCaseSvc.get(clientWorkspaceOf(req), req.params.caseId));
   }
 
+  /** The "Type of issue" choices: the switched-on case areas, in order. */
+  static async caseAreas(_req: Request, res: Response) {
+    res.status(200).json(await CaseAreaSvc.listActive());
+  }
+
   static async create(req: Request, res: Response) {
-    const input = validate(createClientCaseSchema, req.body);
+    // The schema needs one of areas or area, so withAreas always leaves areas set.
+    const input = withAreas(validate<NewClientCase & { area?: string }>(createClientCaseSchema, req.body));
     res.status(201).json(await ClientCaseSvc.create(clientWorkspaceOf(req), req.user.userId, input));
   }
 
   static async update(req: Request, res: Response) {
-    const input = validate(updateClientCaseSchema, req.body);
+    const input = withAreas(validate<ClientCaseChanges & { area?: string }>(updateClientCaseSchema, req.body));
     res.status(200).json(await ClientCaseSvc.update(clientWorkspaceOf(req), req.user.userId, req.params.caseId, input));
   }
 

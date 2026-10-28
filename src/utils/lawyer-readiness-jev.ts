@@ -1,13 +1,13 @@
 import { choice } from "@typesafe-ai/sdk";
 import { jevAsk } from "./typesafeClient";
 import { applyFloor, optionsInOrder, readChoice } from "./jev-common";
-import { CLIENT_CASE_AREAS } from "../constants/client-case.constants";
 
 /**
  * Jev deciding when a client's case has enough in it to suggest a lawyer (the client app). One
  * yes/no question per thing a solicitor needs before picking a case up, each with Jev's confidence,
  * so the client can see exactly what's known and what's missing, never just "not yet". Plus which
- * kind of lawyer the problem needs, which lawyer matching uses.
+ * case areas the problem falls under, which lawyer matching uses: one yes/no per area (a problem
+ * can fall under several), and one for personal injury, which is never matched.
  *
  * Off unless USE_JEV_LAWYER_READINESS=true; the client app then falls back to offering a lawyer
  * after any AI answer, as before.
@@ -53,9 +53,15 @@ export type ReadinessKey = (typeof READINESS_CRITERIA)[number]["key"];
  * benchmark of real client conversations before relying on it outside staging. */
 export const READINESS_MIN_CONFIDENCE = 0.7;
 
-/** Personal injury is recognised only so it can be left out: referral fees are banned there. */
-export const READINESS_AREAS = [...CLIENT_CASE_AREAS, "PERSONAL_INJURY"] as const;
-export type ReadinessArea = (typeof READINESS_AREAS)[number];
+/** A case area Jev can put the problem under (CaseAreaSvc.forJev): switched-on ones only. */
+export interface ReadinessAreaOption {
+  code: string;
+  name: string;
+  description: string;
+}
+
+/** The question key for one case area's yes/no. */
+const areaKey = (code: string) => `area_${code}`;
 
 const MAX_MESSAGES = 20;
 const MAX_MESSAGE_CHARS = 1500;
@@ -67,7 +73,8 @@ const ANSWERS = ["NO", "YES"] as const;
 export interface ReadinessInput {
   caseDetails: {
     title: string;
-    area: string | null;
+    /** The case areas' names, as the client picked them. */
+    areas: string[];
     ukJurisdiction: string | null;
     where: string | null;
     side: string | null;
@@ -76,11 +83,16 @@ export interface ReadinessInput {
     notes?: string | null;
   };
   conversation: { from: "client" | "ai"; text: string }[];
+  /** What Jev chooses from. */
+  caseAreas: ReadinessAreaOption[];
 }
 
 export interface ReadinessAssessment {
   criteria: { key: ReadinessKey; label: string; met: boolean; confidence: number }[];
-  practiceArea: { value: ReadinessArea; confidence: number };
+  /** The areas the problem falls under, each said YES with at least READINESS_MIN_CONFIDENCE, in
+   * the order given. Empty when Jev isn't sure of any. */
+  caseAreas: { code: string; confidence: number }[];
+  personalInjury: { met: boolean; confidence: number };
 }
 
 /** Throws JevUnavailableError when Jev fails or times out; the caller then reports "couldn't
@@ -90,6 +102,7 @@ export async function assessLawyerReadiness(input: ReadinessInput): Promise<Read
   const ruling = "`caseDetails.notes` is the client's own account of what happened and what they want, and counts like the conversation. Answer YES only if `caseDetails` or `conversation` actually show it; answer NO if it is missing, vague, or would have to be guessed.";
   const question = Object.fromEntries(READINESS_CRITERIA.map((c) => [c.key, c.question])) as Record<ReadinessKey, string>;
   const ask = (key: ReadinessKey) => choice(`${question[key]} ${ruling}`, optionsInOrder(ANSWERS));
+  const areaRuling = "A problem can fall under more than one area. `caseDetails.areas` is what the client picked and may be wrong.";
 
   const response = await jevAsk("lawyer-readiness", {
     state: { caseDetails: input.caseDetails, conversation },
@@ -99,24 +112,29 @@ export async function assessLawyerReadiness(input: ReadinessInput): Promise<Read
       otherSide: ask("otherSide"),
       events: ask("events"),
       goal: ask("goal"),
-      practiceArea: choice(
-        "Which kind of solicitor does the client's problem need? EMPLOYMENT: work, dismissal, pay, discrimination at work. PROPERTY: renting, landlords, deposits, buying or owning a home, neighbours. FAMILY: divorce, separation, children. CONSUMER: goods, services, refunds, problems with a business. PERSONAL_INJURY: an injury someone else caused, such as an accident. OTHER: anything else. `caseDetails.area` is what the client picked and may be wrong.",
-        optionsInOrder(READINESS_AREAS),
+      ...Object.fromEntries(
+        input.caseAreas.map((a) => [
+          areaKey(a.code),
+          choice(`Does the client's problem need a solicitor for ${a.name}: ${a.description} ${areaRuling}`, optionsInOrder(ANSWERS)),
+        ]),
       ),
+      personalInjury: choice("Is the client's problem an injury someone else caused, such as an accident?", optionsInOrder(ANSWERS)),
     },
   });
 
   const answers = response.answers as Record<string, { choice: unknown; confidence: number }>;
+  const yes = (key: string) => {
+    const answer = answers[key];
+    const raw = readChoice(answer?.choice, ANSWERS, "NO");
+    const confidence = answer?.confidence ?? 0;
+    return { met: applyFloor(raw, confidence, "YES", READINESS_MIN_CONFIDENCE, "NO").value === "YES", confidence };
+  };
   return {
-    criteria: READINESS_CRITERIA.map((c) => {
-      const answer = answers[c.key];
-      const raw = readChoice(answer?.choice, ANSWERS, "NO");
-      const { value } = applyFloor(raw, answer?.confidence ?? 0, "YES", READINESS_MIN_CONFIDENCE, "NO");
-      return { key: c.key, label: c.label, met: value === "YES", confidence: answer?.confidence ?? 0 };
-    }),
-    practiceArea: {
-      value: readChoice(answers.practiceArea?.choice, READINESS_AREAS, "OTHER"),
-      confidence: answers.practiceArea?.confidence ?? 0,
-    },
+    criteria: READINESS_CRITERIA.map((c) => ({ key: c.key, label: c.label, ...yes(c.key) })),
+    caseAreas: input.caseAreas
+      .map((a) => ({ code: a.code, ...yes(areaKey(a.code)) }))
+      .filter((a) => a.met)
+      .map(({ code, confidence }) => ({ code, confidence })),
+    personalInjury: yes("personalInjury"),
   };
 }

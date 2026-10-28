@@ -2,6 +2,7 @@ import crypto from "crypto";
 import type { ClientRequestStatus, Prisma } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestNotifySvc from "./client-request-notify.service";
+import CaseAreaSvc from "./case-area.service";
 import ChatRepo from "../repositories/chat.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import { labelForDesignation, redactBrief, type RedactionContext } from "../utils/brief-redaction";
@@ -14,7 +15,8 @@ import logger from "../utils/logger";
 /** CaseBrief in the contract: what every matching lawyer sees before claiming. */
 export interface CaseBrief {
   summary: string;
-  practiceArea: string | null;
+  /** The case's areas by name, as when the brief was written. */
+  caseAreas: string[];
   ukJurisdiction: string | null;
   urgency: RequestUrgency;
   knownDeadline: string | null;
@@ -87,7 +89,7 @@ export function briefFingerprint(source: BriefSource, latestMessageId: string | 
   const c = source.case;
   const basis = JSON.stringify([
     c.caseName,
-    c.practiceArea,
+    c.caseAreas,
     c.ukJurisdiction,
     c.jurisdiction,
     c.clientSide,
@@ -116,11 +118,11 @@ interface ConversationMessage {
 
 /** The AI is told today's date and when each message was sent, so it can place "on Tuesday" or "in
  * two months" in time and judge "within 7 days" (#597): without them it guessed the year. */
-function buildPrompt(source: BriefSource, conversation: ConversationMessage[], now: Date): string {
+function buildPrompt(source: BriefSource, caseAreas: string[], conversation: ConversationMessage[], now: Date): string {
   const c = source.case;
   const details = [
     `Case title: ${c.caseName}`,
-    `Type of problem: ${c.practiceArea ?? "not set"}`,
+    `Type of problem: ${caseAreas.join(", ") || "not set"}`,
     `Part of the UK: ${c.ukJurisdiction ?? "not set"}`,
     `Town or city: ${c.jurisdiction ?? "not set"}`,
     `The client is: ${c.clientSide === "CLAIMANT" ? "bringing the complaint" : c.clientSide === "RESPONDENT" ? "responding to one" : "not set"}`,
@@ -175,7 +177,7 @@ export function parseBriefReply(reply: string, now: Date = new Date()): { summar
 
 /**
  * The anonymised brief for a client request (#508): an AI summary of the case and its chat, the
- * practice area, the part of the UK and the urgency, with no names and no documents. Written when
+ * case areas, the part of the UK and the urgency, with no names and no documents. Written when
  * the request is made, and again if the case changes before a lawyer claims it. Whatever the AI
  * writes goes through redactBrief before it's stored, so nothing identifying reaches a lawyer even
  * if the AI slips.
@@ -190,7 +192,8 @@ export default class ClientRequestBriefSvc {
       const { conversation, latestMessageId } = await ClientRequestBriefSvc.conversationOf(source);
       const session = await getChatWonderSessionId();
       const now = new Date();
-      const reply = await callChatWonderRest(buildPrompt(source, conversation, now), session, undefined, "UK", {
+      const caseAreas = (await CaseAreaSvc.refsOf(source.case.caseAreas)).map((a) => a.name);
+      const reply = await callChatWonderRest(buildPrompt(source, caseAreas, conversation, now), session, undefined, "UK", {
         usage: { feature: "clientRequestBrief", userId: source.clientId, caseId: source.caseId },
       });
       const parsed = parseBriefReply(String(reply.response ?? reply.intermediate_response ?? ""), now);
@@ -201,7 +204,7 @@ export default class ClientRequestBriefSvc {
       const intakeData = (storedIntake?.data as unknown as CaseIntake | null) ?? null;
       const brief: CaseBrief = {
         summary: redactBrief(parsed.summary, ctx),
-        practiceArea: source.case.practiceArea,
+        caseAreas,
         ukJurisdiction: source.case.ukJurisdiction,
         urgency: parsed.urgency,
         knownDeadline: parsed.knownDeadline,

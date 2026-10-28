@@ -1,6 +1,7 @@
-import { LawyerClientProfile, LawyerPhRegistration, LawyerUkRegistration, LawyerVerificationStatus, Prisma } from "@prisma/client";
+import { LawyerClientProfile, LawyerPhRegistration, LawyerUkRegistration, LawyerVerificationStatus, PracticeArea, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import type { LawyerCountry } from "../constants/lawyer-application.constants";
+import { PRACTICE_AREAS_INCLUDE, toPracticeAreaRefs, type PracticeAreaRef } from "./practice-area.repository";
 
 /** The PH registration fields, all null until the lawyer fills them in. */
 export interface PhRegistrationFields {
@@ -18,7 +19,7 @@ export interface UkRegistrationFields {
   qualifiedJurisdictions: string[];
 }
 
-const REGISTRATIONS = { ukRegistration: true, phRegistration: true } satisfies Prisma.LawyerClientProfileInclude;
+const REGISTRATIONS = { ukRegistration: true, phRegistration: true, ...PRACTICE_AREAS_INCLUDE } satisfies Prisma.LawyerClientProfileInclude;
 
 /** What the admin queue shows beside the application: who the lawyer is and their firm, details
  * included (a user is in at most one organization). */
@@ -50,12 +51,15 @@ const ADMIN_ROW_INCLUDE = {
 } satisfies Prisma.LawyerClientProfileInclude;
 
 /** A profile row with its country's registration folded in: the UK fields flat (the client hand-off
- * code reads them that way) and the PH ones under `ph`. Storage keeps one table per country; this
- * is the shape every caller works with. */
-function flatten<T extends { ukRegistration: LawyerUkRegistration | null; phRegistration: LawyerPhRegistration | null }>(row: T) {
-  const { ukRegistration: uk, phRegistration: ph, ...rest } = row;
+ * code reads them that way) and the PH ones under `ph`, and its practice areas in picker order.
+ * Storage keeps one table per country; this is the shape every caller works with. */
+function flatten<
+  T extends { ukRegistration: LawyerUkRegistration | null; phRegistration: LawyerPhRegistration | null; practiceAreas: { practiceArea: PracticeArea }[] },
+>(row: T) {
+  const { ukRegistration: uk, phRegistration: ph, practiceAreas, ...rest } = row;
   return {
     ...rest,
+    practiceAreas: toPracticeAreaRefs(practiceAreas),
     regulator: uk?.regulator ?? null,
     registrationNumber: uk?.registrationNumber ?? null,
     qualifiedJurisdictions: uk?.qualifiedJurisdictions ?? [],
@@ -69,7 +73,7 @@ function flatten<T extends { ukRegistration: LawyerUkRegistration | null; phRegi
   };
 }
 
-export type LawyerProfileRow = LawyerClientProfile & UkRegistrationFields & { ph: PhRegistrationFields };
+export type LawyerProfileRow = LawyerClientProfile & UkRegistrationFields & { ph: PhRegistrationFields; practiceAreas: PracticeAreaRef[] };
 export type AdminLawyerProfileRow = ReturnType<typeof flatten<Prisma.LawyerClientProfileGetPayload<{ include: typeof ADMIN_ROW_INCLUDE }>>>;
 
 /** Everything a lawyer's save writes: the shared profile fields and their country's registration. */
@@ -89,16 +93,24 @@ export default class LawyerProfileRepo {
     return row && flatten(row);
   }
 
-  /** Saves the shared fields and the registration of the profile's own country. */
+  /** Saves the shared fields, the registration of the profile's own country, and the practice areas
+   * (replacing the ones it had). */
   static async upsert(userId: string, data: LawyerProfileData): Promise<LawyerProfileRow> {
-    const { regulator, registrationNumber, qualifiedJurisdictions, ph, ...base } = data;
+    const { regulator, registrationNumber, qualifiedJurisdictions, ph, practiceAreas, ...base } = data;
     const country = base.country as LawyerCountry;
     const registration = { regulator, registrationNumber, qualifiedJurisdictions, ph };
-    // Created bare, then the registration upserted in the same write: a nested `upsert` needs the
-    // parent row to exist, and an update-path write covers both a new and an existing profile.
+    // Created bare, then the registration and areas written in the same transaction: a nested write
+    // needs the parent row to exist, and an update-path write covers both a new and an existing profile.
     const row = await prisma.$transaction(async (tx) => {
       await tx.lawyerClientProfile.upsert({ where: { userId }, create: { userId, ...base }, update: base });
-      return tx.lawyerClientProfile.update({ where: { userId }, data: registrationWrites(country, registration), include: REGISTRATIONS });
+      return tx.lawyerClientProfile.update({
+        where: { userId },
+        data: {
+          ...registrationWrites(country, registration),
+          practiceAreas: { deleteMany: {}, create: practiceAreas.map((a) => ({ practiceAreaId: a.id })) },
+        },
+        include: REGISTRATIONS,
+      });
     });
     return flatten(row);
   }
@@ -152,13 +164,14 @@ export default class LawyerProfileRepo {
         enabledByOrganization: true,
         pausedUntil: true,
         capacityLimit: true,
-        practiceAreas: true,
+        practiceAreas: { select: { practiceArea: { select: { caseArea: true, isActive: true } } } },
         ukRegistration: { select: { qualifiedJurisdictions: true } },
       },
     });
     const openCounts = await LawyerProfileRepo.countOpenForLawyers(rows.map((r) => r.userId));
-    return rows.map(({ ukRegistration, ...r }) => ({
+    return rows.map(({ ukRegistration, practiceAreas, ...r }) => ({
       ...r,
+      practiceAreas: practiceAreas.map((a) => a.practiceArea),
       qualifiedJurisdictions: ukRegistration?.qualifiedJurisdictions ?? [],
       openCount: openCounts.get(r.userId) ?? 0,
     }));

@@ -910,9 +910,10 @@ model Case {
   actionType            String?
   jurisdiction          String?
   ukJurisdiction        String?
-  /// The kind of problem, one of CLIENT_CASE_AREAS (constants/client-case.constants.ts). Set by the
-  /// client app; lawyer matching reads it. Null on cases made in the lawyer app.
-  practiceArea          String?
+  /// The kinds of problem, as CaseArea codes ("EMPLOYMENT"). Picked in the client app, one or more,
+  /// and replaced by Jev's once the case is ready for a lawyer; lawyer matching reads them. Empty on
+  /// cases made in the lawyer app.
+  caseAreas             String[]                 @default([])
   language              String                   @default("en")
   notes                 String?                  @db.Text
   lastRefreshedAt       DateTime?
@@ -1043,9 +1044,6 @@ model LawyerClientProfile {
   // The site the lawyer applied on ("UK" | "PH"), from their tenant at the first save. Picks which
   // registration table, practice-area list and fee currency apply.
   country                   String                   @default("UK")
-  // UK: PRACTICE_AREAS (never personal injury: referral fees are banned there). PH:
-  // PH_PRACTICE_AREAS.
-  practiceAreas             String[]
   bio                       String                   @default("") @db.Text
   languages                 String[]
   // Minor units of the country's currency: pence (GBP) or centavos (PHP). Null: no offer.
@@ -1068,8 +1066,56 @@ model LawyerClientProfile {
   user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   ukRegistration LawyerUkRegistration?
   phRegistration LawyerPhRegistration?
+  practiceAreas  LawyerPracticeArea[]
 
   @@index([country, verificationStatus, submittedAt])
+}
+
+// The kinds of problem a client case can be about, per site (UK only for now). Cases and practice
+// areas refer to one by `code`, which never changes once made.
+model CaseArea {
+  id          String   @id @default(uuid())
+  country     String
+  code        String
+  name        String
+  // What Jev is told the area covers when it decides a case's areas.
+  description String   @db.Text
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([country, code])
+  @@index([country, sortOrder])
+}
+
+model PracticeArea {
+  id        String   @id @default(uuid())
+  // "UK" | "PH", as LawyerClientProfile.country.
+  country   String
+  name      String
+  caseArea  String?
+  // Off: hidden from the lawyer's picker and ignored by matching, but kept and shown on the profiles
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lawyers LawyerPracticeArea[]
+
+  @@index([country, sortOrder])
+}
+
+model LawyerPracticeArea {
+  userId         String
+  practiceAreaId String
+  createdAt      DateTime @default(now())
+
+  profile      LawyerClientProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  practiceArea PracticeArea        @relation(fields: [practiceAreaId], references: [id], onDelete: Restrict)
+
+  @@id([userId, practiceAreaId])
+  @@index([practiceAreaId])
 }
 
 // The UK part of a Lawyer Application: what the admin checks against the regulator's register.

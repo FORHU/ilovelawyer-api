@@ -78,7 +78,7 @@ describe("admin client requests, fees and refunds", () => {
     ] as const) {
       await prisma.organization.create({ data: { id, name, slug: `adm-req-${id}`, tenantId: tenant.id, createdById: owner, members: { create: { userId: owner, role: "OWNER", status: "ACCEPTED" } } } });
     }
-    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Dismissal", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales" } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Dismissal", caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } });
 
     const now = Date.now();
     const req = (id: string, status: any, hoursOld: number, extra: object = {}) => ({
@@ -186,7 +186,7 @@ describe("admin client requests, fees and refunds", () => {
       expect(body.total).to.equal(5);
       expect(body.data.map((r: any) => r.id)).to.deep.equal([ids.fresh, ids.failed, ids.engaged, ids.dummy, ids.stale]);
       const engaged = body.data.find((r: any) => r.id === ids.engaged);
-      expect(engaged).to.deep.include({ status: "ENGAGED", practiceArea: "EMPLOYMENT", ukJurisdiction: "England and Wales", organizationName: "One Law LLP", unclaimedOver48h: false });
+      expect(engaged).to.deep.include({ status: "ENGAGED", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", organizationName: "One Law LLP", unclaimedOver48h: false });
       expect(engaged.ageHours).to.be.closeTo(30, 0.2);
       expect(engaged.claims[0]).to.deep.include({ lawyerId: lawyer1, lawyerName: "Lena One", organizationName: "One Law LLP", outcome: "ENGAGED" });
       expect(engaged.claims[0].quote).to.deep.include({ type: "FIXED_FEE", amount: { amountMinor: 90000, currency: "GBP" } });

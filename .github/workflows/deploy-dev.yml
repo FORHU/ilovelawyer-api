@@ -153,6 +153,9 @@ jobs:
           USE_JEV_CONTRADICTIONS: ${{vars.USE_JEV_CONTRADICTIONS}}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
           UK_LEGISLATION_BASE_URL: ${{ secrets.UK_LEGISLATION_BASE_URL }}
+          # Read only by scripts/seed-test-lawyers.ts (the "Seed test lawyers (dev)" workflow), never
+          # by the API. Unset: the seeded lawyers get the script's fallback password.
+          SEED_LAWYER_PASSWORD: ${{ secrets.SEED_LAWYER_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
@@ -230,6 +233,7 @@ jobs:
           add USE_JEV_CONTRADICTIONS   "${USE_JEV_CONTRADICTIONS:-}"
           add UK_CASELAW_BASE_URL       "${UK_CASELAW_BASE_URL:-}"
           add UK_LEGISLATION_BASE_URL   "${UK_LEGISLATION_BASE_URL:-}"
+          add SEED_LAWYER_PASSWORD      "${SEED_LAWYER_PASSWORD:-}"
 
           # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the host's instance role
           # grants S3 and SQS. An empty pair here makes the SDK skip its

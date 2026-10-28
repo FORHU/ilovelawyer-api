@@ -18,6 +18,7 @@ import DocumentSvc from "../src/services/document.service";
 import DocumentRepo from "../src/repositories/document.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientRequestSvc from "../src/services/client-request.service";
+import CaseAreaRepo from "../src/repositories/case-area.repository";
 import requireClientAccount from "../src/middleware/require-client-account.middleware";
 import clientRoute from "../src/routes/client.route";
 import { createClientCaseSchema, sendClientMessageSchema, updateClientCaseSchema } from "../src/validation/client-case.validation";
@@ -40,11 +41,20 @@ async function errorOf(promise: Promise<unknown>): Promise<{ status?: number; co
 
 const workspace: ClientWorkspace = { id: "org-personal", role: "OWNER", tenantCode: "UK" };
 
+/** The UK case areas, as CaseAreaRepo.list gives them back: RETIRED is switched off. */
+const CASE_AREAS = [
+  ["EMPLOYMENT", "Employment"],
+  ["CONSUMER", "Consumer"],
+  ["FAMILY", "Family"],
+  ["RETIRED", "Retired"],
+  ["OTHER", "Other"],
+].map(([code, name], sortOrder) => ({ id: code, country: "UK", code, name, description: "", isActive: code !== "RETIRED", sortOrder }));
+
 function caseRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "case-1",
     caseName: "Dismissed without notice",
-    practiceArea: "EMPLOYMENT",
+    caseAreas: ["EMPLOYMENT"],
     ukJurisdiction: "England and Wales",
     jurisdiction: "Leeds",
     clientSide: "CLAIMANT",
@@ -171,7 +181,9 @@ describe("Client app cases", () => {
         stash(DocumentRepo, ["findManyForCase"]),
         stash(ClientRequestRepo, ["findEngagedLawyerForCase", "findLiveForCase"]),
         stash(socket, ["emitToUser"]),
+        stash(CaseAreaRepo, ["list"]),
       ];
+      (CaseAreaRepo as any).list = async () => CASE_AREAS;
       (ClientPaymentRepo as any).claimCasePayment = async () => 50;
       (ClientPaymentRepo as any).attachToCase = async () => undefined;
       (ClientPaymentRepo as any).spendCredit = async () => {
@@ -220,7 +232,7 @@ describe("Client app cases", () => {
       const dto = await ClientCaseSvc.create(workspace, "u1", {
         paymentId: "pay-1",
         title: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
-        area: "EMPLOYMENT",
+        areas: ["EMPLOYMENT"],
         ukJurisdiction: "England and Wales",
         where: "Leeds",
         side: "CLAIMANT",
@@ -233,7 +245,7 @@ describe("Client app cases", () => {
         "OWNER",
         {
           caseName: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
-          practiceArea: "EMPLOYMENT",
+          caseAreas: ["EMPLOYMENT"],
           ukJurisdiction: "England and Wales",
           jurisdiction: "Leeds",
           clientSide: "CLAIMANT",
@@ -244,6 +256,7 @@ describe("Client app cases", () => {
       expect(title.length).to.equal(80);
       expect(caseId).to.equal("case-1");
       expect(dto).to.include({ id: "case-1", title: "Dismissed without notice", area: "EMPLOYMENT", where: "Leeds", credits: 50 });
+      expect(dto.areas).to.deep.equal([{ code: "EMPLOYMENT", name: "Employment" }]);
       expect(dto.others).to.deep.equal([{ id: "p1", name: "Acme Ltd", role: "Opposing party" }]);
       expect(dto.documents).to.deep.equal([
         { id: "d1", name: "Contract.pdf", status: "READY", size: null, uploadedAt: new Date("2026-10-20"), createdAt: new Date("2026-10-20") },
@@ -254,7 +267,7 @@ describe("Client app cases", () => {
       await ClientCaseSvc.create(workspace, "u1", {
         paymentId: "pay-1",
         title: "Holiday refund",
-        area: "CONSUMER",
+        areas: ["CONSUMER"],
         ukJurisdiction: null,
         notes: "What happened: Flight cancelled.\n\nWhat I want: A refund.",
       });
@@ -262,8 +275,35 @@ describe("Client app cases", () => {
     });
 
     it("stores no UK jurisdiction for a case outside the UK", async () => {
-      await ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "Holiday refund", area: "CONSUMER", ukJurisdiction: null });
+      await ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: null });
       expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, jurisdiction: undefined, clientSide: null });
+    });
+
+    it("takes several areas, each once, and shows them in the list's order", async () => {
+      row = caseRow({ caseAreas: ["FAMILY", "EMPLOYMENT"] });
+      await ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "Split", areas: ["FAMILY", "EMPLOYMENT", "FAMILY"], ukJurisdiction: null });
+      expect((calls.caseCreate as any[])[3].caseAreas).to.deep.equal(["FAMILY", "EMPLOYMENT"]);
+      expect((await ClientCaseSvc.get(workspace, "case-1")).areas.map((a) => a.code)).to.deep.equal(["EMPLOYMENT", "FAMILY"]);
+    });
+
+    it("refuses an area not on the list, or switched off, before the payment is used", async () => {
+      let claimed = false;
+      (ClientPaymentRepo as any).claimCasePayment = async () => {
+        claimed = true;
+        return 50;
+      };
+      for (const [areas, code] of [[["PERSONAL_INJURY"], "UNKNOWN_CASE_AREA"], [["RETIRED"], "CASE_AREA_INACTIVE"], [[], "CASE_AREA_REQUIRED"]] as const) {
+        expect(await errorOf(ClientCaseSvc.create(workspace, "u1", { paymentId: "pay-1", title: "x", areas: [...areas], ukJurisdiction: null }))).to.deep.equal({ status: 400, code });
+      }
+      expect(claimed).to.equal(false);
+    });
+
+    it("lets a case keep a switched-off area it already has, but not add one", async () => {
+      row = caseRow({ caseAreas: ["RETIRED"] });
+      await ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["RETIRED", "FAMILY"] });
+      expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["RETIRED", "FAMILY"] });
+      row = caseRow();
+      expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["RETIRED"] }))).to.deep.equal({ status: 400, code: "CASE_AREA_INACTIVE" });
     });
 
     it("shows only the user's and the AI's messages, and whether a reply is still coming", async () => {
@@ -385,18 +425,18 @@ describe("Client app cases", () => {
 
       it("fixes the type, place and people once a lawyer holds the request, but not the title", async () => {
         live = { id: "req-1", status: "CLAIMED" };
-        for (const change of [{ area: "FAMILY" as const }, { ukJurisdiction: "Scotland" }, { others: [] }]) {
+        for (const change of [{ areas: ["FAMILY"] }, { areas: ["EMPLOYMENT", "FAMILY"] }, { ukJurisdiction: "Scotland" }, { others: [] }]) {
           expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", change))).to.deep.equal({ status: 409, code: "CASE_LOCKED_BY_REQUEST" });
         }
-        await ClientCaseSvc.update(workspace, "u1", "case-1", { title: "New title", area: "EMPLOYMENT", others: [{ name: "acme ltd", role: "Opposing party" }] });
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { title: "New title", areas: ["EMPLOYMENT"], others: [{ name: "acme ltd", role: "Opposing party" }] });
         expect((calls.caseUpdate as any[])[3]).to.include({ caseName: "New title" });
       });
 
       it("keeps a case with an open request inside the UK", async () => {
         live = { id: "req-1", status: "ROUTED" };
         expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { ukJurisdiction: null }))).to.deep.equal({ status: 409, code: "CASE_LOCKED_BY_REQUEST" });
-        await ClientCaseSvc.update(workspace, "u1", "case-1", { area: "FAMILY" });
-        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ practiceArea: "FAMILY" });
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["FAMILY"] });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["FAMILY"] });
       });
     });
 
@@ -475,13 +515,13 @@ describe("Client app cases", () => {
   });
 
   describe("validation", () => {
-    const valid = { paymentId: "pay-1", title: "Holiday refund", area: "CONSUMER", ukJurisdiction: "Scotland" };
+    const valid = { paymentId: "pay-1", title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: "Scotland" };
 
     it("needs the part of the UK, or null for outside it", () => {
       expect(createClientCaseSchema.validate(valid).error).to.equal(undefined);
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: null }).error).to.equal(undefined);
-      expect(createClientCaseSchema.validate({ paymentId: "pay-1", title: "x", area: "CONSUMER" }).error).to.not.equal(undefined);
-      expect(createClientCaseSchema.validate({ title: "x", area: "CONSUMER", ukJurisdiction: null }).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ paymentId: "pay-1", title: "x", areas: ["CONSUMER"] }).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ title: "x", areas: ["CONSUMER"], ukJurisdiction: null }).error).to.not.equal(undefined);
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: "Wales" }).error).to.not.equal(undefined);
     });
 
@@ -494,7 +534,8 @@ describe("Client app cases", () => {
       expect(updateClientCaseSchema.validate({}).error).to.not.equal(undefined);
       expect(updateClientCaseSchema.validate({ title: "New" }).error).to.equal(undefined);
       expect(updateClientCaseSchema.validate({ ukJurisdiction: null }).error).to.equal(undefined);
-      expect(updateClientCaseSchema.validate({ area: "PERSONAL_INJURY" }).error).to.not.equal(undefined);
+      expect(updateClientCaseSchema.validate({ areas: [] }).error).to.not.equal(undefined);
+      expect(updateClientCaseSchema.validate({ areas: ["FAMILY"], area: "FAMILY" }).error).to.not.equal(undefined);
     });
 
     it("takes up to 5 documents with a message", () => {
@@ -505,8 +546,14 @@ describe("Client app cases", () => {
       expect(sendClientMessageSchema.validate({ text: "Hi", documentIds: [""] }).error).to.not.equal(undefined);
     });
 
-    it("only takes the client app's areas, and no personal injury", () => {
-      expect(createClientCaseSchema.validate({ ...valid, area: "PERSONAL_INJURY" }).error).to.not.equal(undefined);
+    it("takes one or more areas, each once, or the older single area, but not both and not none", () => {
+      expect(createClientCaseSchema.validate({ ...valid, areas: ["CONSUMER", "FAMILY"] }).error).to.equal(undefined);
+      const { areas: _areas, ...withoutAreas } = valid;
+      expect(createClientCaseSchema.validate({ ...withoutAreas, area: "CONSUMER" }).error).to.equal(undefined);
+      expect(createClientCaseSchema.validate(withoutAreas).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ ...valid, area: "CONSUMER" }).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ ...valid, areas: [] }).error).to.not.equal(undefined);
+      expect(createClientCaseSchema.validate({ ...valid, areas: ["FAMILY", "FAMILY"] }).error).to.not.equal(undefined);
     });
   });
 
@@ -517,6 +564,7 @@ describe("Client app cases", () => {
       "POST /payments/case",
       "GET /payments/:paymentId",
       "GET /limits",
+      "GET /case-areas",
       "GET /cases",
       "POST /cases",
       "GET /cases/:caseId",

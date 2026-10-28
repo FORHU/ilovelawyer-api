@@ -3,7 +3,8 @@ import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import OrganizationRepo from "../repositories/organization.repository";
-import ClientRequestMatchingSvc from "./client-request-matching.service";
+import ClientRequestMatchingSvc, { caseAreasOf } from "./client-request-matching.service";
+import CaseAreaSvc from "./case-area.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import OrganizationChargeSvc, { chargeDto } from "./organization-charge.service";
 import LawyerPricingSvc, { type Money } from "./lawyer-pricing.service";
@@ -115,7 +116,7 @@ function chargeOf(r: LawyerRequest, lawyerId: string) {
 }
 
 function criteriaOf(r: LawyerRequest) {
-  return { practiceArea: r.case.practiceArea, ukJurisdiction: r.case.ukJurisdiction };
+  return { caseAreas: r.case.caseAreas, ukJurisdiction: r.case.ukJurisdiction };
 }
 
 /**
@@ -138,7 +139,7 @@ export default class ClientRequestLawyerSvc {
     // rule. Paged here, after it: the routed, unclaimed pool is small, and the lawyer-level checks
     // (accepting, paused, enabled) would otherwise make the database's total wrong.
     const now = new Date();
-    const candidates = await ClientRequestRepo.listRoutedFor(lawyer.userId, { practiceAreas: profile.practiceAreas, jurisdictions: profile.qualifiedJurisdictions }, now);
+    const candidates = await ClientRequestRepo.listRoutedFor(lawyer.userId, { caseAreas: caseAreasOf(profile.practiceAreas), jurisdictions: profile.qualifiedJurisdictions }, now);
     const inbox = candidates.filter((r) => ClientRequestMatchingSvc.matches(profile, criteriaOf(r), now));
     const start = (query.page - 1) * query.limit;
     return { total: inbox.length, data: inbox.slice(start, start + query.limit).map((r) => toDto(r, lawyer.userId, fee)) };
@@ -251,7 +252,7 @@ export default class ClientRequestLawyerSvc {
 
     const caseDetails: IntakePackageCaseDetails = {
       title: found.case.caseName,
-      practiceArea: found.case.practiceArea,
+      caseAreas: (await CaseAreaSvc.refsOf(found.case.caseAreas)).map((a) => a.name),
       ukJurisdiction: found.case.ukJurisdiction,
       town: found.case.jurisdiction,
       side: found.case.clientSide,

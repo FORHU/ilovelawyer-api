@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 import ClientRequestAdminRepo, { AdminRequestFilter, AdminRequestRow, ChargeWithRefunds, PAID_CHARGE_STATUSES } from "../repositories/client-request-admin.repository";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
+import CaseAreaSvc from "./case-area.service";
 import SecurityAuditSvc from "./security-audit.service";
 import { chargeDto } from "./organization-charge.service";
 import { organizationCardProviderNamed } from "../payments/organization-card-provider";
@@ -52,12 +53,13 @@ export default class ClientRequestAdminSvc {
     const users = await ClientRequestAdminRepo.findUserNames([...new Set([...lawyerIds, ...adminIds])]);
     const names = new Map(users.map((u) => [u.id, u.name || u.email] as const));
     const matched = await Promise.all(data.map((r) => (r.status === "ROUTED" ? ClientRequestMatchingSvc.eligibleLawyerIds(r.id).then((ids) => ids.length) : 0)));
+    const label = await CaseAreaSvc.labeller();
     return {
       total,
       page,
       pageSize: limit,
       totalPages: Math.max(1, Math.ceil(total / limit)),
-      data: data.map((r, i) => ClientRequestAdminSvc.requestDto(r, matched[i]!, names, now)),
+      data: data.map((r, i) => ClientRequestAdminSvc.requestDto(r, matched[i]!, names, now, label(r.case.caseAreas).map((a) => a.name))),
     };
   }
 
@@ -165,7 +167,8 @@ export default class ClientRequestAdminSvc {
     };
   }
 
-  private static requestDto(r: AdminRequestRow, matchedLawyers: number, names: Map<string, string>, now: Date) {
+  /** `caseAreas` are the case's areas by name. */
+  private static requestDto(r: AdminRequestRow, matchedLawyers: number, names: Map<string, string>, now: Date, caseAreas: string[]) {
     const latest = r.claims[0];
     return {
       id: r.id,
@@ -178,7 +181,7 @@ export default class ClientRequestAdminSvc {
       routedAt: r.routedAt,
       routingExpiresAt: r.routingExpiresAt,
       engagedAt: r.engagedAt,
-      practiceArea: r.case.practiceArea,
+      caseAreas,
       ukJurisdiction: r.case.ukJurisdiction,
       matchedLawyers,
       claims: r.claims.map((c) => ({

@@ -9,7 +9,7 @@ import type { CaseIntake } from "../types/client-intake";
 export interface ClientIntakeCaseSource {
   id: string;
   caseName: string;
-  practiceArea: string | null;
+  caseAreas: string[];
   ukJurisdiction: string | null;
   jurisdiction: string | null;
   clientSide: "CLAIMANT" | "RESPONDENT" | null;
@@ -27,7 +27,7 @@ export default class ClientIntakeRepo {
       select: {
         id: true,
         caseName: true,
-        practiceArea: true,
+        caseAreas: true,
         ukJurisdiction: true,
         jurisdiction: true,
         clientSide: true,

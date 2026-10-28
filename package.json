@@ -16,7 +16,8 @@
     "prisma:seed": "ts-node prisma/seed.ts",
     "stripe:listen": "docker compose --profile stripe up stripe-cli",
     "stripe:secret": "docker compose --profile stripe run --rm stripe-cli listen --print-secret",
-    "stripe:webhook-check": "ts-node --files scripts/stripe-webhook-check.ts"
+    "stripe:webhook-check": "ts-node --files scripts/stripe-webhook-check.ts",
+    "seed:test-lawyers": "ts-node --files scripts/seed-test-lawyers.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
