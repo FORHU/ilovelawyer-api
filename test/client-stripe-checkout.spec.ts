@@ -17,7 +17,7 @@ import {
   type ClientCheckoutRequest,
 } from "../src/payments/client-payment-provider";
 import { verifyStripeWebhook } from "../src/payments/stripe-client";
-import { CASE_CREDITS as CLIENT_CASE_CREDITS, CASE_PRICE_MINOR as CLIENT_CASE_PRICE_MINOR, clientPriceRows, installClientPricing, welcomePromo, type ClientPricingState } from "./support/client-pricing-fixture";
+import { clientPriceRows, installClientPricing, welcomePromo, type ClientPricingState } from "./support/client-pricing-fixture";
 import { CLIENT_URL, USER_APP_URL } from "../src/config";
 
 function stash<T extends object>(target: T, keys: string[]) {
@@ -67,7 +67,7 @@ describe("Client app payments through Stripe Checkout", () => {
   beforeEach(() => {
     restore = stash(ClientPaymentRepo, [
       "create",
-      "hasPaidForCase",
+      "hasPaidTopUp",
       "addCredits",
       "creditsOf",
       "setExternalId",
@@ -91,9 +91,10 @@ describe("Client app payments through Stripe Checkout", () => {
     repo.create = async (data: any) => {
       const row = { id: `pay-${payments.size + 1}`, usedAt: null, createdAt: new Date(), ...data };
       payments.set(row.id, row);
+      if (data.status === "SUCCEEDED" && data.kind === "TOP_UP" && data.caseId) credits[data.caseId] = (credits[data.caseId] ?? 0) + data.credits;
       return { ...row };
     };
-    repo.hasPaidForCase = async () => false;
+    repo.hasPaidTopUp = async () => false;
     repo.addCredits = async (caseId: string, n: number) => (credits[caseId] = (credits[caseId] ?? 0) + n);
     repo.creditsOf = async (caseId: string) => credits[caseId] ?? 0;
     repo.setExternalId = async (id: string, externalId: string) => {
@@ -136,23 +137,33 @@ describe("Client app payments through Stripe Checkout", () => {
   });
 
   describe("starting a payment", () => {
-    it("opens an embedded checkout and keeps the case payment PENDING until Stripe says it's paid", async () => {
-      const started = await ClientBillingSvc.payForCase("u1", { promoCode: "WELCOME5", origin: "https://ilovelawyer.example.com" });
+    it("opens an embedded checkout for the discounted top-up and keeps it PENDING until Stripe says it's paid", async () => {
+      const started = await ClientBillingSvc.topUp("u1", "case-1", { packId: "p100", promoCode: "WELCOME5", origin: "https://ilovelawyer.example.com" });
       expect(started).to.deep.equal({
         paymentId: "pay-1",
         status: "PENDING",
-        amount: { amountMinor: CLIENT_CASE_PRICE_MINOR - 500, currency: "USD" },
-        credits: CLIENT_CASE_CREDITS,
+        credits: 3,
+        added: 100,
+        amount: { amountMinor: 999, currency: "USD" },
         checkout: { provider: "STRIPE", clientSecret: "cs_secret_pay-1", publishableKey: "pk_test_123" },
       });
-      expect(payments.get("pay-1")).to.include({ provider: "STRIPE", status: "PENDING", externalId: "cs_test_pay-1" });
+      expect(payments.get("pay-1")).to.include({ kind: "TOP_UP", provider: "STRIPE", status: "PENDING", externalId: "cs_test_pay-1", promoCode: "WELCOME5" });
       expect(checkoutRequests[0]).to.include({
         paymentId: "pay-1",
         userId: "u1",
         customerEmail: "client@example.com",
-        amountMinor: CLIENT_CASE_PRICE_MINOR - 500,
+        amountMinor: 999,
         returnUrl: "https://ilovelawyer.example.com/payments/return?paymentId=pay-1",
       });
+    });
+
+    it("settles a top-up a promo makes free without Stripe", async () => {
+      restorePricing();
+      restorePricing = installClientPricing({ rows: clientPriceRows(), promos: [welcomePromo({ discountMinor: 5000 })], redemptions: {} } as ClientPricingState);
+      const started = await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25", promoCode: "WELCOME5" });
+      expect(started).to.include({ status: "SUCCEEDED", credits: 28, checkout: null });
+      expect(payments.get("pay-1")).to.include({ provider: "FREE", amountMinor: 0 });
+      expect(checkoutRequests).to.deep.equal([]);
     });
 
     it("adds a top-up's credits only once it's paid", async () => {
@@ -164,12 +175,12 @@ describe("Client app payments through Stripe Checkout", () => {
 
     it("fails the payment and says so when the checkout can't be opened", async () => {
       createFails = true;
-      expect(await errorOf(ClientBillingSvc.payForCase("u1", {}))).to.deep.equal({ status: 502, code: "PAYMENT_PROVIDER_ERROR" });
+      expect(await errorOf(ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" }))).to.deep.equal({ status: 502, code: "PAYMENT_PROVIDER_ERROR" });
       expect(payments.get("pay-1")).to.include({ status: "FAILED" });
     });
 
     it("ignores the dummy's decline switch: Stripe's own test cards do that", async () => {
-      const started = await ClientBillingSvc.payForCase("u1", { testOutcome: "decline" });
+      const started = await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25", testOutcome: "decline" });
       expect(started.status).to.equal("PENDING");
     });
   });
@@ -185,14 +196,14 @@ describe("Client app payments through Stripe Checkout", () => {
 
   describe("paymentStatus (the app asking after the client paid)", () => {
     it("settles a paid checkout at once, without waiting for the webhook", async () => {
-      await ClientBillingSvc.payForCase("u1", {});
+      await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
       outcome = "paid";
-      expect(await ClientBillingSvc.paymentStatus("u1", "pay-1")).to.include({ status: "SUCCEEDED", usable: true });
+      expect(await ClientBillingSvc.paymentStatus("u1", "pay-1")).to.include({ status: "SUCCEEDED", kind: "TOP_UP" });
     });
 
     it("fails an expired checkout, and leaves one still open alone", async () => {
-      await ClientBillingSvc.payForCase("u1", {});
-      expect(await ClientBillingSvc.paymentStatus("u1", "pay-1")).to.include({ status: "PENDING", usable: false });
+      await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
+      expect(await ClientBillingSvc.paymentStatus("u1", "pay-1")).to.include({ status: "PENDING" });
       outcome = "expired";
       const after = await ClientBillingSvc.paymentStatus("u1", "pay-1");
       expect(after).to.include({ status: "FAILED" });
@@ -200,13 +211,13 @@ describe("Client app payments through Stripe Checkout", () => {
     });
 
     it("leaves the payment PENDING when Stripe can't be reached", async () => {
-      await ClientBillingSvc.payForCase("u1", {});
+      await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
       outcome = new Error("timeout");
       expect(await ClientBillingSvc.paymentStatus("u1", "pay-1")).to.include({ status: "PENDING" });
     });
 
     it("answers 404 for another client's payment", async () => {
-      await ClientBillingSvc.payForCase("u1", {});
+      await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
       expect(await errorOf(ClientBillingSvc.paymentStatus("u2", "pay-1"))).to.deep.include({ status: 404 });
     });
   });
@@ -245,7 +256,7 @@ describe("Client app payments through Stripe Checkout", () => {
     });
 
     it("waits on a completed checkout whose bank payment is still clearing, then settles on its outcome", async () => {
-      await ClientBillingSvc.payForCase("u1", {});
+      await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
       await ClientBillingSvc.handleStripeEvent(sessionEvent("evt_1", "checkout.session.completed", completed("pay-1", { payment_status: "unpaid" })));
       expect(payments.get("pay-1").status).to.equal("PENDING");
       await ClientBillingSvc.handleStripeEvent(sessionEvent("evt_2", "checkout.session.async_payment_failed", completed("pay-1", { payment_status: "unpaid" })));
@@ -253,13 +264,13 @@ describe("Client app payments through Stripe Checkout", () => {
     });
 
     it("fails an expired checkout", async () => {
-      await ClientBillingSvc.payForCase("u1", {});
+      await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
       await ClientBillingSvc.handleStripeEvent(sessionEvent("evt_1", "checkout.session.expired", completed("pay-1", { status: "expired", payment_status: "unpaid" })));
       expect(payments.get("pay-1")).to.include({ status: "FAILED" });
     });
 
     it("ignores a session that isn't one of ours, or doesn't match the payment it names", async () => {
-      await ClientBillingSvc.payForCase("u1", {});
+      await ClientBillingSvc.topUp("u1", "case-1", { packId: "p25" });
       await StripeWebhookSvc.handle(sessionEvent("evt_1", "checkout.session.completed", completed("pay-from-another-env")));
       await StripeWebhookSvc.handle(sessionEvent("evt_2", "checkout.session.completed", completed("pay-1", { id: "cs_test_other" })));
       expect(payments.get("pay-1").status).to.equal("PENDING");

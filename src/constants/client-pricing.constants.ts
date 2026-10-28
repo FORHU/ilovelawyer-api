@@ -30,11 +30,12 @@ export const CLIENT_PRICING_CACHE_TTL_S = 60;
  * step. */
 export const CLIENT_PRICING_DEFAULTS = {
   currency: "USD",
-  case: { code: "case", name: "Case", level: 0, priceMinor: 999, credits: 50 },
+  // A new case is free (priceMinor stays 0); `credits` is what it starts with.
+  case: { code: "case", name: "Case", level: 0, priceMinor: 0, credits: 50 },
   packs: [
     { code: "p25", name: "Small", level: 0, priceMinor: 499, credits: 25, isDefault: false },
     { code: "p100", name: "Standard", level: 1, priceMinor: 1499, credits: 100, isDefault: true },
     { code: "p250", name: "Large", level: 2, priceMinor: 2999, credits: 250, isDefault: false },
   ],
-  promos: [{ code: "WELCOME5", description: "$5 off your first case", discountMinor: 500, firstCaseOnly: true, oncePerClient: false }],
+  promos: [{ code: "WELCOME5", description: "$5 off your first top-up", discountMinor: 500, firstTopUpOnly: true, oncePerClient: false }],
 } as const;

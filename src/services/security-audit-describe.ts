@@ -238,7 +238,7 @@ function targetText(event: SecurityAuditEvent, names: AuditNames): string {
       return `${id} jurisdiction module`;
     case "client_price": {
       const [tenant, code] = id.split(":");
-      return code === "case" ? `${tenant} client app case price` : `${tenant} client app top-up pack ${code}`;
+      return code === "case" ? `${tenant} client app new-case credits` : `${tenant} client app top-up pack ${code}`;
     }
     case "client_promo": {
       const [tenant, code] = id.split(":");

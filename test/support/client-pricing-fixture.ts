@@ -7,7 +7,7 @@ import ClientPaymentRepo from "../../src/repositories/client-payment.repository"
 import { redis } from "../../src/lib/redis";
 
 export const TENANT_ID = "tenant-uk";
-export const CASE_PRICE_MINOR = 999;
+/** What a new (free) case starts with. */
 export const CASE_CREDITS = 50;
 
 function priceRow(planType: "B2C_CASE" | "B2C_TOP_UP", code: string, name: string, level: number, priceMinor: number, credits: number, extra: object = {}) {
@@ -16,7 +16,7 @@ function priceRow(planType: "B2C_CASE" | "B2C_TOP_UP", code: string, name: strin
 
 export function clientPriceRows() {
   return [
-    priceRow("B2C_CASE", "case", "Case", 0, CASE_PRICE_MINOR, CASE_CREDITS),
+    priceRow("B2C_CASE", "case", "Case", 0, 0, CASE_CREDITS),
     priceRow("B2C_TOP_UP", "p25", "Small", 0, 499, 25),
     priceRow("B2C_TOP_UP", "p100", "Standard", 1, 1499, 100, { isDefault: true }),
     priceRow("B2C_TOP_UP", "p250", "Large", 2, 2999, 250),
@@ -29,10 +29,10 @@ export function welcomePromo(extra: object = {}) {
     tenantId: TENANT_ID,
     tenant: { code: "UK" },
     code: "WELCOME5",
-    description: "$5 off your first case",
+    description: "$5 off your first top-up",
     discountMinor: 500,
     currency: "USD",
-    firstCaseOnly: true,
+    firstTopUpOnly: true,
     oncePerClient: false,
     expiresAt: null,
     maxRedemptions: null,

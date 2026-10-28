@@ -40,14 +40,16 @@ export interface StartedPayment {
 }
 
 /**
- * Paying for the client app: one payment per new case, and credit top-ups on a case. Chat credits
- * live on the case (Case.clientCredits), and each message to the AI takes one (spendCredit).
+ * Paying for the client app: chat-credit top-ups on a case, with an optional promo code. Cases
+ * themselves are free and start with the tenant's credits (ClientCaseSvc.create); CASE payments
+ * are only history from when they weren't. Chat credits live on the case (Case.clientCredits),
+ * and each message to the AI takes one (spendCredit).
  *
  * Every payment goes through clientPaymentProvider() (payments/client-payment-provider.ts) and is
  * stored as a ClientPayment, failed ones included. The dummy settles at once. Stripe starts PENDING
  * with a checkout the app shows; the payment settles on Stripe's webhook (handleStripeEvent) or when
- * the app asks after the client paid (paymentStatus), whichever comes first. A PENDING case payment
- * can't create a case, and a PENDING top-up adds no credits, until it's paid.
+ * the app asks after the client paid (paymentStatus), whichever comes first. A PENDING top-up adds
+ * no credits until it's paid.
  */
 export default class ClientBillingSvc {
   /** The prices an admin set for this client's tenant (ClientPricingSvc): the case, the active
@@ -56,66 +58,50 @@ export default class ClientBillingSvc {
     return ClientPricingSvc.priceList(await ClientPricingSvc.tenantIdForClient(userId));
   }
 
-  /** What a new case costs this client, with a promo code applied if it can be. */
-  static async quoteCase(userId: string, promoCode?: string) {
+  /** What a top-up pack costs this client, with a promo code applied if it can be. */
+  static async quoteTopUp(userId: string, packId: string, promoCode?: string) {
     const tenantId = await ClientPricingSvc.tenantIdForClient(userId);
-    const { case: casePrice } = await ClientPricingSvc.priceList(tenantId);
-    const { amountMinor: price, currency } = casePrice.price;
+    const pack = (await ClientPricingSvc.priceList(tenantId)).topUpPacks.find((p) => p.id === packId);
+    if (!pack) throw new HttpError("No such top-up pack", 400);
+    const { amountMinor: price, currency } = pack.price;
     const quote = (discountMinor: number, promo: { code: string; applied: boolean; message: string } | null) => ({
+      packId: pack.id,
       price: money(price, currency),
       discount: money(discountMinor, currency),
       total: money(price - discountMinor, currency),
-      credits: casePrice.credits,
+      credits: pack.credits,
       promo,
     });
     const code = promoCode?.trim();
     if (!code) return quote(0, null);
 
-    const check = await ClientPricingSvc.checkPromo(tenantId, userId, code, casePrice.price);
+    const check = await ClientPricingSvc.checkPromo(tenantId, userId, code, pack.price);
     if (!check.ok) return quote(0, { code: check.code, applied: false, message: check.message });
-    const { promo } = check;
-    return quote(Math.min(promo.discountMinor, price), { code: promo.code, applied: true, message: `${promo.code} applied: ${promo.description}.` });
+    const { promo, discountMinor } = check;
+    return quote(discountMinor, { code: promo.code, applied: true, message: `${promo.code} applied: ${promo.description}.` });
   }
 
-  /** Pays for a new case. The payment is then used up creating it (ClientCaseSvc.create). A code
-   * that doesn't apply is refused rather than silently charging the full price. */
-  static async payForCase(userId: string, input: { promoCode?: string; testOutcome?: TestOutcome; origin?: string }) {
-    const quote = await ClientBillingSvc.quoteCase(userId, input.promoCode);
+  /** The caller has already checked the case is this client's. A code that doesn't apply is refused
+   * rather than silently charging the full price. With the dummy the credits are added now; with
+   * Stripe they're added when the payment settles, so `credits` is the balance as it stands
+   * (unchanged until then). */
+  static async topUp(userId: string, caseId: string, input: { packId: string; promoCode?: string; testOutcome?: TestOutcome; origin?: string }) {
+    const quote = await ClientBillingSvc.quoteTopUp(userId, input.packId, input.promoCode);
     if (quote.promo && !quote.promo.applied) throw new HttpError(quote.promo.message, 400, "PROMO_NOT_APPLIED");
     const { payment, checkout } = await ClientBillingSvc.start(userId, {
-      kind: "CASE",
-      caseId: null,
+      caseId,
       amountMinor: quote.total.amountMinor,
       currency: quote.total.currency,
       credits: quote.credits,
       promoCode: quote.promo?.code ?? null,
-      description: "New case on ilovelawyer",
+      description: `${quote.credits} chat credits on ilovelawyer`,
       testOutcome: input.testOutcome,
       origin: input.origin,
     });
-    return { paymentId: payment.id, status: payment.status, amount: money(payment.amountMinor, payment.currency), credits: payment.credits, checkout: checkoutDto(checkout) };
-  }
-
-  /** The caller has already checked the case is this client's. */
-  /** The caller has already checked the case is this client's. With the dummy the credits are added
-   * now; with Stripe they're added when the payment settles, so `credits` is the balance as it
-   * stands (unchanged until then). */
-  static async topUp(userId: string, caseId: string, input: { packId: string; testOutcome?: TestOutcome; origin?: string }) {
-    const pack = (await ClientBillingSvc.pricing(userId)).topUpPacks.find((p) => p.id === input.packId);
-    if (!pack) throw new HttpError("No such top-up pack", 400);
-    const { payment, checkout } = await ClientBillingSvc.start(userId, {
-      kind: "TOP_UP",
-      caseId,
-      amountMinor: pack.price.amountMinor,
-      currency: pack.price.currency,
-      credits: pack.credits,
-      promoCode: null,
-      description: `${pack.credits} chat credits on ilovelawyer`,
-      testOutcome: input.testOutcome,
-      origin: input.origin,
-    });
-    const credits = payment.status === "SUCCEEDED" ? await ClientPaymentRepo.addCredits(caseId, pack.credits) : await ClientPaymentRepo.creditsOf(caseId);
-    return { paymentId: payment.id, status: payment.status, credits, added: pack.credits, amount: pack.price, checkout: checkoutDto(checkout) };
+    // A paid top-up's credits went in with the payment (ClientPaymentRepo.create); a PENDING one's
+    // go in when it settles.
+    const credits = await ClientPaymentRepo.creditsOf(caseId);
+    return { paymentId: payment.id, status: payment.status, credits, added: quote.credits, amount: quote.total, checkout: checkoutDto(checkout) };
   }
 
   /**
@@ -138,8 +124,6 @@ export default class ClientBillingSvc {
       credits: payment.credits,
       caseId: payment.caseId,
       failureReason: payment.failureReason,
-      /** A case payment that can still create its case. */
-      usable: payment.kind === "CASE" && payment.status === "SUCCEEDED" && !payment.usedAt,
     };
   }
 
@@ -216,8 +200,7 @@ export default class ClientBillingSvc {
   private static async start(
     userId: string,
     p: {
-      kind: "CASE" | "TOP_UP";
-      caseId: string | null;
+      caseId: string;
       amountMinor: number;
       currency: string;
       credits: number;
@@ -231,7 +214,7 @@ export default class ClientBillingSvc {
     const row = {
       userId,
       caseId: p.caseId,
-      kind: p.kind,
+      kind: "TOP_UP" as const,
       amountMinor: p.amountMinor,
       currency: p.currency,
       credits: p.credits,

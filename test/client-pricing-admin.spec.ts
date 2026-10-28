@@ -58,28 +58,27 @@ describe("Client app pricing, edited by admins", () => {
   });
   afterEach(() => restore());
 
-  describe("the case price", () => {
-    it("saves a new price and records who changed it from what", async () => {
-      await ClientPricingSvc.updateCase("UK", { priceMinor: 1499, credits: 60 }, "admin-1");
-      expect(writes[0]).to.include({ id: "plan-case", priceMinor: 1499, credits: 60, currency: "USD" });
+  describe("new-case credits", () => {
+    it("saves the credits a new case starts with and records who changed them from what", async () => {
+      await ClientPricingSvc.updateCase("UK", { credits: 60 }, "admin-1");
+      expect(writes[0]).to.deep.include({ id: "plan-case", credits: 60 });
+      // Cases are free: the edit never touches a price.
+      expect(writes[0]).to.not.have.any.keys("priceMinor", "currency");
       expect(audits[0]).to.deep.include({ action: "admin.settings.client_price_changed", actorId: "admin-1", targetType: "client_price", targetId: "UK:case" });
-      expect(audits[0].payload.from).to.deep.equal({ priceMinor: 999, credits: 50, currency: "USD" });
+      expect(audits[0].payload).to.deep.equal({ from: { credits: 50 }, to: { credits: 60 } });
     });
 
-    it("allows free, but nothing below Stripe's minimum or above the ceiling", async () => {
-      await ClientPricingSvc.updateCase("UK", { priceMinor: 0 }, "admin-1");
-      expect(await errorOf(ClientPricingSvc.updateCase("UK", { priceMinor: 49 }, "admin-1"))).to.deep.equal({ status: 400, code: "PRICE_OUT_OF_RANGE" });
-      expect(await errorOf(ClientPricingSvc.updateCase("UK", { priceMinor: 100_000 }, "admin-1"))).to.deep.equal({ status: 400, code: "PRICE_OUT_OF_RANGE" });
+    it("refuses fewer than one credit", async () => {
+      expect(await errorOf(ClientPricingSvc.updateCase("UK", { credits: 0 }, "admin-1"))).to.deep.include({ status: 400 });
     });
 
-    it("checks the bounds of the new currency, and refuses one we don't support", async () => {
-      expect(await errorOf(ClientPricingSvc.updateCase("UK", { priceMinor: 30, currency: "GBP" }, "admin-1"))).to.equal(undefined);
-      expect(await errorOf(ClientPricingSvc.updateCase("UK", { currency: "XYZ" }, "admin-1"))).to.deep.equal({ status: 400, code: "CURRENCY_NOT_SUPPORTED" });
+    it("tells clients the credits, and no case price", async () => {
+      expect((await ClientPricingSvc.priceList(TENANT_ID)).case).to.deep.equal({ credits: 50 });
     });
   });
 
   it("refuses a tenant that doesn't exist", async () => {
-    expect(await errorOf(ClientPricingSvc.updateCase("PH", { priceMinor: 1499 }, "admin-1"))).to.deep.include({ status: 404 });
+    expect(await errorOf(ClientPricingSvc.updateCase("PH", { credits: 60 }, "admin-1"))).to.deep.include({ status: 404 });
   });
 
   describe("top-up packs", () => {
@@ -111,7 +110,7 @@ describe("Client app pricing, edited by admins", () => {
     it("stores the code uppercase with its rules", async () => {
       const promo = await ClientPricingSvc.createPromo(
         "UK",
-        { code: "spring10", description: "$10 off", discountMinor: 1000, currency: "USD", firstCaseOnly: false, oncePerClient: true, maxRedemptions: 100 },
+        { code: "spring10", description: "$10 off", discountMinor: 1000, currency: "USD", firstTopUpOnly: false, oncePerClient: true, maxRedemptions: 100 },
         "admin-1",
       );
       expect(promo).to.include({ code: "SPRING10", oncePerClient: true, maxRedemptions: 100, isActive: true });
@@ -119,7 +118,7 @@ describe("Client app pricing, edited by admins", () => {
     });
 
     it("refuses a zero discount or a zero redemption limit", async () => {
-      const base = { code: "BAD", description: "x", currency: "USD", firstCaseOnly: false, oncePerClient: false, maxRedemptions: null };
+      const base = { code: "BAD", description: "x", currency: "USD", firstTopUpOnly: false, oncePerClient: false, maxRedemptions: null };
       expect(await errorOf(ClientPricingSvc.createPromo("UK", { ...base, discountMinor: 0 }, "admin-1"))).to.deep.include({ status: 400 });
       expect(await errorOf(ClientPricingSvc.createPromo("UK", { ...base, discountMinor: 100, maxRedemptions: 0 }, "admin-1"))).to.deep.include({ status: 400 });
     });

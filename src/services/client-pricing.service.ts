@@ -19,8 +19,8 @@ export interface Money {
   currency: string;
 }
 
+/** A new case is free: this is only the chat credits it starts with. */
 export interface ClientCasePrice {
-  price: Money;
   credits: number;
 }
 
@@ -39,12 +39,10 @@ export interface ClientPriceList {
   defaultPackId: string | null;
 }
 
-export type PromoCheck = { ok: true; promo: ClientPromo } | { ok: false; code: string; message: string };
+export type PromoCheck = { ok: true; promo: ClientPromo; discountMinor: number } | { ok: false; code: string; message: string };
 
 export interface CasePriceInput {
-  priceMinor?: number;
-  credits?: number;
-  currency?: string;
+  credits: number;
 }
 
 export interface NewPackInput {
@@ -96,9 +94,10 @@ async function tenantIdOf(code: TenantCode): Promise<string> {
 
 /**
  * The client app's prices, edited by admins (ilovelawyer-admin Settings), per tenant like the
- * lawyer subscription tiers: each tenant has one case price, its credit top-up packs and its promo
- * codes. A client pays their own tenant's prices (User.tenantId). Prices are PaymentPlan rows
- * (B2C_CASE, B2C_TOP_UP) and promos are ClientPromo rows; see ADR 0017.
+ * lawyer subscription tiers: each tenant has the chat credits a new (free) case starts with, its
+ * credit top-up packs and its promo codes, which come off a top-up. A client pays their own
+ * tenant's prices (User.tenantId). Prices are PaymentPlan rows (B2C_CASE, credits only, and
+ * B2C_TOP_UP) and promos are ClientPromo rows; see ADR 0017 and ADR 0019.
  *
  * Checkout reads priceList(), cached per tenant for CLIENT_PRICING_CACHE_TTL_S, so an edit reaches
  * clients within about a minute. Every write clears that tenant's cache and is recorded in the
@@ -119,10 +118,10 @@ export default class ClientPricingSvc {
 
     const rows = await ClientPricingRepo.listPrices(tenantId);
     const caseRow = rows.find((r) => r.planType === "B2C_CASE");
-    if (!caseRow) throw new HttpError("The client app's case price isn't set up for this region", 500, "CLIENT_PRICING_MISSING");
+    if (!caseRow) throw new HttpError("The client app's new-case credits aren't set up for this region", 500, "CLIENT_PRICING_MISSING");
     const packs = rows.filter((r) => r.planType === "B2C_TOP_UP" && r.isActive);
     const list: ClientPriceList = {
-      case: { price: moneyOf(caseRow), credits: caseRow.credits ?? 0 },
+      case: { credits: caseRow.credits ?? 0 },
       topUpPacks: packs.map((p) => ({ id: p.code, name: p.name, credits: p.credits ?? 0, price: moneyOf(p) })),
       defaultPackId: (packs.find((p) => p.isDefault) ?? packs[0])?.code ?? null,
     };
@@ -130,16 +129,21 @@ export default class ClientPricingSvc {
     return list;
   }
 
-  /** Whether one of the tenant's promo codes takes money off this client's next case. `casePrice`
-   * is the price it would come off. */
-  static async checkPromo(tenantId: string, userId: string, rawCode: string, casePrice: Money): Promise<PromoCheck> {
+  /** Whether one of the tenant's promo codes takes money off this client's top-up. `packPrice` is
+   * the price it would come off; `discountMinor` is how much it takes off. */
+  static async checkPromo(tenantId: string, userId: string, rawCode: string, packPrice: Money): Promise<PromoCheck> {
     const code = rawCode.trim().toUpperCase();
     const promo = await ClientPricingRepo.findPromoByCode(tenantId, code);
     if (!promo || !promo.isActive) return { ok: false, code: rawCode.trim(), message: "That code isn't valid." };
     if (promo.expiresAt && promo.expiresAt.getTime() <= Date.now()) return { ok: false, code, message: `${code} has expired.` };
-    if (promo.currency !== casePrice.currency) return { ok: false, code, message: `${code} can't be used with this price.` };
-    if (promo.firstCaseOnly && (await ClientPaymentRepo.hasPaidForCase(userId))) {
-      return { ok: false, code, message: `${code} only applies to your first case.` };
+    if (promo.currency !== packPrice.currency) return { ok: false, code, message: `${code} can't be used with this price.` };
+    const discountMinor = Math.min(promo.discountMinor, packPrice.amountMinor);
+    const left = packPrice.amountMinor - discountMinor;
+    // Stripe won't take less than its minimum; 0 is fine (it settles without Stripe).
+    const { minMinor } = CLIENT_CURRENCIES[currencyOf(packPrice.currency)];
+    if (left > 0 && left < minMinor) return { ok: false, code, message: `${code} can't be used with this pack. Choose a larger one.` };
+    if (promo.firstTopUpOnly && (await ClientPaymentRepo.hasPaidTopUp(userId))) {
+      return { ok: false, code, message: `${code} only applies to your first top-up.` };
     }
     if (promo.oncePerClient && (await ClientPaymentRepo.countPromoRedemptions(tenantId, code, userId)) > 0) {
       return { ok: false, code, message: `You've already used ${code}.` };
@@ -147,10 +151,10 @@ export default class ClientPricingSvc {
     if (promo.maxRedemptions !== null && (await ClientPaymentRepo.countPromoRedemptions(tenantId, code)) >= promo.maxRedemptions) {
       return { ok: false, code, message: `${code} has been fully used.` };
     }
-    return { ok: true, promo };
+    return { ok: true, promo, discountMinor };
   }
 
-  /** The admin Settings page: each tenant's case price, every pack (inactive ones too) and every
+  /** The admin Settings page: each tenant's new-case credits, every pack (inactive ones too) and every
    * promo with how often it's been used, plus the currencies a price can be in. */
   static async listForAdmin() {
     const [tenants, rows, promos] = await Promise.all([TenantRepo.listAll(), ClientPricingRepo.listAllPrices(), ClientPricingRepo.listAllPromos()]);
@@ -168,18 +172,17 @@ export default class ClientPricingSvc {
     };
   }
 
+  /** The chat credits a new case starts with. Cases are free, so there's no price to set. */
   static async updateCase(tenantCode: TenantCode, input: CasePriceInput, adminId: string) {
     const tenantId = await tenantIdOf(tenantCode);
     const before = (await ClientPricingRepo.listPrices(tenantId)).find((r) => r.planType === "B2C_CASE");
-    if (!before) throw new HttpError(`${tenantCode} has no case price set up`, 500, "CLIENT_PRICING_MISSING");
-    const currency = currencyOf(input.currency ?? before.currency ?? "USD");
-    assertPrice(input.priceMinor ?? before.priceMinor ?? 0, currency, "The case price");
-    if (input.credits !== undefined) assertCredits(input.credits);
+    if (!before) throw new HttpError(`${tenantCode} has no new-case credits set up`, 500, "CLIENT_PRICING_MISSING");
+    assertCredits(input.credits);
 
-    const row = await ClientPricingRepo.updatePrice(before.id, { priceMinor: input.priceMinor, credits: input.credits, currency }, adminId);
+    const row = await ClientPricingRepo.updatePrice(before.id, { credits: input.credits }, adminId);
     await ClientPricingSvc.changed(tenantId, "admin.settings.client_price_changed", adminId, "client_price", `${tenantCode}:case`, {
-      from: { priceMinor: before.priceMinor, credits: before.credits, currency: before.currency },
-      to: { priceMinor: row.priceMinor, credits: row.credits, currency: row.currency },
+      from: { credits: before.credits },
+      to: { credits: row.credits },
     });
     return row;
   }
@@ -253,7 +256,7 @@ export default class ClientPricingSvc {
       description: input.description.trim(),
       discountMinor: input.discountMinor,
       currency: input.currency,
-      firstCaseOnly: input.firstCaseOnly,
+      firstTopUpOnly: input.firstTopUpOnly,
       oncePerClient: input.oncePerClient,
       expiresAt: input.expiresAt ?? null,
       maxRedemptions: input.maxRedemptions,
@@ -289,7 +292,7 @@ export default class ClientPricingSvc {
         description: before.description,
         discountMinor: before.discountMinor,
         currency: before.currency,
-        firstCaseOnly: before.firstCaseOnly,
+        firstTopUpOnly: before.firstTopUpOnly,
         oncePerClient: before.oncePerClient,
         expiresAt: before.expiresAt,
         maxRedemptions: before.maxRedemptions,

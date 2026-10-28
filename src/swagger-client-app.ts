@@ -181,7 +181,7 @@ const adminClientPayment = {
     credits: { type: "integer" },
     promoCode: { type: "string", nullable: true },
     failureReason: { type: "string", nullable: true },
-    usedAt: { type: "string", format: "date-time", nullable: true, description: "When a case payment created its case" },
+    usedAt: { type: "string", format: "date-time", nullable: true, description: "When a case payment created its case (CASE rows are history: cases are free now)" },
     createdAt: { type: "string", format: "date-time" },
     client: { type: "object", properties: { id: { type: "string" }, email: { type: "string" }, name: { type: "string", nullable: true } } },
     case: { type: "object", nullable: true, properties: { id: { type: "string" }, title: { type: "string" } } },
@@ -215,7 +215,7 @@ export const clientAppPaths: Paths = {
   "/client/pricing": {
     get: {
       tags: [TAG],
-      summary: "Price of a case, its credits, and the top-up packs (placeholders)",
+      summary: "The chat credits a new (free) case starts with, and the top-up packs",
       security,
       responses: {
         200: {
@@ -223,7 +223,7 @@ export const clientAppPaths: Paths = {
           content: json({
             type: "object",
             properties: {
-              case: { type: "object", properties: { price: money, credits: { type: "integer" } } },
+              case: { type: "object", properties: { credits: { type: "integer", description: "Chat credits a new case starts with. Cases are free." } } },
               topUpPacks: {
                 type: "array",
                 items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, credits: { type: "integer" }, price: money } },
@@ -235,21 +235,26 @@ export const clientAppPaths: Paths = {
       },
     },
   },
-  "/client/payments/case/quote": {
+  "/client/payments/top-up/quote": {
     post: {
       tags: [TAG],
-      summary: "What a new case costs, with a promo code applied if it can be",
+      summary: "What a top-up pack costs, with a promo code applied if it can be",
       security,
-      requestBody: { required: true, content: json({ type: "object", properties: { promoCode: { type: "string" } } }) },
+      requestBody: {
+        required: true,
+        content: json({ type: "object", required: ["packId"], properties: { packId: { type: "string" }, promoCode: { type: "string" } } }),
+      },
       responses: {
         200: {
           description: "Quote",
           content: json({
             type: "object",
             properties: {
+              packId: { type: "string" },
               price: money,
               discount: money,
               total: money,
+              credits: { type: "integer" },
               promo: {
                 type: "object",
                 nullable: true,
@@ -258,28 +263,7 @@ export const clientAppPaths: Paths = {
             },
           }),
         },
-      },
-    },
-  },
-  "/client/payments/case": {
-    post: {
-      tags: [TAG],
-      summary: "Pay for a new case",
-      description:
-        "Returns a paymentId, which POST /client/cases then uses up once it has SUCCEEDED. One payment creates one case. With the dummy provider (CLIENT_PAYMENT_PROVIDER unset) it settles at once and `checkout` is null. With Stripe it starts PENDING and `checkout` opens Stripe's embedded payment form. No card details reach this API either way.",
-      security,
-      requestBody: { required: true, content: json({ type: "object", properties: { promoCode: { type: "string" }, testOutcome } }) },
-      responses: {
-        201: {
-          description: "Paid (dummy) or started (Stripe)",
-          content: json({
-            type: "object",
-            properties: { paymentId: { type: "string" }, status: paymentStatus, amount: money, credits: { type: "integer" }, checkout },
-          }),
-        },
-        400: err("PROMO_NOT_APPLIED: the code doesn't apply (nothing charged)"),
-        402: err("PAYMENT_DECLINED (dummy)"),
-        502: err("PAYMENT_PROVIDER_ERROR: Stripe couldn't open the payment page (the payment is marked FAILED)"),
+        400: err("No such pack"),
       },
     },
   },
@@ -304,7 +288,6 @@ export const clientAppPaths: Paths = {
               credits: { type: "integer" },
               caseId: { type: "string", nullable: true },
               failureReason: { type: "string", nullable: true },
-              usable: { type: "boolean", description: "A case payment that can still create its case" },
             },
           }),
         },
@@ -363,10 +346,14 @@ export const clientAppPaths: Paths = {
     post: {
       tags: [TAG],
       summary: "Buy chat credits for a case",
-      description: "With the dummy the credits are added at once. With Stripe the payment starts PENDING with a `checkout`, and the credits are added when it settles (webhook, or GET /client/payments/{paymentId}).",
+      description:
+        "With the dummy the credits are added at once. With Stripe the payment starts PENDING with a `checkout`, and the credits are added when it settles (webhook, or GET /client/payments/{paymentId}). A promo code that brings the total to 0 settles at once (provider FREE). No card details reach this API either way.",
       security,
       parameters: [caseId],
-      requestBody: { required: true, content: json({ type: "object", required: ["packId"], properties: { packId: { type: "string" }, testOutcome } }) },
+      requestBody: {
+        required: true,
+        content: json({ type: "object", required: ["packId"], properties: { packId: { type: "string" }, promoCode: { type: "string" }, testOutcome } }),
+      },
       responses: {
         201: {
           description: "Credits added",
@@ -382,9 +369,10 @@ export const clientAppPaths: Paths = {
             },
           }),
         },
-        400: err("No such pack"),
+        400: err("No such pack, or PROMO_NOT_APPLIED: the code doesn't apply (nothing charged)"),
         402: err("PAYMENT_DECLINED"),
         404: err("Not one of this client's cases"),
+        502: err("PAYMENT_PROVIDER_ERROR: Stripe couldn't open the payment page (the payment is marked FAILED)"),
       },
     },
   },
@@ -399,14 +387,14 @@ export const clientAppPaths: Paths = {
     post: {
       tags: [TAG],
       summary: "Create a case (and its AI chat)",
+      description: "Free. The case starts with the chat credits set for the client's tenant (GET /client/pricing `case.credits`).",
       security,
       requestBody: {
         required: true,
         content: json({
           type: "object",
-          required: ["paymentId", "title", "areas", "ukJurisdiction"],
+          required: ["title", "areas", "ukJurisdiction"],
           properties: {
-            paymentId: { type: "string", description: "An unused case payment (POST /client/payments/case)" },
             title: { type: "string", maxLength: 150 },
             areas: {
               type: "array",
@@ -426,7 +414,6 @@ export const clientAppPaths: Paths = {
       responses: {
         201: { description: "Created", content: json(clientCase) },
         400: err("Validation error"),
-        402: err("PAYMENT_REQUIRED: no unused case payment of this client's with that id"),
         403: err("Not a client account"),
       },
     },

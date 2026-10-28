@@ -22,7 +22,7 @@ export interface ClientPromoData {
   description: string;
   discountMinor: number;
   currency: string;
-  firstCaseOnly: boolean;
+  firstTopUpOnly: boolean;
   oncePerClient: boolean;
   expiresAt: Date | null;
   maxRedemptions: number | null;

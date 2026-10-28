@@ -1160,7 +1160,7 @@ model ClientPromo {
   discountMinor  Int
   // Must match the case price's currency for the code to apply.
   currency       String
-  firstCaseOnly  Boolean   @default(false)
+  firstTopUpOnly Boolean   @default(false)
   oncePerClient  Boolean   @default(false)
   expiresAt      DateTime?
   // Null = no limit. Counts SUCCEEDED and PENDING case payments that used the code.
