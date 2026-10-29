@@ -162,7 +162,7 @@ export default class ClientRequestRepo {
             jurisdiction: true,
             clientSide: true,
             parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } },
-            documents: { where: { status: "ACTIVE" }, select: { id: true, name: true }, orderBy: { createdAt: "asc" } },
+            documents: { where: { status: "ACTIVE" }, select: { id: true, name: true, ragStatus: true }, orderBy: { createdAt: "asc" } },
           },
         },
       },
