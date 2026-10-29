@@ -444,6 +444,7 @@ export const clientHandoffSchemas: Schemas = {
         },
       },
       pickByAt: dateTime("While ROUTED with a quote in: the request expires if the client hasn't picked one by then (7 days after the first quote)", true),
+      openToLawyers: { type: "boolean", description: "More lawyers can still take it up: ROUTED, inside its 48h, and fewer than 3 lawyers on it" },
       lawyer: { ...ref("LawyerPublicProfile"), nullable: true, description: "The lawyer hired, or until then the only quote; null with several. firmName is null for a solo practitioner's personal workspace" },
       quote: { ...ref("Quote"), nullable: true, description: "That lawyer's quote" },
       referralDisclosure: { type: "string", nullable: true, description: "Shown on the quote screen; the client acknowledges it to confirm" },
