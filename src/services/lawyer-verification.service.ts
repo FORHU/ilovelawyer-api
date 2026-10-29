@@ -6,6 +6,8 @@ import { toDto } from "./lawyer-profile.service";
 import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import { emailLinkOrigin } from "../utils/tenant-host";
+import PlanGateSvc from "./plan-gate.service";
 import type { UkJurisdiction } from "../types/client-handoff";
 import {
   REJECTION_REASONS_BY_COUNTRY,
@@ -35,6 +37,17 @@ const NEXT_STEP: Record<LawyerCountry, string> = {
   UK: "You can now turn on Accept client requests on your Profile page.",
   PH: "Your profile now shows an Approved badge.",
 };
+
+/** The next step for a lawyer held by verify before plan (PlanGateSvc), who isn't in the app yet. */
+const NEXT_STEP_CHOOSE_PLAN =
+  "You can now choose your plan or start your free trial. Then turn on Accept client requests on your Profile page.";
+
+/** The lawyer's Profile page on their own site, for the approval email's button. Signed out, the
+ * lawyer app signs them in first and brings them back to it; one held by verify before plan is taken
+ * on to the plan step. */
+function profileLink(country: LawyerCountry): string {
+  return `${emailLinkOrigin(country, null)}/homepage/profile`;
+}
 
 function composeNote(country: LawyerCountry, reason: LawyerRejectionReason, note: string | undefined): string {
   const trimmed = note?.trim();
@@ -126,7 +139,11 @@ export default class LawyerVerificationSvc {
       payload: { from: "PENDING", to: "VERIFIED", ...(confirmed ? { confirmedJurisdictions: confirmed } : {}), ...(trimmedNote ? { note: trimmedNote } : {}) },
     });
 
-    await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", { nextStep: NEXT_STEP[country] });
+    const choosesPlan = (await PlanGateSvc.stateOf(userId)) === "CHOOSE_PLAN";
+    await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", {
+      nextStep: choosesPlan ? NEXT_STEP_CHOOSE_PLAN : NEXT_STEP[country],
+      profileLink: profileLink(country),
+    });
 
     return toAdminRow(updated);
   }

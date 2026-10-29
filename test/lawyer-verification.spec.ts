@@ -13,6 +13,7 @@ import LawyerVerificationSvc from "../src/services/lawyer-verification.service";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 import AuthRepo from "../src/repositories/auth.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
+import PlanGateSvc from "../src/services/plan-gate.service";
 import * as mailerModule from "../src/utils/mailer";
 import * as templateModule from "../src/utils/template";
 import { listLawyerVerificationsSchema, rejectLawyerSchema, verifyLawyerSchema } from "../src/validation/admin.validation";
@@ -93,6 +94,7 @@ describe("LawyerVerificationSvc", () => {
   let current: StubProfile | null;
   let writes: { userId: string; data: any; confirmed?: string[] }[];
   let firstVerified: string[];
+  let gate: string;
   let audits: { actorId?: string | null; action: string; targetType?: string; targetId?: string; payload?: object }[];
   let emails: { to: string; subject: string }[];
   let renderedTemplates: { name: string; vars: Record<string, unknown> }[];
@@ -115,6 +117,7 @@ describe("LawyerVerificationSvc", () => {
     restore = [
       stash(LawyerProfileRepo, ["find", "setVerification", "listForAdmin", "markFirstVerified"]),
       stash(AuthRepo, ["findById"]),
+      stash(PlanGateSvc, ["stateOf"]),
       stash(SecurityAuditSvc, ["record"]),
       stash(mailerModule as any, ["sendEmail"]),
       stash(templateModule as any, ["renderTemplate"]),
@@ -128,6 +131,8 @@ describe("LawyerVerificationSvc", () => {
     };
     firstVerified = [];
     (LawyerProfileRepo as any).markFirstVerified = async (userId: string) => void firstVerified.push(userId);
+    gate = "OPEN";
+    (PlanGateSvc as any).stateOf = async () => gate;
     (AuthRepo as any).findById = async (id: string) => (current && id === current.userId ? { id, name: "Jane Lawyer", email: "jane@example.com" } : null);
     (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
     (mailerModule as any).sendEmail = async (opts: { to: string; subject: string }) => void emails.push(opts);
@@ -220,6 +225,17 @@ describe("LawyerVerificationSvc", () => {
       ]);
       expect(renderedTemplates[0].name).to.equal("lawyer-verification-approved");
       expect(renderedTemplates[0].vars.nextStep).to.match(/Accept client requests/);
+    });
+
+    it("links the email to the lawyer's Profile page on their own site, which signs them in first if needed", async () => {
+      await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+      expect(renderedTemplates[0].vars.profileLink).to.match(/^https?:\/\/[^/]+\/homepage\/profile$/);
+    });
+
+    it("tells a lawyer held by verify before plan to choose a plan next, not to accept requests yet", async () => {
+      gate = "CHOOSE_PLAN";
+      await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+      expect(renderedTemplates[0].vars.nextStep).to.match(/choose your plan or start your free trial/);
     });
 
     it("records the first verification, which lets a lawyer held by verify before plan in", async () => {
