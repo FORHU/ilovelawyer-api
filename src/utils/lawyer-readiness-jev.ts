@@ -52,7 +52,7 @@ export const READINESS_CRITERIA = [
     key: "status",
     label: "What's happened since, and where things stand now",
     question:
-      "Has the client said where things currently stand — any contact with the other side, a response received, action already taken (a letter, a complaint, an insurer notified) — or plainly that nothing has happened yet or they haven't heard back? Either answer counts, as long as the client was actually asked and actually said so; it does not count if this was never asked or never answered.",
+      "Has the client said where things currently stand — any contact with the other side, a response received, action already taken (a letter, a complaint, an insurer notified, deducting something owed) — or plainly that nothing has happened yet or they haven't heard back? This counts whether the client volunteered it or was asked for it directly — same as any other fact in their account.",
   },
 ] as const;
 
