@@ -164,6 +164,7 @@ export default class LawyerProfileRepo {
         enabledByOrganization: true,
         pausedUntil: true,
         capacityLimit: true,
+        firstConsultationFeeMinor: true,
         practiceAreas: { select: { practiceArea: { select: { caseArea: true, isActive: true } } } },
         ukRegistration: { select: { qualifiedJurisdictions: true } },
       },

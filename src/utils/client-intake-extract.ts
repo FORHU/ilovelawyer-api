@@ -47,6 +47,24 @@ export function caseDetailsPeople(parties: { name: string; designation: string }
   return parties.map((p) => ({ name: p.name, role: p.designation }));
 }
 
+/** What the client already answered on the case-creation form — shared between
+ * ClientIntakeSvc's extraction prompt (buildIntakePrompt below) and IntakeChatSvc's conversational
+ * grounding (sent to chat-wonder as part of document_context), so a client never has to repeat a
+ * wizard answer to the chat itself. Same wording in both places by construction, not by convention. */
+export function caseDetailsBlock(
+  caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null },
+  parties: { name: string; designation: string }[],
+): string {
+  return `Known case details (already confirmed by the client, do not repeat them as new facts):
+Title: ${caseDetails.title}
+Type of problem: ${caseDetails.caseAreas.join(", ") || "not set"}
+Part of the UK: ${caseDetails.ukJurisdiction ?? "not set"}
+Town or city: ${caseDetails.where ?? "not set"}
+The client is: ${caseDetails.side === "CLAIMANT" ? "bringing the complaint" : caseDetails.side === "RESPONDENT" ? "responding to one" : "not set"}
+The client's note: ${caseDetails.notes || "none"}
+People already named on the case form (don't list these again under "people" unless the conversation adds new detail about them that isn't on the form): ${parties.map((p) => `${p.name} (${p.designation})`).join(", ") || "none"}`;
+}
+
 export function buildIntakePrompt(input: {
   /** `caseAreas` are the case areas' names. */
   caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null };
@@ -67,14 +85,7 @@ export function buildIntakePrompt(input: {
 
 Today's date is ${input.today}.
 
-Known case details (already confirmed by the client, do not repeat them as new facts):
-Title: ${input.caseDetails.title}
-Type of problem: ${input.caseDetails.caseAreas.join(", ") || "not set"}
-Part of the UK: ${input.caseDetails.ukJurisdiction ?? "not set"}
-Town or city: ${input.caseDetails.where ?? "not set"}
-The client is: ${input.caseDetails.side === "CLAIMANT" ? "bringing the complaint" : input.caseDetails.side === "RESPONDENT" ? "responding to one" : "not set"}
-The client's note: ${input.caseDetails.notes || "none"}
-People already named on the case form (don't list these again under "people" unless the conversation adds new detail about them that isn't on the form): ${input.parties.map((p) => `${p.name} (${p.designation})`).join(", ") || "none"}
+${caseDetailsBlock(input.caseDetails, input.parties)}
 
 Documents on this case (cite by their handle, e.g. D1):
 ${docList}

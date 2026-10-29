@@ -4,7 +4,7 @@
  * two surviving sources for a conflict. No DB, no Chat Wonder call. */
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { parseIntakeReply, buildIntakePrompt, caseDetailsPeople, type IntakeMessageInput } from "../src/utils/client-intake-extract";
+import { parseIntakeReply, buildIntakePrompt, caseDetailsBlock, caseDetailsPeople, type IntakeMessageInput } from "../src/utils/client-intake-extract";
 import type { CaseDoc } from "../src/utils/case-document-handles";
 
 const docs: CaseDoc[] = [
@@ -121,6 +121,39 @@ describe("Client intake extraction", () => {
   describe("caseDetailsPeople", () => {
     it("maps each case party to a name and role, in order", () => {
       expect(caseDetailsPeople([{ name: "Acme Ltd", designation: "Opposing party" }])).to.deep.equal([{ name: "Acme Ltd", role: "Opposing party" }]);
+    });
+  });
+
+  describe("caseDetailsBlock", () => {
+    // Shared with IntakeChatSvc's chat-wonder grounding (intake-chat.service.ts): the same text
+    // tells intake not to re-ask what the client already answered on the case form.
+    const details = { title: "Dismissal", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", where: "Leeds", side: "CLAIMANT" as const, notes: "Wants compensation." };
+
+    it("states every answered field, never asking the reader to repeat them", () => {
+      const block = caseDetailsBlock(details, [{ name: "Acme Ltd", designation: "Opposing party" }]);
+      expect(block).to.include("already confirmed by the client, do not repeat them");
+      expect(block).to.include("Title: Dismissal");
+      expect(block).to.include("Type of problem: Employment");
+      expect(block).to.include("Part of the UK: England and Wales");
+      expect(block).to.include("Town or city: Leeds");
+      expect(block).to.include("The client is: bringing the complaint");
+      expect(block).to.include("The client's note: Wants compensation.");
+      expect(block).to.include("Acme Ltd (Opposing party)");
+    });
+
+    it("says plainly when a field was never set, rather than leaving it blank", () => {
+      const block = caseDetailsBlock({ title: "Dismissal", caseAreas: [], ukJurisdiction: null, where: null, side: null, notes: null }, []);
+      expect(block).to.include("Type of problem: not set");
+      expect(block).to.include("Part of the UK: not set");
+      expect(block).to.include("Town or city: not set");
+      expect(block).to.include("The client is: not set");
+      expect(block).to.include("The client's note: none");
+      expect(block).to.include("People already named on the case form");
+      expect(block).to.include(": none");
+    });
+
+    it("reads RESPONDENT as responding to the complaint", () => {
+      expect(caseDetailsBlock({ ...details, side: "RESPONDENT" }, [])).to.include("The client is: responding to one");
     });
   });
 

@@ -38,6 +38,7 @@ import lawRoute from "./law.route";
 import clientRoute from "./client.route";
 import clientRequestRoute from "./client-request.route";
 import practiceAreaRoute from "./practice-area.route";
+import lawyerMatchingRoute from "./lawyer-matching.route";
 
 const router = express.Router();
 
@@ -91,6 +92,7 @@ router.use("/jurisdictions", jurisdictionRouter);
 router.use("/integrations", integrationRouter);
 router.use("/model-settings", modelSettingsRoute);
 router.use("/practice-areas", practiceAreaRoute);
+router.use("/lawyer-matching", lawyerMatchingRoute);
 // The client app (ilovelawyer-client): client accounts only.
 router.use("/client", clientRoute);
 router.use("/client-requests", clientRequestRoute);

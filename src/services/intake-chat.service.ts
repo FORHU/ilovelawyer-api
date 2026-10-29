@@ -1,11 +1,15 @@
 import type { ClientWorkspace } from "./client-case.service";
 import IntakeChatRepo from "../repositories/intake-chat.repository";
 import DocumentRepo from "../repositories/document.repository";
+import CaseRepo from "../repositories/case.repository";
+import ClientCaseRepo from "../repositories/client-case.repository";
+import CaseAreaSvc from "./case-area.service";
 import ClientIntakeSvc from "./client-intake.service";
 import IntakeChatGenerationQueue, { IntakeChatGenerationJob } from "../queues/intake-chat-generation.queue";
 import { streamIntakeChatWonderMessage, getChatWonderSessionIdForIntake, IntakeGenerationCancelledError } from "../utils/intakeChatWonder";
 import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { excerptsWithHandles } from "../utils/case-document-handles";
+import { caseDetailsBlock } from "../utils/client-intake-extract";
 import { redis } from "../lib/redis";
 import { emitToUser } from "../lib/socket";
 import { runInLlmUsageScope } from "../lib/llm-usage-scope";
@@ -191,11 +195,38 @@ export default class IntakeChatSvc {
     };
     emitEvent("chat:started", {});
 
+    // Case-details grounding: what the client already answered on the case-creation wizard
+    // (type of problem, jurisdiction, town, side, notes, named parties). Without this, intake has
+    // no way to know those were already given and keeps re-asking for them turn after turn — this
+    // was missing entirely until caught live (2026-10-29): the shared pipeline this replaced must
+    // have carried it some other way, and it was never rebuilt here when the pipeline was split.
+    let caseContext = "";
+    try {
+      const organizationId = await CaseRepo.findOrganizationId(caseId);
+      const row = organizationId ? await ClientCaseRepo.findById(caseId, organizationId) : null;
+      if (row) {
+        const label = await CaseAreaSvc.labeller();
+        caseContext = caseDetailsBlock(
+          {
+            title: row.caseName,
+            caseAreas: label(row.caseAreas).map((a) => a.name),
+            ukJurisdiction: row.ukJurisdiction,
+            where: row.jurisdiction,
+            side: row.clientSide,
+            notes: row.notes,
+          },
+          row.parties.map((p) => ({ name: p.name, designation: p.designation })),
+        );
+      }
+    } catch (err) {
+      logger.warn("Intake chat generation: case-details grounding unavailable, continuing without it", { err, caseId });
+    }
+
     // Document excerpt grounding — the ambient-awareness requirement: reuses ClientIntakeSvc's
     // own excerpt-pack mechanism (not DocumentChunkSvc's embedding-chunk RAG chain, which is a
     // heavier, lawyer-Terminal-specific tool) so intake doesn't ask about something a document
     // already answers. READY documents only; a document still being read contributes nothing yet.
-    let documentContext = "";
+    let documentExcerptContext = "";
     try {
       const docs = await DocumentRepo.listAllByCase(caseId);
       const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
@@ -203,7 +234,7 @@ export default class IntakeChatSvc {
         const pack = await buildFactExcerptPack(ready);
         if (pack.text) {
           const excerpts = excerptsWithHandles(pack.text.slice(0, MAX_DOCUMENT_EXCERPT_CHARS), ready);
-          documentContext = wrapExtractedText(
+          documentExcerptContext = wrapExtractedText(
             "Facts already given in the client's uploaded documents — check here before asking something a document already answers.",
             excerpts,
           );
@@ -212,6 +243,10 @@ export default class IntakeChatSvc {
     } catch (err) {
       logger.warn("Intake chat generation: document excerpt grounding unavailable, continuing without it", { err, caseId });
     }
+
+    // One combined block, under chat-wonder's single "[CASE CONTEXT]" label (intake_prompt.txt /
+    // the_server.py's _document_context_injection) — case-form facts first, then document excerpts.
+    const documentContext = [caseContext, documentExcerptContext].filter(Boolean).join("\n\n");
 
     let fullResponse: string;
     let lawyerMatches: unknown[] = [];
@@ -251,21 +286,62 @@ export default class IntakeChatSvc {
       userId,
       fullResponse,
       lawyerMatches,
-      caseReady,
     });
+
+    // mark_case_ready() is intake's own self-report — it can jump the gun or misjudge. Jev's
+    // existing, independent per-criterion check (lawyer-readiness-jev.ts, already live for the
+    // "suggest a lawyer" offer) is the actual gate: only once Jev agrees does this turn count as
+    // ready, so a premature or hallucinated tool call never flips the case ready on intake's say
+    // alone. Checked only now, after persisting, so Jev sees this very turn, not the one before it.
+    let caseReadyConfirmed = false;
+    if (assistantMessage && caseReady) {
+      caseReadyConfirmed = await IntakeChatSvc.confirmReadyWithJev(job).catch((err) => {
+        logger.warn("Intake chat generation: Jev readiness gate failed, not marking ready", { err, caseId });
+        return false;
+      });
+      if (caseReadyConfirmed) {
+        logger.info("Intake chat generation: Jev agreed, marking case ready", { caseId, messageId: assistantMessage.id });
+        await IntakeChatRepo.markReady(assistantMessage.id).catch((err) =>
+          logger.warn("Intake chat generation: failed to mark case ready", { err, messageId: assistantMessage.id }),
+        );
+      } else {
+        logger.info("Intake chat generation: intake declared ready but Jev disagreed, not acting on it", { caseId, messageId: assistantMessage.id });
+      }
+    }
 
     if (assistantMessage) {
       emitEvent("chat:done", { assistantMessageId: assistantMessage.id });
       if (lawyerMatches.length) emitEvent("intake:lawyer-matches", { assistantMessageId: assistantMessage.id, matches: lawyerMatches });
-      if (caseReady) emitEvent("intake:case-ready", { assistantMessageId: assistantMessage.id });
+      if (caseReadyConfirmed) emitEvent("intake:case-ready", { assistantMessageId: assistantMessage.id });
     }
 
     // Every intake reply is one of ClientIntakeSvc's automatic refresh triggers — unconditional
     // here (unlike the old shared pipeline's CaseRepo.isClientWorkspaceCase check), since every
-    // case this job ever processes IS a client case, by construction.
+    // case this job ever processes IS a client case, by construction. Keeping this unconditional
+    // (not gated on caseReadyConfirmed) means the overview stays fresh turn by turn regardless;
+    // intake:case-ready is the separate, gated "present it for the client to review now" signal.
     void ClientIntakeSvc.scheduleAuto(caseId, userId, "chat").catch((err) =>
       logger.warn("Client intake: post-reply schedule failed", { err, caseId }),
     );
+  }
+
+  /** Jev's own verdict (ClientCaseSvc.lawyerReadiness) on whether this case is actually ready —
+   * the gate on intake's mark_case_ready(). A dynamic import, not a top-level one: client-case
+   * .service.ts already imports this file (for listMessages/enqueueIntakeGeneration), so a
+   * top-level import back would be a require cycle. Only workspace.id is read downstream (case
+   * scoping); role is never checked for this read-only call. */
+  private static async confirmReadyWithJev(job: IntakeChatGenerationJob): Promise<boolean> {
+    logger.info("Intake chat generation: intake declared ready, asking Jev to confirm", { caseId: job.caseId });
+    const organizationId = await CaseRepo.findOrganizationId(job.caseId);
+    if (!organizationId) {
+      logger.warn("Intake chat generation: Jev gate aborted, no organization for case", { caseId: job.caseId });
+      return false;
+    }
+    const { default: ClientCaseSvc } = await import("./client-case.service");
+    const workspace: ClientWorkspace = { id: organizationId, role: "OWNER", tenantCode: job.tenantCode };
+    const readiness = await ClientCaseSvc.lawyerReadiness(workspace, job.userId, job.caseId);
+    logger.info("Intake chat generation: Jev verdict", { caseId: job.caseId, ready: readiness.ready, caseAreas: readiness.caseAreas });
+    return readiness.ready;
   }
 
   private static async persistIntakeTurn(p: {
@@ -274,7 +350,6 @@ export default class IntakeChatSvc {
     userId: string;
     fullResponse: string;
     lawyerMatches: unknown[];
-    caseReady: boolean;
   }): Promise<{ id: string } | null> {
     // SQS-redelivery idempotency: a worker crash after this point but before the ack means the
     // job redelivers — if a reply already exists for this parent, this is that redelivery, not a
@@ -292,11 +367,6 @@ export default class IntakeChatSvc {
     if (p.lawyerMatches.length) {
       await IntakeChatRepo.recordFindLawyerResult(assistantMessage.id, p.lawyerMatches as string[]).catch((err) =>
         logger.warn("Intake chat generation: failed to record find_lawyer result", { err, messageId: assistantMessage.id }),
-      );
-    }
-    if (p.caseReady) {
-      await IntakeChatRepo.markReady(assistantMessage.id).catch((err) =>
-        logger.warn("Intake chat generation: failed to mark case ready", { err, messageId: assistantMessage.id }),
       );
     }
 
