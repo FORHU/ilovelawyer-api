@@ -14,6 +14,7 @@ import OrganizationChargeRepo from "../repositories/organization-charge.reposito
 import OrganizationRepo from "../repositories/organization.repository";
 import logger from "../utils/logger";
 import HttpError from "../utils/http-error";
+import { shownStatus } from "../utils/client-request-status";
 import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
@@ -77,15 +78,9 @@ function quoteDto(claim: ClaimForClient) {
   };
 }
 
-/**
- * The request's status as the client sees it. Several lawyers (phase 5): the request stays ROUTED
- * until the client picks a quote, so the client sees QUOTED once any lawyer on it has quoted, and
- * CLAIMED once any has joined, as when one lawyer held a request.
- */
+/** The request's status as the client sees it (shownStatus). */
 function statusForClient(r: ClientRequestForClient): ClientRequestStatus {
-  if (r.status !== "ROUTED") return r.status;
-  const open = r.claims.filter((c) => c.outcome === null);
-  return open.some((c) => c.quotedAt) ? "QUOTED" : open.length ? "CLAIMED" : "ROUTED";
+  return shownStatus(r.status, r.claims);
 }
 
 /** The lawyer the client hired, or, until they pick, the only quote: the one `lawyer`/`quote`

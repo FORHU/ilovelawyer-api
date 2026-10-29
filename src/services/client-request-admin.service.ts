@@ -8,6 +8,7 @@ import { organizationCardProviderNamed } from "../payments/organization-card-pro
 import { refundResultOf } from "../payments/client-refunds";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import { shownStatus } from "../utils/client-request-status";
 
 const HOUR_MS = 60 * 60 * 1000;
 const money = (amountMinor: number, currency = "GBP") => ({ amountMinor, currency });
@@ -167,17 +168,23 @@ export default class ClientRequestAdminSvc {
     };
   }
 
-  /** `caseAreas` are the case's areas by name. */
+  /** `caseAreas` are the case's areas by name. Several lawyers (phase 5): the status is shown as the
+   * client sees it (a ROUTED request with a quote on it is QUOTED), and the firm is the chosen
+   * lawyer's, not whoever joined last. */
   private static requestDto(r: AdminRequestRow, matchedLawyers: number, names: Map<string, string>, now: Date, caseAreas: string[]) {
-    const latest = r.claims[0];
+    const open = r.claims.filter((c) => c.outcome === null);
+    const status = shownStatus(r.status, r.claims);
+    // The lawyer the client chose: engaged, or being charged (CONFIRMED, their claim still open); until
+    // then, the only lawyer on it, if there's just one.
+    const chosen = r.claims.find((c) => c.outcome === "ENGAGED") ?? (r.status === "CONFIRMED" || open.length === 1 ? open[0] : undefined);
     return {
       id: r.id,
       caseId: r.caseId,
       clientId: r.clientId,
-      status: r.status,
+      status,
       createdAt: r.createdAt,
       ageHours: Math.round(((now.getTime() - r.createdAt.getTime()) / HOUR_MS) * 10) / 10,
-      unclaimedOver48h: r.status === "ROUTED" && !!r.routingExpiresAt && r.routingExpiresAt <= now,
+      unclaimedOver48h: status === "ROUTED" && !!r.routingExpiresAt && r.routingExpiresAt <= now,
       routedAt: r.routedAt,
       routingExpiresAt: r.routingExpiresAt,
       engagedAt: r.engagedAt,
@@ -196,7 +203,7 @@ export default class ClientRequestAdminSvc {
         releaseReason: c.releaseReason,
         quote: c.quotedAt ? { type: c.quoteType, amount: money(c.quoteAmountMinor ?? 0, c.quoteCurrency ?? "GBP"), sentAt: c.quotedAt } : null,
       })),
-      organizationName: latest?.organization?.name ?? null,
+      organizationName: chosen?.organization?.name ?? null,
       charges: r.charges.map((c) => ClientRequestAdminSvc.adminChargeDto(c, names)),
     };
   }

@@ -1,5 +1,6 @@
 import { ClaimOutcome, ClientRequestStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
+import { shownStatus } from "../utils/client-request-status";
 import { PRACTICE_AREAS_INCLUDE } from "./practice-area.repository";
 
 /** A request is open until it's closed, expired or withdrawn; a case has at most one open. */
@@ -174,8 +175,17 @@ export default class ClientRequestRepo {
             consultations: { where: { status: "ACTIVE" }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 1 },
           },
         },
+        // Whether any lawyer is on it now: their brief, and any quote they sent, rest on it.
+        claims: { where: { outcome: null }, select: { id: true }, take: 1 },
       },
     });
+  }
+
+  /** The status the client sees now (shownStatus): for the client-request:updated sent when one
+   * lawyer leaves a request others may still be on. Null when there's no such request. */
+  static async shownStatus(id: string): Promise<ClientRequestStatus | null> {
+    const request = await prisma.clientRequest.findUnique({ where: { id }, select: { status: true, claims: { where: { outcome: null }, select: { outcome: true, quotedAt: true } } } });
+    return request ? shownStatus(request.status, request.claims) : null;
   }
 
   static async saveBrief(id: string, data: { brief: Prisma.InputJsonValue; briefFingerprint: string; briefGeneratedAt: Date } | { briefError: string }) {
@@ -284,13 +294,15 @@ export default class ClientRequestRepo {
   }
 
   /** ROUTED -> EXPIRED, only if it has still run out (expiredWhere): a lawyer who joined or a pick
-   * that got in first wins. Any claim still open ends NOT_CHOSEN with it. */
-  static async expire(id: string, now: Date): Promise<boolean> {
+   * that got in first wins. Any claim still open ends NOT_CHOSEN with it: those lawyers are returned,
+   * to be told, or null when it didn't expire. */
+  static async expire(id: string, now: Date): Promise<string[] | null> {
     return prisma.$transaction(async (tx) => {
       const { count } = await tx.clientRequest.updateMany({ where: { id, ...expiredWhere(now) }, data: { status: "EXPIRED" } });
-      if (count !== 1) return false;
+      if (count !== 1) return null;
+      const open = await tx.clientRequestClaim.findMany({ where: { requestId: id, outcome: null }, select: { lawyerId: true } });
       await tx.clientRequestClaim.updateMany({ where: { requestId: id, outcome: null }, data: { outcome: "NOT_CHOSEN", endedAt: now } });
-      return true;
+      return open.map((c) => c.lawyerId);
     });
   }
 

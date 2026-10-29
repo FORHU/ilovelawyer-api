@@ -118,7 +118,8 @@ export default class ClientRequestNotifySvc {
     const label = await CaseAreaSvc.labeller();
     for (const request of await ClientRequestRepo.findExpired(now)) {
       try {
-        if (!(await ClientRequestRepo.expire(request.id, now))) continue;
+        const notChosen = await ClientRequestRepo.expire(request.id, now);
+        if (!notChosen) continue;
         // Several lawyers: lawyers quoted, but the client didn't pick one by the pick-by date.
         const unpicked = !!request.pickByAt && request.pickByAt <= now;
         const lawyerIds = await ClientRequestMatchingSvc.eligibleLawyerIds(request.id);
@@ -126,6 +127,18 @@ export default class ClientRequestNotifySvc {
         for (const userId of lawyerIds) emitToUser(userId, "client-request:taken", taken);
         const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "EXPIRED", updatedAt: now.toISOString() };
         emitToUser(request.clientId, "client-request:updated", updated);
+        // The lawyers who were on it: matching may no longer list them (a lawyer at capacity because
+        // of this very claim doesn't match), so they're told directly.
+        for (const lawyerId of notChosen) {
+          emitToUser(lawyerId, "client-request:updated", updated);
+          await NotificationSvc.create({
+            userId: lawyerId,
+            type: "CLIENT_REQUEST",
+            title: "The client didn't choose a quote",
+            message: "The client didn't pick a lawyer in time, so the request has closed. Nothing was charged to you.",
+            link: "/client-requests?view=history",
+          }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: request.id }));
+        }
         await ClientRequestNotifySvc.tellClientExpired(request.client.email, request.caseId, unpicked).catch((err) =>
           logger.error("Client request: expiry email to the client failed", { err, requestId: request.id }),
         );
