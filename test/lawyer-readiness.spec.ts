@@ -11,7 +11,7 @@ import ClientCaseRepo from "../src/repositories/client-case.repository";
 import CaseAreaRepo from "../src/repositories/case-area.repository";
 import IntakeChatSvc from "../src/services/intake-chat.service";
 
-const KEYS = ["problem", "place", "otherSide", "events", "goal"] as const;
+const KEYS = ["problem", "place", "otherSide", "events", "goal", "status"] as const;
 
 const AREAS = [
   { code: "EMPLOYMENT", name: "Employment", description: "Work, dismissal, pay." },

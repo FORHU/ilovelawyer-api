@@ -48,6 +48,12 @@ export const READINESS_CRITERIA = [
     question:
       "Has the client said what outcome they want? If the assistant's own question offered example outcomes (for example compensation, their job back, a refund, repairs, resolving the dispute, or defending a claim) and the client's answer picks or restates one of those, that counts as answered even in a single word — don't require more elaboration than what was actually offered and accepted.",
   },
+  {
+    key: "status",
+    label: "What's happened since, and where things stand now",
+    question:
+      "Has the client said where things currently stand — any contact with the other side, a response received, action already taken (a letter, a complaint, an insurer notified) — or plainly that nothing has happened yet or they haven't heard back? Either answer counts, as long as the client was actually asked and actually said so; it does not count if this was never asked or never answered.",
+  },
 ] as const;
 
 export type ReadinessKey = (typeof READINESS_CRITERIA)[number]["key"];
@@ -115,6 +121,7 @@ export async function assessLawyerReadiness(input: ReadinessInput): Promise<Read
       otherSide: ask("otherSide"),
       events: ask("events"),
       goal: ask("goal"),
+      status: ask("status"),
       ...Object.fromEntries(
         input.caseAreas.map((a) => [
           areaKey(a.code),
