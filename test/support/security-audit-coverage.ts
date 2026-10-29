@@ -90,6 +90,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /users/me/google-calendar": ["integration.connected"],
   "DELETE /users/me/google-calendar": ["integration.disconnected"],
   "PUT /users/me/tour/:track": UI_STATE,
+  "POST /users/me/plan-gate/start": { exempt: "A lawyer going on without paying (verify before plan); stored on their own User (planChosenAt, planTrialEndsAt)" },
   "POST /users/me/setup/complete": UI_STATE,
   "POST /users/me/solo": UI_STATE,
   "POST /users/me/billing/card/setup-session": ["account.payment_card_updated"],

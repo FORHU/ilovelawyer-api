@@ -56,11 +56,11 @@ describe("Client lawyer requests", () => {
     (socket as any).emitToUser = (userId: string, event: string, payload: unknown) => emitted.push([userId, event, payload]);
     (ClientRequestRepo as any).withdraw = async (id: string, from: string[], now: Date) => {
       const r = requests.get(id);
-      if (!r || !from.includes(r.status)) return { moved: false, heldBy: null };
-      const open = claims.find((c) => c.requestId === id && c.outcome === null);
-      if (open) Object.assign(open, { outcome: "WITHDRAWN", endedAt: now });
+      if (!r || !from.includes(r.status)) return { moved: false, heldBy: [] };
+      const open = claims.filter((c) => c.requestId === id && c.outcome === null);
+      for (const c of open) Object.assign(c, { outcome: "WITHDRAWN", endedAt: now });
       Object.assign(r, { status: "WITHDRAWN", withdrawnAt: now });
-      return { moved: true, heldBy: open?.lawyerId ?? null };
+      return { moved: true, heldBy: open.map((c) => c.lawyerId) };
     };
     caseRow = { id: CASE_ID, ukJurisdiction: "England and Wales", lawyerReadiness: null };
     open = null;
@@ -174,16 +174,18 @@ describe("Client lawyer requests", () => {
       expect(emitted[0]![2]).to.deep.equal({ requestId: id });
     });
 
-    it("while a lawyer holds it, ends their claim and tells them", async () => {
+    it("ends the claim of every lawyer on it and tells them; the others just lose it from their inbox", async () => {
       const { id } = await ask();
-      requests.get(id).status = "CLAIMED";
-      claims.push({ requestId: id, lawyerId: "lawyer-a", outcome: null });
+      claims.push({ requestId: id, lawyerId: "lawyer-a", outcome: null }, { requestId: id, lawyerId: "lawyer-c", outcome: null });
 
       await ClientRequestSvc.withdraw("client-1", id);
 
-      expect(claims[0].outcome).to.equal("WITHDRAWN");
-      expect(emitted).to.have.length(1);
-      expect(emitted[0]!.slice(0, 2)).to.deep.equal(["lawyer-a", "client-request:updated"]);
+      expect(claims.map((c) => c.outcome)).to.deep.equal(["WITHDRAWN", "WITHDRAWN"]);
+      expect(emitted.map(([userId, event]) => [userId, event])).to.deep.equal([
+        ["lawyer-a", "client-request:updated"],
+        ["lawyer-c", "client-request:updated"],
+        ["lawyer-b", "client-request:taken"],
+      ]);
       expect(emitted[0]![2]).to.deep.include({ requestId: id, status: "WITHDRAWN" });
     });
   });

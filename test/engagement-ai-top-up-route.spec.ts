@@ -123,11 +123,11 @@ describe("engagement AI top-ups", () => {
 
     const now = new Date();
     const row = await prisma.clientRequest.create({
-      data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: now, status: "QUOTED", routedAt: now, routingExpiresAt: new Date(now.getTime() + 48 * 3_600_000) },
+      data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: now, status: "ROUTED", routedAt: now, routingExpiresAt: new Date(now.getTime() + 48 * 3_600_000), pickByAt: new Date(now.getTime() + 7 * 86_400_000) },
     });
     requestId = row.id;
     await prisma.clientRequestClaim.create({
-      data: { requestId, openRequestId: requestId, lawyerId, organizationId: orgId, claimedAt: now, expiresAt: new Date(now.getTime() + 86_400_000), quoteType: "FIXED_FEE", quoteAmountMinor: 75000, quoteCurrency: "GBP", quoteMessage: "Fixed fee.", quotedAt: now },
+      data: { requestId, lawyerId, organizationId: orgId, claimedAt: now, expiresAt: new Date(now.getTime() + 86_400_000), quoteType: "FIXED_FEE", quoteAmountMinor: 75000, quoteCurrency: "GBP", quoteMessage: "Fixed fee.", quotedAt: now },
     });
     await confirm().expect(200);
     const { body } = await copy().expect(202);

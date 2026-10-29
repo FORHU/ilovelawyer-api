@@ -1324,6 +1324,9 @@ model ClientRequest {
   routingExpiresAt  DateTime?
   // When it was last routed: first routing, or back in the pool after a claim ended (#511).
   routedAt          DateTime?
+  // Several lawyers: the client picks a quote by then (CLIENT_REQUEST_PICK_WINDOW_MS after the first
+  // quote), or the request EXPIRES. Null while no open claim has quoted.
+  pickByAt          DateTime?
   announcedAt       DateTime?
   // Lawyers excluded from matching this request again after they passed, released or lapsed on it
   // (#509/#511/#512) — a client decline does the same once a quote is declined (#512).
@@ -1424,6 +1427,8 @@ enum ClaimOutcome {
   REASSIGNED
   WITHDRAWN
   ENGAGED
+  // Several lawyers on one request: the client hired another, or didn't pick anyone in time.
+  NOT_CHOSEN
 }
 
 model ClientRequestClaim {

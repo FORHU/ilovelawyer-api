@@ -1,5 +1,5 @@
-/** ClientRequestLawyerSvc — the lawyer app's side of client requests (#511): the inbox, accepting
- * (claiming) a request for 24h, and passing on one. No live Postgres: repositories are
+/** ClientRequestLawyerSvc — the lawyer app's side of client requests (#511): the inbox, joining a
+ * request (Accept: any number of lawyers at once since phase 5, each with 24h to quote), and passing on one. No live Postgres: repositories are
  * monkeypatched with an in-memory world, same idiom as test/client-request.spec.ts. The race
  * itself is proven against the database in test/client-request-claim-repository.spec.ts. */
 import { expect } from "chai";
@@ -109,11 +109,13 @@ describe("ClientRequestLawyerSvc", () => {
       ["lawyer-me", { ...PROFILE }],
       ["lawyer-other", { ...PROFILE, userId: "lawyer-other" }],
       ["lawyer-third", { ...PROFILE, userId: "lawyer-third" }],
+      ["lawyer-fourth", { ...PROFILE, userId: "lawyer-fourth" }],
     ]);
     roles = new Map([
       ["lawyer-me", "LAWYER"],
       ["lawyer-other", "LAWYER"],
       ["lawyer-third", "LAWYER"],
+      ["lawyer-fourth", "LAWYER"],
       ["client-x", "USER"],
     ]);
     openCounts = new Map();
@@ -150,14 +152,17 @@ describe("ClientRequestLawyerSvc", () => {
       const r = requests.get(id);
       if (r && !r.excludedLawyerIds.includes(lawyerId)) r.excludedLawyerIds.push(lawyerId);
     };
+    // ClientRequestClaimRepo.claim's rules (proven against Postgres in its own spec): the request
+    // stays ROUTED, with any number of lawyers on it.
     (ClientRequestClaimRepo as any).claim = async (requestId: string, lawyerId: string, organizationId: string, now: Date = new Date()) => {
       const r = requests.get(requestId);
-      if (!r || r.status !== "ROUTED" || r.routingExpiresAt <= now || r.excludedLawyerIds.includes(lawyerId)) return null;
-      r.status = "CLAIMED";
+      if (!r || r.status !== "ROUTED" || r.routingExpiresAt <= now || r.excludedLawyerIds.includes(lawyerId)) return { refused: "CLOSED" };
+      const open = claims.filter((c) => c.requestId === requestId && c.outcome === null);
+      if (open.some((c) => c.lawyerId === lawyerId)) return { refused: "JOINED" };
       r.updatedAt = now;
-      const claim = { id: `claim-${claims.length + 1}`, requestId, lawyerId, organizationId, claimedAt: now, expiresAt: new Date(now.getTime() + 24 * HOUR_MS), outcome: null, endedAt: null };
+      const claim = { id: `claim-${claims.length + 1}`, requestId, lawyerId, organizationId, claimedAt: now, expiresAt: new Date(now.getTime() + 24 * HOUR_MS), outcome: null, endedAt: null, quotedAt: null };
       claims.push(claim);
-      return claim;
+      return { claim, joined: open.length + 1 };
     };
     (OrganizationRepo as any).writeAudit = async (data: any) => audits.push(data);
     (SecurityAuditSvc as any).record = async (input: any) => securityAudits.push(input);
@@ -208,16 +213,24 @@ describe("ClientRequestLawyerSvc", () => {
       expect(claims[0]).to.deep.include({ lawyerId: "lawyer-me", organizationId: "org-me" });
     });
 
-    it("tells the other matching lawyers it's taken, and the client it moved", async () => {
+    it("tells the client a lawyer joined, and keeps the request ROUTED for others", async () => {
       routed("req-1");
-      await ClientRequestLawyerSvc.claim(me, "req-1");
+      const dto = await ClientRequestLawyerSvc.claim(me, "req-1");
 
-      const taken = emitted.filter(([, event]) => event === "client-request:taken");
-      expect(taken.map(([userId]) => userId).sort()).to.deep.equal(["lawyer-other", "lawyer-third"]);
-      expect(taken[0]![2]).to.deep.equal({ requestId: "req-1" });
+      expect(requests.get("req-1")!.status).to.equal("ROUTED");
+      expect(dto).to.deep.include({ lawyersOn: 1 });
+      expect(emitted.filter(([, event]) => event === "client-request:taken")).to.deep.equal([]);
       const updated = emitted.filter(([, event]) => event === "client-request:updated");
       expect(updated.map(([userId]) => userId)).to.deep.equal(["client-req-1"]);
       expect(updated[0]![2]).to.deep.include({ requestId: "req-1", status: "CLAIMED" });
+    });
+
+    it("never takes it from the other matching lawyers, however many join", async () => {
+      routed("req-1");
+      for (const userId of ["lawyer-other", "lawyer-third", "lawyer-me"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "req-1");
+
+      expect(emitted.filter(([, event]) => event === "client-request:taken")).to.deep.equal([]);
+      expect(await ClientRequestLawyerSvc.get({ ...me, userId: "lawyer-fourth" }, "req-1")).to.deep.include({ status: "ROUTED", claim: null, lawyersOn: 3 });
     });
 
     it("records the claim on the client's case and in the security audit log", async () => {
@@ -230,11 +243,22 @@ describe("ClientRequestLawyerSvc", () => {
       expect(securityAudits[0]).to.deep.include({ action: "client_request.claimed", actorId: "lawyer-me", organizationId: "org-me", caseId: "case-req-1" });
     });
 
-    it("answers REQUEST_ALREADY_CLAIMED when another lawyer won", async () => {
+    it("lets a fourth lawyer join: there's no limit", async () => {
       routed("req-1");
-      await ClientRequestLawyerSvc.claim({ ...me, userId: "lawyer-other" }, "req-1");
+      for (const userId of ["lawyer-other", "lawyer-third", "lawyer-fourth"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "req-1");
 
-      expect(await errorOf(ClientRequestLawyerSvc.claim(me, "req-1"))).to.deep.include({ status: 409, code: "REQUEST_ALREADY_CLAIMED" });
+      expect(await ClientRequestLawyerSvc.claim(me, "req-1")).to.deep.include({ status: "CLAIMED", lawyersOn: 4 });
+      expect(claims.filter((c) => c.requestId === "req-1")).to.have.length(4);
+    });
+
+    it("returns the request when a lawyer already on it joins again", async () => {
+      routed("req-1");
+      await ClientRequestLawyerSvc.claim(me, "req-1");
+      const again = await ClientRequestLawyerSvc.claim(me, "req-1");
+
+      expect(again).to.deep.include({ status: "CLAIMED", lawyersOn: 1 });
+      expect(claims).to.have.length(1);
+      expect(audits).to.have.length(1);
     });
 
     it("answers INVALID_REQUEST_STATUS, with the status, once the request has ended", async () => {
@@ -321,10 +345,12 @@ describe("ClientRequestLawyerSvc", () => {
       routed("no-brief-yet", { brief: null });
       routed("window-over", { routingExpiresAt: new Date(Date.now() - 1000) });
       routed("claimed", { status: "CLAIMED" });
+      routed("busy", { routedAt: new Date(Date.now() - 6 * HOUR_MS) });
+      for (const userId of ["lawyer-other", "lawyer-third", "lawyer-fourth"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "busy");
 
       const inbox = await view("inbox");
-      expect(inbox.data.map((r) => r.id)).to.deep.equal(["newer", "older"]);
-      expect(inbox.total).to.equal(2);
+      expect(inbox.data.map((r) => r.id)).to.deep.equal(["newer", "older", "busy"]);
+      expect(inbox.total).to.equal(3);
       expect(inbox.data[0]).to.deep.include({ status: "ROUTED", claim: null, brief: BRIEF });
     });
 
@@ -370,10 +396,10 @@ describe("ClientRequestLawyerSvc", () => {
       expect((await ClientRequestLawyerSvc.get(me, "req-1")).status).to.equal("CLAIMED");
     });
 
-    it("answers 404 for a request another lawyer holds", async () => {
+    it("shows a request other lawyers are on", async () => {
       routed("req-1");
       await ClientRequestLawyerSvc.claim({ ...me, userId: "lawyer-other" }, "req-1");
-      expect(await errorOf(ClientRequestLawyerSvc.get(me, "req-1"))).to.deep.include({ status: 404 });
+      expect(await ClientRequestLawyerSvc.get(me, "req-1")).to.deep.include({ status: "ROUTED", claim: null, lawyersOn: 1 });
     });
 
     it("answers 404 for a request they passed on", async () => {

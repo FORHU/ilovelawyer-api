@@ -65,28 +65,61 @@ function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
   };
 }
 
-/** LawyerRequestForClient in the contract. From QUOTED, the lawyer, their quote and the referral
- * disclosure the client acknowledges to confirm (#512). The engagement fields come with #514. */
+type ClaimForClient = ClientRequestForClient["claims"][number];
+
+function quoteDto(claim: ClaimForClient) {
+  if (!claim.quotedAt) return null;
+  return {
+    type: claim.quoteType,
+    amount: { amountMinor: claim.quoteAmountMinor, currency: claim.quoteCurrency },
+    message: claim.quoteMessage,
+    sentAt: claim.quotedAt,
+  };
+}
+
+/**
+ * The request's status as the client sees it. Several lawyers (phase 5): the request stays ROUTED
+ * until the client picks a quote, so the client sees QUOTED once any lawyer on it has quoted, and
+ * CLAIMED once any has joined, as when one lawyer held a request.
+ */
+function statusForClient(r: ClientRequestForClient): ClientRequestStatus {
+  if (r.status !== "ROUTED") return r.status;
+  const open = r.claims.filter((c) => c.outcome === null);
+  return open.some((c) => c.quotedAt) ? "QUOTED" : open.length ? "CLAIMED" : "ROUTED";
+}
+
+/** The lawyer the client hired, or, until they pick, the only quote: the one `lawyer`/`quote`
+ * show, for an app that shows one. */
+function oneLawyer(r: ClientRequestForClient): ClaimForClient | null {
+  const engaged = r.claims.find((c) => c.outcome === "ENGAGED");
+  if (engaged) return engaged;
+  const open = r.claims.filter((c) => c.outcome === null);
+  if (r.status === "CONFIRMED") return open[0] ?? null;
+  const quoted = open.filter((c) => c.quotedAt);
+  return quoted.length === 1 ? quoted[0]! : null;
+}
+
+/** LawyerRequestForClient in the contract. Several lawyers (phase 5): `lawyers` is everyone on the
+ * request now, oldest first, each with their quote once sent (`claimId` is what confirm and decline
+ * take); `pickByAt` is when it expires without a pick. `lawyer`/`quote` stay for one lawyer (the one
+ * hired, or the only quote). The referral disclosure is what the client acknowledges to confirm
+ * (#512). */
 function toDto(r: ClientRequestForClient) {
-  const quoted = r.claims[0] ?? null;
+  const one = oneLawyer(r);
+  const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c) }));
   return {
     id: r.id,
     caseId: r.caseId,
-    status: r.status,
+    status: statusForClient(r),
     note: r.note,
     consentVersion: r.consentVersion,
     consentAcceptedAt: r.consentAcceptedAt,
     createdAt: r.createdAt,
-    lawyer: quoted ? lawyerDto(quoted) : null,
-    quote: quoted
-      ? {
-          type: quoted.quoteType,
-          amount: { amountMinor: quoted.quoteAmountMinor, currency: quoted.quoteCurrency },
-          message: quoted.quoteMessage,
-          sentAt: quoted.quotedAt,
-        }
-      : null,
-    referralDisclosure: quoted ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
+    lawyers,
+    pickByAt: r.status === "ROUTED" ? r.pickByAt : null,
+    lawyer: one ? lawyerDto(one) : null,
+    quote: one ? quoteDto(one) : null,
+    referralDisclosure: lawyers.some((l) => l.quote) ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
     engagedAt: r.engagedAt,
     closedAt: r.closedAt,
     closedBy: r.closedBy,
@@ -154,8 +187,8 @@ export default class ClientRequestSvc {
     return toDto(await ClientRequestSvc.load(clientId, id));
   }
 
-  /** Until a lawyer is confirmed, the client can take the request back. A lawyer holding it loses
-   * their claim and is told; otherwise the lawyers it was routed to drop it from their inbox. */
+  /** Until a lawyer is confirmed, the client can take the request back. The lawyers on it lose their
+   * claims and are told; the lawyers it was routed to drop it from their inbox. */
   static async withdraw(clientId: string, id: string) {
     const request = await ClientRequestSvc.load(clientId, id);
     const now = new Date();
@@ -163,31 +196,31 @@ export default class ClientRequestSvc {
     if (!moved) {
       throw new HttpError("This request can't be withdrawn now.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     }
-    if (heldBy) {
-      const updated: ClientRequestUpdatedEvent = { requestId: id, status: "WITHDRAWN", updatedAt: now.toISOString() };
-      emitToUser(heldBy, "client-request:updated", updated);
-    } else {
-      const taken: ClientRequestTakenEvent = { requestId: id };
-      for (const lawyerId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) emitToUser(lawyerId, "client-request:taken", taken);
-    }
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "WITHDRAWN", updatedAt: now.toISOString() };
+    for (const lawyerId of heldBy) emitToUser(lawyerId, "client-request:updated", updated);
+    const taken: ClientRequestTakenEvent = { requestId: id };
+    for (const lawyerId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) if (!heldBy.includes(lawyerId)) emitToUser(lawyerId, "client-request:taken", taken);
     return toDto(await ClientRequestSvc.load(clientId, id));
   }
 
   /**
-   * The client confirms the quoted lawyer (#513), having acknowledged the referral disclosure: QUOTED
-   * -> CONFIRMED, and the lawyer's organization is charged the per-case fee straight away. When it goes
-   * through the request is ENGAGED; when the card is declined it stays CONFIRMED, the firm is asked to
-   * update the card, and the client waits. Confirming twice charges once.
+   * The client confirms one lawyer's quote (#513; several lawyers in phase 5), having acknowledged the
+   * referral disclosure: the request is CONFIRMED, that lawyer's organization is charged the per-case
+   * fee straight away, and the other lawyers on it are told the client chose someone else. `claimId`
+   * names the quote; it can be left out when there's only one. When the fee goes through the request
+   * is ENGAGED; when the card is declined it stays CONFIRMED, the firm is asked to update the card,
+   * and the client waits. Confirming twice charges once.
    */
-  static async confirm(clientId: string, id: string, input: { disclosureAcknowledged: boolean }) {
+  static async confirm(clientId: string, id: string, input: { disclosureAcknowledged: boolean; claimId?: string }) {
     if (!input.disclosureAcknowledged) {
       throw new HttpError("Read and acknowledge how ilovelawyer is paid before confirming.", 400, "DISCLOSURE_NOT_ACKNOWLEDGED");
     }
     const request = await ClientRequestSvc.load(clientId, id);
+    const chosen = ClientRequestSvc.quoteToAnswer(request, input.claimId, "This lawyer can't be confirmed now.");
     // The fee is the region's (set in admin, #598): the client's, which is the lawyer's too, as the
     // hand-off is UK-only.
     const fee = await OrganizationChargeSvc.perCaseFee(await ClientPricingSvc.tenantIdForClient(clientId));
-    const confirmed = await OrganizationChargeRepo.confirm(id, fee);
+    const confirmed = await OrganizationChargeRepo.confirm(id, chosen.id, fee);
     if (!confirmed) {
       const now = await ClientRequestSvc.load(clientId, id);
       throw new HttpError("This lawyer can't be confirmed now.", 409, "INVALID_REQUEST_STATUS", { status: now.status ?? request.status });
@@ -204,20 +237,29 @@ export default class ClientRequestSvc {
       message: "The client accepted your quote. The introduction fee is being charged to your card on file.",
       link: `/client-requests/${id}`,
     }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
+    for (const other of confirmed.notChosen) {
+      emitToUser(other, "client-request:updated", updated);
+      await NotificationSvc.create({
+        userId: other,
+        type: "CLIENT_REQUEST",
+        title: "The client chose another lawyer",
+        message: "The client hired another lawyer for this request. Nothing was charged to you.",
+        link: "/client-requests?view=history",
+      }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
+    }
 
     // Engages the request, or tells the firm the card was declined.
     await OrganizationChargeSvc.attempt(confirmed.charge.id);
     return toDto(await ClientRequestSvc.load(clientId, id));
   }
 
-  /** The client declines the quote (#513): nothing is charged, and the request goes back to other
-   * lawyers without this one. The reason stays on the claim; the lawyer is told it ended. */
-  static async decline(clientId: string, id: string, input: { reason?: string }) {
+  /** The client declines one lawyer's quote (#513; several lawyers in phase 5): nothing is charged,
+   * that lawyer doesn't see the request again, and their place frees up for another. `claimId` names
+   * the quote; it can be left out when there's only one. The reason stays on the claim; the lawyer is
+   * told it ended. */
+  static async decline(clientId: string, id: string, input: { reason?: string; claimId?: string }) {
     const request = await ClientRequestSvc.load(clientId, id);
-    const quoted = request.claims[0];
-    if (request.status !== "QUOTED" || !quoted || quoted.outcome !== null) {
-      throw new HttpError("There's no quote to decline now.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
-    }
+    const quoted = ClientRequestSvc.quoteToAnswer(request, input.claimId, "There's no quote to decline now.");
     const now = new Date();
     if (!(await ClientRequestClaimRepo.decline({ id: quoted.id, requestId: id, lawyerId: quoted.lawyerId }, input.reason?.trim() || null, now))) {
       const current = await ClientRequestSvc.load(clientId, id);
@@ -288,6 +330,21 @@ export default class ClientRequestSvc {
     const created = await ClientRequestRepo.createFeedback(id, input.rating, input.comment?.trim() || null);
     if (!created) throw new HttpError("Feedback has already been given for this engagement.", 409, "INVALID_REQUEST_STATUS", { status: "CLOSED" });
     return { rating: created.rating, comment: created.comment, createdAt: created.createdAt };
+  }
+
+  /**
+   * The open quote the client is answering: `claimId`'s, or the only one when it's left out. 409 when
+   * the request isn't waiting on a pick or that quote isn't open; 400 QUOTE_REQUIRED when several are
+   * and none was named.
+   */
+  private static quoteToAnswer(request: ClientRequestForClient, claimId: string | undefined, notNow: string): ClaimForClient {
+    const quoted = request.claims.filter((c) => c.outcome === null && c.quotedAt);
+    const status = statusForClient(request);
+    if (request.status !== "ROUTED" || quoted.length === 0) throw new HttpError(notNow, 409, "INVALID_REQUEST_STATUS", { status });
+    if (!claimId && quoted.length > 1) throw new HttpError("Choose which lawyer's quote this is for.", 400, "QUOTE_REQUIRED");
+    const claim = claimId ? quoted.find((c) => c.id === claimId) : quoted[0];
+    if (!claim) throw new HttpError(notNow, 409, "INVALID_REQUEST_STATUS", { status });
+    return claim;
   }
 
   private static async load(clientId: string, id: string) {

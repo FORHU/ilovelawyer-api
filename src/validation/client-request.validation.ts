@@ -57,11 +57,14 @@ export const quoteClientRequestSchema = Joi.object({
  * DISCLOSURE_NOT_ACKNOWLEDGED answer from the service. */
 export const confirmClientRequestSchema = Joi.object({
   disclosureAcknowledged: Joi.boolean().required(),
+  // Several lawyers: whose quote (LawyerRequestForClient.lawyers[].claimId). Optional when there's one.
+  claimId: Joi.string().trim().optional(),
 });
 
 /** POST /client/lawyer-requests/:id/decline. */
 export const declineClientRequestSchema = Joi.object({
   reason: Joi.string().trim().allow("").max(500).optional(),
+  claimId: Joi.string().trim().optional(),
 });
 
 /** POST /client-requests/:id/close (lawyer) and /client/lawyer-requests/:id/end (client). */

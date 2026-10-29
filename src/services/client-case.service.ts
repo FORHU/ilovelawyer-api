@@ -66,6 +66,8 @@ export interface ClientCaseChanges {
 /** Once a lawyer holds the request, their conflict check and quote rest on the case's problem, place
  * and people, so those stop being editable. CONFIRMED and ENGAGED also stop the case being removed. */
 const LAWYER_HELD: ClientRequestStatus[] = ["CLAIMED", "QUOTED", "CONFIRMED", "ENGAGED"];
+/** Several lawyers (phase 5): a ROUTED request is held once any lawyer has joined it. */
+const isHeld = (live: { status: ClientRequestStatus; lawyersOn?: number }) => LAWYER_HELD.includes(live.status) || (live.lawyersOn ?? 0) > 0;
 const LAWYER_COMMITTED: ClientRequestStatus[] = ["CONFIRMED", "ENGAGED"];
 
 /** A Consultation title is VarChar(80). */
@@ -234,7 +236,7 @@ export default class ClientCaseSvc {
     const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, row.caseAreas);
     const live = await ClientRequestRepo.findLiveForCase(caseId);
     if (live) {
-      const held = LAWYER_HELD.includes(live.status);
+      const held = isHeld(live);
       const movesOutsideUk = input.ukJurisdiction === null && row.ukJurisdiction !== null;
       const changesFixed =
         (caseAreas !== undefined && !sameSet(caseAreas, row.caseAreas)) ||

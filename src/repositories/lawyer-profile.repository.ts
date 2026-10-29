@@ -185,21 +185,21 @@ export default class LawyerProfileRepo {
     }));
   }
 
-  /** How many open client requests (#514) each of these lawyers is holding: CLAIMED, QUOTED,
-   * CONFIRMED or ENGAGED (CLOSED doesn't count, even though the ENGAGED claim's outcome stays set).
-   * A claim counts only while it's the request's current hold — `openRequestId` is set for
-   * CLAIMED/QUOTED/CONFIRMED, and cleared to null once ENGAGED (organization-charge.repository.ts),
-   * so an ENGAGED claim is picked up by `outcome: "ENGAGED"` instead. A lawyer's past released or
-   * declined claim on a request someone else now holds matches neither and isn't counted. Used by
-   * ClientRequestMatchingSvc.matches for the capacity rule. */
+  /** How many open client requests (#514) each of these lawyers is holding: one they've joined and
+   * not yet left (an open claim, on a ROUTED or CONFIRMED request; several lawyers in phase 5), or
+   * one they're engaged on (ENGAGED; CLOSED doesn't count, even though the claim's outcome stays
+   * ENGAGED). A claim that ended any other way isn't counted. Used by ClientRequestMatchingSvc.matches
+   * for the capacity rule. */
   static async countOpenForLawyers(lawyerIds: string[]): Promise<Map<string, number>> {
     if (lawyerIds.length === 0) return new Map();
     const rows = await prisma.clientRequestClaim.groupBy({
       by: ["lawyerId"],
       where: {
         lawyerId: { in: lawyerIds },
-        OR: [{ openRequestId: { not: null } }, { outcome: "ENGAGED" }],
-        request: { status: { in: ["CLAIMED", "QUOTED", "CONFIRMED", "ENGAGED"] } },
+        OR: [
+          { outcome: null, request: { status: { in: ["ROUTED", "CONFIRMED"] } } },
+          { outcome: "ENGAGED", request: { status: "ENGAGED" } },
+        ],
       },
       _count: { _all: true },
     });

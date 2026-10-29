@@ -1,22 +1,35 @@
-/** ClientRequestClaimRepo.claim — the race-safe first claim (#511). Runs against the real database,
- * like test/audit-event-repository.spec.ts: the race can only be shown against Postgres. It makes
- * its own users, organization, case and request, and removes them. */
+/** ClientRequestClaimRepo — lawyers joining a client request (#511; any number at once since phase 5),
+ * quoting, and their claims ending. Runs against the real database, like
+ * test/audit-event-repository.spec.ts: the race can only be shown against Postgres. It makes its own
+ * users, organization, case and request, and removes them. */
 import crypto from "crypto";
 import { expect } from "chai";
 import { describe, it, before, after, beforeEach } from "mocha";
 import prisma from "../src/lib/prisma";
 import ClientRequestClaimRepo, { CLAIM_HOLD_MS } from "../src/repositories/client-request-claim.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
+import OrganizationChargeRepo from "../src/repositories/organization-charge.repository";
+import { CLIENT_REQUEST_PICK_WINDOW_MS } from "../src/constants/client-request.constants";
 
 const HOUR_MS = 60 * 60 * 1000;
 const LAWYERS = 8;
+const QUOTE = { type: "FIXED_FEE" as const, amountMinor: 50_000, currency: "GBP", message: "Fixed fee." };
 
-describe("ClientRequestClaimRepo.claim", () => {
+describe("ClientRequestClaimRepo", () => {
   const clientId = crypto.randomUUID();
   const lawyerIds = Array.from({ length: LAWYERS }, () => crypto.randomUUID());
   const orgId = crypto.randomUUID();
   const caseId = crypto.randomUUID();
   let requestId: string;
+
+  /** Joins, and returns the claim (failing the test if the join was refused). */
+  async function join(lawyerId: string, at: Date = new Date()) {
+    const result = await ClientRequestClaimRepo.claim(requestId, lawyerId, orgId, at);
+    if (!("claim" in result) || !result.claim) throw new Error(`join refused: ${result.refused}`);
+    return result.claim;
+  }
+  const request = () => prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
+  const claimRow = (id: string) => prisma.clientRequestClaim.findUniqueOrThrow({ where: { id } });
 
   before(async () => {
     const tenant = await prisma.tenant.upsert({ where: { code: "UK" }, update: {}, create: { code: "UK", name: "United Kingdom" } });
@@ -30,107 +43,209 @@ describe("ClientRequestClaimRepo.claim", () => {
   beforeEach(async () => {
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
-    const request = await prisma.clientRequest.create({
+    const created = await prisma.clientRequest.create({
       data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: new Date(), status: "ROUTED", routingExpiresAt: new Date(Date.now() + 48 * HOUR_MS) },
     });
-    requestId = request.id;
+    requestId = created.id;
   });
 
   after(async () => {
+    await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.case.delete({ where: { id: caseId } });
     await prisma.organization.delete({ where: { id: orgId } });
     await prisma.user.deleteMany({ where: { id: { in: [clientId, ...lawyerIds] } } });
   });
 
-  it("lets exactly one of many simultaneous claims win", async () => {
-    const results = await Promise.all(lawyerIds.map((lawyerId) => ClientRequestClaimRepo.claim(requestId, lawyerId, orgId)));
+  describe("claim (joining)", () => {
+    it("lets every one of many simultaneous joins in, once each, and keeps the request ROUTED", async () => {
+      const results = await Promise.all([...lawyerIds, ...lawyerIds].map((lawyerId) => ClientRequestClaimRepo.claim(requestId, lawyerId, orgId)));
 
-    const won = results.filter((r) => r !== null);
-    expect(won).to.have.length(1);
-    const claims = await prisma.clientRequestClaim.findMany({ where: { requestId } });
-    expect(claims).to.have.length(1);
-    expect(claims[0]!.lawyerId).to.equal(won[0]!.lawyerId);
-    expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("CLAIMED");
+      expect(results.filter((r) => "claim" in r && r.claim)).to.have.length(LAWYERS);
+      expect(results.filter((r) => r.refused === "JOINED")).to.have.length(LAWYERS);
+      expect(await prisma.clientRequestClaim.count({ where: { requestId, outcome: null } })).to.equal(LAWYERS);
+      expect((await request()).status).to.equal("ROUTED");
+    });
+
+    it("gives each lawyer 24h from joining, and says how many are on it", async () => {
+      const now = new Date();
+      const first = await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, now);
+      const second = await ClientRequestClaimRepo.claim(requestId, lawyerIds[1]!, orgId, now);
+
+      expect(first.claim!.claimedAt.getTime()).to.equal(now.getTime());
+      expect(first.claim!.expiresAt.getTime()).to.equal(now.getTime() + 24 * HOUR_MS);
+      expect(CLAIM_HOLD_MS).to.equal(24 * HOUR_MS);
+      expect([first.joined, second.joined]).to.deep.equal([1, 2]);
+    });
+
+    it("refuses a lawyer already on it, without a second claim", async () => {
+      await join(lawyerIds[0]!);
+      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId)).to.deep.equal({ refused: "JOINED" });
+      expect(await prisma.clientRequestClaim.count({ where: { requestId } })).to.equal(1);
+    });
+
+    it("refuses once the 48h routing window is over, even before the sweep has expired it", async () => {
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
+      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId)).to.deep.equal({ refused: "CLOSED" });
+      expect(await prisma.clientRequestClaim.count({ where: { requestId } })).to.equal(0);
+    });
+
+    it("refuses a lawyer who passed on the request or left it before", async () => {
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { excludedLawyerIds: [lawyerIds[0]!] } });
+      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId)).to.deep.equal({ refused: "CLOSED" });
+      await join(lawyerIds[1]!);
+    });
   });
 
-  it("holds the request for 24h from the claim", async () => {
-    const now = new Date();
-    const claim = await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, now);
+  describe("quote", () => {
+    it("saves the quote once, and the first quote starts the client's 7 days to pick", async () => {
+      const a = await join(lawyerIds[0]!);
+      const b = await join(lawyerIds[1]!);
+      const first = new Date();
 
-    expect(claim!.claimedAt.getTime()).to.equal(now.getTime());
-    expect(claim!.expiresAt.getTime()).to.equal(now.getTime() + 24 * HOUR_MS);
-    expect(CLAIM_HOLD_MS).to.equal(24 * HOUR_MS);
-    expect(claim!.outcome).to.equal(null);
+      expect(await ClientRequestClaimRepo.quote(a, QUOTE, first)).to.equal(true);
+      expect(await ClientRequestClaimRepo.quote(a, QUOTE, first)).to.equal(false);
+      expect(await ClientRequestClaimRepo.quote(b, QUOTE, new Date(first.getTime() + HOUR_MS))).to.equal(true);
+
+      expect((await claimRow(a.id)).quotedAt!.getTime()).to.equal(first.getTime());
+      const r = await request();
+      expect(r.status).to.equal("ROUTED");
+      expect(r.pickByAt!.getTime()).to.equal(first.getTime() + CLIENT_REQUEST_PICK_WINDOW_MS);
+    });
+
+    it("refuses after the lawyer's 24h, or once the request has moved on", async () => {
+      const late = await join(lawyerIds[0]!, new Date(Date.now() - CLAIM_HOLD_MS - 1000));
+      expect(await ClientRequestClaimRepo.quote(late, QUOTE)).to.equal(false);
+
+      const ok = await join(lawyerIds[1]!);
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "WITHDRAWN" } });
+      expect(await ClientRequestClaimRepo.quote(ok, QUOTE)).to.equal(false);
+    });
   });
 
-  it("refuses once the 48h routing window is over, even before the sweep has expired it", async () => {
-    await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
+  describe("a claim ending frees its place", () => {
+    it("release: the lawyer leaves and isn't offered it again; the others carry on", async () => {
+      const a = await join(lawyerIds[0]!);
+      await join(lawyerIds[1]!);
+      await join(lawyerIds[2]!);
+      const routedAt = (await request()).routedAt;
 
-    expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId)).to.equal(null);
-    expect(await prisma.clientRequestClaim.count({ where: { requestId } })).to.equal(0);
-  });
+      expect(await ClientRequestClaimRepo.release(a, { reason: "CONFLICT", note: null })).to.equal(true);
 
-  it("refuses a lawyer who passed on the request or held it before", async () => {
-    await prisma.clientRequest.update({ where: { id: requestId }, data: { excludedLawyerIds: [lawyerIds[0]!] } });
+      expect(await claimRow(a.id)).to.deep.include({ outcome: "RELEASED", releaseReason: "CONFLICT" });
+      const r = await request();
+      expect(r).to.deep.include({ status: "ROUTED", excludedLawyerIds: [lawyerIds[0]!], routedAt });
+      // A place is free again: a new lawyer can join, the one who left can't.
+      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId)).to.deep.equal({ refused: "CLOSED" });
+      await join(lawyerIds[3]!);
+    });
 
-    expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId)).to.equal(null);
-    expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[1]!, orgId)).to.not.equal(null);
+    it("decline: only a quoted claim; with no quote left open, there's nothing to pick by", async () => {
+      const a = await join(lawyerIds[0]!);
+      const b = await join(lawyerIds[1]!);
+      expect(await ClientRequestClaimRepo.decline(a, "Too expensive")).to.equal(false);
+      await ClientRequestClaimRepo.quote(a, QUOTE);
+
+      expect(await ClientRequestClaimRepo.decline(a, "Too expensive")).to.equal(true);
+
+      expect(await claimRow(a.id)).to.deep.include({ outcome: "DECLINED", declineReason: "Too expensive" });
+      expect(await claimRow(b.id)).to.deep.include({ outcome: null });
+      expect(await request()).to.deep.include({ status: "ROUTED", pickByAt: null });
+    });
+
+    it("the last lawyer leaving puts the request back in the pool for a fresh 48h, to be announced again", async () => {
+      const a = await join(lawyerIds[0]!);
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { announcedAt: new Date() } });
+      const now = new Date();
+
+      expect(await ClientRequestClaimRepo.release(a, { reason: "CAPACITY", note: null }, now)).to.equal(true);
+
+      const r = await request();
+      expect(r).to.deep.include({ status: "ROUTED", announcedAt: null, pickByAt: null });
+      expect(r.routedAt!.getTime()).to.equal(now.getTime());
+      expect(r.routingExpiresAt!.getTime()).to.equal(now.getTime() + 48 * HOUR_MS);
+    });
   });
 
   describe("findLapsed / lapse", () => {
-    it("finds a CLAIMED request's hold once it's over, and not before", async () => {
-      const claimedAt = new Date(Date.now() - CLAIM_HOLD_MS - 1000);
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, claimedAt);
+    it("finds an unquoted claim once its 24h is over, and not before", async () => {
+      const joinedAt = new Date(Date.now() - CLAIM_HOLD_MS - 1000);
+      await join(lawyerIds[0]!, joinedAt);
 
       const due = (await ClientRequestClaimRepo.findLapsed(new Date())).filter((c) => c.requestId === requestId);
       expect(due).to.have.length(1);
       expect(due[0]!.request).to.deep.equal({ caseId, clientId });
-      expect((await ClientRequestClaimRepo.findLapsed(claimedAt)).filter((c) => c.requestId === requestId)).to.deep.equal([]);
+      expect((await ClientRequestClaimRepo.findLapsed(joinedAt)).filter((c) => c.requestId === requestId)).to.deep.equal([]);
     });
 
-    it("leaves a QUOTED request's hold alone (whether QUOTED lapses is still open, #512)", async () => {
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, new Date(Date.now() - CLAIM_HOLD_MS - 1000));
-      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "QUOTED" } });
+    it("leaves a quoted claim alone: it waits for the client", async () => {
+      const a = await join(lawyerIds[0]!, new Date(Date.now() - CLAIM_HOLD_MS + 60_000));
+      await ClientRequestClaimRepo.quote(a, QUOTE);
+      await prisma.clientRequestClaim.update({ where: { id: a.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
 
       expect((await ClientRequestClaimRepo.findLapsed(new Date())).filter((c) => c.requestId === requestId)).to.deep.equal([]);
     });
 
-    it("ends the claim and puts the request back in the pool for 48h, without that lawyer", async () => {
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, new Date(Date.now() - CLAIM_HOLD_MS - 1000));
-      await prisma.clientRequest.update({ where: { id: requestId }, data: { announcedAt: new Date() } });
+    it("ends the claim and frees the place, without that lawyer", async () => {
+      await join(lawyerIds[0]!, new Date(Date.now() - CLAIM_HOLD_MS - 1000));
+      await join(lawyerIds[1]!);
       const [due] = (await ClientRequestClaimRepo.findLapsed(new Date())).filter((c) => c.requestId === requestId);
       const now = new Date();
 
       expect(await ClientRequestClaimRepo.lapse(due!, now)).to.equal(true);
 
-      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: due!.id } });
-      expect(claim).to.deep.include({ outcome: "LAPSED", openRequestId: null });
+      const claim = await claimRow(due!.id);
+      expect(claim.outcome).to.equal("LAPSED");
       expect(claim.endedAt!.getTime()).to.equal(now.getTime());
-      const request = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
-      expect(request).to.deep.include({ status: "ROUTED", excludedLawyerIds: [lawyerIds[0]!], announcedAt: null });
-      expect(request.routedAt!.getTime()).to.equal(now.getTime());
-      expect(request.routingExpiresAt!.getTime()).to.equal(now.getTime() + 48 * HOUR_MS);
-      // Back in the pool: another lawyer can win it now; the one who lapsed can't.
-      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId)).to.equal(null);
-      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[1]!, orgId)).to.not.equal(null);
+      expect(await request()).to.deep.include({ status: "ROUTED", excludedLawyerIds: [lawyerIds[0]!] });
+      expect(await prisma.clientRequestClaim.count({ where: { requestId, outcome: null } })).to.equal(1);
     });
 
     it("does nothing when the request moved on in the meantime", async () => {
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, new Date(Date.now() - CLAIM_HOLD_MS - 1000));
+      await join(lawyerIds[0]!, new Date(Date.now() - CLAIM_HOLD_MS - 1000));
       const [due] = (await ClientRequestClaimRepo.findLapsed(new Date())).filter((c) => c.requestId === requestId);
-      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "QUOTED" } });
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "WITHDRAWN" } });
 
       expect(await ClientRequestClaimRepo.lapse(due!, new Date())).to.equal(false);
-      expect((await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: due!.id } })).outcome).to.equal(null);
-      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("QUOTED");
+      expect((await claimRow(due!.id)).outcome).to.equal(null);
+    });
+  });
+
+  describe("OrganizationChargeRepo.confirm: the client picks one quote", () => {
+    it("confirms that lawyer, records their fee, and ends the others as not chosen", async () => {
+      const a = await join(lawyerIds[0]!);
+      const b = await join(lawyerIds[1]!);
+      const c = await join(lawyerIds[2]!);
+      await ClientRequestClaimRepo.quote(a, QUOTE);
+      await ClientRequestClaimRepo.quote(b, QUOTE);
+
+      const confirmed = await OrganizationChargeRepo.confirm(requestId, b.id, { amountMinor: 5000, currency: "GBP" });
+
+      expect(confirmed!.claim.id).to.equal(b.id);
+      expect(confirmed!.notChosen.sort()).to.deep.equal([lawyerIds[0]!, lawyerIds[2]!].sort());
+      expect(confirmed!.charge).to.deep.include({ lawyerId: lawyerIds[1], status: "PENDING", feeRequestId: requestId });
+      expect((await request()).status).to.equal("CONFIRMED");
+      expect((await claimRow(a.id)).outcome).to.equal("NOT_CHOSEN");
+      expect((await claimRow(b.id)).outcome).to.equal(null);
+      expect((await claimRow(c.id)).outcome).to.equal("NOT_CHOSEN");
+    });
+
+    it("refuses a quote that isn't open, and a second confirm", async () => {
+      const a = await join(lawyerIds[0]!);
+      const b = await join(lawyerIds[1]!);
+      await ClientRequestClaimRepo.quote(a, QUOTE);
+
+      expect(await OrganizationChargeRepo.confirm(requestId, b.id, { amountMinor: 5000, currency: "GBP" })).to.equal(null);
+      expect((await request()).status).to.equal("ROUTED");
+      expect(await OrganizationChargeRepo.confirm(requestId, a.id, { amountMinor: 5000, currency: "GBP" })).to.not.equal(null);
+      expect(await OrganizationChargeRepo.confirm(requestId, a.id, { amountMinor: 5000, currency: "GBP" })).to.equal(null);
     });
   });
 
   describe("findUnpaid / lapseUnpaid (#933)", () => {
     /** The client confirmed `hoursAgo`, and the lawyer's per-case fee is `status`. */
     async function confirmedWithFee(hoursAgo: number, status: "FAILED" | "PENDING" = "FAILED") {
-      const claim = (await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId))!;
+      const claim = await join(lawyerIds[0]!);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED" } });
       const fee = await prisma.organizationCharge.create({
         data: {
@@ -171,14 +286,13 @@ describe("ClientRequestClaimRepo.claim", () => {
 
       expect(await ClientRequestClaimRepo.lapseUnpaid(due!, now)).to.equal(true);
 
-      expect(await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: due!.claim.id } })).to.deep.include({ outcome: "LAPSED", openRequestId: null });
-      const request = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
-      expect(request).to.deep.include({ status: "ROUTED", excludedLawyerIds: [lawyerIds[0]!], announcedAt: null });
-      expect(request.routingExpiresAt!.getTime()).to.equal(now.getTime() + 48 * HOUR_MS);
+      expect((await claimRow(due!.claim.id)).outcome).to.equal("LAPSED");
+      const r = await request();
+      expect(r).to.deep.include({ status: "ROUTED", excludedLawyerIds: [lawyerIds[0]!], announcedAt: null, pickByAt: null });
+      expect(r.routingExpiresAt!.getTime()).to.equal(now.getTime() + 48 * HOUR_MS);
       // The failed fee stays in the history, but the next lawyer's confirmation can record its own.
       expect(await prisma.organizationCharge.findUniqueOrThrow({ where: { id: fee.id } })).to.deep.include({ status: "FAILED", feeRequestId: null, requestId });
-      await prisma.organizationCharge.create({ data: { organizationId: orgId, kind: "PER_CASE_FEE", status: "PENDING", amountMinor: 5000, currency: "GBP", requestId, feeRequestId: requestId } });
-      expect(await ClientRequestClaimRepo.claim(requestId, lawyerIds[1]!, orgId)).to.not.equal(null);
+      await join(lawyerIds[1]!);
     });
 
     it("does nothing when a retry started in the meantime", async () => {
@@ -187,8 +301,8 @@ describe("ClientRequestClaimRepo.claim", () => {
       await prisma.organizationCharge.updateMany({ where: { requestId }, data: { status: "PENDING" } });
 
       expect(await ClientRequestClaimRepo.lapseUnpaid(due!, new Date())).to.equal(false);
-      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("CONFIRMED");
-      expect((await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: due!.claim.id } })).outcome).to.equal(null);
+      expect((await request()).status).to.equal("CONFIRMED");
+      expect((await claimRow(due!.claim.id)).outcome).to.equal(null);
     });
   });
 
@@ -205,34 +319,39 @@ describe("ClientRequestClaimRepo.claim", () => {
       expect((await ClientRequestRepo.findUnannounced(new Date())).map((r) => r.id)).to.not.include(requestId);
     });
 
-    it("doesn't announce a request someone already claimed", async () => {
-      await withBrief();
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
-      expect(await ClientRequestRepo.claimAnnouncement(requestId, new Date())).to.equal(false);
-    });
-
-    it("expires a routed request once its 48h is over, and only then", async () => {
+    it("expires a routed request once its 48h is over with nobody on it, and only then", async () => {
       expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
 
       const due = (await ClientRequestRepo.findExpired(new Date())).find((r) => r.id === requestId);
-      expect(due).to.deep.include({ caseId, clientId });
+      expect(due).to.deep.include({ caseId, clientId, pickByAt: null });
       expect(due!.client.email).to.equal(`claim-race-${clientId}@example.com`);
       expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(true);
       expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
-      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("EXPIRED");
+      expect((await request()).status).to.equal("EXPIRED");
     });
 
-    it("never expires a claimed request, even past its routing window", async () => {
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
+    it("doesn't expire a request with a lawyer on it when the 48h end", async () => {
+      await join(lawyerIds[0]!);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
       expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
     });
 
-    it("finds a hold within 2h of ending, and marks its reminder sent once", async () => {
+    it("expires a request the client didn't pick a quote on in time, ending the open claims as not chosen", async () => {
+      const a = await join(lawyerIds[0]!);
+      await ClientRequestClaimRepo.quote(a, QUOTE);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { pickByAt: new Date(Date.now() - 1000) } });
+
+      expect((await ClientRequestRepo.findExpired(new Date())).map((r) => r.id)).to.include(requestId);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(true);
+      expect((await claimRow(a.id)).outcome).to.equal("NOT_CHOSEN");
+    });
+
+    it("finds an unquoted claim within 2h of ending, and marks its reminder sent once", async () => {
       const now = new Date();
-      // Claimed 22h30m ago: 1h30m left.
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId, new Date(now.getTime() - CLAIM_HOLD_MS + 90 * 60 * 1000));
+      // Joined 22h30m ago: 1h30m left.
+      await join(lawyerIds[0]!, new Date(now.getTime() - CLAIM_HOLD_MS + 90 * 60 * 1000));
 
       const due = (await ClientRequestClaimRepo.findDueReminders(now)).filter((c) => c.requestId === requestId);
       expect(due).to.have.length(1);
@@ -242,32 +361,24 @@ describe("ClientRequestClaimRepo.claim", () => {
       expect((await ClientRequestClaimRepo.findDueReminders(now)).filter((c) => c.requestId === requestId)).to.deep.equal([]);
     });
 
-    it("doesn't remind for a hold with more than 2h left", async () => {
-      await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
+    it("doesn't remind for a claim with more than 2h left", async () => {
+      await join(lawyerIds[0]!);
       expect((await ClientRequestClaimRepo.findDueReminders(new Date())).filter((c) => c.requestId === requestId)).to.deep.equal([]);
     });
   });
 
-  it("ends the open claim when the client withdraws the request", async () => {
-    const claim = await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
+  it("ends every open claim when the client withdraws the request", async () => {
+    const a = await join(lawyerIds[0]!);
+    const b = await join(lawyerIds[1]!);
     const now = new Date();
 
-    expect(await ClientRequestRepo.withdraw(requestId, ["ROUTED", "CLAIMED"], now)).to.deep.equal({ moved: true, heldBy: lawyerIds[0] });
+    const result = await ClientRequestRepo.withdraw(requestId, ["ROUTED"], now);
+    expect(result.moved).to.equal(true);
+    expect(result.heldBy.sort()).to.deep.equal([lawyerIds[0]!, lawyerIds[1]!].sort());
 
-    expect(await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claim!.id } })).to.deep.include({ outcome: "WITHDRAWN", openRequestId: null });
-    expect(await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).to.deep.include({ status: "WITHDRAWN" });
-    expect(await ClientRequestRepo.withdraw(requestId, ["ROUTED", "CLAIMED"], now)).to.deep.equal({ moved: false, heldBy: null });
-  });
-
-  it("refuses a second open claim on the same request at the database", async () => {
-    await ClientRequestClaimRepo.claim(requestId, lawyerIds[0]!, orgId);
-    // Straight past the guarded update, as a bug elsewhere might: the unique open-claim key stops it.
-    const sneak = prisma.clientRequestClaim.create({
-      data: { requestId, openRequestId: requestId, lawyerId: lawyerIds[1]!, organizationId: orgId, expiresAt: new Date(Date.now() + CLAIM_HOLD_MS) },
-    });
-
-    let error: any;
-    await sneak.catch((err) => (error = err));
-    expect(error?.code).to.equal("P2002");
+    expect((await claimRow(a.id)).outcome).to.equal("WITHDRAWN");
+    expect((await claimRow(b.id)).outcome).to.equal("WITHDRAWN");
+    expect((await request()).status).to.equal("WITHDRAWN");
+    expect(await ClientRequestRepo.withdraw(requestId, ["ROUTED"], now)).to.deep.equal({ moved: false, heldBy: [] });
   });
 });

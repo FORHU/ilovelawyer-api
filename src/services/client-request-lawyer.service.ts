@@ -18,7 +18,7 @@ import AccountLimitsSvc from "./account-limits.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
-import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
+import type { ClientRequestUpdatedEvent } from "../types/client-handoff";
 import ChatRepo from "../repositories/chat.repository";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
 import { documentFileUrl } from "./document.service";
@@ -53,9 +53,6 @@ export interface LawyerContext {
 
 type LawyerRequest = NonNullable<Awaited<ReturnType<typeof ClientRequestRepo.findForLawyer>>>;
 
-/** A request someone holds: claimed, then quoted, confirmed and engaged on the same claim. */
-const HELD: ClientRequestStatus[] = ["CLAIMED", "QUOTED", "CONFIRMED", "ENGAGED"];
-
 const NOT_FOUND = () => new HttpError("Request not found", 404);
 
 /** The lawyer's quote on a claim (#512), or null before they've sent one. */
@@ -69,6 +66,21 @@ function quoteOf(claim: LawyerRequest["claims"][number] | undefined) {
   };
 }
 
+/** The lawyers on a request now: its open claims. */
+function openClaims(r: LawyerRequest) {
+  return r.claims.filter((c) => c.outcome === null);
+}
+
+/**
+ * The request's status as one lawyer sees it. Several lawyers (phase 5): the request stays ROUTED
+ * until the client picks a quote, so a lawyer on it sees where their own claim is: CLAIMED once
+ * they've joined, QUOTED once they've sent a quote, as when one lawyer held a request.
+ */
+function statusFor(r: LawyerRequest, mine: LawyerRequest["claims"][number] | undefined): ClientRequestStatus {
+  if (r.status === "ROUTED" && mine?.outcome === null) return mine.quotedAt ? "QUOTED" : "CLAIMED";
+  return r.status;
+}
+
 /** ClientRequestForLawyer in the contract, as `lawyerId` sees it. The engagement is filled by #514;
  * until then it's always empty. The per-case fee's charge shows only to the lawyer it's for.
  * `perCaseFee` is what confirming would charge now: the lawyer's tenant's (feeOf). */
@@ -76,12 +88,21 @@ function toDto(r: LawyerRequest, lawyerId: string, perCaseFee: Money, brief: unk
   const mine = r.claims.find((c) => c.lawyerId === lawyerId);
   return {
     id: r.id,
-    status: r.status,
+    status: statusFor(r, mine),
     brief,
     routedAt: r.routedAt,
     routingExpiresAt: r.status === "ROUTED" ? r.routingExpiresAt : null,
+    // Several lawyers: how many are on it now.
+    lawyersOn: openClaims(r).length,
     claim: mine
-      ? { byMe: true, lawyer: { id: mine.lawyer.id, name: mine.lawyer.name ?? "" }, claimedAt: mine.claimedAt, claimExpiresAt: mine.expiresAt }
+      ? {
+          byMe: true,
+          lawyer: { id: mine.lawyer.id, name: mine.lawyer.name ?? "" },
+          claimedAt: mine.claimedAt,
+          claimExpiresAt: mine.expiresAt,
+          // NOT_CHOSEN: the client hired another lawyer, or didn't pick anyone in time.
+          outcome: mine.outcome,
+        }
       : null,
     quote: quoteOf(mine),
     perCaseFee,
@@ -140,12 +161,17 @@ export default class ClientRequestLawyerSvc {
     // (accepting, paused, enabled) would otherwise make the database's total wrong.
     const now = new Date();
     const candidates = await ClientRequestRepo.listRoutedFor(lawyer.userId, { caseAreas: caseAreasOf(profile.practiceAreas), jurisdictions: profile.qualifiedJurisdictions }, now);
-    const inbox = candidates.filter((r) => ClientRequestMatchingSvc.matches(profile, criteriaOf(r), now));
+    // Several lawyers: one already on it is in their "mine" view; others stay in the inbox.
+    const inbox = candidates.filter(
+      (r) =>
+        !r.claims.some((c) => c.lawyerId === lawyer.userId && c.outcome === null) &&
+        ClientRequestMatchingSvc.matches(profile, criteriaOf(r), now),
+    );
     const start = (query.page - 1) * query.limit;
     return { total: inbox.length, data: inbox.slice(start, start + query.limit).map((r) => toDto(r, lawyer.userId, fee)) };
   }
 
-  /** One request: routed to them and still open to a claim, or one they've held. */
+  /** One request: routed to them and still open to joining (inside its 48h), or one they've held. */
   static async get(lawyer: LawyerContext, id: string) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
     const request = await ClientRequestRepo.findForLawyer(id);
@@ -157,7 +183,10 @@ export default class ClientRequestLawyerSvc {
     return toDto(request, lawyer.userId, await feeOf(lawyer), await ClientRequestBriefSvc.current(id));
   }
 
-  /** Accept: the first claim wins a 24h hold, and every other matching lawyer is told it's gone. */
+  /**
+   * Join (the lawyer app's Accept; several lawyers in phase 5): a place on the request, with 24h to
+   * quote. Any number of lawyers can join. Joining again returns the request as it is.
+   */
   static async claim(lawyer: LawyerContext, id: string) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
     const request = await ClientRequestRepo.findForLawyer(id);
@@ -166,14 +195,13 @@ export default class ClientRequestLawyerSvc {
     // Their plan: a trial that's over, or this month's client requests already taken.
     await AccountLimitsSvc.assertCanTakeClientRequest(lawyer.userId);
 
-    const claim = await ClientRequestClaimRepo.claim(id, lawyer.userId, lawyer.organizationId);
-    if (!claim) {
+    const joined = await ClientRequestClaimRepo.claim(id, lawyer.userId, lawyer.organizationId);
+    if ("refused" in joined) {
+      if (joined.refused === "JOINED") return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
       const now = (await ClientRequestRepo.findForLawyer(id)) ?? request;
-      if (HELD.includes(now.status) && now.claims.some((c) => c.outcome === null && c.lawyerId !== lawyer.userId)) {
-        throw new HttpError("Another lawyer accepted this request first.", 409, "REQUEST_ALREADY_CLAIMED");
-      }
       throw new HttpError("This request can't be accepted now.", 409, "INVALID_REQUEST_STATUS", { status: now.status });
     }
+    const { claim } = joined;
 
     await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.claimed", payload: { requestId: id, claimId: claim.id } });
     await SecurityAuditSvc.record({
@@ -186,9 +214,6 @@ export default class ClientRequestLawyerSvc {
       payload: { requestId: id, claimId: claim.id },
     });
 
-    const others = (await ClientRequestMatchingSvc.eligibleLawyerIds(id)).filter((userId) => userId !== lawyer.userId);
-    const taken: ClientRequestTakenEvent = { requestId: id };
-    for (const userId of others) emitToUser(userId, "client-request:taken", taken);
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CLAIMED", updatedAt: claim.claimedAt.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
 
@@ -198,11 +223,12 @@ export default class ClientRequestLawyerSvc {
 
   /**
    * The names behind the brief, for the conflict check (#512): the client and the case's other
-   * parties. Only for the lawyer holding the claim, while CLAIMED (inside the 24h) or QUOTED. Every
-   * read is audited, since it's the first time the lawyer learns who the client is.
+   * parties. Only for a lawyer on the request (an open claim: inside the 24h, or quoted) until the
+   * client picks someone; with several lawyers, each of them. Every read is audited, since it's the
+   * first time the lawyer learns who the client is.
    */
   static async parties(lawyer: LawyerContext, id: string) {
-    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CLAIMED", "QUOTED"]);
+    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["ROUTED"]);
     const found = await ClientRequestRepo.findParties(id);
     if (!found) throw NOT_FOUND();
     const parties = [
@@ -275,12 +301,12 @@ export default class ClientRequestLawyerSvc {
 
   /**
    * Gives the request back (#512): a conflict, no capacity, or out of scope. The claim ends RELEASED
-   * and the request goes back in the pool without this lawyer, as a lapse does. Allowed until the
-   * client answers the quote. The note stays on the claim only: it may name the conflict, so it's
-   * kept out of the case's activity feed and the audit log.
+   * and the lawyer doesn't see the request again; their place frees up, as when a claim lapses. Allowed
+   * until the client picks a quote. The note stays on the claim only: it may name the conflict, so
+   * it's kept out of the case's activity feed and the audit log.
    */
   static async release(lawyer: LawyerContext, id: string, input: { reason: ReleaseReason; note?: string }) {
-    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CLAIMED", "QUOTED"], { allowExpired: true });
+    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["ROUTED"], { allowExpired: true });
     const now = new Date();
     const released = await ClientRequestClaimRepo.release(
       { id: claim.id, requestId: id, lawyerId: lawyer.userId },
@@ -310,7 +336,7 @@ export default class ClientRequestLawyerSvc {
   }
 
   /**
-   * Sends the lawyer's quote to the client (#512): CLAIMED -> QUOTED, inside the 24h hold. A fixed
+   * Sends the lawyer's quote to the client (#512), once, inside the 24h after joining. A fixed
    * fee needs an amount; a first consultation may be free. The fee is the lawyer's own, paid to them
    * directly: the platform's per-case fee (#513) is separate, and is charged when the client
    * confirms, so the quote needs a card on file to charge it to (402 CARD_REQUIRED, #933): the
@@ -318,7 +344,8 @@ export default class ClientRequestLawyerSvc {
    */
   static async quote(lawyer: LawyerContext, id: string, input: { type: QuoteType; amount: { amountMinor: number; currency: string }; message: string }) {
     if (input.type === "FIXED_FEE" && input.amount.amountMinor <= 0) throw new HttpError("A fixed fee needs an amount.", 400);
-    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["CLAIMED"]);
+    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["ROUTED"]);
+    if (claim.quotedAt) throw new HttpError("You've already sent a quote on this request.", 409, "INVALID_REQUEST_STATUS", { status: "QUOTED" });
     await OrganizationChargeSvc.assertCardOnFile(claim.organizationId, lawyer.userId);
     const now = new Date();
     const saved = await ClientRequestClaimRepo.quote(
@@ -328,7 +355,7 @@ export default class ClientRequestLawyerSvc {
     );
     if (!saved) {
       const current = await ClientRequestRepo.findForLawyer(id);
-      if (current?.status === "CLAIMED" && claim.expiresAt <= now) throw ClientRequestLawyerSvc.claimExpired();
+      if (current?.status === "ROUTED" && claim.expiresAt <= now) throw ClientRequestLawyerSvc.claimExpired();
       throw new HttpError("This request can't be quoted now.", 409, "INVALID_REQUEST_STATUS", { status: current?.status ?? request.status });
     }
 
@@ -492,8 +519,8 @@ export default class ClientRequestLawyerSvc {
   /**
    * The lawyer's open claim on the request, while it's in one of `statuses`. 404 when they've never
    * held it (so it can't be probed), 409 INVALID_REQUEST_STATUS when their claim ended or the request
-   * has moved on, 409 CLAIM_EXPIRED when a CLAIMED hold's 24h is over but the sweep hasn't lapsed it
-   * yet. A QUOTED hold doesn't expire: it waits for the client.
+   * has moved on, 409 CLAIM_EXPIRED when an unquoted claim's 24h is over but the sweep hasn't lapsed
+   * it yet. A quoted claim doesn't expire: it waits for the client.
    */
   private static async heldClaim(lawyer: LawyerContext, id: string, statuses: ClientRequestStatus[], opts: { allowExpired?: boolean } = {}) {
     await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
@@ -503,7 +530,7 @@ export default class ClientRequestLawyerSvc {
     if (!claim || !statuses.includes(request.status)) {
       throw new HttpError("You no longer hold this request.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     }
-    if (!opts.allowExpired && request.status === "CLAIMED" && claim.expiresAt <= new Date()) throw ClientRequestLawyerSvc.claimExpired();
+    if (!opts.allowExpired && !claim.quotedAt && claim.expiresAt <= new Date()) throw ClientRequestLawyerSvc.claimExpired();
     return { request, claim };
   }
 
@@ -519,7 +546,7 @@ export default class ClientRequestLawyerSvc {
   }
 
   /** Client requests are UK only, for lawyers whose registration has been verified (#506).
-   * `openCount` (CLAIMED/QUOTED/CONFIRMED/ENGAGED) makes the result usable as LawyerForMatching
+   * `openCount` (requests they're on or engaged on) makes the result usable as LawyerForMatching
    * directly — it only matters against capacity on a request this lawyer doesn't already hold,
    * since every call site here checks `held` (their own claim) before falling back to matches(). */
   private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow & { openCount: number }> {

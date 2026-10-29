@@ -222,7 +222,7 @@ describe("client request conflict check, release and quote", () => {
   });
 
   describe("quote", () => {
-    it("moves the request to QUOTED and shows the lawyer their quote", async () => {
+    it("shows the lawyer their quote, and the request as QUOTED to them", async () => {
       await claim().expect(200);
       const { body } = await quote(FIXED_FEE).expect(200);
       expect(body.status).to.equal("QUOTED");
@@ -284,7 +284,7 @@ describe("client request conflict check, release and quote", () => {
       await prisma.clientRequestClaim.updateMany({ where: { requestId }, data: { expiresAt: new Date(Date.now() - 1000) } });
       expect((await quote(FIXED_FEE).expect(409)).body.code).to.equal("CLAIM_EXPIRED");
       const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true } });
-      expect(row.status).to.equal("CLAIMED");
+      expect(row.status).to.equal("ROUTED");
       expect(row.claims[0]!.quotedAt).to.equal(null);
     });
 
@@ -301,7 +301,7 @@ describe("client request conflict check, release and quote", () => {
         const { body } = await quote(FIXED_FEE).expect(402);
         expect(body.code).to.equal("CARD_REQUIRED");
         const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true } });
-        expect(row.status).to.equal("CLAIMED");
+        expect(row.status).to.equal("ROUTED");
         expect(row.claims[0]!.quotedAt).to.equal(null);
       } finally {
         await prisma.organizationBilling.update({ where: { organizationId: orgId }, data: { paymentMethodId: `pm_${orgId}` } });
@@ -316,7 +316,7 @@ describe("client request conflict check, release and quote", () => {
       await quote({ ...FIXED_FEE, amount: { amountMinor: 12.5, currency: "GBP" } }).expect(400);
       await quote({ ...FIXED_FEE, message: "   " }).expect(400);
       await quote({ ...FIXED_FEE, amount: { amountMinor: 0, currency: "GBP" } }).expect(400);
-      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("CLAIMED");
+      expect((await prisma.clientRequestClaim.findFirstOrThrow({ where: { requestId } })).quotedAt).to.equal(null);
     });
   });
 
@@ -329,8 +329,8 @@ describe("client request conflict check, release and quote", () => {
       const row = await prisma.clientRequest.create({
         data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: new Date(), status: "ROUTED", routingExpiresAt: new Date(Date.now() + 48 * HOUR_MS) },
       });
-      const open = (await ClaimRepo.claim(row.id, lawyerId, orgId))!;
-      return { requestId: row.id, claimId: open.id };
+      const { claim: open } = await ClaimRepo.claim(row.id, lawyerId, orgId);
+      return { requestId: row.id, claimId: open!.id };
     }
 
     it("never both quotes and lapses the same claim, and never deadlocks", async () => {
@@ -342,23 +342,26 @@ describe("client request conflict check, release and quote", () => {
         ]);
         expect([quoted, lapsed].filter(Boolean), `round ${round}`).to.have.length(1);
         const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: r.requestId }, include: { claims: true } });
-        expect(row.status).to.equal(quoted ? "QUOTED" : "ROUTED");
+        expect(row.status).to.equal("ROUTED");
         expect(row.claims[0]!.outcome).to.equal(quoted ? null : "LAPSED");
       }
       expect(CLAIM_HOLD_MS).to.equal(24 * HOUR_MS);
     });
 
-    it("never both releases and withdraws the same request, and never deadlocks", async () => {
+    // Several lawyers (phase 5): a release leaves the request ROUTED, so the client can still withdraw
+    // it afterwards. Whichever is first, the claim ends exactly one way and nothing deadlocks.
+    it("ends the claim once when a release and a withdrawal race, and never deadlocks", async () => {
       for (let round = 0; round < ROUNDS; round++) {
         const r = await freshClaim();
         const [released, withdrawn] = await Promise.all([
           ClaimRepo.release({ id: r.claimId, requestId: r.requestId, lawyerId }, { reason: "CAPACITY", note: null }),
-          RequestRepo.withdraw(r.requestId, ["CLAIMED", "QUOTED"]),
+          RequestRepo.withdraw(r.requestId, ["ROUTED"]),
         ]);
-        expect([released, withdrawn.moved].filter(Boolean), `round ${round}`).to.have.length(1);
+        expect(withdrawn.moved, `round ${round}`).to.equal(true);
         const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: r.requestId }, include: { claims: true } });
-        expect(row.status).to.equal(released ? "ROUTED" : "WITHDRAWN");
+        expect(row.status).to.equal("WITHDRAWN");
         expect(row.claims[0]!.outcome).to.equal(released ? "RELEASED" : "WITHDRAWN");
+        expect(withdrawn.heldBy).to.deep.equal(released ? [] : [lawyerId]);
       }
     });
   });
