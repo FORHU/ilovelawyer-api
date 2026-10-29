@@ -42,11 +42,14 @@ const NEXT_STEP: Record<LawyerCountry, string> = {
 const NEXT_STEP_CHOOSE_PLAN =
   "You can now choose your plan or start your free trial. Then turn on Accept client requests on your Profile page.";
 
-/** The lawyer's Profile page on their own site, for the approval email's button. Signed out, the
- * lawyer app signs them in first and brings them back to it; one held by verify before plan is taken
- * on to the plan step. */
-function profileLink(country: LawyerCountry): string {
-  return `${emailLinkOrigin(country, null)}/homepage/profile`;
+/** The approval email's button, on the lawyer's own site: the plan step (/verification) for a lawyer
+ * held by verify before plan, whose onboarding carries on there; otherwise their Profile page, where
+ * they turn on client requests. Signed out, the lawyer app signs them in first and brings them back. */
+function nextStepButton(country: LawyerCountry, choosesPlan: boolean): { buttonLabel: string; buttonLink: string } {
+  const origin = emailLinkOrigin(country, null);
+  return choosesPlan
+    ? { buttonLabel: "Choose your plan", buttonLink: `${origin}/verification` }
+    : { buttonLabel: "Go to your profile", buttonLink: `${origin}/homepage/profile` };
 }
 
 function composeNote(country: LawyerCountry, reason: LawyerRejectionReason, note: string | undefined): string {
@@ -142,7 +145,7 @@ export default class LawyerVerificationSvc {
     const choosesPlan = (await PlanGateSvc.stateOf(userId)) === "CHOOSE_PLAN";
     await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", {
       nextStep: choosesPlan ? NEXT_STEP_CHOOSE_PLAN : NEXT_STEP[country],
-      profileLink: profileLink(country),
+      ...nextStepButton(country, choosesPlan),
     });
 
     return toAdminRow(updated);

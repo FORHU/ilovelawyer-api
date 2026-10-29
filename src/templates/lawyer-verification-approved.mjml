@@ -2,5 +2,5 @@
 <mj-text>Hello {{name}},</mj-text>
 <mj-text>We've checked the registration details in your ilovelawyer lawyer application and approved it.</mj-text>
 <mj-text>{{nextStep}}</mj-text>
-<mj-button href="{{profileLink}}">Go to your profile</mj-button>
+<mj-button href="{{buttonLink}}">{{buttonLabel}}</mj-button>
 <mj-text>If you're signed out on this device, you'll sign in first and then go straight there.</mj-text>

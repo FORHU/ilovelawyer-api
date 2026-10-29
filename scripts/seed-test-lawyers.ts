@@ -5,13 +5,18 @@
  * tenant, its tiers and the practice and case areas.
  *
  *   npm run seed:test-lawyers              create the 100, or put them back as seeded
- *   npm run seed:test-lawyers -- --clean   delete every seeded lawyer (emails @seed.test)
+ *   npm run seed:test-lawyers -- --clean   delete every seeded lawyer (emails @seed.example.com)
  *
  * Everything comes from a fixed random seed, so every run makes the same people: uk.lawyer.042 is
  * always the same lawyer. A run also deletes any other seeded lawyer (an older PH one, say), so the
  * database holds exactly these 100. Each signs in with SEED_LAWYER_PASSWORD (or the fallback
  * below). Nobody gets a card or a subscription, so claiming a request still needs a card added by
  * hand.
+ *
+ * Verify before plan (PlanGateSvc): every lawyer not yet verified (071–100) is held as a new UK
+ * sign-up would be, so signing in lands on /verification: waiting (pending) or the application
+ * form (rejected, unsubmitted). Verified 066–067 are held too, but past verification and with no
+ * plan chosen, so they land on the plan step. Everyone else signed up before it and goes straight in.
  */
 import "dotenv/config";
 import bcrypt from "bcrypt";
@@ -22,7 +27,11 @@ import { USERS_LIST_VERSION_KEY } from "../src/constants/admin.constants";
 import { UK_JURISDICTIONS, type LawyerRegulator, type UkJurisdiction } from "../src/types/client-handoff";
 import PaymentPlanSvc from "../src/services/payment-plan.service";
 
-const EMAIL_DOMAIN = "seed.test";
+// A subdomain of the reserved example.com: Joi's email check rejects the reserved `.test` TLD, so
+// the API refused to sign these lawyers in, and other seeds already use plain @example.com.
+const EMAIL_DOMAIN = "seed.example.com";
+// The domain seeded lawyers used before; still deleted so a re-seed or --clean removes them.
+const LEGACY_EMAIL_DOMAIN = "seed.test";
 const PASSWORD = process.env.SEED_LAWYER_PASSWORD || "Seed-Lawyer-123!";
 const COUNT = 100;
 const SITE = "UK";
@@ -37,6 +46,9 @@ const statusOf = (n: number): Status => (n <= 70 ? "VERIFIED" : n <= 85 ? "PENDI
 const HEAVY = [1, 2, 3];
 const MAX_TIER = [1, 2];
 const PRO_COUNT = 5;
+/** Verified lawyers still to choose a plan (verify before plan); the unverified are all held. */
+const CHOOSE_PLAN = [66, 67];
+const heldBeforePlan = (n: number) => statusOf(n) !== "VERIFIED" || CHOOSE_PLAN.includes(n);
 
 /** Verified lawyers 1–70: who can actually receive requests. */
 type Availability = "accepting" | "paused" | "off" | "capacity";
@@ -348,6 +360,9 @@ async function write(p: Plan, passwordHash: string, now: Date) {
       termsVersion: TERMS_VERSION,
       paymentPlanId: p.tiers[l.tier],
       allowancePeriodStart: now,
+      // Held ones get no plan, so a rerun puts them back on the plan step.
+      verifyBeforePlan: heldBeforePlan(l.n),
+      ...(heldBeforePlan(l.n) ? { planChosenAt: null, planTrialEndsAt: null } : {}),
     };
     const user = await prisma.user.upsert({
       where: { email: l.email },
@@ -366,6 +381,7 @@ async function write(p: Plan, passwordHash: string, now: Date) {
       verificationStatus: l.status,
       verificationNote: l.verificationNote,
       verifiedAt: l.verifiedAt,
+      firstVerifiedAt: l.verifiedAt,
       submittedAt: l.submittedAt,
     };
     const registration = { regulator: l.regulator, registrationNumber: l.registrationNumber, qualifiedJurisdictions: l.jurisdictions };
@@ -396,6 +412,7 @@ function summarise({ lawyers, areas, caseTypes }: Plan) {
   console.log(`Status: ${countBy(lawyers, (l) => l.status).map(([k, v]) => `${k} ${v}`).join(" · ")}  (001–070 verified, 071–085 pending, 086–090 rejected, 091–100 unsubmitted)`);
   console.log(`Tiers: ${countBy(lawyers, (l) => l.tier).map(([k, v]) => `${k} ${v}`).join(" · ")}  (pro: ${emailsOf(lawyers.filter((l) => l.tier === "pro"))}; max: ${emailsOf(lawyers.filter((l) => l.tier === "max"))})`);
   console.log(`Heavy (12+ areas): ${emailsOf(lawyers.filter((l) => l.heavy))}`);
+  console.log(`Verify before plan: 071–100 wait for verification; plan step: ${emailsOf(lawyers.filter((l) => CHOOSE_PLAN.includes(l.n)))}`);
 
   console.log("\nRegulator and Qualified in (all / verified):");
   for (const c of COMBOS) {
@@ -441,7 +458,13 @@ async function bustUsersList() {
 
 /** Seeded lawyers (by email domain), except those in `keep`. */
 async function deleteSeeded(keep: string[] = []) {
-  const { count } = await prisma.user.deleteMany({ where: { role: "LAWYER", email: { endsWith: `@${EMAIL_DOMAIN}`, notIn: keep } } });
+  const { count } = await prisma.user.deleteMany({
+    where: {
+      role: "LAWYER",
+      email: { notIn: keep },
+      OR: [EMAIL_DOMAIN, LEGACY_EMAIL_DOMAIN].map((domain) => ({ email: { endsWith: `@${domain}` } })),
+    },
+  });
   return count;
 }
 

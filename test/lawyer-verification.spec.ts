@@ -229,13 +229,16 @@ describe("LawyerVerificationSvc", () => {
 
     it("links the email to the lawyer's Profile page on their own site, which signs them in first if needed", async () => {
       await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
-      expect(renderedTemplates[0].vars.profileLink).to.match(/^https?:\/\/[^/]+\/homepage\/profile$/);
+      expect(renderedTemplates[0].vars).to.deep.include({ buttonLabel: "Go to your profile" });
+      expect(renderedTemplates[0].vars.buttonLink).to.match(/^https?:\/\/[^/]+\/homepage\/profile$/);
     });
 
-    it("tells a lawyer held by verify before plan to choose a plan next, not to accept requests yet", async () => {
+    it("sends a lawyer held by verify before plan on to the plan step, not to accept requests yet", async () => {
       gate = "CHOOSE_PLAN";
       await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
       expect(renderedTemplates[0].vars.nextStep).to.match(/choose your plan or start your free trial/);
+      expect(renderedTemplates[0].vars).to.deep.include({ buttonLabel: "Choose your plan" });
+      expect(renderedTemplates[0].vars.buttonLink).to.match(/^https?:\/\/[^/]+\/verification$/);
     });
 
     it("records the first verification, which lets a lawyer held by verify before plan in", async () => {
