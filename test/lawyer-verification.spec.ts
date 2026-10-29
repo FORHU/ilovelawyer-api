@@ -92,6 +92,7 @@ describe("LawyerVerificationSvc", () => {
   let restore: (() => void)[];
   let current: StubProfile | null;
   let writes: { userId: string; data: any; confirmed?: string[] }[];
+  let firstVerified: string[];
   let audits: { actorId?: string | null; action: string; targetType?: string; targetId?: string; payload?: object }[];
   let emails: { to: string; subject: string }[];
   let renderedTemplates: { name: string; vars: Record<string, unknown> }[];
@@ -112,7 +113,7 @@ describe("LawyerVerificationSvc", () => {
     renderedTemplates = [];
 
     restore = [
-      stash(LawyerProfileRepo, ["find", "setVerification", "listForAdmin"]),
+      stash(LawyerProfileRepo, ["find", "setVerification", "listForAdmin", "markFirstVerified"]),
       stash(AuthRepo, ["findById"]),
       stash(SecurityAuditSvc, ["record"]),
       stash(mailerModule as any, ["sendEmail"]),
@@ -125,6 +126,8 @@ describe("LawyerVerificationSvc", () => {
       current = { ...current!, ...data, ...(confirmed ? { qualifiedJurisdictions: confirmed } : {}) };
       return adminRow(current!);
     };
+    firstVerified = [];
+    (LawyerProfileRepo as any).markFirstVerified = async (userId: string) => void firstVerified.push(userId);
     (AuthRepo as any).findById = async (id: string) => (current && id === current.userId ? { id, name: "Jane Lawyer", email: "jane@example.com" } : null);
     (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
     (mailerModule as any).sendEmail = async (opts: { to: string; subject: string }) => void emails.push(opts);
@@ -217,6 +220,11 @@ describe("LawyerVerificationSvc", () => {
       ]);
       expect(renderedTemplates[0].name).to.equal("lawyer-verification-approved");
       expect(renderedTemplates[0].vars.nextStep).to.match(/Accept client requests/);
+    });
+
+    it("records the first verification, which lets a lawyer held by verify before plan in", async () => {
+      await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+      expect(firstVerified).to.deep.equal(["lawyer-1"]);
     });
 
     it("needs at least one confirmed jurisdiction for a UK application", async () => {

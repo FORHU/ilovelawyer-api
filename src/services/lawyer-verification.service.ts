@@ -111,11 +111,11 @@ export default class LawyerVerificationSvc {
     }
     const confirmed = country === "UK" ? confirmedJurisdictions : undefined;
 
-    const updated = await LawyerProfileRepo.setVerification(
-      userId,
-      { verificationStatus: "VERIFIED", verificationNote: null, verifiedAt: new Date() },
-      confirmed
-    );
+    const verifiedAt = new Date();
+    const updated = await LawyerProfileRepo.setVerification(userId, { verificationStatus: "VERIFIED", verificationNote: null, verifiedAt }, confirmed);
+    // Lets a lawyer held by verify before plan in, for good: a later edit back to PENDING doesn't
+    // take it away.
+    await LawyerProfileRepo.markFirstVerified(userId, verifiedAt);
 
     const trimmedNote = note?.trim();
     await SecurityAuditSvc.record({

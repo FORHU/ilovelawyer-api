@@ -101,6 +101,8 @@ export default class AuthRepo {
     tenantId?: string | null;
     paymentPlanId?: string | null;
     termsVersion?: string | null;
+    /** Verify before plan (PlanGateSvc): a UK lawyer's sign-up. */
+    verifyBeforePlan?: boolean;
   }) {
     return bustUsersList(
       await prisma.user.create({
@@ -112,6 +114,7 @@ export default class AuthRepo {
           role: data.role,
           tenantId: data.tenantId,
           paymentPlanId: data.paymentPlanId,
+          verifyBeforePlan: data.verifyBeforePlan ?? false,
           freeCreditUsd: FREE_CREDIT_USD,
           ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
         },
@@ -226,12 +229,14 @@ export default class AuthRepo {
   /** Starts a solo lawyer's free trial of their tier (PLAN_TRIAL_DAYS), once: when the account is
    * both approved and solo, whichever happens last — so a UK lawyer waiting on approval doesn't
    * spend trial days in the queue. Never for a trial guest, a firm lawyer, a lawyer already paying,
-   * or one whose trial already started (a re-approval doesn't restart it). */
+   * one whose trial already started (a re-approval doesn't restart it), or a lawyer held by verify
+   * before plan, whose trial starts when they choose it (PlanGateSvc.startWithoutPaying). */
   static async startPlanTrial(userId: string, now: Date = new Date()) {
     await prisma.user.updateMany({
       where: {
         id: userId,
         role: "LAWYER",
+        verifyBeforePlan: false,
         tenantId: { not: null },
         approvalStatus: "ACTIVE",
         soloChosenAt: { not: null },
@@ -354,6 +359,8 @@ export default class AuthRepo {
     role: Role;
     tenantId?: string | null;
     termsVersion: string;
+    /** Verify before plan (PlanGateSvc): a UK lawyer's sign-up. */
+    verifyBeforePlan?: boolean;
   }) {
     const email = normalizeEmail(data.email);
     const base = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
@@ -376,6 +383,7 @@ export default class AuthRepo {
               termsAcceptedAt: new Date(),
               termsVersion: data.termsVersion,
               freeCreditUsd: FREE_CREDIT_USD,
+              verifyBeforePlan: data.verifyBeforePlan ?? false,
             },
           })
         );

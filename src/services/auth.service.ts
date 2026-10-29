@@ -82,6 +82,7 @@ export default class AuthSvc {
         tenantId,
         paymentPlanId,
         termsVersion: acceptedTerms ? termsVersionFor(role) : null,
+        verifyBeforePlan: AuthSvc.verifiesBeforePlan(role, tenantCode),
       });
     } catch (err) {
       // The findByEmail/findByUsername checks above aren't atomic with this insert — a
@@ -120,6 +121,12 @@ export default class AuthSvc {
    * says nothing about the region. */
   private static signupTenantCode(role: Role, requestTenantCode: TenantCode | null): TenantCode | null {
     return role === "USER" ? CLIENT_TENANT_CODE : requestTenantCode;
+  }
+
+  /** Verify before plan (PlanGateSvc) holds new lawyers on the UK site only: there the Lawyer
+   * Application is the bar check; on PH it's a badge. */
+  static verifiesBeforePlan(role: Role, tenantCode: TenantCode | null): boolean {
+    return role === "LAWYER" && tenantCode === "UK";
   }
 
   /** The 409 for a signup whose email already has an account. An email registered in the lawyer
@@ -615,6 +622,7 @@ export default class AuthSvc {
           role,
           tenantId,
           termsVersion: termsVersionFor(role),
+          verifyBeforePlan: AuthSvc.verifiesBeforePlan(role, tenantCode),
         });
         created = true;
       } catch (err) {

@@ -4,6 +4,7 @@ import HttpError from "../utils/http-error";
 import { MAX_CASES_PER_ACCOUNT, CASE_SPEND_LIMIT_USD } from "../config";
 import { emitToUser } from "../lib/socket";
 import { LIVE_SUBSCRIPTION_STATUSES } from "../constants/plan-trial.constants";
+import PlanGateSvc from "./plan-gate.service";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -33,6 +34,9 @@ export interface AllowanceInfo {
  * subscription is locked the same way, whatever is left of their allowance or top-up credit: they
  * read everything, but start no AI work and create no case until they subscribe (PLAN_TRIAL_ENDED).
  *
+ * A UK lawyer held by verify before plan (PlanGateSvc) does none of these until their application
+ * is verified (VERIFICATION_REQUIRED) and they've chosen a plan (PLAN_NOT_CHOSEN).
+ *
  * The ceiling itself is still never stated as a fixed number in an error. The dollar amount *left*
  * and the percentage used, however, ARE shown to the lawyer (remainingAllowanceUsd/consumedPct on
  * the account — product decision, so a lawyer can see a top-up applied and isn't "being cheated"). */
@@ -47,6 +51,7 @@ export default class AccountLimitsSvc {
       select: { role: true, tenantId: true, caseLimitNotifiedAt: true, planTrialEndsAt: true, paymentPlan: { select: { caseLimit: true } } },
     });
     if (user?.role !== "LAWYER") return;
+    await PlanGateSvc.assertOpen(userId, db);
     if (await AccountLimitsSvc.planTrialOver(userId, user.planTrialEndsAt, db)) {
       throw new HttpError("Your free trial has ended. Choose a plan to create new cases.", 403, "PLAN_TRIAL_ENDED");
     }
@@ -76,6 +81,7 @@ export default class AccountLimitsSvc {
       select: { role: true, planTrialEndsAt: true, paymentPlan: { select: { clientRequestLimit: true } } },
     });
     if (user?.role !== "LAWYER") return;
+    await PlanGateSvc.assertOpen(userId, db);
     if (await AccountLimitsSvc.planTrialOver(userId, user.planTrialEndsAt, db, now)) {
       throw new HttpError("Your free trial has ended. Choose a plan to take on new clients.", 403, "PLAN_TRIAL_ENDED");
     }
@@ -115,6 +121,7 @@ export default class AccountLimitsSvc {
   /** Throws once a lawyer's account has used its AI allowance, across every case. Spend is only
    * known after a call ends, so the request that crosses the line still finishes. */
   static async assertAccountHasBudget(userId: string, db: typeof prisma = prisma) {
+    await PlanGateSvc.assertOpen(userId, db);
     const info = await AccountLimitsSvc.allowanceInfo(userId, db);
     if (info.trialEnded) {
       throw new HttpError("Your free trial has ended. You can still read everything. Choose a plan to keep going.", 403, "PLAN_TRIAL_ENDED");
