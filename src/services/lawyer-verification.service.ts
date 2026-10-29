@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import type { LawyerVerificationStatus } from "@prisma/client";
 import LawyerProfileRepo, { type AdminLawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import AuthRepo from "../repositories/auth.repository";
@@ -7,6 +8,7 @@ import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import { emailLinkOrigin } from "../utils/tenant-host";
+import { LOGIN_LINK_EXPIRY_MS } from "../constants";
 import PlanGateSvc from "./plan-gate.service";
 import type { UkJurisdiction } from "../types/client-handoff";
 import {
@@ -42,14 +44,18 @@ const NEXT_STEP: Record<LawyerCountry, string> = {
 const NEXT_STEP_CHOOSE_PLAN =
   "You can now choose your plan or start your free trial. Then turn on Accept client requests on your Profile page.";
 
-/** The approval email's button, on the lawyer's own site: the plan step (/verification) for a lawyer
- * held by verify before plan, whose onboarding carries on there; otherwise their Profile page, where
- * they turn on client requests. Signed out, the lawyer app signs them in first and brings them back. */
-function nextStepButton(country: LawyerCountry, choosesPlan: boolean): { buttonLabel: string; buttonLink: string } {
-  const origin = emailLinkOrigin(country, null);
+/** The approval email's button, on the lawyer's own site: a one-time login link, same as the account
+ * approval email's (AdminSvc.transition), that signs them in and lands them on the plan step
+ * (/verification) for a lawyer held by verify before plan, whose onboarding carries on there;
+ * otherwise their Profile page, where they turn on client requests. Shares User.loginLinkToken, so
+ * it replaces an unused account approval link. */
+async function nextStepButton(userId: string, country: LawyerCountry, choosesPlan: boolean): Promise<{ buttonLabel: string; buttonLink: string }> {
+  const token = crypto.randomUUID();
+  await AuthRepo.setLoginLinkToken(userId, token, new Date(Date.now() + LOGIN_LINK_EXPIRY_MS));
+  const loginLink = (next: string) => `${emailLinkOrigin(country, null)}/login-link?token=${token}&next=${encodeURIComponent(next)}`;
   return choosesPlan
-    ? { buttonLabel: "Choose your plan", buttonLink: `${origin}/verification` }
-    : { buttonLabel: "Go to your profile", buttonLink: `${origin}/homepage/profile` };
+    ? { buttonLabel: "Choose your plan", buttonLink: loginLink("/verification") }
+    : { buttonLabel: "Go to your profile", buttonLink: loginLink("/homepage/profile") };
 }
 
 function composeNote(country: LawyerCountry, reason: LawyerRejectionReason, note: string | undefined): string {
@@ -143,9 +149,13 @@ export default class LawyerVerificationSvc {
     });
 
     const choosesPlan = (await PlanGateSvc.stateOf(userId)) === "CHOOSE_PLAN";
+    // Signs a lawyer held by verify before plan out of the waiting page, same as account approval
+    // (AdminSvc.transition): a refresh sends them to log in, or the email's login link signs them
+    // straight into the plan step.
+    if (choosesPlan) await AuthRepo.deleteSessionsByUserId(userId);
     await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", {
       nextStep: choosesPlan ? NEXT_STEP_CHOOSE_PLAN : NEXT_STEP[country],
-      ...nextStepButton(country, choosesPlan),
+      ...(await nextStepButton(userId, country, choosesPlan)),
     });
 
     return toAdminRow(updated);
