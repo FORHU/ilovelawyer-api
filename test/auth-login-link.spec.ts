@@ -1,6 +1,6 @@
 /** AuthSvc.consumeLoginLink — the counterpart to resetPassword: consumes the one-time "Login"
- * link token minted by AdminSvc.transition (see admin-session-revocation.spec.ts) and mints a
- * brand-new session.
+ * link token minted by AdminSvc.transition (see admin-session-revocation.spec.ts) or
+ * LawyerVerificationSvc.verify and mints a brand-new session.
  *
  * No live Postgres: AuthRepo is monkeypatched on its CommonJS module object, same idiom as
  * test/decision-record-service.spec.ts.

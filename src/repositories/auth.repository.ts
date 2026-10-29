@@ -101,6 +101,8 @@ export default class AuthRepo {
     tenantId?: string | null;
     paymentPlanId?: string | null;
     termsVersion?: string | null;
+    /** Verify before plan (PlanGateSvc): a UK lawyer's sign-up. */
+    verifyBeforePlan?: boolean;
   }) {
     return bustUsersList(
       await prisma.user.create({
@@ -112,6 +114,7 @@ export default class AuthRepo {
           role: data.role,
           tenantId: data.tenantId,
           paymentPlanId: data.paymentPlanId,
+          verifyBeforePlan: data.verifyBeforePlan ?? false,
           freeCreditUsd: FREE_CREDIT_USD,
           ...(data.termsVersion ? { termsAcceptedAt: new Date(), termsVersion: data.termsVersion } : {}),
         },
@@ -226,12 +229,16 @@ export default class AuthRepo {
   /** Starts a solo lawyer's free trial of their tier (PLAN_TRIAL_DAYS), once: when the account is
    * both approved and solo, whichever happens last — so a UK lawyer waiting on approval doesn't
    * spend trial days in the queue. Never for a trial guest, a firm lawyer, a lawyer already paying,
-   * or one whose trial already started (a re-approval doesn't restart it). */
-  static async startPlanTrial(userId: string, now: Date = new Date()) {
-    await prisma.user.updateMany({
+   * or one whose trial already started (a re-approval doesn't restart it). A lawyer held by verify
+   * before plan gets theirs only when they choose it on the plan step (PlanGateSvc.startWithoutPaying
+   * passes `chosenAfterVerification`), under the same guards, which also records the choice.
+   * Conditional, so two requests at once start it once. Returns whether it started. */
+  static async startPlanTrial(userId: string, now: Date = new Date(), { chosenAfterVerification = false } = {}): Promise<boolean> {
+    const { count } = await prisma.user.updateMany({
       where: {
         id: userId,
         role: "LAWYER",
+        verifyBeforePlan: chosenAfterVerification,
         tenantId: { not: null },
         approvalStatus: "ACTIVE",
         soloChosenAt: { not: null },
@@ -239,8 +246,18 @@ export default class AuthRepo {
         planTrialEndsAt: null,
         paymentPlanSubscriptions: { none: { status: { in: LIVE_SUBSCRIPTION_STATUSES } } },
       },
-      data: { planTrialEndsAt: new Date(now.getTime() + PLAN_TRIAL_DAYS * DAY_MS) },
+      data: {
+        planTrialEndsAt: new Date(now.getTime() + PLAN_TRIAL_DAYS * DAY_MS),
+        ...(chosenAfterVerification ? { planChosenAt: now } : {}),
+      },
     });
+    return count > 0;
+  }
+
+  /** Whether the account has a live paid subscription (LIVE_SUBSCRIPTION_STATUSES): a chosen plan
+   * for the plan gate (PlanGateSvc), and what keeps an ended trial unlocked (AccountLimitsSvc). */
+  static async hasLiveSubscription(userId: string, db: typeof prisma = prisma): Promise<boolean> {
+    return !!(await db.paymentPlanSubscription.findFirst({ where: { userId, status: { in: LIVE_SUBSCRIPTION_STATUSES } }, select: { id: true } }));
   }
 
   /** No bustUsersList: onboardingCompleted isn't a column AdminSvc.listUsers shows. */
@@ -354,6 +371,8 @@ export default class AuthRepo {
     role: Role;
     tenantId?: string | null;
     termsVersion: string;
+    /** Verify before plan (PlanGateSvc): a UK lawyer's sign-up. */
+    verifyBeforePlan?: boolean;
   }) {
     const email = normalizeEmail(data.email);
     const base = email.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "").slice(0, 20) || "user";
@@ -376,6 +395,7 @@ export default class AuthRepo {
               termsAcceptedAt: new Date(),
               termsVersion: data.termsVersion,
               freeCreditUsd: FREE_CREDIT_USD,
+              verifyBeforePlan: data.verifyBeforePlan ?? false,
             },
           })
         );
@@ -538,6 +558,16 @@ export default class AuthRepo {
 
   static async setLoginLinkToken(userId: string, token: string, expiresAt: Date) {
     return prisma.user.update({ where: { id: userId }, data: { loginLinkToken: token, loginLinkTokenExpiry: expiresAt } });
+  }
+
+  /** The account's login link token while it's still usable (unused and unexpired), else null —
+   * so a second email can carry the same link instead of replacing one not clicked yet. */
+  static async findLiveLoginLinkToken(userId: string): Promise<string | null> {
+    const user = await prisma.user.findFirst({
+      where: { id: userId, loginLinkToken: { not: null }, loginLinkTokenExpiry: { gt: new Date() } },
+      select: { loginLinkToken: true },
+    });
+    return user?.loginLinkToken ?? null;
   }
 
   /** Race-safe single-use consumption, same pattern as consumeResetToken: the WHERE clause on

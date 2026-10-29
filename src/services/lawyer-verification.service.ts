@@ -1,11 +1,16 @@
+import crypto from "crypto";
 import type { LawyerVerificationStatus } from "@prisma/client";
 import LawyerProfileRepo, { type AdminLawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import AuthRepo from "../repositories/auth.repository";
 import SecurityAuditSvc from "./security-audit.service";
 import { toDto } from "./lawyer-profile.service";
 import HttpError from "../utils/http-error";
+import logger from "../utils/logger";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
+import { emailLinkOrigin } from "../utils/tenant-host";
+import { LOGIN_LINK_EXPIRY_MS } from "../constants";
+import PlanGateSvc from "./plan-gate.service";
 import type { UkJurisdiction } from "../types/client-handoff";
 import {
   REJECTION_REASONS_BY_COUNTRY,
@@ -35,6 +40,40 @@ const NEXT_STEP: Record<LawyerCountry, string> = {
   UK: "You can now turn on Accept client requests on your Profile page.",
   PH: "Your profile now shows an Approved badge.",
 };
+
+/** The next step for a lawyer held by verify before plan (PlanGateSvc), who isn't in the app yet. */
+const NEXT_STEP_CHOOSE_PLAN =
+  "You can now choose your plan or start your free trial. Then turn on Accept client requests on your Profile page.";
+
+const SIGNED_OUT_NOTE = "If you're signed out on this device, you'll sign in first and then go straight there.";
+const LOGIN_LINK_NOTE = "This button signs you in. It works once and will expire in 7 days.";
+
+/** The approval email's button, on the lawyer's own site. A lawyer held by verify before plan goes to
+ * the plan step (/verification), where their onboarding carries on, through a one-time login link
+ * like the account approval email's (AdminSvc.transition) — verify signs them out of the waiting
+ * page. That needs an approved account (the link only signs in ACTIVE ones) and shares
+ * User.loginLinkToken, so a link not clicked yet is reused rather than replaced. Everyone else, and a
+ * held lawyer still waiting on account approval, gets a plain link: the app signs them in first if
+ * needed. */
+async function nextStepButton(
+  user: { id: string; approvalStatus: string },
+  country: LawyerCountry,
+  choosesPlan: boolean,
+): Promise<{ buttonLabel: string; buttonLink: string; linkNote: string }> {
+  const origin = emailLinkOrigin(country, null);
+  if (!choosesPlan) return { buttonLabel: "Go to your profile", buttonLink: `${origin}/homepage/profile`, linkNote: SIGNED_OUT_NOTE };
+  if (user.approvalStatus !== "ACTIVE") return { buttonLabel: "Choose your plan", buttonLink: `${origin}/verification`, linkNote: SIGNED_OUT_NOTE };
+  let token = await AuthRepo.findLiveLoginLinkToken(user.id);
+  if (!token) {
+    token = crypto.randomUUID();
+    await AuthRepo.setLoginLinkToken(user.id, token, new Date(Date.now() + LOGIN_LINK_EXPIRY_MS));
+  }
+  return {
+    buttonLabel: "Choose your plan",
+    buttonLink: `${origin}/login-link?token=${token}&next=${encodeURIComponent("/verification")}`,
+    linkNote: LOGIN_LINK_NOTE,
+  };
+}
 
 function composeNote(country: LawyerCountry, reason: LawyerRejectionReason, note: string | undefined): string {
   const trimmed = note?.trim();
@@ -84,11 +123,25 @@ export default class LawyerVerificationSvc {
     return { ...profile, country: profile.country as LawyerCountry };
   }
 
-  private static async notify(userId: string, template: string, subject: string, vars: Record<string, string>) {
-    const user = await AuthRepo.findById(userId);
-    if (!user) return;
-    const html = await renderTemplate(template, { name: user.name || "there", ...vars });
-    await sendEmail({ to: user.email, subject, html });
+  /** Emails the lawyer the decision. Non-fatal by design: the decision is already saved by then, and
+   * a retry would hit assertPending, so a mail failure must not turn into an error for the admin.
+   * Returns whether the email went out. */
+  private static async notify(
+    userId: string,
+    template: string,
+    subject: string,
+    varsFor: (user: { id: string; approvalStatus: string }) => Record<string, string> | Promise<Record<string, string>>,
+  ): Promise<boolean> {
+    try {
+      const user = await AuthRepo.findById(userId);
+      if (!user) return false;
+      const html = await renderTemplate(template, { name: user.name || "there", ...(await varsFor(user)) });
+      await sendEmail({ to: user.email, subject, html });
+      return true;
+    } catch (err) {
+      logger.error(`Failed to send ${template} email`, { err, userId });
+      return false;
+    }
   }
 
   /** The admin queue for one site and status, oldest submission first. */
@@ -111,11 +164,11 @@ export default class LawyerVerificationSvc {
     }
     const confirmed = country === "UK" ? confirmedJurisdictions : undefined;
 
-    const updated = await LawyerProfileRepo.setVerification(
-      userId,
-      { verificationStatus: "VERIFIED", verificationNote: null, verifiedAt: new Date() },
-      confirmed
-    );
+    const verifiedAt = new Date();
+    const updated = await LawyerProfileRepo.setVerification(userId, { verificationStatus: "VERIFIED", verificationNote: null, verifiedAt }, confirmed);
+    // Lets a lawyer held by verify before plan in, for good: a later edit back to PENDING doesn't
+    // take it away.
+    await LawyerProfileRepo.markFirstVerified(userId, verifiedAt);
 
     const trimmedNote = note?.trim();
     await SecurityAuditSvc.record({
@@ -126,7 +179,16 @@ export default class LawyerVerificationSvc {
       payload: { from: "PENDING", to: "VERIFIED", ...(confirmed ? { confirmedJurisdictions: confirmed } : {}), ...(trimmedNote ? { note: trimmedNote } : {}) },
     });
 
-    await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", { nextStep: NEXT_STEP[country] });
+    const choosesPlan = (await PlanGateSvc.stateOf(userId)) === "CHOOSE_PLAN";
+    const sent = await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", async (user) => ({
+      nextStep: choosesPlan ? NEXT_STEP_CHOOSE_PLAN : NEXT_STEP[country],
+      ...(await nextStepButton(user, country, choosesPlan)),
+    }));
+    // Signs a lawyer held by verify before plan out of the waiting page, same as account approval
+    // (AdminSvc.transition): a refresh sends them to log in, or the email's login link signs them
+    // straight into the plan step. Only once the email is out, so they're never signed out with
+    // nothing telling them why.
+    if (choosesPlan && sent) await AuthRepo.deleteSessionsByUserId(userId);
 
     return toAdminRow(updated);
   }
@@ -152,7 +214,7 @@ export default class LawyerVerificationSvc {
       payload: { from: "PENDING", to: "REJECTED", reason },
     });
 
-    await LawyerVerificationSvc.notify(userId, "lawyer-verification-rejected", "Your lawyer application wasn't approved", { reason: composedNote });
+    await LawyerVerificationSvc.notify(userId, "lawyer-verification-rejected", "Your lawyer application wasn't approved", () => ({ reason: composedNote }));
 
     return toAdminRow(updated);
   }

@@ -40,6 +40,7 @@ function empty(country: LawyerCountry): ProfileFields {
     verificationStatus: "UNSUBMITTED",
     verificationNote: null,
     verifiedAt: null,
+    firstVerifiedAt: null,
     submittedAt: null,
   };
 }

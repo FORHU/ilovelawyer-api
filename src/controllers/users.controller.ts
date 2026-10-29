@@ -7,6 +7,7 @@ import SecurityAuditSvc from "../services/security-audit.service";
 import AvatarSvc from "../services/avatar.service";
 import GoogleCalendarSvc from "../services/google-calendar.service";
 import ProductTourSvc from "../services/product-tour.service";
+import PlanGateSvc from "../services/plan-gate.service";
 import HttpError from "../utils/http-error";
 import { clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
 import { updateMeSchema, changePasswordSchema, deleteMeSchema, connectGoogleCalendarSchema, saveProductTourSchema } from "../validation/users.validation";
@@ -29,6 +30,17 @@ export default class UsersCtrl {
     if (!(await OrganizationRepo.findOwnSite(user.id))) throw new HttpError("Your account has no site (UK or PH).", 409, "NO_SITE");
     await AuthRepo.setSoloChosen(user.id);
     return res.status(200).json(await UsersSvc.getMe(user.id));
+  }
+
+  /** GET /api/users/me/plan-gate — { state }: OPEN, AWAITING_VERIFICATION or CHOOSE_PLAN. */
+  static async planGate(req: Request, res: Response) {
+    return res.status(200).json({ state: await PlanGateSvc.stateOf(req.user.userId) });
+  }
+
+  /** POST /api/users/me/plan-gate/start — the plan step's "go on without paying"; returns { state }. */
+  static async startWithoutPaying(req: Request, res: Response) {
+    await PlanGateSvc.startWithoutPaying(req.user.userId);
+    return res.status(200).json({ state: await PlanGateSvc.stateOf(req.user.userId) });
   }
 
   static async completeSetup(req: Request, res: Response) {
