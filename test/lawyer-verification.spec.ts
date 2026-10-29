@@ -253,7 +253,7 @@ describe("LawyerVerificationSvc", () => {
         gate = "CHOOSE_PLAN";
       });
 
-      it("is sent on to the plan step through a one-time login link, then signed out of the waiting page", async () => {
+      it("is sent on to the plan step through a one-time login link, and stays signed in for the waiting page to move them on", async () => {
         const before = Date.now();
         await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
         expect(renderedTemplates[0].vars.nextStep).to.match(/choose your plan or start your free trial/);
@@ -266,7 +266,7 @@ describe("LawyerVerificationSvc", () => {
         expect(link.pathname).to.equal("/login-link");
         expect(link.searchParams.get("token")).to.equal(loginLinks[0].token);
         expect(link.searchParams.get("next")).to.equal("/verification");
-        expect(signedOut).to.deep.equal(["lawyer-1"]);
+        expect(signedOut).to.deep.equal([]);
       });
 
       it("reuses a login link not clicked yet instead of replacing it", async () => {
@@ -283,13 +283,12 @@ describe("LawyerVerificationSvc", () => {
         expect(renderedTemplates[0].vars.buttonLink).to.match(/^https?:\/\/[^/]+\/verification$/);
       });
 
-      it("isn't signed out when the email fails, and the admin's verify still succeeds", async () => {
+      it("is still verified when the email fails, without an error for the admin", async () => {
         (mailerModule as any).sendEmail = async () => {
           throw new Error("smtp down");
         };
         const result = await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
         expect(result.profile.verification.status).to.equal("VERIFIED");
-        expect(signedOut).to.deep.equal([]);
       });
     });
 
