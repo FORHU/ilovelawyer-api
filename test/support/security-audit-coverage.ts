@@ -95,6 +95,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "PUT /users/me/tour/:track": UI_STATE,
   "POST /users/me/setup/complete": UI_STATE,
   "POST /users/me/solo": UI_STATE,
+  "POST /users/me/plan-gate/start": UI_STATE,
   "POST /users/me/billing/card/setup-session": ["account.payment_card_updated"],
   "POST /admin/users/:id/export": ["export.user_data"],
   "POST /admin/users/:id/approve": ["admin.user.approved"],
