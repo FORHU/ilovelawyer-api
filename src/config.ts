@@ -154,11 +154,10 @@ export const FIELD_ENCRYPTION_OLD_KEYS = process.env.FIELD_ENCRYPTION_OLD_KEYS a
 /** Field-level encryption of IntakeMessage.content/pendingReplyContent
  * (src/utils/intake-field-crypto.ts) — a deliberately separate key and implementation from
  * FIELD_ENCRYPTION_KEY above, so the client/intake pipeline shares nothing with the lawyer side
- * (see docs/adr, the 2026-10-28 intake-pipeline separation). Regionalised like
- * LEGAL_CHAT_MODEL_UK: one secret now, a _PH variant added when that region needs its own value. */
+ * (see docs/adr, the 2026-10-28 intake-pipeline separation). One env var, a different value set
+ * per deployed environment (dev/UK/PH) rather than a per-region variable name. No key rotation. */
 export const INTAKE_FIELD_ENCRYPTION_ENABLED = process.env.INTAKE_FIELD_ENCRYPTION_ENABLED === "true";
-export const INTAKE_FIELD_ENCRYPTION_KEY_UK = process.env.INTAKE_FIELD_ENCRYPTION_KEY_UK as string | undefined;
-export const INTAKE_FIELD_ENCRYPTION_OLD_KEYS_UK = process.env.INTAKE_FIELD_ENCRYPTION_OLD_KEYS_UK as string | undefined;
+export const INTAKE_FIELD_ENCRYPTION_KEY = process.env.INTAKE_FIELD_ENCRYPTION_KEY as string | undefined;
 export const CHAT_WONDER_API_URL = (process.env.CHAT_WONDER_API_URL || "").replace(/\/+$/, "");
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
 /** juris.ph public API root (no version/segment). juris-ph.ts appends `/v1/...` for the

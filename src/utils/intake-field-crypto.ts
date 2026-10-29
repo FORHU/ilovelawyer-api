@@ -1,30 +1,30 @@
 import crypto from "crypto";
-import { INTAKE_FIELD_ENCRYPTION_ENABLED, INTAKE_FIELD_ENCRYPTION_KEY_UK, INTAKE_FIELD_ENCRYPTION_OLD_KEYS_UK } from "../config";
+import { INTAKE_FIELD_ENCRYPTION_ENABLED, INTAKE_FIELD_ENCRYPTION_KEY } from "../config";
 import logger from "./logger";
 
 /** Field-level encryption for IntakeMessage — the client/intake pipeline's own copy of
  * field-crypto.ts, not an import of it. The two are deliberately separate implementations of the
  * same method (AES-256-GCM, `enc1:<keyId>:<iv>:<tag>:<ciphertext>`, label bound into the AEAD
- * tag, key-rotation by keyId) with separate keys, per the 2026-10-28 intake-pipeline separation:
- * nothing about intake chat may share code, a table, or an encryption mechanism with the lawyer
- * side, even a pure, already-correct helper function. That has a real cost — a bugfix to one
- * implementation does not automatically reach the other, so a fix made here should be checked
- * against field-crypto.ts too, and vice versa — accepted deliberately, not an oversight.
+ * tag) with separate keys, per the 2026-10-28 intake-pipeline separation: nothing about intake
+ * chat may share code, a table, or an encryption mechanism with the lawyer side, even a pure,
+ * already-correct helper function. That has a real cost — a bugfix to one implementation does not
+ * automatically reach the other, so a fix made here should be checked against field-crypto.ts
+ * too, and vice versa — accepted deliberately, not an oversight.
  *
- * Off by default (INTAKE_FIELD_ENCRYPTION_ENABLED). Reading never depends on the switch: a value
- * that carries the prefix is opened whenever a matching key is configured, so turning the switch
- * off never strands anything already sealed. */
+ * One key only, no rotation: INTAKE_FIELD_ENCRYPTION_KEY, a different value per environment (not
+ * per region — there is no _UK/_PH split here). Off by default (INTAKE_FIELD_ENCRYPTION_ENABLED).
+ * Reading never depends on the switch: a value that carries the prefix is opened whenever the
+ * configured key matches, so turning the switch off never strands anything already sealed. */
 
 export interface IntakeFieldCryptoConfig {
   enabled: boolean;
   key?: string;
-  oldKeys?: string;
 }
 
 const PREFIX = "enc1";
 
 function fromEnv(): IntakeFieldCryptoConfig {
-  return { enabled: INTAKE_FIELD_ENCRYPTION_ENABLED, key: INTAKE_FIELD_ENCRYPTION_KEY_UK, oldKeys: INTAKE_FIELD_ENCRYPTION_OLD_KEYS_UK };
+  return { enabled: INTAKE_FIELD_ENCRYPTION_ENABLED, key: INTAKE_FIELD_ENCRYPTION_KEY };
 }
 
 /** A 32-byte key given as 64 hex chars or base64; null for anything else. */
@@ -49,26 +49,13 @@ export function currentIntakeKeyId(cfg: IntakeFieldCryptoConfig = fromEnv()): st
   return key ? keyIdOf(key) : null;
 }
 
-let keyCache: { signature: string; keys: Map<string, Buffer> } | null = null;
-
-function keysById(cfg: IntakeFieldCryptoConfig): Map<string, Buffer> {
-  const signature = `${cfg.key ?? ""}|${cfg.oldKeys ?? ""}`;
-  if (keyCache?.signature === signature) return keyCache.keys;
-  const all = [cfg.key, ...(cfg.oldKeys ?? "").split(",")].map(parseKey).filter((k): k is Buffer => k !== null);
-  const keys = new Map(all.map((k) => [keyIdOf(k), k]));
-  keyCache = { signature, keys };
-  return keys;
-}
-
 export function isIntakeEncryptedField(value: unknown): value is string {
   return typeof value === "string" && value.startsWith(`${PREFIX}:`);
 }
 
 /** What the startup log says, so nobody has to guess whether intake sealing is on. */
-export function intakeFieldEncryptionStatus(cfg: IntakeFieldCryptoConfig = fromEnv()): { enabled: boolean; keyConfigured: boolean; previousKeys: number } {
-  const current = currentKey(cfg);
-  const previous = [...keysById(cfg).values()].filter((k) => !current || !k.equals(current)).length;
-  return { enabled: cfg.enabled, keyConfigured: current !== null, previousKeys: previous };
+export function intakeFieldEncryptionStatus(cfg: IntakeFieldCryptoConfig = fromEnv()): { enabled: boolean; keyConfigured: boolean } {
+  return { enabled: cfg.enabled, keyConfigured: currentKey(cfg) !== null };
 }
 
 export function intakeFieldEncryptionEnabled(cfg: IntakeFieldCryptoConfig = fromEnv()): boolean {
@@ -78,7 +65,7 @@ export function intakeFieldEncryptionEnabled(cfg: IntakeFieldCryptoConfig = from
 /** Seals `plain`. Throws when no valid key is configured. */
 export function encryptIntakeField(plain: string, label: string, cfg: IntakeFieldCryptoConfig = fromEnv()): string {
   const key = currentKey(cfg);
-  if (!key) throw new Error("INTAKE_FIELD_ENCRYPTION_KEY_UK is not configured (32 bytes, base64 or 64 hex chars)");
+  if (!key) throw new Error("INTAKE_FIELD_ENCRYPTION_KEY is not configured (32 bytes, base64 or 64 hex chars)");
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(Buffer.from(label, "utf8"));
@@ -86,14 +73,15 @@ export function encryptIntakeField(plain: string, label: string, cfg: IntakeFiel
   return [PREFIX, keyIdOf(key), iv.toString("base64"), cipher.getAuthTag().toString("base64"), ciphertext.toString("base64")].join(":");
 }
 
-/** The text inside a sealed value, or null when it cannot be opened. A value without the prefix is
- * returned as it is. */
+/** The text inside a sealed value, or null when it cannot be opened (wrong/missing key, or the
+ * value was sealed under a key that is no longer configured — there is no old-key fallback). A
+ * value without the prefix is returned as it is. */
 export function decryptIntakeField(stored: string, label: string, cfg: IntakeFieldCryptoConfig = fromEnv()): string | null {
   if (!isIntakeEncryptedField(stored)) return stored;
   const [, id, iv, tag, ciphertext] = stored.split(":");
   if (!id || !iv || !tag || !ciphertext) return null;
-  const key = keysById(cfg).get(id);
-  if (!key) return null;
+  const key = currentKey(cfg);
+  if (!key || keyIdOf(key) !== id) return null;
   try {
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64"));
     decipher.setAAD(Buffer.from(label, "utf8"));
