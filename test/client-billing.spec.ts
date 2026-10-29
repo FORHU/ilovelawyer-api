@@ -9,7 +9,7 @@ import ClientPaymentRepo from "../src/repositories/client-payment.repository";
 import ClientCaseSvc, { type ClientWorkspace } from "../src/services/client-case.service";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
 import CaseSvc from "../src/services/case.service";
-import ChatSvc from "../src/services/chat.service";
+import IntakeChatSvc from "../src/services/intake-chat.service";
 import CaseAreaRepo from "../src/repositories/case-area.repository";
 import { dummyClientPaymentProvider, setClientPaymentProvider } from "../src/payments/client-payment-provider";
 import { CASE_CREDITS as CLIENT_CASE_CREDITS, clientPriceRows, installClientPricing, welcomePromo, type ClientPricingState } from "./support/client-pricing-fixture";
@@ -196,7 +196,7 @@ describe("Client app billing", () => {
     let calls: string[];
 
     beforeEach(() => {
-      const fns = [stash(CaseSvc, ["create"]), stash(ChatSvc, ["createConsultation", "enqueueChatGeneration"]), stash(ClientCaseRepo, ["findById"]), stash(CaseAreaRepo, ["list"])];
+      const fns = [stash(CaseSvc, ["create"]), stash(IntakeChatSvc, ["enqueueIntakeGeneration"]), stash(ClientCaseRepo, ["findById"]), stash(CaseAreaRepo, ["list"])];
       restoreMore = () => fns.forEach((f) => f());
       (CaseAreaRepo as any).list = async () => [{ id: "a", country: "UK", code: "PROPERTY", name: "Property", description: "", isActive: true, sortOrder: 0 }];
       calls = [];
@@ -205,10 +205,9 @@ describe("Client app billing", () => {
         credits["case-1"] = data.clientCredits;
         return { id: "case-1" };
       };
-      (ChatSvc as any).createConsultation = async () => ({ id: "cons-1" });
-      (ChatSvc as any).enqueueChatGeneration = async () => {
+      (IntakeChatSvc as any).enqueueIntakeGeneration = async () => {
         calls.push("enqueue");
-        return { messageId: "m1" };
+        return { messageId: "m1", sessionId: "s", replyStatus: "PENDING" };
       };
       (ClientCaseRepo as any).findById = async () => ({
         id: "case-1",
@@ -220,7 +219,6 @@ describe("Client app billing", () => {
         clientCredits: credits["case-1"],
         parties: [],
         documents: [],
-        consultations: [{ id: "cons-1" }],
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -244,7 +242,7 @@ describe("Client app billing", () => {
     it("takes a credit for each message, and gives it back if the AI couldn't be asked", async () => {
       await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Can they keep it?");
       expect(credits["case-1"]).to.equal(2);
-      (ChatSvc as any).enqueueChatGeneration = async () => {
+      (IntakeChatSvc as any).enqueueIntakeGeneration = async () => {
         throw Object.assign(new Error("A reply is already generating"), { statusCode: 409 });
       };
       expect(await errorOf(ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "And now?"))).to.deep.include({ status: 409 });

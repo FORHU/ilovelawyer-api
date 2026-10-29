@@ -2,7 +2,7 @@ import crypto from "crypto";
 import type { ClientWorkspace } from "./client-case.service";
 import ClientIntakeRepo, { type ClientIntakeCaseSource } from "../repositories/client-intake.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
-import ChatRepo from "../repositories/chat.repository";
+import IntakeChatRepo from "../repositories/intake-chat.repository";
 import LlmUsageRepo from "../repositories/llm-usage.repository";
 import AiGenerationLockSvc from "./ai-generation-lock.service";
 import AiGenerationJobRepo from "../repositories/ai-generation-job.repository";
@@ -266,8 +266,7 @@ export default class ClientIntakeSvc {
   }
 
   private static async conversationOf(source: ClientIntakeCaseSource): Promise<{ messages: IntakeMessageInput[]; latestMessageId: string | null }> {
-    if (!source.consultationId) return { messages: [], latestMessageId: null };
-    const rows = (await ChatRepo.listMessagesByConsultation(source.consultationId)).filter((m) => m.role === "user" || m.role === "assistant");
+    const rows = (await IntakeChatRepo.listByCase(source.id)).filter((m) => m.role === "user" || m.role === "assistant");
     const messages = rows.slice(-MAX_MESSAGES).map((m): IntakeMessageInput => ({
       id: m.id,
       role: m.role === "user" ? "user" : "ai",

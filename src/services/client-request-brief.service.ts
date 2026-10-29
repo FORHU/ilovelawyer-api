@@ -3,11 +3,13 @@ import type { ClientRequestStatus, Prisma } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestNotifySvc from "./client-request-notify.service";
 import CaseAreaSvc from "./case-area.service";
-import ChatRepo from "../repositories/chat.repository";
+import IntakeChatRepo from "../repositories/intake-chat.repository";
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import { labelForDesignation, redactBrief, type RedactionContext } from "../utils/brief-redaction";
 import { toAnonymisedIntake } from "../utils/client-intake-redaction";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
+import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
+import { excerptsWithHandles } from "../utils/case-document-handles";
 import type { AnonymisedIntake, CaseIntake } from "../types/client-intake";
 import { REQUEST_URGENCIES, type RequestUrgency } from "../types/client-handoff";
 import logger from "../utils/logger";
@@ -102,10 +104,18 @@ export function briefFingerprint(source: BriefSource, latestMessageId: string | 
   return crypto.createHash("sha256").update(basis).digest("hex");
 }
 
-function redactionContext(source: BriefSource): RedactionContext {
+/** `extraPeople` is anyone ClientIntakeSvc's own extraction (CaseIntake.people) found named in the
+ * conversation or a document who isn't already a registered case party — a witness in an email
+ * thread, a company contact, a claims handler. Without this, a name that only ever appears inside
+ * a document has nothing in `people` to match it: redactBrief only strips names it's told about,
+ * never free text it hasn't seen before, so an unregistered name would reach the brief untouched. */
+function redactionContext(source: BriefSource, extraPeople: { name: string }[] = []): RedactionContext {
   const people = source.case.parties.map((p) => ({ name: p.name, label: labelForDesignation(p.designation) }));
   for (const name of [source.client.name, source.client.username]) {
     if (name?.trim()) people.push({ name: name.trim(), label: "the client" });
+  }
+  for (const p of extraPeople) {
+    if (p.name?.trim()) people.push({ name: p.name.trim(), label: "someone named in the case" });
   }
   return { people, documentNames: source.case.documents.map((d) => d.name) };
 }
@@ -117,8 +127,12 @@ interface ConversationMessage {
 }
 
 /** The AI is told today's date and when each message was sent, so it can place "on Tuesday" or "in
- * two months" in time and judge "within 7 days" (#597): without them it guessed the year. */
-function buildPrompt(source: BriefSource, caseAreas: string[], conversation: ConversationMessage[], now: Date): string {
+ * two months" in time and judge "within 7 days" (#597): without them it guessed the year.
+ * `documentExcerpts` is the same text ClientIntakeSvc's own extraction reads — without it, this
+ * summary resolves "last Wednesday" or any other document-only fact on its own, independently of
+ * (and sometimes disagreeing with) what the Overview/Timeline the lawyer sees right next to it
+ * already worked out from the document. */
+function buildPrompt(source: BriefSource, caseAreas: string[], conversation: ConversationMessage[], documentExcerpts: string, now: Date): string {
   const c = source.case;
   const details = [
     `Case title: ${c.caseName}`,
@@ -133,9 +147,9 @@ function buildPrompt(source: BriefSource, caseAreas: string[], conversation: Con
   const today = ukDay(now);
   return `You are preparing an anonymised case summary for UK solicitors deciding whether to take on a new client.
 
-Today's date is ${today}. Each message below shows the date it was sent. Work out any relative dates ("on Tuesday", "in two months") from those dates.
+Today's date is ${today}. Each message below shows the date it was sent. Work out any relative dates ("on Tuesday", "in two months") from those dates, or from a document's own dated content if the conversation doesn't give one — never guess one that isn't actually stated or computable.
 
-Write for a solicitor, in plain English, 80 to 180 words: what happened and when, where things stand now, what the client wants, and anything time-sensitive. Refer to people only by their role (the client, the employer, the landlord, the seller), never by name. Do not mention document names, addresses, email addresses or phone numbers. Do not give legal advice. Use only the case details and the conversation below.
+Write for a solicitor, in plain English, 80 to 180 words: what happened and when, where things stand now, what the client wants, and anything time-sensitive. Use the document excerpts below (if any) the same way you use the conversation — do not write as if no documents were given when excerpts are provided. Refer to people only by their role (the client, the employer, the landlord, the seller), never by name. Do not mention document names, addresses, email addresses or phone numbers, or anyone's name that appears in a document. Do not give legal advice. Use only the case details, the conversation and the document excerpts below.
 
 Then rate the urgency, counting from today: URGENT if a hearing, deadline or time limit is within 7 days or has passed, SOON if within 30 days, otherwise ROUTINE. Rate a rough time the same way: "in about two months" is ROUTINE, "in a couple of weeks" is SOON.
 
@@ -150,7 +164,9 @@ Case details:
 ${details}
 
 Conversation between the client and the AI:
-${chat || "(no conversation yet)"}`;
+${chat || "(no conversation yet)"}
+
+${documentExcerpts}`;
 }
 
 /** The AI's reply as { summary, urgency, knownDeadline }, or null when it isn't usable. A deadline
@@ -193,15 +209,20 @@ export default class ClientRequestBriefSvc {
       const session = await getChatWonderSessionId();
       const now = new Date();
       const caseAreas = (await CaseAreaSvc.refsOf(source.case.caseAreas)).map((a) => a.name);
-      const reply = await callChatWonderRest(buildPrompt(source, caseAreas, conversation, now), session, undefined, "UK", {
+      const ready = source.case.documents.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
+      const pack = ready.length ? await buildFactExcerptPack(ready) : { text: "", chunkIds: [], factCount: 0 };
+      const documentExcerpts = ready.length
+        ? wrapExtractedText("Use only these excerpts and the documents listed above.", excerptsWithHandles(pack.text, ready))
+        : "";
+      const reply = await callChatWonderRest(buildPrompt(source, caseAreas, conversation, documentExcerpts, now), session, undefined, "UK", {
         usage: { feature: "clientRequestBrief", userId: source.clientId, caseId: source.caseId },
       });
       const parsed = parseBriefReply(String(reply.response ?? reply.intermediate_response ?? ""), now);
       if (!parsed) throw new Error("The AI's reply had no usable summary");
 
-      const ctx = redactionContext(source);
       const storedIntake = await ClientIntakeRepo.find(source.caseId);
       const intakeData = (storedIntake?.data as unknown as CaseIntake | null) ?? null;
+      const ctx = redactionContext(source, intakeData?.people);
       const brief: CaseBrief = {
         summary: redactBrief(parsed.summary, ctx),
         caseAreas,
@@ -248,9 +269,7 @@ export default class ClientRequestBriefSvc {
   }
 
   private static async conversationOf(source: BriefSource) {
-    const consultationId = source.case.consultations[0]?.id;
-    if (!consultationId) return { conversation: [], latestMessageId: null };
-    const messages = (await ChatRepo.listMessagesByConsultation(consultationId)).filter((m) => m.role === "user" || m.role === "assistant");
+    const messages = (await IntakeChatRepo.listByCase(source.caseId)).filter((m) => m.role === "user" || m.role === "assistant");
     return {
       conversation: messages.slice(-MAX_MESSAGES).map((m): ConversationMessage => ({ from: m.role, text: m.content.slice(0, MAX_MESSAGE_CHARS), at: m.createdAt })),
       latestMessageId: messages.at(-1)?.id ?? null,

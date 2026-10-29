@@ -2,10 +2,11 @@ import prisma from "../lib/prisma";
 import type { CaseIntake } from "../types/client-intake";
 
 /** What ClientIntakeSvc.generateInner reads to build the prompt: the case's own fields, its
- * parties, its ACTIVE documents, and its one consultation. Caller-scoped by caseId alone — same
- * as ClientOverviewRepo/DocumentRepo.listAllByCase — because by the time a job reaches here,
+ * parties, and its ACTIVE documents. Caller-scoped by caseId alone — same as
+ * ClientOverviewRepo/DocumentRepo.listAllByCase — because by the time a job reaches here,
  * ClientIntakeSvc.beginQueued/scheduleAuto has already resolved the caseId from an access-checked
- * workspace. */
+ * workspace. No consultation lookup: the intake pipeline's own thread is keyed straight to
+ * Case.id (IntakeMessage.caseId), so there is nothing to resolve here anymore. */
 export interface ClientIntakeCaseSource {
   id: string;
   caseName: string;
@@ -17,12 +18,11 @@ export interface ClientIntakeCaseSource {
   lawyerReadiness: unknown;
   parties: { name: string; designation: string }[];
   documents: { id: string; name: string; ragStatus: string }[];
-  consultationId: string | null;
 }
 
 export default class ClientIntakeRepo {
   static async findCaseForIntake(caseId: string): Promise<ClientIntakeCaseSource | null> {
-    const row = await prisma.case.findUnique({
+    return prisma.case.findUnique({
       where: { id: caseId },
       select: {
         id: true,
@@ -35,11 +35,8 @@ export default class ClientIntakeRepo {
         lawyerReadiness: true,
         parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } },
         documents: { where: { status: "ACTIVE" }, select: { id: true, name: true, ragStatus: true }, orderBy: { createdAt: "asc" } },
-        consultations: { where: { status: "ACTIVE" }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 1 },
       },
     });
-    if (!row) return null;
-    return { ...row, consultationId: row.consultations[0]?.id ?? null };
   }
 
   static async find(caseId: string) {

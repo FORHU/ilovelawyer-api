@@ -502,6 +502,56 @@ model CaseClientIntake {
   case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
 }
 
+/// The intake chat's own message table (ADR: separate pipeline, 2026-10-28) — deliberately NOT
+/// Message/Consultation. Keyed straight to Case: one intake thread per case, no session/thread
+/// row of its own. Sealed via src/utils/intake-field-crypto.ts (its own key, its own
+/// implementation — never field-crypto.ts, which seals Message/CaseDocumentChunk/privileged
+/// notes for the lawyer side). findLawyerResultIds/markedReady are the landing spot for the
+/// find_lawyer/mark_case_ready tool-call results chat-wonder sends back as [LAWYER_MATCHES]/
+/// [CASE_READY] frames.
+model IntakeMessage {
+  id                  String                    @id @default(uuid())
+  caseId              String
+  role                IntakeMessageRole
+  content             String                    @db.Text
+  createdAt           DateTime                  @default(now())
+  userId              String?
+  // Links an assistant reply back to the user turn that prompted it — same idiom as
+  // Message.parentMessageId, used for the SQS-redelivery idempotency guard (a job id IS the user
+  // message's id; a worker retried after a crash checks for an existing reply by this field
+  // before creating a second one) and the Stop/cancel flow's reply lookup.
+  parentMessageId     String?
+  // Same purpose as Message.replyStatus/pendingReplyContent — mirrors its shape (including
+  // CANCELLED, for the Stop button) so the streaming UX is at parity, on its own enum.
+  replyStatus         IntakeMessageReplyStatus?
+  pendingReplyContent String?                   @db.Text
+  // Case documents attached to this turn — caseId-scoped directly, no consultation indirection.
+  documentIds         String[]                  @default([])
+  findLawyerResultIds String[]                  @default([])
+  markedReady         Boolean                   @default(false)
+
+  case   Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  parent IntakeMessage?   @relation("IntakeMessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  replies IntakeMessage[] @relation("IntakeMessageThread")
+
+  @@index([caseId])
+  @@index([userId])
+  @@index([parentMessageId])
+}
+
+enum IntakeMessageRole {
+  user
+  assistant
+  system
+}
+
+enum IntakeMessageReplyStatus {
+  PENDING
+  DONE
+  FAILED
+  CANCELLED
+}
+
 model MessageRelatedCases {
   id        String   @id @default(uuid())
   messageId String   @unique
@@ -981,6 +1031,7 @@ model Case {
   clientRequests              ClientRequest[]
   clientOverview              CaseClientOverview?
   clientIntake                CaseClientIntake?
+  intakeMessages              IntakeMessage[]
 
   @@index([userId])
   @@index([organizationId])

@@ -9,9 +9,9 @@ import { assessLawyerReadiness, READINESS_MIN_CONFIDENCE } from "../src/utils/la
 import ClientCaseSvc, { type ClientWorkspace } from "../src/services/client-case.service";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
 import CaseAreaRepo from "../src/repositories/case-area.repository";
-import ChatSvc from "../src/services/chat.service";
+import IntakeChatSvc from "../src/services/intake-chat.service";
 
-const KEYS = ["problem", "place", "otherSide", "events", "goal"] as const;
+const KEYS = ["problem", "place", "otherSide", "events", "goal", "status"] as const;
 
 const AREAS = [
   { code: "EMPLOYMENT", name: "Employment", description: "Work, dismissal, pay." },
@@ -99,11 +99,11 @@ describe("Lawyer readiness", () => {
 
     beforeEach(() => {
       process.env.USE_JEV_LAWYER_READINESS = "true";
-      const orig = { findById: ClientCaseRepo.findById, saveReadiness: ClientCaseRepo.saveReadiness, listMessages: ChatSvc.listMessages, list: CaseAreaRepo.list };
+      const orig = { findById: ClientCaseRepo.findById, saveReadiness: ClientCaseRepo.saveReadiness, listMessages: IntakeChatSvc.listMessages, list: CaseAreaRepo.list };
       restore = () => {
         (ClientCaseRepo as any).findById = orig.findById;
         (ClientCaseRepo as any).saveReadiness = orig.saveReadiness;
-        (ChatSvc as any).listMessages = orig.listMessages;
+        (IntakeChatSvc as any).listMessages = orig.listMessages;
         (CaseAreaRepo as any).list = orig.list;
         process.env.USE_JEV_LAWYER_READINESS = savedFlag;
       };
@@ -115,19 +115,18 @@ describe("Lawyer readiness", () => {
         jurisdiction: "Leeds",
         clientSide: "CLAIMANT",
         parties: [{ name: "Acme Ltd", designation: "Opposing party" }],
-        consultations: [{ id: "cons-1" }],
         lawyerReadiness: null,
       };
       messages = [
-        { id: "m1", role: "user", content: "I was dismissed by text.", replyStatus: "DONE", createdAt: "t1", documents: [] },
-        { id: "m2", role: "assistant", content: "That may be unfair dismissal.", replyStatus: null, createdAt: "t2", documents: [] },
+        { id: "m1", role: "user", text: "I was dismissed by text.", replyStatus: "DONE", documentIds: [], createdAt: "t1" },
+        { id: "m2", role: "ai", text: "That may be unfair dismissal.", replyStatus: null, documentIds: [], createdAt: "t2" },
       ];
       saved = [];
       (ClientCaseRepo as any).findById = async () => row;
       (ClientCaseRepo as any).saveReadiness = async (...args: any[]) => {
         saved.push(args);
       };
-      (ChatSvc as any).listMessages = async () => messages;
+      (IntakeChatSvc as any).listMessages = async () => ({ replying: false, messages });
       // RETIRED is switched off, so Jev isn't asked about it.
       (CaseAreaRepo as any).list = async () =>
         [...AREAS, { code: "RETIRED", name: "Retired", description: "Old." }].map((a, sortOrder) => ({ ...a, id: a.code, country: "UK", isActive: a.code !== "RETIRED", sortOrder }));
@@ -185,7 +184,7 @@ describe("Lawyer readiness", () => {
       row.lawyerReadiness = await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
       await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
       expect(jevCalls).to.have.length(1);
-      messages.push({ id: "m3", role: "user", content: "I want compensation.", replyStatus: "DONE", documents: [] }, { id: "m4", role: "assistant", content: "OK.", documents: [] });
+      messages.push({ id: "m3", role: "user", text: "I want compensation.", replyStatus: "DONE", documentIds: [], createdAt: "t3" }, { id: "m4", role: "ai", text: "OK.", replyStatus: null, documentIds: [], createdAt: "t4" });
       await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
       expect(jevCalls).to.have.length(2);
     });

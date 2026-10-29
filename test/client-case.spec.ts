@@ -14,7 +14,7 @@ import ClientBillingSvc from "../src/services/client-billing.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import OrganizationSvc from "../src/services/organization.service";
 import CaseSvc from "../src/services/case.service";
-import ChatSvc from "../src/services/chat.service";
+import IntakeChatSvc from "../src/services/intake-chat.service";
 import DocumentSvc from "../src/services/document.service";
 import DocumentRepo from "../src/repositories/document.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
@@ -176,7 +176,7 @@ describe("Client app cases", () => {
         stash(ClientCaseRepo, ["findById", "findAnyById", "list", "clearReadiness"]),
         stash(CaseSvc, ["create", "update", "archive", "unarchive", "delete"]),
         stash(ClientRequestSvc, ["withdraw"]),
-        stash(ChatSvc, ["createConsultation", "listMessages", "enqueueChatGeneration"]),
+        stash(IntakeChatSvc, ["listMessages", "enqueueIntakeGeneration"]),
         // Credits are test/client-billing.spec.ts's; here a new case starts with 50.
         stash(ClientPaymentRepo, ["spendCredit", "addCredits"]),
         stash(ClientBillingSvc, ["pricing"]),
@@ -219,18 +219,14 @@ describe("Client app cases", () => {
         record("caseCreate")(...args);
         return { id: "case-1" };
       };
-      (ChatSvc as any).createConsultation = async (...args: unknown[]) => {
-        record("createConsultation")(...args);
-        return { id: "cons-new" };
-      };
-      (ChatSvc as any).enqueueChatGeneration = async (...args: unknown[]) => {
+      (IntakeChatSvc as any).enqueueIntakeGeneration = async (...args: unknown[]) => {
         record("enqueue")(...args);
         return { messageId: "m9", sessionId: "s", replyStatus: "PENDING" };
       };
     });
     afterEach(() => restore());
 
-    it("maps a client case onto a lawyer Case, and starts its chat", async () => {
+    it("maps a client case onto a lawyer Case — no chat thread started yet, the intake pipeline needs none", async () => {
       const dto = await ClientCaseSvc.create(workspace, "u1", {
         title: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
         areas: ["EMPLOYMENT"],
@@ -255,9 +251,7 @@ describe("Client app cases", () => {
           clientCredits: 50,
         },
       ]);
-      const [, , title, caseId] = calls.createConsultation as [string, string, string, string];
-      expect(title.length).to.equal(80);
-      expect(caseId).to.equal("case-1");
+      expect(calls.enqueue).to.equal(undefined);
       expect(dto).to.include({ id: "case-1", title: "Dismissed without notice", area: "EMPLOYMENT", where: "Leeds", credits: 50 });
       expect(dto.areas).to.deep.equal([{ code: "EMPLOYMENT", name: "Employment" }]);
       expect(dto.others).to.deep.equal([{ id: "p1", name: "Acme Ltd", role: "Opposing party" }]);
@@ -304,50 +298,34 @@ describe("Client app cases", () => {
     });
 
     it("shows only the user's and the AI's messages, and whether a reply is still coming", async () => {
-      (ChatSvc as any).listMessages = async (...args: unknown[]) => {
+      (IntakeChatSvc as any).listMessages = async (...args: unknown[]) => {
         calls.listMessages = args;
-        return [
-          {
-            id: "m1",
-            role: "user",
-            content: "Is this legal?",
-            replyStatus: "DONE",
-            createdAt: "t1",
-            documents: [{ id: "d1", name: "Contract.pdf", ragStatus: "READY", fileUrl: "https://files/x", caseId: "case-1" }],
-          },
-          { id: "m2", role: "assistant", content: "Usually not.", replyStatus: null, createdAt: "t2", documents: [] },
-          { id: "m3", role: "system", content: "internal", replyStatus: null, createdAt: "t3", documents: [] },
-          { id: "m4", role: "user", content: "What now?", replyStatus: "PENDING", createdAt: "t4", documents: [] },
-        ];
+        return {
+          replying: true,
+          messages: [
+            { id: "m1", role: "user", text: "Is this legal?", replyStatus: "DONE", documentIds: ["d1"], createdAt: "t1" },
+            { id: "m2", role: "ai", text: "Usually not.", replyStatus: null, documentIds: [], createdAt: "t2" },
+            { id: "m4", role: "user", text: "What now?", replyStatus: "PENDING", documentIds: [], createdAt: "t4" },
+          ],
+        };
       };
       const result = await ClientCaseSvc.listMessages(workspace, "u1", "case-1");
-      expect(calls.listMessages).to.deep.equal([firmScope("org-personal"), "u1", "cons-1"]);
+      expect(calls.listMessages).to.deep.equal([workspace, "u1", "case-1"]);
       expect(result.replying).to.equal(true);
       expect(result.messages.map((m) => [m.id, m.role, m.replyStatus])).to.deep.equal([
         ["m1", "user", "DONE"],
         ["m2", "ai", null],
         ["m4", "user", "PENDING"],
       ]);
-      // Only what the app shows under the message: no file link, no other document fields.
-      expect(result.messages[0].documents).to.deep.equal([{ id: "d1", name: "Contract.pdf", status: "READY" }]);
-      expect(result.messages[1].documents).to.deep.equal([]);
+      // The case's documents attached to the user's turn — ids only; IntakeChatSvc.listMessages
+      // doesn't resolve names/status inline, the frontend already has a document-list endpoint.
+      expect(result.messages[0].documentIds).to.deep.equal(["d1"]);
+      expect(result.messages[1].documentIds).to.deep.equal([]);
     });
 
-    it("asks the AI in the case's consultation, on the UK tenant, scoped to the case, on the client app's own queue", async () => {
+    it("asks the AI on the intake pipeline's own queue, scoped to the case", async () => {
       await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "What are my rights?");
-      expect(calls.enqueue).to.deep.equal([
-        firmScope("org-personal"),
-        "UK",
-        "u1",
-        "cons-1",
-        "",
-        "What are my rights?",
-        undefined,
-        undefined,
-        "case-1",
-        undefined,
-        { source: "client" },
-      ]);
+      expect(calls.enqueue).to.deep.equal([workspace, "u1", "case-1", "What are my rights?", undefined]);
       expect(calls.findManyForCase).to.equal(undefined);
     });
 
@@ -356,7 +334,7 @@ describe("Client app cases", () => {
         caseDocs = [{ id: "d1", name: "Contract.pdf", ragStatus: "READY" }];
         await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read this", ["d1"]);
         expect(calls.findManyForCase).to.deep.equal([["d1"], "case-1", firmScope("org-personal")]);
-        expect((calls.enqueue as unknown[]).slice(8, 10)).to.deep.equal(["case-1", ["d1"]]);
+        expect(calls.enqueue).to.deep.equal([workspace, "u1", "case-1", "Read this", ["d1"]]);
         expect(creditsSpent).to.equal(1);
       });
 
@@ -395,14 +373,8 @@ describe("Client app cases", () => {
         caseDocs = [{ id: "d1", name: "Contract.pdf", ragStatus: "READY" }];
         await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Read this", ["d1", "d1"]);
         expect((calls.findManyForCase as unknown[])[0]).to.deep.equal(["d1"]);
-        expect((calls.enqueue as unknown[])[9]).to.deep.equal(["d1"]);
+        expect((calls.enqueue as unknown[])[4]).to.deep.equal(["d1"]);
       });
-    });
-
-    it("gives a case that lost its chat a new one", async () => {
-      row = caseRow({ consultations: [] });
-      await ClientCaseSvc.sendMessage(workspace, "u1", "case-1", "Hello");
-      expect((calls.enqueue as unknown[])[3]).to.equal("cons-new");
     });
 
     it("answers 404 for a case that isn't in the client's workspace", async () => {
