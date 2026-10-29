@@ -799,6 +799,8 @@ const swaggerSpec: OAS3Definition = {
       get: {
         tags: ["Users"],
         summary: "Get the current authenticated user's profile",
+        description:
+          "Also carries `planGate` (OPEN, AWAITING_VERIFICATION or CHOOSE_PLAN — see GET /users/me/plan-gate), so the lawyer app can route a lawyer held by verify before plan without a second request. Only this response, POST /users/me/setup/complete and POST /users/me/solo carry it.",
         security: [{ bearerAuth: [] }],
         responses: {
           200: { description: "Current user profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
