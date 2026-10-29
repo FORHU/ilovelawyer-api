@@ -96,7 +96,10 @@ export default class LawyerProfileRepo {
   /** Saves the shared fields, the registration of the profile's own country, and the practice areas
    * (replacing the ones it had). */
   static async upsert(userId: string, data: LawyerProfileData): Promise<LawyerProfileRow> {
-    const { regulator, registrationNumber, qualifiedJurisdictions, ph, practiceAreas, ...base } = data;
+    // firstVerifiedAt is markFirstVerified's alone: a save that read the profile before an admin
+    // verified it mustn't write it back empty.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { regulator, registrationNumber, qualifiedJurisdictions, ph, practiceAreas, firstVerifiedAt, ...base } = data;
     const country = base.country as LawyerCountry;
     const registration = { regulator, registrationNumber, qualifiedJurisdictions, ph };
     // Created bare, then the registration and areas written in the same transaction: a nested write
@@ -117,6 +120,11 @@ export default class LawyerProfileRepo {
 
   /** An admin's decision — only the fields it touches. Approving a UK application also records the
    * jurisdictions the admin confirmed. Returns the admin queue's row. */
+  /** Records the application's first verification, once (verify before plan, PlanGateSvc). */
+  static async markFirstVerified(userId: string, at: Date) {
+    await prisma.lawyerClientProfile.updateMany({ where: { userId, firstVerifiedAt: null }, data: { firstVerifiedAt: at } });
+  }
+
   static async setVerification(
     userId: string,
     data: Pick<LawyerClientProfile, "verificationStatus" | "verificationNote" | "verifiedAt">,

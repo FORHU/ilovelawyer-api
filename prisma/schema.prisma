@@ -97,6 +97,13 @@ model User {
   // The lawyer chose Solo practitioner at account setup: they work in their own workspace, with no
   // organization (docs/adr/0022). Null until they choose; a firm lawyer never sets it.
   soloChosenAt        DateTime?
+  // Verify before plan (PlanGateSvc): set on a UK lawyer's sign-up, so a solo lawyer or firm
+  // founder only gets in once their Lawyer Application has been verified, then chooses a plan.
+  // False for every account made before it, which keeps today's order.
+  verifyBeforePlan    Boolean        @default(false)
+  // When a held lawyer chose to go on without paying (a solo lawyer's free trial, a founder's
+  // unpaid plan). A live subscription also counts as chosen. Null otherwise.
+  planChosenAt        DateTime?
 
   // Landing-page trial guests (TrialSvc.start): a throwaway account with no password and no real
   // email. `trialExpiresAt` is what marks one (null for every real account) and is when its
@@ -1109,6 +1116,9 @@ model LawyerClientProfile {
   // The admin's note on a rejection, shown to the lawyer.
   verificationNote          String?
   verifiedAt                DateTime?
+  // The first time an admin verified it. Unlike verifiedAt, an edit that sends the application back
+  // to PENDING never clears it, so a lawyer let in by verification (PlanGateSvc) stays in.
+  firstVerifiedAt           DateTime?
   // When the profile last went to PENDING, i.e. joined the admin queue. Null until first submitted.
   submittedAt               DateTime?
   createdAt                 DateTime                 @default(now())

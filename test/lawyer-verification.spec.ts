@@ -13,6 +13,7 @@ import LawyerVerificationSvc from "../src/services/lawyer-verification.service";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 import AuthRepo from "../src/repositories/auth.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
+import PlanGateSvc from "../src/services/plan-gate.service";
 import * as mailerModule from "../src/utils/mailer";
 import * as templateModule from "../src/utils/template";
 import { listLawyerVerificationsSchema, rejectLawyerSchema, verifyLawyerSchema } from "../src/validation/admin.validation";
@@ -92,9 +93,15 @@ describe("LawyerVerificationSvc", () => {
   let restore: (() => void)[];
   let current: StubProfile | null;
   let writes: { userId: string; data: any; confirmed?: string[] }[];
+  let firstVerified: string[];
+  let gate: string;
   let audits: { actorId?: string | null; action: string; targetType?: string; targetId?: string; payload?: object }[];
   let emails: { to: string; subject: string }[];
   let renderedTemplates: { name: string; vars: Record<string, unknown> }[];
+  let loginLinks: { userId: string; token: string; expiresAt: Date }[];
+  let liveToken: string | null;
+  let approvalStatus: string;
+  let signedOut: string[];
 
   beforeEach(() => {
     current = {
@@ -112,8 +119,9 @@ describe("LawyerVerificationSvc", () => {
     renderedTemplates = [];
 
     restore = [
-      stash(LawyerProfileRepo, ["find", "setVerification", "listForAdmin"]),
-      stash(AuthRepo, ["findById"]),
+      stash(LawyerProfileRepo, ["find", "setVerification", "listForAdmin", "markFirstVerified"]),
+      stash(AuthRepo, ["findById", "setLoginLinkToken", "findLiveLoginLinkToken", "deleteSessionsByUserId"]),
+      stash(PlanGateSvc, ["stateOf"]),
       stash(SecurityAuditSvc, ["record"]),
       stash(mailerModule as any, ["sendEmail"]),
       stash(templateModule as any, ["renderTemplate"]),
@@ -125,7 +133,19 @@ describe("LawyerVerificationSvc", () => {
       current = { ...current!, ...data, ...(confirmed ? { qualifiedJurisdictions: confirmed } : {}) };
       return adminRow(current!);
     };
-    (AuthRepo as any).findById = async (id: string) => (current && id === current.userId ? { id, name: "Jane Lawyer", email: "jane@example.com" } : null);
+    firstVerified = [];
+    (LawyerProfileRepo as any).markFirstVerified = async (userId: string) => void firstVerified.push(userId);
+    gate = "OPEN";
+    (PlanGateSvc as any).stateOf = async () => gate;
+    approvalStatus = "ACTIVE";
+    (AuthRepo as any).findById = async (id: string) =>
+      current && id === current.userId ? { id, name: "Jane Lawyer", email: "jane@example.com", approvalStatus } : null;
+    loginLinks = [];
+    liveToken = null;
+    (AuthRepo as any).setLoginLinkToken = async (userId: string, token: string, expiresAt: Date) => void loginLinks.push({ userId, token, expiresAt });
+    (AuthRepo as any).findLiveLoginLinkToken = async () => liveToken;
+    signedOut = [];
+    (AuthRepo as any).deleteSessionsByUserId = async (userId: string) => void signedOut.push(userId);
     (SecurityAuditSvc as any).record = async (data: any) => void audits.push(data);
     (mailerModule as any).sendEmail = async (opts: { to: string; subject: string }) => void emails.push(opts);
     (templateModule as any).renderTemplate = async (name: string, vars: Record<string, unknown>) => {
@@ -217,6 +237,65 @@ describe("LawyerVerificationSvc", () => {
       ]);
       expect(renderedTemplates[0].name).to.equal("lawyer-verification-approved");
       expect(renderedTemplates[0].vars.nextStep).to.match(/Accept client requests/);
+    });
+
+    it("links a lawyer who isn't held to their Profile page with a plain link, leaving them signed in and any login link alone", async () => {
+      await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+      expect(renderedTemplates[0].vars).to.deep.include({ buttonLabel: "Go to your profile" });
+      expect(renderedTemplates[0].vars.buttonLink).to.match(/^https?:\/\/[^/]+\/homepage\/profile$/);
+      expect(renderedTemplates[0].vars.linkNote).to.match(/sign in first/);
+      expect(loginLinks).to.deep.equal([]);
+      expect(signedOut).to.deep.equal([]);
+    });
+
+    describe("a lawyer held by verify before plan", () => {
+      beforeEach(() => {
+        gate = "CHOOSE_PLAN";
+      });
+
+      it("is sent on to the plan step through a one-time login link, then signed out of the waiting page", async () => {
+        const before = Date.now();
+        await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+        expect(renderedTemplates[0].vars.nextStep).to.match(/choose your plan or start your free trial/);
+        expect(renderedTemplates[0].vars).to.deep.include({ buttonLabel: "Choose your plan" });
+        expect(renderedTemplates[0].vars.linkNote).to.match(/works once/);
+        expect(loginLinks).to.have.length(1);
+        expect(loginLinks[0].userId).to.equal("lawyer-1");
+        expect(loginLinks[0].expiresAt.getTime() - before).to.be.closeTo(7 * 24 * 60 * 60 * 1000, 5_000);
+        const link = new URL(renderedTemplates[0].vars.buttonLink as string);
+        expect(link.pathname).to.equal("/login-link");
+        expect(link.searchParams.get("token")).to.equal(loginLinks[0].token);
+        expect(link.searchParams.get("next")).to.equal("/verification");
+        expect(signedOut).to.deep.equal(["lawyer-1"]);
+      });
+
+      it("reuses a login link not clicked yet instead of replacing it", async () => {
+        liveToken = "account-approval-token";
+        await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+        expect(loginLinks).to.deep.equal([]);
+        expect(new URL(renderedTemplates[0].vars.buttonLink as string).searchParams.get("token")).to.equal("account-approval-token");
+      });
+
+      it("gets a plain link while their account still waits for approval, since a login link couldn't sign them in", async () => {
+        approvalStatus = "PENDING";
+        await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+        expect(loginLinks).to.deep.equal([]);
+        expect(renderedTemplates[0].vars.buttonLink).to.match(/^https?:\/\/[^/]+\/verification$/);
+      });
+
+      it("isn't signed out when the email fails, and the admin's verify still succeeds", async () => {
+        (mailerModule as any).sendEmail = async () => {
+          throw new Error("smtp down");
+        };
+        const result = await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+        expect(result.profile.verification.status).to.equal("VERIFIED");
+        expect(signedOut).to.deep.equal([]);
+      });
+    });
+
+    it("records the first verification, which lets a lawyer held by verify before plan in", async () => {
+      await LawyerVerificationSvc.verify("lawyer-1", { confirmedJurisdictions: ["England and Wales"] }, "admin-1");
+      expect(firstVerified).to.deep.equal(["lawyer-1"]);
     });
 
     it("needs at least one confirmed jurisdiction for a UK application", async () => {

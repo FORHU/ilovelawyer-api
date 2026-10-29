@@ -799,6 +799,8 @@ const swaggerSpec: OAS3Definition = {
       get: {
         tags: ["Users"],
         summary: "Get the current authenticated user's profile",
+        description:
+          "Also carries `planGate` (OPEN, AWAITING_VERIFICATION or CHOOSE_PLAN — see GET /users/me/plan-gate), so the lawyer app can route a lawyer held by verify before plan without a second request. Only this response, POST /users/me/setup/complete and POST /users/me/solo carry it.",
         security: [{ bearerAuth: [] }],
         responses: {
           200: { description: "Current user profile", content: { "application/json": { schema: { $ref: "#/components/schemas/UserProfile" } } } },
@@ -851,6 +853,41 @@ const swaggerSpec: OAS3Definition = {
           200: { description: "The user", content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } },
           403: { description: "NOT_A_LAWYER", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           409: { description: "NO_SITE: the account has no site (UK or PH)", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/users/me/plan-gate": {
+      get: {
+        tags: ["Users"],
+        summary: "Verify before plan: where the lawyer app sends this lawyer",
+        description:
+          "UK only, for lawyers who signed up since verify before plan, working solo or as a firm's founder. AWAITING_VERIFICATION: their Lawyer Application hasn't been verified yet, so the app shows the waiting page and every endpoint but sign-in, the account itself (/users/me), consents, organizations, payment plans, billing, practice areas, jurisdictions and notifications answers 403 VERIFICATION_REQUIRED. CHOOSE_PLAN: verified, so the app shows the plan step, and those endpoints answer 403 PLAN_NOT_CHOSEN until they subscribe or go on without paying. OPEN for everyone else, as before.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "The gate",
+            content: { "application/json": { schema: { type: "object", properties: { state: { type: "string", enum: ["OPEN", "AWAITING_VERIFICATION", "CHOOSE_PLAN"] } } } } },
+          },
+        },
+      },
+    },
+    "/users/me/plan-gate/start": {
+      post: {
+        tags: ["Users"],
+        summary: "Verify before plan: go on without paying",
+        description:
+          "The plan step's alternative to subscribing. A verified solo lawyer's 14-day free trial starts now; a verified founder's firm stays on the unpaid plan, with no trial. Does nothing once a plan is chosen. Returns the gate, OPEN after it.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: {
+            description: "The gate",
+            content: { "application/json": { schema: { type: "object", properties: { state: { type: "string", enum: ["OPEN", "AWAITING_VERIFICATION", "CHOOSE_PLAN"] } } } } },
+          },
+          409: {
+            description:
+              "VERIFICATION_REQUIRED: the application isn't verified yet. WORKSPACE_REQUIRED: they haven't chosen solo or a firm yet. PLAN_NOT_STARTED: the account isn't approved, so the trial can't start.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
         },
       },
     },

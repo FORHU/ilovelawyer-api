@@ -48,6 +48,11 @@ router.get("/me/tour/:track", asyncHandler(UsersCtrl.getTour));
 router.post("/me/setup/complete", asyncHandler(UsersCtrl.completeSetup));
 // The lawyer works solo: no organization is created (docs/adr/0022); sets soloChosenAt.
 router.post("/me/solo", asyncHandler(UsersCtrl.chooseSolo));
+// Verify before plan (PlanGateSvc): whether the app lets the lawyer in, waits for their
+// application's verification, or asks them to choose a plan; and the plan step's "go on without
+// paying" (a solo lawyer's free trial starts then).
+router.get("/me/plan-gate", asyncHandler(UsersCtrl.planGate));
+router.post("/me/plan-gate/start", asyncHandler(UsersCtrl.startWithoutPaying));
 // A solo lawyer's own card on file and fee history (a firm's are under /organizations/:id/billing).
 router.get("/me/billing/card", asyncHandler(OrganizationCardCtrl.getOwn));
 router.post("/me/billing/card/setup-session", asyncHandler(OrganizationCardCtrl.startOwnSetup));
