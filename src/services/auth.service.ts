@@ -876,10 +876,10 @@ export default class AuthSvc {
     return { accessToken, refreshToken, deletionCancelled, userId };
   }
 
-  /** Signs in with the login link sent in the account approval email (AdminSvc.transition) or the
-   * lawyer application approval email (LawyerVerificationSvc.verify): a brand-new session. The
-   * link works until it expires, in any browser, so it adds a session rather than replacing the
-   * others — opening it in a second browser doesn't sign the first one out. */
+  /** Consumes the one-time login link sent in the account approval email (AdminSvc.transition) or
+   * the lawyer application approval email (LawyerVerificationSvc.verify) and mints a brand-new
+   * session — the counterpart to resetPassword above, which does the same consume-token-then-login
+   * shape for the password-reset flow. */
   static async consumeLoginLink(token: string, remember = true) {
     return AuthSvc.auditSignIn(
       "login_link",
@@ -890,11 +890,14 @@ export default class AuthSvc {
   }
 
   private static async consumeLoginLinkAndSignIn(token: string, remember: boolean) {
-    const userId = await AuthRepo.findUserIdByLoginLinkToken(token);
+    const userId = await AuthRepo.consumeLoginLinkToken(token);
     if (!userId) {
       throw new HttpError("Invalid or expired login link", 400);
     }
 
+    // Defense in depth: approval already revoked sessions, but this clears anything created
+    // since (e.g. a normal login the user did in the meantime).
+    await AuthRepo.deleteSessionsByUserId(userId);
     const linkUser = await AuthRepo.findById(userId);
     if (linkUser) AuthSvc.assertClientApp(linkUser);
     const deletionCancelled = await AuthSvc.restoreIfScheduled(linkUser);

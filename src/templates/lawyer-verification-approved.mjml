@@ -4,4 +4,4 @@
 <mj-text>{{nextStep}}</mj-text>
 <mj-button href="{{buttonLink}}">{{buttonLabel}}</mj-button>
 <mj-text>Or copy and paste this link: {{buttonLink}}</mj-text>
-<mj-text>This button signs you in. The link will expire in 7 days.</mj-text>
+<mj-text>{{linkNote}}</mj-text>

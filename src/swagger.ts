@@ -859,7 +859,7 @@ const swaggerSpec: OAS3Definition = {
         tags: ["Users"],
         summary: "Verify before plan: where the lawyer app sends this lawyer",
         description:
-          "UK only, for lawyers who signed up since verify before plan, working solo or as a firm's founder. AWAITING_VERIFICATION: their Lawyer Application hasn't been verified yet, so the app shows the waiting page and AI, case and client-request work answer 403 VERIFICATION_REQUIRED. CHOOSE_PLAN: verified, so the app shows the plan step, and that work answers 403 PLAN_NOT_CHOSEN until they subscribe or go on without paying. OPEN for everyone else, as before.",
+          "UK only, for lawyers who signed up since verify before plan, working solo or as a firm's founder. AWAITING_VERIFICATION: their Lawyer Application hasn't been verified yet, so the app shows the waiting page and every endpoint but sign-in, the account itself (/users/me), consents, organizations, payment plans, billing, practice areas, jurisdictions and notifications answers 403 VERIFICATION_REQUIRED. CHOOSE_PLAN: verified, so the app shows the plan step, and those endpoints answer 403 PLAN_NOT_CHOSEN until they subscribe or go on without paying. OPEN for everyone else, as before.",
         security: [{ bearerAuth: [] }],
         responses: {
           200: {
@@ -881,7 +881,11 @@ const swaggerSpec: OAS3Definition = {
             description: "The gate",
             content: { "application/json": { schema: { type: "object", properties: { state: { type: "string", enum: ["OPEN", "AWAITING_VERIFICATION", "CHOOSE_PLAN"] } } } } },
           },
-          409: { description: "VERIFICATION_REQUIRED: the application isn't verified yet", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          409: {
+            description:
+              "VERIFICATION_REQUIRED: the application isn't verified yet. WORKSPACE_REQUIRED: they haven't chosen solo or a firm yet. PLAN_NOT_STARTED: the account isn't approved, so the trial can't start.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
         },
       },
     },
