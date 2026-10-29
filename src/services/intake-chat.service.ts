@@ -80,11 +80,11 @@ export default class IntakeChatSvc {
     text: string,
     documentIds?: string[],
   ): Promise<{ messageId: string; sessionId: string; replyStatus: "PENDING" }> {
-    if (await IntakeChatRepo.hasPendingTurn(caseId)) {
+    const sessionId = await IntakeChatSvc.resolveSession(caseId);
+    const userMessage = await IntakeChatRepo.createUserMessageIfNoPendingTurn(caseId, text, userId, documentIds);
+    if (!userMessage) {
       throw new HttpError("A reply is already generating for this case", 409);
     }
-    const sessionId = await IntakeChatSvc.resolveSession(caseId);
-    const userMessage = await IntakeChatRepo.createMessage(caseId, "user", text, userId, documentIds, "PENDING");
 
     const job: IntakeChatGenerationJob = {
       jobId: userMessage.id,
@@ -227,8 +227,13 @@ export default class IntakeChatSvc {
     // heavier, lawyer-Terminal-specific tool) so intake doesn't ask about something a document
     // already answers. READY documents only; a document still being read contributes nothing yet.
     let documentExcerptContext = "";
+    // Every active document on the case, for redactDocumentIds below — a raw document id the
+    // model repeats back (from an excerpt handle, or just guessed) gets swapped for its name
+    // instead of leaking an internal uuid into the client's chat.
+    let scopeDocs: { id: string; name: string }[] = [];
     try {
       const docs = await DocumentRepo.listAllByCase(caseId);
+      scopeDocs = docs.map((d) => ({ id: d.id, name: d.name }));
       const ready = docs.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
       if (ready.length) {
         const pack = await buildFactExcerptPack(ready);
@@ -251,16 +256,35 @@ export default class IntakeChatSvc {
     let fullResponse: string;
     let lawyerMatches: unknown[] = [];
     let caseReady = false;
+    // Checkpoints the raw accumulated reply into the user message's pendingReplyContent every
+    // CHECKPOINT_INTERVAL_MS — same idiom as ChatSvc.runChatGenerationJob — so Stop/cancel has an
+    // actual partial reply to save instead of control.getPartial()'s placeholder "", and a
+    // mid-generation refresh can show progress instead of a bare "thinking" indicator.
+    const CHECKPOINT_INTERVAL_MS = 1_000;
+    let lastCheckpointAt = 0;
+    let checkpointChain: Promise<unknown> = Promise.resolve();
+    let accumulatedForCheckpoint = "";
+    control.getPartial = () => accumulatedForCheckpoint;
     const checkpointedOnChunk = (text: string) => {
       if (signal.aborted) return;
       emitEvent("chat:chunk", { chunk: text });
+      accumulatedForCheckpoint += text;
+      const now = Date.now();
+      if (now - lastCheckpointAt >= CHECKPOINT_INTERVAL_MS) {
+        lastCheckpointAt = now;
+        const snapshot = accumulatedForCheckpoint;
+        checkpointChain = checkpointChain
+          .then(() => IntakeChatRepo.checkpointPendingReply(parentMessageId, snapshot))
+          .catch((err) => logger.warn("Intake chat generation: pending-reply checkpoint failed", { err, messageId: parentMessageId }));
+      }
     };
 
     try {
       const result = await streamIntakeChatWonderMessage(sessionId, userInput, checkpointedOnChunk, documentContext || undefined, signal, () =>
         emitEvent("chat:answer-complete", {}),
       );
-      fullResponse = redactDocumentIds(result.content, []);
+      await checkpointChain;
+      fullResponse = redactDocumentIds(result.content, scopeDocs);
       lawyerMatches = result.lawyerMatches;
       caseReady = result.caseReady;
     } catch (err) {

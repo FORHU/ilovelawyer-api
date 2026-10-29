@@ -67,6 +67,12 @@ describe("POST /lawyer-matching/by-criteria", () => {
     expect(received!.ukJurisdiction).to.equal(null);
   });
 
+  it("takes an omitted ukJurisdiction key the same as an explicit null, not a 400", async () => {
+    const res = await post({ caseAreas: ["EMPLOYMENT"] });
+    expect(res.status).to.equal(200);
+    expect(received!.ukJurisdiction).to.equal(null);
+  });
+
   it("refuses a ukJurisdiction that's neither a string nor null", async () => {
     expect((await post({ caseAreas: ["EMPLOYMENT"], ukJurisdiction: 1 })).status).to.equal(400);
   });

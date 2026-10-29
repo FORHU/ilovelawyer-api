@@ -2,6 +2,15 @@ import prisma from "../lib/prisma";
 import { IntakeMessageRole, IntakeMessageReplyStatus } from "@prisma/client";
 import { openIntakeMessage, openIntakeMessages, sealIntakeMessageContent, sealIntakePendingReply } from "../utils/intake-message-content";
 
+/** Stable 32-bit key for a case id, for the advisory lock below — same idiom as cron-lock.ts's
+ * lockKey, duplicated rather than imported since that one hashes a job name, not a case id, and
+ * the two locks are never meant to collide by sharing a keyspace. */
+function lockKeyFor(caseId: string): number {
+  let hash = 0;
+  for (let i = 0; i < caseId.length; i++) hash = (Math.imul(hash, 31) + caseId.charCodeAt(i)) | 0;
+  return hash;
+}
+
 /** The intake chat's own repository — reads and writes IntakeMessage only, never Message/
  * Consultation. No groups, no timeline/mindMap/citation side-tables, no Jev message-triage
  * columns: those are lawyer-Terminal concerns this pipeline doesn't carry. Mirrors ChatRepo's
@@ -52,7 +61,9 @@ export default class IntakeChatRepo {
   /** True when this case's most recent intake turn is a user turn still awaiting its reply — the
    * intake pipeline's own one-turn-at-a-time guard, same reasoning as ChatRepo.hasPendingTurn: one
    * Chat Wonder session per case, two turns generating concurrently on it would silently orphan
-   * one of them. */
+   * one of them. Not safe against two near-simultaneous callers both passing this check before
+   * either's insert lands — see createUserMessageIfNoPendingTurn below for the atomic version
+   * enqueueIntakeGeneration actually uses. */
   static async hasPendingTurn(caseId: string): Promise<boolean> {
     const last = await prisma.intakeMessage.findFirst({
       where: { caseId },
@@ -60,6 +71,28 @@ export default class IntakeChatRepo {
       select: { role: true, replyStatus: true },
     });
     return last?.role === "user" && last.replyStatus === "PENDING";
+  }
+
+  /** The check-then-insert hasPendingTurn + createMessage would otherwise be, made atomic: a
+   * Postgres transaction-scoped advisory lock, keyed by caseId, so two near-simultaneous sends
+   * for the same case can't both read "nothing pending" before either's insert lands — the second
+   * caller's check, inside the same lock, now sees the first's row. Returns null (same meaning as
+   * hasPendingTurn returning true) when another turn is already pending; the created message
+   * otherwise. */
+  static async createUserMessageIfNoPendingTurn(caseId: string, content: string, userId: string, documentIds?: string[]) {
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKeyFor(caseId)})`;
+      const last = await tx.intakeMessage.findFirst({
+        where: { caseId },
+        orderBy: { createdAt: "desc" },
+        select: { role: true, replyStatus: true },
+      });
+      if (last?.role === "user" && last.replyStatus === "PENDING") return null;
+      const stored = await tx.intakeMessage.create({
+        data: { caseId, role: "user", content: sealIntakeMessageContent(content), userId, documentIds: documentIds ?? [], replyStatus: "PENDING" },
+      });
+      return openIntakeMessage(stored) ?? stored;
+    });
   }
 
   /** Turns that have been PENDING longer than is ever legitimate — swept back to FAILED by the
