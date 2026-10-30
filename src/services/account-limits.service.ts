@@ -3,7 +3,7 @@ import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import { MAX_CASES_PER_ACCOUNT, CASE_SPEND_LIMIT_USD } from "../config";
 import { emitToUser } from "../lib/socket";
-import { LIVE_SUBSCRIPTION_STATUSES } from "../constants/plan-trial.constants";
+import AuthRepo from "../repositories/auth.repository";
 import PlanGateSvc from "./plan-gate.service";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
@@ -121,8 +121,10 @@ export default class AccountLimitsSvc {
   /** Throws once a lawyer's account has used its AI allowance, across every case. Spend is only
    * known after a call ends, so the request that crosses the line still finishes. */
   static async assertAccountHasBudget(userId: string, db: typeof prisma = prisma) {
-    await PlanGateSvc.assertOpen(userId, db);
-    const info = await AccountLimitsSvc.allowanceInfo(userId, db);
+    const { info, verifyBeforePlan } = await AccountLimitsSvc.loadAllowance(userId, db);
+    // Only an account that can be held at all pays for the gate's own read (the planGate
+    // middleware already refused a held lawyer's request; this is defence in depth).
+    if (verifyBeforePlan) await PlanGateSvc.assertOpen(userId, db);
     if (info.trialEnded) {
       throw new HttpError("Your free trial has ended. You can still read everything. Choose a plan to keep going.", 403, "PLAN_TRIAL_ENDED");
     }
@@ -142,14 +144,31 @@ export default class AccountLimitsSvc {
     userId: string,
     db: typeof prisma = prisma,
   ): Promise<AllowanceInfo> {
+    return (await AccountLimitsSvc.loadAllowance(userId, db)).info;
+  }
+
+  /** allowanceInfo, plus the account's verifyBeforePlan read in the same query, so
+   * assertAccountHasBudget knows whether to check the plan gate without another lookup. */
+  private static async loadAllowance(userId: string, db: typeof prisma): Promise<{ info: AllowanceInfo; verifyBeforePlan: boolean }> {
     const user = await db.user.findUnique({
       where: { id: userId },
-      select: { role: true, extraAiAllowanceUsd: true, tenantId: true, allowancePeriodStart: true, planTrialEndsAt: true, paymentPlan: { select: { includedAllowanceUsd: true } } },
+      select: {
+        role: true,
+        verifyBeforePlan: true,
+        extraAiAllowanceUsd: true,
+        tenantId: true,
+        allowancePeriodStart: true,
+        planTrialEndsAt: true,
+        paymentPlan: { select: { includedAllowanceUsd: true } },
+      },
     });
-    if (user?.role !== "LAWYER") return { limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0, trialEnded: false, trialEndsAt: null };
+    if (user?.role !== "LAWYER") {
+      return { info: { limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0, trialEnded: false, trialEndsAt: null }, verifyBeforePlan: false };
+    }
+    const verifyBeforePlan = !!user.verifyBeforePlan;
     const trial = { trialEnded: false, trialEndsAt: user.planTrialEndsAt ?? null };
     if (await AccountLimitsSvc.planTrialOver(userId, user.planTrialEndsAt, db)) {
-      return { limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0, ...trial, trialEnded: true };
+      return { info: { limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0, ...trial, trialEnded: true }, verifyBeforePlan };
     }
 
     // A tenant-less lawyer (legacy/edge case) still honors the global off-switch: threshold 0
@@ -159,9 +178,10 @@ export default class AccountLimitsSvc {
     const included = user.tenantId ? (user.paymentPlan?.includedAllowanceUsd ?? 0) : CASE_SPEND_LIMIT_USD;
     const threshold = included + user.extraAiAllowanceUsd;
     if (!threshold) {
-      return user.tenantId
+      const info: AllowanceInfo = user.tenantId
         ? { limited: true, locked: true, remainingUsd: 0, consumedPct: 100, thresholdUsd: 0, ...trial }
         : { limited: false, locked: false, remainingUsd: null, consumedPct: null, thresholdUsd: 0, ...trial };
+      return { info, verifyBeforePlan };
     }
 
     const { _sum } = await db.llmUsage.aggregate({
@@ -170,12 +190,15 @@ export default class AccountLimitsSvc {
     });
     const spent = _sum.estimatedCostUsd ?? 0;
     return {
-      limited: true,
-      locked: spent >= threshold,
-      remainingUsd: Math.max(0, threshold - spent),
-      consumedPct: Math.min(100, Math.round((spent / threshold) * 1000) / 10),
-      thresholdUsd: threshold,
-      ...trial,
+      info: {
+        limited: true,
+        locked: spent >= threshold,
+        remainingUsd: Math.max(0, threshold - spent),
+        consumedPct: Math.min(100, Math.round((spent / threshold) * 1000) / 10),
+        thresholdUsd: threshold,
+        ...trial,
+      },
+      verifyBeforePlan,
     };
   }
 
@@ -183,8 +206,7 @@ export default class AccountLimitsSvc {
    * over and no subscription is live. Asks about subscriptions only once a trial has ended. */
   static async planTrialOver(userId: string, planTrialEndsAt: Date | null, db: typeof prisma = prisma, now: Date = new Date()): Promise<boolean> {
     if (!planTrialEndsAt || planTrialEndsAt > now) return false;
-    const live = await db.paymentPlanSubscription.findFirst({ where: { userId, status: { in: LIVE_SUBSCRIPTION_STATUSES } }, select: { id: true } });
-    return !live;
+    return !(await AuthRepo.hasLiveSubscription(userId, db));
   }
 
   /** planTrialOver for a lawyer by id alone (the top-up checkout). */

@@ -6,6 +6,7 @@ import CitationExtractionQueue from "./queues/citation-extraction.queue";
 import AiGenerationQueue from "./queues/ai-generation.queue";
 import CaseGraphPromotionQueue from "./queues/case-graph-promotion.queue";
 import ChatGenerationQueue, { ClientChatGenerationQueue, startStalePendingChatSweep } from "./queues/chat-generation.queue";
+import IntakeChatGenerationQueue, { startIntakeStalePendingSweep } from "./queues/intake-chat-generation.queue";
 import EventReminderQueue from "./queues/event-reminder.queue";
 import AccountDeletionQueue from "./queues/account-deletion.queue";
 import ConsultationDeletionQueue from "./queues/consultation-deletion.queue";
@@ -35,8 +36,15 @@ CitationExtractionQueue.start();
 AiGenerationQueue.start();
 CaseGraphPromotionQueue.start();
 ChatGenerationQueue.start();
-ClientChatGenerationQueue.start();
 startStalePendingChatSweep();
+// ClientCaseSvc.sendMessage now dispatches to IntakeChatGenerationQueue below, a fully separate
+// pipeline — nothing enqueues to ClientChatGenerationQueue's queue anymore. Still started here
+// anyway, on purpose: any job already sitting on that queue from before this deploy (sent under
+// the old code) would otherwise be stranded with no consumer, and its sender would wait forever
+// for a reply that never comes. Safe to stop once that queue is confirmed drained.
+ClientChatGenerationQueue.start();
+IntakeChatGenerationQueue.start();
+startIntakeStalePendingSweep();
 EventReminderQueue.start();
 AccountDeletionQueue.start();
 ConsultationDeletionQueue.start();
