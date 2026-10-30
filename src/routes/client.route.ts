@@ -32,6 +32,8 @@ router.post("/cases/:caseId/archive", asyncHandler(ClientCaseCtrl.archive));
 router.post("/cases/:caseId/unarchive", asyncHandler(ClientCaseCtrl.unarchive));
 router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages));
 router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
+router.post("/cases/:caseId/voice-messages/presign", asyncHandler(ClientCaseCtrl.presignVoiceMessage));
+router.post("/cases/:caseId/voice-messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendVoiceMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
 router.post("/cases/:caseId/documents", asyncHandler(ClientCaseCtrl.addDocument));
 // The Documents tab's row actions (#574). Retry reads the file again like an upload does, so like

@@ -6,6 +6,9 @@ export const CLIENT_CASE_WHERE_MAX_LENGTH = 120;
 export const CLIENT_MESSAGE_MAX_LENGTH = 4000;
 /** Case documents one chat message can carry. */
 export const CLIENT_MESSAGE_DOCUMENTS_MAX = 5;
+/** A voice message's recording — generously above a few minutes of webm/opus, well under what
+ * Amazon Transcribe's batch API accepts. */
+export const VOICE_MESSAGE_MAX_BYTES = 25 * 1024 * 1024;
 /** How long the link the Documents tab opens a file with stays valid. The app fetches a fresh one
  * on every View, so it only has to outlive the click. */
 export const CLIENT_DOCUMENT_LINK_SECONDS = 300;

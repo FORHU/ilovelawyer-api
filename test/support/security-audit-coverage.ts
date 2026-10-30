@@ -252,6 +252,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/cases/:caseId/archive": CASE_FEED,
   "POST /client/cases/:caseId/unarchive": CASE_FEED,
   "POST /client/cases/:caseId/messages": AI_RUN,
+  "POST /client/cases/:caseId/voice-messages/presign": UPLOAD,
+  "POST /client/cases/:caseId/voice-messages": AI_RUN,
   "POST /client/cases/:caseId/documents/presign": UPLOAD,
   "POST /client/cases/:caseId/documents": UPLOAD,
   "DELETE /client/cases/:caseId/documents/:documentId": ["document.deleted"],

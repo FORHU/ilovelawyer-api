@@ -30,6 +30,8 @@ import { CLIENT_DOCUMENT_LINK_SECONDS } from "../constants/client-case.constants
 import CaseAreaSvc, { type CaseAreaRef } from "./case-area.service";
 import { OTHER_CASE_AREA } from "../constants/case-area.constants";
 import { firmScope } from "../utils/workspace";
+import { getPresignedUploadUrl } from "../utils/s3";
+import { randomUUID } from "crypto";
 
 /** The client's personal workspace, as clientWorkspaceOf(req) gives it. */
 export interface ClientWorkspace {
@@ -412,6 +414,30 @@ export default class ClientCaseSvc {
   static async presignDocument(workspace: ClientWorkspace, userId: string, caseId: string, file: { filename: string; contentType: string; fileSize?: number }) {
     await ClientCaseSvc.load(workspace, caseId);
     return DocumentSvc.presign(firmScope(workspace.id), userId, file.filename, file.contentType, caseId, undefined, file.fileSize);
+  }
+
+  /** Step one of a voice message: a URL the browser PUTs its recording to, straight to S3 — same
+   * shape as presignDocument, but its own key namespace (voice-messages/, not a case Document)
+   * since a recording is never listed/managed like an uploaded document. */
+  static async presignVoiceMessage(workspace: ClientWorkspace, caseId: string, contentType: string, fileSize?: number) {
+    await ClientCaseSvc.load(workspace, caseId);
+    const key = `voice-messages/${caseId}/${randomUUID()}.webm`;
+    const uploadUrl = await getPresignedUploadUrl(key, contentType, fileSize);
+    return { uploadUrl, key };
+  }
+
+  /** Step two: the recording is already in S3 (presignVoiceMessage's key) — same credit/queue path
+   * as sendMessage, except the intake worker transcribes this turn before generating a reply (see
+   * IntakeChatSvc.enqueueIntakeGeneration's audioKey param). */
+  static async sendVoiceMessage(workspace: ClientWorkspace, userId: string, caseId: string, audioKey: string) {
+    await ClientCaseSvc.load(workspace, caseId);
+    await ClientBillingSvc.spendCredit(caseId);
+    try {
+      return await IntakeChatSvc.enqueueIntakeGeneration(workspace, userId, caseId, "[Voice message — transcribing…]", undefined, audioKey);
+    } catch (err) {
+      await ClientBillingSvc.refundCredit(caseId);
+      throw err;
+    }
   }
 
   /** Step two: records the uploaded file on the case. Extraction starts from here, and the AI uses

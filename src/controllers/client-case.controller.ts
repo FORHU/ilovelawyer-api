@@ -13,8 +13,10 @@ import {
   addClientDocumentSchema,
   createClientCaseSchema,
   presignClientDocumentSchema,
+  presignVoiceMessageSchema,
   quoteClientTopUpSchema,
   sendClientMessageSchema,
+  sendVoiceMessageSchema,
   topUpClientCaseSchema,
   updateClientCaseSchema,
 } from "../validation/client-case.validation";
@@ -88,6 +90,16 @@ export default class ClientCaseCtrl {
   static async presignDocument(req: Request, res: Response) {
     const file = validate(presignClientDocumentSchema, req.body);
     res.status(200).json(await ClientCaseSvc.presignDocument(clientWorkspaceOf(req), req.user.userId, req.params.caseId, file));
+  }
+
+  static async presignVoiceMessage(req: Request, res: Response) {
+    const { contentType, fileSize } = validate(presignVoiceMessageSchema, req.body);
+    res.status(200).json(await ClientCaseSvc.presignVoiceMessage(clientWorkspaceOf(req), req.params.caseId, contentType, fileSize));
+  }
+
+  static async sendVoiceMessage(req: Request, res: Response) {
+    const { key } = validate(sendVoiceMessageSchema, req.body);
+    res.status(202).json(await ClientCaseSvc.sendVoiceMessage(clientWorkspaceOf(req), req.user.userId, req.params.caseId, key));
   }
 
   static async addDocument(req: Request, res: Response) {

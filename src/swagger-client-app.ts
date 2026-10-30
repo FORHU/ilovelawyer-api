@@ -550,6 +550,17 @@ export const clientAppPaths: Paths = {
                         properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["PENDING", "READY", "FAILED"] } },
                       },
                     },
+                    audioUrl: { type: "string", nullable: true, description: "Playable audio: the client's own recording on a voice-originated user message, or Polly's synthesized reply on its answer" },
+                    audioTimings: {
+                      type: "object",
+                      nullable: true,
+                      description: "Only on a voice reply's answer: Polly's sentence/word speech marks for audioUrl, to sync a transcript highlight to playback. `text` (markdown-stripped) is what sentenceTimings/wordTimings index into — never this message's own `text` field",
+                      properties: {
+                        text: { type: "string" },
+                        sentenceTimings: { type: "array", items: { type: "object", properties: { time: { type: "number" }, start: { type: "integer" }, end: { type: "integer" } } } },
+                        wordTimings: { type: "array", items: { type: "object", properties: { time: { type: "number" }, start: { type: "integer" }, end: { type: "integer" } } } },
+                      },
+                    },
                     createdAt: { type: "string", format: "date-time" },
                   },
                 },
@@ -584,6 +595,43 @@ export const clientAppPaths: Paths = {
         409: err(
           "DOCUMENTS_NOT_READY: a document is still being read or couldn't be read; `message` names them and `documents` lists { id, name, status }. Otherwise a reply is already generating. Neither uses a credit",
         ),
+      },
+    },
+  },
+  "/client/cases/{caseId}/voice-messages/presign": {
+    post: {
+      tags: [TAG],
+      summary: "Step 1 of a voice message: a URL to PUT the recording to S3",
+      security,
+      parameters: [caseId],
+      requestBody: {
+        required: true,
+        content: json({ type: "object", required: ["contentType"], properties: { contentType: { type: "string" }, fileSize: { type: "integer" } } }),
+      },
+      responses: {
+        200: { description: "Upload URL", content: json({ type: "object", properties: { uploadUrl: { type: "string" }, key: { type: "string" } } }) },
+        404: err("Not one of this client's cases"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/voice-messages": {
+    post: {
+      tags: [TAG],
+      summary: "Step 2: ask the AI with the uploaded recording",
+      description:
+        "Transcribed (Amazon Transcribe) before the AI answers; the transcript appears in GET messages as soon as it's ready, ahead of the AI's reply. The reply's own audio (Polly) lands at the same time as chat:done.",
+      security,
+      parameters: [caseId],
+      requestBody: {
+        required: true,
+        content: json({ type: "object", required: ["key"], properties: { key: { type: "string", description: "From voice-messages/presign" } } }),
+      },
+      responses: {
+        202: { description: "Queued; the transcript and then the answer appear in GET messages. Uses one chat credit" },
+        402: err("OUT_OF_CREDITS: top up the case"),
+        403: err("CONSENT_REQUIRED (AI processing withdrawn)"),
+        404: err("Not one of this client's cases"),
+        409: err("A reply is already generating for this case. Doesn't use a credit"),
       },
     },
   },
