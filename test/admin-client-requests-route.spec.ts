@@ -206,6 +206,36 @@ describe("admin client requests, fees and refunds", () => {
       expect((await list("&unclaimedOver48h=true").expect(200)).body.data[0].unclaimedOver48h).to.equal(true);
       await list("&status=NOPE").expect(400);
     });
+
+    // Several lawyers (phase 5): a request stays ROUTED with lawyers on it.
+    it("shows a request lawyers are on, past its 48h, as QUOTED and not unclaimed, with the chosen lawyer's firm", async () => {
+      const id = crypto.randomUUID();
+      const now = Date.now();
+      await prisma.clientRequest.create({
+        data: { id, caseId, clientId, status: "ROUTED", consentVersion: "test", consentAcceptedAt: new Date(now - 72 * HOUR_MS), createdAt: new Date(now - 72 * HOUR_MS), routedAt: new Date(now - 72 * HOUR_MS), routingExpiresAt: new Date(now - 24 * HOUR_MS) },
+      });
+      const join = (lawyerId: string, organizationId: string, hoursAgo: number, quoted: boolean) =>
+        prisma.clientRequestClaim.create({
+          data: { requestId: id, lawyerId, organizationId, claimedAt: new Date(now - hoursAgo * HOUR_MS), expiresAt: new Date(now + HOUR_MS), ...(quoted ? { quoteType: "FIXED_FEE", quoteAmountMinor: 80000, quoteCurrency: "GBP", quotedAt: new Date(now - HOUR_MS) } : {}) },
+        });
+      try {
+        const first = await join(lawyer1, org1, 60, true);
+        await join(lawyer2, org2, 50, false);
+        const row = async () => (await list().expect(200)).body.data.find((r: any) => r.id === id);
+        expect(await row()).to.deep.include({ status: "QUOTED", unclaimedOver48h: false, organizationName: null });
+        const idsOf = async (q: string) => (await list(q).expect(200)).body.data.map((r: any) => r.id);
+        expect(await idsOf("&status=QUOTED")).to.deep.equal([id]);
+        expect(await idsOf("&status=ROUTED")).to.not.include(id);
+        expect(await idsOf("&unclaimedOver48h=true")).to.not.include(id);
+
+        // The client picks the first lawyer (firm One), though firm Two joined last.
+        await prisma.clientRequest.update({ where: { id }, data: { status: "CONFIRMED" } });
+        await prisma.clientRequestClaim.updateMany({ where: { requestId: id, id: { not: first.id } }, data: { outcome: "NOT_CHOSEN", endedAt: new Date() } });
+        expect(await row()).to.deep.include({ status: "CONFIRMED", organizationName: "One Law LLP" });
+      } finally {
+        await prisma.clientRequest.delete({ where: { id } });
+      }
+    });
   });
 
   describe("GET /client-requests/fees-summary", () => {

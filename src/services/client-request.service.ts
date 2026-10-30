@@ -14,6 +14,7 @@ import OrganizationChargeRepo from "../repositories/organization-charge.reposito
 import OrganizationRepo from "../repositories/organization.repository";
 import logger from "../utils/logger";
 import HttpError from "../utils/http-error";
+import { shownStatus } from "../utils/client-request-status";
 import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
@@ -21,6 +22,7 @@ import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../type
 import {
   CLIENT_REQUEST_CONSENT_TEXT,
   CLIENT_REQUEST_CONSENT_VERSION,
+  CLIENT_REQUEST_MAX_LAWYERS,
   CLIENT_REQUEST_REFERRAL_DISCLOSURE,
 } from "../constants/client-request.constants";
 
@@ -77,15 +79,9 @@ function quoteDto(claim: ClaimForClient) {
   };
 }
 
-/**
- * The request's status as the client sees it. Several lawyers (phase 5): the request stays ROUTED
- * until the client picks a quote, so the client sees QUOTED once any lawyer on it has quoted, and
- * CLAIMED once any has joined, as when one lawyer held a request.
- */
+/** The request's status as the client sees it (shownStatus). */
 function statusForClient(r: ClientRequestForClient): ClientRequestStatus {
-  if (r.status !== "ROUTED") return r.status;
-  const open = r.claims.filter((c) => c.outcome === null);
-  return open.some((c) => c.quotedAt) ? "QUOTED" : open.length ? "CLAIMED" : "ROUTED";
+  return shownStatus(r.status, r.claims);
 }
 
 /** The lawyer the client hired, or, until they pick, the only quote: the one `lawyer`/`quote`
@@ -101,9 +97,10 @@ function oneLawyer(r: ClientRequestForClient): ClaimForClient | null {
 
 /** LawyerRequestForClient in the contract. Several lawyers (phase 5): `lawyers` is everyone on the
  * request now, oldest first, each with their quote once sent (`claimId` is what confirm and decline
- * take); `pickByAt` is when it expires without a pick. `lawyer`/`quote` stay for one lawyer (the one
- * hired, or the only quote). The referral disclosure is what the client acknowledges to confirm
- * (#512). */
+ * take); `pickByAt` is when it expires without a pick; `openToLawyers`, whether more lawyers can
+ * still take it up (its 48h open and a place free), so the app doesn't promise quotes that can't
+ * come. `lawyer`/`quote` stay for one lawyer (the one hired, or the only quote). The referral
+ * disclosure is what the client acknowledges to confirm (#512). */
 function toDto(r: ClientRequestForClient) {
   const one = oneLawyer(r);
   const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c) }));
@@ -117,6 +114,11 @@ function toDto(r: ClientRequestForClient) {
     createdAt: r.createdAt,
     lawyers,
     pickByAt: r.status === "ROUTED" ? r.pickByAt : null,
+    openToLawyers:
+      r.status === "ROUTED" &&
+      !!r.routingExpiresAt &&
+      r.routingExpiresAt > new Date() &&
+      r.claims.filter((c) => c.outcome === null).length < CLIENT_REQUEST_MAX_LAWYERS,
     lawyer: one ? lawyerDto(one) : null,
     quote: one ? quoteDto(one) : null,
     referralDisclosure: lawyers.some((l) => l.quote) ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,

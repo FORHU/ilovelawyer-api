@@ -1,4 +1,4 @@
-/** ClientRequestClaimRepo — lawyers joining a client request (#511; any number at once since phase 5),
+/** ClientRequestClaimRepo — lawyers joining a client request (#511; up to 3 at once since phase 5),
  * quoting, and their claims ending. Runs against the real database, like
  * test/audit-event-repository.spec.ts: the race can only be shown against Postgres. It makes its own
  * users, organization, case and request, and removes them. */
@@ -9,7 +9,7 @@ import prisma from "../src/lib/prisma";
 import ClientRequestClaimRepo, { CLAIM_HOLD_MS } from "../src/repositories/client-request-claim.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import OrganizationChargeRepo from "../src/repositories/organization-charge.repository";
-import { CLIENT_REQUEST_PICK_WINDOW_MS } from "../src/constants/client-request.constants";
+import { CLIENT_REQUEST_MAX_LAWYERS, CLIENT_REQUEST_PICK_WINDOW_MS } from "../src/constants/client-request.constants";
 
 const HOUR_MS = 60 * 60 * 1000;
 const LAWYERS = 8;
@@ -58,12 +58,12 @@ describe("ClientRequestClaimRepo", () => {
   });
 
   describe("claim (joining)", () => {
-    it("lets every one of many simultaneous joins in, once each, and keeps the request ROUTED", async () => {
-      const results = await Promise.all([...lawyerIds, ...lawyerIds].map((lawyerId) => ClientRequestClaimRepo.claim(requestId, lawyerId, orgId)));
+    it("lets exactly 3 of many simultaneous joins in, and keeps the request ROUTED", async () => {
+      const results = await Promise.all(lawyerIds.map((lawyerId) => ClientRequestClaimRepo.claim(requestId, lawyerId, orgId)));
 
-      expect(results.filter((r) => "claim" in r && r.claim)).to.have.length(LAWYERS);
-      expect(results.filter((r) => r.refused === "JOINED")).to.have.length(LAWYERS);
-      expect(await prisma.clientRequestClaim.count({ where: { requestId, outcome: null } })).to.equal(LAWYERS);
+      expect(results.filter((r) => "claim" in r && r.claim)).to.have.length(CLIENT_REQUEST_MAX_LAWYERS);
+      expect(results.filter((r) => r.refused === "FULL")).to.have.length(LAWYERS - CLIENT_REQUEST_MAX_LAWYERS);
+      expect(await prisma.clientRequestClaim.count({ where: { requestId, outcome: null } })).to.equal(CLIENT_REQUEST_MAX_LAWYERS);
       expect((await request()).status).to.equal("ROUTED");
     });
 
@@ -228,6 +228,8 @@ describe("ClientRequestClaimRepo", () => {
       expect((await claimRow(a.id)).outcome).to.equal("NOT_CHOSEN");
       expect((await claimRow(b.id)).outcome).to.equal(null);
       expect((await claimRow(c.id)).outcome).to.equal("NOT_CHOSEN");
+      // So it never reaches them again, even if it's routed afresh after an unpaid fee.
+      expect((await request()).excludedLawyerIds.sort()).to.deep.equal([lawyerIds[0]!, lawyerIds[2]!].sort());
     });
 
     it("refuses a quote that isn't open, and a second confirm", async () => {
@@ -320,31 +322,32 @@ describe("ClientRequestClaimRepo", () => {
     });
 
     it("expires a routed request once its 48h is over with nobody on it, and only then", async () => {
-      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(null);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
 
       const due = (await ClientRequestRepo.findExpired(new Date())).find((r) => r.id === requestId);
       expect(due).to.deep.include({ caseId, clientId, pickByAt: null });
       expect(due!.client.email).to.equal(`claim-race-${clientId}@example.com`);
-      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(true);
-      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.deep.equal([]);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(null);
       expect((await request()).status).to.equal("EXPIRED");
     });
 
     it("doesn't expire a request with a lawyer on it when the 48h end", async () => {
       await join(lawyerIds[0]!);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { routingExpiresAt: new Date(Date.now() - 1000) } });
-      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(null);
     });
 
     it("expires a request the client didn't pick a quote on in time, ending the open claims as not chosen", async () => {
       const a = await join(lawyerIds[0]!);
       await ClientRequestClaimRepo.quote(a, QUOTE);
-      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(null);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { pickByAt: new Date(Date.now() - 1000) } });
 
       expect((await ClientRequestRepo.findExpired(new Date())).map((r) => r.id)).to.include(requestId);
-      expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(true);
+      // The lawyers whose claims it ended, so they can be told.
+      expect(await ClientRequestRepo.expire(requestId, new Date())).to.deep.equal([lawyerIds[0]]);
       expect((await claimRow(a.id)).outcome).to.equal("NOT_CHOSEN");
     });
 

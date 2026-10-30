@@ -16,7 +16,9 @@ export default class OrganizationChargeRepo {
   /**
    * The client confirms one lawyer's quote (#513; several lawyers in phase 5): ROUTED -> CONFIRMED,
    * the per-case fee is recorded PENDING against the organization whose lawyer quoted, and every other
-   * open claim ends NOT_CHOSEN (`notChosen`: those lawyers, to tell). Both or neither, once: null when
+   * open claim ends NOT_CHOSEN (`notChosen`: those lawyers, to tell). Those lawyers are excluded from
+   * the request, as when any other claim ends, so it doesn't reach them again if the chosen lawyer's
+   * fee is never paid and it's routed afresh (lapseUnpaid). Both or neither, once: null when
    * the request isn't ROUTED any more (a second confirm, a withdrawal, it expired) or that claim isn't
    * an open quote (the lawyer released it, or it was declined).
    */
@@ -41,7 +43,10 @@ export default class OrganizationChargeRepo {
         });
         const others = await tx.clientRequestClaim.findMany({ where: { requestId, outcome: null, id: { not: claim.id } }, select: { lawyerId: true } });
         await tx.clientRequestClaim.updateMany({ where: { requestId, outcome: null, id: { not: claim.id } }, data: { outcome: "NOT_CHOSEN", endedAt: now } });
-        return { charge, claim, notChosen: others.map((c) => c.lawyerId) };
+        const notChosen = others.map((c) => c.lawyerId);
+        // The request row is already locked by the status change above.
+        if (notChosen.length) await tx.clientRequest.update({ where: { id: requestId }, data: { excludedLawyerIds: { push: notChosen } } });
+        return { charge, claim, notChosen };
       });
     } catch (err) {
       if (err instanceof MovedOn) return null;

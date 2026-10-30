@@ -9,9 +9,11 @@ ALTER TYPE "ClaimOutcome" ADD VALUE 'NOT_CHOSEN';
 ALTER TABLE "ClientRequest" ADD COLUMN     "pickByAt" TIMESTAMP(3);
 
 -- A request one lawyer holds today carries on under the new rules: back to ROUTED, its claim still
--- open, and if that lawyer has quoted, the client has 7 days from the quote to pick it.
+-- open, and if that lawyer has quoted, the client has 7 days to pick it, counted from the quote or
+-- from now, whichever is later: a quote older than 7 days was under no deadline when it was sent,
+-- so it mustn't expire on the first sweep after this runs.
 UPDATE "ClientRequest" r
-SET "pickByAt" = c."quotedAt" + INTERVAL '7 days'
+SET "pickByAt" = GREATEST(c."quotedAt", now()) + INTERVAL '7 days'
 FROM "ClientRequestClaim" c
 WHERE c."requestId" = r."id" AND c."outcome" IS NULL AND c."quotedAt" IS NOT NULL AND r."status" IN ('CLAIMED', 'QUOTED');
 

@@ -1,7 +1,7 @@
 import type { ClaimOutcome, Prisma, QuoteType, ReleaseReason } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { ROUTING_WINDOW_MS } from "./client-request.repository";
-import { CLIENT_REQUEST_PICK_WINDOW_MS, CLIENT_REQUEST_UNPAID_FEE_HOURS } from "../constants/client-request.constants";
+import { CLIENT_REQUEST_MAX_LAWYERS, CLIENT_REQUEST_PICK_WINDOW_MS, CLIENT_REQUEST_UNPAID_FEE_HOURS } from "../constants/client-request.constants";
 
 /** How long a lawyer who joined a request has to quote before their claim lapses (#511). */
 export const CLAIM_HOLD_MS = 24 * 60 * 60 * 1000;
@@ -12,9 +12,9 @@ export const CLAIM_REMINDER_LEAD_MS = 2 * 60 * 60 * 1000;
 /** Rolls the transaction back when the request or claim had already moved on. */
 class RequestMovedOn extends Error {}
 
-/** Why a lawyer couldn't join: CLOSED (not routed, its 48h over, or they're excluded from it), or
- * JOINED (they already are). */
-export type JoinRefusal = "CLOSED" | "JOINED";
+/** Why a lawyer couldn't join: CLOSED (not routed, its 48h over, or they're excluded from it), FULL
+ * (CLIENT_REQUEST_MAX_LAWYERS already on it), or JOINED (they already are). */
+export type JoinRefusal = "CLOSED" | "FULL" | "JOINED";
 
 type Tx = Prisma.TransactionClient;
 
@@ -74,13 +74,14 @@ async function endClaim(
 }
 
 /** A lawyer's place on a client request (ClientRequestClaim): they've joined it, can see the names
- * and quote within 24h. Any number of lawyers can be on a request at once. */
+ * and quote within 24h; up to CLIENT_REQUEST_MAX_LAWYERS at once. */
 export default class ClientRequestClaimRepo {
   /**
    * A lawyer joins a routed request (#511, several lawyers in phase 5): only while it's ROUTED, inside
-   * its 48h, and they aren't excluded from it. There's no limit on how many join. The request row's
-   * lock is taken first, so joins at once are counted one after another and a lawyer can't hold two
-   * claims. `organizationId` null: a solo lawyer, with no organization (docs/adr/0022).
+   * its 48h, they aren't excluded from it, and fewer than CLIENT_REQUEST_MAX_LAWYERS hold it. The
+   * request row's lock is taken first, so many joins at once are counted one after another and no
+   * more than the most ever get in. `organizationId` null: a solo lawyer, with no organization
+   * (docs/adr/0022).
    */
   static async claim(requestId: string, lawyerId: string, organizationId: string | null, now: Date = new Date()) {
     return prisma.$transaction(async (tx) => {
@@ -88,6 +89,7 @@ export default class ClientRequestClaimRepo {
       if (!open) return { refused: "CLOSED" as JoinRefusal };
       const held = await tx.clientRequestClaim.findMany({ where: { requestId, outcome: null }, select: { lawyerId: true } });
       if (held.some((c) => c.lawyerId === lawyerId)) return { refused: "JOINED" as JoinRefusal };
+      if (held.length >= CLIENT_REQUEST_MAX_LAWYERS) return { refused: "FULL" as JoinRefusal };
       const claim = await tx.clientRequestClaim.create({
         data: { requestId, lawyerId, organizationId, claimedAt: now, expiresAt: new Date(now.getTime() + CLAIM_HOLD_MS) },
       });
