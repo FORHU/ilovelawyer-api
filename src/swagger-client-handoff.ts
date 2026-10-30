@@ -61,6 +61,10 @@ const threadParams: Parameter[] = [
   { name: "page", in: "query", schema: { type: "integer", default: 1 } },
   { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 200 } },
 ];
+/** The client's thread with one lawyer (one per lawyer since phase 5b). */
+const claimParam: Parameter[] = [
+  { name: "claimId", in: "query", schema: { type: "string", format: "uuid" }, description: "The lawyer's thread (LawyerOffer.claimId). Left out: the hired lawyer's." },
+];
 const threadPage: Schema = {
   type: "object",
   properties: {
@@ -114,7 +118,7 @@ export const clientHandoffTags: Tags = [
       "| Event | Payload | When |",
       "| --- | --- | --- |",
       "| `client-request:updated` | `{ requestId, status, updatedAt }` | Any status change |",
-      "| `engagement:message` | `{ requestId, message }` | The lawyer posts in the thread |",
+      "| `engagement:message` | `{ requestId, claimId, message }` | A lawyer posts in their thread (from joining, phase 5b) |",
     ].join("\n"),
   },
   {
@@ -134,7 +138,7 @@ export const clientHandoffTags: Tags = [
       "| `client-request:taken` | `{ requestId }` | Claimed by someone else, withdrawn or expired: drop it from the inbox |",
       "| `client-request:updated` | `{ requestId, status, updatedAt }` | A request you hold changed |",
       "| `client-request:claim-expiring` | `{ requestId, claimExpiresAt }` | 2h before your hold ends |",
-      "| `engagement:message` | `{ requestId, message }` | The client posts in the thread |",
+      "| `engagement:message` | `{ requestId, claimId, message }` | The client posts in your thread |",
       "| `engagement:document-added` | `{ requestId, caseId, documentId, filename, submittedBy, submittedAt }` | The client adds a document to the case, or shares one in the thread |",
       "| `engagement:ai-budget` | `{ requestId, percentUsed, state }` | Crossed 80% or 100%, or topped up |",
       "| `shared-cases:changed` (existing) | `{ caseId, shared: false }` | Engagement closed: live access ended |",
@@ -492,8 +496,10 @@ export const clientHandoffSchemas: Schemas = {
     properties: {
       id: { type: "string" },
       requestId: { type: "string" },
+      claimId: { type: "string", nullable: true, description: "The lawyer's claim the thread belongs to" },
       author: {
         type: "object",
+        description: "Before the lawyer is hired, the client's messages show as \"Client\", with no id.",
         properties: { id: { type: "string", nullable: true }, name: { type: "string" }, side: { type: "string", enum: ["CLIENT", "LAWYER", "SYSTEM"] } },
       },
       body: { type: "string" },
@@ -747,24 +753,25 @@ export const clientHandoffPaths: Paths = {
     get: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "The engagement thread, oldest first",
-      description: "Open from ENGAGED, and still readable once CLOSED. 409 before a lawyer is engaged.",
-      parameters: [...requestId, ...threadParams],
+      summary: "Your thread with one lawyer, oldest first",
+      description:
+        "One thread per lawyer (phase 5b): it opens when they join, and stays readable once their claim ends or the engagement closes. Without claimId, the hired lawyer's thread (409 before anyone is hired); 404 for a claimId that isn't on this request.",
+      parameters: [...requestId, ...claimParam, ...threadParams],
       responses: { 200: ok("Messages", threadPage), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "Post in the thread, optionally sharing a document from the case",
+      summary: "Post in your thread with one lawyer, optionally sharing a document from the case",
       description:
-        "Text, a document already on the case (documentId), or both. Sharing a document also sends engagement:document-added to the lawyer. The lawyer gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
-      parameters: requestId,
+        "While the lawyer is on the request: text only. Once they're hired: text, a document already on the case (documentId), or both; sharing a document also sends engagement:document-added to the lawyer. The lawyer gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
+      parameters: [...requestId, ...claimParam],
       body: { type: "object", properties: { body: { type: "string", maxLength: 5000 }, documentId: { type: "string", format: "uuid" } } },
       responses: {
         201: ok("Posted", ref("EngagementMessage")),
-        400: err("Neither text nor a document"),
-        404: err("Not your request, or the document isn't on the case"),
-        409: err("ENGAGEMENT_CLOSED (read-only after close) or INVALID_REQUEST_STATUS"),
+        400: err("Neither text nor a document, or DOCUMENTS_AFTER_HIRE (a document before hiring this lawyer)"),
+        404: err("Not your request, the claim isn't on it, or the document isn't on the case"),
+        409: err("ENGAGEMENT_CLOSED (read-only after close), THREAD_CLOSED (the lawyer's claim ended) or INVALID_REQUEST_STATUS"),
       },
     }),
   },
@@ -772,9 +779,9 @@ export const clientHandoffPaths: Paths = {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "Mark the thread read",
-      description: "The lawyer's messages up to now stop counting as unread.",
-      parameters: requestId,
+      summary: "Mark your thread with one lawyer read",
+      description: "That lawyer's messages up to now stop counting as unread. claimId as for GET.",
+      parameters: [...requestId, ...claimParam],
       responses: { 204: { description: "Marked read" }, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
@@ -1007,8 +1014,9 @@ export const clientHandoffPaths: Paths = {
     get: op({
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "The engagement thread, oldest first",
-      description: "Only the lawyer it's engaged on (404 for anyone else). Still readable once CLOSED.",
+      summary: "Your thread with the client, oldest first",
+      description:
+        "Open from joining (phase 5b), for your latest claim on the request (404 if you never joined it). Still readable once your claim ends or the engagement closes. Until you're hired, the client's messages show as \"Client\".",
       parameters: [...requestId, ...threadParams],
       responses: { 200: ok("Messages", threadPage), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
@@ -1017,10 +1025,10 @@ export const clientHandoffPaths: Paths = {
       issue: "ilovelawyer-api#517", built: true,
       summary: "Post in the thread",
       description:
-        "The lawyer can't add documents to the client's case (read-only), so no documentId here. The client gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
+        "While you're on the request, or engaged. The lawyer can't add documents to the client's case (read-only), so no documentId here. The client gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
       parameters: requestId,
       body: { type: "object", required: ["body"], properties: { body: { type: "string", maxLength: 5000 } } },
-      responses: { 201: ok("Posted", ref("EngagementMessage")), 400: err("No text"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or INVALID_REQUEST_STATUS") },
+      responses: { 201: ok("Posted", ref("EngagementMessage")), 400: err("No text"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or THREAD_CLOSED (your claim ended)") },
     }),
   },
   "/client-requests/{id}/messages/read": {

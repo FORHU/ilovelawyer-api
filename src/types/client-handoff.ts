@@ -178,9 +178,11 @@ export interface ClientRequestClaimExpiringEvent {
   claimExpiresAt: string;
 }
 
-/** To everyone on the engagement thread except the author. */
+/** To the other side of a lawyer's thread with the client (one per lawyer since phase 5b). */
 export interface EngagementMessageEvent {
   requestId: string;
+  /** The lawyer's claim the thread belongs to. */
+  claimId: string;
   message: EngagementMessage;
 }
 
@@ -213,6 +215,9 @@ export interface EngagementAiBudgetEvent {
 export interface EngagementMessage {
   id: string;
   requestId: string;
+  /** The lawyer's claim the thread belongs to (null only for a message whose lawyer's account is gone). */
+  claimId: string | null;
+  /** Before the lawyer is hired, the client's messages show as "Client", with no id. */
   author: { id: string | null; name: string; side: "CLIENT" | "LAWYER" | "SYSTEM" };
   body: string;
   /** Set when the message shares a document. */

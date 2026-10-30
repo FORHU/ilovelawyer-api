@@ -13,6 +13,7 @@ import {
   feedbackClientRequestSchema,
   listClientRequestsSchema,
   listEngagementMessagesSchema,
+  engagementThreadSchema,
   postEngagementMessageSchema,
 } from "../validation/client-request.validation";
 
@@ -67,21 +68,24 @@ export default class ClientRequestCtrl {
     res.status(200).json(await ClientRequestSvc.end(req.user.userId, req.params.id, body));
   }
 
-  /** The engagement thread (#517), oldest first, with how many of the lawyer's messages are unread. */
+  /** The thread with one lawyer (#517; `?claimId=`, or the hired lawyer's), oldest first, with how
+   * many of the lawyer's messages are unread. */
   static async messages(req: Request, res: Response) {
-    const query = validate(listEngagementMessagesSchema, req.query);
-    const thread = await EngagementMessageSvc.forClient(req.user.userId, req.params.id);
+    const { claimId, ...query } = validate(listEngagementMessagesSchema, req.query);
+    const thread = await EngagementMessageSvc.forClient(req.user.userId, req.params.id, claimId);
     res.status(200).json(await EngagementMessageSvc.list(thread, "CLIENT", query));
   }
 
   static async postMessage(req: Request, res: Response) {
+    const { claimId } = validate(engagementThreadSchema, req.query);
     const body = validate(postEngagementMessageSchema, req.body ?? {});
-    const thread = await EngagementMessageSvc.forClient(req.user.userId, req.params.id);
+    const thread = await EngagementMessageSvc.forClient(req.user.userId, req.params.id, claimId);
     res.status(201).json(await EngagementMessageSvc.post(thread, "CLIENT", req.user.userId, body));
   }
 
   static async readMessages(req: Request, res: Response) {
-    await EngagementMessageSvc.markRead(await EngagementMessageSvc.forClient(req.user.userId, req.params.id), "CLIENT");
+    const { claimId } = validate(engagementThreadSchema, req.query);
+    await EngagementMessageSvc.markRead(await EngagementMessageSvc.forClient(req.user.userId, req.params.id, claimId), "CLIENT");
     res.status(204).end();
   }
 
