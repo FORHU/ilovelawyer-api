@@ -8,6 +8,7 @@ import { describe, it, before, after, beforeEach, afterEach } from "mocha";
 import request from "supertest";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
+import { sentQuotation, cleanQuotationMoney } from "./support/quotation-fixture";
 import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import CaseCopyQueue from "../src/queues/case-copy.queue";
@@ -84,6 +85,7 @@ describe("engagement AI budget", () => {
   });
 
   after(async () => {
+    await cleanQuotationMoney({ organizationIds: [orgId] }, [clientId]);
     await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: copyCaseId }] } });
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
@@ -106,10 +108,13 @@ describe("engagement AI budget", () => {
       data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: now, status: "ROUTED", routedAt: now, routingExpiresAt: new Date(now.getTime() + 48 * 3_600_000), pickByAt: new Date(now.getTime() + 7 * 86_400_000) },
     });
     requestId = row.id;
-    await prisma.clientRequestClaim.create({
+    const claim = await prisma.clientRequestClaim.create({
       data: { requestId, lawyerId, organizationId: orgId, claimedAt: now, expiresAt: new Date(now.getTime() + 86_400_000), quoteType: "FIXED_FEE", quoteAmountMinor: 75000, quoteCurrency: "GBP", quoteMessage: "Fixed fee.", quotedAt: now },
     });
+    const quotation = await sentQuotation(claim);
     await confirm().expect(200);
+    // The client pays the quote (the dummy provider): that engages the request.
+    await request(app).post(`/api/client/lawyer-requests/${requestId}/quotations/${quotation.id}/payment`).set(auth(clientId)).send({}).expect(200);
     const { body } = await copy().expect(202);
     await CaseCopyQueue.tick();
     copyCaseId = (await prisma.caseCopy.findUniqueOrThrow({ where: { id: body.caseCopyId } })).copyCaseId!;

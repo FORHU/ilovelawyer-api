@@ -18,7 +18,13 @@ router.post("/:id/pass", asyncHandler(ClientRequestLawyerCtrl.pass));
 router.get("/:id/parties", asyncHandler(ClientRequestLawyerCtrl.parties));
 router.post("/:id/release", asyncHandler(ClientRequestLawyerCtrl.release));
 router.post("/:id/quote", asyncHandler(ClientRequestLawyerCtrl.quote));
-// Retrying the per-case fee after the card was declined and updated (#513).
+// The quotation in steps: a draft (priced with the platform fee, with the lawyer's expiry), sending
+// it, and taking it back before the client accepts.
+router.put("/:id/quotation", asyncHandler(ClientRequestLawyerCtrl.saveQuotation));
+router.post("/:id/quotation/send", asyncHandler(ClientRequestLawyerCtrl.sendQuotation));
+router.post("/:id/quotation/withdraw", asyncHandler(ClientRequestLawyerCtrl.withdrawQuotation));
+// Retrying the per-case fee after the card was declined and updated (#513). Only requests accepted
+// before quotation payments have one.
 router.post("/:id/charge/retry", asyncHandler(ClientRequestLawyerCtrl.retryCharge));
 // Copying the engaged client's case to the lawyer's own workspace (#514).
 router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));

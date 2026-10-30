@@ -10,18 +10,20 @@
 /** How long the client has to pick a quote, from the first quote, before the request expires. */
 export const CLIENT_REQUEST_PICK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-export const CLIENT_REQUEST_CONSENT_VERSION = "2026-10-29b-draft";
+export const CLIENT_REQUEST_CONSENT_VERSION = "2026-11-10-draft";
 
 export const CLIENT_REQUEST_CONSENT_TEXT = [
   "We'll share an anonymised summary of your case with verified UK lawyers who may take it on. It leaves out names and documents.",
   "Any of those lawyers can take up your request. Each one who does will also see the names of the people and organisations in your case, only to check they have no conflict of interest, and can send you a quote.",
-  "If you hire one of them, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
+  "If you hire one of them, you pay their quote and ilovelawyer's platform fee through ilovelawyer. Once paid, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
   "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.",
 ].join("\n\n");
 
-/** The SRA requires telling the client the lawyer pays us for the introduction. */
+/** How the platform is paid, shown on every quote and acknowledged to accept one. DRAFT wording,
+ * pending the same review as the consent text (#846): the client pays ilovelawyer's fee on top of the
+ * lawyer's quote, and pays both through ilovelawyer. */
 export const CLIENT_REQUEST_REFERRAL_DISCLOSURE =
-  "ilovelawyer is paid a fixed fee by the lawyer for introducing you. You don't pay us anything for this, and it doesn't change what the lawyer charges you.";
+  "You pay through ilovelawyer: the lawyer's fee, plus ilovelawyer's platform fee shown on the quote. The lawyer receives their full fee, and the platform fee doesn't change what the lawyer charges you.";
 
 export const CLIENT_REQUEST_NOTE_MAX_LENGTH = 1000;
 

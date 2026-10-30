@@ -6,6 +6,8 @@ import OrganizationCardSvc from "./organization-card.service";
 import OrganizationChargeSvc from "./organization-charge.service";
 import { ORGANIZATION_CHARGE_PURPOSE, ORGANIZATION_REFUND_PURPOSE } from "../payments/organization-card-provider";
 import ClientRequestAdminSvc from "./client-request-admin.service";
+import QuotationPaymentSvc from "./quotation-payment.service";
+import { QUOTATION_PAYMENT_PURPOSE, QUOTATION_REFUND_PURPOSE } from "../payments/quotation-payment-provider";
 import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "../payments/client-payment-provider";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
@@ -161,12 +163,20 @@ export default class ClientBillingSvc {
         }
         break;
       }
-      // A charge to a law firm's card (OrganizationChargeSvc: the per-case fee) that settled later, or
-      // whose direct answer never arrived.
+      // A charge to a law firm's card (OrganizationChargeSvc: an AI top-up, or a per-case fee from before
+      // quotation payments) that settled later, or whose direct answer never arrived. Or a client paying
+      // a lawyer's quotation (QuotationPaymentSvc).
       case "payment_intent.succeeded":
       case "payment_intent.payment_failed": {
         const intent = event.data.object as Stripe.PaymentIntent;
         if (intent.metadata?.purpose === ORGANIZATION_CHARGE_PURPOSE) await OrganizationChargeSvc.applyStripeIntent(intent);
+        else if (intent.metadata?.purpose === QUOTATION_PAYMENT_PURPOSE) await QuotationPaymentSvc.applyStripeIntent(intent);
+        break;
+      }
+      // The client's bank disputing a quotation payment: its earning is held until it's decided.
+      case "charge.dispute.created":
+      case "charge.dispute.closed": {
+        await QuotationPaymentSvc.applyStripeDispute(event.data.object as Stripe.Dispute, event.type === "charge.dispute.created");
         break;
       }
       // A refund an admin issued (ClientBillingAdminSvc.refund) that Stripe finished, or couldn't.
@@ -175,6 +185,7 @@ export default class ClientBillingSvc {
       case "refund.failed": {
         const refund = event.data.object as Stripe.Refund;
         if (refund.metadata?.purpose === ORGANIZATION_REFUND_PURPOSE) await ClientRequestAdminSvc.applyStripeRefund(refund);
+        else if (refund.metadata?.purpose === QUOTATION_REFUND_PURPOSE) await QuotationPaymentSvc.applyStripeRefund(refund);
         else await ClientBillingAdminSvc.applyStripeRefund(refund);
         break;
       }

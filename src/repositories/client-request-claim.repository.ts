@@ -1,7 +1,8 @@
-import type { ClaimOutcome, Prisma, QuoteType, ReleaseReason } from "@prisma/client";
+import type { ClaimOutcome, Prisma, ReleaseReason } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { ROUTING_WINDOW_MS } from "./client-request.repository";
-import { CLIENT_REQUEST_PICK_WINDOW_MS, CLIENT_REQUEST_UNPAID_FEE_HOURS } from "../constants/client-request.constants";
+import { CLIENT_REQUEST_UNPAID_FEE_HOURS } from "../constants/client-request.constants";
+import { closeOpenQuotations, quotationStatusFor } from "./quotation.repository";
 
 /** How long a lawyer who joined a request has to quote before their claim lapses (#511). */
 export const CLAIM_HOLD_MS = 24 * 60 * 60 * 1000;
@@ -27,7 +28,7 @@ type Tx = Prisma.TransactionClient;
 
 /** Takes the request row's lock while it's still ROUTED (several lawyers: it stays ROUTED until the
  * client picks a quote). False when it isn't. */
-async function lockRouted(tx: Tx, requestId: string, now: Date, where: Prisma.ClientRequestWhereInput = {}): Promise<boolean> {
+export async function lockRouted(tx: Tx, requestId: string, now: Date, where: Prisma.ClientRequestWhereInput = {}): Promise<boolean> {
   const { count } = await tx.clientRequest.updateMany({ where: { id: requestId, status: "ROUTED", ...where }, data: { updatedAt: now } });
   return count === 1;
 }
@@ -38,7 +39,7 @@ async function lockRouted(tx: Tx, requestId: string, now: Date, where: Prisma.Cl
  * the pool for a fresh 48h, to be announced again, as when one lawyer held it. With no quote left
  * open, there's nothing for the client to pick, so no pick-by date.
  */
-async function afterClaimEnded(tx: Tx, requestId: string, lawyerId: string, now: Date) {
+export async function afterClaimEnded(tx: Tx, requestId: string, lawyerId: string, now: Date) {
   const open = await tx.clientRequestClaim.findMany({ where: { requestId, outcome: null }, select: { quotedAt: true } });
   await tx.clientRequest.update({
     where: { id: requestId },
@@ -51,19 +52,23 @@ async function afterClaimEnded(tx: Tx, requestId: string, lawyerId: string, now:
 }
 
 /** Ends one open claim on a ROUTED request (`claimWhere` narrows which: quoted, unquoted, expired),
- * then afterClaimEnded. Both or neither: false when the request or claim had moved on. */
-async function endClaim(
+ * closes its quotation if it has an open one (quotationStatusFor the outcome, unless `quotation`
+ * says otherwise), then afterClaimEnded. Both or neither: false when the request or claim had moved on. */
+export async function endClaim(
   claim: { id: string; requestId: string; lawyerId: string },
   outcome: ClaimOutcome,
   now: Date,
   claimWhere: Prisma.ClientRequestClaimWhereInput = {},
   extra: Prisma.ClientRequestClaimUpdateManyMutationInput = {},
+  quotation: { where?: Prisma.QuotationWhereInput; status?: Parameters<typeof closeOpenQuotations>[2]; rejectReason?: string | null } = {},
 ): Promise<boolean> {
   try {
     await prisma.$transaction(async (tx) => {
       if (!(await lockRouted(tx, claim.requestId, now))) throw new RequestMovedOn();
       const ended = await tx.clientRequestClaim.updateMany({ where: { id: claim.id, outcome: null, ...claimWhere }, data: { outcome, endedAt: now, ...extra } });
       if (ended.count !== 1) throw new RequestMovedOn();
+      const closed = await closeOpenQuotations(tx, { claimId: claim.id, ...quotation.where }, quotation.status ?? quotationStatusFor(outcome), now, quotation.rejectReason);
+      if (quotation.where && closed !== 1) throw new RequestMovedOn();
       await afterClaimEnded(tx, claim.requestId, claim.lawyerId, now);
     });
     return true;
@@ -112,34 +117,6 @@ export default class ClientRequestClaimRepo {
   }
 
   /**
-   * Saves the lawyer's quote (#512), once, inside their 24h. The first quote on the request starts the
-   * client's CLIENT_REQUEST_PICK_WINDOW_MS to pick one. Both or neither: false, with nothing changed,
-   * when the claim already ended, its 24h ran out, it was quoted already, or the request is no longer
-   * ROUTED (the client picked someone, withdrew, or it expired).
-   */
-  static async quote(
-    claim: { id: string; requestId: string },
-    quote: { type: QuoteType; amountMinor: number; currency: string; message: string },
-    now: Date = new Date(),
-  ): Promise<boolean> {
-    try {
-      await prisma.$transaction(async (tx) => {
-        if (!(await lockRouted(tx, claim.requestId, now))) throw new RequestMovedOn();
-        const saved = await tx.clientRequestClaim.updateMany({
-          where: { id: claim.id, outcome: null, quotedAt: null, expiresAt: { gt: now } },
-          data: { quoteType: quote.type, quoteAmountMinor: quote.amountMinor, quoteCurrency: quote.currency, quoteMessage: quote.message, quotedAt: now },
-        });
-        if (saved.count !== 1) throw new RequestMovedOn();
-        await tx.clientRequest.updateMany({ where: { id: claim.requestId, pickByAt: null }, data: { pickByAt: new Date(now.getTime() + CLIENT_REQUEST_PICK_WINDOW_MS) } });
-      });
-      return true;
-    } catch (err) {
-      if (err instanceof RequestMovedOn) return false;
-      throw err;
-    }
-  }
-
-  /**
    * The lawyer gives the request back (#512): their claim ends RELEASED with the reason, they don't
    * see it again, and their place frees up (afterClaimEnded). Until the client picks a quote, quoted
    * or not. Both or neither.
@@ -154,7 +131,7 @@ export default class ClientRequestClaimRepo {
    * Both or neither.
    */
   static async decline(claim: { id: string; requestId: string; lawyerId: string }, reason: string | null, now: Date = new Date()): Promise<boolean> {
-    return endClaim(claim, "DECLINED", now, { quotedAt: { not: null } }, { declineReason: reason });
+    return endClaim(claim, "DECLINED", now, { quotedAt: { not: null } }, { declineReason: reason }, { rejectReason: reason });
   }
 
   /**
@@ -210,6 +187,7 @@ export default class ClientRequestClaimRepo {
         const fee = await tx.organizationCharge.updateMany({ where: { id: unpaid.chargeId, status: "FAILED" }, data: { feeRequestId: null } });
         const ended = await tx.clientRequestClaim.updateMany({ where: { id: unpaid.claim.id, outcome: null }, data: { outcome: "LAPSED", endedAt: now } });
         if (rerouted.count !== 1 || fee.count !== 1 || ended.count !== 1) throw new RequestMovedOn();
+        await tx.quotation.updateMany({ where: { claimId: unpaid.claim.id, status: "ACCEPTED" }, data: { status: "EXPIRED", closedAt: now } });
       });
       return true;
     } catch (err) {

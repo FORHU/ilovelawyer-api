@@ -52,6 +52,22 @@ export default class ClientRequestLawyerCtrl {
     res.status(200).json(await ClientRequestLawyerSvc.quote(lawyerOf(req), req.params.id, body));
   }
 
+  /** PUT /client-requests/:id/quotation: save the draft. */
+  static async saveQuotation(req: Request, res: Response) {
+    const body = validate(quoteClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestLawyerSvc.saveQuotation(lawyerOf(req), req.params.id, body));
+  }
+
+  /** POST /client-requests/:id/quotation/send */
+  static async sendQuotation(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.sendQuotation(lawyerOf(req), req.params.id));
+  }
+
+  /** POST /client-requests/:id/quotation/withdraw */
+  static async withdrawQuotation(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.withdrawQuotation(lawyerOf(req), req.params.id));
+  }
+
   static async retryCharge(req: Request, res: Response) {
     res.status(200).json(await ClientRequestLawyerSvc.retryCharge(lawyerOf(req), req.params.id));
   }

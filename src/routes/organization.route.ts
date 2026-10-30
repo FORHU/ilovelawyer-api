@@ -7,6 +7,7 @@ import { requireOrgRole } from "../utils/org-role";
 import OrganizationCtrl from "../controllers/organization.controller";
 import SecurityAuditCtrl from "../controllers/security-audit.controller";
 import OrganizationCardCtrl from "../controllers/organization-card.controller";
+import WalletCtrl from "../controllers/wallet.controller";
 
 const router = express.Router();
 
@@ -111,5 +112,16 @@ router.post(
   requireOrgRole(OrganizationRole.ADMIN),
   asyncHandler(OrganizationCardCtrl.startSetup),
 );
+
+// The firm's wallet: its lawyers' earnings from client quotations, and paying them out. Owners and
+// Admins only, to see it as well as to withdraw from it.
+const firmWallet = [asyncHandler(resolveOrganizationFromParam()), requireOrgRole(OrganizationRole.ADMIN)];
+router.get("/:id/wallet", ...firmWallet, asyncHandler(WalletCtrl.get));
+router.get("/:id/wallet/ledger", ...firmWallet, asyncHandler(WalletCtrl.ledger));
+router.get("/:id/wallet/earnings", ...firmWallet, asyncHandler(WalletCtrl.earnings));
+router.get("/:id/wallet/withdrawals", ...firmWallet, asyncHandler(WalletCtrl.withdrawals));
+router.post("/:id/wallet/withdrawals", ...firmWallet, asyncHandler(WalletCtrl.withdraw));
+router.post("/:id/wallet/payout-account/onboarding-link", ...firmWallet, asyncHandler(WalletCtrl.onboardingLink));
+router.post("/:id/wallet/payout-account/refresh", ...firmWallet, asyncHandler(WalletCtrl.refreshAccount));
 
 export default router;

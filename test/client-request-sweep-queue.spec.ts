@@ -11,6 +11,8 @@ import ClientRequestClaimRepo from "../src/repositories/client-request-claim.rep
 import OrganizationRepo from "../src/repositories/organization.repository";
 import NotificationSvc from "../src/services/notification.service";
 import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
+import QuotationPaymentSvc from "../src/services/quotation-payment.service";
+import WalletSvc from "../src/services/wallet.service";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import * as socket from "../src/lib/socket";
 
@@ -62,8 +64,13 @@ describe("ClientRequestSweepQueue.tick", () => {
       stash(SecurityAuditSvc, ["record"]),
       stash(socket, ["emitToUser"]),
       stash(ClientRequestNotifySvc, ["expireDue", "remindDue", "announceDue"]),
+      stash(QuotationPaymentSvc, ["expireDue"]),
+      stash(WalletSvc, ["releaseDue"]),
     ];
     steps = [];
+    // Tested against the database in test/quotation-payments.spec.ts.
+    (QuotationPaymentSvc as any).expireDue = async () => (steps.push("quote-expiry"), 0);
+    (WalletSvc as any).releaseDue = async () => (steps.push("release"), 0);
     (ClientRequestNotifySvc as any).expireDue = async () => (steps.push("expire"), 0);
     (ClientRequestNotifySvc as any).remindDue = async () => (steps.push("remind"), 0);
     (ClientRequestNotifySvc as any).announceDue = async () => (steps.push("announce"), 0);
@@ -126,7 +133,7 @@ describe("ClientRequestSweepQueue.tick", () => {
     expect(securityAudits).to.deep.equal([]);
   });
 
-  it("lapses, then expires, reminds and announces, and says how many of each", async () => {
+  it("lapses, expires quotes, then expires, reminds, announces and releases earnings, and says how many of each", async () => {
     (ClientRequestClaimRepo as any).lapse = async () => (steps.push("lapse"), true);
     (ClientRequestNotifySvc as any).expireDue = async () => (steps.push("expire"), 2);
     (ClientRequestNotifySvc as any).remindDue = async () => (steps.push("remind"), 3);
@@ -135,8 +142,11 @@ describe("ClientRequestSweepQueue.tick", () => {
     unpaid = [UNPAID];
     (ClientRequestClaimRepo as any).lapseUnpaid = async () => (steps.push("unpaid"), true);
 
-    expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.equal({ lapsed: 1, unpaid: 1, expired: 2, reminded: 3, announced: 4 });
-    expect(steps).to.deep.equal(["lapse", "unpaid", "expire", "remind", "announce"]);
+    (QuotationPaymentSvc as any).expireDue = async () => (steps.push("quote-expiry"), 5);
+    (WalletSvc as any).releaseDue = async () => (steps.push("release"), 6);
+
+    expect(await ClientRequestSweepQueue.tick(NOW)).to.deep.equal({ lapsed: 1, unpaid: 1, quotesExpired: 5, expired: 2, reminded: 3, announced: 4, released: 6 });
+    expect(steps).to.deep.equal(["lapse", "unpaid", "quote-expiry", "expire", "remind", "announce", "release"]);
   });
 
   it("still runs the later steps when one fails", async () => {

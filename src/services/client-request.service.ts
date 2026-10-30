@@ -4,13 +4,13 @@ import { toPracticeAreaRefs } from "../repositories/practice-area.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
-import OrganizationChargeSvc from "./organization-charge.service";
-import ClientPricingSvc from "./client-pricing.service";
 import EngagementAccessSvc from "./engagement-access.service";
+import QuotationPaymentSvc from "./quotation-payment.service";
+import QuotationRepo from "../repositories/quotation.repository";
+import { quotationDto } from "./quotation.dto";
 import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
-import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import logger from "../utils/logger";
 import HttpError from "../utils/http-error";
@@ -67,6 +67,8 @@ function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
 
 type ClaimForClient = ClientRequestForClient["claims"][number];
 
+/** The quote as the client first saw it (#512): the type, the lawyer's amount and message. Kept for
+ * older apps; `quotation` has the platform fee, the total and the expiry. */
 function quoteDto(claim: ClaimForClient) {
   if (!claim.quotedAt) return null;
   return {
@@ -75,6 +77,11 @@ function quoteDto(claim: ClaimForClient) {
     message: claim.quoteMessage,
     sentAt: claim.quotedAt,
   };
+}
+
+/** The lawyer's quotation once sent: a draft is the lawyer's own, never shown to the client. */
+function quotationFor(claim: ClaimForClient) {
+  return claim.quotation && claim.quotation.status !== "DRAFT" ? quotationDto(claim.quotation) : null;
 }
 
 /**
@@ -101,12 +108,13 @@ function oneLawyer(r: ClientRequestForClient): ClaimForClient | null {
 
 /** LawyerRequestForClient in the contract. Several lawyers (phase 5): `lawyers` is everyone on the
  * request now, oldest first, each with their quote once sent (`claimId` is what confirm and decline
- * take); `pickByAt` is when it expires without a pick. `lawyer`/`quote` stay for one lawyer (the one
- * hired, or the only quote). The referral disclosure is what the client acknowledges to confirm
- * (#512). */
+ * take, `quotation.id` what accept, reject and pay take); `pickByAt` is when it expires without a
+ * pick. `lawyer`/`quote`/`quotation` stay for one lawyer (the one hired, or the only quote). The
+ * disclosure is what the client acknowledges to accept. `awaitingPayment`: the client accepted a
+ * quotation and hasn't paid it yet. */
 function toDto(r: ClientRequestForClient) {
   const one = oneLawyer(r);
-  const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c) }));
+  const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c), quotation: quotationFor(c) }));
   return {
     id: r.id,
     caseId: r.caseId,
@@ -119,6 +127,8 @@ function toDto(r: ClientRequestForClient) {
     pickByAt: r.status === "ROUTED" ? r.pickByAt : null,
     lawyer: one ? lawyerDto(one) : null,
     quote: one ? quoteDto(one) : null,
+    quotation: one ? quotationFor(one) : null,
+    awaitingPayment: r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED",
     referralDisclosure: lawyers.some((l) => l.quote) ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
     engagedAt: r.engagedAt,
     closedAt: r.closedAt,
@@ -204,40 +214,49 @@ export default class ClientRequestSvc {
   }
 
   /**
-   * The client confirms one lawyer's quote (#513; several lawyers in phase 5), having acknowledged the
-   * referral disclosure: the request is CONFIRMED, that lawyer's organization is charged the per-case
-   * fee straight away, and the other lawyers on it are told the client chose someone else. `claimId`
-   * names the quote; it can be left out when there's only one. When the fee goes through the request
-   * is ENGAGED; when the card is declined it stays CONFIRMED, the firm is asked to update the card,
-   * and the client waits. Confirming twice charges once.
+   * The client accepts one lawyer's quotation (several lawyers since phase 5), having acknowledged how
+   * ilovelawyer is paid: the request is CONFIRMED, the quotation ACCEPTED with its total fixed, and
+   * the other lawyers on it are told the client chose someone else. The client then pays it
+   * (QuotationPaymentSvc.start), and paying engages the request. A quotation with nothing to pay (a
+   * free first consultation) engages it at once. `claimId` (or `quotationId`) names the quote; it can
+   * be left out when there's only one. 409 QUOTATION_EXPIRED after the lawyer's expiry. Nothing is
+   * charged to the lawyer.
    */
-  static async confirm(clientId: string, id: string, input: { disclosureAcknowledged: boolean; claimId?: string }) {
+  static async confirm(clientId: string, id: string, input: { disclosureAcknowledged: boolean; claimId?: string; quotationId?: string }) {
     if (!input.disclosureAcknowledged) {
-      throw new HttpError("Read and acknowledge how ilovelawyer is paid before confirming.", 400, "DISCLOSURE_NOT_ACKNOWLEDGED");
+      throw new HttpError("Read and acknowledge how ilovelawyer is paid before accepting.", 400, "DISCLOSURE_NOT_ACKNOWLEDGED");
     }
     const request = await ClientRequestSvc.load(clientId, id);
-    const chosen = ClientRequestSvc.quoteToAnswer(request, input.claimId, "This lawyer can't be confirmed now.");
-    // The fee is the region's (set in admin, #598): the client's, which is the lawyer's too, as the
-    // hand-off is UK-only.
-    const fee = await OrganizationChargeSvc.perCaseFee(await ClientPricingSvc.tenantIdForClient(clientId));
-    const confirmed = await OrganizationChargeRepo.confirm(id, chosen.id, fee);
-    if (!confirmed) {
+    const claimId = input.quotationId ? (request.claims.find((c) => c.quotation?.id === input.quotationId)?.id ?? "-") : input.claimId;
+    const chosen = ClientRequestSvc.quoteToAnswer(request, claimId, "This lawyer can't be confirmed now.");
+    if (!chosen.quotation) throw new HttpError("This lawyer can't be confirmed now.", 409, "INVALID_REQUEST_STATUS", { status: statusForClient(request) });
+    const accepted = await QuotationRepo.accept(id, chosen.quotation.id);
+    if ("refused" in accepted) {
+      if (accepted.refused === "EXPIRED") throw new HttpError("This quote has expired.", 409, "QUOTATION_EXPIRED");
       const now = await ClientRequestSvc.load(clientId, id);
       throw new HttpError("This lawyer can't be confirmed now.", 409, "INVALID_REQUEST_STATUS", { status: now.status ?? request.status });
     }
 
-    const lawyerId = confirmed.claim.lawyerId;
-    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: clientId, action: "client_request.confirmed", payload: { requestId: id, chargeId: confirmed.charge.id, lawyerId } });
+    const lawyerId = accepted.claim.lawyerId;
+    await OrganizationRepo.writeAudit({
+      caseId: request.caseId,
+      actorId: clientId,
+      action: "client_request.confirmed",
+      payload: { requestId: id, quotationId: accepted.quotation.id, lawyerId },
+    });
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CONFIRMED", updatedAt: new Date().toISOString() };
     emitToUser(lawyerId, "client-request:updated", updated);
-    await NotificationSvc.create({
-      userId: lawyerId,
-      type: "CLIENT_REQUEST",
-      title: "A client confirmed you",
-      message: "The client accepted your quote. The introduction fee is being charged to your card on file.",
-      link: `/client-requests/${id}`,
-    }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
-    for (const other of confirmed.notChosen) {
+    const free = accepted.quotation.acceptedAmountMinor === 0;
+    if (!free) {
+      await NotificationSvc.create({
+        userId: lawyerId,
+        type: "CLIENT_REQUEST",
+        title: "A client accepted your quote",
+        message: "You'll be engaged as soon as the client pays it. Nothing is charged to you.",
+        link: `/client-requests/${id}`,
+      }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
+    }
+    for (const other of accepted.notChosen) {
       emitToUser(other, "client-request:updated", updated);
       await NotificationSvc.create({
         userId: other,
@@ -248,12 +267,27 @@ export default class ClientRequestSvc {
       }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
     }
 
-    // Engages the request, or tells the firm the card was declined.
-    await OrganizationChargeSvc.attempt(confirmed.charge.id);
+    if (free && (await QuotationRepo.engageUnpaid(accepted.quotation))) {
+      await QuotationPaymentSvc.afterEngaged(accepted.quotation, accepted.claim, 0, null, null);
+    }
     return toDto(await ClientRequestSvc.load(clientId, id));
   }
 
-  /** The client declines one lawyer's quote (#513; several lawyers in phase 5): nothing is charged,
+  /** The client accepts a quotation by its id (POST .../quotations/:quotationId/accept). */
+  static async accept(clientId: string, id: string, quotationId: string, input: { disclosureAcknowledged: boolean }) {
+    return ClientRequestSvc.confirm(clientId, id, { ...input, quotationId });
+  }
+
+  /** The client rejects a quotation by its id (POST .../quotations/:quotationId/reject). */
+  static async reject(clientId: string, id: string, quotationId: string, input: { reason?: string }) {
+    const request = await ClientRequestSvc.load(clientId, id);
+    const claim = request.claims.find((c) => c.quotation?.id === quotationId);
+    if (!claim) throw new HttpError("Quote not found", 404);
+    return ClientRequestSvc.decline(clientId, id, { ...input, claimId: claim.id });
+  }
+
+  /** The client declines one lawyer's quote (#513; several lawyers in phase 5): its quotation is
+   * REJECTED, nothing is charged,
    * that lawyer doesn't see the request again, and their place frees up for another. `claimId` names
    * the quote; it can be left out when there's only one. The reason stays on the claim; the lawyer is
    * told it ended. */

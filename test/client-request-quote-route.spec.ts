@@ -13,6 +13,7 @@ import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import SecurityAuditRepo from "../src/repositories/security-audit.repository";
 import ClaimRepo, { CLAIM_HOLD_MS } from "../src/repositories/client-request-claim.repository";
+import QuotationRepo from "../src/repositories/quotation.repository";
 import RequestRepo from "../src/repositories/client-request.repository";
 import { CLIENT_REQUEST_REFERRAL_DISCLOSURE } from "../src/constants/client-request.constants";
 
@@ -37,7 +38,9 @@ describe("client request conflict check, release and quote", () => {
   const quote = (body: object, id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/quote`).set(asLawyer(id, org)).send(body);
   const clientView = () => request(app).get(`/api/client/lawyer-requests/${requestId}`).set(auth(clientId));
 
-  const FIXED_FEE = { type: "FIXED_FEE", amount: { amountMinor: 75000, currency: "GBP" }, message: "  I can take this on for a fixed fee.  " };
+  // The lawyer's own expiry: the client accepts and pays before it.
+  const EXPIRES_AT = new Date(Date.now() + 5 * 24 * HOUR_MS).toISOString();
+  const FIXED_FEE = { type: "FIXED_FEE", amount: { amountMinor: 75000, currency: "GBP" }, message: "  I can take this on for a fixed fee.  ", expiresAt: EXPIRES_AT };
 
   before(async () => {
     const tenant = await prisma.tenant.upsert({ where: { code: "UK" }, update: {}, create: { code: "UK", name: "United Kingdom" } });
@@ -237,7 +240,7 @@ describe("client request conflict check, release and quote", () => {
       await claim().expect(200);
       // Claimed but not quoted: the client still sees nobody.
       expect((await clientView().expect(200)).body).to.deep.include({ status: "CLAIMED", lawyer: null, quote: null });
-      await quote({ type: "FIRST_CONSULTATION", amount: { amountMinor: 0, currency: "GBP" }, message: "Free first call this week." }).expect(200);
+      await quote({ type: "FIRST_CONSULTATION", amount: { amountMinor: 0, currency: "GBP" }, message: "Free first call this week.", expiresAt: EXPIRES_AT }).expect(200);
 
       const { body } = await clientView().expect(200);
       expect(body.status).to.equal("QUOTED");
@@ -293,20 +296,23 @@ describe("client request conflict check, release and quote", () => {
       await quote(FIXED_FEE, otherLawyerId, otherOrgId).expect(404);
     });
 
-    // #933: the client only ever sees a quote whose introduction fee can be charged.
-    it("needs a card on file: accepting doesn't, sending the quote does (402 CARD_REQUIRED)", async () => {
+    // Quotation payments: the client pays through ilovelawyer and nothing is charged to the lawyer,
+    // so sending a quote no longer needs a card on file (#933's check is gone).
+    it("needs no card on file", async () => {
       await prisma.organizationBilling.update({ where: { organizationId: orgId }, data: { paymentMethodId: null } });
       try {
         await claim().expect(200);
-        const { body } = await quote(FIXED_FEE).expect(402);
-        expect(body.code).to.equal("CARD_REQUIRED");
-        const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true } });
-        expect(row.status).to.equal("ROUTED");
-        expect(row.claims[0]!.quotedAt).to.equal(null);
+        const { body } = await quote(FIXED_FEE).expect(200);
+        expect(body.status).to.equal("QUOTED");
       } finally {
         await prisma.organizationBilling.update({ where: { organizationId: orgId }, data: { paymentMethodId: `pm_${orgId}` } });
       }
-      await quote(FIXED_FEE).expect(200);
+    });
+
+    it("needs the lawyer's expiry", async () => {
+      await claim().expect(200);
+      const { expiresAt: _expiresAt, ...noExpiry } = FIXED_FEE;
+      await quote(noExpiry).expect(400);
     });
 
     it("checks the quote: type, GBP, a message, and an amount for a fixed fee", async () => {
@@ -336,10 +342,13 @@ describe("client request conflict check, release and quote", () => {
     it("never both quotes and lapses the same claim, and never deadlocks", async () => {
       for (let round = 0; round < ROUNDS; round++) {
         const r = await freshClaim();
-        const [quoted, lapsed] = await Promise.all([
-          ClaimRepo.quote({ id: r.claimId, requestId: r.requestId }, { type: "FIXED_FEE", amountMinor: 100, currency: "GBP", message: "x" }),
+        const terms = { platformFeeBps: 1500, minPlatformFeeMinor: 500 };
+        await QuotationRepo.saveDraft({ id: r.claimId, requestId: r.requestId, lawyerId }, { type: "FIXED_FEE", serviceFeeMinor: 100, currency: "GBP", message: "x", expiresAt: new Date(EXPIRES_AT) }, terms);
+        const [sent, lapsed] = await Promise.all([
+          QuotationRepo.send({ id: r.claimId, requestId: r.requestId }, terms),
           ClaimRepo.lapse({ id: r.claimId, requestId: r.requestId, lawyerId }),
         ]);
+        const quoted = !("refused" in sent);
         expect([quoted, lapsed].filter(Boolean), `round ${round}`).to.have.length(1);
         const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: r.requestId }, include: { claims: true } });
         expect(row.status).to.equal("ROUTED");

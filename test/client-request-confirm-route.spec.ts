@@ -1,8 +1,9 @@
-/** The client confirms or declines the quote, and the lawyer's organization is charged the per-case
- * fee (#513): POST /client/lawyer-requests/:id/confirm and /decline, POST /client-requests/:id/charge/
- * retry, the Stripe webhook settling a charge later, and GET /organizations/:id/billing/fees. Through
- * the real routes against the real database, with its own UK firm, lawyer, client, case and request.
- * Stripe is a fake provider whose answers each test sets. */
+/** The client confirms (accepts) or declines the quote and pays it, and what the engagement then allows:
+ * POST /client/lawyer-requests/:id/confirm and /decline, paying through POST .../quotations/:id/payment
+ * (the dummy provider), copy, read-only access, close, end and feedback. A request accepted before
+ * quotation payments keeps its per-case fee, and POST /client-requests/:id/charge/retry still retries
+ * it. Through the real routes against the real database, with its own UK firm, lawyer, client, case and
+ * request. The firm's card is charged through a fake provider whose answers each test sets. */
 import crypto from "crypto";
 import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
@@ -22,13 +23,14 @@ import {
   type HostedOrganizationCardProvider,
 } from "../src/payments/organization-card-provider";
 import { LAWYER_PRICING_DEFAULTS } from "../src/constants/lawyer-pricing.constants";
+import { sentQuotation, cleanQuotationMoney } from "./support/quotation-fixture";
 
 // The UK tenant's introduction fee, as seeded (lawyer_pricing_seed): these tests don't edit it.
 const CLIENT_REQUEST_PER_CASE_FEE_MINOR = LAWYER_PRICING_DEFAULTS.introFee.priceMinor;
 
 const HOUR_MS = 60 * 60 * 1000;
 
-describe("client confirms, the firm is charged the per-case fee", () => {
+describe("client confirms and pays, and the engagement", () => {
   const lawyerId = crypto.randomUUID();
   const adminId = crypto.randomUUID();
   const memberId = crypto.randomUUID();
@@ -41,6 +43,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
   const webhookEvents: string[] = [];
   let requestId: string;
   let claimId: string;
+  let quotationId: string;
 
   // The fake Stripe: each charge's answer, in order (an Error means Stripe couldn't be reached).
   let answers: (CardChargeResult | Error)[];
@@ -77,6 +80,12 @@ describe("client confirms, the firm is charged the per-case fee", () => {
 
   const auth = (id: string) => ({ Authorization: `Bearer ${loginToken(id, false).accessToken}` });
   const confirm = (body: object = { disclosureAcknowledged: true }) => request(app).post(`/api/client/lawyer-requests/${requestId}/confirm`).set(auth(clientId)).send(body);
+  const pay = (id = quotationId) => request(app).post(`/api/client/lawyer-requests/${requestId}/quotations/${id}/payment`).set(auth(clientId)).send({});
+  /** Accepted and paid: ENGAGED. */
+  const engage = async () => {
+    await confirm().expect(200);
+    return (await pay().expect(200)).body;
+  };
   const decline = (body: object = {}) => request(app).post(`/api/client/lawyer-requests/${requestId}/decline`).set(auth(clientId)).send(body);
   const clientView = () => request(app).get(`/api/client/lawyer-requests/${requestId}`).set(auth(clientId));
   const retry = (id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/charge/retry`).set({ ...auth(id), "X-Organization-Id": org });
@@ -161,6 +170,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
   });
 
   after(async () => {
+    await cleanQuotationMoney({ organizationIds: [orgId, otherOrgId] }, [clientId]);
     await prisma.organizationCharge.deleteMany({ where: { organizationId: { in: [orgId, otherOrgId] } } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.auditEvent.deleteMany({ where: { caseId } });
@@ -214,65 +224,51 @@ describe("client confirms, the firm is charged the per-case fee", () => {
       },
     });
     claimId = claim.id;
+    quotationId = (await sentQuotation(claim)).id;
   });
 
   afterEach(() => setOrganizationCardProvider(null));
 
   describe("confirm", () => {
-    it("needs the referral disclosure acknowledged, and charges nothing without it", async () => {
-      await card("STRIPE");
+    it("needs the disclosure acknowledged, and changes nothing without it", async () => {
       expect((await confirm({ disclosureAcknowledged: false }).expect(400)).body.code).to.equal("DISCLOSURE_NOT_ACKNOWLEDGED");
       await confirm({}).expect(400);
       expect((await state()).status).to.equal("ROUTED");
-      expect(chargeRequests).to.have.length(0);
     });
 
-    it("charges the firm's card once through Stripe and engages the request", async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
+    it("accepts the quote without charging the firm, and the client's payment engages the request", async () => {
       const { body } = await confirm().expect(200);
-      expect(body.status).to.equal("ENGAGED");
-      expect(body.engagedAt).to.be.a("string");
+      expect(body).to.deep.include({ status: "CONFIRMED", awaitingPayment: true });
+      expect(body.quotation).to.deep.include({ status: "ACCEPTED" });
+      expect(chargeRequests).to.have.length(0);
+      expect((await state()).charges).to.have.length(0);
+      expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client accepted your quote"]);
 
-      expect(chargeRequests).to.have.length(1);
-      expect(chargeRequests[0]).to.deep.include({ attempt: 1, customerId: "cus_test_firm", paymentMethodId: "stripe_pm_1", amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" });
-      expect(chargeRequests[0]!.metadata).to.deep.include({ organizationId: orgId, requestId });
-
+      const paid = await pay().expect(200);
+      expect(paid.body.payment.status).to.equal("SUCCEEDED");
       const s = await state();
       expect(s.status).to.equal("ENGAGED");
+      expect(s.engagedAt).to.be.instanceOf(Date);
       expect(s.claim).to.deep.include({ outcome: "ENGAGED", openRequestId: null });
-      expect(s.charges).to.have.length(1);
-      expect(s.charges[0]).to.deep.include({ kind: "PER_CASE_FEE", status: "SUCCEEDED", provider: "STRIPE", paymentIntentId: "pi_1", attempts: 1, organizationId: orgId, lawyerId });
+      expect(s.charges).to.have.length(0);
 
       const lawyer = (await lawyerView().expect(200)).body;
-      expect(lawyer.perCaseFee).to.deep.equal({ amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" });
-      expect(lawyer.charge).to.deep.include({ status: "SUCCEEDED", failureReason: null });
-      expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client confirmed you", "You're engaged on a client request"]);
+      expect(lawyer.charge).to.equal(null);
+      expect(lawyer.quotation).to.deep.include({ status: "PAID" });
+      expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client accepted your quote", "You're engaged on a client request"]);
     });
 
     it("grants the engaged lawyer read-only access to the client's case", async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
-      await confirm().expect(200);
-
+      await engage();
       const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
       expect(access?.permission).to.equal("VIEW");
     });
 
-    it("charges a dummy test card without Stripe", async () => {
-      await card("DUMMY");
-      expect((await confirm().expect(200)).body.status).to.equal("ENGAGED");
-      expect(chargeRequests).to.have.length(0);
-      expect((await state()).charges[0]).to.deep.include({ status: "SUCCEEDED", provider: "DUMMY" });
-    });
-
-    it("charges once however many times it's confirmed at once", async () => {
-      await card("STRIPE");
+    it("accepts once however many times it's confirmed at once", async () => {
       const results = await Promise.all([1, 2, 3, 4, 5].map(() => confirm()));
       expect(results.filter((r) => r.status === 200)).to.have.length(1);
       expect(results.filter((r) => r.status === 409)).to.have.length(4);
-      expect(chargeRequests).to.have.length(1);
-      expect((await state()).charges).to.have.length(1);
+      expect((await prisma.quotation.findUniqueOrThrow({ where: { id: quotationId } })).status).to.equal("ACCEPTED");
     });
 
     it("can't confirm a request with no quote open", async () => {
@@ -283,9 +279,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
 
   describe("copy", () => {
     beforeEach(async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
-      await confirm().expect(200);
+      await engage();
     });
 
     it("queues a workspace copy for the lawyer and finishes it through the copy queue", async () => {
@@ -328,9 +322,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     const asGuest = (id = lawyerId) => ({ ...auth(id), "X-Organization-Id": clientOrgId });
 
     beforeEach(async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
-      await confirm().expect(200);
+      await engage();
     });
 
     it("tells the lawyer which workspace to open the client's case in", async () => {
@@ -357,9 +349,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     const asGuest = (id = lawyerId) => ({ ...auth(id), "X-Organization-Id": clientOrgId });
 
     beforeEach(async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
-      await confirm().expect(200);
+      await engage();
     });
 
     it("closes the engagement and removes the lawyer's access", async () => {
@@ -394,9 +384,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
 
   describe("client ends the engagement", () => {
     beforeEach(async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
-      await confirm().expect(200);
+      await engage();
     });
 
     it("closes the engagement, closedBy CLIENT, and removes the lawyer's access", async () => {
@@ -421,9 +409,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
 
   describe("feedback", () => {
     beforeEach(async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
-      await confirm().expect(200);
+      await engage();
     });
 
     it("can't be given before the engagement closes", async () => {
@@ -452,136 +438,87 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     });
   });
 
-  describe("a declined card", () => {
-    it("keeps the request CONFIRMED and tells the lawyer and the firm's admins, not other members", async () => {
-      await card("STRIPE");
-      answers = [declined("pi_1")];
-      const { body } = await confirm().expect(200);
-      expect(body.status).to.equal("CONFIRMED");
-      const s = await state();
-      expect(s.status).to.equal("CONFIRMED");
-      expect(s.claim.outcome).to.equal(null);
-      expect(s.charges[0]).to.deep.include({ status: "FAILED", failureReason: "Your card was declined.", attempts: 1 });
-
-      for (const id of [lawyerId, adminId]) {
-        expect((await notificationsFor(id)).map((n) => n.title), id).to.include("The introduction fee couldn't be charged");
-      }
-      expect(await notificationsFor(memberId)).to.have.length(0);
-      expect((await lawyerView().expect(200)).body.charge).to.deep.include({ status: "FAILED", failureReason: "Your card was declined." });
+  // Requests the client confirmed before quotation payments: the firm's per-case fee was charged then,
+  // and one that failed can still be retried once the card is updated.
+  describe("a per-case fee from before quotation payments", () => {
+    beforeEach(async () => {
+      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED", pickByAt: null } });
+      await prisma.quotation.update({ where: { id: quotationId }, data: { status: "ACCEPTED", acceptedAt: new Date(), acceptedAmountMinor: 75000 } });
+      await prisma.organizationCharge.create({
+        data: {
+          organizationId: orgId,
+          kind: "PER_CASE_FEE",
+          status: "FAILED",
+          amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR,
+          currency: "GBP",
+          requestId,
+          feeRequestId: requestId,
+          lawyerId,
+          provider: "STRIPE",
+          failureReason: "Your card was declined.",
+          attempts: 1,
+        },
+      });
     });
 
     it("can be retried by the lawyer once the card is updated, as a new payment", async () => {
       await card("STRIPE");
-      answers = [declined("pi_1"), declined("pi_2"), ok("pi_3")];
-      await confirm().expect(200);
-      const again = await retry().expect(402);
-      expect(again.body.code).to.equal("CHARGE_FAILED");
+      answers = [declined("pi_2"), ok("pi_3")];
+      expect((await retry().expect(402)).body.code).to.equal("CHARGE_FAILED");
       const { body } = await retry().expect(200);
       expect(body.status).to.equal("ENGAGED");
-      expect(chargeRequests.map((r) => r.attempt)).to.deep.equal([1, 2, 3]);
+      expect(chargeRequests.map((r) => r.attempt)).to.deep.equal([2, 3]);
       expect((await state()).charges[0]).to.deep.include({ status: "SUCCEEDED", paymentIntentId: "pi_3", attempts: 3 });
-    });
-
-    it("fails without a card on file, and goes through once one is added", async () => {
-      const { body } = await confirm().expect(200);
-      expect(body.status).to.equal("CONFIRMED");
-      expect((await state()).charges[0]!.failureReason).to.match(/no card on file/i);
-      expect(chargeRequests).to.have.length(0);
-      await card("STRIPE");
-      expect((await retry().expect(200)).body.status).to.equal("ENGAGED");
-    });
-
-    it("never runs two retries at once", async () => {
-      await card("STRIPE");
-      answers = [declined("pi_1")];
-      await confirm().expect(200);
-      const results = await Promise.all([retry(), retry(), retry()]);
-      expect(results.filter((r) => r.status === 200)).to.have.length(1);
-      expect(chargeRequests).to.have.length(2);
+      expect(chargeRequests[1]).to.deep.include({ amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" });
     });
 
     it("refuses a retry from anyone but the lawyer holding it, or when nothing failed", async () => {
       await card("STRIPE");
-      answers = [declined("pi_1")];
-      await confirm().expect(200);
       await retry(otherLawyerId, otherOrgId).expect(404);
       await retry().expect(200);
       expect((await retry().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
     });
-  });
 
-  describe("when Stripe answers later", () => {
-    it("waits CONFIRMED while the payment is processing, and the webhook engages it, once", async () => {
+    it("shows the charge only to the lawyer it's for, and in the firm's fee history for its OWNER and ADMIN", async () => {
+      await card("STRIPE");
+      answers = [ok("pi_1")];
+      await retry().expect(200);
+      expect((await lawyerView().expect(200)).body.charge).to.deep.include({ status: "SUCCEEDED" });
+      for (const as of [lawyerId, adminId]) {
+        const { body } = await fees(as).expect(200);
+        expect(body.total).to.equal(1);
+        expect(body.data[0]).to.deep.include({ kind: "PER_CASE_FEE", status: "SUCCEEDED", requestId, lawyer: { id: lawyerId, name: "Lena Lawyer" } });
+      }
+      await fees(memberId).expect(403);
+      await fees(otherLawyerId).expect(403);
+    });
+
+    it("the webhook settles a payment Stripe finished later", async () => {
       await card("STRIPE");
       answers = [processing("pi_1")];
-      expect((await confirm().expect(200)).body.status).to.equal("CONFIRMED");
+      expect((await retry().expect(200)).body.status).to.equal("CONFIRMED");
       const charge = (await state()).charges[0]!;
-      expect(charge).to.deep.include({ status: "PENDING", paymentIntentId: "pi_1" });
-      await retry().expect(409);
-
       stripeNow.set("pi_1", ok("pi_1"));
       await webhook("payment_intent.succeeded", "pi_1", charge.id);
       await webhook("payment_intent.succeeded", "pi_1", charge.id);
-      const s = await state();
-      expect(s.status).to.equal("ENGAGED");
-      expect(s.charges[0]).to.deep.include({ status: "SUCCEEDED", receiptUrl: "https://pay.stripe.com/receipts/pi_1" });
+      expect((await state()).status).to.equal("ENGAGED");
       expect((await notificationsFor(lawyerId)).filter((n) => n.title === "You're engaged on a client request")).to.have.length(1);
-    });
-
-    it("the webhook fails a payment that was declined later", async () => {
-      await card("STRIPE");
-      answers = [processing("pi_1")];
-      await confirm().expect(200);
-      const charge = (await state()).charges[0]!;
-      stripeNow.set("pi_1", declined("pi_1"));
-      await webhook("payment_intent.payment_failed", "pi_1", charge.id);
-      expect((await state()).charges[0]).to.deep.include({ status: "FAILED" });
-    });
-
-    it("an attempt with no answer is retried with the same idempotency key, so Stripe can't charge twice", async () => {
-      await card("STRIPE");
-      answers = [new Error("socket hang up"), ok("pi_1")];
-      expect((await confirm().expect(200)).body.status).to.equal("CONFIRMED");
-      expect((await state()).charges[0]).to.deep.include({ status: "FAILED", attempts: 0 });
-      await retry().expect(200);
-      // Both calls were attempt 1: the same key, so Stripe replays the first payment if it happened.
-      expect(chargeRequests.map((r) => r.attempt)).to.deep.equal([1, 1]);
-    });
-
-    it("records money Stripe took even after we'd marked the attempt failed", async () => {
-      await card("STRIPE");
-      answers = [new Error("timeout")];
-      await confirm().expect(200);
-      const charge = (await state()).charges[0]!;
-      stripeNow.set("pi_late", ok("pi_late"));
-      await webhook("payment_intent.succeeded", "pi_late", charge.id);
-      const s = await state();
-      expect(s.status).to.equal("ENGAGED");
-      expect(s.charges[0]).to.deep.include({ status: "SUCCEEDED", paymentIntentId: "pi_late" });
-    });
-
-    it("ignores a payment that isn't one of our charges", async () => {
-      await webhook("payment_intent.succeeded", "pi_other", crypto.randomUUID());
-      expect((await state()).status).to.equal("ROUTED");
     });
   });
 
   describe("decline", () => {
     it("charges nothing, ends the claim DECLINED and routes the request again without that lawyer", async () => {
-      await card("STRIPE");
       const { body } = await decline({ reason: "  Found someone closer.  " }).expect(200);
       expect(body).to.deep.include({ status: "ROUTED", lawyer: null, quote: null });
       const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true, charges: true } });
       expect(row.excludedLawyerIds).to.include(lawyerId);
       expect(row.charges).to.have.length(0);
       expect(row.claims[0]).to.deep.include({ outcome: "DECLINED", declineReason: "Found someone closer.", openRequestId: null });
-      expect(chargeRequests).to.have.length(0);
+      expect(await prisma.quotation.findUniqueOrThrow({ where: { id: quotationId } })).to.deep.include({ status: "REJECTED", rejectReason: "Found someone closer." });
       expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client chose not to go ahead"]);
     });
 
     it("only while QUOTED: not once confirmed", async () => {
-      await card("STRIPE");
-      answers = [declined("pi_1")];
       await confirm().expect(200);
       expect((await decline().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
     });
@@ -589,6 +526,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
 
   describe("several lawyers' quotes (phase 5)", () => {
     let secondClaimId: string;
+    let secondQuotationId: string;
     beforeEach(async () => {
       const now = new Date();
       const second = await prisma.clientRequestClaim.create({
@@ -606,6 +544,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
         },
       });
       secondClaimId = second.id;
+      secondQuotationId = (await sentQuotation(second, 60000)).id;
     });
 
     it("lists every lawyer's quote for the client, and shows no single lawyer until they pick", async () => {
@@ -617,16 +556,17 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     });
 
     it("needs the client to name which quote, then confirms that one and tells the other lawyer", async () => {
-      await card("STRIPE");
       expect((await confirm().expect(400)).body.code).to.equal("QUOTE_REQUIRED");
-      answers = [ok("pi_1")];
 
       const { body } = await confirm({ disclosureAcknowledged: true, claimId: secondClaimId }).expect(200);
-
-      expect(body).to.deep.include({ status: "ENGAGED" });
+      expect(body).to.deep.include({ status: "CONFIRMED" });
       expect(body.lawyer.id).to.equal(memberId);
+      expect((await prisma.quotation.findUniqueOrThrow({ where: { id: quotationId } })).status).to.equal("NOT_CHOSEN");
+      await pay(secondQuotationId).expect(200);
+
       const s = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true, charges: true } });
-      expect(s.charges.map((c) => c.lawyerId)).to.deep.equal([memberId]);
+      expect(s.status).to.equal("ENGAGED");
+      expect(s.charges).to.have.length(0);
       expect(s.claims.find((c) => c.id === claimId)!.outcome).to.equal("NOT_CHOSEN");
       expect(s.claims.find((c) => c.id === secondClaimId)!.outcome).to.equal("ENGAGED");
       expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["The client chose another lawyer"]);
@@ -641,26 +581,10 @@ describe("client confirms, the firm is charged the per-case fee", () => {
   });
 
   describe("fee history", () => {
-    it("lists the firm's charges for its OWNER and ADMIN, with the lawyer and receipt", async () => {
-      await card("STRIPE");
-      answers = [ok("pi_1")];
-      await confirm().expect(200);
-      for (const as of [lawyerId, adminId]) {
-        const { body } = await fees(as).expect(200);
-        expect(body.total).to.equal(1);
-        expect(body.data[0]).to.deep.include({
-          kind: "PER_CASE_FEE",
-          status: "SUCCEEDED",
-          amount: { amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" },
-          requestId,
-          lawyer: { id: lawyerId, name: "Lena Lawyer" },
-          receiptUrl: "https://pay.stripe.com/receipts/pi_1",
-        });
-      }
-      await fees(memberId).expect(403);
-      await fees(otherLawyerId).expect(403);
-      const filtered = await request(app).get(`/api/organizations/${orgId}/billing/fees?kind=AI_TOP_UP`).set(auth(lawyerId)).expect(200);
-      expect(filtered.body.total).to.equal(0);
+    it("has no per-case fee for a request the client paid through ilovelawyer", async () => {
+      await engage();
+      const { body } = await fees(adminId).expect(200);
+      expect(body.total).to.equal(0);
       expect(claimId).to.be.a("string");
     });
   });

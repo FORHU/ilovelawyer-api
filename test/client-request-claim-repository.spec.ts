@@ -9,11 +9,22 @@ import prisma from "../src/lib/prisma";
 import ClientRequestClaimRepo, { CLAIM_HOLD_MS } from "../src/repositories/client-request-claim.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import OrganizationChargeRepo from "../src/repositories/organization-charge.repository";
+import QuotationRepo from "../src/repositories/quotation.repository";
 import { CLIENT_REQUEST_PICK_WINDOW_MS } from "../src/constants/client-request.constants";
 
 const HOUR_MS = 60 * 60 * 1000;
 const LAWYERS = 8;
 const QUOTE = { type: "FIXED_FEE" as const, amountMinor: 50_000, currency: "GBP", message: "Fixed fee." };
+const TERMS = { platformFeeBps: 1500, minPlatformFeeMinor: 500 };
+
+/** The lawyer drafts and sends their quotation at `at`, valid for 7 days from then. False when
+ * either step was refused. */
+async function quote(claim: { id: string; requestId: string; lawyerId: string }, q = QUOTE, at: Date = new Date()) {
+  const draft = { type: q.type, serviceFeeMinor: q.amountMinor, currency: q.currency, message: q.message, expiresAt: new Date(at.getTime() + CLIENT_REQUEST_PICK_WINDOW_MS) };
+  const saved = await QuotationRepo.saveDraft(claim, draft, TERMS, at);
+  if ("refused" in saved && saved.refused !== "SENT") return false;
+  return !("refused" in (await QuotationRepo.send(claim, TERMS, at)));
+}
 
 describe("ClientRequestClaimRepo", () => {
   const clientId = crypto.randomUUID();
@@ -98,28 +109,28 @@ describe("ClientRequestClaimRepo", () => {
   });
 
   describe("quote", () => {
-    it("saves the quote once, and the first quote starts the client's 7 days to pick", async () => {
+    it("sends the quote once, and the request's pick-by date follows the latest quote's expiry", async () => {
       const a = await join(lawyerIds[0]!);
       const b = await join(lawyerIds[1]!);
       const first = new Date();
 
-      expect(await ClientRequestClaimRepo.quote(a, QUOTE, first)).to.equal(true);
-      expect(await ClientRequestClaimRepo.quote(a, QUOTE, first)).to.equal(false);
-      expect(await ClientRequestClaimRepo.quote(b, QUOTE, new Date(first.getTime() + HOUR_MS))).to.equal(true);
+      expect(await quote(a, QUOTE, first)).to.equal(true);
+      expect(await quote(a, QUOTE, first)).to.equal(false);
+      expect(await quote(b, QUOTE, new Date(first.getTime() + HOUR_MS))).to.equal(true);
 
       expect((await claimRow(a.id)).quotedAt!.getTime()).to.equal(first.getTime());
       const r = await request();
       expect(r.status).to.equal("ROUTED");
-      expect(r.pickByAt!.getTime()).to.equal(first.getTime() + CLIENT_REQUEST_PICK_WINDOW_MS);
+      expect(r.pickByAt!.getTime()).to.equal(first.getTime() + HOUR_MS + CLIENT_REQUEST_PICK_WINDOW_MS);
     });
 
     it("refuses after the lawyer's 24h, or once the request has moved on", async () => {
       const late = await join(lawyerIds[0]!, new Date(Date.now() - CLAIM_HOLD_MS - 1000));
-      expect(await ClientRequestClaimRepo.quote(late, QUOTE)).to.equal(false);
+      expect(await quote(late, QUOTE)).to.equal(false);
 
       const ok = await join(lawyerIds[1]!);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "WITHDRAWN" } });
-      expect(await ClientRequestClaimRepo.quote(ok, QUOTE)).to.equal(false);
+      expect(await quote(ok, QUOTE)).to.equal(false);
     });
   });
 
@@ -144,7 +155,7 @@ describe("ClientRequestClaimRepo", () => {
       const a = await join(lawyerIds[0]!);
       const b = await join(lawyerIds[1]!);
       expect(await ClientRequestClaimRepo.decline(a, "Too expensive")).to.equal(false);
-      await ClientRequestClaimRepo.quote(a, QUOTE);
+      await quote(a, QUOTE);
 
       expect(await ClientRequestClaimRepo.decline(a, "Too expensive")).to.equal(true);
 
@@ -180,7 +191,7 @@ describe("ClientRequestClaimRepo", () => {
 
     it("leaves a quoted claim alone: it waits for the client", async () => {
       const a = await join(lawyerIds[0]!, new Date(Date.now() - CLAIM_HOLD_MS + 60_000));
-      await ClientRequestClaimRepo.quote(a, QUOTE);
+      await quote(a, QUOTE);
       await prisma.clientRequestClaim.update({ where: { id: a.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
 
       expect((await ClientRequestClaimRepo.findLapsed(new Date())).filter((c) => c.requestId === requestId)).to.deep.equal([]);
@@ -216,8 +227,8 @@ describe("ClientRequestClaimRepo", () => {
       const a = await join(lawyerIds[0]!);
       const b = await join(lawyerIds[1]!);
       const c = await join(lawyerIds[2]!);
-      await ClientRequestClaimRepo.quote(a, QUOTE);
-      await ClientRequestClaimRepo.quote(b, QUOTE);
+      await quote(a, QUOTE);
+      await quote(b, QUOTE);
 
       const confirmed = await OrganizationChargeRepo.confirm(requestId, b.id, { amountMinor: 5000, currency: "GBP" });
 
@@ -233,7 +244,7 @@ describe("ClientRequestClaimRepo", () => {
     it("refuses a quote that isn't open, and a second confirm", async () => {
       const a = await join(lawyerIds[0]!);
       const b = await join(lawyerIds[1]!);
-      await ClientRequestClaimRepo.quote(a, QUOTE);
+      await quote(a, QUOTE);
 
       expect(await OrganizationChargeRepo.confirm(requestId, b.id, { amountMinor: 5000, currency: "GBP" })).to.equal(null);
       expect((await request()).status).to.equal("ROUTED");
@@ -339,7 +350,7 @@ describe("ClientRequestClaimRepo", () => {
 
     it("expires a request the client didn't pick a quote on in time, ending the open claims as not chosen", async () => {
       const a = await join(lawyerIds[0]!);
-      await ClientRequestClaimRepo.quote(a, QUOTE);
+      await quote(a, QUOTE);
       expect(await ClientRequestRepo.expire(requestId, new Date())).to.equal(false);
       await prisma.clientRequest.update({ where: { id: requestId }, data: { pickByAt: new Date(Date.now() - 1000) } });
 

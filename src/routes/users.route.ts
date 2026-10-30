@@ -8,6 +8,7 @@ import OrganizationCardCtrl from "../controllers/organization-card.controller";
 import { freeCreditState } from "../middleware/free-credit.middleware";
 import AccountLimitsSvc from "../services/account-limits.service";
 import { AVATAR_MAX_BYTES } from "../constants";
+import WalletCtrl from "../controllers/wallet.controller";
 
 // In memory: AvatarSvc checks the bytes (type, size) before anything reaches S3.
 const avatarUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: AVATAR_MAX_BYTES, files: 1 } });
@@ -57,6 +58,15 @@ router.post("/me/plan-gate/start", asyncHandler(UsersCtrl.startWithoutPaying));
 router.get("/me/billing/card", asyncHandler(OrganizationCardCtrl.getOwn));
 router.post("/me/billing/card/setup-session", asyncHandler(OrganizationCardCtrl.startOwnSetup));
 router.get("/me/billing/fees", asyncHandler(OrganizationCardCtrl.ownFees));
+// A solo lawyer's own earnings from client quotations, and paying them out (a firm's are under
+// /organizations/:id/wallet).
+router.get("/me/wallet", asyncHandler(WalletCtrl.get));
+router.get("/me/wallet/ledger", asyncHandler(WalletCtrl.ledger));
+router.get("/me/wallet/earnings", asyncHandler(WalletCtrl.earnings));
+router.get("/me/wallet/withdrawals", asyncHandler(WalletCtrl.withdrawals));
+router.post("/me/wallet/withdrawals", asyncHandler(WalletCtrl.withdraw));
+router.post("/me/wallet/payout-account/onboarding-link", asyncHandler(WalletCtrl.onboardingLink));
+router.post("/me/wallet/payout-account/refresh", asyncHandler(WalletCtrl.refreshAccount));
 router.put("/me/tour/:track", asyncHandler(UsersCtrl.saveTour));
 // A lawyer's Lawyer Application (UK and PH; the path predates PH).
 router.get("/me/client-request-profile", asyncHandler(LawyerProfileCtrl.get));

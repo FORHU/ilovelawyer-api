@@ -4,6 +4,8 @@ import OrganizationRepo from "../repositories/organization.repository";
 import NotificationSvc from "../services/notification.service";
 import ClientRequestNotifySvc from "../services/client-request-notify.service";
 import SecurityAuditSvc from "../services/security-audit.service";
+import QuotationPaymentSvc from "../services/quotation-payment.service";
+import WalletSvc from "../services/wallet.service";
 import { emitToUser } from "../lib/socket";
 import { withCronLock } from "../lib/cron-lock";
 import logger from "../utils/logger";
@@ -15,14 +17,17 @@ const SCHEDULE = "* * * * *";
 type LapsedClaim = Awaited<ReturnType<typeof ClientRequestClaimRepo.findLapsed>>[number];
 type UnpaidFee = Awaited<ReturnType<typeof ClientRequestClaimRepo.findUnpaid>>[number];
 
-type SweepResult = { lapsed: number; unpaid: number; expired: number; reminded: number; announced: number };
+type SweepResult = { lapsed: number; unpaid: number; quotesExpired: number; expired: number; reminded: number; announced: number; released: number };
 
 /**
  * The client request timers (the UK client-to-lawyer hand-off), in order: a claim's 24h hold
  * lapsing back to the pool (#511), a confirmed request whose introduction fee still hasn't gone
- * through after 48h going back too (#933), then a routed request nobody claimed within 48h expiring, the
- * 2h-before reminder to a lawyer holding one, and announcing routed requests nobody has been told
- * about yet, including the ones a lapse just put back (#510, ClientRequestNotifySvc). Each step is
+ * through after 48h going back too (#933), quotations past the lawyer's expiry (QuotationPaymentSvc:
+ * the claim ends, and an accepted but unpaid one sends the request back to other lawyers), then a
+ * routed request nobody claimed within 48h expiring, the 2h-before reminder to a lawyer holding one,
+ * announcing routed requests nobody has been told about yet, including the ones a lapse just put back
+ * (#510, ClientRequestNotifySvc), and last, lawyers' earnings whose hold is over becoming available
+ * to withdraw (WalletSvc). Each step is
  * a guarded update, so a run that overlaps another or dies halfway never acts on the same request
  * twice, and one step failing doesn't stop the rest.
  */
@@ -42,15 +47,17 @@ export default class ClientRequestSweepQueue {
 
   /** One sweep. Called by the cron schedule; exposed for tests. */
   static async tick(now: Date = new Date()): Promise<SweepResult> {
-    const result: SweepResult = { lapsed: 0, unpaid: 0, expired: 0, reminded: 0, announced: 0 };
+    const result: SweepResult = { lapsed: 0, unpaid: 0, quotesExpired: 0, expired: 0, reminded: 0, announced: 0, released: 0 };
     if (this.ticking) return result;
     this.ticking = true;
     try {
       result.lapsed = await this.step("lapse", () => this.lapseDue(now));
       result.unpaid = await this.step("unpaid", () => this.lapseUnpaidDue(now));
+      result.quotesExpired = await this.step("quote-expiry", () => QuotationPaymentSvc.expireDue(now));
       result.expired = await this.step("expire", () => ClientRequestNotifySvc.expireDue(now));
       result.reminded = await this.step("remind", () => ClientRequestNotifySvc.remindDue(now));
       result.announced = await this.step("announce", () => ClientRequestNotifySvc.announceDue(now));
+      result.released = await this.step("release", () => WalletSvc.releaseDue(now));
     } finally {
       this.ticking = false;
     }

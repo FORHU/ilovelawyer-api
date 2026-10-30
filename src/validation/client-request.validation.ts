@@ -40,8 +40,11 @@ export const releaseClientRequestSchema = Joi.object({
   note: Joi.string().trim().allow("").max(CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH).optional(),
 });
 
-/** POST /client-requests/:id/quote. GBP only: client requests are UK only. A first consultation may
- * be free (0); the service refuses a fixed fee of 0. */
+/** PUT /client-requests/:id/quotation (a draft) and POST /client-requests/:id/quote (draft and send
+ * in one). GBP only: client requests are UK only. `amount` is the lawyer's service fee, paid out to
+ * them in full; the platform fee is added on top for the client. A first consultation may be free
+ * (0); the service refuses a fixed fee of 0. `expiresAt` is the lawyer's: the client accepts and pays
+ * before it. */
 export const quoteClientRequestSchema = Joi.object({
   type: Joi.string()
     .valid(...QUOTE_TYPES)
@@ -51,14 +54,28 @@ export const quoteClientRequestSchema = Joi.object({
     currency: Joi.string().valid("GBP").required(),
   }).required(),
   message: Joi.string().trim().min(1).max(CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH).required(),
+  expiresAt: Joi.date().iso().required(),
+});
+
+/** POST /client/lawyer-requests/:id/quotations/:quotationId/accept. */
+export const acceptQuotationSchema = Joi.object({
+  disclosureAcknowledged: Joi.boolean().required(),
+});
+
+/** POST /client/lawyer-requests/:id/quotations/:quotationId/payment. "decline" asks the dummy
+ * provider to refuse, for testing the app's failure screen; Stripe ignores it. */
+export const payQuotationSchema = Joi.object({
+  testOutcome: Joi.string().valid("decline").optional(),
 });
 
 /** POST /client/lawyer-requests/:id/confirm. Not `valid(true)`: false gets its own
  * DISCLOSURE_NOT_ACKNOWLEDGED answer from the service. */
 export const confirmClientRequestSchema = Joi.object({
   disclosureAcknowledged: Joi.boolean().required(),
-  // Several lawyers: whose quote (LawyerRequestForClient.lawyers[].claimId). Optional when there's one.
+  // Several lawyers: whose quote (LawyerRequestForClient.lawyers[].claimId, or its quotation's id).
+  // Optional when there's one.
   claimId: Joi.string().trim().optional(),
+  quotationId: Joi.string().trim().optional(),
 });
 
 /** POST /client/lawyer-requests/:id/decline. */

@@ -3,6 +3,7 @@ import ClientPaymentRepo from "../repositories/client-payment.repository";
 import ClientBillingSvc from "./client-billing.service";
 import AccountTopUpBillingSvc from "./account-topup-billing.service";
 import PaymentPlanBillingSvc from "./payment-plan-billing.service";
+import WalletSvc from "./wallet.service";
 
 /**
  * One Stripe account, one webhook mount, three billing services: the client app's payments (and a
@@ -20,6 +21,14 @@ export default class StripeWebhookSvc {
     await ClientBillingSvc.handleStripeEvent(event);
     await AccountTopUpBillingSvc.handleStripeEvent(event);
     await PaymentPlanBillingSvc.handleStripeEvent(event);
+    await ClientPaymentRepo.recordWebhookEvent(event.id, event.type);
+    return { duplicate: false };
+  }
+
+  /** The Connect endpoint's events (lawyers' connected accounts): only the wallet acts on them. */
+  static async handleConnect(event: Stripe.Event): Promise<{ duplicate: boolean }> {
+    if (await ClientPaymentRepo.isWebhookEventRecorded(event.id)) return { duplicate: true };
+    await WalletSvc.applyConnectEvent(event);
     await ClientPaymentRepo.recordWebhookEvent(event.id, event.type);
     return { duplicate: false };
   }

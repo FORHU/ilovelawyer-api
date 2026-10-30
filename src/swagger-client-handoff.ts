@@ -1,5 +1,9 @@
 import type { OAS3Definition, Operation, Parameter, Reference, Schema } from "swagger-jsdoc";
 import {
+  QUOTATION_STATUSES,
+  QUOTATION_PAYMENT_STATUSES,
+  EARNING_STATUSES,
+  WITHDRAWAL_STATUSES,
   AI_BUDGET_STATES,
   CHARGE_KINDS,
   CHARGE_STATUSES,
@@ -33,6 +37,7 @@ const CLIENT_TAG = "Lawyer Requests (client app)";
 const LAWYER_TAG = "Client Requests (lawyer app)";
 const BILLING_TAG = "Client Request Billing (lawyer app)";
 const ADMIN_TAG = "Admin: Client Requests";
+const WALLET_TAG = "Earnings and Payouts (lawyer app)";
 
 const ref = (name: string): Reference => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: S) => ({ "application/json": { schema } });
@@ -106,6 +111,11 @@ const BAD_STATUS = err("INVALID_REQUEST_STATUS: not allowed in the request's cur
 const LAWYER_ONLY = err("NOT_UK_TENANT or LAWYER_NOT_VERIFIED, or the account is not a lawyer");
 
 export const clientHandoffTags: Tags = [
+  {
+    name: WALLET_TAG,
+    description:
+      "A payee's earnings from client quotations (WalletSvc): a firm's under /organizations/{id}/wallet (OWNER/ADMIN), a solo lawyer's under /users/me/wallet. Each client payment puts the lawyer's full service fee in PENDING for the tenant's hold (PayoutSettings.earningsHoldDays), then the sweep makes it AVAILABLE. Withdrawals go to the payee's bank through Stripe Connect (an Express account set up on Stripe's pages), at least the tenant's minimum.",
+  },
   {
     name: CLIENT_TAG,
     description: [
@@ -394,6 +404,83 @@ export const clientHandoffSchemas: Schemas = {
     type: "object",
     properties: { id: { type: "string" }, status: enumOf(CHARGE_STATUSES), amount: money(), failureReason: { type: "string", nullable: true } },
   },
+  QuoteTerms: {
+    type: "object",
+    description: "How the platform fee on a quote is worked out now: platformFeeBps of the service fee, never below minPlatformFee; none on a free quote",
+    properties: { platformFeeBps: { type: "integer", example: 1500 }, minPlatformFee: money() },
+  },
+  Quotation: {
+    type: "object",
+    description: "The lawyer's quotation. serviceFee is paid out to the lawyer in full; the client pays total = serviceFee + platformFee. The fee is fixed when it's sent; acceptedAmount when the client accepts.",
+    properties: {
+      id: { type: "string" },
+      claimId: { type: "string" },
+      type: enumOf(QUOTE_TYPES),
+      status: enumOf(QUOTATION_STATUSES),
+      serviceFee: money(),
+      platformFeeBps: { type: "integer" },
+      platformFee: money(),
+      total: money(),
+      acceptedAmount: { ...money(), nullable: true },
+      message: { type: "string" },
+      expiresAt: dateTime("Set by the lawyer: the client accepts and pays before it"),
+      sentAt: dateTime(undefined, true),
+      acceptedAt: dateTime(undefined, true),
+      paidAt: dateTime(undefined, true),
+    },
+  },
+  QuotationPayment: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      quotationId: { type: "string" },
+      status: enumOf(QUOTATION_PAYMENT_STATUSES),
+      amount: money(),
+      serviceFee: money(),
+      platformFee: money(),
+      refunded: money(),
+      provider: { type: "string", enum: ["STRIPE", "DUMMY"] },
+      failureReason: { type: "string", nullable: true },
+      succeededAt: dateTime(undefined, true),
+      createdAt: dateTime(),
+    },
+  },
+  Wallet: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      owner: { type: "object", properties: { type: { type: "string", enum: ["ORGANIZATION", "USER"] }, id: { type: "string" } } },
+      currency: { type: "string" },
+      balances: { type: "object", properties: { pending: money(), available: money("Can be below zero after a refund of money already withdrawn"), reserved: money("On its way to the bank"), withdrawn: money() } },
+      payoutAccount: {
+        type: "object",
+        properties: { provider: { type: "string", nullable: true, enum: ["STRIPE", "DUMMY"] }, connected: { type: "boolean" }, detailsSubmitted: { type: "boolean" }, payoutsEnabled: { type: "boolean" } },
+      },
+      minWithdrawal: money(),
+      earningsHoldDays: { type: "integer", nullable: true },
+    },
+  },
+  Earning: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      requestId: { type: "string" },
+      quotationId: { type: "string" },
+      status: enumOf(EARNING_STATUSES),
+      gross: money("What the client paid"),
+      platformFee: money(),
+      net: money("The lawyer's service fee"),
+      reversed: money("Taken back by refunds or a lost dispute"),
+      disputed: { type: "boolean" },
+      availableAt: dateTime(),
+      releasedAt: dateTime(undefined, true),
+      createdAt: dateTime(),
+    },
+  },
+  Withdrawal: {
+    type: "object",
+    properties: { id: { type: "string" }, status: enumOf(WITHDRAWAL_STATUSES), amount: money(), failureReason: { type: "string", nullable: true }, paidAt: dateTime(undefined, true), createdAt: dateTime() },
+  },
   ClientRequestForLawyer: {
     type: "object",
     properties: {
@@ -405,8 +492,10 @@ export const clientHandoffSchemas: Schemas = {
       lawyersOn: { type: "integer", description: "Several lawyers (phase 5): how many are on it now" },
       claim: { ...ref("ClaimSummary"), nullable: true },
       quote: { ...ref("Quote"), nullable: true },
-      perCaseFee: { ...money("What confirming will charge the organization now: the region's introduction fee, set in admin"), readOnly: true },
-      charge: { ...ref("ChargeSummary"), nullable: true, description: "The per-case fee, from CONFIRMED" },
+      quotation: { ...ref("Quotation"), nullable: true, description: "The lawyer's draft or sent quotation" },
+      quoteTerms: ref("QuoteTerms"),
+      perCaseFee: { ...money("The region's old introduction fee: only charged on requests confirmed before quotation payments"), readOnly: true },
+      charge: { ...ref("ChargeSummary"), nullable: true, description: "The per-case fee, on requests confirmed before quotation payments" },
       engagement: {
         type: "object",
         nullable: true,
@@ -443,12 +532,15 @@ export const clientHandoffSchemas: Schemas = {
             joinedAt: dateTime(),
             lawyer: ref("LawyerPublicProfile"),
             quote: { ...ref("Quote"), nullable: true, description: "Null until they've quoted" },
+            quotation: { ...ref("Quotation"), nullable: true, description: "With the platform fee, the total and the expiry; null until they've quoted" },
           },
         },
       },
       pickByAt: dateTime("While ROUTED with a quote in: the request expires if the client hasn't picked one by then (7 days after the first quote)", true),
       lawyer: { ...ref("LawyerPublicProfile"), nullable: true, description: "The lawyer hired, or until then the only quote; null with several. firmName is null for a solo practitioner's personal workspace" },
       quote: { ...ref("Quote"), nullable: true, description: "That lawyer's quote" },
+      quotation: { ...ref("Quotation"), nullable: true, description: "That lawyer's quotation" },
+      awaitingPayment: { type: "boolean", description: "The client accepted a quotation and hasn't paid it yet (CONFIRMED)" },
       referralDisclosure: { type: "string", nullable: true, description: "Shown on the quote screen; the client acknowledges it to confirm" },
       engagedAt: dateTime(undefined, true),
       closedAt: dateTime(undefined, true),
@@ -725,14 +817,69 @@ export const clientHandoffPaths: Paths = {
       issue: "ilovelawyer-api#513", built: true,
       summary: "Confirm one lawyer's quote",
       description:
-        "While a quote is open, once: confirming twice charges once. Several lawyers (phase 5): claimId names the quote (400 QUOTE_REQUIRED when there are several and none is named); the other lawyers on the request end NOT_CHOSEN and are notified. Moves to CONFIRMED and charges the lawyer's organization the per-case fee straight away, off-session on its card on file (Stripe, or a DUMMY test card that takes no money). Paid: ENGAGED (engagedAt set); the lawyer's read access to the case comes with #514. Declined, or no card: it stays CONFIRMED, the lawyer and the organization's OWNER/ADMINs are notified to update the card, and the lawyer retries (POST /client-requests/{id}/charge/retry). A bank that settles later leaves it CONFIRMED until Stripe's webhook.",
+        "Accepts one lawyer's quotation, while it's open and before its expiry (409 QUOTATION_EXPIRED), once. Several lawyers (phase 5): claimId (or quotationId) names it (400 QUOTE_REQUIRED when there are several and none is named); the other lawyers on the request end NOT_CHOSEN and are notified. Moves to CONFIRMED with the quotation ACCEPTED and its total fixed (acceptedAmount); the client then pays it (POST .../quotations/{quotationId}/payment), and paying engages the request. A quotation with nothing to pay (a free first consultation) engages it at once. Nothing is charged to the lawyer.",
       parameters: requestId,
       body: {
         type: "object",
         required: ["disclosureAcknowledged"],
         properties: { disclosureAcknowledged: { type: "boolean", enum: [true] }, claimId: { type: "string", description: "Whose quote; optional when there's only one" } },
       },
-      responses: { 200: ok("Confirmed or engaged", ref("LawyerRequestForClient")), 400: err("DISCLOSURE_NOT_ACKNOWLEDGED or QUOTE_REQUIRED"), 404: NOT_FOUND, 409: BAD_STATUS },
+      responses: { 200: ok("Confirmed or engaged", ref("LawyerRequestForClient")), 400: err("DISCLOSURE_NOT_ACKNOWLEDGED or QUOTE_REQUIRED"), 404: NOT_FOUND, 409: err("INVALID_REQUEST_STATUS or QUOTATION_EXPIRED") },
+    }),
+  },
+  "/client/lawyer-requests/{id}/quotations/{quotationId}/accept": {
+    post: op({
+      tag: CLIENT_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Accept a lawyer's quotation",
+      description: "POST .../confirm by the quotation's id.",
+      parameters: [...requestId, idParam("quotationId")],
+      body: { type: "object", required: ["disclosureAcknowledged"], properties: { disclosureAcknowledged: { type: "boolean", enum: [true] } } },
+      responses: { 200: ok("Confirmed, or engaged when there's nothing to pay", ref("LawyerRequestForClient")), 400: err("DISCLOSURE_NOT_ACKNOWLEDGED"), 404: NOT_FOUND, 409: err("INVALID_REQUEST_STATUS or QUOTATION_EXPIRED") },
+    }),
+  },
+  "/client/lawyer-requests/{id}/quotations/{quotationId}/reject": {
+    post: op({
+      tag: CLIENT_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Reject a lawyer's quotation",
+      description: "POST .../decline by the quotation's id. The quotation is REJECTED with the reason.",
+      parameters: [...requestId, idParam("quotationId")],
+      body: { type: "object", properties: { reason: { type: "string", maxLength: 500 } } },
+      responses: { 200: ok("Rejected", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
+    }),
+  },
+  "/client/lawyer-requests/{id}/quotations/{quotationId}/payment": {
+    post: op({
+      tag: CLIENT_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Pay the accepted quotation",
+      description:
+        "Starts (or resumes) paying the accepted amount, before the quotation's expiry (409 QUOTATION_EXPIRED). With Stripe: a PENDING payment and a PaymentIntent on ilovelawyer's account, whose client secret the app hands to Stripe's Payment Element; the same intent comes back while it's open. It settles on payment_intent.succeeded or GET .../payment. With the dummy provider: it settles now (402 PAYMENT_DECLINED for testOutcome decline). Paid: ENGAGED, the lawyer gets read-only access, and their service fee goes to their wallet.",
+      parameters: [...requestId, idParam("quotationId")],
+      body: { type: "object", properties: { testOutcome: { type: "string", enum: ["decline"], description: "Dummy provider only" } } },
+      responses: {
+        200: ok("Started, or paid", {
+          type: "object",
+          properties: {
+            payment: ref("QuotationPayment"),
+            intent: { type: "object", nullable: true, properties: { clientSecret: { type: "string" }, publishableKey: { type: "string" } } },
+          },
+        }),
+        402: err("PAYMENT_DECLINED"),
+        404: NOT_FOUND,
+        409: err("INVALID_REQUEST_STATUS or QUOTATION_EXPIRED"),
+      },
+    }),
+  },
+  "/client/lawyer-requests/{id}/payment": {
+    get: op({
+      tag: CLIENT_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Where the client's payment stands",
+      description: "The newest attempt on the request's accepted quotation, checked with Stripe first while PENDING (so the app learns the outcome without waiting for the webhook). Null before any attempt.",
+      parameters: requestId,
+      responses: { 200: ok("The payment", { type: "object", properties: { payment: { ...ref("QuotationPayment"), nullable: true } } }), 404: NOT_FOUND },
     }),
   },
   "/client/lawyer-requests/{id}/decline": {
@@ -941,16 +1088,51 @@ export const clientHandoffPaths: Paths = {
     post: op({
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#512", built: true,
-      summary: "Send your quote to the client",
+      summary: "Send your quote to the client (draft and send in one)",
       description:
-        "Allowed while CLAIMED and inside the 24h hold (409 CLAIM_EXPIRED after it). Moves to QUOTED, once. GBP only. A FIXED_FEE needs an amount above 0; a FIRST_CONSULTATION may be free. Once quoted, the hold no longer lapses: the request waits for the client to confirm or decline (#513). The client then sees the quote and the lawyer's public profile on GET /client/lawyer-requests/{id}. Needs a card on file for the per-case fee confirming will charge (the firm's, or a solo lawyer's own): 402 CARD_REQUIRED otherwise (FORHU/ilovelawyer-app#933).",
+        "Allowed while CLAIMED and inside the 24h hold (409 CLAIM_EXPIRED after it). Moves to QUOTED, once. GBP only. `amount` is the lawyer's service fee, paid out to them in full; the client pays the tenant's platform fee on top (QuoteTerms), fixed when the quote is sent. `expiresAt` is the lawyer's: the client accepts and pays before it (at most 90 days away). A FIXED_FEE needs an amount above 0; a FIRST_CONSULTATION may be free (no platform fee, nothing to pay). Nothing is charged to the lawyer, so no card on file is needed.",
       parameters: requestId,
       body: {
         type: "object",
-        required: ["type", "amount", "message"],
-        properties: { type: enumOf(QUOTE_TYPES), amount: money(), message: { type: "string", maxLength: 2000 } },
+        required: ["type", "amount", "message", "expiresAt"],
+        properties: { type: enumOf(QUOTE_TYPES), amount: money(), message: { type: "string", maxLength: 2000 }, expiresAt: dateTime() },
       },
-      responses: { 200: ok("Quoted (QUOTED)", ref("ClientRequestForLawyer")), 400: err("Validation error"), 402: err("CARD_REQUIRED: no card on file"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED or INVALID_REQUEST_STATUS") },
+      responses: { 200: ok("Quoted (QUOTED)", ref("ClientRequestForLawyer")), 400: err("Validation error, or QUOTATION_EXPIRY_INVALID"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED or INVALID_REQUEST_STATUS") },
+    }),
+  },
+  "/client-requests/{id}/quotation": {
+    put: op({
+      tag: LAWYER_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Save your quotation as a draft",
+      description: "Same body as POST .../quote. Priced with the tenant's platform fee as it is now, so the app can show the client's total. Only the lawyer sees a draft. Inside the 24h hold, until sent (409 once sent).",
+      parameters: requestId,
+      body: {
+        type: "object",
+        required: ["type", "amount", "message", "expiresAt"],
+        properties: { type: enumOf(QUOTE_TYPES), amount: money(), message: { type: "string", maxLength: 2000 }, expiresAt: dateTime() },
+      },
+      responses: { 200: ok("Draft saved", ref("ClientRequestForLawyer")), 400: err("Validation error, or QUOTATION_EXPIRY_INVALID"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED or INVALID_REQUEST_STATUS") },
+    }),
+  },
+  "/client-requests/{id}/quotation/send": {
+    post: op({
+      tag: LAWYER_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Send the draft quotation to the client",
+      description: "DRAFT -> SENT, once, priced again with the tenant's terms now and fixed from here on. Inside the 24h hold and before the quotation's own expiry (409 QUOTATION_EXPIRED). The request's pick-by date moves out to this expiry if it's later.",
+      parameters: requestId,
+      responses: { 200: ok("Quoted (QUOTED)", ref("ClientRequestForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("CLAIM_EXPIRED, QUOTATION_EXPIRED or INVALID_REQUEST_STATUS") },
+    }),
+  },
+  "/client-requests/{id}/quotation/withdraw": {
+    post: op({
+      tag: LAWYER_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Withdraw your sent quotation",
+      description: "Before the client accepts it. The quotation is WITHDRAWN and the lawyer's claim ends RELEASED, as giving the request back does (audited as client_request.released).",
+      parameters: requestId,
+      responses: { 200: ok("Withdrawn", ref("ClientRequestForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
   "/client-requests/{id}/charge/retry": {
@@ -1425,5 +1607,114 @@ export const clientHandoffPaths: Paths = {
         502: err("PAYMENT_PROVIDER_ERROR: Stripe refused; the refund is recorded FAILED and nothing is held"),
       },
     }),
+  },
+  "/users/me/wallet": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "Your own wallet", parameters: [], responses: { 200: ok("The wallet", ref("Wallet")), 403: err("Not an OWNER or ADMIN of the firm") } }),
+  },
+  "/users/me/wallet/ledger": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "Every movement in your own wallet, newest first", parameters: [...[], ...pageParams], responses: { 200: ok("A page of ledger entries") } }),
+  },
+  "/users/me/wallet/earnings": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "One earning per client payment", parameters: [...[], ...pageParams], responses: { 200: ok("A page of earnings", page("Earning")) } }),
+  },
+  "/users/me/wallet/withdrawals": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "Withdrawals, newest first", parameters: [...[], ...pageParams], responses: { 200: ok("A page of withdrawals", page("Withdrawal")) } }),
+    post: op({
+      tag: WALLET_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Withdraw to the bank",
+      description: "Header Idempotency-Key (the same key returns the same withdrawal). At least the tenant's minimum, at most the available balance, with a payout account Stripe has enabled. The amount is reserved, transferred to the payee's Connect account and paid out; it's PAID on payout.paid, or back in AVAILABLE on payout.failed. Audited (wallet.withdrawal_requested).",
+      parameters: [...[], { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }],
+      body: { type: "object", required: ["amount"], properties: { amount: money() } },
+      responses: { 201: ok("The withdrawal", ref("Withdrawal")), 400: err("WITHDRAWAL_BELOW_MINIMUM (details.minimum)"), 403: err("Not an OWNER or ADMIN of the firm"), 409: err("PAYOUT_ACCOUNT_REQUIRED, or INSUFFICIENT_BALANCE (details.available)") },
+    }),
+  },
+  "/users/me/wallet/payout-account/onboarding-link": {
+    post: op({
+      tag: WALLET_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Set up where payouts go",
+      description: "Makes the payee's Stripe Connect Express account on first use, and returns Stripe's onboarding page (url null with the dummy provider, which is ready at once). returnUrl must be on the app's own address. Audited (wallet.payout_account_started).",
+      parameters: [],
+      body: { type: "object", required: ["returnUrl"], properties: { returnUrl: { type: "string" } } },
+      responses: { 200: ok("Where to send the browser", { type: "object", properties: { url: { type: "string", nullable: true }, wallet: ref("Wallet") } }), 400: err("RETURN_URL_NOT_ALLOWED") },
+    }),
+  },
+  "/users/me/wallet/payout-account/refresh": {
+    post: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "Read the payout account's state from Stripe again", parameters: [], responses: { 200: ok("The wallet", ref("Wallet")) } }),
+  },
+  "/organizations/{id}/wallet": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "The firm's wallet", parameters: [idParam()], responses: { 200: ok("The wallet", ref("Wallet")), 403: err("Not an OWNER or ADMIN of the firm") } }),
+  },
+  "/organizations/{id}/wallet/ledger": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "Every movement in the firm's wallet, newest first", parameters: [...[idParam()], ...pageParams], responses: { 200: ok("A page of ledger entries") } }),
+  },
+  "/organizations/{id}/wallet/earnings": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "One earning per client payment", parameters: [...[idParam()], ...pageParams], responses: { 200: ok("A page of earnings", page("Earning")) } }),
+  },
+  "/organizations/{id}/wallet/withdrawals": {
+    get: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "Withdrawals, newest first", parameters: [...[idParam()], ...pageParams], responses: { 200: ok("A page of withdrawals", page("Withdrawal")) } }),
+    post: op({
+      tag: WALLET_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Withdraw to the bank",
+      description: "Header Idempotency-Key (the same key returns the same withdrawal). At least the tenant's minimum, at most the available balance, with a payout account Stripe has enabled. The amount is reserved, transferred to the payee's Connect account and paid out; it's PAID on payout.paid, or back in AVAILABLE on payout.failed. Audited (wallet.withdrawal_requested).",
+      parameters: [...[idParam()], { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } }],
+      body: { type: "object", required: ["amount"], properties: { amount: money() } },
+      responses: { 201: ok("The withdrawal", ref("Withdrawal")), 400: err("WITHDRAWAL_BELOW_MINIMUM (details.minimum)"), 403: err("Not an OWNER or ADMIN of the firm"), 409: err("PAYOUT_ACCOUNT_REQUIRED, or INSUFFICIENT_BALANCE (details.available)") },
+    }),
+  },
+  "/organizations/{id}/wallet/payout-account/onboarding-link": {
+    post: op({
+      tag: WALLET_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Set up where payouts go",
+      description: "Makes the payee's Stripe Connect Express account on first use, and returns Stripe's onboarding page (url null with the dummy provider, which is ready at once). returnUrl must be on the app's own address. Audited (wallet.payout_account_started).",
+      parameters: [idParam()],
+      body: { type: "object", required: ["returnUrl"], properties: { returnUrl: { type: "string" } } },
+      responses: { 200: ok("Where to send the browser", { type: "object", properties: { url: { type: "string", nullable: true }, wallet: ref("Wallet") } }), 400: err("RETURN_URL_NOT_ALLOWED") },
+    }),
+  },
+  "/organizations/{id}/wallet/payout-account/refresh": {
+    post: op({ tag: WALLET_TAG, issue: "quotation payments", built: true, summary: "Read the payout account's state from Stripe again", parameters: [idParam()], responses: { 200: ok("The wallet", ref("Wallet")) } }),
+  },
+  "/admin/settings/payout-settings": {
+    get: op({ tag: ADMIN_TAG, issue: "quotation payments", built: true, summary: "Quotation payment terms per tenant", description: "The platform fee rate and minimum, the earnings hold and the minimum withdrawal, with the defaults and the limits an admin may set.", responses: { 200: ok("Every tenant's terms"), 403: err("Not a platform admin") } }),
+  },
+  "/admin/settings/tenants/{code}/payout-settings": {
+    patch: op({
+      tag: ADMIN_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Change a tenant's quotation payment terms",
+      description: "Any of platformFeeBps, minPlatformFeeMinor, earningsHoldDays, minWithdrawalMinor, within the limits (400 PAYOUT_SETTING_OUT_OF_RANGE). Reaches new quotes and withdrawals within about a minute; a sent quote keeps its fee. Audited (admin.settings.payout_settings_changed).",
+      parameters: [{ name: "code", in: "path", required: true, schema: { type: "string", enum: ["UK", "PH"] } }],
+      body: { type: "object", properties: { platformFeeBps: { type: "integer" }, minPlatformFeeMinor: { type: "integer" }, earningsHoldDays: { type: "integer" }, minWithdrawalMinor: { type: "integer" } } },
+      responses: { 200: ok("Saved"), 400: err("PAYOUT_SETTING_OUT_OF_RANGE"), 403: err("Not a platform admin"), 404: err("Unknown tenant") },
+    }),
+  },
+  "/admin/quotation-payments": {
+    get: op({
+      tag: ADMIN_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Clients' quotation payments",
+      description: "Payments that took money, newest first; every attempt with all=true, or one status with status.",
+      parameters: [{ name: "status", in: "query", schema: enumOf(QUOTATION_PAYMENT_STATUSES) }, { name: "all", in: "query", schema: { type: "boolean" } }, ...pageParams],
+      responses: { 200: ok("A page of payments, each with its refunds"), 403: err("Not a platform admin") },
+    }),
+  },
+  "/admin/quotation-payments/{id}/refund": {
+    post: op({
+      tag: ADMIN_TAG,
+      issue: "quotation payments", built: true,
+      summary: "Refund a quotation payment",
+      description:
+        "Everything left when amount is left out, the platform fee included. Less is a partial refund out of the lawyer's service fee only (400 REFUND_EXCEEDS_CHARGE past it), and the platform fee is kept. The lawyer's earning is reversed by the service-fee part once the refund goes through (from PENDING, or AVAILABLE, which can go below zero). Through the provider the payment was taken with. Audited (admin.quotation_payment.refunded). The engagement carries on.",
+      parameters: [idParam()],
+      body: { type: "object", required: ["reason"], properties: { amount: money(), reason: { type: "string", maxLength: 500 } } },
+      responses: { 200: ok("The payment with its refunds"), 400: err("REFUND_EXCEEDS_CHARGE"), 403: err("Not a platform admin"), 404: err("Payment not found"), 409: err("NOT_REFUNDABLE"), 502: err("REFUND_FAILED") },
+    }),
+  },
+  "/admin/wallets": {
+    get: op({ tag: ADMIN_TAG, issue: "quotation payments", built: true, summary: "Every payee's wallet with its balances", parameters: pageParams, responses: { 200: ok("A page of wallets"), 403: err("Not a platform admin") } }),
   },
 };

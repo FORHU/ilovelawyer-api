@@ -32,6 +32,8 @@ app.use(
 // because the hosts that share a domain with a frontend (uk-dev, uk.ilovelawyer.com) only route
 // /api/* to this server; matched here first, it never reaches the /api router.
 app.post("/api/webhooks/stripe", express.raw({ type: "application/json", limit: "1mb" }), asyncHandler(StripeWebhookCtrl.handle));
+// Events on lawyers' Stripe Connect accounts (payouts, onboarding): a second endpoint with its own secret.
+app.post("/api/webhooks/stripe-connect", express.raw({ type: "application/json", limit: "1mb" }), asyncHandler(StripeWebhookCtrl.handleConnect));
 
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());

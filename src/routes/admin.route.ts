@@ -9,6 +9,7 @@ import ClientBillingAdminCtrl from "../controllers/client-billing-admin.controll
 import ClientRequestAdminCtrl from "../controllers/client-request-admin.controller";
 import ClientPricingAdminCtrl from "../controllers/client-pricing-admin.controller";
 import LawyerPricingAdminCtrl from "../controllers/lawyer-pricing-admin.controller";
+import PayoutAdminCtrl from "../controllers/payout-admin.controller";
 import PracticeAreaAdminCtrl from "../controllers/practice-area-admin.controller";
 import CaseAreaAdminCtrl from "../controllers/case-area-admin.controller";
 
@@ -72,6 +73,10 @@ router.get("/settings/lawyer-pricing", asyncHandler(LawyerPricingAdminCtrl.get))
 router.patch("/settings/tenants/:code/lawyer-pricing/intro-fee", asyncHandler(LawyerPricingAdminCtrl.updateIntroFee));
 router.post("/settings/tenants/:code/lawyer-pricing/packs", asyncHandler(LawyerPricingAdminCtrl.createPack));
 router.patch("/settings/lawyer-pricing/packs/:id", asyncHandler(LawyerPricingAdminCtrl.updatePack));
+// Quotation payments per tenant: the platform fee on top of a lawyer's quote, the earnings hold and
+// the minimum withdrawal (PayoutSettingsSvc).
+router.get("/settings/payout-settings", asyncHandler(PayoutAdminCtrl.getSettings));
+router.patch("/settings/tenants/:code/payout-settings", asyncHandler(PayoutAdminCtrl.updateSettings));
 
 router.get("/audit-log", asyncHandler(SecurityAuditCtrl.listForAdmin));
 router.get("/audit-log/export", asyncHandler(SecurityAuditCtrl.exportForAdmin));
@@ -91,5 +96,9 @@ router.get("/client-requests/fees-summary", asyncHandler(ClientRequestAdminCtrl.
 router.get("/client-requests", asyncHandler(ClientRequestAdminCtrl.listRequests));
 router.get("/charges/:chargeId", asyncHandler(ClientRequestAdminCtrl.getCharge));
 router.post("/charges/:chargeId/refund", asyncHandler(ClientRequestAdminCtrl.refundCharge));
+// Clients paying lawyers' quotations through ilovelawyer, refunds of them, and the lawyers' wallets.
+router.get("/quotation-payments", asyncHandler(PayoutAdminCtrl.listPayments));
+router.post("/quotation-payments/:id/refund", asyncHandler(PayoutAdminCtrl.refundPayment));
+router.get("/wallets", asyncHandler(PayoutAdminCtrl.listWallets));
 
 export default router;

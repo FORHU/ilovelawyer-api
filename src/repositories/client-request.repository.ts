@@ -1,6 +1,7 @@
 import { ClaimOutcome, ClientRequestStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { PRACTICE_AREAS_INCLUDE } from "./practice-area.repository";
+import { closeOpenQuotations } from "./quotation.repository";
 
 /** A request is open until it's closed, expired or withdrawn; a case has at most one open. */
 export const CLOSED_REQUEST_STATUSES: ClientRequestStatus[] = ["CLOSED", "EXPIRED", "WITHDRAWN"];
@@ -22,8 +23,8 @@ const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASS
 const FOR_LAWYER = {
   case: { select: { caseName: true, caseAreas: true, ukJurisdiction: true, organizationId: true, organization: { select: { name: true } } } },
   client: { select: { id: true, name: true, username: true } },
-  claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } } } },
-  // The per-case fee (#513), from CONFIRMED.
+  claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } }, quotation: true } },
+  // The per-case fee (#513), from CONFIRMED, on requests accepted before quotation payments.
   charges: { where: { kind: "PER_CASE_FEE" } },
 } satisfies Prisma.ClientRequestInclude;
 
@@ -44,6 +45,7 @@ const FOR_CLIENT = {
         },
       },
       organization: { select: { name: true, isPersonal: true } },
+      quotation: true,
     },
   },
   feedback: true,
@@ -127,6 +129,7 @@ export default class ClientRequestRepo {
       if (count !== 1) return { moved: false, heldBy: [] };
       const open = await tx.clientRequestClaim.findMany({ where: { requestId: id, outcome: null }, select: { lawyerId: true } });
       await tx.clientRequestClaim.updateMany({ where: { requestId: id, outcome: null }, data: { outcome: "WITHDRAWN", endedAt: now } });
+      await closeOpenQuotations(tx, { requestId: id }, "WITHDRAWN", now);
       return { moved: true, heldBy: open.map((c) => c.lawyerId) };
     });
   }
@@ -289,6 +292,7 @@ export default class ClientRequestRepo {
       const { count } = await tx.clientRequest.updateMany({ where: { id, ...expiredWhere(now) }, data: { status: "EXPIRED" } });
       if (count !== 1) return false;
       await tx.clientRequestClaim.updateMany({ where: { requestId: id, outcome: null }, data: { outcome: "NOT_CHOSEN", endedAt: now } });
+      await closeOpenQuotations(tx, { requestId: id }, "EXPIRED", now);
       return true;
     });
   }

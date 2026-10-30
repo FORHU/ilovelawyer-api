@@ -63,6 +63,12 @@ router.post("/lawyer-requests/:id/withdraw", asyncHandler(ClientRequestCtrl.with
 // Answering the lawyer's quote (#513): confirming charges their organization the per-case fee.
 router.post("/lawyer-requests/:id/confirm", asyncHandler(ClientRequestCtrl.confirm));
 router.post("/lawyer-requests/:id/decline", asyncHandler(ClientRequestCtrl.decline));
+// A lawyer's quotation by its id: accepting it fixes the amount, then the client pays it through
+// ilovelawyer (a Stripe PaymentIntent); paying engages the request.
+router.post("/lawyer-requests/:id/quotations/:quotationId/accept", asyncHandler(ClientRequestCtrl.acceptQuotation));
+router.post("/lawyer-requests/:id/quotations/:quotationId/reject", asyncHandler(ClientRequestCtrl.rejectQuotation));
+router.post("/lawyer-requests/:id/quotations/:quotationId/payment", asyncHandler(ClientRequestCtrl.payQuotation));
+router.get("/lawyer-requests/:id/payment", asyncHandler(ClientRequestCtrl.payment));
 // The client's side of closing the engagement, and rating the lawyer afterwards (#519).
 router.post("/lawyer-requests/:id/end", asyncHandler(ClientRequestCtrl.end));
 router.post("/lawyer-requests/:id/feedback", asyncHandler(ClientRequestCtrl.feedback));
