@@ -16,8 +16,11 @@
 export const CLIENT_REQUEST_STATUSES = [
   "REQUESTED", // created, brief being generated
   "ROUTED", // brief sent to every matching lawyer
-  "CLAIMED", // one lawyer holds it for 24h: conflict check, then quote
-  "QUOTED", // quote sent; the client confirms or declines
+  // Several lawyers (phase 5): a request stays ROUTED until the client picks a quote. CLAIMED and
+  // QUOTED are what each side is shown for it: a lawyer, where their own claim is; the client, whether
+  // any lawyer has joined or quoted.
+  "CLAIMED", // a lawyer has joined: conflict check, then quote within 24h
+  "QUOTED", // a quote is in; the client confirms or declines
   "CONFIRMED", // the client confirmed; the per-case fee is being charged (or failed and awaits a new card)
   "ENGAGED", // fee paid; the lawyer has read-only access to the client's case
   "CLOSED", // the lawyer closed or the client ended the engagement; live access ended
@@ -69,7 +72,7 @@ export function clientRequestStatusLabel(status: ClientRequestStatus): string {
 }
 
 /** How a lawyer's claim on a request ended. */
-export const CLAIM_OUTCOMES = ["RELEASED", "LAPSED", "DECLINED", "REASSIGNED", "WITHDRAWN", "ENGAGED"] as const;
+export const CLAIM_OUTCOMES = ["RELEASED", "LAPSED", "DECLINED", "REASSIGNED", "WITHDRAWN", "ENGAGED", "NOT_CHOSEN"] as const;
 export type ClaimOutcome = (typeof CLAIM_OUTCOMES)[number];
 
 /** Same values as UK_JURISDICTIONS in validation/case.validation.ts. */
@@ -175,9 +178,11 @@ export interface ClientRequestClaimExpiringEvent {
   claimExpiresAt: string;
 }
 
-/** To everyone on the engagement thread except the author. */
+/** To the other side of a lawyer's thread with the client (one per lawyer since phase 5b). */
 export interface EngagementMessageEvent {
   requestId: string;
+  /** The lawyer's claim the thread belongs to. */
+  claimId: string;
   message: EngagementMessage;
 }
 
@@ -210,6 +215,9 @@ export interface EngagementAiBudgetEvent {
 export interface EngagementMessage {
   id: string;
   requestId: string;
+  /** The lawyer's claim the thread belongs to (null only for a message whose lawyer's account is gone). */
+  claimId: string | null;
+  /** Before the lawyer is hired, the client's messages show as "Client", with no id. */
   author: { id: string | null; name: string; side: "CLIENT" | "LAWYER" | "SYSTEM" };
   body: string;
   /** Set when the message shares a document. */

@@ -119,14 +119,18 @@ export default class ClientRequestNotifySvc {
     for (const request of await ClientRequestRepo.findExpired(now)) {
       try {
         if (!(await ClientRequestRepo.expire(request.id, now))) continue;
+        // Several lawyers: lawyers quoted, but the client didn't pick one by the pick-by date.
+        const unpicked = !!request.pickByAt && request.pickByAt <= now;
         const lawyerIds = await ClientRequestMatchingSvc.eligibleLawyerIds(request.id);
         const taken: ClientRequestTakenEvent = { requestId: request.id };
         for (const userId of lawyerIds) emitToUser(userId, "client-request:taken", taken);
         const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "EXPIRED", updatedAt: now.toISOString() };
         emitToUser(request.clientId, "client-request:updated", updated);
-        await ClientRequestNotifySvc.tellClientExpired(request.client.email, request.caseId).catch((err) =>
+        await ClientRequestNotifySvc.tellClientExpired(request.client.email, request.caseId, unpicked).catch((err) =>
           logger.error("Client request: expiry email to the client failed", { err, requestId: request.id }),
         );
+        // Ops hear about requests no lawyer took up, not ones the client let lapse.
+        if (unpicked) continue;
         expired.push({
           id: request.id,
           practiceArea: areasLabel(label(request.case.caseAreas).map((a) => a.name)),
@@ -164,11 +168,16 @@ export default class ClientRequestNotifySvc {
     return reminded;
   }
 
-  private static async tellClientExpired(email: string, caseId: string) {
+  /** `unpicked`: lawyers quoted, but the client didn't pick one in time (several lawyers, phase 5). */
+  private static async tellClientExpired(email: string, caseId: string, unpicked: boolean) {
     const caseLink = clientCaseLink(caseId);
-    const html = await renderTemplate("client-request-expired-client", { caseLink });
-    const text = `No lawyer accepted your request within 48 hours, so it has closed. You can ask for a lawyer again from your case.\n\n${caseLink}`;
-    await sendEmail({ to: email, subject: "We couldn't find a lawyer this time", text, html });
+    const heading = unpicked ? "Your lawyer request has closed" : "We couldn't find a lawyer this time";
+    const reason = unpicked
+      ? "You didn't choose one of the quotes within 7 days, so your request has closed."
+      : "No lawyer accepted your request within 48 hours, so it has closed.";
+    const html = await renderTemplate("client-request-expired-client", { caseLink, heading, reason });
+    const text = `${reason} You can ask for a lawyer again from your case.\n\n${caseLink}`;
+    await sendEmail({ to: email, subject: heading, text, html });
   }
 
   /** One email per run to OPS_ALERT_EMAILS. Always logged, so an unset address still leaves a trace. */

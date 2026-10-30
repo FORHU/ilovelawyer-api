@@ -14,16 +14,18 @@ class MovedOn extends Error {}
  */
 export default class OrganizationChargeRepo {
   /**
-   * The client confirms (#513): QUOTED -> CONFIRMED, and the per-case fee is recorded PENDING against
-   * the organization whose lawyer quoted. Both or neither, once: null when the request isn't QUOTED
-   * any more (a second confirm, a decline, a withdrawal, the lawyer released it).
+   * The client confirms one lawyer's quote (#513; several lawyers in phase 5): ROUTED -> CONFIRMED,
+   * the per-case fee is recorded PENDING against the organization whose lawyer quoted, and every other
+   * open claim ends NOT_CHOSEN (`notChosen`: those lawyers, to tell). Both or neither, once: null when
+   * the request isn't ROUTED any more (a second confirm, a withdrawal, it expired) or that claim isn't
+   * an open quote (the lawyer released it, or it was declined).
    */
-  static async confirm(requestId: string, fee: { amountMinor: number; currency: string }) {
+  static async confirm(requestId: string, claimId: string, fee: { amountMinor: number; currency: string }, now: Date = new Date()) {
     try {
       return await prisma.$transaction(async (tx) => {
-        const { count } = await tx.clientRequest.updateMany({ where: { id: requestId, status: "QUOTED" }, data: { status: "CONFIRMED" } });
+        const { count } = await tx.clientRequest.updateMany({ where: { id: requestId, status: "ROUTED" }, data: { status: "CONFIRMED" } });
         if (count !== 1) throw new MovedOn();
-        const claim = await tx.clientRequestClaim.findFirst({ where: { requestId, outcome: null, quotedAt: { not: null } } });
+        const claim = await tx.clientRequestClaim.findFirst({ where: { id: claimId, requestId, outcome: null, quotedAt: { not: null } } });
         if (!claim) throw new MovedOn();
         const charge = await tx.organizationCharge.create({
           data: {
@@ -37,7 +39,9 @@ export default class OrganizationChargeRepo {
             lawyerId: claim.lawyerId,
           },
         });
-        return { charge, claim };
+        const others = await tx.clientRequestClaim.findMany({ where: { requestId, outcome: null, id: { not: claim.id } }, select: { lawyerId: true } });
+        await tx.clientRequestClaim.updateMany({ where: { requestId, outcome: null, id: { not: claim.id } }, data: { outcome: "NOT_CHOSEN", endedAt: now } });
+        return { charge, claim, notChosen: others.map((c) => c.lawyerId) };
       });
     } catch (err) {
       if (err instanceof MovedOn) return null;

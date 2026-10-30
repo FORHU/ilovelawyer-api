@@ -24,30 +24,30 @@ enum ApprovalStatus {
 }
 
 model User {
-  id                      String    @id @default(uuid())
+  id                   String    @id @default(uuid())
   // Always stored trimmed + lowercased (see normalizeEmail in src/utils/auth.utils.ts and the
   // normalize_user_emails migration) — @unique is therefore effectively case-insensitive.
-  email                   String    @unique
-  password                String?
-  name                    String?
-  username                String    @unique
-  role                    Role      @default(USER)
-  lastLoginAt             DateTime?
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
-  provider                String?
-  googleId                String?   @unique
+  email                String    @unique
+  password             String?
+  name                 String?
+  username             String    @unique
+  role                 Role      @default(USER)
+  lastLoginAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  provider             String?
+  googleId             String?   @unique
   // Staff/self-serve top-up credit on top of the subscription plan's included AI allowance
   // (AccountLimitsSvc). Internal: never shown to lawyers as a ceiling, only the balance/percentage.
-  extraAiAllowanceUsd     Float     @default(0)
+  extraAiAllowanceUsd  Float     @default(0)
   // The B2B PaymentPlan tier this lawyer is on (PaymentPlanSvc/AccountLimitsSvc). Null means
   // unsubscribed/canceled, not "fall back to a default tier" — see AccountLimitsSvc.allowanceInfo.
-  paymentPlanId           String?
+  paymentPlanId        String?
   // Start of the current billing period, for summing LlmUsage against the tier's allowance. Null
   // means sum spend all-time. Grandfathered accounts start at the payment_plan_tiers migration.
-  allowancePeriodStart    DateTime?
+  allowancePeriodStart DateTime?
   // One-time fence for the "you're over your tier's case limit" notice (grandfathering).
-  caseLimitNotifiedAt     DateTime?
+  caseLimitNotifiedAt  DateTime?
 
   // A solo lawyer's free trial of their tier (PlanTrialSvc): set once, PLAN_TRIAL_DAYS after the
   // account is approved and solo, never cleared. Past it with no live subscription, the account is
@@ -64,7 +64,7 @@ model User {
   googleCalendarSyncToken String?
   avatarId                String?
   tenantId                String?
-  isEmailVerified         Boolean   @default(false)
+  isEmailVerified         Boolean @default(false)
 
   // Set true for every account that existed before the strong-password policy shipped
   // (see the add_must_change_password migration's backfill) and for any account whose
@@ -470,19 +470,18 @@ model CaseMindMap {
   revisions MindMapRevision[]
 }
 
-
 model CaseClientOverview {
-  caseId String @id
+  caseId              String    @id
   generatedAt         DateTime?
   readySetFingerprint String?
   documentIds         String[]  @default([])
   summary             String?   @db.Text
   panes               Json?
-  runDay    DateTime? @db.Date
-  runsOnDay Int       @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  runDay              DateTime? @db.Date
+  runsOnDay           Int       @default(0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  case                Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
 }
 
 /// The client app's Intake tab (ClientIntakeSvc): one AI-extracted CaseIntake (api's
@@ -499,7 +498,7 @@ model CaseClientIntake {
   runsOnDay   Int       @default(0)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
-  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case        Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
 }
 
 /// The intake chat's own message table (ADR: separate pipeline, 2026-10-28) — deliberately NOT
@@ -1375,6 +1374,9 @@ model ClientRequest {
   routingExpiresAt  DateTime?
   // When it was last routed: first routing, or back in the pool after a claim ended (#511).
   routedAt          DateTime?
+  // Several lawyers: the client picks a quote by then (CLIENT_REQUEST_PICK_WINDOW_MS after the first
+  // quote), or the request EXPIRES. Null while no open claim has quoted.
+  pickByAt          DateTime?
   announcedAt       DateTime?
   // Lawyers excluded from matching this request again after they passed, released or lapsed on it
   // (#509/#511/#512) — a client decline does the same once a quote is declined (#512).
@@ -1389,10 +1391,6 @@ model ClientRequest {
   // access ends immediately either way; the lawyer's workspace copy, if any, is kept.
   closedAt          DateTime?
   closedBy          ClosedBy?
-  // When each side last read the engagement thread (#517): messages from the other side after it
-  // are unread.
-  lawyerReadAt      DateTime?
-  clientReadAt      DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -1421,24 +1419,28 @@ enum EngagementMessageSide {
   SYSTEM
 }
 
-// The thread between the client and their engaged lawyer (#517), from ENGAGED and read-only once
-// CLOSED. `body` is sealed like chat messages (label "EngagementMessage.body", utils/field-crypto).
-// A client's message can share a document already on the case. The author is kept only as a link:
-// a deleted account leaves the message, with no name.
+// The thread between the client and one lawyer on their request (#517; one per lawyer since phase
+// 5b): it opens when the lawyer joins, and turns read-only when their claim ends or the engagement
+// closes. `body` is sealed like chat messages (label "EngagementMessage.body", utils/field-crypto).
+// The client can share a document already on the case, once that lawyer is hired. The author and
+// the claim are kept only as links: a deleted account leaves the message, with no name.
 model EngagementMessage {
   id         String                @id @default(uuid())
   requestId  String
+  claimId    String?
   authorId   String?
   side       EngagementMessageSide
   body       String                @db.Text
   documentId String?
   createdAt  DateTime              @default(now())
 
-  request  ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  author   User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
-  document Document?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  request  ClientRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  claim    ClientRequestClaim? @relation(fields: [claimId], references: [id], onDelete: SetNull)
+  author   User?               @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  document Document?           @relation(fields: [documentId], references: [id], onDelete: SetNull)
 
   @@index([requestId, createdAt])
+  @@index([claimId, createdAt])
   @@index([authorId])
 }
 
@@ -1475,6 +1477,8 @@ enum ClaimOutcome {
   REASSIGNED
   WITHDRAWN
   ENGAGED
+  // Several lawyers on one request: the client hired another, or didn't pick anyone in time.
+  NOT_CHOSEN
 }
 
 model ClientRequestClaim {
@@ -1503,10 +1507,15 @@ model ClientRequestClaim {
   quoteCurrency    String?
   quoteMessage     String?        @db.Text
   quotedAt         DateTime?
+  // When each side last read this lawyer's thread with the client (#517, per claim since phase 5b):
+  // messages from the other side after it are unread.
+  lawyerReadAt     DateTime?
+  clientReadAt     DateTime?
 
-  request      ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  lawyer       User          @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
-  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  request      ClientRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  lawyer       User                @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
+  organization Organization?       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages     EngagementMessage[]
 
   @@index([requestId])
   @@index([lawyerId, outcome])
@@ -3519,9 +3528,9 @@ model PaymentPlanSubscription {
   scheduledPaymentPlanId String?
   stripeScheduleId       String?
 
-  failureReason        String?
-  createdAt            DateTime                      @default(now())
-  updatedAt            DateTime                      @updatedAt
+  failureReason String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id])

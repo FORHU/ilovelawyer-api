@@ -61,6 +61,10 @@ const threadParams: Parameter[] = [
   { name: "page", in: "query", schema: { type: "integer", default: 1 } },
   { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 200 } },
 ];
+/** The client's thread with one lawyer (one per lawyer since phase 5b). */
+const claimParam: Parameter[] = [
+  { name: "claimId", in: "query", schema: { type: "string", format: "uuid" }, description: "The lawyer's thread (LawyerOffer.claimId). Left out: the hired lawyer's." },
+];
 const threadPage: Schema = {
   type: "object",
   properties: {
@@ -114,7 +118,7 @@ export const clientHandoffTags: Tags = [
       "| Event | Payload | When |",
       "| --- | --- | --- |",
       "| `client-request:updated` | `{ requestId, status, updatedAt }` | Any status change |",
-      "| `engagement:message` | `{ requestId, message }` | The lawyer posts in the thread |",
+      "| `engagement:message` | `{ requestId, claimId, message }` | A lawyer posts in their thread (from joining, phase 5b) |",
     ].join("\n"),
   },
   {
@@ -131,10 +135,10 @@ export const clientHandoffTags: Tags = [
       "| Event | Payload | When |",
       "| --- | --- | --- |",
       "| `client-request:new` | `{ requestId, caseAreas, ukJurisdiction, urgency, routingExpiresAt }` | Routed to you |",
-      "| `client-request:taken` | `{ requestId }` | Claimed by someone else, withdrawn or expired: drop it from the inbox |",
+      "| `client-request:taken` | `{ requestId }` | The client hired someone, withdrew it, or it expired: drop it from the inbox |",
       "| `client-request:updated` | `{ requestId, status, updatedAt }` | A request you hold changed |",
       "| `client-request:claim-expiring` | `{ requestId, claimExpiresAt }` | 2h before your hold ends |",
-      "| `engagement:message` | `{ requestId, message }` | The client posts in the thread |",
+      "| `engagement:message` | `{ requestId, claimId, message }` | The client posts in your thread |",
       "| `engagement:document-added` | `{ requestId, caseId, documentId, filename, submittedBy, submittedAt }` | The client adds a document to the case, or shares one in the thread |",
       "| `engagement:ai-budget` | `{ requestId, percentUsed, state }` | Crossed 80% or 100%, or topped up |",
       "| `shared-cases:changed` (existing) | `{ caseId, shared: false }` | Engagement closed: live access ended |",
@@ -382,7 +386,8 @@ export const clientHandoffSchemas: Schemas = {
       byMe: { type: "boolean" },
       lawyer: { type: "object", properties: { id: { type: "string" }, name: { type: "string" } }, description: "Only for the holder and the organization's OWNER/ADMIN" },
       claimedAt: dateTime(),
-      claimExpiresAt: dateTime("24h after the claim. Cleared once the client confirms"),
+      claimExpiresAt: dateTime("24h after joining: the time to quote. A quoted claim waits for the client"),
+      outcome: { ...enumOf(CLAIM_OUTCOMES), nullable: true, description: "Null while it's open. NOT_CHOSEN: the client hired another lawyer, or didn't pick in time" },
     },
   },
   ChargeSummary: {
@@ -396,7 +401,8 @@ export const clientHandoffSchemas: Schemas = {
       status: enumOf(CLIENT_REQUEST_STATUSES),
       brief: ref("CaseBrief"),
       routedAt: dateTime(undefined, true),
-      routingExpiresAt: dateTime("48h after routing, while unclaimed", true),
+      routingExpiresAt: dateTime("48h after routing: until then, lawyers can join while a place is free", true),
+      lawyersOn: { type: "integer", description: "Several lawyers (phase 5): how many are on it now" },
       claim: { ...ref("ClaimSummary"), nullable: true },
       quote: { ...ref("Quote"), nullable: true },
       perCaseFee: { ...money("What confirming will charge the organization now: the region's introduction fee, set in admin"), readOnly: true },
@@ -427,8 +433,22 @@ export const clientHandoffSchemas: Schemas = {
       consentVersion: { type: "string" },
       consentAcceptedAt: dateTime(),
       createdAt: dateTime(),
-      lawyer: { ...ref("LawyerPublicProfile"), nullable: true, description: "From QUOTED (#512). firmName is null for a solo practitioner's personal workspace" },
-      quote: { ...ref("Quote"), nullable: true },
+      lawyers: {
+        type: "array",
+        description: "Several lawyers (phase 5): everyone on the request now, oldest first, and the one engaged. claimId is what confirm and decline take",
+        items: {
+          type: "object",
+          properties: {
+            claimId: { type: "string" },
+            joinedAt: dateTime(),
+            lawyer: ref("LawyerPublicProfile"),
+            quote: { ...ref("Quote"), nullable: true, description: "Null until they've quoted" },
+          },
+        },
+      },
+      pickByAt: dateTime("While ROUTED with a quote in: the request expires if the client hasn't picked one by then (7 days after the first quote)", true),
+      lawyer: { ...ref("LawyerPublicProfile"), nullable: true, description: "The lawyer hired, or until then the only quote; null with several. firmName is null for a solo practitioner's personal workspace" },
+      quote: { ...ref("Quote"), nullable: true, description: "That lawyer's quote" },
       referralDisclosure: { type: "string", nullable: true, description: "Shown on the quote screen; the client acknowledges it to confirm" },
       engagedAt: dateTime(undefined, true),
       closedAt: dateTime(undefined, true),
@@ -474,8 +494,10 @@ export const clientHandoffSchemas: Schemas = {
     properties: {
       id: { type: "string" },
       requestId: { type: "string" },
+      claimId: { type: "string", nullable: true, description: "The lawyer's claim the thread belongs to" },
       author: {
         type: "object",
+        description: "Before the lawyer is hired, the client's messages show as \"Client\", with no id.",
         properties: { id: { type: "string", nullable: true }, name: { type: "string" }, side: { type: "string", enum: ["CLIENT", "LAWYER", "SYSTEM"] } },
       },
       body: { type: "string" },
@@ -701,47 +723,53 @@ export const clientHandoffPaths: Paths = {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#513", built: true,
-      summary: "Confirm the quoted lawyer",
+      summary: "Confirm one lawyer's quote",
       description:
-        "Only from QUOTED, once: confirming twice charges once. Moves to CONFIRMED and charges the lawyer's organization the per-case fee straight away, off-session on its card on file (Stripe, or a DUMMY test card that takes no money). Paid: ENGAGED (engagedAt set); the lawyer's read access to the case comes with #514. Declined, or no card: it stays CONFIRMED, the lawyer and the organization's OWNER/ADMINs are notified to update the card, and the lawyer retries (POST /client-requests/{id}/charge/retry). A bank that settles later leaves it CONFIRMED until Stripe's webhook.",
+        "While a quote is open, once: confirming twice charges once. Several lawyers (phase 5): claimId names the quote (400 QUOTE_REQUIRED when there are several and none is named); the other lawyers on the request end NOT_CHOSEN and are notified. Moves to CONFIRMED and charges the lawyer's organization the per-case fee straight away, off-session on its card on file (Stripe, or a DUMMY test card that takes no money). Paid: ENGAGED (engagedAt set); the lawyer's read access to the case comes with #514. Declined, or no card: it stays CONFIRMED, the lawyer and the organization's OWNER/ADMINs are notified to update the card, and the lawyer retries (POST /client-requests/{id}/charge/retry). A bank that settles later leaves it CONFIRMED until Stripe's webhook.",
       parameters: requestId,
-      body: { type: "object", required: ["disclosureAcknowledged"], properties: { disclosureAcknowledged: { type: "boolean", enum: [true] } } },
-      responses: { 200: ok("Confirmed or engaged", ref("LawyerRequestForClient")), 400: err("DISCLOSURE_NOT_ACKNOWLEDGED"), 404: NOT_FOUND, 409: BAD_STATUS },
+      body: {
+        type: "object",
+        required: ["disclosureAcknowledged"],
+        properties: { disclosureAcknowledged: { type: "boolean", enum: [true] }, claimId: { type: "string", description: "Whose quote; optional when there's only one" } },
+      },
+      responses: { 200: ok("Confirmed or engaged", ref("LawyerRequestForClient")), 400: err("DISCLOSURE_NOT_ACKNOWLEDGED or QUOTE_REQUIRED"), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
   "/client/lawyer-requests/{id}/decline": {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#513", built: true,
-      summary: "Decline the quote",
-      description: "Only from QUOTED. Nothing is charged. The claim ends DECLINED (the reason stays on it) and the request goes back to ROUTED for 48h, without that lawyer, who is notified.",
+      summary: "Decline one lawyer's quote",
+      description:
+        "While that quote is open. Nothing is charged. The claim ends DECLINED (the reason stays on it), the lawyer is notified and doesn't see the request again, and their place frees up; the other lawyers carry on. claimId names the quote (400 QUOTE_REQUIRED when there are several and none is named). With nobody left on it, the request is routed again for 48h.",
       parameters: requestId,
-      body: { type: "object", properties: { reason: { type: "string", maxLength: 500 } } },
-      responses: { 200: ok("Back to ROUTED", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
+      body: { type: "object", properties: { reason: { type: "string", maxLength: 500 }, claimId: { type: "string" } } },
+      responses: { 200: ok("Declined", ref("LawyerRequestForClient")), 400: err("QUOTE_REQUIRED"), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
   "/client/lawyer-requests/{id}/messages": {
     get: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "The engagement thread, oldest first",
-      description: "Open from ENGAGED, and still readable once CLOSED. 409 before a lawyer is engaged.",
-      parameters: [...requestId, ...threadParams],
+      summary: "Your thread with one lawyer, oldest first",
+      description:
+        "One thread per lawyer (phase 5b): it opens when they join, and stays readable once their claim ends or the engagement closes. Without claimId, the hired lawyer's thread (409 before anyone is hired); 404 for a claimId that isn't on this request.",
+      parameters: [...requestId, ...claimParam, ...threadParams],
       responses: { 200: ok("Messages", threadPage), 404: NOT_FOUND, 409: BAD_STATUS },
     }),
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "Post in the thread, optionally sharing a document from the case",
+      summary: "Post in your thread with one lawyer, optionally sharing a document from the case",
       description:
-        "Text, a document already on the case (documentId), or both. Sharing a document also sends engagement:document-added to the lawyer. The lawyer gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
-      parameters: requestId,
+        "While the lawyer is on the request: text only. Once they're hired: text, a document already on the case (documentId), or both; sharing a document also sends engagement:document-added to the lawyer. The lawyer gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
+      parameters: [...requestId, ...claimParam],
       body: { type: "object", properties: { body: { type: "string", maxLength: 5000 }, documentId: { type: "string", format: "uuid" } } },
       responses: {
         201: ok("Posted", ref("EngagementMessage")),
-        400: err("Neither text nor a document"),
-        404: err("Not your request, or the document isn't on the case"),
-        409: err("ENGAGEMENT_CLOSED (read-only after close) or INVALID_REQUEST_STATUS"),
+        400: err("Neither text nor a document, or DOCUMENTS_AFTER_HIRE (a document before hiring this lawyer)"),
+        404: err("Not your request, the claim isn't on it, or the document isn't on the case"),
+        409: err("ENGAGEMENT_CLOSED (read-only after close), THREAD_CLOSED (the lawyer's claim ended) or INVALID_REQUEST_STATUS"),
       },
     }),
   },
@@ -749,9 +777,9 @@ export const clientHandoffPaths: Paths = {
     post: op({
       tag: CLIENT_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "Mark the thread read",
-      description: "The lawyer's messages up to now stop counting as unread.",
-      parameters: requestId,
+      summary: "Mark your thread with one lawyer read",
+      description: "That lawyer's messages up to now stop counting as unread. claimId as for GET.",
+      parameters: [...requestId, ...claimParam],
       responses: { 204: { description: "Marked read" }, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
@@ -854,14 +882,15 @@ export const clientHandoffPaths: Paths = {
     post: op({
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#511", built: true,
-      summary: "Accept: hold the request for 24h",
-      description: "Only one lawyer can win. The others get client-request:taken. Needs no card: sending the quote does (FORHU/ilovelawyer-app#933). Nothing is charged until the client confirms.",
+      summary: "Accept: join the request, with 24h to quote",
+      description:
+        "Several lawyers (phase 5): any number can join, each seeing the names for the conflict check and quoting. Joining again returns the request. Needs no card: sending the quote does (FORHU/ilovelawyer-app#933). Nothing is charged until the client confirms.",
       parameters: requestId,
       responses: {
-        200: ok("Claimed (CLAIMED)", ref("ClientRequestForLawyer")),
+        200: ok("Joined (CLAIMED to this lawyer)", ref("ClientRequestForLawyer")),
         403: LAWYER_ONLY,
         404: NOT_FOUND,
-        409: err("REQUEST_ALREADY_CLAIMED or INVALID_REQUEST_STATUS"),
+        409: err("INVALID_REQUEST_STATUS"),
       },
     }),
   },
@@ -983,8 +1012,9 @@ export const clientHandoffPaths: Paths = {
     get: op({
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#517", built: true,
-      summary: "The engagement thread, oldest first",
-      description: "Only the lawyer it's engaged on (404 for anyone else). Still readable once CLOSED.",
+      summary: "Your thread with the client, oldest first",
+      description:
+        "Open from joining (phase 5b), for your latest claim on the request (404 if you never joined it). Still readable once your claim ends or the engagement closes. Until you're hired, the client's messages show as \"Client\".",
       parameters: [...requestId, ...threadParams],
       responses: { 200: ok("Messages", threadPage), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
@@ -993,10 +1023,10 @@ export const clientHandoffPaths: Paths = {
       issue: "ilovelawyer-api#517", built: true,
       summary: "Post in the thread",
       description:
-        "The lawyer can't add documents to the client's case (read-only), so no documentId here. The client gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
+        "While you're on the request, or engaged. The lawyer can't add documents to the client's case (read-only), so no documentId here. The client gets engagement:message. Encrypted at rest. Posting marks the thread read for you.",
       parameters: requestId,
       body: { type: "object", required: ["body"], properties: { body: { type: "string", maxLength: 5000 } } },
-      responses: { 201: ok("Posted", ref("EngagementMessage")), 400: err("No text"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or INVALID_REQUEST_STATUS") },
+      responses: { 201: ok("Posted", ref("EngagementMessage")), 400: err("No text"), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: err("ENGAGEMENT_CLOSED or THREAD_CLOSED (your claim ended)") },
     }),
   },
   "/client-requests/{id}/messages/read": {

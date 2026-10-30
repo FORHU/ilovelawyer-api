@@ -57,11 +57,14 @@ export const quoteClientRequestSchema = Joi.object({
  * DISCLOSURE_NOT_ACKNOWLEDGED answer from the service. */
 export const confirmClientRequestSchema = Joi.object({
   disclosureAcknowledged: Joi.boolean().required(),
+  // Several lawyers: whose quote (LawyerRequestForClient.lawyers[].claimId). Optional when there's one.
+  claimId: Joi.string().trim().optional(),
 });
 
 /** POST /client/lawyer-requests/:id/decline. */
 export const declineClientRequestSchema = Joi.object({
   reason: Joi.string().trim().allow("").max(500).optional(),
+  claimId: Joi.string().trim().optional(),
 });
 
 /** POST /client-requests/:id/close (lawyer) and /client/lawyer-requests/:id/end (client). */
@@ -86,13 +89,22 @@ export const feedbackClientRequestSchema = Joi.object({
   comment: Joi.string().trim().allow("").max(2000).optional(),
 });
 
-/** GET /client-requests/:id/messages and /client/lawyer-requests/:id/messages (#517): oldest first. */
+/** GET /client-requests/:id/messages and /client/lawyer-requests/:id/messages (#517): oldest first.
+ * The client names the lawyer's thread with `claimId` (one per lawyer since phase 5b); left out, it's
+ * the hired lawyer's. The lawyer has one thread per request, so they never send it. */
 export const listEngagementMessagesSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(200).default(100),
+  claimId: Joi.string().uuid().optional(),
 });
 
-/** POST .../messages (#517). The lawyer sends text; the client may also share a case document. */
+/** POST /client/lawyer-requests/:id/messages and .../messages/read: which lawyer's thread, as above. */
+export const engagementThreadSchema = Joi.object({
+  claimId: Joi.string().uuid().optional(),
+});
+
+/** POST .../messages (#517). The lawyer sends text; the client may also share a case document, once
+ * that lawyer is hired. */
 export const postEngagementMessageSchema = Joi.object({
   body: Joi.string().trim().allow("").max(5000).optional(),
   documentId: Joi.string().uuid().optional(),

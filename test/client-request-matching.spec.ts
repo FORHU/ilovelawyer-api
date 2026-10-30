@@ -162,34 +162,26 @@ describe("budgetFitScoreOf", () => {
   });
 });
 
-describe("ClientRequestMatchingSvc.route / reroute / eligibleLawyerIds", () => {
+describe("ClientRequestMatchingSvc.route / eligibleLawyerIds", () => {
   let restore: (() => void)[];
   let routed: { id: string }[];
-  let rerouted: { id: string; excludeLawyerId: string }[];
-  let rerouteResult: boolean;
   let matchingRow: { excludedLawyerIds: string[]; case: { caseAreas: string[]; ukJurisdiction: string | null } } | null;
   let candidates: Lawyer[];
   let requestedExcludeIds: string[][];
 
   beforeEach(() => {
     routed = [];
-    rerouted = [];
-    rerouteResult = true;
     matchingRow = { excludedLawyerIds: [], case: { caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } };
     candidates = [ELIGIBLE];
     requestedExcludeIds = [];
 
-    restore = [stash(ClientRequestRepo, ["route", "findForMatching", "reroute"]), stash(LawyerProfileRepo, ["findVerified"])];
+    restore = [stash(ClientRequestRepo, ["route", "findForMatching"]), stash(LawyerProfileRepo, ["findVerified"])];
 
     (ClientRequestRepo as any).route = async (id: string) => {
       routed.push({ id });
       return { id, status: "ROUTED" };
     };
     (ClientRequestRepo as any).findForMatching = async () => matchingRow;
-    (ClientRequestRepo as any).reroute = async (id: string, excludeLawyerId: string) => {
-      rerouted.push({ id, excludeLawyerId });
-      return rerouteResult;
-    };
     (LawyerProfileRepo as any).findVerified = async (excludeIds: string[]) => {
       requestedExcludeIds.push(excludeIds);
       return candidates;
@@ -219,17 +211,6 @@ describe("ClientRequestMatchingSvc.route / reroute / eligibleLawyerIds", () => {
   it("returns no eligible lawyers for an unknown request", async () => {
     matchingRow = null;
     expect(await ClientRequestMatchingSvc.eligibleLawyerIds("missing")).to.deep.equal([]);
-  });
-
-  it("reroutes a held request without the lawyer who passed or released", async () => {
-    const result = await ClientRequestMatchingSvc.reroute("req-1", "lawyer-1");
-    expect(rerouted).to.deep.equal([{ id: "req-1", excludeLawyerId: "lawyer-1" }]);
-    expect(result).to.equal(true);
-  });
-
-  it("reports a failed reroute (the request wasn't held)", async () => {
-    rerouteResult = false;
-    expect(await ClientRequestMatchingSvc.reroute("req-1", "lawyer-1")).to.equal(false);
   });
 
   describe("matchByCriteria", () => {

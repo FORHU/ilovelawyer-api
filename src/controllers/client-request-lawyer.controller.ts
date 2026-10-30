@@ -69,7 +69,8 @@ export default class ClientRequestLawyerCtrl {
     res.status(202).json(await ClientRequestLawyerSvc.topUp(lawyerOf(req), req.params.id, body));
   }
 
-  /** The engagement thread (#517), oldest first, with how many of the client's messages are unread. */
+  /** Their thread with the client (#517; from joining since phase 5b), oldest first, with how many of
+   * the client's messages are unread. */
   static async messages(req: Request, res: Response) {
     const query = validate(listEngagementMessagesSchema, req.query);
     const thread = await EngagementMessageSvc.forLawyer(lawyerOf(req).userId, req.params.id);

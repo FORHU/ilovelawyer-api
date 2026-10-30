@@ -116,11 +116,4 @@ export default class ClientRequestMatchingSvc {
       .map((lawyer) => ({ lawyerId: lawyer.userId, budgetFitScore: budgetFitScoreOf(lawyer.firstConsultationFeeMinor, input.budget) }))
       .sort((a, b) => a.budgetFitScore - b.budgetFitScore);
   }
-
-  /** Puts a held request back in the pool without one lawyer, for #511 (pass/release) and #512
-   * (client decline) to call once built. False if the request wasn't CLAIMED or QUOTED to begin
-   * with — something else already moved it on. */
-  static async reroute(requestId: string, excludeLawyerId: string): Promise<boolean> {
-    return ClientRequestRepo.reroute(requestId, excludeLawyerId);
-  }
 }

@@ -5,14 +5,17 @@ import { PRACTICE_AREAS_INCLUDE } from "./practice-area.repository";
 /** A request is open until it's closed, expired or withdrawn; a case has at most one open. */
 export const CLOSED_REQUEST_STATUSES: ClientRequestStatus[] = ["CLOSED", "EXPIRED", "WITHDRAWN"];
 
-/** How long a routed request stays open to a claim before EXPIRED (#510) acts on it. */
+/** How long a routed request stays open to lawyers joining it before EXPIRED (#510) acts on it. */
 export const ROUTING_WINDOW_MS = 48 * 60 * 60 * 1000;
 
-/** CLAIMED or QUOTED is where a held request re-enters the pool from (#511, #512). */
-const REROUTABLE: ClientRequestStatus[] = ["CLAIMED", "QUOTED"];
+/** A routed request has run out when its 48h are over with no lawyer on it, or when the client
+ * hasn't picked a quote by its pick-by date (several lawyers, phase 5). */
+function expiredWhere(now: Date): Prisma.ClientRequestWhereInput {
+  return { status: "ROUTED", OR: [{ routingExpiresAt: { lte: now }, claims: { none: { outcome: null } } }, { pickByAt: { lte: now } }] };
+}
 
 /** How a claim ends without an engagement: these show in the lawyer's history straight away. */
-const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASSIGNED", "WITHDRAWN"];
+const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASSIGNED", "WITHDRAWN", "NOT_CHOSEN"];
 
 /** What the lawyer app reads of a request (#511): the case's practice area and jurisdiction for
  * matching, and every claim on it, newest first, with the claiming lawyer's name. */
@@ -24,13 +27,13 @@ const FOR_LAWYER = {
   charges: { where: { kind: "PER_CASE_FEE" } },
 } satisfies Prisma.ClientRequestInclude;
 
-/** What the client app reads of a request (#512): the claim the current quote was made under (open,
- * or ENGAGED once confirmed), with what the client may see of the lawyer and their firm. */
+/** What the client app reads of a request (#512; several lawyers in phase 5): every lawyer on it now
+ * (an open claim, quoted or not) or engaged on it, oldest first, with what the client may see of the
+ * lawyer and their firm. */
 const FOR_CLIENT = {
   claims: {
-    where: { quotedAt: { not: null }, OR: [{ outcome: null }, { outcome: "ENGAGED" }] },
-    orderBy: { claimedAt: "desc" },
-    take: 1,
+    where: { OR: [{ outcome: null }, { outcome: "ENGAGED" }] },
+    orderBy: { claimedAt: "asc" },
     include: {
       lawyer: {
         select: {
@@ -54,8 +57,13 @@ export default class ClientRequestRepo {
   }
 
   /** The case's open request with its status, for deciding what a change to the case may do. */
+  /** The case's open request, with how many lawyers are on it now (open claims). */
   static async findLiveForCase(caseId: string) {
-    return prisma.clientRequest.findFirst({ where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } }, select: { id: true, status: true } });
+    const live = await prisma.clientRequest.findFirst({
+      where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } },
+      select: { id: true, status: true, _count: { select: { claims: { where: { outcome: null } } } } },
+    });
+    return live ? { id: live.id, status: live.status, lawyersOn: live._count.claims } : null;
   }
 
   static async findOpenForCase(caseId: string) {
@@ -111,15 +119,15 @@ export default class ClientRequestRepo {
     return { total, data };
   }
 
-  /** The client takes the request back (#507): WITHDRAWN if it's still in one of `from`, ending any
-   * open claim with it (#511). `heldBy` is the lawyer whose claim ended, if any. */
-  static async withdraw(id: string, from: ClientRequestStatus[], now: Date = new Date()): Promise<{ moved: boolean; heldBy: string | null }> {
+  /** The client takes the request back (#507): WITHDRAWN if it's still in one of `from`, ending every
+   * open claim with it (#511; several lawyers in phase 5). `heldBy`: the lawyers whose claims ended. */
+  static async withdraw(id: string, from: ClientRequestStatus[], now: Date = new Date()): Promise<{ moved: boolean; heldBy: string[] }> {
     return prisma.$transaction(async (tx) => {
       const { count } = await tx.clientRequest.updateMany({ where: { id, status: { in: from } }, data: { status: "WITHDRAWN", withdrawnAt: now } });
-      if (count !== 1) return { moved: false, heldBy: null };
-      const open = await tx.clientRequestClaim.findFirst({ where: { requestId: id, outcome: null }, select: { id: true, lawyerId: true } });
-      if (open) await tx.clientRequestClaim.update({ where: { id: open.id }, data: { outcome: "WITHDRAWN", endedAt: now, openRequestId: null } });
-      return { moved: true, heldBy: open?.lawyerId ?? null };
+      if (count !== 1) return { moved: false, heldBy: [] };
+      const open = await tx.clientRequestClaim.findMany({ where: { requestId: id, outcome: null }, select: { lawyerId: true } });
+      await tx.clientRequestClaim.updateMany({ where: { requestId: id, outcome: null }, data: { outcome: "WITHDRAWN", endedAt: now } });
+      return { moved: true, heldBy: open.map((c) => c.lawyerId) };
     });
   }
 
@@ -257,15 +265,16 @@ export default class ClientRequestRepo {
     });
   }
 
-  /** Routed requests whose 48h is over (#510), with what the client and ops are told. */
+  /** Routed requests that have run out (expiredWhere), with what the client and ops are told. */
   static async findExpired(now: Date) {
     return prisma.clientRequest.findMany({
-      where: { status: "ROUTED", routingExpiresAt: { lte: now } },
+      where: expiredWhere(now),
       select: {
         id: true,
         caseId: true,
         clientId: true,
         routedAt: true,
+        pickByAt: true,
         case: { select: { caseAreas: true, ukJurisdiction: true } },
         client: { select: { email: true } },
       },
@@ -273,11 +282,15 @@ export default class ClientRequestRepo {
     });
   }
 
-  /** ROUTED -> EXPIRED, only if it's still routed and its 48h is over: a claim that got in first
-   * wins. */
+  /** ROUTED -> EXPIRED, only if it has still run out (expiredWhere): a lawyer who joined or a pick
+   * that got in first wins. Any claim still open ends NOT_CHOSEN with it. */
   static async expire(id: string, now: Date): Promise<boolean> {
-    const { count } = await prisma.clientRequest.updateMany({ where: { id, status: "ROUTED", routingExpiresAt: { lte: now } }, data: { status: "EXPIRED" } });
-    return count === 1;
+    return prisma.$transaction(async (tx) => {
+      const { count } = await tx.clientRequest.updateMany({ where: { id, ...expiredWhere(now) }, data: { status: "EXPIRED" } });
+      if (count !== 1) return false;
+      await tx.clientRequestClaim.updateMany({ where: { requestId: id, outcome: null }, data: { outcome: "NOT_CHOSEN", endedAt: now } });
+      return true;
+    });
   }
 
   /** The names behind the anonymised brief, for the claiming lawyer's conflict check (#512): the
@@ -329,22 +342,5 @@ export default class ClientRequestRepo {
       where: { id, NOT: { excludedLawyerIds: { has: lawyerId } } },
       data: { excludedLawyerIds: { push: lawyerId } },
     });
-  }
-
-  /** Puts a held request back in the pool without one lawyer (#511 pass/release, #512 decline) —
-   * guarded, since a lapse timer and a manual action can race for the same request. */
-  static async reroute(id: string, excludeLawyerId: string): Promise<boolean> {
-    const { count } = await prisma.clientRequest.updateMany({
-      where: { id, status: { in: REROUTABLE } },
-      data: {
-        status: "ROUTED",
-        routedAt: new Date(),
-        routingExpiresAt: new Date(Date.now() + ROUTING_WINDOW_MS),
-        // Announced again to whoever matches now (#510).
-        announcedAt: null,
-        excludedLawyerIds: { push: excludeLawyerId },
-      },
-    });
-    return count === 1;
   }
 }

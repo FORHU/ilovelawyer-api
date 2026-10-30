@@ -1,17 +1,21 @@
 /**
  * What a client agrees to when asking for a lawyer (POST /api/client/lawyer-requests). DRAFT
  * wording, pending a UK solicitor's review (FORHU/ilovelawyer-app#846). It already says what the
- * #845 decisions require: names reach only the claiming lawyer, and only for the conflict check;
+ * #845 decisions require, as changed for several lawyers on one request (phase 5): names reach only
+ * the lawyers who join it, and only for the conflict check;
  * either side can end the engagement; the lawyer may keep a copy of the case. Bump the version
  * whenever the text changes: a client who agreed to an older version is asked again
  * (CONSENT_VERSION_STALE).
  */
-export const CLIENT_REQUEST_CONSENT_VERSION = "2026-10-21-draft";
+/** How long the client has to pick a quote, from the first quote, before the request expires. */
+export const CLIENT_REQUEST_PICK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const CLIENT_REQUEST_CONSENT_VERSION = "2026-10-29b-draft";
 
 export const CLIENT_REQUEST_CONSENT_TEXT = [
   "We'll share an anonymised summary of your case with verified UK lawyers who may take it on. It leaves out names and documents.",
-  "The first lawyer to accept will also see the names of the people and organisations in your case, only to check they have no conflict of interest.",
-  "If you confirm that lawyer, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
+  "Any of those lawyers can take up your request. Each one who does will also see the names of the people and organisations in your case, only to check they have no conflict of interest, and can send you a quote.",
+  "If you hire one of them, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
   "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.",
 ].join("\n\n");
 

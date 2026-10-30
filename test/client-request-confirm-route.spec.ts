@@ -183,16 +183,25 @@ describe("client confirms, the firm is charged the per-case fee", () => {
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.organizationBilling.deleteMany({ where: { organizationId: orgId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId] } } });
-    // A request the lawyer has claimed and quoted on.
+    // A request the lawyer has joined and quoted on: still ROUTED, with their quote open and the
+    // client's 7 days to pick running (several lawyers, phase 5).
     const now = new Date();
     const row = await prisma.clientRequest.create({
-      data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: now, status: "QUOTED", routedAt: now, routingExpiresAt: new Date(now.getTime() + 48 * HOUR_MS) },
+      data: {
+        caseId,
+        clientId,
+        consentVersion: "test",
+        consentAcceptedAt: now,
+        status: "ROUTED",
+        routedAt: now,
+        routingExpiresAt: new Date(now.getTime() + 48 * HOUR_MS),
+        pickByAt: new Date(now.getTime() + 7 * 24 * HOUR_MS),
+      },
     });
     requestId = row.id;
     const claim = await prisma.clientRequestClaim.create({
       data: {
         requestId,
-        openRequestId: requestId,
         lawyerId,
         organizationId: orgId,
         claimedAt: now,
@@ -214,7 +223,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
       await card("STRIPE");
       expect((await confirm({ disclosureAcknowledged: false }).expect(400)).body.code).to.equal("DISCLOSURE_NOT_ACKNOWLEDGED");
       await confirm({}).expect(400);
-      expect((await state()).status).to.equal("QUOTED");
+      expect((await state()).status).to.equal("ROUTED");
       expect(chargeRequests).to.have.length(0);
     });
 
@@ -266,8 +275,8 @@ describe("client confirms, the firm is charged the per-case fee", () => {
       expect((await state()).charges).to.have.length(1);
     });
 
-    it("can't confirm a request that isn't quoted", async () => {
-      await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CLAIMED" } });
+    it("can't confirm a request with no quote open", async () => {
+      await prisma.clientRequestClaim.update({ where: { id: claimId }, data: { quotedAt: null } });
       expect((await confirm().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
     });
   });
@@ -553,7 +562,7 @@ describe("client confirms, the firm is charged the per-case fee", () => {
 
     it("ignores a payment that isn't one of our charges", async () => {
       await webhook("payment_intent.succeeded", "pi_other", crypto.randomUUID());
-      expect((await state()).status).to.equal("QUOTED");
+      expect((await state()).status).to.equal("ROUTED");
     });
   });
 
@@ -575,6 +584,59 @@ describe("client confirms, the firm is charged the per-case fee", () => {
       answers = [declined("pi_1")];
       await confirm().expect(200);
       expect((await decline().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+    });
+  });
+
+  describe("several lawyers' quotes (phase 5)", () => {
+    let secondClaimId: string;
+    beforeEach(async () => {
+      const now = new Date();
+      const second = await prisma.clientRequestClaim.create({
+        data: {
+          requestId,
+          lawyerId: memberId,
+          organizationId: orgId,
+          claimedAt: now,
+          expiresAt: new Date(now.getTime() + 24 * HOUR_MS),
+          quoteType: "FIXED_FEE",
+          quoteAmountMinor: 60000,
+          quoteCurrency: "GBP",
+          quoteMessage: "Cheaper fixed fee.",
+          quotedAt: now,
+        },
+      });
+      secondClaimId = second.id;
+    });
+
+    it("lists every lawyer's quote for the client, and shows no single lawyer until they pick", async () => {
+      const { body } = await request(app).get(`/api/client/lawyer-requests/${requestId}`).set(auth(clientId)).expect(200);
+      expect(body).to.deep.include({ status: "QUOTED", lawyer: null, quote: null });
+      expect(body.lawyers.map((l: { claimId: string }) => l.claimId)).to.deep.equal([claimId, secondClaimId]);
+      expect(body.lawyers[1].quote).to.deep.include({ type: "FIXED_FEE", amount: { amountMinor: 60000, currency: "GBP" } });
+      expect(body.pickByAt).to.be.a("string");
+    });
+
+    it("needs the client to name which quote, then confirms that one and tells the other lawyer", async () => {
+      await card("STRIPE");
+      expect((await confirm().expect(400)).body.code).to.equal("QUOTE_REQUIRED");
+      answers = [ok("pi_1")];
+
+      const { body } = await confirm({ disclosureAcknowledged: true, claimId: secondClaimId }).expect(200);
+
+      expect(body).to.deep.include({ status: "ENGAGED" });
+      expect(body.lawyer.id).to.equal(memberId);
+      const s = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true, charges: true } });
+      expect(s.charges.map((c) => c.lawyerId)).to.deep.equal([memberId]);
+      expect(s.claims.find((c) => c.id === claimId)!.outcome).to.equal("NOT_CHOSEN");
+      expect(s.claims.find((c) => c.id === secondClaimId)!.outcome).to.equal("ENGAGED");
+      expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["The client chose another lawyer"]);
+    });
+
+    it("declines one quote and leaves the other open", async () => {
+      expect((await decline().expect(400)).body.code).to.equal("QUOTE_REQUIRED");
+      const { body } = await decline({ claimId }).expect(200);
+      expect(body).to.deep.include({ status: "QUOTED" });
+      expect(body.lawyers.map((l: { claimId: string }) => l.claimId)).to.deep.equal([secondClaimId]);
     });
   });
 
