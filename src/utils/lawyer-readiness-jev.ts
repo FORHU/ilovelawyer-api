@@ -1,6 +1,7 @@
 import { choice } from "@typesafe-ai/sdk";
 import { jevAsk } from "./typesafeClient";
 import { applyFloor, optionsInOrder, readChoice } from "./jev-common";
+import logger from "./logger";
 
 /**
  * Jev deciding when a client's case has enough in it to suggest a lawyer (the client app). One
@@ -32,7 +33,8 @@ export const READINESS_CRITERIA = [
   {
     key: "otherSide",
     label: "Who the other side is",
-    question: "Is it clear who the client's problem is with: a named or clearly identified person, employer, landlord, business or organisation?",
+    question:
+      "Is it clear who the client's problem is with? A relationship or role used consistently through the conversation (their neighbour, their landlord, their employer, a named business) counts, even with no proper name given — don't require more precision than the client's own story already makes clear.",
   },
   {
     key: "events",
@@ -43,7 +45,14 @@ export const READINESS_CRITERIA = [
   {
     key: "goal",
     label: "What you want to get out of it",
-    question: "Has the client said what outcome they want, for example compensation, their job back, a refund, repairs, or to defend a claim against them?",
+    question:
+      "Has the client said what outcome they want? If the assistant's own question offered example outcomes (for example compensation, their job back, a refund, repairs, resolving the dispute, or defending a claim) and the client's answer picks or restates one of those, that counts as answered even in a single word — don't require more elaboration than what was actually offered and accepted.",
+  },
+  {
+    key: "status",
+    label: "What's happened since, and where things stand now",
+    question:
+      "Has the client said where things currently stand — any contact with the other side, a response received, action already taken (a letter, a complaint, an insurer notified, deducting something owed) — or plainly that nothing has happened yet or they haven't heard back? This counts whether the client volunteered it or was asked for it directly — same as any other fact in their account.",
   },
 ] as const;
 
@@ -99,7 +108,7 @@ export interface ReadinessAssessment {
  * check", never "ready". */
 export async function assessLawyerReadiness(input: ReadinessInput): Promise<ReadinessAssessment> {
   const conversation = input.conversation.slice(-MAX_MESSAGES).map((m) => ({ from: m.from, text: m.text.slice(0, MAX_MESSAGE_CHARS) }));
-  const ruling = "`caseDetails.notes` is the client's own account of what happened and what they want, and counts like the conversation. Answer YES only if `caseDetails` or `conversation` actually show it; answer NO if it is missing, vague, or would have to be guessed.";
+  const ruling = "`caseDetails.notes` is the client's own account of what happened and what they want, and counts like the conversation. Answer YES only if `caseDetails` or `conversation` actually show it; answer NO if it is missing or would have to be guessed. A short answer is not vague just for being short — if it's a direct, on-topic reply to a question the assistant actually asked, it counts, even in one word.";
   const question = Object.fromEntries(READINESS_CRITERIA.map((c) => [c.key, c.question])) as Record<ReadinessKey, string>;
   const ask = (key: ReadinessKey) => choice(`${question[key]} ${ruling}`, optionsInOrder(ANSWERS));
   const areaRuling = "A problem can fall under more than one area. `caseDetails.areas` is what the client picked and may be wrong.";
@@ -112,6 +121,7 @@ export async function assessLawyerReadiness(input: ReadinessInput): Promise<Read
       otherSide: ask("otherSide"),
       events: ask("events"),
       goal: ask("goal"),
+      status: ask("status"),
       ...Object.fromEntries(
         input.caseAreas.map((a) => [
           areaKey(a.code),
@@ -125,16 +135,21 @@ export async function assessLawyerReadiness(input: ReadinessInput): Promise<Read
   const answers = response.answers as Record<string, { choice: unknown; confidence: number }>;
   const yes = (key: string) => {
     const answer = answers[key];
+    if (!answer) logger.warn("Lawyer readiness: Jev returned no answer for this question, treating as NO/0", { key });
     const raw = readChoice(answer?.choice, ANSWERS, "NO");
     const confidence = answer?.confidence ?? 0;
     return { met: applyFloor(raw, confidence, "YES", READINESS_MIN_CONFIDENCE, "NO").value === "YES", confidence };
   };
-  return {
-    criteria: READINESS_CRITERIA.map((c) => ({ key: c.key, label: c.label, ...yes(c.key) })),
-    caseAreas: input.caseAreas
-      .map((a) => ({ code: a.code, ...yes(areaKey(a.code)) }))
-      .filter((a) => a.met)
-      .map(({ code, confidence }) => ({ code, confidence })),
-    personalInjury: yes("personalInjury"),
-  };
+  const criteria = READINESS_CRITERIA.map((c) => ({ key: c.key, label: c.label, ...yes(c.key) }));
+  const caseAreas = input.caseAreas
+    .map((a) => ({ code: a.code, ...yes(areaKey(a.code)) }))
+    .filter((a) => a.met)
+    .map(({ code, confidence }) => ({ code, confidence }));
+  const personalInjury = yes("personalInjury");
+  logger.info("Lawyer readiness: Jev verdict", {
+    criteria: criteria.map((c) => `${c.key}=${c.met ? "YES" : "NO"}(${c.confidence.toFixed(2)})`),
+    caseAreas: caseAreas.map((a) => a.code),
+    personalInjury: personalInjury.met,
+  });
+  return { criteria, caseAreas, personalInjury };
 }

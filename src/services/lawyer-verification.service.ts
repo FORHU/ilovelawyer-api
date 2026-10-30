@@ -1,12 +1,15 @@
+import crypto from "crypto";
 import type { LawyerVerificationStatus } from "@prisma/client";
 import LawyerProfileRepo, { type AdminLawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import AuthRepo from "../repositories/auth.repository";
 import SecurityAuditSvc from "./security-audit.service";
 import { toDto } from "./lawyer-profile.service";
 import HttpError from "../utils/http-error";
+import logger from "../utils/logger";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import { emailLinkOrigin } from "../utils/tenant-host";
+import { LOGIN_LINK_EXPIRY_MS } from "../constants";
 import PlanGateSvc from "./plan-gate.service";
 import type { UkJurisdiction } from "../types/client-handoff";
 import {
@@ -42,14 +45,34 @@ const NEXT_STEP: Record<LawyerCountry, string> = {
 const NEXT_STEP_CHOOSE_PLAN =
   "You can now choose your plan or start your free trial. Then turn on Accept client requests on your Profile page.";
 
-/** The approval email's button, on the lawyer's own site: the plan step (/verification) for a lawyer
- * held by verify before plan, whose onboarding carries on there; otherwise their Profile page, where
- * they turn on client requests. Signed out, the lawyer app signs them in first and brings them back. */
-function nextStepButton(country: LawyerCountry, choosesPlan: boolean): { buttonLabel: string; buttonLink: string } {
+const SIGNED_OUT_NOTE = "If you're signed out on this device, you'll sign in first and then go straight there.";
+const LOGIN_LINK_NOTE = "This button signs you in. It works once and will expire in 7 days.";
+
+/** The approval email's button, on the lawyer's own site. A lawyer held by verify before plan goes to
+ * the plan step (/verification), where their onboarding carries on, through a one-time login link
+ * like the account approval email's (AdminSvc.transition), for when they read it signed out or on
+ * another device. That needs an approved account (the link only signs in ACTIVE ones) and shares
+ * User.loginLinkToken, so a link not clicked yet is reused rather than replaced. Everyone else, and a
+ * held lawyer still waiting on account approval, gets a plain link: the app signs them in first if
+ * needed. */
+async function nextStepButton(
+  user: { id: string; approvalStatus: string },
+  country: LawyerCountry,
+  choosesPlan: boolean,
+): Promise<{ buttonLabel: string; buttonLink: string; linkNote: string }> {
   const origin = emailLinkOrigin(country, null);
-  return choosesPlan
-    ? { buttonLabel: "Choose your plan", buttonLink: `${origin}/verification` }
-    : { buttonLabel: "Go to your profile", buttonLink: `${origin}/homepage/profile` };
+  if (!choosesPlan) return { buttonLabel: "Go to your profile", buttonLink: `${origin}/homepage/profile`, linkNote: SIGNED_OUT_NOTE };
+  if (user.approvalStatus !== "ACTIVE") return { buttonLabel: "Choose your plan", buttonLink: `${origin}/verification`, linkNote: SIGNED_OUT_NOTE };
+  let token = await AuthRepo.findLiveLoginLinkToken(user.id);
+  if (!token) {
+    token = crypto.randomUUID();
+    await AuthRepo.setLoginLinkToken(user.id, token, new Date(Date.now() + LOGIN_LINK_EXPIRY_MS));
+  }
+  return {
+    buttonLabel: "Choose your plan",
+    buttonLink: `${origin}/login-link?token=${token}&next=${encodeURIComponent("/verification")}`,
+    linkNote: LOGIN_LINK_NOTE,
+  };
 }
 
 function composeNote(country: LawyerCountry, reason: LawyerRejectionReason, note: string | undefined): string {
@@ -100,11 +123,22 @@ export default class LawyerVerificationSvc {
     return { ...profile, country: profile.country as LawyerCountry };
   }
 
-  private static async notify(userId: string, template: string, subject: string, vars: Record<string, string>) {
-    const user = await AuthRepo.findById(userId);
-    if (!user) return;
-    const html = await renderTemplate(template, { name: user.name || "there", ...vars });
-    await sendEmail({ to: user.email, subject, html });
+  /** Emails the lawyer the decision. Non-fatal by design: the decision is already saved by then, and
+   * a retry would hit assertPending, so a mail failure must not turn into an error for the admin. */
+  private static async notify(
+    userId: string,
+    template: string,
+    subject: string,
+    varsFor: (user: { id: string; approvalStatus: string }) => Record<string, string> | Promise<Record<string, string>>,
+  ) {
+    try {
+      const user = await AuthRepo.findById(userId);
+      if (!user) return;
+      const html = await renderTemplate(template, { name: user.name || "there", ...(await varsFor(user)) });
+      await sendEmail({ to: user.email, subject, html });
+    } catch (err) {
+      logger.error(`Failed to send ${template} email`, { err, userId });
+    }
   }
 
   /** The admin queue for one site and status, oldest submission first. */
@@ -143,10 +177,12 @@ export default class LawyerVerificationSvc {
     });
 
     const choosesPlan = (await PlanGateSvc.stateOf(userId)) === "CHOOSE_PLAN";
-    await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", {
+    // A lawyer held by verify before plan stays signed in: the waiting page's poll moves them on to
+    // the plan step, and the planGate middleware is what keeps them out of the rest of the API.
+    await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", async (user) => ({
       nextStep: choosesPlan ? NEXT_STEP_CHOOSE_PLAN : NEXT_STEP[country],
-      ...nextStepButton(country, choosesPlan),
-    });
+      ...(await nextStepButton(user, country, choosesPlan)),
+    }));
 
     return toAdminRow(updated);
   }
@@ -172,7 +208,7 @@ export default class LawyerVerificationSvc {
       payload: { from: "PENDING", to: "REJECTED", reason },
     });
 
-    await LawyerVerificationSvc.notify(userId, "lawyer-verification-rejected", "Your lawyer application wasn't approved", { reason: composedNote });
+    await LawyerVerificationSvc.notify(userId, "lawyer-verification-rejected", "Your lawyer application wasn't approved", () => ({ reason: composedNote }));
 
     return toAdminRow(updated);
   }

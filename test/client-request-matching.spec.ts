@@ -7,7 +7,7 @@
  */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
-import ClientRequestMatchingSvc, { caseAreasOf, type MatchablePracticeArea } from "../src/services/client-request-matching.service";
+import ClientRequestMatchingSvc, { budgetFitScoreOf, caseAreasOf, type ClientBudget, type MatchablePracticeArea } from "../src/services/client-request-matching.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 
@@ -25,6 +25,7 @@ type Lawyer = {
   openCount: number;
   practiceAreas: MatchablePracticeArea[];
   qualifiedJurisdictions: string[];
+  firstConsultationFeeMinor: number | null;
 };
 
 /** A practice area the lawyer holds, mapped to a client case area (or not). */
@@ -39,6 +40,7 @@ const ELIGIBLE: Lawyer = {
   openCount: 0,
   practiceAreas: [mapped("EMPLOYMENT")],
   qualifiedJurisdictions: ["England and Wales"],
+  firstConsultationFeeMinor: null,
 };
 
 const CRITERIA = { caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" };
@@ -123,6 +125,43 @@ describe("caseAreasOf", () => {
   });
 });
 
+const budget = (minMinor: number | null, maxMinor: number | null): ClientBudget => ({ minMinor, maxMinor, feePreference: null });
+
+describe("budgetFitScoreOf", () => {
+  it("scores 0 when there's no budget, whatever the fee", () => {
+    expect(budgetFitScoreOf(1_000_000, null)).to.equal(0);
+    expect(budgetFitScoreOf(null, null)).to.equal(0);
+  });
+
+  it("scores 0 for a lawyer who hasn't set a fee, even against a tight budget", () => {
+    expect(budgetFitScoreOf(null, budget(50_000, 150_000))).to.equal(0);
+  });
+
+  it("scores 0 for a fee inside the range, at either end", () => {
+    expect(budgetFitScoreOf(100_000, budget(50_000, 150_000))).to.equal(0);
+    expect(budgetFitScoreOf(50_000, budget(50_000, 150_000))).to.equal(0);
+    expect(budgetFitScoreOf(150_000, budget(50_000, 150_000))).to.equal(0);
+  });
+
+  it("scores the shortfall for a fee below the client's minimum", () => {
+    expect(budgetFitScoreOf(30_000, budget(50_000, 150_000))).to.equal(20_000);
+  });
+
+  it("scores the overage for a fee above the client's maximum", () => {
+    expect(budgetFitScoreOf(1_000_000, budget(50_000, 150_000))).to.equal(850_000);
+  });
+
+  it("never scores above 0 for an open-ended range (\"Over £X\"): any fee at or above the minimum fits", () => {
+    expect(budgetFitScoreOf(10_000_000, budget(500_000, null))).to.equal(0);
+    expect(budgetFitScoreOf(100_000, budget(500_000, null))).to.equal(400_000);
+  });
+
+  it("scores the overage against zero when only a maximum is set (the client's own amount, low = high, still has both)", () => {
+    expect(budgetFitScoreOf(1_000_000, budget(null, 150_000))).to.equal(850_000);
+    expect(budgetFitScoreOf(100_000, budget(null, 150_000))).to.equal(0);
+  });
+});
+
 describe("ClientRequestMatchingSvc.route / eligibleLawyerIds", () => {
   let restore: (() => void)[];
   let routed: { id: string }[];
@@ -174,4 +213,49 @@ describe("ClientRequestMatchingSvc.route / eligibleLawyerIds", () => {
     expect(await ClientRequestMatchingSvc.eligibleLawyerIds("missing")).to.deep.equal([]);
   });
 
+  describe("matchByCriteria", () => {
+    it("asks for every verified lawyer, excluding no one", async () => {
+      await ClientRequestMatchingSvc.matchByCriteria({ caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" });
+      expect(requestedExcludeIds).to.deep.equal([[]]);
+    });
+
+    it("matches the same rule as eligibleLawyerIds, without needing a request", async () => {
+      candidates = [ELIGIBLE, { ...ELIGIBLE, userId: "lawyer-2", practiceAreas: [mapped("FAMILY")] }];
+      const result = await ClientRequestMatchingSvc.matchByCriteria({ caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" });
+      expect(result.map((r) => r.lawyerId)).to.deep.equal(["lawyer-1"]);
+    });
+
+    it("gives every match a budgetFitScore of 0 when no budget is given", async () => {
+      const result = await ClientRequestMatchingSvc.matchByCriteria({ caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" });
+      expect(result).to.deep.equal([{ lawyerId: "lawyer-1", budgetFitScore: 0 }]);
+    });
+
+    it("never excludes a lawyer for being outside budget, only ranks them lower", async () => {
+      candidates = [
+        { ...ELIGIBLE, userId: "lawyer-pricey", firstConsultationFeeMinor: 1_000_000 },
+        { ...ELIGIBLE, userId: "lawyer-cheap", firstConsultationFeeMinor: 100_000 },
+      ];
+      const result = await ClientRequestMatchingSvc.matchByCriteria({
+        caseAreas: ["EMPLOYMENT"],
+        ukJurisdiction: "England and Wales",
+        budget: budget(50_000, 150_000),
+      });
+      expect(result.map((r) => r.lawyerId)).to.deep.equal(["lawyer-cheap", "lawyer-pricey"]);
+      expect(result[0].budgetFitScore).to.equal(0);
+      expect(result[1].budgetFitScore).to.equal(850_000);
+    });
+
+    it("sorts closest-to-budget first among several mismatches", async () => {
+      candidates = [
+        { ...ELIGIBLE, userId: "lawyer-far", firstConsultationFeeMinor: 1_000_000 },
+        { ...ELIGIBLE, userId: "lawyer-near", firstConsultationFeeMinor: 200_000 },
+      ];
+      const result = await ClientRequestMatchingSvc.matchByCriteria({
+        caseAreas: ["EMPLOYMENT"],
+        ukJurisdiction: "England and Wales",
+        budget: budget(50_000, 150_000),
+      });
+      expect(result.map((r) => r.lawyerId)).to.deep.equal(["lawyer-near", "lawyer-far"]);
+    });
+  });
 });

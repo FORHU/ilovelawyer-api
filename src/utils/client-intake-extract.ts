@@ -47,6 +47,24 @@ export function caseDetailsPeople(parties: { name: string; designation: string }
   return parties.map((p) => ({ name: p.name, role: p.designation }));
 }
 
+/** What the client already answered on the case-creation form — shared between
+ * ClientIntakeSvc's extraction prompt (buildIntakePrompt below) and IntakeChatSvc's conversational
+ * grounding (sent to chat-wonder as part of document_context), so a client never has to repeat a
+ * wizard answer to the chat itself. Same wording in both places by construction, not by convention. */
+export function caseDetailsBlock(
+  caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null },
+  parties: { name: string; designation: string }[],
+): string {
+  return `Known case details (already confirmed by the client, do not repeat them as new facts):
+Title: ${caseDetails.title}
+Type of problem: ${caseDetails.caseAreas.join(", ") || "not set"}
+Part of the UK: ${caseDetails.ukJurisdiction ?? "not set"}
+Town or city: ${caseDetails.where ?? "not set"}
+The client is: ${caseDetails.side === "CLAIMANT" ? "bringing the complaint" : caseDetails.side === "RESPONDENT" ? "responding to one" : "not set"}
+The client's note: ${caseDetails.notes || "none"}
+People already named on the case form (don't list these again under "people" unless the conversation adds new detail about them that isn't on the form): ${parties.map((p) => `${p.name} (${p.designation})`).join(", ") || "none"}`;
+}
+
 export function buildIntakePrompt(input: {
   /** `caseAreas` are the case areas' names. */
   caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null };
@@ -67,14 +85,7 @@ export function buildIntakePrompt(input: {
 
 Today's date is ${input.today}.
 
-Known case details (already confirmed by the client, do not repeat them as new facts):
-Title: ${input.caseDetails.title}
-Type of problem: ${input.caseDetails.caseAreas.join(", ") || "not set"}
-Part of the UK: ${input.caseDetails.ukJurisdiction ?? "not set"}
-Town or city: ${input.caseDetails.where ?? "not set"}
-The client is: ${input.caseDetails.side === "CLAIMANT" ? "bringing the complaint" : input.caseDetails.side === "RESPONDENT" ? "responding to one" : "not set"}
-The client's note: ${input.caseDetails.notes || "none"}
-People already named on the case form (don't list these again under "people" unless the conversation adds new detail about them that isn't on the form): ${input.parties.map((p) => `${p.name} (${p.designation})`).join(", ") || "none"}
+${caseDetailsBlock(input.caseDetails, input.parties)}
 
 Documents on this case (cite by their handle, e.g. D1):
 ${docList}
@@ -83,7 +94,7 @@ Conversation (cite by its handle, e.g. M1):
 ${chatLines || "(no conversation yet)"}
 
 From the conversation and the documents only — never invent or infer anything not stated — extract:
-- people: anyone involved besides the client, who they are to the case (their role, e.g. "the employer", "a witness"), each with the message or document handle(s) it came from.
+- people: every actual name you see anywhere above — in the conversation or in a document excerpt — of a person, company or organisation, whoever they are: the client themselves if a document uses their name, the other side, a witness, an insurer, a solicitor on a letter, anyone. This list drives redaction before a lawyer sees any of this, so completeness matters more than relevance — include a name even if their role is unclear or they otherwise wouldn't be worth mentioning. Give each their name exactly as written, their role if known (or "unclear" if not), and the message or document handle(s) it came from.
 - timeline: dated events, each with a date (YYYY-MM-DD if a full date is given, or null if not), datePrecision ("DAY"/"MONTH"/"YEAR"/"UNKNOWN"), and its source handle(s). Never work out a date yourself — only use one that is actually stated or computable from a stated relative date ("last Tuesday") against today's date.
 - facts: other important factual statements, each with its source handle(s).
 - goals: what the client said they want to happen.
@@ -96,6 +107,8 @@ From the conversation and the documents only — never invent or infer anything 
 Every item except "missing" must cite at least one real handle (Mn for the conversation, Dn p.N for a document, with the page if you can tell which page). Never cite a handle that doesn't exist. Do not repeat the known case details above as if you'd found them in the conversation.
 
 ${input.documentExcerpts}
+
+The "summary" must be consistent with every other field you produce here, not written as if the documents list or excerpts above didn't exist. If a document is listed above, the summary must not say no documents were provided — say what they show instead, or that they're still being read if excerpts aren't available yet. If "timeline"/"facts" below cite a document for something, the summary citing or contradicting that same fact must agree with it.
 
 Reply with only this JSON and nothing else, omitting a list entirely (as []) when there's nothing to put in it:
 {"summary": "80-150 words, plain English, neutral, third person, no legal conclusions", "people": [{"name": "", "role": "", "sources": ["M1"]}], "timeline": [{"text": "", "date": null, "datePrecision": "UNKNOWN", "sources": ["M2"]}], "facts": [{"text": "", "sources": ["M1"]}], "goals": [{"text": "", "sources": ["M1"]}], "concerns": [{"text": "", "sources": ["M1"]}], "questionsForLawyer": [{"text": "", "sources": ["M1"]}], "deadlines": [{"text": "", "date": null, "sources": ["M1"]}], "missing": [{"question": "", "why": ""}], "conflicts": [{"description": "", "sources": ["M1", "D1 p.2"]}]}`;

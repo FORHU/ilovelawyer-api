@@ -7,7 +7,7 @@ import DocumentRepo from "../repositories/document.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
 import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
-import ChatSvc from "./chat.service";
+import IntakeChatSvc from "./intake-chat.service";
 import ClientRequestSvc from "./client-request.service";
 import DocumentSvc, { documentFileUrl } from "./document.service";
 import OrganizationSvc from "./organization.service";
@@ -69,9 +69,6 @@ const LAWYER_HELD: ClientRequestStatus[] = ["CLAIMED", "QUOTED", "CONFIRMED", "E
 /** Several lawyers (phase 5): a ROUTED request is held once any lawyer has joined it. */
 const isHeld = (live: { status: ClientRequestStatus; lawyersOn?: number }) => LAWYER_HELD.includes(live.status) || (live.lawyersOn ?? 0) > 0;
 const LAWYER_COMMITTED: ClientRequestStatus[] = ["CONFIRMED", "ENGAGED"];
-
-/** A Consultation title is VarChar(80). */
-const CONSULTATION_TITLE_MAX = 80;
 
 /** A document as the client app lists it. A Document has no upload time of its own: it's made when
  * the upload is confirmed, so createdAt is when it was uploaded. createdAt stays for older apps. */
@@ -220,7 +217,9 @@ export default class ClientCaseSvc {
       ...(input.notes ? { notes: input.notes } : {}),
       clientCredits: credits,
     });
-    await ChatSvc.createConsultation(firmScope(workspace.id), userId, input.title.slice(0, CONSULTATION_TITLE_MAX), created.id);
+    // No Consultation pre-created here anymore — the intake pipeline has no thread/session
+    // concept of its own (IntakeMessage keys straight to Case.id), so there is nothing for one to
+    // back. See the 2026-10-28 intake-pipeline separation.
     return ClientCaseSvc.get(workspace, created.id);
   }
 
@@ -312,51 +311,32 @@ export default class ClientCaseSvc {
   }
 
   /** The chat, oldest first. `replying` is true while the AI is still answering the last message,
-   * so the app shows it's typing until chat:done or chat:error arrives over the socket. */
+   * so the app shows it's typing until chat:done or chat:error arrives over the socket. Reads the
+   * intake pipeline's own table (IntakeMessage) — never Message/Consultation. */
   static async listMessages(workspace: ClientWorkspace, userId: string, caseId: string) {
-    const consultationId = await ClientCaseSvc.consultationOf(workspace, userId, caseId);
-    const messages = await ChatSvc.listMessages(firmScope(workspace.id), userId, consultationId);
-    const visible = messages.filter((m) => m.role === "user" || m.role === "assistant");
-    return {
-      replying: visible.some((m) => m.role === "user" && m.replyStatus === "PENDING"),
-      messages: visible.map((m) => ({
-        id: m.id,
-        role: m.role === "user" ? ("user" as const) : ("ai" as const),
-        text: m.content,
-        /** User messages only: whether the AI's answer to it arrived. */
-        replyStatus: m.role === "user" ? m.replyStatus : null,
-        /** The case documents sent with a user message (sendMessage's documentIds). */
-        documents: m.role === "user" ? m.documents.map((d) => ({ id: d.id, name: d.name, status: d.ragStatus })) : [],
-        createdAt: m.createdAt,
-      })),
-    };
+    // consultationOf used to do this ownership check as a side effect of resolving a
+    // consultationId; IntakeChatSvc.listMessages needs no such resolution, so the check has to be
+    // explicit here now.
+    await ClientCaseSvc.load(workspace, caseId);
+    return IntakeChatSvc.listMessages(workspace, userId, caseId);
   }
 
-  /** Asks the AI, for one chat credit. The answer is generated in the background, on the client
-   * app's own queue (ClientChatGenerationQueue), shows up in listMessages, and is announced to the
-   * client by the chat:done / chat:error socket events. A message that couldn't be queued gets its
-   * credit back; one the AI then fails to answer keeps it spent, like any other AI work.
-   * `documentIds` are the case's documents sent with it, each READY (checked before the credit is
-   * spent, so a refused send costs nothing). */
+  /** Asks the AI, for one chat credit. The answer is generated in the background, on the intake
+   * pipeline's own queue (IntakeChatGenerationQueue — not ChatGenerationQueue/
+   * ClientChatGenerationQueue, nothing shared with the lawyer side), shows up in listMessages, and
+   * is announced to the client by the chat:done / chat:error socket events. A message that
+   * couldn't be queued gets its credit back; one the AI then fails to answer keeps it spent, like
+   * any other AI work. `documentIds` are the case's documents sent with it, each READY (checked
+   * before the credit is spent, so a refused send costs nothing). */
   static async sendMessage(workspace: ClientWorkspace, userId: string, caseId: string, text: string, documentIds: string[] = []) {
-    const consultationId = await ClientCaseSvc.consultationOf(workspace, userId, caseId);
+    // Same ownership check consultationOf used to do as a side effect — explicit now that nothing
+    // resolves a consultation here anymore.
+    await ClientCaseSvc.load(workspace, caseId);
     const ids = [...new Set(documentIds)];
     if (ids.length) await ClientCaseSvc.assertAttachable(workspace, caseId, ids);
     await ClientBillingSvc.spendCredit(caseId);
     try {
-      return await ChatSvc.enqueueChatGeneration(
-        firmScope(workspace.id),
-        workspace.tenantCode,
-        userId,
-        consultationId,
-        "",
-        text,
-        undefined,
-        undefined,
-        caseId,
-        ids.length ? ids : undefined,
-        { source: "client" },
-      );
+      return await IntakeChatSvc.enqueueIntakeGeneration(workspace, userId, caseId, text, ids.length ? ids : undefined);
     } catch (err) {
       await ClientBillingSvc.refundCredit(caseId);
       throw err;
@@ -509,13 +489,5 @@ export default class ClientCaseSvc {
     const row = await ClientCaseRepo.findById(caseId, workspace.id);
     if (!row) throw new HttpError("Case not found", 404);
     return row;
-  }
-
-  /** The case's chat. Every client case gets one when it's made; this also covers one that lost it. */
-  private static async consultationOf(workspace: ClientWorkspace, userId: string, caseId: string): Promise<string> {
-    const row = await ClientCaseSvc.load(workspace, caseId);
-    if (row.consultations[0]) return row.consultations[0].id;
-    const created = await ChatSvc.createConsultation(firmScope(workspace.id), userId, row.caseName.slice(0, CONSULTATION_TITLE_MAX), caseId);
-    return created.id;
   }
 }

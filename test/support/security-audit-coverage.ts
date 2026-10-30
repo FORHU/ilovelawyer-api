@@ -41,6 +41,9 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /organizations/:id/billing/card/setup-session": ["org.payment_card_updated"],
   "GET /organizations/:id/audit-log/export": ["export.audit_log"],
   "POST /generated-document/": ["export.generated_document"],
+  "POST /lawyer-matching/by-criteria": {
+    exempt: "Read-only lawyer search by practice area/jurisdiction/budget, called by chat-wonder's find_lawyer tool and the client app's browse-lawyers feature — no client-matter access, nothing created or changed",
+  },
   "POST /auth/signup": ["auth.signup"],
   "POST /auth/send-otp": SESSION,
   "POST /auth/cancel-signup": ["auth.signup_cancelled"],
@@ -93,6 +96,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /users/me/plan-gate/start": { exempt: "A lawyer going on without paying (verify before plan); stored on their own User (planChosenAt, planTrialEndsAt)" },
   "POST /users/me/setup/complete": UI_STATE,
   "POST /users/me/solo": UI_STATE,
+  "POST /users/me/plan-gate/start": UI_STATE,
   "POST /users/me/billing/card/setup-session": ["account.payment_card_updated"],
   "POST /admin/users/:id/export": ["export.user_data"],
   "POST /admin/users/:id/approve": ["admin.user.approved"],

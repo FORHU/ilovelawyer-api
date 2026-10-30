@@ -4,7 +4,7 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import prisma from "../src/lib/prisma";
-import PlanGateSvc, { planGateOf, type PlanGateFacts } from "../src/services/plan-gate.service";
+import PlanGateSvc, { planGateOf, workspaceOf, type PlanGateFacts } from "../src/services/plan-gate.service";
 import { DAY_MS, PLAN_TRIAL_DAYS } from "../src/constants/plan-trial.constants";
 
 const gated: PlanGateFacts = { role: "LAWYER", verifyBeforePlan: true, workspace: "SOLO", everVerified: false, planChosen: false };
@@ -40,10 +40,12 @@ describe("Plan gate (verify before plan)", () => {
   });
 
   describe("PlanGateSvc", () => {
-    const original = { findUnique: prisma.user.findUnique, update: prisma.user.update, sub: prisma.paymentPlanSubscription.findFirst };
+    const original = { findUnique: prisma.user.findUnique, updateMany: prisma.user.updateMany, sub: prisma.paymentPlanSubscription.findFirst };
     let row: any;
     let live: boolean;
     let updates: any[];
+    /** What the conditional write does: by default it matches and applies its data to the row. */
+    let writeMatches: boolean;
 
     beforeEach(() => {
       row = {
@@ -57,16 +59,19 @@ describe("Plan gate (verify before plan)", () => {
       };
       live = false;
       updates = [];
+      writeMatches = true;
       (prisma.user as any).findUnique = async () => row;
-      (prisma.user as any).update = async (args: any) => {
+      (prisma.user as any).updateMany = async (args: any) => {
         updates.push(args);
-        return row;
+        if (!writeMatches) return { count: 0 };
+        Object.assign(row, args.data);
+        return { count: 1 };
       };
       (prisma.paymentPlanSubscription as any).findFirst = async () => (live ? { id: "sub-1" } : null);
     });
     afterEach(() => {
       (prisma.user as any).findUnique = original.findUnique;
-      (prisma.user as any).update = original.update;
+      (prisma.user as any).updateMany = original.updateMany;
       (prisma.paymentPlanSubscription as any).findFirst = original.sub;
     });
 
@@ -79,6 +84,18 @@ describe("Plan gate (verify before plan)", () => {
       expect(await PlanGateSvc.stateOf("u1")).to.equal("OPEN");
     });
 
+    it("lets a firm decide the workspace: solo then joined a firm is a member, and owning any firm is a founder", () => {
+      const member = { role: "MEMBER", organization: { isPersonal: false } };
+      const owner = { role: "OWNER", organization: { isPersonal: false } };
+      const personal = { role: "OWNER", organization: { isPersonal: true } };
+      const solo = new Date("2026-10-28");
+      expect(workspaceOf(solo, [member])).to.equal("MEMBER");
+      expect(workspaceOf(null, [member, owner])).to.equal("FOUNDER");
+      expect(workspaceOf(null, [owner, member])).to.equal("FOUNDER");
+      expect(workspaceOf(solo, [personal])).to.equal("SOLO");
+      expect(workspaceOf(null, [])).to.equal("NONE");
+    });
+
     it("counts a started trial or a live subscription as a chosen plan", async () => {
       row.planTrialEndsAt = new Date("2026-11-12");
       expect(await PlanGateSvc.stateOf("u1")).to.equal("OPEN");
@@ -87,18 +104,44 @@ describe("Plan gate (verify before plan)", () => {
       expect(await PlanGateSvc.stateOf("u1")).to.equal("OPEN");
     });
 
-    it("starts a verified solo lawyer's 14-day trial when they choose it", async () => {
+    it("starts a verified solo lawyer's 14-day trial when they choose it, under the trial's own guards", async () => {
       const now = new Date("2026-11-01T10:00:00Z");
       await PlanGateSvc.startWithoutPaying("u1", now);
-      expect(updates[0].data).to.deep.equal({ planChosenAt: now, planTrialEndsAt: new Date(now.getTime() + PLAN_TRIAL_DAYS * DAY_MS) });
+      expect(updates).to.have.length(1);
+      expect(updates[0].where).to.deep.include({ id: "u1", verifyBeforePlan: true, approvalStatus: "ACTIVE", trialExpiresAt: null, planTrialEndsAt: null });
+      expect(updates[0].data).to.deep.equal({ planTrialEndsAt: new Date(now.getTime() + PLAN_TRIAL_DAYS * DAY_MS), planChosenAt: now });
     });
 
-    it("lets a verified founder in on the unpaid plan, with no trial", async () => {
+    it("lets a verified founder in on the unpaid plan, with no trial, once their account is approved", async () => {
       row.soloChosenAt = null;
       row.organizationMemberships = [{ role: "OWNER", organization: { isPersonal: false } }];
       const now = new Date("2026-11-01T10:00:00Z");
       await PlanGateSvc.startWithoutPaying("u1", now);
+      expect(updates[0].where).to.deep.equal({ id: "u1", verifyBeforePlan: true, approvalStatus: "ACTIVE", planChosenAt: null });
       expect(updates[0].data).to.deep.equal({ planChosenAt: now });
+    });
+
+    it("refuses before they've chosen solo or a firm, so no one is let in without a trial", async () => {
+      row.soloChosenAt = null;
+      expect(await errorOf(PlanGateSvc.startWithoutPaying("u1"))).to.deep.equal({ status: 409, code: "WORKSPACE_REQUIRED" });
+      expect(updates).to.deep.equal([]);
+    });
+
+    it("refuses when the trial can't start (the account isn't approved), rather than letting them in", async () => {
+      writeMatches = false;
+      expect(await errorOf(PlanGateSvc.startWithoutPaying("u1"))).to.deep.equal({ status: 409, code: "PLAN_NOT_STARTED" });
+    });
+
+    it("succeeds for the second of two requests at once, which finds the trial already started", async () => {
+      writeMatches = false;
+      const realFind = (prisma.user as any).findUnique;
+      let reads = 0;
+      (prisma.user as any).findUnique = async () => {
+        // The first request's write lands between this one's read and its own write.
+        if (++reads > 1) row.planTrialEndsAt = new Date("2026-11-15");
+        return realFind();
+      };
+      expect(await errorOf(PlanGateSvc.startWithoutPaying("u1"))).to.equal(null);
     });
 
     it("refuses before verification, and does nothing once a plan is chosen", async () => {
@@ -128,6 +171,22 @@ describe("Plan gate (verify before plan)", () => {
       };
       expect(await PlanGateSvc.stateOf("u1")).to.equal("OPEN");
       expect(subChecks).to.equal(0);
+    });
+
+    it("checks every request from a held lawyer, and remembers an account that can never be held", async () => {
+      row.clientRequestProfile = { firstVerifiedAt: null };
+      expect(await errorOf(PlanGateSvc.assertOpenForRequest("held-1"))).to.deep.equal({ status: 403, code: "VERIFICATION_REQUIRED" });
+      expect(await errorOf(PlanGateSvc.assertOpenForRequest("held-1"))).to.deep.equal({ status: 403, code: "VERIFICATION_REQUIRED" });
+
+      row.verifyBeforePlan = false;
+      let reads = 0;
+      (prisma.user as any).findUnique = async () => {
+        reads++;
+        return row;
+      };
+      await PlanGateSvc.assertOpenForRequest("never-held-1");
+      await PlanGateSvc.assertOpenForRequest("never-held-1");
+      expect(reads).to.equal(1);
     });
   });
 });

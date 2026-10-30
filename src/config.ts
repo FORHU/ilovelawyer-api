@@ -151,6 +151,13 @@ export const GOOGLE_TOKEN_ENC_KEY = process.env.GOOGLE_TOKEN_ENC_KEY as string |
 export const FIELD_ENCRYPTION_ENABLED = process.env.FIELD_ENCRYPTION_ENABLED === "true";
 export const FIELD_ENCRYPTION_KEY = process.env.FIELD_ENCRYPTION_KEY as string | undefined;
 export const FIELD_ENCRYPTION_OLD_KEYS = process.env.FIELD_ENCRYPTION_OLD_KEYS as string | undefined;
+/** Field-level encryption of IntakeMessage.content/pendingReplyContent
+ * (src/utils/intake-field-crypto.ts) — a deliberately separate key and implementation from
+ * FIELD_ENCRYPTION_KEY above, so the client/intake pipeline shares nothing with the lawyer side
+ * (see docs/adr, the 2026-10-28 intake-pipeline separation). One env var, a different value set
+ * per deployed environment (dev/UK/PH) rather than a per-region variable name. No key rotation. */
+export const INTAKE_FIELD_ENCRYPTION_ENABLED = process.env.INTAKE_FIELD_ENCRYPTION_ENABLED === "true";
+export const INTAKE_FIELD_ENCRYPTION_KEY = process.env.INTAKE_FIELD_ENCRYPTION_KEY as string | undefined;
 export const CHAT_WONDER_API_URL = (process.env.CHAT_WONDER_API_URL || "").replace(/\/+$/, "");
 export const CHAT_WONDER_WS_URL = process.env.CHAT_WONDER_WS_URL as string;
 /** juris.ph public API root (no version/segment). juris-ph.ts appends `/v1/...` for the
@@ -224,6 +231,12 @@ export const MESSAGE_PERSISTENCE_QUEUE_URL = process.env.MESSAGE_PERSISTENCE_QUE
  * MESSAGE_PERSISTENCE_QUEUE_URL (or any other queue): two consumers polling one queue randomly
  * steal each other's messages. */
 export const CLIENT_CHAT_GENERATION_QUEUE_URL = process.env.CLIENT_CHAT_GENERATION_QUEUE_URL as string;
+/** The intake chat pipeline's own queue (IntakeMessage, caseId-keyed — see
+ * queues/intake-chat-generation.queue.ts). Deliberately NOT the same worker code as
+ * MESSAGE_PERSISTENCE_QUEUE_URL/CLIENT_CHAT_GENERATION_QUEUE_URL above — a fully separate queue,
+ * processor and consumer per the 2026-10-28 intake-pipeline separation. Must NOT share a physical
+ * SQS queue with any other queue in this file. */
+export const INTAKE_CHAT_GENERATION_QUEUE_URL = process.env.INTAKE_CHAT_GENERATION_QUEUE_URL as string;
 /** Case-graph enrichment for an already-persisted chat turn (timeline/decision-record
  * promotion) — see queues/case-graph-promotion.queue.ts. Its own dedicated queue: it must
  * NOT share a physical SQS queue with MESSAGE_PERSISTENCE_QUEUE_URL (or any other queue) —

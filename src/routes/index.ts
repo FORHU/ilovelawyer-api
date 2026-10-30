@@ -3,6 +3,7 @@ import authRoute from "./auth.route";
 import trialRoute from "./trial.route";
 import { blockTrialWrites } from "../middleware/trial.middleware";
 import { freeCreditLimit } from "../middleware/free-credit.middleware";
+import { planGate } from "../middleware/plan-gate.middleware";
 import chatRoute from "./chat.route";
 import legalRagRoute from "./legal-rag.route";
 import filesRoute from "./files.route";
@@ -38,11 +39,16 @@ import lawRoute from "./law.route";
 import clientRoute from "./client.route";
 import clientRequestRoute from "./client-request.route";
 import practiceAreaRoute from "./practice-area.route";
+import lawyerMatchingRoute from "./lawyer-matching.route";
 
 const router = express.Router();
 
 // An account that has spent its free AI credit starts no new work anywhere (freeCreditLimit).
 router.use(freeCreditLimit);
+
+// A UK lawyer held by verify before plan reaches only what the verification and plan steps need
+// (planGate).
+router.use(planGate);
 
 // A trial guest (see TrialSvc) can read around the app but not write through these. That includes
 // the routers whose POSTs call a paid model or the speech service (legal-rag, tts, law's citation
@@ -91,6 +97,7 @@ router.use("/jurisdictions", jurisdictionRouter);
 router.use("/integrations", integrationRouter);
 router.use("/model-settings", modelSettingsRoute);
 router.use("/practice-areas", practiceAreaRoute);
+router.use("/lawyer-matching", lawyerMatchingRoute);
 // The client app (ilovelawyer-client): client accounts only.
 router.use("/client", clientRoute);
 router.use("/client-requests", clientRequestRoute);

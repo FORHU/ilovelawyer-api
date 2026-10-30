@@ -11,7 +11,7 @@ import DocumentRepo from "../src/repositories/document.repository";
 import ClientCaseRepo from "../src/repositories/client-case.repository";
 import ClientPaymentRepo from "../src/repositories/client-payment.repository";
 import ClientCaseSvc, { type ClientWorkspace } from "../src/services/client-case.service";
-import ChatSvc from "../src/services/chat.service";
+import IntakeChatSvc from "../src/services/intake-chat.service";
 import ConsentSvc from "../src/services/consent.service";
 import { firmScope } from "../src/utils/workspace";
 
@@ -84,7 +84,7 @@ describe("Client message documents", () => {
       stash(ClientCaseRepo, ["findById"]);
       stash(DocumentRepo, ["findManyForCase"]);
       stash(ClientPaymentRepo, ["spendCredit", "addCredits"]);
-      stash(ChatSvc, ["enqueueChatGeneration"]);
+      stash(IntakeChatSvc, ["enqueueIntakeGeneration"]);
       role = "USER";
       ragStatus = "READY";
       enqueued = null;
@@ -92,11 +92,11 @@ describe("Client message documents", () => {
       (ClientCaseSvc as any).workspaceFor = async (userId: string) => ({ ...workspace, id: userId === "other-client" ? "org-2" : workspace.id });
       (ConsentSvc as any).assertAllowed = async () => undefined;
       (ClientCaseRepo as any).findById = async (id: string, orgId: string) =>
-        id === "case-1" && orgId === workspace.id ? { id: "case-1", caseName: "Fired by my boss", consultations: [{ id: "cons-1" }] } : null;
+        id === "case-1" && orgId === workspace.id ? { id: "case-1", caseName: "Fired by my boss" } : null;
       (DocumentRepo as any).findManyForCase = async () => [{ id: "d1", name: "Payslip.pdf", ragStatus }];
       (ClientPaymentRepo as any).spendCredit = async () => true;
       (ClientPaymentRepo as any).addCredits = async () => 50;
-      (ChatSvc as any).enqueueChatGeneration = async (...args: unknown[]) => {
+      (IntakeChatSvc as any).enqueueIntakeGeneration = async (...args: unknown[]) => {
         enqueued = args;
         return { messageId: "m9", sessionId: "s", replyStatus: "PENDING" };
       };
@@ -105,7 +105,7 @@ describe("Client message documents", () => {
     it("sends the client's READY document with the message", async () => {
       const res = await send("client");
       expect(res.status).to.equal(202);
-      expect(enqueued?.[9]).to.deep.equal(["d1"]);
+      expect(enqueued?.[4]).to.deep.equal(["d1"]);
     });
 
     it("refuses a document still being read with 409 and its name", async () => {

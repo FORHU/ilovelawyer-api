@@ -9,16 +9,20 @@ import { isGoogleSsoAccount } from "../utils/auth.utils";
 import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS, accountDeletionDueAt } from "../constants/account-deletion.constants";
 import { BCRYPT_SALT_ROUNDS } from "../constants";
 import AuditSvc, { AuditAction } from "./audit.service";
+import PlanGateSvc from "./plan-gate.service";
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", { dateStyle: "long" });
 }
 
 export default class UsersSvc {
+  /** The account, plus its verify before plan gate (PlanGateSvc), so the lawyer app routes a held
+   * lawyer without a second request. Only here and on the endpoints built on it (setup complete,
+   * solo): the other /me-shaped responses can't change the gate, and the app keeps what it had. */
   static async getMe(userId: string) {
     const user = await AuthRepo.findById(userId);
     if (!user) throw new HttpError("User not found", 404);
-    return user;
+    return { ...user, planGate: await PlanGateSvc.stateOf(userId) };
   }
 
   static async updateMe(userId: string, data: { name?: string; username?: string }) {

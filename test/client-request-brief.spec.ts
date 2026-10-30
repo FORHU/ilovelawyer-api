@@ -7,7 +7,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import { redactBrief, labelForDesignation, type RedactionContext } from "../src/utils/brief-redaction";
 import ClientRequestBriefSvc, { parseBriefReply, ukDay, urgencyFor } from "../src/services/client-request-brief.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
-import ChatRepo from "../src/repositories/chat.repository";
+import IntakeChatRepo from "../src/repositories/intake-chat.repository";
 import ClientIntakeRepo from "../src/repositories/client-intake.repository";
 import * as chatWonder from "../src/utils/chatWonder";
 import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
@@ -128,7 +128,7 @@ describe("Anonymised case brief", () => {
     const originals = {
       findForBrief: ClientRequestRepo.findForBrief,
       saveBrief: ClientRequestRepo.saveBrief,
-      listMessages: ChatRepo.listMessagesByConsultation,
+      listMessages: IntakeChatRepo.listByCase,
       rest: chatWonder.callChatWonderRest,
       session: chatWonder.getChatWonderSessionId,
       announce: ClientRequestNotifySvc.announceInBackground,
@@ -180,7 +180,7 @@ describe("Anonymised case brief", () => {
         saved.push(data);
         if (data.brief) Object.assign(source, { brief: data.brief, briefFingerprint: data.briefFingerprint });
       };
-      (ChatRepo as any).listMessagesByConsultation = async () => messages;
+      (IntakeChatRepo as any).listByCase = async () => messages;
       // No intake run yet for any case in this file's fixtures — ClientRequestBriefSvc folds
       // CaseClientIntake.fingerprint into briefFingerprint and CaseIntake into brief.intake
       // (ADR 0018); stubbed here the same way every other repo in this file is, with nothing
@@ -197,7 +197,7 @@ describe("Anonymised case brief", () => {
     afterEach(() => {
       (ClientRequestRepo as any).findForBrief = originals.findForBrief;
       (ClientRequestRepo as any).saveBrief = originals.saveBrief;
-      (ChatRepo as any).listMessagesByConsultation = originals.listMessages;
+      (IntakeChatRepo as any).listByCase = originals.listMessages;
       (chatWonder as any).callChatWonderRest = originals.rest;
       (chatWonder as any).getChatWonderSessionId = originals.session;
       (ClientRequestNotifySvc as any).announceInBackground = originals.announce;
