@@ -247,6 +247,10 @@ describe("Client app cases", () => {
           jurisdiction: "Leeds",
           clientSide: "CLAIMANT",
           parties: [{ name: "Acme Ltd", designation: "Opposing party" }],
+          // No budget given: "Not sure".
+          budgetMinMinor: null,
+          budgetMaxMinor: null,
+          budgetFeePreference: null,
           // Free: no payment, and the case is written with the tenant's new-case credits.
           clientCredits: 50,
         },
@@ -268,6 +272,22 @@ describe("Client app cases", () => {
         notes: "What happened: Flight cancelled.\n\nWhat I want: A refund.",
       });
       expect((calls.caseCreate as any[])[3]).to.include({ notes: "What happened: Flight cancelled.\n\nWhat I want: A refund." });
+    });
+
+    it("stores the client's budget as a low and a high in pence, and returns it", async () => {
+      row = caseRow({ budgetMinMinor: 50_000, budgetMaxMinor: 150_000, budgetFeePreference: "FIXED_FEE" });
+      const dto = await ClientCaseSvc.create(workspace, "u1", {
+        title: "Dismissed",
+        areas: ["EMPLOYMENT"],
+        ukJurisdiction: "England and Wales",
+        budget: { minMinor: 50_000, maxMinor: 150_000, feePreference: "FIXED_FEE" },
+      });
+      expect((calls.caseCreate as any[])[3]).to.include({ budgetMinMinor: 50_000, budgetMaxMinor: 150_000, budgetFeePreference: "FIXED_FEE" });
+      expect(dto.budget).to.deep.equal({ minMinor: 50_000, maxMinor: 150_000, feePreference: "FIXED_FEE" });
+    });
+
+    it("returns no budget for a case without one", async () => {
+      expect((await ClientCaseSvc.get(workspace, "case-1")).budget).to.equal(null);
     });
 
     it("stores no UK jurisdiction for a case outside the UK", async () => {
@@ -411,6 +431,14 @@ describe("Client app cases", () => {
         }
         await ClientCaseSvc.update(workspace, "u1", "case-1", { title: "New title", areas: ["EMPLOYMENT"], others: [{ name: "acme ltd", role: "Opposing party" }] });
         expect((calls.caseUpdate as any[])[3]).to.include({ caseName: "New title" });
+      });
+
+      it("changes or clears the budget, even while a lawyer holds the request", async () => {
+        live = { id: "req-1", status: "QUOTED" };
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { budget: { minMinor: 275_000, maxMinor: 275_000, feePreference: null } });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ budgetMinMinor: 275_000, budgetMaxMinor: 275_000, budgetFeePreference: null });
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { budget: null });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ budgetMinMinor: null, budgetMaxMinor: null, budgetFeePreference: null });
       });
 
       it("keeps a case with an open request inside the UK", async () => {

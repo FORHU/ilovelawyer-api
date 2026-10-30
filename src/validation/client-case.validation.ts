@@ -1,6 +1,8 @@
 import Joi from "joi";
 import { ALLOWED_DOCUMENT_EXTENSIONS, ALLOWED_DOCUMENT_FILENAME_PATTERN, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "../constants";
+import { QuoteType } from "@prisma/client";
 import {
+  CLIENT_BUDGET_MAX_MINOR,
   CLIENT_CASE_NOTES_MAX_LENGTH,
   CLIENT_CASE_TITLE_MAX_LENGTH,
   CLIENT_CASE_WHERE_MAX_LENGTH,
@@ -34,6 +36,21 @@ const notes = Joi.string().trim().allow("").max(CLIENT_CASE_NOTES_MAX_LENGTH);
 const areas = Joi.array().items(Joi.string().max(40)).min(1).unique();
 const area = Joi.string().max(40);
 
+// Client Budget (utils/client-budget): a low and a high in pence, either open, and the kind of fee
+// the client would rather be quoted. null: no budget ("Not sure", or cleared).
+const pence = Joi.number().integer().min(0).max(CLIENT_BUDGET_MAX_MINOR).allow(null).required();
+const budget = Joi.object({
+  minMinor: pence,
+  maxMinor: pence,
+  feePreference: Joi.string()
+    .valid(...Object.values(QuoteType))
+    .allow(null)
+    .required(),
+})
+  .custom((value, helpers) => (value.minMinor !== null && value.maxMinor !== null && value.minMinor > value.maxMinor ? helpers.error("budget.order") : value))
+  .messages({ "budget.order": "The budget's low can't be more than its high." })
+  .allow(null);
+
 export const createClientCaseSchema = Joi.object({
   title: Joi.string().trim().min(1).max(CLIENT_CASE_TITLE_MAX_LENGTH).required(),
   areas,
@@ -50,6 +67,7 @@ export const createClientCaseSchema = Joi.object({
     .optional(),
   others: otherParties.optional(),
   notes: notes.optional(),
+  budget: budget.optional(),
 }).xor("areas", "area");
 
 /** Editing a case: any of the details the wizard asked for, but at least one. */
@@ -66,6 +84,7 @@ export const updateClientCaseSchema = Joi.object({
     .allow(null),
   others: otherParties,
   notes,
+  budget,
 })
   .min(1)
   .oxor("areas", "area");

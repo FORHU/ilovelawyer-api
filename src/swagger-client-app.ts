@@ -43,6 +43,20 @@ const clientDocument = {
   },
 };
 
+/** Client Budget (utils/client-budget): in pence like a quote. Null on the case: "Not sure". */
+const clientBudget = {
+  type: "object",
+  nullable: true,
+  description: "What the client can spend on a lawyer. A range sets both ends, the client's own amount sets both to it, a null high is open-ended. Null: not set (\"Not sure\")",
+  properties: {
+    minMinor: { type: "integer", minimum: 0, maximum: 100_000_000, nullable: true, description: "Pence" },
+    maxMinor: { type: "integer", minimum: 0, maximum: 100_000_000, nullable: true, description: "Pence; at least minMinor (400 otherwise)" },
+    feePreference: { type: "string", enum: ["FIXED_FEE", "FIRST_CONSULTATION"], nullable: true, description: "Null: either" },
+  },
+  required: ["minMinor", "maxMinor", "feePreference"],
+  example: { minMinor: 50000, maxMinor: 150000, feePreference: "FIXED_FEE" },
+};
+
 const clientCase = {
   type: "object",
   properties: {
@@ -62,6 +76,7 @@ const clientCase = {
       type: "array",
       items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, role: { type: "string", enum: [...CLIENT_PARTY_ROLES] } } },
     },
+    budget: clientBudget,
     documents: { type: "array", items: clientDocument },
     credits: { type: "integer", description: "Chat credits left; each message to the AI uses one" },
     createdAt: { type: "string", format: "date-time" },
@@ -408,6 +423,7 @@ export const clientAppPaths: Paths = {
             side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
             others: { type: "array", items: { type: "object", properties: { name: { type: "string" }, role: { type: "string", enum: [...CLIENT_PARTY_ROLES] } } } },
             notes: { type: "string", maxLength: 2000, description: "What happened and what the client wants" },
+            budget: clientBudget,
           },
         }),
       },
@@ -478,6 +494,7 @@ export const clientAppPaths: Paths = {
             side: { type: "string", enum: ["CLAIMANT", "RESPONDENT"], nullable: true },
             others: { type: "array", description: "Replaces the whole list", items: { type: "object", properties: { name: { type: "string" }, role: { type: "string", enum: [...CLIENT_PARTY_ROLES] } } } },
             notes: { type: "string", maxLength: 2000 },
+            budget: { ...clientBudget, description: "Replaces the budget; null clears it. Can change while a lawyer holds the request" },
           },
         }),
       },

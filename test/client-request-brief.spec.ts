@@ -251,6 +251,19 @@ describe("Anonymised case brief", () => {
       expect(aiCalls).to.equal(2);
     });
 
+    it("carries the client's budget into the brief, and null when they set none", async () => {
+      expect((await ClientRequestBriefSvc.generate("req-1"))!.budget).to.equal(null);
+      Object.assign(source.case, { budgetMinMinor: 50_000, budgetMaxMinor: 150_000, budgetFeePreference: "FIXED_FEE" });
+      expect((await ClientRequestBriefSvc.generate("req-1"))!.budget).to.deep.equal({ minMinor: 50_000, maxMinor: 150_000, feePreference: "FIXED_FEE" });
+    });
+
+    it("writes it again when the budget changes before a lawyer claims it", async () => {
+      await ClientRequestBriefSvc.generate("req-1");
+      source.case.budgetMinMinor = 500_000;
+      await ClientRequestBriefSvc.current("req-1");
+      expect(aiCalls).to.equal(2);
+    });
+
     it("leaves it alone once a lawyer has claimed the request", async () => {
       await ClientRequestBriefSvc.generate("req-1");
       source.status = "CLAIMED";

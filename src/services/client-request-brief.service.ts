@@ -13,6 +13,7 @@ import { excerptsWithHandles } from "../utils/case-document-handles";
 import type { AnonymisedIntake, CaseIntake } from "../types/client-intake";
 import { REQUEST_URGENCIES, type RequestUrgency } from "../types/client-handoff";
 import logger from "../utils/logger";
+import { budgetOf, type ClientBudget } from "../utils/client-budget";
 
 /** CaseBrief in the contract: what every matching lawyer sees before claiming. */
 export interface CaseBrief {
@@ -23,6 +24,9 @@ export interface CaseBrief {
   urgency: RequestUrgency;
   knownDeadline: string | null;
   clientNote: string;
+  /** What the client can spend (Client Budget); null when they set none. Absent on briefs written
+   * before budgets, which readers take as null. */
+  budget: ClientBudget | null;
   generatedAt: string;
   /** The client's intake (ClientIntakeSvc), redacted the same way `summary` and `clientNote`
    * are — never party names, document names or raw source ids. Null until the intake has run
@@ -89,6 +93,7 @@ type BriefSource = NonNullable<Awaited<ReturnType<typeof ClientRequestRepo.findF
  * case/chat basis above changes. Omitted (undefined) for a case with no intake run yet. */
 export function briefFingerprint(source: BriefSource, latestMessageId: string | null, intakeFingerprint?: string | null): string {
   const c = source.case;
+  const budget = budgetOf(c);
   const basis = JSON.stringify([
     c.caseName,
     c.caseAreas,
@@ -100,6 +105,9 @@ export function briefFingerprint(source: BriefSource, latestMessageId: string | 
     latestMessageId,
     source.note,
     intakeFingerprint ?? null,
+    // Only when set, so the briefs of cases with no budget keep their fingerprint and aren't all
+    // rewritten at once.
+    ...(budget ? [budget] : []),
   ]);
   return crypto.createHash("sha256").update(basis).digest("hex");
 }
@@ -193,7 +201,7 @@ export function parseBriefReply(reply: string, now: Date = new Date()): { summar
 
 /**
  * The anonymised brief for a client request (#508): an AI summary of the case and its chat, the
- * case areas, the part of the UK and the urgency, with no names and no documents. Written when
+ * case areas, the part of the UK, the urgency and the client's budget, with no names and no documents. Written when
  * the request is made, and again if the case changes before a lawyer claims it. Whatever the AI
  * writes goes through redactBrief before it's stored, so nothing identifying reaches a lawyer even
  * if the AI slips.
@@ -230,6 +238,7 @@ export default class ClientRequestBriefSvc {
         urgency: parsed.urgency,
         knownDeadline: parsed.knownDeadline,
         clientNote: redactBrief(source.note, ctx),
+        budget: budgetOf(source.case),
         generatedAt: new Date().toISOString(),
         intake: intakeData ? toAnonymisedIntake(intakeData, ctx) : null,
       };

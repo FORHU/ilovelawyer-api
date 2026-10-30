@@ -970,6 +970,13 @@ model Case {
   /// and replaced by Jev's once the case is ready for a lawyer; lawyer matching reads them. Empty on
   /// cases made in the lawyer app.
   caseAreas             String[]                 @default([])
+  /// Client app only: what the client can spend on a lawyer (Client Budget), in pence like a quote.
+  /// A range fills both, the client's own amount sets both to it, "Over £5,000" leaves the high
+  /// empty, and "Not sure" leaves both empty. Shown to matching lawyers in the brief.
+  budgetMinMinor        Int?
+  budgetMaxMinor        Int?
+  /// The kind of fee the client would rather be quoted. Null: either.
+  budgetFeePreference   QuoteType?
   language              String                   @default("en")
   notes                 String?                  @db.Text
   lastRefreshedAt       DateTime?
