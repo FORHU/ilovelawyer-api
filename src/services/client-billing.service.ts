@@ -7,6 +7,7 @@ import OrganizationChargeSvc from "./organization-charge.service";
 import { ORGANIZATION_CHARGE_PURPOSE, ORGANIZATION_REFUND_PURPOSE } from "../payments/organization-card-provider";
 import ClientRequestAdminSvc from "./client-request-admin.service";
 import QuotationPaymentSvc from "./quotation-payment.service";
+import WalletSvc from "./wallet.service";
 import { QUOTATION_PAYMENT_PURPOSE, QUOTATION_REFUND_PURPOSE } from "../payments/quotation-payment-provider";
 import { clientPaymentProvider, outcomeOfSession, type ClientCheckout } from "../payments/client-payment-provider";
 import HttpError from "../utils/http-error";
@@ -187,6 +188,11 @@ export default class ClientBillingSvc {
         if (refund.metadata?.purpose === ORGANIZATION_REFUND_PURPOSE) await ClientRequestAdminSvc.applyStripeRefund(refund);
         else if (refund.metadata?.purpose === QUOTATION_REFUND_PURPOSE) await QuotationPaymentSvc.applyStripeRefund(refund);
         else await ClientBillingAdminSvc.applyStripeRefund(refund);
+        break;
+      }
+      // A lawyer's withdrawal transfer taken back to the platform (WalletSvc).
+      case "transfer.reversed": {
+        await WalletSvc.applyTransferReversal(event.data.object as Stripe.Transfer);
         break;
       }
       default:

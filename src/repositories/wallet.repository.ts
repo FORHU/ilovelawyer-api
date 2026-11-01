@@ -229,6 +229,10 @@ export default class WalletRepo {
     return prisma.withdrawal.findUnique({ where: { payoutId } });
   }
 
+  static async findWithdrawalByTransfer(transferId: string) {
+    return prisma.withdrawal.findUnique({ where: { transferId } });
+  }
+
   /** Keeps the provider's transfer and payout ids on a withdrawal still PROCESSING. */
   static async setWithdrawalIds(id: string, ids: { transferId: string | null; payoutId: string | null }) {
     await prisma.withdrawal.updateMany({

@@ -61,7 +61,8 @@ export interface ConnectPayoutProvider {
   onboardingLink(accountId: string, returnUrl: string, refreshUrl: string): Promise<string>;
   accountStatus(accountId: string): Promise<PayoutAccountStatus>;
   payout(request: PayoutRequest): Promise<PayoutResult>;
-  /** Takes a transfer back to the platform after its payout failed. */
+  /** Takes a transfer back to the platform after its payout failed. Does nothing when it's already
+   * been taken back (by an earlier call, or by someone in Stripe's dashboard). */
   reverseTransfer(transferId: string, amountMinor: number, withdrawalId: string): Promise<void>;
 }
 
@@ -137,7 +138,13 @@ export const stripePayoutProvider: ConnectPayoutProvider = {
     }
   },
   async reverseTransfer(transferId, amountMinor, withdrawalId) {
-    await stripeClient().transfers.createReversal(transferId, { amount: amountMinor }, { idempotencyKey: `withdrawal-reversal-${withdrawalId}` });
+    const stripe = stripeClient();
+    // Reversed already (a transfer.reversed from the dashboard can come before payout.failed):
+    // reversing again would be refused for more than is left.
+    const transfer = await stripe.transfers.retrieve(transferId);
+    const left = Math.min(amountMinor, transfer.amount - transfer.amount_reversed);
+    if (left <= 0) return;
+    await stripe.transfers.createReversal(transferId, { amount: left }, { idempotencyKey: `withdrawal-reversal-${withdrawalId}` });
   },
 };
 

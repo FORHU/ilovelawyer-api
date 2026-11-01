@@ -23,7 +23,7 @@ import {
   type IntentQuotationPaymentProvider,
   type QuotationPaymentResult,
 } from "../src/payments/quotation-payment-provider";
-import { setPayoutProvider } from "../src/payments/payout-provider";
+import { setPayoutProvider, type ConnectPayoutProvider } from "../src/payments/payout-provider";
 import { PAYOUT_SETTINGS_DEFAULTS, payoutSettingsCacheKey, platformFeeOf } from "../src/constants/payout.constants";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -382,6 +382,111 @@ describe("quotation payments", function () {
       const failed = (await withdraw(20000).expect(201)).body;
       expect(failed).to.deep.include({ status: "FAILED", failureReason: "The bank refused the payout." });
       expect((await wallet().expect(200)).body.balances.available.amountMinor).to.equal(60000);
+    });
+
+    describe("through Stripe Connect", () => {
+      // A Connect provider that leaves every payout PROCESSING, for the webhooks to end.
+      let reversals: string[];
+      const connect: ConnectPayoutProvider = {
+        name: "STRIPE",
+        mode: "connect",
+        async createAccount(req) {
+          return { accountId: `acct_${req.walletId}`, payoutsEnabled: true, detailsSubmitted: true };
+        },
+        async onboardingLink() {
+          return "https://connect.stripe.test/onboarding";
+        },
+        async accountStatus() {
+          return { payoutsEnabled: true, detailsSubmitted: true };
+        },
+        async payout(req) {
+          return { status: "PROCESSING", transferId: `tr_${req.withdrawalId}`, payoutId: `po_${req.withdrawalId}`, failureReason: null };
+        },
+        async reverseTransfer(transferId) {
+          reversals.push(transferId);
+        },
+      };
+      const processing = async (amountMinor: number) => {
+        const w = (await withdraw(amountMinor).expect(201)).body;
+        expect(w.status).to.equal("PROCESSING");
+        return w.id as string;
+      };
+      const statusOf = async (id: string) => (await prisma.withdrawal.findUniqueOrThrow({ where: { id } })).status;
+      const balances = async () => (await wallet().expect(200)).body.balances;
+      const transferReversed = (withdrawalId: string, amount: number, reversed = amount) =>
+        ClientBillingSvc.handleStripeEvent({
+          id: `evt_${crypto.randomUUID()}`,
+          type: "transfer.reversed",
+          data: { object: { id: `tr_${withdrawalId}`, amount, amount_reversed: reversed, metadata: { withdrawalId } } },
+        } as unknown as Stripe.Event);
+      const payoutEvent = (type: "payout.paid" | "payout.failed", withdrawalId: string) =>
+        WalletSvc.applyConnectEvent({
+          id: `evt_${crypto.randomUUID()}`,
+          type,
+          data: { object: { id: `po_${withdrawalId}`, metadata: { withdrawalId }, failure_message: "The account was closed." } },
+        } as unknown as Stripe.Event);
+
+      beforeEach(async () => {
+        reversals = [];
+        await engaged();
+        await releaseNow();
+        setPayoutProvider(connect);
+        await request(app).post(`/api/organizations/${orgId}/wallet/payout-account/onboarding-link`).set(auth(lawyerId)).send({ returnUrl: "http://localhost:3000/earnings" }).expect(200);
+      });
+
+      it("a failed payout takes its transfer back, and the money returns to the available balance", async () => {
+        const id = await processing(20000);
+        expect((await balances()).reserved.amountMinor).to.equal(20000);
+        await payoutEvent("payout.failed", id);
+        expect(reversals).to.deep.equal([`tr_${id}`]);
+        expect(await statusOf(id)).to.equal("FAILED");
+        const b = await balances();
+        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.reserved.amountMinor).to.equal(0);
+      });
+
+      it("a transfer reversed in Stripe while the payout is on its way fails the withdrawal and returns the money, once", async () => {
+        const id = await processing(20000);
+        await transferReversed(id, 20000);
+        await transferReversed(id, 20000);
+        expect(await statusOf(id)).to.equal("FAILED");
+        expect((await prisma.withdrawal.findUniqueOrThrow({ where: { id } })).failureReason).to.equal("The transfer to your payout account was reversed.");
+        expect((await balances()).available.amountMinor).to.equal(60000);
+
+        // The payout then fails too: the transfer is back already, so it isn't reversed again.
+        await payoutEvent("payout.failed", id);
+        expect(reversals).to.deep.equal([]);
+        const b = await balances();
+        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.reserved.amountMinor).to.equal(0);
+      });
+
+      it("leaves a reversal after the payout was paid, or in part, for ops to settle", async () => {
+        const paid = await processing(20000);
+        await payoutEvent("payout.paid", paid);
+        await transferReversed(paid, 20000);
+        await payoutEvent("payout.failed", paid);
+        expect(await statusOf(paid)).to.equal("PAID");
+        expect(reversals).to.deep.equal([]);
+
+        const partly = await processing(10000);
+        await transferReversed(partly, 10000, 4000);
+        expect(await statusOf(partly)).to.equal("PROCESSING");
+
+        const b = await balances();
+        expect(b.withdrawn.amountMinor).to.equal(20000);
+        expect(b.reserved.amountMinor).to.equal(10000);
+        expect(b.available.amountMinor).to.equal(30000);
+      });
+
+      it("ignores a reversed transfer that isn't a withdrawal's", async () => {
+        await ClientBillingSvc.handleStripeEvent({
+          id: `evt_${crypto.randomUUID()}`,
+          type: "transfer.reversed",
+          data: { object: { id: "tr_elsewhere", amount: 5000, amount_reversed: 5000, metadata: {} } },
+        } as unknown as Stripe.Event);
+        expect((await balances()).available.amountMinor).to.equal(60000);
+      });
     });
   });
 
