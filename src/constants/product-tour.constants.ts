@@ -9,6 +9,14 @@ export type ProductTourArchetype = (typeof PRODUCT_TOUR_ARCHETYPES)[number];
 // case). The step scripts live in ilovelawyer-app's lib/tour and lib/sample-case.
 export const PRODUCT_TOUR_TRACKS = ["consultation", "cases", "library", "calendar", "studio", "terminal"] as const;
 
+// The client app's tours (ilovelawyer-client's lib/tour/tours.ts), one per screen the guided tour
+// covers: the welcome card, the Cases page, the New case hint and chat, a first case and its Lawyer tab.
+// Prefixed so they never collide with the lawyer app's tracks of the same page ("cases"). They don't
+// count toward User.onboardingCompleted, which is the lawyer app's setup.
+export const CLIENT_PRODUCT_TOUR_TRACKS = ["client-welcome", "client-cases", "client-new-case", "client-case", "client-lawyer", "client-chat"] as const;
+
+export const ALL_PRODUCT_TOUR_TRACKS: readonly string[] = [...PRODUCT_TOUR_TRACKS, ...CLIENT_PRODUCT_TOUR_TRACKS];
+
 // Step ids are short slugs ("ask", "newcase"); these bounds only keep junk out of the row.
 export const PRODUCT_TOUR_STEP_ID_MAX = 40;
 export const PRODUCT_TOUR_MAX_STEPS = 50;

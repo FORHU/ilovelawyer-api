@@ -9,7 +9,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import ProductTourSvc from "../src/services/product-tour.service";
 import ProductTourRepo from "../src/repositories/product-tour.repository";
 import AuthRepo from "../src/repositories/auth.repository";
-import { PRODUCT_TOUR_TRACKS } from "../src/constants";
+import { ALL_PRODUCT_TOUR_TRACKS, CLIENT_PRODUCT_TOUR_TRACKS, PRODUCT_TOUR_TRACKS } from "../src/constants";
 import { saveProductTourSchema } from "../src/validation/users.validation";
 
 describe("ProductTourSvc", () => {
@@ -83,6 +83,18 @@ describe("ProductTourSvc", () => {
     expect(onboarded).to.deep.equal([]);
     await ProductTourSvc.save("u1", last, { status: "DISMISSED", archetype: null, currentStep: null, doneSteps: [] });
     expect(onboarded).to.deep.equal(["u1"]);
+  });
+
+  it("finishing every client-app tour doesn't touch the lawyer app's onboarding", async () => {
+    for (const track of CLIENT_PRODUCT_TOUR_TRACKS) {
+      await ProductTourSvc.save("u1", track, { status: "COMPLETED", archetype: null, currentStep: null, doneSteps: [] });
+    }
+    expect(onboarded).to.deep.equal([]);
+  });
+
+  it("keeps the client tracks apart from the lawyer app's tracks", () => {
+    expect(CLIENT_PRODUCT_TOUR_TRACKS.filter((t) => (PRODUCT_TOUR_TRACKS as readonly string[]).includes(t))).to.deep.equal([]);
+    expect(ALL_PRODUCT_TOUR_TRACKS).to.include.members([...PRODUCT_TOUR_TRACKS, ...CLIENT_PRODUCT_TOUR_TRACKS]);
   });
 });
 

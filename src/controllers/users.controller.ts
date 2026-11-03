@@ -11,7 +11,7 @@ import PlanGateSvc from "../services/plan-gate.service";
 import HttpError from "../utils/http-error";
 import { clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
 import { updateMeSchema, changePasswordSchema, deleteMeSchema, connectGoogleCalendarSchema, saveProductTourSchema } from "../validation/users.validation";
-import { PRODUCT_TOUR_TRACKS } from "../constants";
+import { ALL_PRODUCT_TOUR_TRACKS } from "../constants";
 
 export default class UsersCtrl {
   static async me(req: Request, res: Response) {
@@ -146,6 +146,6 @@ export default class UsersCtrl {
 }
 
 function tourTrack(track: string) {
-  if (!(PRODUCT_TOUR_TRACKS as readonly string[]).includes(track)) throw new HttpError(`Unknown tour: ${track}`, 404);
+  if (!ALL_PRODUCT_TOUR_TRACKS.includes(track)) throw new HttpError(`Unknown tour: ${track}`, 404);
   return track;
 }
