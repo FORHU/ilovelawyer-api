@@ -554,6 +554,8 @@ describe("Client app cases", () => {
       "POST /payments/case/quote",
       "POST /payments/case",
       "GET /payments/:paymentId",
+      "POST /dictations",
+      "GET /dictations/:id",
       "GET /limits",
       "GET /case-areas",
       "GET /cases",
