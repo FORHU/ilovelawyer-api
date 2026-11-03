@@ -190,6 +190,33 @@ describe("Client lawyer requests", () => {
     });
   });
 
+  // Review finding 7 (client #68): the app only says more quotes may come while they can.
+  describe("openToLawyers", () => {
+    const HOUR = 60 * 60 * 1000;
+    const stored = (overrides: Record<string, unknown>, open: number) => {
+      requests.set("req-x", { id: "req-x", caseId: CASE_ID, clientId: "client-1", status: "ROUTED", routingExpiresAt: new Date(Date.now() + HOUR), pickByAt: null, createdAt: new Date(), ...overrides });
+      const lawyer = { id: "l", name: "L", username: "l", lawyerClientProfile: null };
+      (ClientRequestRepo as any).findForClient = async () => ({
+        ...requests.get("req-x"),
+        claims: Array.from({ length: open }, (_, i) => ({ id: `c${i}`, lawyerId: `l${i}`, outcome: null, quotedAt: null, claimedAt: new Date(), lawyer })),
+      });
+    };
+
+    it("is true while the 48h are open and a place is free", async () => {
+      stored({}, 2);
+      expect((await ClientRequestSvc.get("client-1", "req-x")).openToLawyers).to.equal(true);
+    });
+
+    it("is false once 3 lawyers are on it, once the 48h are over, or once it isn't ROUTED", async () => {
+      stored({}, 3);
+      expect((await ClientRequestSvc.get("client-1", "req-x")).openToLawyers).to.equal(false);
+      stored({ routingExpiresAt: new Date(Date.now() - HOUR) }, 1);
+      expect((await ClientRequestSvc.get("client-1", "req-x")).openToLawyers).to.equal(false);
+      stored({ status: "CONFIRMED" }, 1);
+      expect((await ClientRequestSvc.get("client-1", "req-x")).openToLawyers).to.equal(false);
+    });
+  });
+
   it("validates the note length and the case id", () => {
     const base = { caseId: CASE_ID, consentVersion: "v", consentAccepted: true };
     expect(createClientRequestSchema.validate(base).error).to.equal(undefined);

@@ -150,6 +150,7 @@ describe("Anonymised case brief", () => {
       source = {
         id: "req-1",
         status: "REQUESTED",
+        claims: [],
         caseId: "case-1",
         clientId: "client-1",
         note: "Please call me on 07700 900123, ask for John Smith.",
@@ -247,6 +248,24 @@ describe("Anonymised case brief", () => {
     it("writes it again when the case changes before a lawyer claims it", async () => {
       await ClientRequestBriefSvc.generate("req-1");
       messages.push({ id: "m3", role: "user", content: "I want my job back." });
+      await ClientRequestBriefSvc.current("req-1");
+      expect(aiCalls).to.equal(2);
+    });
+
+    it("leaves it alone while a lawyer is on the request, though it stays ROUTED (several lawyers)", async () => {
+      await ClientRequestBriefSvc.generate("req-1");
+      source.status = "ROUTED";
+      source.claims = [{ id: "claim-1" }];
+      messages.push({ id: "m3", role: "user", content: "Another detail." });
+      await ClientRequestBriefSvc.current("req-1");
+      expect(aiCalls).to.equal(1);
+    });
+
+    it("writes it again once the last lawyer has left", async () => {
+      await ClientRequestBriefSvc.generate("req-1");
+      source.status = "ROUTED";
+      source.claims = [];
+      messages.push({ id: "m3", role: "user", content: "Another detail." });
       await ClientRequestBriefSvc.current("req-1");
       expect(aiCalls).to.equal(2);
     });

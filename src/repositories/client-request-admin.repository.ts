@@ -6,8 +6,8 @@ export interface AdminRequestFilter {
   status?: ClientRequestStatus;
   /** Made at least this many hours ago. */
   minAgeHours?: number;
-  /** Still ROUTED with its 48h routing window over: nobody claimed it in time (#510's sweep may not
-   * have expired it yet). */
+  /** Still ROUTED with its 48h routing window over and nobody on it: nobody claimed it in time (#510's
+   * sweep may not have expired it yet). */
   unclaimedOver48h?: boolean;
   /** One case's requests. */
   caseId?: string;
@@ -31,12 +31,24 @@ export type AdminRequestRow = Prisma.ClientRequestGetPayload<{ include: typeof F
 
 export type ChargeWithRefunds = Prisma.OrganizationChargeGetPayload<{ include: { refunds: true } }>;
 
+/** Several lawyers (phase 5): a request stays ROUTED while lawyers are on it, so ROUTED, CLAIMED and
+ * QUOTED are told apart by its open claims, as ClientRequestAdminSvc shows them (adminStatus). A row
+ * from before phase 5 may still carry CLAIMED or QUOTED itself. */
+const OPEN_CLAIM = { outcome: null } satisfies Prisma.ClientRequestClaimWhereInput;
+const OPEN_QUOTE = { outcome: null, quotedAt: { not: null } } satisfies Prisma.ClientRequestClaimWhereInput;
+function statusWhere(status: ClientRequestStatus): Prisma.ClientRequestWhereInput {
+  if (status === "ROUTED") return { status: "ROUTED", claims: { none: OPEN_CLAIM } };
+  if (status === "CLAIMED") return { OR: [{ status: "CLAIMED" }, { status: "ROUTED", claims: { some: OPEN_CLAIM, none: OPEN_QUOTE } }] };
+  if (status === "QUOTED") return { OR: [{ status: "QUOTED" }, { status: "ROUTED", claims: { some: OPEN_QUOTE } }] };
+  return { status };
+}
+
 function toWhere(filter: AdminRequestFilter, now: Date): Prisma.ClientRequestWhereInput {
   const where: Prisma.ClientRequestWhereInput[] = [];
-  if (filter.status) where.push({ status: filter.status });
+  if (filter.status) where.push(statusWhere(filter.status));
   if (filter.caseId) where.push({ caseId: filter.caseId });
   if (filter.minAgeHours !== undefined) where.push({ createdAt: { lte: new Date(now.getTime() - filter.minAgeHours * 60 * 60 * 1000) } });
-  if (filter.unclaimedOver48h) where.push({ status: "ROUTED", routingExpiresAt: { lte: now } });
+  if (filter.unclaimedOver48h) where.push({ status: "ROUTED", routingExpiresAt: { lte: now }, claims: { none: OPEN_CLAIM } });
   return where.length ? { AND: where } : {};
 }
 
