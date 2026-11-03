@@ -160,7 +160,7 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
     expect(sentDocumentContext).to.include("Acme Ltd (Opposing party)");
   });
 
-  it("tells chat-wonder what Jev's own readiness check already confirmed, so intake never re-asks it either", async () => {
+  it("tells chat-wonder what Jev's own readiness check confirmed AND what's still open, so intake never re-asks the confirmed and never drops the open", async () => {
     // Regression for a live bug (2026-11-03): the model kept re-asking things already answered in
     // the conversation (a goal stated inline, "nothing's been signed" restated) because it had to
     // re-derive "already answered" purely by re-reading raw chat text — Jev's own check already
@@ -180,7 +180,9 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
     await IntakeChatSvc.processIntakeGenerationJob(JOB);
     expect(sentDocumentContext).to.include("Already confirmed");
     expect(sentDocumentContext).to.include("What you want to get out of it");
-    expect(sentDocumentContext).to.not.include("What happened, and roughly when");
+    expect(sentDocumentContext).to.include("Still open");
+    expect(sentDocumentContext).to.include("never say or imply the case is ready");
+    expect(sentDocumentContext).to.include("What happened, and roughly when");
   });
 
   it("still refreshes the overview every turn, whether or not Jev confirms readiness", async () => {

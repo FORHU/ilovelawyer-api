@@ -174,7 +174,7 @@ describe("Client intake extraction", () => {
       { key: "status", label: "What's happened since, and where things stand now", met: true, confidence: 0.8 },
     ] as const;
 
-    it("lists only the met criteria, never asking the reader to ask about them again", () => {
+    it("lists met criteria as confirmed and unmet criteria as still to pursue", () => {
       const block = readinessBlock([...criteria]);
       expect(block).to.include("Already confirmed");
       expect(block).to.include("do not ask about");
@@ -182,12 +182,18 @@ describe("Client intake extraction", () => {
       expect(block).to.include("Where in the UK it happened");
       expect(block).to.include("What you want to get out of it");
       expect(block).to.include("What's happened since, and where things stand now");
-      expect(block).to.not.include("Who the other side is");
-      expect(block).to.not.include("What happened, and roughly when");
+      expect(block).to.include("Still open");
+      expect(block).to.include("keep asking for these until");
+      expect(block).to.include("never say or imply the case is ready");
+      expect(block).to.include("Who the other side is");
+      expect(block).to.include("What happened, and roughly when");
     });
 
-    it("is empty when nothing is confirmed yet, rather than an empty-looking block", () => {
-      expect(readinessBlock(criteria.map((c) => ({ ...c, met: false })))).to.equal("");
+    it("lists every criterion as still open when nothing is confirmed yet", () => {
+      const block = readinessBlock(criteria.map((c) => ({ ...c, met: false })));
+      expect(block).to.include("Still open");
+      expect(block).to.not.include("Already confirmed");
+      for (const c of criteria) expect(block).to.include(c.label);
     });
 
     it("is empty for an empty criteria list (Jev disabled, or not checked yet)", () => {

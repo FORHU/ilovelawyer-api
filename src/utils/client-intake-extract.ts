@@ -69,13 +69,28 @@ People already named on the case form (don't list these again under "people" unl
  * whether each must-have is covered — the same verdict the client's own readiness checklist UI
  * shows. Feeding that verdict back into chat-wonder's context turns "is this already answered"
  * from the model re-deriving it by re-reading raw chat text (unreliable over a long conversation)
- * into a lookup against ground truth it's explicitly told to trust. Empty string when nothing is
- * confirmed yet, so an empty/all-unmet result adds nothing to the prompt rather than an
- * empty-looking block. */
+ * into a lookup against ground truth it's explicitly told to trust.
+ *
+ * Lists both sides, not just what's confirmed: a live bug (2026-11-03) showed the model treating
+ * a case as finished in prose ("ready for a solicitor to review") while an independent-check
+ * must-have was still unmet, and never asking for it — surfacing only the confirmed half gave it
+ * nothing telling it to keep pursuing the rest. Empty string when there's nothing to say either
+ * way (nothing confirmed and nothing outstanding — i.e. no criteria at all, such as Jev disabled),
+ * not an empty-looking block. */
 export function readinessBlock(criteria: { label: string; met: boolean }[]): string {
   const met = criteria.filter((c) => c.met).map((c) => `- ${c.label}`);
-  if (!met.length) return "";
-  return `Already confirmed by an independent check — do not ask about these again, regardless of how the conversation reads:\n${met.join("\n")}`;
+  const open = criteria.filter((c) => !c.met).map((c) => `- ${c.label}`);
+  if (!met.length && !open.length) return "";
+  const parts: string[] = [];
+  if (met.length) {
+    parts.push(`Already confirmed by an independent check — do not ask about these again, regardless of how the conversation reads:\n${met.join("\n")}`);
+  }
+  if (open.length) {
+    parts.push(
+      `Still open per that same independent check — keep asking for these until they're answered, and never say or imply the case is ready while any of them remain:\n${open.join("\n")}`,
+    );
+  }
+  return parts.join("\n\n");
 }
 
 export function buildIntakePrompt(input: {
