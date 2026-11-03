@@ -10,6 +10,7 @@ import OrganizationChargeSvc, { chargeDto } from "./organization-charge.service"
 import LawyerPricingSvc, { type Money } from "./lawyer-pricing.service";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import QuotationRepo, { type QuotationRefusal } from "../repositories/quotation.repository";
+import QuotationPaymentRepo from "../repositories/quotation-payment.repository";
 import PayoutSettingsSvc from "./payout-settings.service";
 import { quotationDto } from "./quotation.dto";
 import { QUOTATION_MAX_VALIDITY_DAYS } from "../constants/payout.constants";
@@ -22,7 +23,7 @@ import AccountLimitsSvc from "./account-limits.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
-import type { ClientRequestUpdatedEvent, QuoteTerms } from "../types/client-handoff";
+import type { ClientRequestUpdatedEvent, QuotationInvoice, QuoteTerms } from "../types/client-handoff";
 import ChatRepo from "../repositories/chat.repository";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
 import { documentFileUrl } from "./document.service";
@@ -535,6 +536,46 @@ export default class ClientRequestLawyerSvc {
     });
     const charge = await OrganizationChargeSvc.buyTopUp({ tenantCode: lawyer.tenantCode, requestId: id, organizationId: claim.organizationId, lawyerId: lawyer.userId, packId: input.packId });
     return chargeDto({ ...charge, refunds: [] }, claim.lawyer.name);
+  }
+
+  /**
+   * The client's payment for this lawyer's quote, as an invoice for their records: who paid for
+   * what, the fee split and any refunds. Only the lawyer engaged on it, while ENGAGED or after it
+   * closed. `invoice` is null when nothing was paid through ilovelawyer (a free first consultation,
+   * or a request accepted before quotation payments).
+   */
+  static async invoice(lawyer: LawyerContext, id: string): Promise<{ invoice: QuotationInvoice | null }> {
+    await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
+    const request = await ClientRequestRepo.findForLawyer(id);
+    if (!request || !request.claims.some((c) => c.lawyerId === lawyer.userId)) throw NOT_FOUND();
+    const claim = request.claims.find((c) => c.lawyerId === lawyer.userId && c.outcome === "ENGAGED");
+    if (!claim) throw new HttpError("This request isn't engaged.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    const quotation = claim.quotation;
+    const payment = quotation ? await QuotationPaymentRepo.findPaid(quotation.id) : null;
+    if (!quotation || !payment) return { invoice: null };
+
+    const firm = claim.organizationId ? await OrganizationRepo.findById(claim.organizationId) : null;
+    const lawyerName = claim.lawyer.name ?? "";
+    const issuedAt = payment.succeededAt ?? quotation.paidAt ?? payment.createdAt;
+    const money = (amountMinor: number) => ({ amountMinor, currency: payment.currency as "GBP" });
+    return {
+      invoice: {
+        number: `INV-${issuedAt.toISOString().slice(0, 10).replace(/-/g, "")}-${payment.id.slice(0, 8).toUpperCase()}`,
+        status: payment.status === "SUCCEEDED" ? "PAID" : (payment.status as QuotationInvoice["status"]),
+        issuedAt: issuedAt.toISOString(),
+        payee: { name: firm?.name ?? lawyerName, lawyerName },
+        client: { name: request.client.name || request.client.username },
+        caseName: request.case.caseName,
+        quoteType: quotation.type,
+        description: quotation.message,
+        serviceFee: money(payment.serviceFeeMinor),
+        platformFee: money(payment.platformFeeMinor),
+        total: money(payment.amountMinor),
+        refunded: money(payment.refundedMinor),
+        lawyerRefunded: money(payment.refunds.reduce((sum, r) => sum + r.serviceFeeMinor, 0)),
+        payment: { provider: payment.provider, reference: payment.paymentIntentId ?? payment.id },
+      },
+    };
   }
 
   /** The engagement's AI budget meter (#515): what's included, any top-ups, what's been spent on

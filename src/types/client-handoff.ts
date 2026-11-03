@@ -158,6 +158,27 @@ export interface Quotation {
   paidAt: string | null;
 }
 
+/** The client's payment for a lawyer's quotation, as the engaged lawyer's invoice (GET
+ * /client-requests/:id/invoice). `number` stays the same for the payment. `refunded` is what the
+ * client has been given back so far; `lawyerRefunded` is the part of it that came out of the
+ * lawyer's service fee. `reference` is Stripe's PaymentIntent id, or ours for a dummy payment. */
+export interface QuotationInvoice {
+  number: string;
+  status: "PAID" | "PARTIALLY_REFUNDED" | "REFUNDED" | "DISPUTED";
+  issuedAt: string;
+  payee: { name: string; lawyerName: string };
+  client: { name: string };
+  caseName: string;
+  quoteType: QuoteType;
+  description: string;
+  serviceFee: Money;
+  platformFee: Money;
+  total: Money;
+  refunded: Money;
+  lawyerRefunded: Money;
+  payment: { provider: string; reference: string };
+}
+
 /** Amounts in the currency's minor unit (pence). Prices are placeholders until
  * FORHU/ilovelawyer-app#846 and are read from config, never hard-coded in an app. */
 export interface Money {

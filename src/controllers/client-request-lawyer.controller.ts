@@ -76,6 +76,10 @@ export default class ClientRequestLawyerCtrl {
     res.status(202).json(await ClientRequestLawyerSvc.copy(lawyerOf(req), req.params.id));
   }
 
+  static async invoice(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.invoice(lawyerOf(req), req.params.id));
+  }
+
   static async aiBudget(req: Request, res: Response) {
     res.status(200).json(await ClientRequestLawyerSvc.aiBudget(lawyerOf(req), req.params.id));
   }

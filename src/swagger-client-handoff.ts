@@ -429,6 +429,26 @@ export const clientHandoffSchemas: Schemas = {
       paidAt: dateTime(undefined, true),
     },
   },
+  QuotationInvoice: {
+    type: "object",
+    description: "The client's payment for the lawyer's quotation, as the engaged lawyer's invoice. refunded is what the client got back so far; lawyerRefunded the part that came out of the service fee.",
+    properties: {
+      number: { type: "string", example: "INV-20261103-0DFFFFA6" },
+      status: enumOf(["PAID", "PARTIALLY_REFUNDED", "REFUNDED", "DISPUTED"]),
+      issuedAt: dateTime("When the client paid"),
+      payee: { type: "object", properties: { name: { type: "string", description: "The firm, else the solo lawyer" }, lawyerName: { type: "string" } } },
+      client: { type: "object", properties: { name: { type: "string" } } },
+      caseName: { type: "string" },
+      quoteType: enumOf(QUOTE_TYPES),
+      description: { type: "string", description: "The quotation's message" },
+      serviceFee: money(),
+      platformFee: money(),
+      total: money(),
+      refunded: money(),
+      lawyerRefunded: money(),
+      payment: { type: "object", properties: { provider: { type: "string", example: "STRIPE" }, reference: { type: "string", description: "Stripe's PaymentIntent id, or ours for a dummy payment" } } },
+    },
+  },
   QuotationPayment: {
     type: "object",
     properties: {
@@ -1160,6 +1180,16 @@ export const clientHandoffPaths: Paths = {
         404: NOT_FOUND,
         409: BAD_STATUS,
       },
+    }),
+  },
+  "/client-requests/{id}/invoice": {
+    get: op({
+      tag: LAWYER_TAG,
+      issue: "quotation payments", built: true,
+      summary: "The client's payment for your quote, as an invoice",
+      description: "Only the lawyer engaged on the request, while ENGAGED or after it closed. invoice is null when nothing was paid through ilovelawyer (a free first consultation, or a request accepted before quotation payments).",
+      parameters: requestId,
+      responses: { 200: ok("The invoice", { type: "object", properties: { invoice: { ...ref("QuotationInvoice"), nullable: true } } }), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
     }),
   },
   "/client-requests/{id}/ai-budget": {

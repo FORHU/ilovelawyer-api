@@ -70,9 +70,11 @@ services:
     restart: "no"
 
   # Forwards Stripe test-mode webhooks to the API running on this machine (npm run dev), so a
-  # Checkout paid locally settles the same way it does when deployed. Opt-in: it only starts with
-  # `docker compose --profile stripe up stripe-cli`, and needs STRIPE_SECRET_KEY (a sk_test_ key)
-  # in .env. See docs/stripe-local-webhooks.md.
+  # payment made locally settles the same way it does when deployed: the platform's events to
+  # /api/webhooks/stripe, and lawyers' connected accounts' (payouts) to /api/webhooks/stripe-connect.
+  # Opt-in: it only starts with `docker compose --profile stripe up stripe-cli`, and needs
+  # STRIPE_SECRET_KEY (a sk_test_ key) in .env. --events lists every event the API handles; keep it
+  # in step with docs/stripe-local-webhooks.md. See that page for the setup.
   stripe-cli:
     image: stripe/stripe-cli:v1.53.0
     container_name: ilovelawyer-stripe-cli
@@ -86,8 +88,10 @@ services:
       - listen
       - --forward-to
       - http://host.docker.internal:${PORT:-3001}/api/webhooks/stripe
+      - --forward-connect-to
+      - http://host.docker.internal:${PORT:-3001}/api/webhooks/stripe-connect
       - --events
-      - checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,refund.updated,refund.failed,payment_intent.succeeded,payment_intent.payment_failed,invoice.paid,invoice.payment_failed,customer.subscription.updated,customer.subscription.deleted
+      - checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,refund.updated,refund.failed,payment_intent.succeeded,payment_intent.payment_failed,invoice.paid,invoice.payment_failed,customer.subscription.updated,customer.subscription.deleted,charge.dispute.created,charge.dispute.closed,transfer.reversed,account.updated,payout.paid,payout.failed
     restart: "no"
 
 volumes:

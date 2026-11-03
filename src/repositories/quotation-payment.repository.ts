@@ -31,6 +31,15 @@ export default class QuotationPaymentRepo {
     return prisma.quotationPayment.findFirst({ where: { quotationId }, orderBy: { attempt: "desc" } });
   }
 
+  /** The attempt that took money on a quotation, with its refunds that went through: its invoice. */
+  static async findPaid(quotationId: string) {
+    return prisma.quotationPayment.findFirst({
+      where: { quotationId, status: { in: PAID_QUOTATION_PAYMENT_STATUSES } },
+      orderBy: { attempt: "desc" },
+      include: { refunds: { where: { status: "SUCCEEDED" } } },
+    });
+  }
+
   /** Attempts still waiting on the client, for the expiry to cancel. */
   static async findPending(quotationId: string) {
     return prisma.quotationPayment.findMany({ where: { quotationId, status: "PENDING" } });

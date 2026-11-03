@@ -539,6 +539,38 @@ describe("quotation payments", function () {
     });
   });
 
+  describe("the lawyer's invoice", () => {
+    const invoice = (as = asLawyer) => request(app).get(`/api/client-requests/${requestId}/invoice`).set(as);
+
+    it("shows the engaged lawyer who paid for what, with the fee split, under their firm's name", async () => {
+      await invoice().expect(409);
+      await engaged();
+      const { body } = await invoice().expect(200);
+      expect(body.invoice).to.deep.include({ status: "PAID", caseName: "Unfair dismissal", quoteType: "FIXED_FEE", description: "I can take this on for a fixed fee." });
+      expect(body.invoice.number).to.match(/^INV-\d{8}-[0-9A-F]{8}$/);
+      expect(body.invoice.payee).to.deep.equal({ name: "Lena Law LLP", lawyerName: "Lena Lawyer" });
+      expect(body.invoice.client).to.deep.equal({ name: "Clara Client" });
+      expect([body.invoice.serviceFee.amountMinor, body.invoice.platformFee.amountMinor, body.invoice.total.amountMinor]).to.deep.equal([60000, 9000, 69000]);
+      expect(body.invoice.payment.provider).to.equal("DUMMY");
+      expect((await invoice().expect(200)).body.invoice.number).to.equal(body.invoice.number);
+    });
+
+    it("carries refunds, with the part that came out of the lawyer's fee", async () => {
+      await engaged();
+      const payment = await prisma.quotationPayment.findFirstOrThrow({ where: { requestId, status: "SUCCEEDED" } });
+      await request(app).post(`/api/admin/quotation-payments/${payment.id}/refund`).set(auth(adminId)).send({ amount: { amountMinor: 10000, currency: "GBP" }, reason: "Part of the work wasn't done" }).expect(200);
+      const { body } = await invoice().expect(200);
+      expect(body.invoice.status).to.equal("PARTIALLY_REFUNDED");
+      expect([body.invoice.refunded.amountMinor, body.invoice.lawyerRefunded.amountMinor]).to.deep.equal([10000, 10000]);
+    });
+
+    it("is null for a free first consultation, and not for the firm's other members", async () => {
+      await quoted({ type: "FIRST_CONSULTATION", amount: { amountMinor: 0, currency: "GBP" }, message: "First call is free.", expiresAt: inDays(3) }).then((id) => accept(id).expect(200));
+      expect((await invoice().expect(200)).body.invoice).to.equal(null);
+      await invoice({ ...auth(memberId), "X-Organization-Id": orgId }).expect(403);
+    });
+  });
+
   describe("admin payout settings", () => {
     it("are edited per tenant within limits, and audited", async () => {
       const list = (await request(app).get("/api/admin/settings/payout-settings").set(auth(adminId)).expect(200)).body;

@@ -31,6 +31,8 @@ router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));
 // The client's intake package (ADR 0018): the full CaseIntake, the transcript and the
 // documents, once engaged. Read-only; every read is audited.
 router.get("/:id/intake-package", asyncHandler(ClientRequestLawyerCtrl.intakePackage));
+// The client's payment for the lawyer's quote, as the lawyer's invoice. Engaged or closed.
+router.get("/:id/invoice", asyncHandler(ClientRequestLawyerCtrl.invoice));
 // The engagement's AI budget meter (#515).
 router.get("/:id/ai-budget", asyncHandler(ClientRequestLawyerCtrl.aiBudget));
 // Buying an AI top-up pack for it, once the lawyer approves the charge (#516).
