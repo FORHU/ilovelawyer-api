@@ -110,9 +110,10 @@ export default class QuotationRepo {
     return prisma.quotation.findUnique({ where: { claimId } });
   }
 
-  /** The accepted quotation a confirmed request is waiting on payment for. */
+  /** The accepted quotation a confirmed request is waiting on payment for. Not one accepted before
+   * quotation payments (no accepted amount), which is paid outside ilovelawyer. */
   static async findAcceptedForRequest(requestId: string) {
-    return prisma.quotation.findFirst({ where: { requestId, status: { in: ["ACCEPTED", "PAID"] } }, orderBy: { acceptedAt: "desc" } });
+    return prisma.quotation.findFirst({ where: { requestId, status: { in: ["ACCEPTED", "PAID"] }, acceptedAmountMinor: { not: null } }, orderBy: { acceptedAt: "desc" } });
   }
 
   /**
@@ -201,14 +202,16 @@ export default class QuotationRepo {
   }
 
   /** Quotations whose lawyer-set expiry has passed while still waiting on the client: SENT on a
-   * routed request, or ACCEPTED but unpaid on a confirmed one. With who to tell. */
+   * routed request, or ACCEPTED but unpaid on a confirmed one. Not a quote accepted before quotation
+   * payments (no accepted amount): the client pays that lawyer outside ilovelawyer, and its request
+   * waits on the per-case fee instead. With who to tell. */
   static async findExpired(now: Date) {
     return prisma.quotation.findMany({
       where: {
         expiresAt: { lte: now },
         OR: [
           { status: "SENT", request: { status: "ROUTED" }, claim: { outcome: null } },
-          { status: "ACCEPTED", request: { status: "CONFIRMED" } },
+          { status: "ACCEPTED", acceptedAmountMinor: { not: null }, request: { status: "CONFIRMED" } },
         ],
       },
       select: {
@@ -255,7 +258,10 @@ export default class QuotationRepo {
         if (rerouted.count !== 1) throw new MovedOn();
         const paid = await tx.quotationPayment.count({ where: { quotationId: q.id, status: { notIn: ["PENDING", "FAILED", "CANCELED"] } } });
         if (paid > 0) throw new MovedOn();
-        const expired = await tx.quotation.updateMany({ where: { id: q.id, status: "ACCEPTED", expiresAt: { lte: now } }, data: { status: "EXPIRED", closedAt: now } });
+        const expired = await tx.quotation.updateMany({
+          where: { id: q.id, status: "ACCEPTED", acceptedAmountMinor: { not: null }, expiresAt: { lte: now } },
+          data: { status: "EXPIRED", closedAt: now },
+        });
         if (expired.count !== 1) throw new MovedOn();
         await tx.quotationPayment.updateMany({ where: { quotationId: q.id, status: "PENDING" }, data: { status: "CANCELED", failureReason: "The quote expired before it was paid." } });
         await tx.clientRequestClaim.updateMany({ where: { id: q.claimId, outcome: null }, data: { outcome: "NOT_CHOSEN", endedAt: now } });

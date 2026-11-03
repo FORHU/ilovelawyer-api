@@ -169,7 +169,7 @@ QUOTATION_PAYMENT_PROVIDER=dummy PAYOUT_PROVIDER=dummy LAWYER_PAYMENT_PROVIDER=d
   | `checkout.session.async_payment_failed`, `checkout.session.expired` | Settle it as failed |
   | `payment_intent.succeeded`, `payment_intent.payment_failed` | Settle a quote payment, or a charge to a card on file that Stripe finished later |
   | `refund.updated`, `refund.failed` | Bring an admin's refund to Stripe's final status |
-  | `charge.dispute.created`, `charge.dispute.closed` | Hold the lawyer's earning while a quote payment is disputed; reverse it if the dispute is lost |
+  | `charge.dispute.created`, `charge.dispute.closed` | Keep the lawyer's earning from being released while a quote payment is disputed (only while it's still PENDING); reverse it if the dispute is lost |
   | `transfer.reversed` | Return a withdrawal's money to the available balance if its transfer is reversed before the payout is paid |
   | `invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted` | Keep a lawyer's subscription plan in step: renewals, failed renewals, changes and cancellations |
   | `account.updated`, `payout.paid`, `payout.failed` (connect endpoint) | Update a lawyer's payout account; finish a withdrawal, or return its money if the payout failed |

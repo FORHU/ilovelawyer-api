@@ -284,6 +284,12 @@ export default class WalletSvc {
           return;
         }
         if (event.type === "payout.paid") {
+          if (withdrawal.status === "FAILED") {
+            // Its reserve went back to AVAILABLE, yet the bank has the money: paid twice unless ops take
+            // it back. Not moved here, as the PAID-then-failed case below.
+            logger.error("Wallet: payout paid for a withdrawal that had failed; reconcile by hand", { withdrawalId: withdrawal.id, walletId: withdrawal.walletId, payoutId: payout.id });
+            return;
+          }
           await WalletSvc.settleWithdrawal(withdrawal.id, { paid: true }, { payoutId: payout.id });
         } else if (withdrawal.status === "PROCESSING") {
           // The money is back on the connected account: take the transfer back to the platform, so the
@@ -310,11 +316,14 @@ export default class WalletSvc {
    * platform's objects, so it never comes to the Connect one). The transfer is a withdrawal's, taken
    * back to the platform:
    *  - by us, after its payout failed: the withdrawal is FAILED already, nothing to do;
-   *  - in Stripe's dashboard while the payout is still on its way: the money is back on the platform,
-   *    so the withdrawal fails and the reserve goes back to AVAILABLE (the payout.failed that follows
-   *    finds it ended);
-   *  - after it was PAID, or only in part: not undone here. The lawyer's bank has the money, so putting
-   *    it back in their balance could pay them twice. Logged for ops to settle with an ADJUSTMENT.
+   *  - in Stripe's dashboard while the withdrawal is PROCESSING: not undone here either. Reversing the
+   *    transfer doesn't stop a payout already on its way (the connected account goes negative and it
+   *    usually still lands), so the reserve stays where it is and the payout's own outcome settles it:
+   *    payout.failed puts it back in AVAILABLE, payout.paid marks it PAID. A payout that was never
+   *    made is refused when resumeStalledPayouts replays it (the account has nothing to pay out), which
+   *    fails it the same way. Logged for ops, who may need to collect the negative balance;
+   *  - after it was PAID, or only in part: the lawyer's bank has the money, so putting it back in their
+   *    balance could pay them twice. Logged for ops to settle with an ADJUSTMENT.
    */
   static async applyTransferReversal(transfer: Stripe.Transfer) {
     const withdrawal =
@@ -324,19 +333,20 @@ export default class WalletSvc {
       return;
     }
     if (withdrawal.status === "FAILED" || withdrawal.status === "REJECTED") return;
-    const fully = transfer.amount_reversed >= transfer.amount;
-    if (withdrawal.status !== "PROCESSING" || !fully) {
-      logger.error("Wallet: transfer reversed outside a failed payout; reconcile by hand", {
+    logger.error(
+      withdrawal.status === "PROCESSING"
+        ? "Wallet: transfer reversed while its payout is on its way; the payout's outcome settles the withdrawal, check the connected account's balance"
+        : "Wallet: transfer reversed outside a failed payout; reconcile by hand",
+      {
         withdrawalId: withdrawal.id,
         walletId: withdrawal.walletId,
         status: withdrawal.status,
         transferId: transfer.id,
+        payoutId: withdrawal.payoutId,
         amountMinor: transfer.amount,
         reversedMinor: transfer.amount_reversed,
-      });
-      return;
-    }
-    await WalletSvc.settleWithdrawal(withdrawal.id, { paid: false, reason: "The transfer to your payout account was reversed." }, { transferId: transfer.id });
+      },
+    );
   }
 
   /** Every wallet with its balances, for the admin app. */

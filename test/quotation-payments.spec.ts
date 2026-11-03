@@ -16,6 +16,7 @@ import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import ClientBillingSvc from "../src/services/client-billing.service";
 import QuotationPaymentSvc from "../src/services/quotation-payment.service";
+import QuotationPaymentRepo from "../src/repositories/quotation-payment.repository";
 import WalletSvc from "../src/services/wallet.service";
 import {
   setQuotationPaymentProvider,
@@ -588,20 +589,38 @@ describe("quotation payments", function () {
         expect(b.reserved.amountMinor).to.equal(0);
       });
 
-      it("a transfer reversed in Stripe while the payout is on its way fails the withdrawal and returns the money, once", async () => {
+      it("a transfer reversed in Stripe while the payout is on its way leaves the money reserved; a failed payout then returns it", async () => {
         const id = await processing(20000);
         await transferReversed(id, 20000);
-        await transferReversed(id, 20000);
-        expect(await statusOf(id)).to.equal("FAILED");
-        expect((await prisma.withdrawal.findUniqueOrThrow({ where: { id } })).failureReason).to.equal("The transfer to your payout account was reversed.");
-        expect((await balances()).available.amountMinor).to.equal(60000);
+        expect(await statusOf(id)).to.equal("PROCESSING");
+        expect((await balances()).reserved.amountMinor).to.equal(20000);
 
-        // The payout then fails too: the transfer is back already, so it isn't reversed again.
         await payoutEvent("payout.failed", id);
-        expect(reversals).to.deep.equal([]);
+        expect(await statusOf(id)).to.equal("FAILED");
         const b = await balances();
         expect(b.available.amountMinor).to.equal(60000);
         expect(b.reserved.amountMinor).to.equal(0);
+      });
+
+      it("a transfer reversed in Stripe whose payout lands anyway pays the lawyer once, not twice", async () => {
+        const id = await processing(20000);
+        await transferReversed(id, 20000);
+        await payoutEvent("payout.paid", id);
+        expect(await statusOf(id)).to.equal("PAID");
+        const b = await balances();
+        expect(b.withdrawn.amountMinor).to.equal(20000);
+        expect(b.reserved.amountMinor).to.equal(0);
+        expect(b.available.amountMinor).to.equal(40000);
+      });
+
+      it("a payout that lands after its withdrawal failed moves nothing back", async () => {
+        const id = await processing(20000);
+        await payoutEvent("payout.failed", id);
+        await payoutEvent("payout.paid", id);
+        expect(await statusOf(id)).to.equal("FAILED");
+        const b = await balances();
+        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.withdrawn.amountMinor).to.equal(0);
       });
 
       it("leaves a reversal after the payout was paid, or in part, for ops to settle", async () => {
@@ -657,6 +676,24 @@ describe("quotation payments", function () {
       expect(row.claims[0]!.outcome).to.equal("NOT_CHOSEN");
       expect(row.quotations[0]!.status).to.equal("EXPIRED");
     });
+
+    it("leaves a request confirmed before quotation payments alone, and never asks its client to pay", async () => {
+      const id = await quoted();
+      await accept(id).expect(200);
+      // As the migration backfills it: ACCEPTED with no accepted amount, expiring at the old pick-by date.
+      await prisma.quotation.update({ where: { id }, data: { acceptedAmountMinor: null, expiresAt: new Date(Date.now() - DAY_MS) } });
+
+      expect(await QuotationPaymentSvc.expireDue()).to.equal(0);
+      const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true, quotations: true } });
+      expect(row.status).to.equal("CONFIRMED");
+      expect(row.excludedLawyerIds).to.not.include(lawyerId);
+      expect(row.claims[0]!.outcome).to.equal(null);
+      expect(row.quotations[0]!.status).to.equal("ACCEPTED");
+
+      expect((await clientView().expect(200)).body.awaitingPayment).to.equal(false);
+      await pay(id).expect(409);
+      expect(await prisma.quotationPayment.count({ where: { quotationId: id } })).to.equal(0);
+    });
   });
 
   describe("refunds", () => {
@@ -679,6 +716,20 @@ describe("quotation payments", function () {
       ]);
       expect((await wallet().expect(200)).body.balances.pending.amountMinor).to.equal(0);
       expect((await prisma.earning.findFirstOrThrow({ where: { requestId } })).status).to.equal("REVERSED");
+    });
+
+    it("splits a refund by what's left when it's recorded, not when it was checked", async () => {
+      await engaged();
+      const payment = await prisma.quotationPayment.findFirstOrThrow({ where: { requestId, status: "SUCCEEDED" } });
+      // Two admins at once: one refunds 10000 while the other has checked 59000 as a partial refund.
+      await refund(payment.id, { amount: { amountMinor: 10000, currency: "GBP" }, reason: "Part of the work wasn't done" }).expect(200);
+      const late = await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 59000, reason: "Client cancelled", createdById: adminId });
+      // 59000 is now all that's left: the platform fee comes back too, and the lawyer's part is only what's left of theirs.
+      expect(late).to.deep.include({ amountMinor: 59000, serviceFeeMinor: 50000, platformFeeMinor: 9000 });
+
+      // A partial refund bigger than what's left of the lawyer's fee is refused.
+      await prisma.quotationRefund.delete({ where: { id: late!.id } });
+      expect(await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 55000, reason: "Too much", createdById: adminId })).to.equal(null);
     });
   });
 

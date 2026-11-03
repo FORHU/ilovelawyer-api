@@ -279,7 +279,9 @@ ALTER TABLE "PayoutSettings" ADD CONSTRAINT "PayoutSettings_tenantId_fkey" FOREI
 -- made before the platform fee existed, so they carry none (the client pays the quoted amount and
 -- the lawyer receives all of it). A quote still waiting on the client expires when its request's
 -- pick-by date does. Requests already CONFIRMED or ENGAGED keep their per-case fee: their quotation
--- is ACCEPTED, with nothing for the client to pay through ilovelawyer.
+-- is ACCEPTED with no accepted amount (acceptedAmountMinor NULL), the mark of a quote the client pays
+-- the lawyer for outside ilovelawyer. Nothing asks them to pay it, and the quotation expiry leaves it
+-- alone: a legacy CONFIRMED request waits on its per-case fee's retry, as it did before.
 INSERT INTO "Quotation" (
   "id", "claimId", "requestId", "lawyerId", "type", "serviceFeeMinor", "platformFeeBps", "platformFeeMinor",
   "totalAmountMinor", "acceptedAmountMinor", "currency", "message", "expiresAt", "status", "sentAt",
@@ -295,7 +297,7 @@ SELECT
   0,
   0,
   COALESCE(c."quoteAmountMinor", 0),
-  CASE WHEN c."outcome" = 'ENGAGED' OR (c."outcome" IS NULL AND r."status" = 'CONFIRMED') THEN COALESCE(c."quoteAmountMinor", 0) END,
+  NULL,
   COALESCE(c."quoteCurrency", 'GBP'),
   COALESCE(c."quoteMessage", ''),
   COALESCE(r."pickByAt", c."quotedAt" + INTERVAL '7 days'),

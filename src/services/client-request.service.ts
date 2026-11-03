@@ -130,7 +130,8 @@ function toDto(r: ClientRequestForClient) {
     lawyer: one ? lawyerDto(one) : null,
     quote: one ? quoteDto(one) : null,
     quotation: one ? quotationFor(one) : null,
-    awaitingPayment: r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED",
+    // A quote accepted before quotation payments has no accepted amount: it's paid outside ilovelawyer.
+    awaitingPayment: r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED" && one.quotation.acceptedAmountMinor !== null,
     referralDisclosure: lawyers.some((l) => l.quote) ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
     engagedAt: r.engagedAt,
     closedAt: r.closedAt,

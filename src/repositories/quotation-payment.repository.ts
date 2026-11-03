@@ -159,19 +159,26 @@ export default class QuotationPaymentRepo {
   }
 
   /** Records a refund PENDING, with the payment row locked, so two admins at once can't give back
-   * more than was paid. Null when the payment took no money, or it would be more than is left. */
-  static async createRefund(
-    paymentId: string,
-    input: { amountMinor: number; serviceFeeMinor: number; platformFeeMinor: number; reason: string; createdById: string | null },
-  ): Promise<QuotationRefund | null> {
+   * more than was paid. The split is worked out under the lock too: everything that's left gives back
+   * the platform fee as well; less comes out of the lawyer's service fee only. Null when the payment
+   * took no money, or the amount is more than is left (or, for a partial refund, than is left of the
+   * lawyer's fee). */
+  static async createRefund(paymentId: string, input: { amountMinor: number; reason: string; createdById: string | null }): Promise<QuotationRefund | null> {
     try {
       return await prisma.$transaction(async (tx) => {
         const locked = await tx.quotationPayment.updateMany({ where: { id: paymentId, status: { in: PAID_QUOTATION_PAYMENT_STATUSES } }, data: { updatedAt: new Date() } });
         if (locked.count !== 1) throw new MovedOn();
         const payment = await tx.quotationPayment.findUniqueOrThrow({ where: { id: paymentId } });
-        const { _sum } = await tx.quotationRefund.aggregate({ where: { paymentId, status: { in: ["PENDING", "SUCCEEDED"] } }, _sum: { amountMinor: true } });
-        if ((_sum.amountMinor ?? 0) + input.amountMinor > payment.amountMinor) throw new MovedOn();
-        return tx.quotationRefund.create({ data: { paymentId, ...input, status: "PENDING" } });
+        const { _sum } = await tx.quotationRefund.aggregate({
+          where: { paymentId, status: { in: ["PENDING", "SUCCEEDED"] } },
+          _sum: { amountMinor: true, serviceFeeMinor: true },
+        });
+        const left = payment.amountMinor - (_sum.amountMinor ?? 0);
+        const serviceLeft = payment.serviceFeeMinor - (_sum.serviceFeeMinor ?? 0);
+        const full = input.amountMinor === left;
+        if (input.amountMinor > left || (!full && input.amountMinor > serviceLeft)) throw new MovedOn();
+        const serviceFeeMinor = full ? serviceLeft : input.amountMinor;
+        return tx.quotationRefund.create({ data: { paymentId, ...input, serviceFeeMinor, platformFeeMinor: input.amountMinor - serviceFeeMinor, status: "PENDING" } });
       });
     } catch (err) {
       if (err instanceof MovedOn) return null;
@@ -221,8 +228,9 @@ export default class QuotationPaymentRepo {
 
   // ── Disputes ───────────────────────────────────────────────────────────────
 
-  /** The client's bank opened a dispute: the payment is DISPUTED and its earning held back from
-   * release until it's decided. */
+  /** The client's bank opened a dispute: the payment is DISPUTED and its earning isn't released until
+   * it's decided. That holds it only while it's still PENDING: one already AVAILABLE can be withdrawn,
+   * and a lost dispute then takes AVAILABLE negative. */
   static async openDispute(paymentId: string) {
     await prisma.$transaction([
       prisma.quotationPayment.updateMany({ where: { id: paymentId, status: { in: ["SUCCEEDED", "PARTIALLY_REFUNDED"] } }, data: { status: "DISPUTED" } }),

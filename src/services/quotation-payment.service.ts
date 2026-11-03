@@ -230,25 +230,19 @@ export default class QuotationPaymentSvc {
     if (payment.status === "DISPUTED") throw new HttpError("This payment is disputed: the client's bank decides the outcome.", 409, "NOT_REFUNDABLE");
     if (input.amount && input.amount.currency !== payment.currency) throw new HttpError(`This payment is in ${payment.currency}.`, 400, "REFUND_CURRENCY_MISMATCH");
 
+    // Checked here for a clear answer, and again under the lock (createRefund), which also splits it.
     const so = await QuotationPaymentRepo.refundedSoFar(paymentId);
     const left = payment.amountMinor - so.amountMinor;
     const serviceLeft = payment.serviceFeeMinor - so.serviceFeeMinor;
     const amountMinor = input.amount?.amountMinor ?? left;
     if (amountMinor <= 0 || amountMinor > left) throw new HttpError(`At most ${gbp(left)} is left to refund.`, 400, "REFUND_EXCEEDS_CHARGE");
     // Everything that's left: the platform fee comes back too. Less: only the lawyer's part.
-    const full = amountMinor === left;
-    if (!full && amountMinor > serviceLeft) {
+    if (amountMinor !== left && amountMinor > serviceLeft) {
       throw new HttpError(`A partial refund comes out of the lawyer's fee: at most ${gbp(serviceLeft)}. Refund ${gbp(left)} to give back everything.`, 400, "REFUND_EXCEEDS_CHARGE");
     }
-    const serviceFeeMinor = full ? serviceLeft : amountMinor;
-    const refund = await QuotationPaymentRepo.createRefund(paymentId, {
-      amountMinor,
-      serviceFeeMinor,
-      platformFeeMinor: amountMinor - serviceFeeMinor,
-      reason: input.reason,
-      createdById: adminId,
-    });
-    if (!refund) throw new HttpError("This refund would be more than is left of the payment.", 409, "REFUND_EXCEEDS_CHARGE");
+    const refund = await QuotationPaymentRepo.createRefund(paymentId, { amountMinor, reason: input.reason, createdById: adminId });
+    if (!refund) throw new HttpError("Another refund changed what's left of this payment. Look again and retry.", 409, "REFUND_EXCEEDS_CHARGE");
+    const serviceFeeMinor = refund.serviceFeeMinor;
 
     const provider = quotationPaymentProviderNamed(payment.provider);
     let result: { status: "PENDING" | "SUCCEEDED" | "FAILED"; externalId: string | null; failureReason: string | null };
@@ -341,13 +335,7 @@ export default class QuotationPaymentSvc {
 
     if (settled.orphaned) {
       logger.warn("Quotation payment: money taken after the request moved on, refunding", { paymentId: payment.id, requestId: payment.requestId });
-      const refund = await QuotationPaymentRepo.createRefund(payment.id, {
-        amountMinor: payment.amountMinor,
-        serviceFeeMinor: payment.serviceFeeMinor,
-        platformFeeMinor: payment.platformFeeMinor,
-        reason: "Paid after the quote expired",
-        createdById: null,
-      });
+      const refund = await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: payment.amountMinor, reason: "Paid after the quote expired", createdById: null });
       if (refund) {
         const result = await quotationPaymentProviderNamed(payment.provider)
           .refund({ refundId: refund.id, paymentId: payment.id, paymentIntentId: settled.payment.paymentIntentId ?? "", amountMinor: payment.amountMinor })
@@ -444,6 +432,8 @@ export default class QuotationPaymentSvc {
     if (!quotation || quotation.requestId !== requestId) throw new HttpError("Quote not found", 404);
     if (quotation.status === "PAID") throw new HttpError("This quote is already paid.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     if (quotation.status !== "ACCEPTED") throw new HttpError("Accept the quote before paying it.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
+    // Accepted before quotation payments: the client pays this lawyer outside ilovelawyer.
+    if (quotation.acceptedAmountMinor === null) throw new HttpError("This quote isn't paid through ilovelawyer.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     if (quotation.expiresAt <= new Date()) throw new HttpError("This quote has expired.", 409, "QUOTATION_EXPIRED");
     return quotation;
   }
