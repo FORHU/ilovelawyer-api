@@ -121,6 +121,30 @@ describe("PATCH /api/v1/intake-cases/:caseId", () => {
     expect(res.body.side).to.equal("CLAIMANT");
   });
 
+  it("rejects the legacy singular area field instead of silently ignoring it", async () => {
+    const userId = await seedClient(createdUserIds);
+    const caseId = await seedCase(userId);
+
+    const res = await request(app)
+      .patch(`/api/v1/intake-cases/${caseId}`)
+      .set("x-api-key", CHAT_WONDER_API_KEY)
+      .send({ userId, area: "EMPLOYMENT" });
+
+    expect(res.status).to.equal(400);
+  });
+
+  it("rejects a body with no real case-detail field, even though userId alone would satisfy min(1)", async () => {
+    const userId = await seedClient(createdUserIds);
+    const caseId = await seedCase(userId);
+
+    const res = await request(app)
+      .patch(`/api/v1/intake-cases/${caseId}`)
+      .set("x-api-key", CHAT_WONDER_API_KEY)
+      .send({ userId });
+
+    expect(res.status).to.equal(400);
+  });
+
   it("leaves every other field untouched on a partial payload", async () => {
     const userId = await seedClient(createdUserIds);
     const caseId = await seedCase(userId);

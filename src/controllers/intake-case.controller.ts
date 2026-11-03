@@ -3,6 +3,7 @@ import type { ObjectSchema } from "joi";
 import prisma from "../lib/prisma";
 import ClientCaseSvc, { type ClientCaseChanges } from "../services/client-case.service";
 import HttpError from "../utils/http-error";
+import logger from "../utils/logger";
 import { updateIntakeCaseSchema } from "../validation/intake-case.validation";
 
 function validate<T>(schema: ObjectSchema<T>, body: unknown): T {
@@ -22,6 +23,8 @@ export default class IntakeCaseCtrl {
       throw new HttpError("This is only available for client accounts", 403, "CLIENT_ACCOUNT_ONLY");
     }
     const workspace = await ClientCaseSvc.workspaceFor(userId, user.name || user.username);
-    res.status(200).json(await ClientCaseSvc.update(workspace, userId, req.params.caseId, rest));
+    const result = await ClientCaseSvc.update(workspace, userId, req.params.caseId, rest);
+    logger.info("Intake case: chat-wonder update applied", { caseId: req.params.caseId, userId, fields: Object.keys(rest) });
+    res.status(200).json(result);
   }
 }
