@@ -57,6 +57,10 @@ export const quoteClientRequestSchema = Joi.object({
   expiresAt: Joi.date().iso().required(),
 });
 
+/** POST /client-requests/:id/quote, the one-step form older lawyer apps still use: the same, but
+ * `expiresAt` may be left out (they predate it), and the service gives it a default. */
+export const legacyQuoteClientRequestSchema = quoteClientRequestSchema.keys({ expiresAt: Joi.date().iso().optional() });
+
 /** POST /client/lawyer-requests/:id/quotations/:quotationId/accept. */
 export const acceptQuotationSchema = Joi.object({
   disclosureAcknowledged: Joi.boolean().required(),

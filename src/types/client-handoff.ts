@@ -212,7 +212,9 @@ export const CLIENT_HANDOFF_ERROR_CODES = {
   REFUND_EXCEEDS_CHARGE: "REFUND_EXCEEDS_CHARGE", // 400
   // Quotation payments and the lawyer's wallet
   QUOTATION_EXPIRED: "QUOTATION_EXPIRED", // 409: the lawyer's expiry has passed
+  QUOTATION_EXPIRY_INVALID: "QUOTATION_EXPIRY_INVALID", // 400: the expiry isn't in the future, or is more than the maximum away
   PAYMENT_DECLINED: "PAYMENT_DECLINED", // 402: the client's payment was refused
+  PAYMENT_IN_PROGRESS: "PAYMENT_IN_PROGRESS", // 409: an earlier attempt is still settling; try again shortly
   PAYOUT_ACCOUNT_REQUIRED: "PAYOUT_ACCOUNT_REQUIRED", // 409: set up the payout account (Stripe) before withdrawing
   WITHDRAWAL_BELOW_MINIMUM: "WITHDRAWAL_BELOW_MINIMUM", // 400: details.minimum is the tenant's minimum withdrawal
   INSUFFICIENT_BALANCE: "INSUFFICIENT_BALANCE", // 409: details.available is what can be withdrawn

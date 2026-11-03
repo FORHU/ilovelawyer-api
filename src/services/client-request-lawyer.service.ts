@@ -1,4 +1,4 @@
-import type { ClientRequestStatus, QuoteType, ReleaseReason } from "@prisma/client";
+import type { ClientRequestStatus, Quotation, QuoteType, ReleaseReason } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
@@ -9,11 +9,11 @@ import ClientRequestBriefSvc from "./client-request-brief.service";
 import OrganizationChargeSvc, { chargeDto } from "./organization-charge.service";
 import LawyerPricingSvc, { type Money } from "./lawyer-pricing.service";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
-import QuotationRepo, { type QuotationRefusal } from "../repositories/quotation.repository";
+import QuotationRepo, { type QuotationDraft, type QuotationRefusal } from "../repositories/quotation.repository";
 import QuotationPaymentRepo from "../repositories/quotation-payment.repository";
 import PayoutSettingsSvc from "./payout-settings.service";
 import { quotationDto } from "./quotation.dto";
-import { QUOTATION_MAX_VALIDITY_DAYS } from "../constants/payout.constants";
+import { QUOTATION_DEFAULT_VALIDITY_DAYS, QUOTATION_MAX_VALIDITY_DAYS } from "../constants/payout.constants";
 import CaseCopyRepo from "../repositories/case-copy.repository";
 import CaseCopyQueue from "../queues/case-copy.queue";
 import EngagementAccessSvc from "./engagement-access.service";
@@ -68,6 +68,7 @@ export interface QuotationInput {
 type LawyerRequest = NonNullable<Awaited<ReturnType<typeof ClientRequestRepo.findForLawyer>>>;
 
 const NOT_FOUND = () => new HttpError("Request not found", 404);
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The lawyer's quotation on their claim: their draft, or the one they sent, with the platform fee
  * and total the client sees, and its expiry. */
@@ -392,23 +393,37 @@ export default class ClientRequestLawyerSvc {
    * so no card on file is needed.
    */
   static async saveQuotation(lawyer: LawyerContext, id: string, input: QuotationInput) {
-    if (input.type === "FIXED_FEE" && input.amount.amountMinor <= 0) throw new HttpError("A fixed fee needs an amount.", 400);
-    const expiresAt = new Date(input.expiresAt);
     const now = new Date();
-    if (!(expiresAt > now)) throw new HttpError("Choose an expiry in the future.", 400, "QUOTATION_EXPIRY_INVALID");
-    if (expiresAt.getTime() - now.getTime() > QUOTATION_MAX_VALIDITY_DAYS * 24 * 60 * 60 * 1000) {
-      throw new HttpError(`A quote can be valid for at most ${QUOTATION_MAX_VALIDITY_DAYS} days.`, 400, "QUOTATION_EXPIRY_INVALID");
-    }
+    const draft = ClientRequestLawyerSvc.draftOf(input, now);
     const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["ROUTED"]);
     const terms = await PayoutSettingsSvc.forTenantCode(lawyer.tenantCode);
-    const saved = await QuotationRepo.saveDraft(
-      { id: claim.id, requestId: id, lawyerId: lawyer.userId },
-      { type: input.type, serviceFeeMinor: input.amount.amountMinor, currency: input.amount.currency, message: input.message.trim(), expiresAt },
-      terms,
-      now,
-    );
+    const saved = await QuotationRepo.saveDraft({ id: claim.id, requestId: id, lawyerId: lawyer.userId }, draft, terms, now);
     if ("refused" in saved) throw await ClientRequestLawyerSvc.quotationRefused(saved.refused, id, request.status, claim.expiresAt, now);
     return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
+  }
+
+  /** The draft a quotation input makes, checked: a fixed fee needs an amount, and the expiry is in the
+   * future and at most QUOTATION_MAX_VALIDITY_DAYS away. */
+  private static draftOf(input: QuotationInput, now: Date): QuotationDraft {
+    if (input.type === "FIXED_FEE" && input.amount.amountMinor <= 0) throw new HttpError("A fixed fee needs an amount.", 400);
+    const expiresAt = new Date(input.expiresAt);
+    if (!(expiresAt > now)) throw new HttpError("Choose an expiry in the future.", 400, "QUOTATION_EXPIRY_INVALID");
+    if (expiresAt.getTime() - now.getTime() > QUOTATION_MAX_VALIDITY_DAYS * DAY_MS) {
+      throw new HttpError(`A quote can be valid for at most ${QUOTATION_MAX_VALIDITY_DAYS} days.`, 400, "QUOTATION_EXPIRY_INVALID");
+    }
+    return { type: input.type, serviceFeeMinor: input.amount.amountMinor, currency: input.amount.currency, message: input.message.trim(), expiresAt };
+  }
+
+  /** A quotation went out: the case's activity, and the client told. */
+  private static async quoted(lawyer: LawyerContext, request: { id: string; caseId: string; clientId: string }, claimId: string, sent: Quotation, now: Date) {
+    await OrganizationRepo.writeAudit({
+      caseId: request.caseId,
+      actorId: lawyer.userId,
+      action: "client_request.quoted",
+      payload: { requestId: request.id, claimId, quotationId: sent.id, type: sent.type, serviceFeeMinor: sent.serviceFeeMinor, totalAmountMinor: sent.totalAmountMinor },
+    });
+    const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "QUOTED", updatedAt: now.toISOString() };
+    emitToUser(request.clientId, "client-request:updated", updated);
   }
 
   /**
@@ -421,22 +436,23 @@ export default class ClientRequestLawyerSvc {
     const now = new Date();
     const sent = await QuotationRepo.send({ id: claim.id, requestId: id }, await PayoutSettingsSvc.forTenantCode(lawyer.tenantCode), now);
     if ("refused" in sent) throw await ClientRequestLawyerSvc.quotationRefused(sent.refused, id, request.status, claim.expiresAt, now);
-
-    await OrganizationRepo.writeAudit({
-      caseId: request.caseId,
-      actorId: lawyer.userId,
-      action: "client_request.quoted",
-      payload: { requestId: id, claimId: claim.id, quotationId: sent.id, type: sent.type, serviceFeeMinor: sent.serviceFeeMinor, totalAmountMinor: sent.totalAmountMinor },
-    });
-    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "QUOTED", updatedAt: now.toISOString() };
-    emitToUser(request.clientId, "client-request:updated", updated);
+    await ClientRequestLawyerSvc.quoted(lawyer, request, claim.id, sent, now);
     return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
   }
 
-  /** Drafts and sends in one go (POST /client-requests/:id/quote, the lawyer app's one-step form). */
-  static async quote(lawyer: LawyerContext, id: string, input: QuotationInput) {
-    await ClientRequestLawyerSvc.saveQuotation(lawyer, id, input);
-    return ClientRequestLawyerSvc.sendQuotation(lawyer, id);
+  /**
+   * Drafts and sends in one go (POST /client-requests/:id/quote, the lawyer app's one-step form), in
+   * one transaction: sent, or refused with nothing saved. Older apps don't send an expiry, so one
+   * defaults to QUOTATION_DEFAULT_VALIDITY_DAYS from now.
+   */
+  static async quote(lawyer: LawyerContext, id: string, input: Omit<QuotationInput, "expiresAt"> & { expiresAt?: QuotationInput["expiresAt"] }) {
+    const now = new Date();
+    const draft = ClientRequestLawyerSvc.draftOf({ ...input, expiresAt: input.expiresAt ?? new Date(now.getTime() + QUOTATION_DEFAULT_VALIDITY_DAYS * DAY_MS) }, now);
+    const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["ROUTED"]);
+    const sent = await QuotationRepo.saveAndSend({ id: claim.id, requestId: id, lawyerId: lawyer.userId }, draft, await PayoutSettingsSvc.forTenantCode(lawyer.tenantCode), now);
+    if ("refused" in sent) throw await ClientRequestLawyerSvc.quotationRefused(sent.refused, id, request.status, claim.expiresAt, now);
+    await ClientRequestLawyerSvc.quoted(lawyer, request, claim.id, sent, now);
+    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
   }
 
   /** Takes back a sent quotation before the client accepts it (POST .../quotation/withdraw): it's

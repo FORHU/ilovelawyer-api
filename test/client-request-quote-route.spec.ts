@@ -309,10 +309,13 @@ describe("client request conflict check, release and quote", () => {
       }
     });
 
-    it("needs the lawyer's expiry", async () => {
+    // Older lawyer apps send no expiry: the quote gets the default, so those lawyers can still quote.
+    it("gives a quote with no expiry the default 7 days, and refuses one in the past", async () => {
       await claim().expect(200);
       const { expiresAt: _expiresAt, ...noExpiry } = FIXED_FEE;
-      await quote(noExpiry).expect(400);
+      await quote({ ...FIXED_FEE, expiresAt: new Date(Date.now() - 60_000).toISOString() }).expect(400);
+      const { body } = await quote(noExpiry).expect(200);
+      expect(new Date(body.quotation.expiresAt).getTime()).to.be.closeTo(Date.now() + 7 * 24 * 60 * 60 * 1000, 60_000);
     });
 
     it("checks the quote: type, GBP, a message, and an amount for a fixed fee", async () => {

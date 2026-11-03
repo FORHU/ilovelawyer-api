@@ -65,6 +65,37 @@ function priced(serviceFeeMinor: number, terms: FeeTerms) {
   return { platformFeeBps: terms.platformFeeBps, platformFeeMinor, totalAmountMinor: serviceFeeMinor + platformFeeMinor };
 }
 
+/** QuotationRepo.saveDraft's work, inside a transaction that has locked the routed request. */
+async function saveDraftTx(tx: Tx, claim: { id: string; requestId: string; lawyerId: string }, draft: QuotationDraft, terms: FeeTerms, now: Date) {
+  const open = await tx.clientRequestClaim.findFirst({ where: { id: claim.id, outcome: null, expiresAt: { gt: now } }, select: { id: true } });
+  if (!open) throw new MovedOn();
+  const existing = await tx.quotation.findUnique({ where: { claimId: claim.id }, select: { status: true } });
+  if (existing && existing.status !== "DRAFT") throw new MovedOn("SENT");
+  const data = { ...draft, ...priced(draft.serviceFeeMinor, terms) };
+  return tx.quotation.upsert({
+    where: { claimId: claim.id },
+    create: { claimId: claim.id, requestId: claim.requestId, lawyerId: claim.lawyerId, ...data },
+    update: data,
+  });
+}
+
+/** QuotationRepo.send's work, inside a transaction that has locked the routed request. */
+async function sendTx(tx: Tx, claim: { id: string; requestId: string }, terms: FeeTerms, now: Date) {
+  const draft = await tx.quotation.findUnique({ where: { claimId: claim.id } });
+  if (!draft) throw new MovedOn();
+  if (draft.status !== "DRAFT") throw new MovedOn("SENT");
+  if (draft.expiresAt <= now) throw new MovedOn("EXPIRED");
+  const sent = await tx.quotation.update({ where: { id: draft.id }, data: { ...priced(draft.serviceFeeMinor, terms), status: "SENT", sentAt: now } });
+  const quoted = await tx.clientRequestClaim.updateMany({
+    where: { id: claim.id, outcome: null, quotedAt: null, expiresAt: { gt: now } },
+    data: { quoteType: sent.type, quoteAmountMinor: sent.serviceFeeMinor, quoteCurrency: sent.currency, quoteMessage: sent.message, quotedAt: now },
+  });
+  if (quoted.count !== 1) throw new MovedOn();
+  const request = await tx.clientRequest.findUniqueOrThrow({ where: { id: claim.requestId }, select: { pickByAt: true } });
+  if (!request.pickByAt || request.pickByAt < sent.expiresAt) await tx.clientRequest.update({ where: { id: claim.requestId }, data: { pickByAt: sent.expiresAt } });
+  return sent;
+}
+
 /**
  * The lawyer's quotation on their claim (Quotation), through the client accepting it. Every
  * transaction takes the request row first (REQUEST_ROW_FIRST in client-request-claim.repository.ts),
@@ -93,16 +124,19 @@ export default class QuotationRepo {
     return refusing(() =>
       prisma.$transaction(async (tx) => {
         if (!(await lockRouted(tx, claim.requestId, now))) throw new MovedOn();
-        const open = await tx.clientRequestClaim.findFirst({ where: { id: claim.id, outcome: null, expiresAt: { gt: now } }, select: { id: true } });
-        if (!open) throw new MovedOn();
-        const existing = await tx.quotation.findUnique({ where: { claimId: claim.id }, select: { status: true } });
-        if (existing && existing.status !== "DRAFT") throw new MovedOn("SENT");
-        const data = { ...draft, ...priced(draft.serviceFeeMinor, terms) };
-        return tx.quotation.upsert({
-          where: { claimId: claim.id },
-          create: { claimId: claim.id, requestId: claim.requestId, lawyerId: claim.lawyerId, ...data },
-          update: data,
-        });
+        return saveDraftTx(tx, claim, draft, terms, now);
+      }),
+    );
+  }
+
+  /** saveDraft then send, in one transaction (the legacy one-step POST /quote): either the quote is
+   * sent, or nothing changed, never a draft left behind. */
+  static async saveAndSend(claim: { id: string; requestId: string; lawyerId: string }, draft: QuotationDraft, terms: FeeTerms, now: Date = new Date()) {
+    return refusing(() =>
+      prisma.$transaction(async (tx) => {
+        if (!(await lockRouted(tx, claim.requestId, now))) throw new MovedOn();
+        await saveDraftTx(tx, claim, draft, terms, now);
+        return sendTx(tx, claim, terms, now);
       }),
     );
   }
@@ -117,19 +151,7 @@ export default class QuotationRepo {
     return refusing(() =>
       prisma.$transaction(async (tx) => {
         if (!(await lockRouted(tx, claim.requestId, now))) throw new MovedOn();
-        const draft = await tx.quotation.findUnique({ where: { claimId: claim.id } });
-        if (!draft) throw new MovedOn();
-        if (draft.status !== "DRAFT") throw new MovedOn("SENT");
-        if (draft.expiresAt <= now) throw new MovedOn("EXPIRED");
-        const sent = await tx.quotation.update({ where: { id: draft.id }, data: { ...priced(draft.serviceFeeMinor, terms), status: "SENT", sentAt: now } });
-        const quoted = await tx.clientRequestClaim.updateMany({
-          where: { id: claim.id, outcome: null, quotedAt: null, expiresAt: { gt: now } },
-          data: { quoteType: sent.type, quoteAmountMinor: sent.serviceFeeMinor, quoteCurrency: sent.currency, quoteMessage: sent.message, quotedAt: now },
-        });
-        if (quoted.count !== 1) throw new MovedOn();
-        const request = await tx.clientRequest.findUniqueOrThrow({ where: { id: claim.requestId }, select: { pickByAt: true } });
-        if (!request.pickByAt || request.pickByAt < sent.expiresAt) await tx.clientRequest.update({ where: { id: claim.requestId }, data: { pickByAt: sent.expiresAt } });
-        return sent;
+        return sendTx(tx, claim, terms, now);
       }),
     );
   }

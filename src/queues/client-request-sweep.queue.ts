@@ -18,7 +18,7 @@ const SCHEDULE = "* * * * *";
 type LapsedClaim = Awaited<ReturnType<typeof ClientRequestClaimRepo.findLapsed>>[number];
 type UnpaidFee = Awaited<ReturnType<typeof ClientRequestClaimRepo.findUnpaid>>[number];
 
-type SweepResult = { lapsed: number; unpaid: number; quotesExpired: number; expired: number; reminded: number; announced: number; released: number };
+type SweepResult = { lapsed: number; unpaid: number; quotesExpired: number; expired: number; reminded: number; announced: number; released: number; payoutsResumed: number };
 
 /**
  * The client request timers (the UK client-to-lawyer hand-off), in order: a claim's 24h hold
@@ -27,8 +27,9 @@ type SweepResult = { lapsed: number; unpaid: number; quotesExpired: number; expi
  * the claim ends, and an accepted but unpaid one sends the request back to other lawyers), then a
  * routed request nobody claimed within 48h expiring, the 2h-before reminder to a lawyer holding one,
  * announcing routed requests nobody has been told about yet, including the ones a lapse just put back
- * (#510, ClientRequestNotifySvc), and last, lawyers' earnings whose hold is over becoming available
- * to withdraw (WalletSvc). Each step is
+ * (#510, ClientRequestNotifySvc), lawyers' earnings whose hold is over becoming available to
+ * withdraw, and last, Stripe withdrawals whose payout got no answer being run again (WalletSvc).
+ * Each step is
  * a guarded update, so a run that overlaps another or dies halfway never acts on the same request
  * twice, and one step failing doesn't stop the rest.
  */
@@ -48,7 +49,7 @@ export default class ClientRequestSweepQueue {
 
   /** One sweep. Called by the cron schedule; exposed for tests. */
   static async tick(now: Date = new Date()): Promise<SweepResult> {
-    const result: SweepResult = { lapsed: 0, unpaid: 0, quotesExpired: 0, expired: 0, reminded: 0, announced: 0, released: 0 };
+    const result: SweepResult = { lapsed: 0, unpaid: 0, quotesExpired: 0, expired: 0, reminded: 0, announced: 0, released: 0, payoutsResumed: 0 };
     if (this.ticking) return result;
     this.ticking = true;
     try {
@@ -59,6 +60,7 @@ export default class ClientRequestSweepQueue {
       result.reminded = await this.step("remind", () => ClientRequestNotifySvc.remindDue(now));
       result.announced = await this.step("announce", () => ClientRequestNotifySvc.announceDue(now));
       result.released = await this.step("release", () => WalletSvc.releaseDue(now));
+      result.payoutsResumed = await this.step("resume-payouts", () => WalletSvc.resumeStalledPayouts(now));
     } finally {
       this.ticking = false;
     }

@@ -1731,7 +1731,10 @@ export const clientHandoffPaths: Paths = {
       summary: "Clients' quotation payments",
       description: "Payments that took money, newest first; every attempt with all=true, or one status with status.",
       parameters: [{ name: "status", in: "query", schema: enumOf(QUOTATION_PAYMENT_STATUSES) }, { name: "all", in: "query", schema: { type: "boolean" } }, ...pageParams],
-      responses: { 200: ok("A page of payments, each with its refunds"), 403: err("Not a platform admin") },
+      responses: {
+        200: ok("A page of payments, each with its refunds (newest first), refundPending (on its way at Stripe), and refundable / refundableServiceFee: what a refund may take now, 0 for a disputed or fully refunded one"),
+        403: err("Not a platform admin"),
+      },
     }),
   },
   "/admin/quotation-payments/{id}/refund": {

@@ -13,6 +13,7 @@ import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
 import WalletSvc, { payeeOf } from "./wallet.service";
 import { quotationPaymentProvider, quotationPaymentProviderNamed, type QuotationPaymentResult } from "../payments/quotation-payment-provider";
+import { stripeRefused } from "../payments/stripe-client";
 import { emitToUser } from "../lib/socket";
 import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
@@ -41,13 +42,13 @@ export function paymentDto(p: QuotationPayment) {
   };
 }
 
-function refundDto(r: QuotationRefund) {
+function refundDto(r: QuotationRefund, currency: string) {
   return {
     id: r.id,
     status: r.status,
-    amount: { amountMinor: r.amountMinor, currency: "GBP" },
-    serviceFee: { amountMinor: r.serviceFeeMinor, currency: "GBP" },
-    platformFee: { amountMinor: r.platformFeeMinor, currency: "GBP" },
+    amount: money(r.amountMinor, currency),
+    serviceFee: money(r.serviceFeeMinor, currency),
+    platformFee: money(r.platformFeeMinor, currency),
     reason: r.reason,
     failureReason: r.failureReason,
     createdAt: r.createdAt,
@@ -78,6 +79,7 @@ export default class QuotationPaymentSvc {
     requestId: string,
     quotationId: string,
     opts: { testOutcome?: "decline" } = {},
+    resumedOnce = false,
   ): Promise<{ payment: ReturnType<typeof paymentDto>; intent: { clientSecret: string; publishableKey: string } | null }> {
     const quotation = await QuotationPaymentSvc.acceptedQuotation(clientId, requestId, quotationId);
     const provider = quotationPaymentProvider();
@@ -102,7 +104,13 @@ export default class QuotationPaymentSvc {
           return { payment: paymentDto(payment), intent: { clientSecret: resumed.clientSecret, publishableKey: resumed.publishableKey } };
         }
         await QuotationPaymentSvc.applyResult(payment, resumed);
-        return QuotationPaymentSvc.start(clientId, requestId, quotationId, opts);
+        // Starts again once: the moved-on attempt is settled or ended now. Still PENDING (settling it
+        // was refused, or it's already being settled elsewhere) means come back shortly, not a loop.
+        const after = await QuotationPaymentRepo.findById(payment.id);
+        if (resumedOnce || after?.status === "PENDING") {
+          throw new HttpError("Your payment is still being processed. Try again in a moment.", 409, "PAYMENT_IN_PROGRESS");
+        }
+        return QuotationPaymentSvc.start(clientId, requestId, quotationId, opts, true);
       }
     }
 
@@ -162,7 +170,8 @@ export default class QuotationPaymentSvc {
       await QuotationPaymentRepo.openDispute(payment.id);
       return;
     }
-    const walletId = await QuotationPaymentRepo.closeDispute(payment.id, dispute.status === "won", dispute.id);
+    // Only "lost" takes the money back; "won" and an inquiry's "warning_closed" leave it with us.
+    const walletId = await QuotationPaymentRepo.closeDispute(payment.id, dispute.status === "lost", dispute.id);
     if (walletId) await WalletSvc.changedById(walletId);
   }
 
@@ -217,6 +226,8 @@ export default class QuotationPaymentSvc {
     if (!PAID_QUOTATION_PAYMENT_STATUSES.includes(payment.status) || payment.status === "REFUNDED") {
       throw new HttpError("Only a payment that took money, and isn't fully refunded, can be refunded.", 409, "NOT_REFUNDABLE");
     }
+    // Stripe refuses refunds on a disputed charge (charge_disputed): the bank decides it.
+    if (payment.status === "DISPUTED") throw new HttpError("This payment is disputed: the client's bank decides the outcome.", 409, "NOT_REFUNDABLE");
     if (input.amount && input.amount.currency !== payment.currency) throw new HttpError(`This payment is in ${payment.currency}.`, 400, "REFUND_CURRENCY_MISMATCH");
 
     const so = await QuotationPaymentRepo.refundedSoFar(paymentId);
@@ -244,8 +255,16 @@ export default class QuotationPaymentSvc {
     try {
       result = await provider.refund({ refundId: refund.id, paymentId, paymentIntentId: payment.paymentIntentId ?? "", amountMinor });
     } catch (err) {
-      result = { status: "FAILED", externalId: null, failureReason: err instanceof Error ? err.message : String(err) };
-      logger.error("Quotation payment refund failed", { paymentId, refundId: refund.id, err: result.failureReason });
+      const reason = err instanceof Error ? err.message : String(err);
+      if (stripeRefused(err)) {
+        result = { status: "FAILED", externalId: null, failureReason: reason };
+        logger.error("Quotation payment refund refused", { paymentId, refundId: refund.id, err: reason });
+      } else {
+        // No answer: Stripe may have made it. It stays PENDING, so refund.updated can settle it, and what
+        // it holds back stops a retry from refunding the same money twice.
+        result = { status: "PENDING", externalId: null, failureReason: null };
+        logger.error("Quotation payment refund: no answer from Stripe, left PENDING for its webhook", { paymentId, refundId: refund.id, err: reason });
+      }
     }
     if (result.status === "PENDING") {
       if (result.externalId) await prisma.quotationRefund.update({ where: { id: refund.id }, data: { externalId: result.externalId } });
@@ -273,8 +292,25 @@ export default class QuotationPaymentSvc {
     return { total, page: query.page, pageSize: query.limit, data: data.map((p) => QuotationPaymentSvc.adminDto(p)) };
   }
 
+  /** The admin app's row. `refundable` and `refundableServiceFee` are what refund() would allow now
+   * (the same count as refundedSoFar: pending refunds hold their share back), 0 when it can't be
+   * refunded at all; `refundPending` is what's on its way at Stripe. */
   private static adminDto(p: QuotationPayment & { refunds: QuotationRefund[] }) {
-    return { ...paymentDto(p), requestId: p.requestId, clientId: p.clientId, paymentIntentId: p.paymentIntentId, refunds: p.refunds.map(refundDto) };
+    const held = p.refunds.filter((r) => r.status === "PENDING" || r.status === "SUCCEEDED");
+    const pending = p.refunds.filter((r) => r.status === "PENDING").reduce((sum, r) => sum + r.amountMinor, 0);
+    const refundableStatus = PAID_QUOTATION_PAYMENT_STATUSES.includes(p.status) && p.status !== "REFUNDED" && p.status !== "DISPUTED";
+    const left = refundableStatus ? Math.max(0, p.amountMinor - held.reduce((sum, r) => sum + r.amountMinor, 0)) : 0;
+    const serviceLeft = refundableStatus ? Math.max(0, p.serviceFeeMinor - held.reduce((sum, r) => sum + r.serviceFeeMinor, 0)) : 0;
+    return {
+      ...paymentDto(p),
+      requestId: p.requestId,
+      clientId: p.clientId,
+      paymentIntentId: p.paymentIntentId,
+      refundPending: money(pending, p.currency),
+      refundable: money(left, p.currency),
+      refundableServiceFee: money(Math.min(serviceLeft, left), p.currency),
+      refunds: p.refunds.map((r) => refundDto(r, p.currency)),
+    };
   }
 
   /** Records a provider's answer on one attempt, and what follows from a success. */
@@ -315,7 +351,12 @@ export default class QuotationPaymentSvc {
       if (refund) {
         const result = await quotationPaymentProviderNamed(payment.provider)
           .refund({ refundId: refund.id, paymentId: payment.id, paymentIntentId: settled.payment.paymentIntentId ?? "", amountMinor: payment.amountMinor })
-          .catch((err) => ({ status: "FAILED" as const, externalId: null, failureReason: err instanceof Error ? err.message : String(err) }));
+          // Refused: FAILED. No answer: left PENDING for refund.updated, since Stripe may have made it.
+          .catch((err) =>
+            stripeRefused(err)
+              ? { status: "FAILED" as const, externalId: null, failureReason: err instanceof Error ? err.message : String(err) }
+              : { status: "PENDING" as const, externalId: null, failureReason: null },
+          );
         if (result.status === "SUCCEEDED" || result.status === "FAILED") {
           await QuotationPaymentRepo.settleRefund(refund.id, { status: result.status, externalId: result.externalId, failureReason: result.failureReason });
         }

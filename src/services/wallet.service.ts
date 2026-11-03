@@ -14,6 +14,11 @@ import { CLIENT_HANDOFF_SOCKET_EVENTS, type WalletUpdatedEvent } from "../types/
 
 const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
 
+/** A Stripe withdrawal with no payout this long after it was made gets its payout run again... */
+const STALLED_PAYOUT_AFTER_MS = 5 * 60_000;
+/** ...until Stripe's idempotency keys expire (24h); past that a replay could pay twice, so ops decide. */
+const STALLED_PAYOUT_MAX_AGE_MS = 23 * 60 * 60_000;
+
 /** Who a claim's earnings are paid to. The one place that decides it (see the backlog in CONTEXT.md:
  * firm or lawyer as payee): for now the firm the lawyer claimed under, else the solo lawyer. A rule
  * that pays a firm's lawyers to their own wallets changes this function and nothing else; each
@@ -185,21 +190,55 @@ export default class WalletSvc {
       payload: { withdrawalId: withdrawal.id, amountMinor },
     });
 
-    const provider = payoutProviderNamed(wallet.provider);
+    await WalletSvc.runPayout(withdrawal, wallet);
+    await WalletSvc.changed(wallet.id, owner);
+    return withdrawalDto((await WalletRepo.findWithdrawal(withdrawal.id))!);
+  }
+
+  /**
+   * The sweep: Stripe withdrawals still PROCESSING with no payout a few minutes on, because Stripe
+   * gave no answer to the transfer or the payout. Runs the payout again: it uses the withdrawal's own
+   * idempotency keys, so Stripe hands back the transfer or payout it already made and only makes what's
+   * missing. Within Stripe's 24h key window only; an older one is left for ops to settle. Returns
+   * how many were resumed.
+   */
+  static async resumeStalledPayouts(now: Date = new Date()): Promise<number> {
+    const stalled = await WalletRepo.findStalledWithdrawals(new Date(now.getTime() - STALLED_PAYOUT_MAX_AGE_MS), new Date(now.getTime() - STALLED_PAYOUT_AFTER_MS));
+    let resumed = 0;
+    for (const withdrawal of stalled) {
+      const wallet = withdrawal.wallet;
+      if (!wallet.provider || !wallet.stripeAccountId) continue;
+      try {
+        await WalletSvc.runPayout(withdrawal, wallet);
+        const after = await WalletRepo.findWithdrawal(withdrawal.id);
+        if (after?.payoutId || after?.status !== "PROCESSING") {
+          resumed++;
+          await WalletSvc.changedById(wallet.id);
+        }
+      } catch (err) {
+        logger.error("Wallet: stalled payout couldn't be resumed", { withdrawalId: withdrawal.id, err: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return resumed;
+  }
+
+  /** Sends one reserved withdrawal through its provider and records what came back. Throws only when
+   * the provider gave no answer at all (resumeStalledPayouts tries again). */
+  private static async runPayout(withdrawal: Withdrawal, wallet: Wallet) {
+    const provider = payoutProviderNamed(wallet.provider!);
     try {
-      const result = await provider.payout({ withdrawalId: withdrawal.id, walletId: wallet.id, accountId: wallet.stripeAccountId, amountMinor, currency: wallet.currency });
+      const result = await provider.payout({ withdrawalId: withdrawal.id, walletId: wallet.id, accountId: wallet.stripeAccountId!, amountMinor: withdrawal.amountMinor, currency: withdrawal.currency });
       if (result.status === "PROCESSING") {
+        // Kept even without a payout id: the transfer is real, and transfer.reversed finds it by this.
         await WalletRepo.setWithdrawalIds(withdrawal.id, result);
       } else {
-        if (result.status === "FAILED" && result.transferId && provider.mode === "connect") await provider.reverseTransfer(result.transferId, amountMinor, withdrawal.id);
+        if (result.status === "FAILED" && result.transferId && provider.mode === "connect") await provider.reverseTransfer(result.transferId, withdrawal.amountMinor, withdrawal.id);
         await WalletSvc.settleWithdrawal(withdrawal.id, result.status === "PAID" ? { paid: true } : { paid: false, reason: result.failureReason ?? "The payout failed." }, result);
       }
     } catch (err) {
-      // No answer: the reserve stays until the provider's webhook says how it ended, or ops look.
+      // No answer: the reserve stays, and resumeStalledPayouts replays it with the same keys.
       logger.error("Wallet: payout provider unreachable", { withdrawalId: withdrawal.id, err: err instanceof Error ? err.message : String(err) });
     }
-    await WalletSvc.changed(wallet.id, owner);
-    return withdrawalDto((await WalletRepo.findWithdrawal(withdrawal.id))!);
   }
 
   /** The sweep (ClientRequestSweepQueue): releases every earning whose hold is over to AVAILABLE, and

@@ -41,14 +41,18 @@ async function lockWallet(tx: Tx, walletId: string) {
  * of the earning. Returns what was reversed.
  */
 export async function reverseEarningTx(tx: Tx, earningId: string, amountMinor: number, key: string, note: string): Promise<{ walletId: string; reversedMinor: number } | null> {
+  // Lock first, then read: release() moves an earning PENDING -> AVAILABLE under the same lock, so the
+  // status read after it is the bucket the money is really in.
+  const owner = await tx.earning.findUnique({ where: { id: earningId }, select: { walletId: true } });
+  if (!owner) return null;
+  await lockWallet(tx, owner.walletId);
   const earning = await tx.earning.findUnique({ where: { id: earningId } });
   if (!earning || earning.status === "REVERSED") return null;
   const amount = Math.min(amountMinor, earning.netMinor - earning.reversedMinor);
   if (amount <= 0) return null;
-  await lockWallet(tx, earning.walletId);
   const reversedMinor = earning.reversedMinor + amount;
   const updated = await tx.earning.updateMany({
-    where: { id: earning.id, reversedMinor: earning.reversedMinor },
+    where: { id: earning.id, reversedMinor: earning.reversedMinor, status: earning.status },
     data: { reversedMinor, ...(reversedMinor >= earning.netMinor ? { status: "REVERSED" } : {}) },
   });
   if (updated.count !== 1) return null;
@@ -223,6 +227,16 @@ export default class WalletRepo {
 
   static async findWithdrawal(id: string) {
     return prisma.withdrawal.findUnique({ where: { id } });
+  }
+
+  /** Withdrawals still PROCESSING with no payout from the provider, made between `from` and `to`:
+   * the provider gave no answer (WalletSvc.resumeStalledPayouts). */
+  static async findStalledWithdrawals(from: Date, to: Date) {
+    return prisma.withdrawal.findMany({
+      where: { status: "PROCESSING", payoutId: null, createdAt: { gte: from, lte: to } },
+      include: { wallet: true },
+      orderBy: { createdAt: "asc" },
+    });
   }
 
   static async findWithdrawalByPayout(payoutId: string) {

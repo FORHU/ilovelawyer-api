@@ -4,7 +4,7 @@ import ClientRequestLawyerSvc, { type LawyerContext } from "../services/client-r
 import EngagementMessageSvc from "../services/engagement-message.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
-import { aiTopUpSchema, closeClientRequestSchema, listEngagementMessagesSchema, postEngagementMessageSchema, listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
+import { aiTopUpSchema, closeClientRequestSchema, listEngagementMessagesSchema, postEngagementMessageSchema, legacyQuoteClientRequestSchema, listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
 
 function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
   const { error, value } = schema.validate(input, { stripUnknown: true, convert: true });
@@ -48,7 +48,7 @@ export default class ClientRequestLawyerCtrl {
   }
 
   static async quote(req: Request, res: Response) {
-    const body = validate(quoteClientRequestSchema, req.body ?? {});
+    const body = validate(legacyQuoteClientRequestSchema, req.body ?? {});
     res.status(200).json(await ClientRequestLawyerSvc.quote(lawyerOf(req), req.params.id, body));
   }
 

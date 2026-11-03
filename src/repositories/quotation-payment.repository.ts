@@ -111,7 +111,16 @@ export default class QuotationPaymentRepo {
     if (!payment) return { settled: false };
     try {
       return await prisma.$transaction(async (tx) => {
-        const engaged = (await tx.clientRequest.updateMany({ where: { id: payment.requestId, status: "CONFIRMED" }, data: { status: "ENGAGED", engagedAt: now } })).count === 1;
+        // Engaged only while the request is still CONFIRMED on *this* quotation. CONFIRMED on another
+        // (the quote expired, the request went back out, and the client accepted someone else) means
+        // this money came too late: orphaned, refunded, never a rollback that keeps it.
+        const engaged =
+          (
+            await tx.clientRequest.updateMany({
+              where: { id: payment.requestId, status: "CONFIRMED", quotations: { some: { id: payment.quotationId, status: "ACCEPTED" } } },
+              data: { status: "ENGAGED", engagedAt: now },
+            })
+          ).count === 1;
         const { count } = await tx.quotationPayment.updateMany({
           where: { id: paymentId, status: { in: ["PENDING", "FAILED", "CANCELED"] } },
           data: { status: "SUCCEEDED", succeededAt: now, failureReason: null, ...(paymentIntentId ? { paymentIntentId } : {}) },
@@ -221,16 +230,20 @@ export default class QuotationPaymentRepo {
     ]);
   }
 
-  /** The dispute was decided. Won: the payment is back to SUCCEEDED (or PARTIALLY_REFUNDED) and its
-   * earning released as normal. Lost: the bank took the money back, so what's left of the earning is
-   * reversed out of the wallet. Returns the wallet that changed, if any. */
-  static async closeDispute(paymentId: string, won: boolean, disputeId: string): Promise<string | null> {
+  /** The dispute was decided. Lost: the bank took the money back, so what's left of the earning is
+   * reversed out of the wallet. Anything else (won, or an inquiry closed as warning_closed) took no
+   * money: the payment goes back to what its refunds make it and its earning is released as normal.
+   * Returns the wallet that changed, if any. */
+  static async closeDispute(paymentId: string, lost: boolean, disputeId: string): Promise<string | null> {
     return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const payment = await tx.quotationPayment.findUnique({ where: { id: paymentId } });
       if (!payment || payment.status !== "DISPUTED") return null;
       const earning = await tx.earning.findUnique({ where: { paymentId } });
-      if (won) {
-        await tx.quotationPayment.update({ where: { id: paymentId }, data: { status: payment.refundedMinor > 0 ? "PARTIALLY_REFUNDED" : "SUCCEEDED" } });
+      if (!lost) {
+        // Refunds can be made while it's DISPUTED (settleRefund leaves the status alone), so they may
+        // already cover all of it.
+        const status = payment.refundedMinor >= payment.amountMinor ? "REFUNDED" : payment.refundedMinor > 0 ? "PARTIALLY_REFUNDED" : "SUCCEEDED";
+        await tx.quotationPayment.update({ where: { id: paymentId }, data: { status } });
         if (earning) await tx.earning.update({ where: { id: earning.id }, data: { disputed: false } });
         return null;
       }

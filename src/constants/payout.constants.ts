@@ -28,6 +28,9 @@ export const PAYOUT_SETTINGS_CACHE_TTL_S = 60;
 
 /** The longest a lawyer can give a client to accept and pay a quote. */
 export const QUOTATION_MAX_VALIDITY_DAYS = 90;
+/** A quote's expiry when the lawyer's app doesn't send one (older apps, POST /client-requests/:id/quote).
+ * The same default the lawyer app's form starts at. */
+export const QUOTATION_DEFAULT_VALIDITY_DAYS = 7;
 
 /**
  * The platform fee on a service fee: `bps` of it rounded half-up, never below `minFeeMinor`. A free

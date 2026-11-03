@@ -30,7 +30,8 @@ export interface PayoutAccountStatus {
 }
 
 export interface PayoutRequest {
-  /** Our Withdrawal id: the idempotency key for both the transfer and the payout. */
+  /** Our Withdrawal id: the idempotency key for both the transfer and the payout, so a replay of the
+   * same withdrawal returns what Stripe already made instead of moving the money again. */
   withdrawalId: string;
   walletId: string;
   accountId: string;
@@ -134,7 +135,9 @@ export const stripePayoutProvider: ConnectPayoutProvider = {
       return { status: "PROCESSING", transferId: transfer.id, payoutId: payout.id, failureReason: null };
     } catch (err) {
       if (err instanceof Stripe.errors.StripeInvalidRequestError) return { status: "FAILED", transferId: transfer.id, payoutId: null, failureReason: err.message };
-      throw err;
+      // No answer on the payout, but the transfer is real: hand its id back so it's kept, and leave the
+      // payout to WalletSvc.resumeStalledPayouts, whose replay with the same keys can't pay twice.
+      return { status: "PROCESSING", transferId: transfer.id, payoutId: null, failureReason: null };
     }
   },
   async reverseTransfer(transferId, amountMinor, withdrawalId) {
