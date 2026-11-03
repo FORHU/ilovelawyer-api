@@ -3,14 +3,11 @@ import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import { Request, Response } from "express";
 import Joi from "joi";
-import { SynthesizeSpeechCommand, OutputFormat, VoiceId } from "@aws-sdk/client-polly";
 import HttpError from "../utils/http-error";
-import { getPollyClient } from "../utils/polly";
+import { synthesizeSpeechToBuffer } from "../utils/polly";
 
 const router = express.Router();
 router.use(validSession);
-
-const polly = getPollyClient();
 
 router.post("/polly", asyncHandler(async (req: Request, res: Response) => {
   const schema = Joi.object({
@@ -21,21 +18,7 @@ router.post("/polly", asyncHandler(async (req: Request, res: Response) => {
   const { error, value } = schema.validate(req.body);
   if (error) throw new HttpError(error.message, 400);
 
-  const command = new SynthesizeSpeechCommand({
-    Text: value.text,
-    OutputFormat: OutputFormat.MP3,
-    VoiceId: value.voiceId as VoiceId,
-    Engine: "neural",
-  });
-
-  const result = await polly.send(command);
-  if (!result.AudioStream) throw new HttpError("Polly returned no audio", 502);
-
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of result.AudioStream as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk);
-  }
-  const buffer = Buffer.concat(chunks);
+  const buffer = await synthesizeSpeechToBuffer(value.text, value.voiceId);
 
   res.set("Content-Type", "audio/mpeg");
   res.set("Content-Length", String(buffer.length));

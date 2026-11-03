@@ -565,6 +565,8 @@ describe("Client app cases", () => {
       "POST /cases/:caseId/unarchive",
       "GET /cases/:caseId/messages",
       "POST /cases/:caseId/messages",
+      "POST /cases/:caseId/voice-messages/presign",
+      "POST /cases/:caseId/voice-messages",
       "POST /cases/:caseId/documents/presign",
       "POST /cases/:caseId/documents",
       "DELETE /cases/:caseId/documents/:documentId",

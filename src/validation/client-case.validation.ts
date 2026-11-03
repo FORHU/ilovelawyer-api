@@ -7,6 +7,7 @@ import {
   CLIENT_MESSAGE_DOCUMENTS_MAX,
   CLIENT_MESSAGE_MAX_LENGTH,
   CLIENT_PARTY_ROLES,
+  VOICE_MESSAGE_MAX_BYTES,
 } from "../constants/client-case.constants";
 import { CLIENT_SIDES, PARTY_NAME_MAX_LENGTH, UK_JURISDICTIONS } from "./case.validation";
 
@@ -97,6 +98,15 @@ export const presignClientDocumentSchema = Joi.object({
   filename,
   contentType: Joi.string().required(),
   fileSize: fileSize.optional(),
+});
+
+export const presignVoiceMessageSchema = Joi.object({
+  contentType: Joi.string().required(),
+  fileSize: Joi.number().integer().min(0).max(VOICE_MESSAGE_MAX_BYTES).optional(),
+});
+
+export const sendVoiceMessageSchema = Joi.object({
+  key: Joi.string().required(),
 });
 
 export const addClientDocumentSchema = Joi.object({

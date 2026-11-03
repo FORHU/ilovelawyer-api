@@ -1,6 +1,16 @@
 import prisma from "../lib/prisma";
-import { IntakeMessageRole, IntakeMessageReplyStatus } from "@prisma/client";
-import { openIntakeMessage, openIntakeMessages, sealIntakeMessageContent, sealIntakePendingReply } from "../utils/intake-message-content";
+import { IntakeMessageRole, IntakeMessageReplyStatus, Prisma } from "@prisma/client";
+import { openIntakeMessage, openIntakeMessages, sealIntakeMessageContent, sealIntakePendingReply, sealReplyAudioTimingsText } from "../utils/intake-message-content";
+import type { MarkTiming } from "../utils/polly";
+
+/** What IntakeMessage.replyAudioTimings holds — see its doc comment in schema.prisma. `text` is
+ * the markdown-stripped text actually sent to Polly, which sentenceTimings/wordTimings index
+ * into (never `content`, which still has the chat persona's markdown). */
+export interface ReplyAudioTimings {
+  text: string;
+  sentenceTimings: MarkTiming[];
+  wordTimings: MarkTiming[];
+}
 
 /** Stable 32-bit key for a case id, for the advisory lock below — same idiom as cron-lock.ts's
  * lockKey, duplicated rather than imported since that one hashes a job name, not a case id, and
@@ -79,7 +89,13 @@ export default class IntakeChatRepo {
    * caller's check, inside the same lock, now sees the first's row. Returns null (same meaning as
    * hasPendingTurn returning true) when another turn is already pending; the created message
    * otherwise. */
-  static async createUserMessageIfNoPendingTurn(caseId: string, content: string, userId: string, documentIds?: string[]) {
+  static async createUserMessageIfNoPendingTurn(
+    caseId: string,
+    content: string,
+    userId: string,
+    documentIds?: string[],
+    audioKey?: string,
+  ) {
     return prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKeyFor(caseId)})`;
       const last = await tx.intakeMessage.findFirst({
@@ -89,9 +105,29 @@ export default class IntakeChatRepo {
       });
       if (last?.role === "user" && last.replyStatus === "PENDING") return null;
       const stored = await tx.intakeMessage.create({
-        data: { caseId, role: "user", content: sealIntakeMessageContent(content), userId, documentIds: documentIds ?? [], replyStatus: "PENDING" },
+        data: { caseId, role: "user", content: sealIntakeMessageContent(content), userId, documentIds: documentIds ?? [], replyStatus: "PENDING", audioKey },
       });
       return openIntakeMessage(stored) ?? stored;
+    });
+  }
+
+  /** Overwrites a voice turn's placeholder content with its transcript once Amazon Transcribe
+   * finishes — the one write IntakeChatSvc.runIntakeGenerationJob does before generation starts. */
+  static async setTranscribedContent(messageId: string, transcript: string) {
+    const stored = await prisma.intakeMessage.update({
+      where: { id: messageId },
+      data: { content: sealIntakeMessageContent(transcript) },
+    });
+    return openIntakeMessage(stored) ?? stored;
+  }
+
+  /** Stamps a voice turn's assistant reply with its synthesized audio's S3 key, called before
+   * chat:done fires so the event always means "everything, including audio, is ready". */
+  static async setReplyAudio(messageId: string, audioKey: string, timings: ReplyAudioTimings) {
+    const sealed: ReplyAudioTimings = { ...timings, text: sealReplyAudioTimingsText(timings.text) };
+    return prisma.intakeMessage.update({
+      where: { id: messageId },
+      data: { replyAudioKey: audioKey, replyAudioTimings: sealed as unknown as Prisma.InputJsonValue },
     });
   }
 

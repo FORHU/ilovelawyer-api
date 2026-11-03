@@ -31,8 +31,14 @@ export interface IntakeChatGenerationJob {
   userId: string;
   caseId: string;
   sessionId: string;
+  /** Empty for a voice-originated turn until the worker transcribes audioS3Key — see
+   * IntakeChatSvc.runIntakeGenerationJob's transcription step, which fills this in before doing
+   * anything else. */
   userInput: string;
   documentIds?: string[];
+  /** Set only for a voice-originated turn: the client's recorded audio, already uploaded to S3.
+   * The worker transcribes this first and uses the result as userInput for the rest of the job. */
+  audioS3Key?: string;
   enqueuedAt?: number;
 }
 
