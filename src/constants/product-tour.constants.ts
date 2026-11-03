@@ -17,6 +17,9 @@ export const CLIENT_PRODUCT_TOUR_TRACKS = ["client-welcome", "client-cases", "cl
 
 export const ALL_PRODUCT_TOUR_TRACKS: readonly string[] = [...PRODUCT_TOUR_TRACKS, ...CLIENT_PRODUCT_TOUR_TRACKS];
 
+export const isLawyerTourTrack = (track: string) => (PRODUCT_TOUR_TRACKS as readonly string[]).includes(track);
+export const isClientTourTrack = (track: string) => (CLIENT_PRODUCT_TOUR_TRACKS as readonly string[]).includes(track);
+
 // Step ids are short slugs ("ask", "newcase"); these bounds only keep junk out of the row.
 export const PRODUCT_TOUR_STEP_ID_MAX = 40;
 export const PRODUCT_TOUR_MAX_STEPS = 50;

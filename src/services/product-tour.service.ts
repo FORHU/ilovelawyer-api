@@ -1,7 +1,7 @@
 import { ProductTourStatus } from "@prisma/client";
 import ProductTourRepo from "../repositories/product-tour.repository";
 import AuthRepo from "../repositories/auth.repository";
-import { PRODUCT_TOUR_TRACKS } from "../constants";
+import { PRODUCT_TOUR_TRACKS, isLawyerTourTrack } from "../constants";
 
 type TourState = {
   track: string;
@@ -31,7 +31,7 @@ export default class ProductTourSvc {
   ): Promise<TourState> {
     const currentStep = input.status === ProductTourStatus.IN_PROGRESS ? input.currentStep : null;
     const row = await ProductTourRepo.upsert(userId, track, { ...input, currentStep, doneSteps: [...new Set(input.doneSteps)] });
-    if (isFinished(input.status) && (PRODUCT_TOUR_TRACKS as readonly string[]).includes(track)) await completeOnboardingIfToursFinished(userId);
+    if (isFinished(input.status) && isLawyerTourTrack(track)) await completeOnboardingIfToursFinished(userId);
     return toState(row);
   }
 }

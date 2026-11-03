@@ -9,7 +9,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import ProductTourSvc from "../src/services/product-tour.service";
 import ProductTourRepo from "../src/repositories/product-tour.repository";
 import AuthRepo from "../src/repositories/auth.repository";
-import { ALL_PRODUCT_TOUR_TRACKS, CLIENT_PRODUCT_TOUR_TRACKS, PRODUCT_TOUR_TRACKS } from "../src/constants";
+import { ALL_PRODUCT_TOUR_TRACKS, CLIENT_PRODUCT_TOUR_TRACKS, PRODUCT_TOUR_TRACKS, isClientTourTrack, isLawyerTourTrack } from "../src/constants";
 import { saveProductTourSchema } from "../src/validation/users.validation";
 
 describe("ProductTourSvc", () => {
@@ -90,6 +90,18 @@ describe("ProductTourSvc", () => {
       await ProductTourSvc.save("u1", track, { status: "COMPLETED", archetype: null, currentStep: null, doneSteps: [] });
     }
     expect(onboarded).to.deep.equal([]);
+  });
+
+  it("tells a client track from a lawyer track", () => {
+    for (const track of CLIENT_PRODUCT_TOUR_TRACKS) {
+      expect(isClientTourTrack(track)).to.equal(true);
+      expect(isLawyerTourTrack(track)).to.equal(false);
+    }
+    for (const track of PRODUCT_TOUR_TRACKS) {
+      expect(isLawyerTourTrack(track)).to.equal(true);
+      expect(isClientTourTrack(track)).to.equal(false);
+    }
+    expect(isClientTourTrack("nope") || isLawyerTourTrack("nope")).to.equal(false);
   });
 
   it("keeps the client tracks apart from the lawyer app's tracks", () => {
