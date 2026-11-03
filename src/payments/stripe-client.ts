@@ -12,6 +12,19 @@ export function stripeClient(): Stripe {
   return client;
 }
 
+/** Whether a Stripe call that threw definitely did nothing: Stripe refused or never processed the
+ * request. Anything else (a timeout, a connection drop, a 5xx) may have gone through, so the caller
+ * must wait for the webhook rather than record a failure. */
+export function stripeRefused(err: unknown): boolean {
+  return (
+    err instanceof Stripe.errors.StripeInvalidRequestError ||
+    err instanceof Stripe.errors.StripeCardError ||
+    err instanceof Stripe.errors.StripeAuthenticationError ||
+    err instanceof Stripe.errors.StripePermissionError ||
+    err instanceof Stripe.errors.StripeRateLimitError
+  );
+}
+
 /** Checks a webhook delivery's Stripe-Signature against STRIPE_WEBHOOK_SECRET and parses it. Throws
  * a 400 for a bad or missing signature, so a forged call is refused before anything reads it. */
 export function verifyStripeWebhook(rawBody: Buffer, signature: string | undefined, secret = STRIPE_WEBHOOK_SECRET): Stripe.Event {

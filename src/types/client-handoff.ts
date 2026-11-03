@@ -21,8 +21,8 @@ export const CLIENT_REQUEST_STATUSES = [
   // any lawyer has joined or quoted.
   "CLAIMED", // a lawyer has joined: conflict check, then quote within 24h
   "QUOTED", // a quote is in; the client confirms or declines
-  "CONFIRMED", // the client confirmed; the per-case fee is being charged (or failed and awaits a new card)
-  "ENGAGED", // fee paid; the lawyer has read-only access to the client's case
+  "CONFIRMED", // the client accepted a quote and is paying it (before quotation payments: the per-case fee was being charged)
+  "ENGAGED", // the client paid; the lawyer has read-only access to the client's case
   "CLOSED", // the lawyer closed or the client ended the engagement; live access ended
   "EXPIRED", // unclaimed 48h after routing; ops alerted
   "WITHDRAWN", // the client withdrew before engagement
@@ -96,16 +96,88 @@ export type ReleaseReason = (typeof RELEASE_REASONS)[number];
 export const LAWYER_VERIFICATION_STATUSES = ["UNSUBMITTED", "PENDING", "VERIFIED", "REJECTED"] as const;
 export type LawyerVerificationStatus = (typeof LAWYER_VERIFICATION_STATUSES)[number];
 
+/** PER_CASE_FEE is history: requests accepted before quotation payments. New requests charge none. */
 export const CHARGE_KINDS = ["PER_CASE_FEE", "AI_TOP_UP"] as const;
 export type ChargeKind = (typeof CHARGE_KINDS)[number];
 
 export const CHARGE_STATUSES = ["PENDING", "SUCCEEDED", "FAILED", "REFUNDED", "PARTIALLY_REFUNDED"] as const;
 export type ChargeStatus = (typeof CHARGE_STATUSES)[number];
 
+/** A lawyer's quotation. The lawyer drafts it (DRAFT) and sends it (SENT); the client accepts
+ * (ACCEPTED, the amount is then fixed) and pays (PAID), or rejects it (REJECTED). WITHDRAWN: the
+ * lawyer took it back or gave the request back. EXPIRED: the lawyer's expiry passed before it was
+ * accepted and paid. NOT_CHOSEN: the client accepted another lawyer's quote. */
+export const QUOTATION_STATUSES = ["DRAFT", "SENT", "ACCEPTED", "PAID", "REJECTED", "WITHDRAWN", "EXPIRED", "NOT_CHOSEN"] as const;
+export type QuotationStatus = (typeof QUOTATION_STATUSES)[number];
+
+/** One attempt by the client at paying an accepted quotation. */
+export const QUOTATION_PAYMENT_STATUSES = ["PENDING", "SUCCEEDED", "FAILED", "CANCELED", "REFUNDED", "PARTIALLY_REFUNDED", "DISPUTED"] as const;
+export type QuotationPaymentStatus = (typeof QUOTATION_PAYMENT_STATUSES)[number];
+
+/** The lawyer's share of a payment: PENDING through the hold, then AVAILABLE to withdraw. */
+export const EARNING_STATUSES = ["PENDING", "AVAILABLE", "REVERSED"] as const;
+export type EarningStatus = (typeof EARNING_STATUSES)[number];
+
+export const WITHDRAWAL_STATUSES = ["REQUESTED", "PROCESSING", "PAID", "FAILED", "REJECTED"] as const;
+export type WithdrawalStatus = (typeof WITHDRAWAL_STATUSES)[number];
+
+/** Where the money in a wallet is: waiting out the hold, free to withdraw, on its way to the bank,
+ * or paid out. */
+export const WALLET_BUCKETS = ["PENDING", "AVAILABLE", "RESERVED", "WITHDRAWN"] as const;
+export type WalletBucket = (typeof WALLET_BUCKETS)[number];
+
 /** WARNING from 80% of the engagement's AI budget; EXHAUSTED at 100%, when AI actions stop. */
 export const AI_BUDGET_STATES = ["OK", "WARNING", "EXHAUSTED"] as const;
 export type AiBudgetState = (typeof AI_BUDGET_STATES)[number];
 export const AI_BUDGET_WARNING_PERCENT = 80;
+
+/** What a quote costs the client, as the lawyer app previews it before sending: the lawyer's service
+ * fee (paid out to them in full) plus the platform fee, which is `platformFeeBps` of it, never less
+ * than `minPlatformFee` (a free first consultation has none). */
+export interface QuoteTerms {
+  platformFeeBps: number;
+  minPlatformFee: Money;
+}
+
+/** The lawyer's quote as both apps read it. `total` is what the client pays; `acceptedAmount` is
+ * set once they accept and never changes after. */
+export interface Quotation {
+  id: string;
+  claimId: string;
+  type: QuoteType;
+  status: QuotationStatus;
+  serviceFee: Money;
+  platformFeeBps: number;
+  platformFee: Money;
+  total: Money;
+  acceptedAmount: Money | null;
+  message: string;
+  expiresAt: string;
+  sentAt: string | null;
+  acceptedAt: string | null;
+  paidAt: string | null;
+}
+
+/** The client's payment for a lawyer's quotation, as the engaged lawyer's invoice (GET
+ * /client-requests/:id/invoice). `number` stays the same for the payment. `refunded` is what the
+ * client has been given back so far; `lawyerRefunded` is the part of it that came out of the
+ * lawyer's service fee. `reference` is Stripe's PaymentIntent id, or ours for a dummy payment. */
+export interface QuotationInvoice {
+  number: string;
+  status: "PAID" | "PARTIALLY_REFUNDED" | "REFUNDED" | "DISPUTED";
+  issuedAt: string;
+  payee: { name: string; lawyerName: string };
+  client: { name: string };
+  caseName: string;
+  quoteType: QuoteType;
+  description: string;
+  serviceFee: Money;
+  platformFee: Money;
+  total: Money;
+  refunded: Money;
+  lawyerRefunded: Money;
+  payment: { provider: string; reference: string };
+}
 
 /** Amounts in the currency's minor unit (pence). Prices are placeholders until
  * FORHU/ilovelawyer-app#846 and are read from config, never hard-coded in an app. */
@@ -138,6 +210,14 @@ export const CLIENT_HANDOFF_ERROR_CODES = {
   INVALID_REQUEST_STATUS: "INVALID_REQUEST_STATUS", // 409: details.status is the current status
   // Admin
   REFUND_EXCEEDS_CHARGE: "REFUND_EXCEEDS_CHARGE", // 400
+  // Quotation payments and the lawyer's wallet
+  QUOTATION_EXPIRED: "QUOTATION_EXPIRED", // 409: the lawyer's expiry has passed
+  QUOTATION_EXPIRY_INVALID: "QUOTATION_EXPIRY_INVALID", // 400: the expiry isn't in the future, or is more than the maximum away
+  PAYMENT_DECLINED: "PAYMENT_DECLINED", // 402: the client's payment was refused
+  PAYMENT_IN_PROGRESS: "PAYMENT_IN_PROGRESS", // 409: an earlier attempt is still settling; try again shortly
+  PAYOUT_ACCOUNT_REQUIRED: "PAYOUT_ACCOUNT_REQUIRED", // 409: set up the payout account (Stripe) before withdrawing
+  WITHDRAWAL_BELOW_MINIMUM: "WITHDRAWAL_BELOW_MINIMUM", // 400: details.minimum is the tenant's minimum withdrawal
+  INSUFFICIENT_BALANCE: "INSUFFICIENT_BALANCE", // 409: details.available is what can be withdrawn
 } as const;
 export type ClientHandoffErrorCode = keyof typeof CLIENT_HANDOFF_ERROR_CODES;
 
@@ -242,7 +322,14 @@ export const CLIENT_HANDOFF_SOCKET_EVENTS = {
   ENGAGEMENT_DOCUMENT_ADDED: "engagement:document-added",
   ENGAGEMENT_DOCUMENT_REMOVED: "engagement:document-removed",
   ENGAGEMENT_AI_BUDGET: "engagement:ai-budget",
+  WALLET_UPDATED: "wallet:updated",
 } as const;
+
+/** To the lawyer whose wallet changed (an earning, a release, a withdrawal paid or failed): refetch
+ * the wallet. For a firm's wallet, sent to its owners and admins. */
+export interface WalletUpdatedEvent {
+  walletId: string;
+}
 
 export interface ClientHandoffSocketPayloads {
   "client-request:new": ClientRequestNewEvent;
@@ -253,4 +340,5 @@ export interface ClientHandoffSocketPayloads {
   "engagement:document-added": EngagementDocumentAddedEvent;
   "engagement:document-removed": EngagementDocumentRemovedEvent;
   "engagement:ai-budget": EngagementAiBudgetEvent;
+  "wallet:updated": WalletUpdatedEvent;
 }

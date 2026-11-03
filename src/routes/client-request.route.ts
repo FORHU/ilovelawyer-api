@@ -18,13 +18,21 @@ router.post("/:id/pass", asyncHandler(ClientRequestLawyerCtrl.pass));
 router.get("/:id/parties", asyncHandler(ClientRequestLawyerCtrl.parties));
 router.post("/:id/release", asyncHandler(ClientRequestLawyerCtrl.release));
 router.post("/:id/quote", asyncHandler(ClientRequestLawyerCtrl.quote));
-// Retrying the per-case fee after the card was declined and updated (#513).
+// The quotation in steps: a draft (priced with the platform fee, with the lawyer's expiry), sending
+// it, and taking it back before the client accepts.
+router.put("/:id/quotation", asyncHandler(ClientRequestLawyerCtrl.saveQuotation));
+router.post("/:id/quotation/send", asyncHandler(ClientRequestLawyerCtrl.sendQuotation));
+router.post("/:id/quotation/withdraw", asyncHandler(ClientRequestLawyerCtrl.withdrawQuotation));
+// Retrying the per-case fee after the card was declined and updated (#513). Only requests accepted
+// before quotation payments have one.
 router.post("/:id/charge/retry", asyncHandler(ClientRequestLawyerCtrl.retryCharge));
 // Copying the engaged client's case to the lawyer's own workspace (#514).
 router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));
 // The client's intake package (ADR 0018): the full CaseIntake, the transcript and the
 // documents, once engaged. Read-only; every read is audited.
 router.get("/:id/intake-package", asyncHandler(ClientRequestLawyerCtrl.intakePackage));
+// The client's payment for the lawyer's quote, as the lawyer's invoice. Engaged or closed.
+router.get("/:id/invoice", asyncHandler(ClientRequestLawyerCtrl.invoice));
 // The engagement's AI budget meter (#515).
 router.get("/:id/ai-budget", asyncHandler(ClientRequestLawyerCtrl.aiBudget));
 // Buying an AI top-up pack for it, once the lawyer approves the charge (#516).

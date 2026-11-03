@@ -4,7 +4,7 @@ import ClientRequestLawyerSvc, { type LawyerContext } from "../services/client-r
 import EngagementMessageSvc from "../services/engagement-message.service";
 import HttpError from "../utils/http-error";
 import { getTenantContext } from "../utils/tenant-context";
-import { aiTopUpSchema, closeClientRequestSchema, listEngagementMessagesSchema, postEngagementMessageSchema, listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
+import { aiTopUpSchema, closeClientRequestSchema, listEngagementMessagesSchema, postEngagementMessageSchema, legacyQuoteClientRequestSchema, listLawyerClientRequestsSchema, quoteClientRequestSchema, releaseClientRequestSchema } from "../validation/client-request.validation";
 
 function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
   const { error, value } = schema.validate(input, { stripUnknown: true, convert: true });
@@ -48,8 +48,24 @@ export default class ClientRequestLawyerCtrl {
   }
 
   static async quote(req: Request, res: Response) {
-    const body = validate(quoteClientRequestSchema, req.body ?? {});
+    const body = validate(legacyQuoteClientRequestSchema, req.body ?? {});
     res.status(200).json(await ClientRequestLawyerSvc.quote(lawyerOf(req), req.params.id, body));
+  }
+
+  /** PUT /client-requests/:id/quotation: save the draft. */
+  static async saveQuotation(req: Request, res: Response) {
+    const body = validate(quoteClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestLawyerSvc.saveQuotation(lawyerOf(req), req.params.id, body));
+  }
+
+  /** POST /client-requests/:id/quotation/send */
+  static async sendQuotation(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.sendQuotation(lawyerOf(req), req.params.id));
+  }
+
+  /** POST /client-requests/:id/quotation/withdraw */
+  static async withdrawQuotation(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.withdrawQuotation(lawyerOf(req), req.params.id));
   }
 
   static async retryCharge(req: Request, res: Response) {
@@ -58,6 +74,10 @@ export default class ClientRequestLawyerCtrl {
 
   static async copy(req: Request, res: Response) {
     res.status(202).json(await ClientRequestLawyerSvc.copy(lawyerOf(req), req.params.id));
+  }
+
+  static async invoice(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestLawyerSvc.invoice(lawyerOf(req), req.params.id));
   }
 
   static async aiBudget(req: Request, res: Response) {

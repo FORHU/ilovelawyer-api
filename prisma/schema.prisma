@@ -529,8 +529,8 @@ model IntakeMessage {
   findLawyerResultIds String[]                  @default([])
   markedReady         Boolean                   @default(false)
 
-  case   Case             @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  parent IntakeMessage?   @relation("IntakeMessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
+  case    Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  parent  IntakeMessage?  @relation("IntakeMessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)
   replies IntakeMessage[] @relation("IntakeMessageThread")
 
   @@index([caseId])
@@ -1394,12 +1394,13 @@ model ClientRequest {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
-  case     Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  client   User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  claims   ClientRequestClaim[]
-  charges  OrganizationCharge[]
-  feedback EngagementFeedback?
-  messages EngagementMessage[]
+  case       Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client     User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  claims     ClientRequestClaim[]
+  charges    OrganizationCharge[]
+  feedback   EngagementFeedback?
+  messages   EngagementMessage[]
+  quotations Quotation[]
 
   @@index([caseId, status])
   @@index([clientId, createdAt])
@@ -1516,10 +1517,280 @@ model ClientRequestClaim {
   lawyer       User                @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
   organization Organization?       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   messages     EngagementMessage[]
+  quotation    Quotation?
 
   @@index([requestId])
   @@index([lawyerId, outcome])
   @@index([outcome, expiresAt])
+}
+
+// A Quotation's lifecycle (types/client-handoff.ts QUOTATION_STATUSES). NOT_CHOSEN: the client
+// accepted another lawyer's quote on the same request.
+enum QuotationStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  PAID
+  REJECTED
+  WITHDRAWN
+  EXPIRED
+  NOT_CHOSEN
+}
+
+// The lawyer's quote to the client (QuotationSvc), one per claim. The lawyer sets the service fee,
+// which is paid out to them in full; the platform fee is added on top for the client from the
+// tenant's PayoutSettings, frozen when the quote is sent, so the total the client sees never changes.
+// The lawyer also sets `expiresAt`: the client accepts and pays before it. The claim's quote columns
+// (quoteType, quoteAmountMinor, ..., quotedAt) are kept in step on send for the queries that predate
+// this table (the lapse, the reminder, the pick-by date); this row is what the apps read.
+model Quotation {
+  id                  String          @id @default(uuid())
+  claimId             String          @unique
+  requestId           String
+  lawyerId            String
+  type                QuoteType
+  serviceFeeMinor     Int
+  platformFeeBps      Int
+  platformFeeMinor    Int
+  totalAmountMinor    Int
+  // The total the client agreed to, copied when they accepted. What the PaymentIntent charges.
+  acceptedAmountMinor Int?
+  currency            String          @default("GBP")
+  message             String          @default("") @db.Text
+  expiresAt           DateTime
+  status              QuotationStatus @default(DRAFT)
+  sentAt              DateTime?
+  acceptedAt          DateTime?
+  paidAt              DateTime?
+  rejectedAt          DateTime?
+  rejectReason        String?
+  closedAt            DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  claim   ClientRequestClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  request ClientRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@index([status, expiresAt])
+}
+
+enum QuotationPaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  DISPUTED
+}
+
+// The client paying an accepted Quotation (QuotationPaymentSvc), one row per attempt: a retry after a
+// failure is a new PaymentIntent. Kept apart from ClientPayment, which is chat credits. Plain ids, no
+// foreign keys: money records outlive a deleted case or account. `provider` is STRIPE or DUMMY.
+model QuotationPayment {
+  id               String                 @id @default(uuid())
+  quotationId      String
+  requestId        String
+  clientId         String
+  amountMinor      Int
+  // The two parts of amountMinor: the lawyer's and the platform's, copied from the quotation.
+  serviceFeeMinor  Int
+  platformFeeMinor Int
+  currency         String
+  provider         String
+  attempt          Int
+  paymentIntentId  String?                @unique
+  status           QuotationPaymentStatus
+  failureReason    String?
+  refundedMinor    Int                    @default(0)
+  succeededAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  refunds QuotationRefund[]
+
+  @@unique([quotationId, attempt])
+  @@index([quotationId, status])
+  @@index([requestId])
+  @@index([createdAt])
+}
+
+enum QuotationRefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+// Money given back on a QuotationPayment by a platform admin. A full refund gives back the platform fee
+// too; a partial one comes out of the lawyer's service fee only (`serviceFeeMinor`), and the platform
+// fee is kept. The lawyer's earning is reversed by `serviceFeeMinor` once the refund succeeds.
+model QuotationRefund {
+  id               String                @id @default(uuid())
+  paymentId        String
+  amountMinor      Int
+  serviceFeeMinor  Int
+  platformFeeMinor Int
+  reason           String
+  status           QuotationRefundStatus
+  externalId       String?               @unique
+  failureReason    String?
+  createdById      String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  payment QuotationPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+}
+
+// Who a Wallet belongs to (WalletAccessSvc decides who can see and withdraw from it).
+enum WalletOwnerType {
+  ORGANIZATION
+  USER
+}
+
+// A payee's balance (WalletSvc): a firm, or a solo lawyer. Which wallet an earning goes to is
+// EarningsPayeeSvc.payeeOf's call alone, so letting a firm's lawyers be paid to their own (USER)
+// wallets later needs no schema change. No foreign key to the owner: the ledger outlives it.
+// `stripeAccountId` is the owner's Stripe Connect Express account, made on first onboarding.
+model Wallet {
+  id               String          @id @default(uuid())
+  ownerType        WalletOwnerType
+  ownerId          String
+  currency         String          @default("GBP")
+  provider         String?
+  stripeAccountId  String?         @unique
+  payoutsEnabled   Boolean         @default(false)
+  detailsSubmitted Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  entries     WalletLedgerEntry[]
+  earnings    Earning[]
+  withdrawals Withdrawal[]
+
+  @@unique([ownerType, ownerId])
+}
+
+enum EarningStatus {
+  PENDING
+  AVAILABLE
+  REVERSED
+}
+
+// The lawyer's share of one successful QuotationPayment: always the quotation's service fee. PENDING
+// until `availableAt` (the tenant's earningsHoldDays after payment), then AVAILABLE. `disputed` holds
+// it back from release while the client's bank dispute is open. `reversedMinor` is what refunds or a
+// lost dispute took back.
+model Earning {
+  id               String        @id @default(uuid())
+  paymentId        String        @unique
+  walletId         String
+  quotationId      String
+  requestId        String
+  lawyerId         String
+  grossMinor       Int
+  platformFeeMinor Int
+  netMinor         Int
+  reversedMinor    Int           @default(0)
+  currency         String
+  status           EarningStatus @default(PENDING)
+  disputed         Boolean       @default(false)
+  availableAt      DateTime
+  releasedAt       DateTime?
+  createdAt        DateTime      @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@index([walletId, createdAt])
+  @@index([status, availableAt])
+}
+
+enum WalletBucket {
+  PENDING
+  AVAILABLE
+  RESERVED
+  WITHDRAWN
+}
+
+enum WalletEntryKind {
+  EARNING
+  RELEASE
+  WITHDRAWAL
+  REVERSAL
+  ADJUSTMENT
+}
+
+// The wallet's append-only ledger: a balance is the sum of one bucket's entries, never a stored
+// number. A move between buckets is two entries (one negative, one positive). `idempotencyKey` is
+// unique, so a replayed webhook or a sweep that runs twice can't count anything twice.
+model WalletLedgerEntry {
+  id             String          @id @default(uuid())
+  walletId       String
+  bucket         WalletBucket
+  kind           WalletEntryKind
+  amountMinor    Int
+  currency       String
+  sourceId       String?
+  idempotencyKey String          @unique
+  note           String?
+  createdAt      DateTime        @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@index([walletId, bucket])
+  @@index([walletId, createdAt])
+}
+
+enum WithdrawalStatus {
+  REQUESTED
+  PROCESSING
+  PAID
+  FAILED
+  REJECTED
+}
+
+// A payee moving available money to their bank (WalletSvc.withdraw): a Stripe Connect transfer to
+// their connected account, then a payout from it. The amount is reserved when it's requested, and
+// released back to AVAILABLE if the payout fails.
+model Withdrawal {
+  id             String           @id @default(uuid())
+  walletId       String
+  requestedById  String
+  amountMinor    Int
+  currency       String
+  idempotencyKey String           @unique
+  status         WithdrawalStatus
+  provider       String?
+  transferId     String?          @unique
+  payoutId       String?          @unique
+  failureReason  String?
+  paidAt         DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@index([walletId, createdAt])
+  @@index([status])
+}
+
+// The quotation payment terms per tenant, edited in the admin app (PayoutSettingsSvc). A missing row
+// means the defaults (PAYOUT_SETTINGS_DEFAULTS). A change reaches new quotes and new withdrawals only:
+// a sent quote keeps its platform fee, an earning its release date.
+model PayoutSettings {
+  tenantId            String   @id
+  platformFeeBps      Int
+  minPlatformFeeMinor Int
+  earningsHoldDays    Int
+  minWithdrawalMinor  Int
+  currency            String   @default("GBP")
+  updatedById         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model Party {
@@ -3407,6 +3678,7 @@ model Tenant {
   settings                  TenantSetting[]
   paymentPlans              PaymentPlan[]
   clientPromos              ClientPromo[]
+  payoutSettings            PayoutSettings?
 }
 
 // Admin-editable settings scoped to one Tenant (PH / UK) — one row per (tenant, key).

@@ -134,10 +134,22 @@ export const CLIENT_PAYMENT_PROVIDER = (process.env.CLIENT_PAYMENT_PROVIDER || "
  * which saves a test card at once. Separate from CLIENT_PAYMENT_PROVIDER so each side can go live on
  * its own. */
 export const LAWYER_PAYMENT_PROVIDER = (process.env.LAWYER_PAYMENT_PROVIDER || "dummy").trim().toLowerCase();
+/** Who takes a client's payment for a lawyer's quote (payments/quotation-payment-provider.ts):
+ * "stripe" (a PaymentIntent the client app confirms with Stripe's Payment Element; needs
+ * STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY and STRIPE_WEBHOOK_SECRET), or "dummy" (the default),
+ * which settles at once and takes no money. */
+export const QUOTATION_PAYMENT_PROVIDER = (process.env.QUOTATION_PAYMENT_PROVIDER || "dummy").trim().toLowerCase();
+/** Who pays lawyers out (payments/payout-provider.ts): "stripe" (Stripe Connect Express accounts,
+ * transfers and payouts; needs STRIPE_SECRET_KEY and STRIPE_CONNECT_WEBHOOK_SECRET for POST
+ * /api/webhooks/stripe-connect), or "dummy" (the default), which pays out at once and moves no money. */
+export const PAYOUT_PROVIDER = (process.env.PAYOUT_PROVIDER || "dummy").trim().toLowerCase();
 export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || undefined;
 /** Public by design: the client app needs it to show Stripe's payment form. */
 export const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || undefined;
 export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || undefined;
+/** Signs the Connect webhook (events on lawyers' connected accounts: account.updated, payout.*),
+ * a separate endpoint in Stripe's dashboard from STRIPE_WEBHOOK_SECRET's. */
+export const STRIPE_CONNECT_WEBHOOK_SECRET = process.env.STRIPE_CONNECT_WEBHOOK_SECRET || undefined;
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID as string;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET as string;
 /** Encrypts User.googleRefreshToken at rest (src/utils/google-token-crypto.ts): 32 bytes, as

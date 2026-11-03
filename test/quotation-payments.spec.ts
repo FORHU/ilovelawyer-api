@@ -1,0 +1,779 @@
+/** Quotation payments end to end, through the real routes against the real database: the lawyer drafts
+ * and sends a quotation (service fee, platform fee on top, their own expiry), the client accepts and
+ * pays it through ilovelawyer, the lawyer's service fee lands in their firm's wallet PENDING, the sweep
+ * releases it, and they withdraw it. Also the expiry, a free first consultation, refunds, a Stripe
+ * PaymentIntent settled by its webhook, and the admin's payout settings. The dummy providers stand in
+ * for Stripe unless a test sets a fake. */
+import crypto from "crypto";
+import { expect } from "chai";
+import { describe, it, before, after, beforeEach, afterEach } from "mocha";
+import request from "supertest";
+import Stripe from "stripe";
+import app from "../src/app";
+import prisma from "../src/lib/prisma";
+import { redis } from "../src/lib/redis";
+import { givePracticeArea } from "./support/practice-area-fixture";
+import loginToken from "../src/utils/loginToken";
+import ClientBillingSvc from "../src/services/client-billing.service";
+import QuotationPaymentSvc from "../src/services/quotation-payment.service";
+import QuotationPaymentRepo from "../src/repositories/quotation-payment.repository";
+import WalletSvc from "../src/services/wallet.service";
+import {
+  setQuotationPaymentProvider,
+  QUOTATION_PAYMENT_PURPOSE,
+  type IntentQuotationPaymentProvider,
+  type QuotationPaymentResult,
+} from "../src/payments/quotation-payment-provider";
+import { setPayoutProvider, type ConnectPayoutProvider } from "../src/payments/payout-provider";
+import { PAYOUT_SETTINGS_DEFAULTS, payoutSettingsCacheKey, platformFeeOf } from "../src/constants/payout.constants";
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+describe("quotation payments", function () {
+  // Several real requests per test, some through the admin routes.
+  this.timeout(15_000);
+  const lawyerId = crypto.randomUUID();
+  const memberId = crypto.randomUUID();
+  const clientId = crypto.randomUUID();
+  const adminId = crypto.randomUUID();
+  const orgId = crypto.randomUUID();
+  const clientOrgId = crypto.randomUUID();
+  const caseId = crypto.randomUUID();
+  const webhookEvents: string[] = [];
+  let tenantId: string;
+  let requestId: string;
+  let claimId: string;
+
+  const auth = (id: string) => ({ Authorization: `Bearer ${loginToken(id, false).accessToken}` });
+  const asLawyer = { ...auth(lawyerId), "X-Organization-Id": orgId };
+  const lawyerView = () => request(app).get(`/api/client-requests/${requestId}`).set(asLawyer);
+  const draft = (body: object) => request(app).put(`/api/client-requests/${requestId}/quotation`).set(asLawyer).send(body);
+  const send = () => request(app).post(`/api/client-requests/${requestId}/quotation/send`).set(asLawyer);
+  const clientView = () => request(app).get(`/api/client/lawyer-requests/${requestId}`).set(auth(clientId));
+  const accept = (quotationId: string, body: object = { disclosureAcknowledged: true }) =>
+    request(app).post(`/api/client/lawyer-requests/${requestId}/quotations/${quotationId}/accept`).set(auth(clientId)).send(body);
+  const pay = (quotationId: string, body: object = {}) => request(app).post(`/api/client/lawyer-requests/${requestId}/quotations/${quotationId}/payment`).set(auth(clientId)).send(body);
+  const wallet = (as = lawyerId) => request(app).get(`/api/organizations/${orgId}/wallet`).set(auth(as));
+  const withdraw = (amountMinor: number, key = crypto.randomUUID(), as = lawyerId) =>
+    request(app).post(`/api/organizations/${orgId}/wallet/withdrawals`).set({ ...auth(as), "Idempotency-Key": key }).send({ amount: { amountMinor, currency: "GBP" } });
+
+  const inDays = (days: number) => new Date(Date.now() + days * DAY_MS).toISOString();
+  const FIXED_FEE = (amountMinor = 60000, expiresAt = inDays(5)) => ({ type: "FIXED_FEE", amount: { amountMinor, currency: "GBP" }, message: "I can take this on for a fixed fee.", expiresAt });
+
+  /** Drafts and sends a quote, then returns its id. */
+  const quoted = async (body = FIXED_FEE()) => {
+    await draft(body).expect(200);
+    const { body: after } = await send().expect(200);
+    return after.quotation.id as string;
+  };
+  /** Quoted, accepted and paid with the dummy. */
+  const engaged = async (body = FIXED_FEE()) => {
+    const id = await quoted(body);
+    await accept(id).expect(200);
+    await pay(id).expect(200);
+    return id;
+  };
+
+  before(async () => {
+    const tenant = await prisma.tenant.upsert({ where: { code: "UK" }, update: {}, create: { code: "UK", name: "United Kingdom" } });
+    tenantId = tenant.id;
+    const user = (id: string, name: string, role: "LAWYER" | "USER" | "ADMIN") => ({ id, email: `qpay-${id}@example.com`, username: `qpay-${id}`, name, role, tenantId: tenant.id });
+    await prisma.user.createMany({
+      data: [user(lawyerId, "Lena Lawyer", "LAWYER"), user(memberId, "Mo Member", "LAWYER"), user(clientId, "Clara Client", "USER"), user(adminId, "Ann Admin", "ADMIN")],
+    });
+    await prisma.organization.create({
+      data: {
+        id: orgId,
+        name: "Lena Law LLP",
+        slug: `qpay-${orgId}`,
+        tenantId: tenant.id,
+        createdById: lawyerId,
+        members: { create: [{ userId: lawyerId, role: "OWNER", status: "ACCEPTED" }, { userId: memberId, role: "MEMBER", status: "ACCEPTED" }] },
+      },
+    });
+    await prisma.organization.create({
+      data: { id: clientOrgId, name: "Clara Client", slug: `qpay-${clientOrgId}`, tenantId: tenant.id, createdById: clientId, isPersonal: true, members: { create: { userId: clientId, role: "OWNER", status: "ACCEPTED" } } },
+    });
+    await prisma.lawyerClientProfile.create({ data: { userId: lawyerId, acceptingRequests: true, verificationStatus: "VERIFIED", verifiedAt: new Date() } });
+    await givePracticeArea([lawyerId]);
+    await prisma.lawyerUkRegistration.create({ data: { userId: lawyerId, regulator: "SRA", registrationNumber: "333", qualifiedJurisdictions: ["England and Wales"] } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, organizationId: clientOrgId, caseName: "Unfair dismissal", caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } });
+  });
+
+  const cleanWallet = async () => {
+    const w = await prisma.wallet.findUnique({ where: { ownerType_ownerId: { ownerType: "ORGANIZATION", ownerId: orgId } } });
+    if (!w) return;
+    await prisma.walletLedgerEntry.deleteMany({ where: { walletId: w.id } });
+    await prisma.earning.deleteMany({ where: { walletId: w.id } });
+    await prisma.withdrawal.deleteMany({ where: { walletId: w.id } });
+    await prisma.wallet.delete({ where: { id: w.id } });
+  };
+
+  const cleanSettings = async () => {
+    await prisma.payoutSettings.deleteMany({ where: { tenantId } });
+    await redis.del(payoutSettingsCacheKey(tenantId));
+  };
+
+  after(async () => {
+    await cleanWallet();
+    await cleanSettings();
+    await prisma.quotationPayment.deleteMany({ where: { clientId } });
+    await prisma.clientRequest.deleteMany({ where: { caseId } });
+    await prisma.auditEvent.deleteMany({ where: { caseId } });
+    await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, memberId, clientId] } } });
+    await prisma.caseAccess.deleteMany({ where: { caseId } });
+    await prisma.case.deleteMany({ where: { id: caseId } });
+    await prisma.lawyerClientProfile.deleteMany({ where: { userId: lawyerId } });
+    await prisma.organizationMember.deleteMany({ where: { userId: { in: [lawyerId, memberId, clientId] } } });
+    await prisma.organization.deleteMany({ where: { id: { in: [orgId, clientOrgId] } } });
+    await prisma.user.deleteMany({ where: { id: { in: [lawyerId, memberId, clientId, adminId] } } });
+    await prisma.stripeWebhookEvent.deleteMany({ where: { id: { in: webhookEvents } } });
+  });
+
+  beforeEach(async () => {
+    await cleanWallet();
+    await cleanSettings();
+    await prisma.quotationPayment.deleteMany({ where: { clientId } });
+    await prisma.clientRequest.deleteMany({ where: { caseId } });
+    await prisma.caseAccess.deleteMany({ where: { caseId } });
+    const now = new Date();
+    const row = await prisma.clientRequest.create({
+      data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: now, status: "ROUTED", routedAt: now, routingExpiresAt: new Date(now.getTime() + 48 * HOUR_MS) },
+    });
+    requestId = row.id;
+    claimId = (await prisma.clientRequestClaim.create({ data: { requestId, lawyerId, organizationId: orgId, claimedAt: now, expiresAt: new Date(now.getTime() + 24 * HOUR_MS) } })).id;
+  });
+
+  afterEach(() => {
+    setQuotationPaymentProvider(null);
+    setPayoutProvider(null);
+  });
+
+  describe("the lawyer's quotation", () => {
+    it("prices a draft with the platform fee on top, and keeps it from the client until sent", async () => {
+      const { body } = await draft(FIXED_FEE(60000)).expect(200);
+      const fee = platformFeeOf(60000, PAYOUT_SETTINGS_DEFAULTS.platformFeeBps, PAYOUT_SETTINGS_DEFAULTS.minPlatformFeeMinor);
+      expect(fee).to.equal(9000);
+      expect(body.quotation).to.deep.include({ status: "DRAFT", platformFeeBps: 1500 });
+      expect(body.quotation.serviceFee).to.deep.equal({ amountMinor: 60000, currency: "GBP" });
+      expect(body.quotation.platformFee).to.deep.equal({ amountMinor: 9000, currency: "GBP" });
+      expect(body.quotation.total).to.deep.equal({ amountMinor: 69000, currency: "GBP" });
+      expect(body.quoteTerms).to.deep.equal({ platformFeeBps: 1500, minPlatformFee: { amountMinor: 500, currency: "GBP" } });
+      expect(body.status).to.equal("CLAIMED");
+      const client = (await clientView().expect(200)).body;
+      expect(client.lawyers[0].quotation).to.equal(null);
+      expect(client.status).to.equal("CLAIMED");
+    });
+
+    it("never takes less than the minimum platform fee", async () => {
+      const { body } = await draft(FIXED_FEE(2000)).expect(200);
+      expect(body.quotation.platformFee.amountMinor).to.equal(500);
+      expect(body.quotation.total.amountMinor).to.equal(2500);
+    });
+
+    it("needs an expiry in the future, and no more than 90 days away", async () => {
+      expect((await draft(FIXED_FEE(60000, new Date(Date.now() - HOUR_MS).toISOString())).expect(400)).body.code).to.equal("QUOTATION_EXPIRY_INVALID");
+      expect((await draft(FIXED_FEE(60000, inDays(91))).expect(400)).body.code).to.equal("QUOTATION_EXPIRY_INVALID");
+      await draft({ ...FIXED_FEE(), expiresAt: undefined }).expect(400);
+    });
+
+    it("sends it once: the client sees the fee split, the total and the expiry", async () => {
+      const expiresAt = inDays(10);
+      await draft(FIXED_FEE(60000, expiresAt)).expect(200);
+      const sent = (await send().expect(200)).body;
+      expect(sent.status).to.equal("QUOTED");
+      expect(sent.quotation.status).to.equal("SENT");
+      await send().expect(409);
+      await draft(FIXED_FEE(70000)).expect(409);
+
+      const client = (await clientView().expect(200)).body;
+      expect(client.status).to.equal("QUOTED");
+      expect(client.quotation).to.deep.include({ status: "SENT", expiresAt: new Date(expiresAt).toISOString() });
+      expect(client.quotation.total.amountMinor).to.equal(69000);
+      expect(client.referralDisclosure).to.include("The lawyer receives their full fee");
+      const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true } });
+      expect(row.pickByAt?.toISOString()).to.equal(new Date(expiresAt).toISOString());
+      expect(row.claims[0]!.quotedAt).to.be.instanceOf(Date);
+    });
+
+    it("keeps the fee it was sent with when an admin changes the rate later", async () => {
+      const id = await quoted(FIXED_FEE(60000));
+      await request(app).patch("/api/admin/settings/tenants/UK/payout-settings").set(auth(adminId)).send({ platformFeeBps: 2000 }).expect(200);
+      const q = await prisma.quotation.findUniqueOrThrow({ where: { id } });
+      expect(q).to.deep.include({ platformFeeBps: 1500, platformFeeMinor: 9000, totalAmountMinor: 69000 });
+      expect((await lawyerView().expect(200)).body.quoteTerms.platformFeeBps).to.equal(2000);
+    });
+  });
+
+  describe("the one-step quote older apps send", () => {
+    it("takes a quote with no expiry, valid for the default 7 days", async () => {
+      const { body } = await request(app)
+        .post(`/api/client-requests/${requestId}/quote`)
+        .set(asLawyer)
+        .send({ type: "FIXED_FEE", amount: { amountMinor: 60000, currency: "GBP" }, message: "I can take this on for a fixed fee." })
+        .expect(200);
+      expect(body.quotation.status).to.equal("SENT");
+      expect(new Date(body.quotation.expiresAt).getTime()).to.be.closeTo(Date.now() + 7 * DAY_MS, 60_000);
+    });
+  });
+
+  describe("accepting and paying", () => {
+    it("accepting fixes the total and charges the lawyer nothing", async () => {
+      const id = await quoted();
+      await accept(id, { disclosureAcknowledged: false }).expect(400);
+      const { body } = await accept(id).expect(200);
+      expect(body.status).to.equal("CONFIRMED");
+      expect(body.awaitingPayment).to.equal(true);
+      expect(body.quotation).to.deep.include({ status: "ACCEPTED" });
+      expect(body.quotation.acceptedAmount).to.deep.equal({ amountMinor: 69000, currency: "GBP" });
+      expect(await prisma.organizationCharge.count({ where: { requestId } })).to.equal(0);
+    });
+
+    it("the client pays the total; the lawyer's firm gets the full service fee, PENDING, and access to the case", async () => {
+      const id = await quoted();
+      await accept(id).expect(200);
+      const paid = (await pay(id).expect(200)).body;
+      expect(paid.intent).to.equal(null);
+      expect(paid.payment).to.deep.include({ status: "SUCCEEDED", provider: "DUMMY" });
+      expect(paid.payment.amount.amountMinor).to.equal(69000);
+      expect(paid.payment.serviceFee.amountMinor).to.equal(60000);
+      expect(paid.payment.platformFee.amountMinor).to.equal(9000);
+
+      const client = (await clientView().expect(200)).body;
+      expect(client.status).to.equal("ENGAGED");
+      expect(client.quotation.status).to.equal("PAID");
+      const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
+      expect(access?.permission).to.equal("VIEW");
+
+      const w = (await wallet().expect(200)).body;
+      expect(w.balances.pending.amountMinor).to.equal(60000);
+      expect(w.balances.available.amountMinor).to.equal(0);
+      expect(w.minWithdrawal.amountMinor).to.equal(1000);
+      const earning = await prisma.earning.findFirstOrThrow({ where: { requestId } });
+      expect(earning).to.deep.include({ grossMinor: 69000, platformFeeMinor: 9000, netMinor: 60000, status: "PENDING" });
+      expect(earning.availableAt.getTime()).to.be.closeTo(Date.now() + 7 * DAY_MS, 60_000);
+    });
+
+    it("a declined payment leaves the request waiting, and the next attempt goes through", async () => {
+      const id = await quoted();
+      await accept(id).expect(200);
+      expect((await pay(id, { testOutcome: "decline" }).expect(402)).body.code).to.equal("PAYMENT_DECLINED");
+      expect((await clientView().expect(200)).body.status).to.equal("CONFIRMED");
+      await pay(id).expect(200);
+      const attempts = await prisma.quotationPayment.findMany({ where: { quotationId: id }, orderBy: { attempt: "asc" } });
+      expect(attempts.map((a) => [a.attempt, a.status])).to.deep.equal([
+        [1, "FAILED"],
+        [2, "SUCCEEDED"],
+      ]);
+      await pay(id).expect(409);
+    });
+
+    it("a free first consultation engages the request on accepting, with nothing to pay", async () => {
+      const id = await quoted({ type: "FIRST_CONSULTATION", amount: { amountMinor: 0, currency: "GBP" }, message: "First call is free.", expiresAt: inDays(3) });
+      const { body } = await accept(id).expect(200);
+      expect(body.status).to.equal("ENGAGED");
+      expect(body.quotation.total.amountMinor).to.equal(0);
+      expect(await prisma.quotationPayment.count({ where: { quotationId: id } })).to.equal(0);
+    });
+  });
+
+  describe("with Stripe", () => {
+    let stripeNow: Map<string, QuotationPaymentResult>;
+    const fake: IntentQuotationPaymentProvider = {
+      name: "STRIPE",
+      mode: "intent",
+      async createIntent(req) {
+        return { paymentIntentId: `pi_${req.paymentId}`, clientSecret: `secret_${req.paymentId}`, publishableKey: "pk_test" };
+      },
+      async resumeIntent(pi) {
+        return { paymentIntentId: pi, clientSecret: `secret_${pi}`, publishableKey: "pk_test", status: "PENDING", failureReason: null };
+      },
+      async status(pi) {
+        return stripeNow.get(pi) ?? { status: "PENDING", paymentIntentId: pi, failureReason: null };
+      },
+      async cancel(pi) {
+        return stripeNow.get(pi) ?? { status: "CANCELED", paymentIntentId: pi, failureReason: null };
+      },
+      async refund(req) {
+        return { externalId: `re_${req.refundId}`, status: "SUCCEEDED", failureReason: null };
+      },
+    };
+    const webhook = async (pi: string, paymentId: string) => {
+      const id = `evt_${crypto.randomUUID()}`;
+      webhookEvents.push(id);
+      await ClientBillingSvc.handleStripeEvent({ id, type: "payment_intent.succeeded", data: { object: { id: pi, metadata: { purpose: QUOTATION_PAYMENT_PURPOSE, paymentId } } } } as unknown as Stripe.Event);
+    };
+
+    beforeEach(() => {
+      stripeNow = new Map();
+      setQuotationPaymentProvider(fake);
+    });
+
+    it("hands the app a PaymentIntent for the accepted amount, the same one again while it's open, and engages on the webhook once", async () => {
+      const id = await quoted();
+      await accept(id).expect(200);
+      const first = (await pay(id).expect(200)).body;
+      expect(first.payment.status).to.equal("PENDING");
+      expect(first.intent).to.deep.equal({ clientSecret: `secret_${first.payment.id}`, publishableKey: "pk_test" });
+      const again = (await pay(id).expect(200)).body;
+      expect(again.payment.id).to.equal(first.payment.id);
+      expect((await clientView().expect(200)).body.status).to.equal("CONFIRMED");
+
+      const pi = `pi_${first.payment.id}`;
+      stripeNow.set(pi, { status: "SUCCEEDED", paymentIntentId: pi, failureReason: null });
+      await webhook(pi, first.payment.id);
+      await webhook(pi, first.payment.id);
+      expect((await clientView().expect(200)).body.status).to.equal("ENGAGED");
+      expect(await prisma.earning.count({ where: { requestId } })).to.equal(1);
+      const status = (await request(app).get(`/api/client/lawyer-requests/${requestId}/payment`).set(auth(clientId)).expect(200)).body;
+      expect(status.payment.status).to.equal("SUCCEEDED");
+    });
+
+    /** Quoted, accepted and paid through the fake Stripe, settled by its webhook. */
+    const paidWithStripe = async () => {
+      const id = await quoted();
+      await accept(id).expect(200);
+      const { payment } = (await pay(id).expect(200)).body;
+      const pi = `pi_${payment.id}`;
+      stripeNow.set(pi, { status: "SUCCEEDED", paymentIntentId: pi, failureReason: null });
+      await webhook(pi, payment.id);
+      return { paymentId: payment.id as string, pi };
+    };
+    const refund = (paymentId: string, body: object) => request(app).post(`/api/admin/quotation-payments/${paymentId}/refund`).set(auth(adminId)).send(body);
+    /** charge.dispute.created when `closedAs` is null, else charge.dispute.closed with that status. */
+    const dispute = (pi: string, closedAs: string | null) =>
+      QuotationPaymentSvc.applyStripeDispute({ id: `dp_${crypto.randomUUID()}`, payment_intent: pi, status: closedAs ?? "needs_response" } as unknown as Stripe.Dispute, closedAs === null);
+    const paymentRow = (id: string) => prisma.quotationPayment.findUniqueOrThrow({ where: { id } });
+    const earningRow = () => prisma.earning.findFirstOrThrow({ where: { requestId } });
+
+    it("refunds money that arrives for a quote the request has moved on from, rather than keeping it", async () => {
+      const a = await quoted();
+      await accept(a).expect(200);
+      const { payment } = (await pay(a).expect(200)).body;
+      // The sweep expired quote A and cancelled its payment, the request went back out, and the
+      // client accepted another lawyer's quote B: CONFIRMED again, on B.
+      await prisma.quotation.update({ where: { id: a }, data: { status: "EXPIRED" } });
+      await prisma.quotationPayment.update({ where: { id: payment.id }, data: { status: "CANCELED" } });
+      const now = new Date();
+      const b = await prisma.clientRequestClaim.create({ data: { requestId, lawyerId: memberId, claimedAt: now, expiresAt: new Date(now.getTime() + DAY_MS) } });
+      await prisma.quotation.create({
+        data: { claimId: b.id, requestId, lawyerId: memberId, type: "FIXED_FEE", serviceFeeMinor: 50000, platformFeeBps: 0, platformFeeMinor: 0, totalAmountMinor: 50000, acceptedAmountMinor: 50000, expiresAt: new Date(now.getTime() + DAY_MS), status: "ACCEPTED", sentAt: now, acceptedAt: now },
+      });
+
+      const pi = `pi_${payment.id}`;
+      stripeNow.set(pi, { status: "SUCCEEDED", paymentIntentId: pi, failureReason: null });
+      await webhook(pi, payment.id);
+
+      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("CONFIRMED");
+      expect(await paymentRow(payment.id)).to.deep.include({ status: "REFUNDED", refundedMinor: 69000 });
+      expect(await prisma.earning.count({ where: { requestId } })).to.equal(0);
+    });
+
+    it("leaves a refund Stripe gave no answer to PENDING, holds its amount back, and settles it on the webhook", async () => {
+      const { paymentId } = await paidWithStripe();
+      setQuotationPaymentProvider({
+        ...fake,
+        async refund() {
+          throw new Error("socket hang up");
+        },
+      });
+      const body = (await refund(paymentId, { reason: "Client cancelled" }).expect(200)).body;
+      expect(body.refunds[0].status).to.equal("PENDING");
+      expect([body.refundPending.amountMinor, body.refundable.amountMinor]).to.deep.equal([69000, 0]);
+      expect((await refund(paymentId, { reason: "Again" }).expect(400)).body.code).to.equal("REFUND_EXCEEDS_CHARGE");
+
+      await QuotationPaymentSvc.applyStripeRefund({ id: "re_late", status: "succeeded", metadata: { refundId: body.refunds[0].id } } as unknown as Stripe.Refund);
+      expect(await paymentRow(paymentId)).to.deep.include({ status: "REFUNDED", refundedMinor: 69000 });
+      expect((await earningRow()).status).to.equal("REVERSED");
+    });
+
+    it("fails a refund Stripe refuses at once", async () => {
+      const { paymentId } = await paidWithStripe();
+      setQuotationPaymentProvider({
+        ...fake,
+        async refund() {
+          throw new Stripe.errors.StripeInvalidRequestError({ message: "Refund refused", type: "invalid_request_error" });
+        },
+      });
+      expect((await refund(paymentId, { reason: "Client cancelled" }).expect(502)).body.code).to.equal("REFUND_FAILED");
+      expect((await prisma.quotationRefund.findFirstOrThrow({ where: { paymentId } })).status).to.equal("FAILED");
+      expect((await paymentRow(paymentId)).status).to.equal("SUCCEEDED");
+    });
+
+    it("takes nothing from the lawyer for an inquiry closed with a warning; a lost dispute takes their fee back", async () => {
+      const { paymentId, pi } = await paidWithStripe();
+      await dispute(pi, null);
+      expect((await earningRow()).disputed).to.equal(true);
+      await dispute(pi, "warning_closed");
+      expect(await earningRow()).to.deep.include({ disputed: false, reversedMinor: 0, status: "PENDING" });
+      expect((await paymentRow(paymentId)).status).to.equal("SUCCEEDED");
+
+      await dispute(pi, null);
+      await dispute(pi, "lost");
+      expect((await earningRow()).status).to.equal("REVERSED");
+      expect((await paymentRow(paymentId)).status).to.equal("REFUNDED");
+    });
+
+    it("keeps a payment REFUNDED when a dispute is won after a refund covered all of it", async () => {
+      const { paymentId, pi } = await paidWithStripe();
+      setQuotationPaymentProvider({
+        ...fake,
+        async refund(req) {
+          return { externalId: `re_${req.refundId}`, status: "PENDING", failureReason: null };
+        },
+      });
+      const pending = (await refund(paymentId, { reason: "Client cancelled" }).expect(200)).body.refunds[0];
+      await dispute(pi, null);
+      await QuotationPaymentSvc.applyStripeRefund({ id: `re_${pending.id}`, status: "succeeded", metadata: { refundId: pending.id } } as unknown as Stripe.Refund);
+      await dispute(pi, "won");
+      expect((await paymentRow(paymentId)).status).to.equal("REFUNDED");
+    });
+
+    it("won't refund a disputed payment: the bank decides it", async () => {
+      const { paymentId, pi } = await paidWithStripe();
+      await dispute(pi, null);
+      expect((await refund(paymentId, { reason: "Client cancelled" }).expect(409)).body.code).to.equal("NOT_REFUNDABLE");
+      const listed = (await request(app).get("/api/admin/quotation-payments").set(auth(adminId)).expect(200)).body.data.find((p: { id: string }) => p.id === paymentId);
+      expect(listed.refundable.amountMinor).to.equal(0);
+    });
+  });
+
+  describe("the lawyer's wallet", () => {
+    const releaseNow = async () => {
+      await prisma.earning.updateMany({ where: { requestId }, data: { availableAt: new Date(Date.now() - 1000) } });
+      return WalletSvc.releaseDue();
+    };
+
+    it("releases an earning once its hold is over, once", async () => {
+      await engaged();
+      expect(await WalletSvc.releaseDue()).to.equal(0);
+      expect(await releaseNow()).to.equal(1);
+      expect(await WalletSvc.releaseDue()).to.equal(0);
+      const w = (await wallet().expect(200)).body;
+      expect(w.balances.pending.amountMinor).to.equal(0);
+      expect(w.balances.available.amountMinor).to.equal(60000);
+    });
+
+    it("is the firm's OWNERs' and ADMINs' only", async () => {
+      await wallet(memberId).expect(403);
+      await withdraw(5000, crypto.randomUUID(), memberId).expect(403);
+    });
+
+    it("withdraws once a payout account is set up, within the minimum and the available balance", async () => {
+      await engaged();
+      await releaseNow();
+      expect((await withdraw(20000).expect(409)).body.code).to.equal("PAYOUT_ACCOUNT_REQUIRED");
+
+      const set = (await request(app).post(`/api/organizations/${orgId}/wallet/payout-account/onboarding-link`).set(auth(lawyerId)).send({ returnUrl: "http://localhost:3000/earnings" })).body;
+      expect(set.url).to.equal(null);
+      expect(set.wallet.payoutAccount).to.deep.include({ connected: true, payoutsEnabled: true });
+
+      expect((await withdraw(500).expect(400)).body.code).to.equal("WITHDRAWAL_BELOW_MINIMUM");
+      const tooMuch = (await withdraw(60001).expect(409)).body;
+      expect(tooMuch.code).to.equal("INSUFFICIENT_BALANCE");
+      expect(tooMuch.available).to.deep.equal({ amountMinor: 60000, currency: "GBP" });
+
+      const key = crypto.randomUUID();
+      const paid = (await withdraw(20000, key).expect(201)).body;
+      expect(paid).to.deep.include({ status: "PAID" });
+      const same = (await withdraw(20000, key).expect(201)).body;
+      expect(same.id).to.equal(paid.id);
+
+      const w = (await wallet().expect(200)).body;
+      expect(w.balances.available.amountMinor).to.equal(40000);
+      expect(w.balances.withdrawn.amountMinor).to.equal(20000);
+      expect(w.balances.reserved.amountMinor).to.equal(0);
+    });
+
+    it("puts a failed payout back in the available balance", async () => {
+      await engaged();
+      await releaseNow();
+      setPayoutProvider({
+        name: "DUMMY",
+        mode: "immediate",
+        async createAccount(req) {
+          return { accountId: `dummy_acct_${req.walletId}`, payoutsEnabled: true, detailsSubmitted: true };
+        },
+        async payout() {
+          return { status: "FAILED", transferId: null, payoutId: null, failureReason: "The bank refused the payout." };
+        },
+      });
+      await request(app).post(`/api/organizations/${orgId}/wallet/payout-account/onboarding-link`).set(auth(lawyerId)).send({ returnUrl: "http://localhost:3000/earnings" }).expect(200);
+      const failed = (await withdraw(20000).expect(201)).body;
+      expect(failed).to.deep.include({ status: "FAILED", failureReason: "The bank refused the payout." });
+      expect((await wallet().expect(200)).body.balances.available.amountMinor).to.equal(60000);
+    });
+
+    describe("through Stripe Connect", () => {
+      // A Connect provider that leaves every payout PROCESSING, for the webhooks to end.
+      let reversals: string[];
+      const connect: ConnectPayoutProvider = {
+        name: "STRIPE",
+        mode: "connect",
+        async createAccount(req) {
+          return { accountId: `acct_${req.walletId}`, payoutsEnabled: true, detailsSubmitted: true };
+        },
+        async onboardingLink() {
+          return "https://connect.stripe.test/onboarding";
+        },
+        async accountStatus() {
+          return { payoutsEnabled: true, detailsSubmitted: true };
+        },
+        async payout(req) {
+          return { status: "PROCESSING", transferId: `tr_${req.withdrawalId}`, payoutId: `po_${req.withdrawalId}`, failureReason: null };
+        },
+        async reverseTransfer(transferId) {
+          reversals.push(transferId);
+        },
+      };
+      const processing = async (amountMinor: number) => {
+        const w = (await withdraw(amountMinor).expect(201)).body;
+        expect(w.status).to.equal("PROCESSING");
+        return w.id as string;
+      };
+      const statusOf = async (id: string) => (await prisma.withdrawal.findUniqueOrThrow({ where: { id } })).status;
+      const balances = async () => (await wallet().expect(200)).body.balances;
+      const transferReversed = (withdrawalId: string, amount: number, reversed = amount) =>
+        ClientBillingSvc.handleStripeEvent({
+          id: `evt_${crypto.randomUUID()}`,
+          type: "transfer.reversed",
+          data: { object: { id: `tr_${withdrawalId}`, amount, amount_reversed: reversed, metadata: { withdrawalId } } },
+        } as unknown as Stripe.Event);
+      const payoutEvent = (type: "payout.paid" | "payout.failed", withdrawalId: string) =>
+        WalletSvc.applyConnectEvent({
+          id: `evt_${crypto.randomUUID()}`,
+          type,
+          data: { object: { id: `po_${withdrawalId}`, metadata: { withdrawalId }, failure_message: "The account was closed." } },
+        } as unknown as Stripe.Event);
+
+      beforeEach(async () => {
+        reversals = [];
+        await engaged();
+        await releaseNow();
+        setPayoutProvider(connect);
+        await request(app).post(`/api/organizations/${orgId}/wallet/payout-account/onboarding-link`).set(auth(lawyerId)).send({ returnUrl: "http://localhost:3000/earnings" }).expect(200);
+      });
+
+      it("keeps the transfer when the payout gets no answer, and the sweep finishes it with the same keys", async () => {
+        const calls: string[] = [];
+        setPayoutProvider({
+          ...connect,
+          async payout(req) {
+            calls.push(req.withdrawalId);
+            // First the transfer goes through but the payout gets no answer; replayed, Stripe hands back the payout.
+            const payoutId = calls.filter((c) => c === req.withdrawalId).length === 1 ? null : `po_${req.withdrawalId}`;
+            return { status: "PROCESSING", transferId: `tr_${req.withdrawalId}`, payoutId, failureReason: null };
+          },
+        });
+        const id = await processing(20000);
+        expect(await prisma.withdrawal.findUniqueOrThrow({ where: { id } })).to.deep.include({ transferId: `tr_${id}`, payoutId: null });
+
+        await WalletSvc.resumeStalledPayouts();
+        expect(calls.filter((c) => c === id)).to.have.length(1);
+        await prisma.withdrawal.update({ where: { id }, data: { createdAt: new Date(Date.now() - 6 * 60_000) } });
+        await WalletSvc.resumeStalledPayouts();
+        expect(calls.filter((c) => c === id)).to.have.length(2);
+        expect(await prisma.withdrawal.findUniqueOrThrow({ where: { id } })).to.deep.include({ status: "PROCESSING", payoutId: `po_${id}` });
+        expect((await balances()).reserved.amountMinor).to.equal(20000);
+      });
+
+      it("a failed payout takes its transfer back, and the money returns to the available balance", async () => {
+        const id = await processing(20000);
+        expect((await balances()).reserved.amountMinor).to.equal(20000);
+        await payoutEvent("payout.failed", id);
+        expect(reversals).to.deep.equal([`tr_${id}`]);
+        expect(await statusOf(id)).to.equal("FAILED");
+        const b = await balances();
+        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.reserved.amountMinor).to.equal(0);
+      });
+
+      it("a transfer reversed in Stripe while the payout is on its way leaves the money reserved; a failed payout then returns it", async () => {
+        const id = await processing(20000);
+        await transferReversed(id, 20000);
+        expect(await statusOf(id)).to.equal("PROCESSING");
+        expect((await balances()).reserved.amountMinor).to.equal(20000);
+
+        await payoutEvent("payout.failed", id);
+        expect(await statusOf(id)).to.equal("FAILED");
+        const b = await balances();
+        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.reserved.amountMinor).to.equal(0);
+      });
+
+      it("a transfer reversed in Stripe whose payout lands anyway pays the lawyer once, not twice", async () => {
+        const id = await processing(20000);
+        await transferReversed(id, 20000);
+        await payoutEvent("payout.paid", id);
+        expect(await statusOf(id)).to.equal("PAID");
+        const b = await balances();
+        expect(b.withdrawn.amountMinor).to.equal(20000);
+        expect(b.reserved.amountMinor).to.equal(0);
+        expect(b.available.amountMinor).to.equal(40000);
+      });
+
+      it("a payout that lands after its withdrawal failed moves nothing back", async () => {
+        const id = await processing(20000);
+        await payoutEvent("payout.failed", id);
+        await payoutEvent("payout.paid", id);
+        expect(await statusOf(id)).to.equal("FAILED");
+        const b = await balances();
+        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.withdrawn.amountMinor).to.equal(0);
+      });
+
+      it("leaves a reversal after the payout was paid, or in part, for ops to settle", async () => {
+        const paid = await processing(20000);
+        await payoutEvent("payout.paid", paid);
+        await transferReversed(paid, 20000);
+        await payoutEvent("payout.failed", paid);
+        expect(await statusOf(paid)).to.equal("PAID");
+        expect(reversals).to.deep.equal([]);
+
+        const partly = await processing(10000);
+        await transferReversed(partly, 10000, 4000);
+        expect(await statusOf(partly)).to.equal("PROCESSING");
+
+        const b = await balances();
+        expect(b.withdrawn.amountMinor).to.equal(20000);
+        expect(b.reserved.amountMinor).to.equal(10000);
+        expect(b.available.amountMinor).to.equal(30000);
+      });
+
+      it("ignores a reversed transfer that isn't a withdrawal's", async () => {
+        await ClientBillingSvc.handleStripeEvent({
+          id: `evt_${crypto.randomUUID()}`,
+          type: "transfer.reversed",
+          data: { object: { id: "tr_elsewhere", amount: 5000, amount_reversed: 5000, metadata: {} } },
+        } as unknown as Stripe.Event);
+        expect((await balances()).available.amountMinor).to.equal(60000);
+      });
+    });
+  });
+
+  describe("expiry", () => {
+    it("expires a sent quote the client didn't accept in time, ending the lawyer's claim", async () => {
+      const id = await quoted();
+      await prisma.quotation.update({ where: { id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      await accept(id).expect(409);
+      expect(await QuotationPaymentSvc.expireDue()).to.equal(1);
+      const q = await prisma.quotation.findUniqueOrThrow({ where: { id } });
+      expect(q.status).to.equal("EXPIRED");
+      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(claim.outcome).to.equal("NOT_CHOSEN");
+    });
+
+    it("sends an accepted but unpaid request back to other lawyers at the lawyer's expiry", async () => {
+      const id = await quoted();
+      await accept(id).expect(200);
+      await prisma.quotation.update({ where: { id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      expect((await pay(id).expect(409)).body.code).to.equal("QUOTATION_EXPIRED");
+      expect(await QuotationPaymentSvc.expireDue()).to.equal(1);
+      const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true, quotations: true } });
+      expect(row.status).to.equal("ROUTED");
+      expect(row.excludedLawyerIds).to.include(lawyerId);
+      expect(row.claims[0]!.outcome).to.equal("NOT_CHOSEN");
+      expect(row.quotations[0]!.status).to.equal("EXPIRED");
+    });
+
+    it("leaves a request confirmed before quotation payments alone, and never asks its client to pay", async () => {
+      const id = await quoted();
+      await accept(id).expect(200);
+      // As the migration backfills it: ACCEPTED with no accepted amount, expiring at the old pick-by date.
+      await prisma.quotation.update({ where: { id }, data: { acceptedAmountMinor: null, expiresAt: new Date(Date.now() - DAY_MS) } });
+
+      expect(await QuotationPaymentSvc.expireDue()).to.equal(0);
+      const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true, quotations: true } });
+      expect(row.status).to.equal("CONFIRMED");
+      expect(row.excludedLawyerIds).to.not.include(lawyerId);
+      expect(row.claims[0]!.outcome).to.equal(null);
+      expect(row.quotations[0]!.status).to.equal("ACCEPTED");
+
+      expect((await clientView().expect(200)).body.awaitingPayment).to.equal(false);
+      await pay(id).expect(409);
+      expect(await prisma.quotationPayment.count({ where: { quotationId: id } })).to.equal(0);
+    });
+  });
+
+  describe("refunds", () => {
+    const refund = (paymentId: string, body: object) => request(app).post(`/api/admin/quotation-payments/${paymentId}/refund`).set(auth(adminId)).send(body);
+
+    it("a partial refund comes out of the lawyer's fee only; a full refund gives back the platform fee too", async () => {
+      await engaged();
+      const payment = await prisma.quotationPayment.findFirstOrThrow({ where: { requestId, status: "SUCCEEDED" } });
+      expect((await refund(payment.id, { amount: { amountMinor: 60001, currency: "GBP" }, reason: "Too much" }).expect(400)).body.code).to.equal("REFUND_EXCEEDS_CHARGE");
+
+      const partial = (await refund(payment.id, { amount: { amountMinor: 10000, currency: "GBP" }, reason: "Part of the work wasn't done" }).expect(200)).body;
+      expect(partial.status).to.equal("PARTIALLY_REFUNDED");
+      expect((await wallet().expect(200)).body.balances.pending.amountMinor).to.equal(50000);
+
+      const full = (await refund(payment.id, { reason: "Client cancelled" }).expect(200)).body;
+      expect(full.status).to.equal("REFUNDED");
+      expect(full.refunds.map((r: { amount: { amountMinor: number }; platformFee: { amountMinor: number } }) => [r.amount.amountMinor, r.platformFee.amountMinor])).to.deep.equal([
+        [59000, 9000],
+        [10000, 0],
+      ]);
+      expect((await wallet().expect(200)).body.balances.pending.amountMinor).to.equal(0);
+      expect((await prisma.earning.findFirstOrThrow({ where: { requestId } })).status).to.equal("REVERSED");
+    });
+
+    it("splits a refund by what's left when it's recorded, not when it was checked", async () => {
+      await engaged();
+      const payment = await prisma.quotationPayment.findFirstOrThrow({ where: { requestId, status: "SUCCEEDED" } });
+      // Two admins at once: one refunds 10000 while the other has checked 59000 as a partial refund.
+      await refund(payment.id, { amount: { amountMinor: 10000, currency: "GBP" }, reason: "Part of the work wasn't done" }).expect(200);
+      const late = await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 59000, reason: "Client cancelled", createdById: adminId });
+      // 59000 is now all that's left: the platform fee comes back too, and the lawyer's part is only what's left of theirs.
+      expect(late).to.deep.include({ amountMinor: 59000, serviceFeeMinor: 50000, platformFeeMinor: 9000 });
+
+      // A partial refund bigger than what's left of the lawyer's fee is refused.
+      await prisma.quotationRefund.delete({ where: { id: late!.id } });
+      expect(await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 55000, reason: "Too much", createdById: adminId })).to.equal(null);
+    });
+  });
+
+  describe("the lawyer's invoice", () => {
+    const invoice = (as = asLawyer) => request(app).get(`/api/client-requests/${requestId}/invoice`).set(as);
+
+    it("shows the engaged lawyer who paid for what, with the fee split, under their firm's name", async () => {
+      await invoice().expect(409);
+      await engaged();
+      const { body } = await invoice().expect(200);
+      expect(body.invoice).to.deep.include({ status: "PAID", caseName: "Unfair dismissal", quoteType: "FIXED_FEE", description: "I can take this on for a fixed fee." });
+      expect(body.invoice.number).to.match(/^INV-\d{8}-[0-9A-F]{8}$/);
+      expect(body.invoice.payee).to.deep.equal({ name: "Lena Law LLP", lawyerName: "Lena Lawyer" });
+      expect(body.invoice.client).to.deep.equal({ name: "Clara Client" });
+      expect([body.invoice.serviceFee.amountMinor, body.invoice.platformFee.amountMinor, body.invoice.total.amountMinor]).to.deep.equal([60000, 9000, 69000]);
+      expect(body.invoice.payment.provider).to.equal("DUMMY");
+      expect((await invoice().expect(200)).body.invoice.number).to.equal(body.invoice.number);
+    });
+
+    it("carries refunds, with the part that came out of the lawyer's fee", async () => {
+      await engaged();
+      const payment = await prisma.quotationPayment.findFirstOrThrow({ where: { requestId, status: "SUCCEEDED" } });
+      await request(app).post(`/api/admin/quotation-payments/${payment.id}/refund`).set(auth(adminId)).send({ amount: { amountMinor: 10000, currency: "GBP" }, reason: "Part of the work wasn't done" }).expect(200);
+      const { body } = await invoice().expect(200);
+      expect(body.invoice.status).to.equal("PARTIALLY_REFUNDED");
+      expect([body.invoice.refunded.amountMinor, body.invoice.lawyerRefunded.amountMinor]).to.deep.equal([10000, 10000]);
+    });
+
+    it("is null for a free first consultation, and not for the firm's other members", async () => {
+      await quoted({ type: "FIRST_CONSULTATION", amount: { amountMinor: 0, currency: "GBP" }, message: "First call is free.", expiresAt: inDays(3) }).then((id) => accept(id).expect(200));
+      expect((await invoice().expect(200)).body.invoice).to.equal(null);
+      await invoice({ ...auth(memberId), "X-Organization-Id": orgId }).expect(403);
+    });
+  });
+
+  describe("admin payout settings", () => {
+    it("are edited per tenant within limits, and audited", async () => {
+      const list = (await request(app).get("/api/admin/settings/payout-settings").set(auth(adminId)).expect(200)).body;
+      expect(list.tenants.find((t: { code: string }) => t.code === "UK").settings).to.deep.include({ platformFeeBps: 1500, minWithdrawalMinor: 1000 });
+      await request(app).patch("/api/admin/settings/tenants/UK/payout-settings").set(auth(adminId)).send({ platformFeeBps: 9999 }).expect(400);
+      await request(app).patch("/api/admin/settings/tenants/UK/payout-settings").set(auth(lawyerId)).send({ minWithdrawalMinor: 2000 }).expect(403);
+      const saved = (await request(app).patch("/api/admin/settings/tenants/UK/payout-settings").set(auth(adminId)).send({ minWithdrawalMinor: 2000, earningsHoldDays: 3 }).expect(200)).body;
+      expect(saved.settings).to.deep.include({ minWithdrawalMinor: 2000, earningsHoldDays: 3, platformFeeBps: 1500 });
+      expect((await wallet().expect(200)).body.minWithdrawal.amountMinor).to.equal(2000);
+    });
+  });
+});
