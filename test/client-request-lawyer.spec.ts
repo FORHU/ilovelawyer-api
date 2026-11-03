@@ -1,5 +1,5 @@
 /** ClientRequestLawyerSvc — the lawyer app's side of client requests (#511): the inbox, joining a
- * request (Accept: any number of lawyers at once since phase 5, each with 24h to quote), and passing on one. No live Postgres: repositories are
+ * request (Accept: up to 3 lawyers at once since phase 5, each with 24h to quote), and passing on one. No live Postgres: repositories are
  * monkeypatched with an in-memory world, same idiom as test/client-request.spec.ts. The race
  * itself is proven against the database in test/client-request-claim-repository.spec.ts. */
 import { expect } from "chai";
@@ -7,6 +7,7 @@ import { describe, it, beforeEach, afterEach } from "mocha";
 import ClientRequestLawyerSvc, { type LawyerContext } from "../src/services/client-request-lawyer.service";
 import { caseAreasOf } from "../src/services/client-request-matching.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
+import { shownStatus } from "../src/utils/client-request-status";
 import ClientRequestClaimRepo from "../src/repositories/client-request-claim.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
@@ -94,7 +95,7 @@ describe("ClientRequestLawyerSvc", () => {
 
   beforeEach(() => {
     restore = [
-      stash(ClientRequestRepo, ["findForMatching", "findForLawyer", "listRoutedFor", "listHeldBy", "exclude"]),
+      stash(ClientRequestRepo, ["findForMatching", "findForLawyer", "listRoutedFor", "listHeldBy", "exclude", "shownStatus"]),
       stash(ClientRequestClaimRepo, ["claim"]),
       stash(LawyerProfileRepo, ["find", "findLawyerTenant", "findVerified", "countOpenForLawyers"]),
       stash(OrganizationRepo, ["writeAudit"]),
@@ -148,17 +149,23 @@ describe("ClientRequestLawyerSvc", () => {
       );
       return { total: held.length, data: held.slice((page - 1) * limit, page * limit).map(withClaims) };
     };
+    // What the client sees: the in-memory claims, by the same rule (utils/client-request-status).
+    (ClientRequestRepo as any).shownStatus = async (id: string) => {
+      const r = requests.get(id);
+      return r ? shownStatus(r.status, claims.filter((c) => c.requestId === id)) : null;
+    };
     (ClientRequestRepo as any).exclude = async (id: string, lawyerId: string) => {
       const r = requests.get(id);
       if (r && !r.excludedLawyerIds.includes(lawyerId)) r.excludedLawyerIds.push(lawyerId);
     };
     // ClientRequestClaimRepo.claim's rules (proven against Postgres in its own spec): the request
-    // stays ROUTED, with any number of lawyers on it.
+    // stays ROUTED, up to 3 lawyers on it at once.
     (ClientRequestClaimRepo as any).claim = async (requestId: string, lawyerId: string, organizationId: string, now: Date = new Date()) => {
       const r = requests.get(requestId);
       if (!r || r.status !== "ROUTED" || r.routingExpiresAt <= now || r.excludedLawyerIds.includes(lawyerId)) return { refused: "CLOSED" };
       const open = claims.filter((c) => c.requestId === requestId && c.outcome === null);
       if (open.some((c) => c.lawyerId === lawyerId)) return { refused: "JOINED" };
+      if (open.length >= 3) return { refused: "FULL" };
       r.updatedAt = now;
       const claim = { id: `claim-${claims.length + 1}`, requestId, lawyerId, organizationId, claimedAt: now, expiresAt: new Date(now.getTime() + 24 * HOUR_MS), outcome: null, endedAt: null, quotedAt: null };
       claims.push(claim);
@@ -218,19 +225,23 @@ describe("ClientRequestLawyerSvc", () => {
       const dto = await ClientRequestLawyerSvc.claim(me, "req-1");
 
       expect(requests.get("req-1")!.status).to.equal("ROUTED");
-      expect(dto).to.deep.include({ lawyersOn: 1 });
+      expect(dto).to.deep.include({ lawyersOn: 1, maxLawyers: 3 });
       expect(emitted.filter(([, event]) => event === "client-request:taken")).to.deep.equal([]);
       const updated = emitted.filter(([, event]) => event === "client-request:updated");
       expect(updated.map(([userId]) => userId)).to.deep.equal(["client-req-1"]);
       expect(updated[0]![2]).to.deep.include({ requestId: "req-1", status: "CLAIMED" });
     });
 
-    it("never takes it from the other matching lawyers, however many join", async () => {
+    it("tells the matching lawyers not on it that it's gone once the third lawyer joins", async () => {
       routed("req-1");
-      for (const userId of ["lawyer-other", "lawyer-third", "lawyer-me"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "req-1");
-
+      await ClientRequestLawyerSvc.claim({ ...me, userId: "lawyer-other" }, "req-1");
+      await ClientRequestLawyerSvc.claim({ ...me, userId: "lawyer-third" }, "req-1");
       expect(emitted.filter(([, event]) => event === "client-request:taken")).to.deep.equal([]);
-      expect(await ClientRequestLawyerSvc.get({ ...me, userId: "lawyer-fourth" }, "req-1")).to.deep.include({ status: "ROUTED", claim: null, lawyersOn: 3 });
+
+      await ClientRequestLawyerSvc.claim(me, "req-1");
+      const taken = emitted.filter(([, event]) => event === "client-request:taken");
+      expect(taken.map(([userId]) => userId)).to.deep.equal(["lawyer-fourth"]);
+      expect(taken[0]![2]).to.deep.equal({ requestId: "req-1" });
     });
 
     it("records the claim on the client's case and in the security audit log", async () => {
@@ -243,12 +254,12 @@ describe("ClientRequestLawyerSvc", () => {
       expect(securityAudits[0]).to.deep.include({ action: "client_request.claimed", actorId: "lawyer-me", organizationId: "org-me", caseId: "case-req-1" });
     });
 
-    it("lets a fourth lawyer join: there's no limit", async () => {
+    it("lets up to 3 lawyers join, then answers REQUEST_FULL", async () => {
       routed("req-1");
       for (const userId of ["lawyer-other", "lawyer-third", "lawyer-fourth"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "req-1");
 
-      expect(await ClientRequestLawyerSvc.claim(me, "req-1")).to.deep.include({ status: "CLAIMED", lawyersOn: 4 });
-      expect(claims.filter((c) => c.requestId === "req-1")).to.have.length(4);
+      expect(await errorOf(ClientRequestLawyerSvc.claim(me, "req-1"))).to.deep.include({ status: 409, code: "REQUEST_FULL" });
+      expect(claims.filter((c) => c.requestId === "req-1")).to.have.length(3);
     });
 
     it("returns the request when a lawyer already on it joins again", async () => {
@@ -345,12 +356,12 @@ describe("ClientRequestLawyerSvc", () => {
       routed("no-brief-yet", { brief: null });
       routed("window-over", { routingExpiresAt: new Date(Date.now() - 1000) });
       routed("claimed", { status: "CLAIMED" });
-      routed("busy", { routedAt: new Date(Date.now() - 6 * HOUR_MS) });
-      for (const userId of ["lawyer-other", "lawyer-third", "lawyer-fourth"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "busy");
+      routed("full");
+      for (const userId of ["lawyer-other", "lawyer-third", "lawyer-fourth"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "full");
 
       const inbox = await view("inbox");
-      expect(inbox.data.map((r) => r.id)).to.deep.equal(["newer", "older", "busy"]);
-      expect(inbox.total).to.equal(3);
+      expect(inbox.data.map((r) => r.id)).to.deep.equal(["newer", "older"]);
+      expect(inbox.total).to.equal(2);
       expect(inbox.data[0]).to.deep.include({ status: "ROUTED", claim: null, brief: BRIEF });
     });
 
@@ -396,10 +407,16 @@ describe("ClientRequestLawyerSvc", () => {
       expect((await ClientRequestLawyerSvc.get(me, "req-1")).status).to.equal("CLAIMED");
     });
 
-    it("shows a request other lawyers are on", async () => {
+    it("shows a request another lawyer is on while a place is free", async () => {
       routed("req-1");
       await ClientRequestLawyerSvc.claim({ ...me, userId: "lawyer-other" }, "req-1");
       expect(await ClientRequestLawyerSvc.get(me, "req-1")).to.deep.include({ status: "ROUTED", claim: null, lawyersOn: 1 });
+    });
+
+    it("answers 404 for a full request they're not on", async () => {
+      routed("req-1");
+      for (const userId of ["lawyer-other", "lawyer-third", "lawyer-fourth"]) await ClientRequestLawyerSvc.claim({ ...me, userId }, "req-1");
+      expect(await errorOf(ClientRequestLawyerSvc.get(me, "req-1"))).to.deep.include({ status: 404 });
     });
 
     it("answers 404 for a request they passed on", async () => {

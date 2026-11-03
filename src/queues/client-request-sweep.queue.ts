@@ -1,5 +1,6 @@
 import cron, { type ScheduledTask } from "node-cron";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
+import ClientRequestRepo from "../repositories/client-request.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import NotificationSvc from "../services/notification.service";
 import ClientRequestNotifySvc from "../services/client-request-notify.service";
@@ -115,7 +116,7 @@ export default class ClientRequestSweepQueue {
 
     const updated: ClientRequestUpdatedEvent = { requestId, status: "ROUTED", updatedAt: now.toISOString() };
     emitToUser(claim.lawyerId, "client-request:updated", updated);
-    emitToUser(clientId, "client-request:updated", updated);
+    emitToUser(clientId, "client-request:updated", { ...updated, status: (await ClientRequestRepo.shownStatus(requestId)) ?? "ROUTED" });
     await NotificationSvc.create({
       userId: claim.lawyerId,
       type: "CLIENT_REQUEST",
@@ -144,7 +145,8 @@ export default class ClientRequestSweepQueue {
 
     const updated: ClientRequestUpdatedEvent = { requestId: claim.requestId, status: "ROUTED", updatedAt: now.toISOString() };
     emitToUser(claim.lawyerId, "client-request:updated", updated);
-    emitToUser(clientId, "client-request:updated", updated);
+    // Several lawyers: others may still be on it, one with a quote, so the client hears what they'd see.
+    emitToUser(clientId, "client-request:updated", { ...updated, status: (await ClientRequestRepo.shownStatus(claim.requestId)) ?? "ROUTED" });
     // No organizationId: the inbox is the lawyer's own, so this shows in whichever workspace they're in.
     await NotificationSvc.create({
       userId: claim.lawyerId,

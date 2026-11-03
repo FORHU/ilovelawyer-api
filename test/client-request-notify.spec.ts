@@ -150,7 +150,20 @@ describe("ClientRequestNotifySvc", () => {
     beforeEach(() => {
       expirable = new Set(["req-1", "req-2"]);
       (ClientRequestRepo as any).findExpired = async () => [request("req-1"), request("req-2", { case: { caseAreas: ["FAMILY"], ukJurisdiction: "Scotland" } })];
-      (ClientRequestRepo as any).expire = async (id: string) => expirable.delete(id);
+      // No lawyer on these two: they expired unclaimed.
+      (ClientRequestRepo as any).expire = async (id: string) => (expirable.delete(id) ? [] : null);
+    });
+
+    it("tells each lawyer who was on it when the client didn't pick a quote in time", async () => {
+      (ClientRequestRepo as any).findExpired = async () => [request("req-1", { pickByAt: new Date(NOW.getTime() - 1000) })];
+      (ClientRequestRepo as any).expire = async () => ["lawyer-quoted", "lawyer-a"];
+
+      expect(await ClientRequestNotifySvc.expireDue(NOW)).to.equal(0); // the client let it lapse: no ops digest
+      const toLawyers = emitted.filter(([userId, event]) => event === "client-request:updated" && userId !== "client-req-1");
+      expect(toLawyers.map(([userId]) => userId)).to.deep.equal(["lawyer-quoted", "lawyer-a"]);
+      expect(toLawyers[0]![2]).to.deep.include({ requestId: "req-1", status: "EXPIRED" });
+      expect(notifications.map((n) => n.userId)).to.deep.equal(["lawyer-quoted", "lawyer-a"]);
+      expect(notifications[0]).to.deep.include({ title: "The client didn't choose a quote" });
     });
 
     it("expires a request nobody claimed in 48h, and tells its lawyers and the client", async () => {

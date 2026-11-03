@@ -8,6 +8,7 @@ import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import ClientRequestSweepQueue from "../src/queues/client-request-sweep.queue";
 import ClientRequestClaimRepo from "../src/repositories/client-request-claim.repository";
+import ClientRequestRepo from "../src/repositories/client-request.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import NotificationSvc from "../src/services/notification.service";
 import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
@@ -42,6 +43,8 @@ const UNPAID = {
 
 describe("ClientRequestSweepQueue.tick", () => {
   let restore: (() => void)[];
+  // What the client would see after the lapse (ClientRequestRepo.shownStatus).
+  let shown: string;
   let due: (typeof LAPSED)[];
   let unpaid: (typeof UNPAID)[];
   let unpaidWins: boolean;
@@ -57,6 +60,7 @@ describe("ClientRequestSweepQueue.tick", () => {
   beforeEach(() => {
     restore = [
       stash(ClientRequestClaimRepo, ["findLapsed", "lapse", "findUnpaid", "lapseUnpaid"]),
+      stash(ClientRequestRepo, ["shownStatus"]),
       stash(OrganizationRepo, ["writeAudit"]),
       stash(NotificationSvc, ["create"]),
       stash(SecurityAuditSvc, ["record"]),
@@ -84,6 +88,8 @@ describe("ClientRequestSweepQueue.tick", () => {
       lapsed.push({ claimId: claim.id, now });
       return lapseWins;
     };
+    shown = "ROUTED";
+    (ClientRequestRepo as any).shownStatus = async () => shown;
     (OrganizationRepo as any).writeAudit = async (data: any) => audits.push(data);
     (NotificationSvc as any).create = async (input: any) => notifications.push(input);
     (SecurityAuditSvc as any).record = async (input: any) => securityAudits.push(input);
@@ -107,6 +113,14 @@ describe("ClientRequestSweepQueue.tick", () => {
     const updates = emitted.filter(([, event]) => event === "client-request:updated");
     expect(updates.map(([userId]) => userId).sort()).to.deep.equal(["client-1", "lawyer-1"]);
     expect(updates[0]![2]).to.deep.equal({ requestId: "req-1", status: "ROUTED", updatedAt: NOW.toISOString() });
+  });
+
+  it("tells the client QUOTED, not ROUTED, when another lawyer's quote is still on it (several lawyers)", async () => {
+    shown = "QUOTED";
+    await ClientRequestSweepQueue.tick(NOW);
+    const updates = emitted.filter(([, event]) => event === "client-request:updated");
+    expect(updates.find(([userId]) => userId === "client-1")![2]).to.deep.include({ status: "QUOTED" });
+    expect(updates.find(([userId]) => userId === "lawyer-1")![2]).to.deep.include({ status: "ROUTED" });
   });
 
   it("records the lapse on the client's case and in the security audit log, with no actor", async () => {

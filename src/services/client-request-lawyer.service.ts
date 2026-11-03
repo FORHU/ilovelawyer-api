@@ -18,7 +18,8 @@ import AccountLimitsSvc from "./account-limits.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
-import type { ClientRequestUpdatedEvent } from "../types/client-handoff";
+import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
+import { CLIENT_REQUEST_MAX_LAWYERS } from "../constants/client-request.constants";
 import ChatRepo from "../repositories/chat.repository";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
 import { documentFileUrl } from "./document.service";
@@ -92,8 +93,9 @@ function toDto(r: LawyerRequest, lawyerId: string, perCaseFee: Money, brief: unk
     brief,
     routedAt: r.routedAt,
     routingExpiresAt: r.status === "ROUTED" ? r.routingExpiresAt : null,
-    // Several lawyers: how many are on it now.
+    // Several lawyers: how many are on it now, of CLIENT_REQUEST_MAX_LAWYERS.
     lawyersOn: openClaims(r).length,
+    maxLawyers: CLIENT_REQUEST_MAX_LAWYERS,
     claim: mine
       ? {
           byMe: true,
@@ -161,31 +163,36 @@ export default class ClientRequestLawyerSvc {
     // (accepting, paused, enabled) would otherwise make the database's total wrong.
     const now = new Date();
     const candidates = await ClientRequestRepo.listRoutedFor(lawyer.userId, { caseAreas: caseAreasOf(profile.practiceAreas), jurisdictions: profile.qualifiedJurisdictions }, now);
-    // Several lawyers: one already on it is in their "mine" view; others stay in the inbox.
+    // Several lawyers: one already on it is in their "mine" view, and a full one leaves the inbox
+    // until a place frees up.
     const inbox = candidates.filter(
       (r) =>
         !r.claims.some((c) => c.lawyerId === lawyer.userId && c.outcome === null) &&
+        openClaims(r).length < CLIENT_REQUEST_MAX_LAWYERS &&
         ClientRequestMatchingSvc.matches(profile, criteriaOf(r), now),
     );
     const start = (query.page - 1) * query.limit;
     return { total: inbox.length, data: inbox.slice(start, start + query.limit).map((r) => toDto(r, lawyer.userId, fee)) };
   }
 
-  /** One request: routed to them and still open to joining (inside its 48h), or one they've held. */
+  /** One request: routed to them and still open to joining (inside its 48h, with a place free), or
+   * one they've held. */
   static async get(lawyer: LawyerContext, id: string) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
     const request = await ClientRequestRepo.findForLawyer(id);
     if (!request) throw NOT_FOUND();
     const held = request.claims.some((c) => c.lawyerId === lawyer.userId);
-    const open = request.status === "ROUTED" && !!request.routingExpiresAt && request.routingExpiresAt > new Date();
+    const open =
+      request.status === "ROUTED" && !!request.routingExpiresAt && request.routingExpiresAt > new Date() && openClaims(request).length < CLIENT_REQUEST_MAX_LAWYERS;
     if (!held && !(open && ClientRequestLawyerSvc.isFor(request, lawyer.userId, profile))) throw NOT_FOUND();
     // Rewritten first if the case changed and nobody has claimed it yet (#508).
     return toDto(request, lawyer.userId, await feeOf(lawyer), await ClientRequestBriefSvc.current(id));
   }
 
   /**
-   * Join (the lawyer app's Accept; several lawyers in phase 5): a place on the request, with 24h to
-   * quote. Any number of lawyers can join. Joining again returns the request as it is.
+   * Join (the lawyer app's Accept; several lawyers in phase 5): a place on the request, up to
+   * CLIENT_REQUEST_MAX_LAWYERS at once, with 24h to quote. Joining again returns the request as it is.
+   * Once it's full, every other matching lawyer is told it's gone from their inbox.
    */
   static async claim(lawyer: LawyerContext, id: string) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
@@ -198,6 +205,9 @@ export default class ClientRequestLawyerSvc {
     const joined = await ClientRequestClaimRepo.claim(id, lawyer.userId, lawyer.organizationId);
     if ("refused" in joined) {
       if (joined.refused === "JOINED") return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
+      if (joined.refused === "FULL") {
+        throw new HttpError(`${CLIENT_REQUEST_MAX_LAWYERS} lawyers are already on this request.`, 409, "REQUEST_FULL", { maxLawyers: CLIENT_REQUEST_MAX_LAWYERS });
+      }
       const now = (await ClientRequestRepo.findForLawyer(id)) ?? request;
       throw new HttpError("This request can't be accepted now.", 409, "INVALID_REQUEST_STATUS", { status: now.status });
     }
@@ -214,6 +224,12 @@ export default class ClientRequestLawyerSvc {
       payload: { requestId: id, claimId: claim.id },
     });
 
+    if (joined.joined >= CLIENT_REQUEST_MAX_LAWYERS) {
+      const after = (await ClientRequestRepo.findForLawyer(id))!;
+      const on = new Set(openClaims(after).map((c) => c.lawyerId));
+      const taken: ClientRequestTakenEvent = { requestId: id };
+      for (const userId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) if (!on.has(userId)) emitToUser(userId, "client-request:taken", taken);
+    }
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CLAIMED", updatedAt: claim.claimedAt.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
 
@@ -329,7 +345,8 @@ export default class ClientRequestLawyerSvc {
       caseId: request.caseId,
       payload,
     });
-    const updated: ClientRequestUpdatedEvent = { requestId: id, status: "ROUTED", updatedAt: now.toISOString() };
+    // Several lawyers: others may still be on it, one with a quote, so the client hears what they'd see.
+    const updated: ClientRequestUpdatedEvent = { requestId: id, status: (await ClientRequestRepo.shownStatus(id)) ?? "ROUTED", updatedAt: now.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
 
     return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));

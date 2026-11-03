@@ -251,12 +251,14 @@ export default class ClientRequestBriefSvc {
   }
 
   /** The brief as a lawyer should see it now: rewritten first if the case changed (or the last try
-   * failed) and no lawyer has claimed the request yet. For the lawyer-facing reads (#509, #511). */
+   * failed) and no lawyer is on the request. Several lawyers (phase 5): the request stays ROUTED while
+   * they're on it, so it's the open claims that freeze it, not the status. For the lawyer-facing
+   * reads (#509, #511). */
   static async current(requestId: string): Promise<CaseBrief | null> {
     const source = await ClientRequestRepo.findForBrief(requestId);
     if (!source) return null;
     const stored = source.brief as unknown as CaseBrief | null;
-    if (!BRIEF_REFRESH_STATUSES.includes(source.status)) return stored;
+    if (!BRIEF_REFRESH_STATUSES.includes(source.status) || source.claims.length > 0) return stored;
     const { latestMessageId } = await ClientRequestBriefSvc.conversationOf(source);
     const intakeFingerprint = (await ClientIntakeRepo.find(source.caseId))?.fingerprint;
     if (stored && source.briefFingerprint === briefFingerprint(source, latestMessageId, intakeFingerprint)) return stored;
