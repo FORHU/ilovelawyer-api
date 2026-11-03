@@ -280,8 +280,15 @@ export default class IntakeChatSvc {
     };
 
     try {
-      const result = await streamIntakeChatWonderMessage(sessionId, userInput, checkpointedOnChunk, documentContext || undefined, signal, () =>
-        emitEvent("chat:answer-complete", {}),
+      const result = await streamIntakeChatWonderMessage(
+        sessionId,
+        userInput,
+        checkpointedOnChunk,
+        documentContext || undefined,
+        signal,
+        () => emitEvent("chat:answer-complete", {}),
+        caseId,
+        userId,
       );
       await checkpointChain;
       fullResponse = redactDocumentIds(result.content, scopeDocs);
