@@ -219,7 +219,11 @@ export default class IntakeChatSvc {
     // than typed. Failing this fails the turn exactly like the AI-call failure path below.
     if (job.audioS3Key) {
       try {
-        const transcript = (await transcribeS3Media(job.audioS3Key, `voice-msg-${parentMessageId}`)).trim();
+        // A client talking to this chat is always one voice — never speaker-labelled, unlike the
+        // evidence-transcription path this function also serves (recorded hearings, calls).
+        // Diarization misfiring on a single speaker (a pause or pitch shift read as a second
+        // speaker) would otherwise leak "[TS:0.82] [Speaker 0]: ..." tags into the chat transcript.
+        const transcript = (await transcribeS3Media(job.audioS3Key, `voice-msg-${parentMessageId}`, { speakerLabels: false })).trim();
         if (!transcript) throw new Error("Transcribe returned an empty transcript");
         userInput = transcript;
         await IntakeChatRepo.setTranscribedContent(parentMessageId, transcript);
