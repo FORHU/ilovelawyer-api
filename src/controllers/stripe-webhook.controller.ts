@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import StripeWebhookSvc from "../services/stripe-webhook.service";
 import { verifyStripeWebhook } from "../payments/stripe-client";
+import { STRIPE_CONNECT_WEBHOOK_SECRET } from "../config";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
@@ -22,6 +23,19 @@ export default class StripeWebhookCtrl {
     const event = verifyStripeWebhook(req.body, req.header("stripe-signature"));
     const { duplicate } = await StripeWebhookSvc.handle(event);
     logger.info("Stripe webhook handled", { eventId: event.id, type: event.type, duplicate });
+    res.status(200).json({ received: true, duplicate });
+  }
+
+  /** POST /api/webhooks/stripe-connect: events on lawyers' connected accounts (account.updated,
+   * payout.paid, payout.failed), signed with STRIPE_CONNECT_WEBHOOK_SECRET. Deduplicated with the
+   * same StripeWebhookEvent table; WalletSvc is idempotent too. */
+  static async handleConnect(req: Request, res: Response) {
+    if (!Buffer.isBuffer(req.body)) {
+      throw new HttpError("Webhook body wasn't read raw; check the mount order in app.ts", 500, "STRIPE_WEBHOOK_MISCONFIGURED");
+    }
+    const event = verifyStripeWebhook(req.body, req.header("stripe-signature"), STRIPE_CONNECT_WEBHOOK_SECRET);
+    const { duplicate } = await StripeWebhookSvc.handleConnect(event);
+    logger.info("Stripe Connect webhook handled", { eventId: event.id, type: event.type, account: event.account, duplicate });
     res.status(200).json({ received: true, duplicate });
   }
 }

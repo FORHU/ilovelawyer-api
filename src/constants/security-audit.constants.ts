@@ -82,6 +82,12 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.lawyer.rejected",
   "admin.client_payment.refunded",
   "admin.organization_charge.refunded",
+  "admin.quotation_payment.refunded",
+  "admin.settings.payout_settings_changed",
+
+  // A lawyer's wallet: where their earnings are paid out to, and money leaving it.
+  "wallet.payout_account_started",
+  "wallet.withdrawal_requested",
 
   // Client requests (the UK client-to-lawyer hand-off, docs/adr/0016): a lawyer's claim gives
   // them the claim-scoped party lookup, so taking it and losing it are both access changes.
@@ -137,7 +143,10 @@ export type SecurityAuditTargetType =
   | "lawyer_price"
   | "client_promo"
   | "practice_area"
-  | "case_area";
+  | "case_area"
+  | "quotation_payment"
+  | "wallet"
+  | "payout_settings";
 
 /** How long rows are kept before SecurityAuditRetentionQueue deletes them: 7 years by default,
  * overridable with SECURITY_AUDIT_RETENTION_DAYS. Never below the 365-day floor the database
@@ -225,6 +234,10 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.lawyer.rejected": "Lawyer's client-request profile rejected by ilovelawyer",
   "admin.client_payment.refunded": "Client app payment refunded by ilovelawyer",
   "admin.organization_charge.refunded": "Introduction fee or AI top-up refunded by ilovelawyer",
+  "admin.quotation_payment.refunded": "Client's payment for a quote refunded by ilovelawyer",
+  "admin.settings.payout_settings_changed": "Platform fee, earnings hold or minimum withdrawal changed",
+  "wallet.payout_account_started": "Payout account set up or updated",
+  "wallet.withdrawal_requested": "Withdrawal from the wallet requested",
   "client_request.claimed": "Client request accepted",
   "client_request.claim_lapsed": "Hold on a client request lapsed",
   "client_request.parties_viewed": "Party names viewed for a conflict check",

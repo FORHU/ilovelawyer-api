@@ -134,12 +134,16 @@ jobs:
           CLOUDFRONT_URL: ${{ vars.DEV_CLOUDFRONT_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          # Client app payments: unset means the dummy provider (charges nothing). Test-mode keys only.
+          # Payments: each provider unset means its dummy (charges and pays out nothing). Test-mode keys only.
           CLIENT_PAYMENT_PROVIDER: ${{ vars.DEV_CLIENT_PAYMENT_PROVIDER }}
           LAWYER_PAYMENT_PROVIDER: ${{ vars.DEV_LAWYER_PAYMENT_PROVIDER }}
+          QUOTATION_PAYMENT_PROVIDER: ${{ vars.DEV_QUOTATION_PAYMENT_PROVIDER }}
+          PAYOUT_PROVIDER: ${{ vars.DEV_PAYOUT_PROVIDER }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          # Signs /api/webhooks/stripe-connect (lawyers' payouts): a second endpoint in Stripe, its own secret.
+          STRIPE_CONNECT_WEBHOOK_SECRET: ${{ secrets.STRIPE_CONNECT_WEBHOOK_SECRET }}
           # Who's emailed when client requests expire unclaimed (comma-separated). Unset: logged only.
           OPS_ALERT_EMAILS: ${{ vars.DEV_OPS_ALERT_EMAILS }}
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
@@ -219,9 +223,12 @@ jobs:
           add TYPESAFE_API_KEY          "${TYPESAFE_API_KEY:-}"
           add CLIENT_PAYMENT_PROVIDER   "${CLIENT_PAYMENT_PROVIDER:-}"
           add LAWYER_PAYMENT_PROVIDER   "${LAWYER_PAYMENT_PROVIDER:-}"
+          add QUOTATION_PAYMENT_PROVIDER "${QUOTATION_PAYMENT_PROVIDER:-}"
+          add PAYOUT_PROVIDER           "${PAYOUT_PROVIDER:-}"
           add STRIPE_SECRET_KEY         "${STRIPE_SECRET_KEY:-}"
           add STRIPE_PUBLISHABLE_KEY    "${STRIPE_PUBLISHABLE_KEY:-}"
           add STRIPE_WEBHOOK_SECRET     "${STRIPE_WEBHOOK_SECRET:-}"
+          add STRIPE_CONNECT_WEBHOOK_SECRET "${STRIPE_CONNECT_WEBHOOK_SECRET:-}"
           add OPS_ALERT_EMAILS          "${OPS_ALERT_EMAILS:-}"
           add JURIS_PH_API_URL          "${JURIS_PH_API_URL:-}"
           add TRIAL_MESSAGE_LIMIT       "${TRIAL_MESSAGE_LIMIT:-}"

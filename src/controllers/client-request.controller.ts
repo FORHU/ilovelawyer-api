@@ -2,11 +2,14 @@ import { clientWorkspaceOf } from "../middleware/require-client-account.middlewa
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import ClientRequestSvc from "../services/client-request.service";
+import QuotationPaymentSvc from "../services/quotation-payment.service";
 import EngagementMessageSvc from "../services/engagement-message.service";
 import HttpError from "../utils/http-error";
 import {
   clientRequestEligibilitySchema,
+  acceptQuotationSchema,
   confirmClientRequestSchema,
+  payQuotationSchema,
   createClientRequestSchema,
   declineClientRequestSchema,
   endClientRequestSchema,
@@ -57,6 +60,29 @@ export default class ClientRequestCtrl {
   static async decline(req: Request, res: Response) {
     const body = validate(declineClientRequestSchema, req.body ?? {});
     res.status(200).json(await ClientRequestSvc.decline(req.user.userId, req.params.id, body));
+  }
+
+  /** POST /client/lawyer-requests/:id/quotations/:quotationId/accept */
+  static async acceptQuotation(req: Request, res: Response) {
+    const body = validate(acceptQuotationSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestSvc.accept(req.user.userId, req.params.id, req.params.quotationId, body));
+  }
+
+  /** POST /client/lawyer-requests/:id/quotations/:quotationId/reject */
+  static async rejectQuotation(req: Request, res: Response) {
+    const body = validate(declineClientRequestSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestSvc.reject(req.user.userId, req.params.id, req.params.quotationId, { reason: body.reason }));
+  }
+
+  /** POST /client/lawyer-requests/:id/quotations/:quotationId/payment: start or resume paying it. */
+  static async payQuotation(req: Request, res: Response) {
+    const body = validate(payQuotationSchema, req.body ?? {});
+    res.status(200).json(await QuotationPaymentSvc.start(req.user.userId, req.params.id, req.params.quotationId, body));
+  }
+
+  /** GET /client/lawyer-requests/:id/payment: where the client's payment stands. */
+  static async payment(req: Request, res: Response) {
+    res.status(200).json(await QuotationPaymentSvc.status(req.user.userId, req.params.id));
   }
 
   static async withdraw(req: Request, res: Response) {
