@@ -551,16 +551,6 @@ export const clientAppPaths: Paths = {
                       },
                     },
                     audioUrl: { type: "string", nullable: true, description: "Playable audio: the client's own recording on a voice-originated user message, or Polly's synthesized reply on its answer" },
-                    audioTimings: {
-                      type: "object",
-                      nullable: true,
-                      description: "Only on a voice reply's answer: Polly's sentence/word speech marks for audioUrl, to sync a transcript highlight to playback. `text` (markdown-stripped) is what sentenceTimings/wordTimings index into — never this message's own `text` field",
-                      properties: {
-                        text: { type: "string" },
-                        sentenceTimings: { type: "array", items: { type: "object", properties: { time: { type: "number" }, start: { type: "integer" }, end: { type: "integer" } } } },
-                        wordTimings: { type: "array", items: { type: "object", properties: { time: { type: "number" }, start: { type: "integer" }, end: { type: "integer" } } } },
-                      },
-                    },
                     createdAt: { type: "string", format: "date-time" },
                   },
                 },

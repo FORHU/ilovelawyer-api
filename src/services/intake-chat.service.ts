@@ -1,5 +1,5 @@
 import type { ClientWorkspace } from "./client-case.service";
-import IntakeChatRepo, { type ReplyAudioTimings } from "../repositories/intake-chat.repository";
+import IntakeChatRepo from "../repositories/intake-chat.repository";
 import DocumentRepo from "../repositories/document.repository";
 import CaseRepo from "../repositories/case.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
@@ -20,7 +20,7 @@ import { stripStructuredBlocks } from "../utils/response-parser";
 import { redactDocumentIds } from "../utils/document-references";
 import { getProxyFileUrl, uploadToS3 } from "../utils/s3";
 import { transcribeS3Media } from "./transcription.service";
-import { synthesizeSpeechWithMarks } from "../utils/polly";
+import { synthesizeSpeechToBuffer } from "../utils/polly";
 import { toSpeechPlainText } from "../utils/tts-text";
 
 /** How a running intake turn is stopped — same shape as ChatSvc's GenerationControl, its own
@@ -75,10 +75,6 @@ export default class IntakeChatSvc {
           // for a case; resolve names there rather than duplicating that join on every message read.
           documentIds: m.role === "user" ? m.documentIds : [],
           audioUrl: audioKey ? getProxyFileUrl(audioKey, { disposition: "inline" }) : null,
-          // Only the assistant reply ever has this (an untranscribed sync target for the client's
-          // own recording would need word-level ASR timings, which Transcribe doesn't give us
-          // here) — null whenever there's no audio, or it predates this field.
-          audioTimings: m.role === "assistant" ? (m.replyAudioTimings as unknown as ReplyAudioTimings | null) : null,
           createdAt: m.createdAt,
         };
       }),
@@ -410,10 +406,10 @@ export default class IntakeChatSvc {
     if (assistantMessage && job.audioS3Key) {
       try {
         const speechText = toSpeechPlainText(fullResponse);
-        const { audio, sentenceTimings, wordTimings } = await synthesizeSpeechWithMarks(speechText);
+        const audio = await synthesizeSpeechToBuffer(speechText);
         const replyAudioKey = `voice-messages/${caseId}/${assistantMessage.id}-reply.mp3`;
         await uploadToS3(replyAudioKey, audio, "audio/mpeg");
-        await IntakeChatRepo.setReplyAudio(assistantMessage.id, replyAudioKey, { text: speechText, sentenceTimings, wordTimings });
+        await IntakeChatRepo.setReplyAudio(assistantMessage.id, replyAudioKey);
       } catch (err) {
         logger.error("Intake chat generation: voice reply synthesis failed, continuing text-only", { err, caseId, messageId: assistantMessage.id });
       }

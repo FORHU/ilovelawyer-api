@@ -235,7 +235,7 @@ describe("IntakeChatSvc: voice turns", () => {
       ]),
       stash(intakeChatWonder as any, ["streamIntakeChatWonderMessage"]),
       stash(transcriptionService as any, ["transcribeS3Media"]),
-      stash(polly as any, ["synthesizeSpeechWithMarks"]),
+      stash(polly as any, ["synthesizeSpeechToBuffer"]),
       stash(s3 as any, ["uploadToS3"]),
       stash(socket as any, ["emitToUser"]),
     ];
@@ -260,7 +260,7 @@ describe("IntakeChatSvc: voice turns", () => {
       sentUserInput = userInput;
       return { content: "That may be unfair dismissal.", lawyerMatches: [], caseReady: false };
     };
-    (polly as any).synthesizeSpeechWithMarks = async () => ({ audio: Buffer.from("mp3-bytes"), sentenceTimings: [], wordTimings: [] });
+    (polly as any).synthesizeSpeechToBuffer = async () => Buffer.from("mp3-bytes");
     (s3 as any).uploadToS3 = async () => undefined;
     (socket as any).emitToUser = (userId: string, event: string, payload: unknown) => emitted.push([userId, event, payload]);
   });
@@ -299,7 +299,7 @@ describe("IntakeChatSvc: voice turns", () => {
   });
 
   it("still answers (text-only) if Polly synthesis fails — a synthesis failure must not fail an already-good turn", async () => {
-    (polly as any).synthesizeSpeechWithMarks = async () => {
+    (polly as any).synthesizeSpeechToBuffer = async () => {
       throw new Error("Polly down");
     };
     await IntakeChatSvc.processIntakeGenerationJob(VOICE_JOB);

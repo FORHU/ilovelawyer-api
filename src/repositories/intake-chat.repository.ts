@@ -1,16 +1,6 @@
 import prisma from "../lib/prisma";
-import { IntakeMessageRole, IntakeMessageReplyStatus, Prisma } from "@prisma/client";
-import { openIntakeMessage, openIntakeMessages, sealIntakeMessageContent, sealIntakePendingReply, sealReplyAudioTimingsText } from "../utils/intake-message-content";
-import type { MarkTiming } from "../utils/polly";
-
-/** What IntakeMessage.replyAudioTimings holds — see its doc comment in schema.prisma. `text` is
- * the markdown-stripped text actually sent to Polly, which sentenceTimings/wordTimings index
- * into (never `content`, which still has the chat persona's markdown). */
-export interface ReplyAudioTimings {
-  text: string;
-  sentenceTimings: MarkTiming[];
-  wordTimings: MarkTiming[];
-}
+import { IntakeMessageRole, IntakeMessageReplyStatus } from "@prisma/client";
+import { openIntakeMessage, openIntakeMessages, sealIntakeMessageContent, sealIntakePendingReply } from "../utils/intake-message-content";
 
 /** Stable 32-bit key for a case id, for the advisory lock below — same idiom as cron-lock.ts's
  * lockKey, duplicated rather than imported since that one hashes a job name, not a case id, and
@@ -123,11 +113,10 @@ export default class IntakeChatRepo {
 
   /** Stamps a voice turn's assistant reply with its synthesized audio's S3 key, called before
    * chat:done fires so the event always means "everything, including audio, is ready". */
-  static async setReplyAudio(messageId: string, audioKey: string, timings: ReplyAudioTimings) {
-    const sealed: ReplyAudioTimings = { ...timings, text: sealReplyAudioTimingsText(timings.text) };
+  static async setReplyAudio(messageId: string, audioKey: string) {
     return prisma.intakeMessage.update({
       where: { id: messageId },
-      data: { replyAudioKey: audioKey, replyAudioTimings: sealed as unknown as Prisma.InputJsonValue },
+      data: { replyAudioKey: audioKey },
     });
   }
 
