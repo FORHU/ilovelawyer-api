@@ -246,6 +246,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "DELETE /bookmarks/:id": PERSONAL,
   "POST /documents/presign": UPLOAD,
   // The client app (client.route.ts): a client's own cases in their personal workspace.
+  "POST /client/dictations": { exempt: "Sends a short spoken clip to be turned into text; the clip is deleted once the text is returned and no record is kept" },
   "POST /client/cases": CASE_FEED,
   "PATCH /client/cases/:caseId": CASE_FEED,
   "DELETE /client/cases/:caseId": ["case.deleted", "document.deleted"],

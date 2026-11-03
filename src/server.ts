@@ -9,6 +9,7 @@ import ChatGenerationQueue, { ClientChatGenerationQueue, startStalePendingChatSw
 import IntakeChatGenerationQueue, { startIntakeStalePendingSweep } from "./queues/intake-chat-generation.queue";
 import EventReminderQueue from "./queues/event-reminder.queue";
 import AccountDeletionQueue from "./queues/account-deletion.queue";
+import DictationSweepQueue from "./queues/dictation-sweep.queue";
 import ConsultationDeletionQueue from "./queues/consultation-deletion.queue";
 import OrganizationDeletionQueue from "./queues/organization-deletion.queue";
 import GoogleCalendarSyncQueue from "./queues/google-calendar-sync.queue";
@@ -55,6 +56,7 @@ SecurityAuditRetentionQueue.start();
 TrialGuestPurgeQueue.start();
 ClientRequestSweepQueue.start();
 PlanTrialSweepQueue.start();
+DictationSweepQueue.start();
 
 if (FREE_CREDIT_USD === null) logger.error("FREE_CREDIT_USD is not set: new accounts get no free AI credit and are not limited");
 

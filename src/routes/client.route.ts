@@ -1,10 +1,25 @@
 import express from "express";
+import multer from "multer";
+import rateLimit from "express-rate-limit";
 import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import requireClientAccount from "../middleware/require-client-account.middleware";
 import requireConsent from "../middleware/require-consent.middleware";
 import ClientCaseCtrl from "../controllers/client-case.controller";
 import ClientRequestCtrl from "../controllers/client-request.controller";
+import ClientDictationCtrl from "../controllers/client-dictation.controller";
+
+// A spoken answer is a short clip (180s at most in the app); in memory, since it goes straight to S3
+// for the Transcribe job.
+const dictationUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+// Each clip starts a billed Transcribe job, so a client can only start so many: per account, ahead of
+// the upload so a refused request holds no clip in memory.
+const dictationLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "You've used voice input a lot just now. Try again in a few minutes, or type instead." },
+});
 
 /** The client app (ilovelawyer-client): a client's own cases, their AI chat and their documents.
  * Client accounts only; everything runs in the client's personal workspace. */
@@ -18,6 +33,11 @@ router.post("/payments/top-up/quote", asyncHandler(ClientCaseCtrl.quoteTopUp));
 router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.casePaymentGone));
 router.post("/payments/case", asyncHandler(ClientCaseCtrl.casePaymentGone));
 router.get("/payments/:paymentId", asyncHandler(ClientCaseCtrl.paymentStatus));
+
+// Speaking instead of typing in a composer (AWS Transcribe): the clip is sent for transcribing, so
+// it needs AI-processing consent like the chat does. Nothing is kept once the text is returned.
+router.post("/dictations", requireConsent("AI_PROCESSING"), dictationLimiter, dictationUpload.single("audio"), asyncHandler(ClientDictationCtrl.start));
+router.get("/dictations/:id", asyncHandler(ClientDictationCtrl.result));
 
 router.get("/limits", asyncHandler(ClientCaseCtrl.limits));
 // The "Type of issue" choices: the switched-on case areas, in order.

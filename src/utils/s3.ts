@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand, HeadBucketCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
@@ -48,6 +48,27 @@ export async function uploadToS3(key: string, body: Buffer, contentType: string)
   );
 
   return s3UrlForKey(key);
+}
+
+/** Removes one object. Callers that clean up after themselves decide what a failure means. */
+export async function deleteFromS3(key: string): Promise<void> {
+  if (!AWS_S3_BUCKET) throw new Error("AWS_S3_BUCKET is not configured");
+  await client.send(new DeleteObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
+}
+
+/** Every object under a prefix, with when it was last written. For cleanup sweeps. */
+export async function listS3Objects(prefix: string): Promise<{ key: string; lastModified: Date }[]> {
+  if (!AWS_S3_BUCKET) throw new Error("AWS_S3_BUCKET is not configured");
+  const found: { key: string; lastModified: Date }[] = [];
+  let token: string | undefined;
+  do {
+    const page = await client.send(new ListObjectsV2Command({ Bucket: AWS_S3_BUCKET, Prefix: prefix, ContinuationToken: token }));
+    for (const item of page.Contents ?? []) {
+      if (item.Key && item.LastModified) found.push({ key: item.Key, lastModified: item.LastModified });
+    }
+    token = page.NextContinuationToken;
+  } while (token);
+  return found;
 }
 
 /** Server-side copy within the bucket — the bytes never pass through the API. */

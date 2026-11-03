@@ -2,6 +2,8 @@ import {
   TranscribeClient,
   StartTranscriptionJobCommand,
   GetTranscriptionJobCommand,
+  DeleteTranscriptionJobCommand,
+  ListTranscriptionJobsCommand,
 } from "@aws-sdk/client-transcribe";
 import axios from "axios";
 import TranscriptionRepo from "../repositories/transcription.repository";
@@ -29,15 +31,20 @@ function getTranscribeClient() {
 /** Starts an AWS Transcribe batch job for audio/video already sitting in S3. Shared by
  * TranscriptionSvc.startBatchJob (Transcription page) and the Case Document extraction pipeline
  * (mp3/mp4 evidence uploads), so both use identical language/diarization settings. */
-export async function startTranscribeJob(s3Key: string, jobName: string): Promise<void> {
+export async function startTranscribeJob(
+  s3Key: string,
+  jobName: string,
+  // Recordings of several people (the default) get speaker labels; a dictation is one voice.
+  { languageOptions = ["en-US", "tl-PH", "ko-KR"], speakerLabels = true }: { languageOptions?: string[]; speakerLabels?: boolean } = {},
+): Promise<void> {
   if (!AWS_S3_BUCKET) throw new HttpError("AWS_S3_BUCKET is not configured", 500);
   const mediaFormat = getMediaFormat(s3Key);
   const params: any = {
     TranscriptionJobName: jobName,
     IdentifyLanguage: true,
-    LanguageOptions: ["en-US", "tl-PH", "ko-KR"],
+    LanguageOptions: languageOptions,
     Media: { MediaFileUri: `s3://${AWS_S3_BUCKET}/${s3Key}` },
-    Settings: { ShowSpeakerLabels: true, MaxSpeakerLabels: 10 },
+    ...(speakerLabels ? { Settings: { ShowSpeakerLabels: true, MaxSpeakerLabels: 10 } } : {}),
   };
   if (mediaFormat) params.MediaFormat = mediaFormat;
   await getTranscribeClient().send(new StartTranscriptionJobCommand(params));
@@ -47,6 +54,19 @@ export interface TranscribeJobResult {
   status: string;
   transcript?: string;
   failureReason?: string;
+  /** The S3 key of the media the job read, for a caller that cleans up after itself. */
+  mediaKey?: string;
+}
+
+/** "s3://bucket/some/key.webm" -> "some/key.webm" */
+function s3KeyOf(uri: string | undefined): string | undefined {
+  const match = uri?.match(/^s3:\/\/[^/]+\/(.+)$/);
+  return match?.[1];
+}
+
+/** AWS answers a job name it doesn't know with a BadRequestException, not a typed not-found. */
+export function isTranscribeJobNotFound(err: unknown): boolean {
+  return (err as { name?: string } | null)?.name === "BadRequestException" && /couldn't be found/i.test((err as Error).message);
 }
 
 /** One-shot status check of a started job; on COMPLETED also fetches/formats the transcript. */
@@ -56,11 +76,34 @@ export async function getTranscribeJobResult(jobName: string): Promise<Transcrib
   if (!job) throw new HttpError("Job not found in AWS Transcribe", 404);
 
   const status = job.TranscriptionJobStatus ?? "UNKNOWN";
+  const mediaKey = s3KeyOf(job.Media?.MediaFileUri);
   if (status === "COMPLETED" && job.Transcript?.TranscriptFileUri) {
-    return { status, transcript: await fetchTranscriptText(job.Transcript.TranscriptFileUri) };
+    return { status, mediaKey, transcript: await fetchTranscriptText(job.Transcript.TranscriptFileUri) };
   }
-  if (status === "FAILED") return { status, failureReason: job.FailureReason };
-  return { status };
+  if (status === "FAILED") return { status, mediaKey, failureReason: job.FailureReason };
+  return { status, mediaKey };
+}
+
+/** The jobs whose name starts with `prefix`, for cleanup sweeps. */
+export async function listTranscribeJobs(prefix: string): Promise<{ name: string; status: string; createdAt: Date }[]> {
+  const found: { name: string; status: string; createdAt: Date }[] = [];
+  let token: string | undefined;
+  do {
+    const page = await getTranscribeClient().send(new ListTranscriptionJobsCommand({ JobNameContains: prefix, NextToken: token }));
+    for (const job of page.TranscriptionJobSummaries ?? []) {
+      // JobNameContains matches anywhere in the name; only the ones that start with it are ours.
+      if (job.TranscriptionJobName?.startsWith(prefix) && job.CreationTime) {
+        found.push({ name: job.TranscriptionJobName, status: job.TranscriptionJobStatus ?? "UNKNOWN", createdAt: job.CreationTime });
+      }
+    }
+    token = page.NextToken;
+  } while (token);
+  return found;
+}
+
+/** Removes the job and, with it, the transcript AWS keeps for it. */
+export async function deleteTranscribeJob(jobName: string): Promise<void> {
+  await getTranscribeClient().send(new DeleteTranscriptionJobCommand({ TranscriptionJobName: jobName }));
 }
 
 const TRANSCRIBE_POLL_INTERVAL_MS = 5_000;

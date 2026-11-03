@@ -11,7 +11,7 @@ import PlanGateSvc from "../services/plan-gate.service";
 import HttpError from "../utils/http-error";
 import { clearRefreshTokenCookie } from "../utils/refreshTokenCookie";
 import { updateMeSchema, changePasswordSchema, deleteMeSchema, connectGoogleCalendarSchema, saveProductTourSchema } from "../validation/users.validation";
-import { PRODUCT_TOUR_TRACKS } from "../constants";
+import { isClientTourTrack, isLawyerTourTrack } from "../constants";
 
 export default class UsersCtrl {
   static async me(req: Request, res: Response) {
@@ -129,14 +129,14 @@ export default class UsersCtrl {
 
   /** GET /api/users/me/tour/:track — where the caller is in that onboarding tour. */
   static async getTour(req: Request, res: Response) {
-    const track = tourTrack(req.params.track);
+    const track = await tourTrack(req.user.userId, req.params.track);
     const result = await ProductTourSvc.get(req.user.userId, track);
     return res.status(200).json(result);
   }
 
   /** PUT /api/users/me/tour/:track — saves the caller's whole tour state after a move. */
   static async saveTour(req: Request, res: Response) {
-    const track = tourTrack(req.params.track);
+    const track = await tourTrack(req.user.userId, req.params.track);
     const { error, value } = saveProductTourSchema.validate(req.body);
     if (error) throw new HttpError(error.message, 400);
 
@@ -145,7 +145,11 @@ export default class UsersCtrl {
   }
 }
 
-function tourTrack(track: string) {
-  if (!(PRODUCT_TOUR_TRACKS as readonly string[]).includes(track)) throw new HttpError(`Unknown tour: ${track}`, 404);
+/** The tour named in the URL, if it is one this account's app runs: a client account (role USER)
+ * has the client app's tours, a lawyer the lawyer app's. Anything else reads as not found. */
+async function tourTrack(userId: string, track: string) {
+  const user = await AuthRepo.findById(userId);
+  const known = user?.role === "USER" ? isClientTourTrack(track) : isLawyerTourTrack(track);
+  if (!known) throw new HttpError(`Unknown tour: ${track}`, 404);
   return track;
 }
