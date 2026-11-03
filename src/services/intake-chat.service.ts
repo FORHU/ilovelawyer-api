@@ -9,7 +9,7 @@ import IntakeChatGenerationQueue, { IntakeChatGenerationJob } from "../queues/in
 import { streamIntakeChatWonderMessage, getChatWonderSessionIdForIntake, IntakeGenerationCancelledError } from "../utils/intakeChatWonder";
 import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { excerptsWithHandles } from "../utils/case-document-handles";
-import { caseDetailsBlock } from "../utils/client-intake-extract";
+import { caseDetailsBlock, readinessBlock } from "../utils/client-intake-extract";
 import { redis } from "../lib/redis";
 import { emitToUser } from "../lib/socket";
 import { runInLlmUsageScope } from "../lib/llm-usage-scope";
@@ -222,6 +222,28 @@ export default class IntakeChatSvc {
       logger.warn("Intake chat generation: case-details grounding unavailable, continuing without it", { err, caseId });
     }
 
+    // Readiness grounding: Jev's own independent check (confirmReadyWithJev below reuses the same
+    // call) already decides every turn whether each must-have is covered — the same verdict the
+    // client's readiness checklist UI shows. Without this, the model has to re-derive "already
+    // answered" purely by re-reading raw chat text itself every turn, which is where the re-asking
+    // bugs came from (caught live 2026-11-03): it kept asking things already answered — a goal
+    // stated inline with the problem, "nothing's been signed" restated as an emphatic answer —
+    // because nothing told it those were already settled. Cached per latest-AI-message-id
+    // (ClientCaseSvc.lawyerReadiness), so this costs nothing extra beyond what the checklist UI's
+    // own query already pays for the same turn.
+    let readinessContext = "";
+    try {
+      const organizationId = await CaseRepo.findOrganizationId(caseId);
+      if (organizationId) {
+        const { default: ClientCaseSvc } = await import("./client-case.service");
+        const workspace: ClientWorkspace = { id: organizationId, role: "OWNER", tenantCode: job.tenantCode };
+        const readiness = await ClientCaseSvc.lawyerReadiness(workspace, userId, caseId);
+        readinessContext = readinessBlock(readiness.criteria);
+      }
+    } catch (err) {
+      logger.warn("Intake chat generation: readiness grounding unavailable, continuing without it", { err, caseId });
+    }
+
     // Document excerpt grounding — the ambient-awareness requirement: reuses ClientIntakeSvc's
     // own excerpt-pack mechanism (not DocumentChunkSvc's embedding-chunk RAG chain, which is a
     // heavier, lawyer-Terminal-specific tool) so intake doesn't ask about something a document
@@ -251,7 +273,7 @@ export default class IntakeChatSvc {
 
     // One combined block, under chat-wonder's single "[CASE CONTEXT]" label (intake_prompt.txt /
     // the_server.py's _document_context_injection) — case-form facts first, then document excerpts.
-    const documentContext = [caseContext, documentExcerptContext].filter(Boolean).join("\n\n");
+    const documentContext = [caseContext, readinessContext, documentExcerptContext].filter(Boolean).join("\n\n");
 
     let fullResponse: string;
     let lawyerMatches: unknown[] = [];

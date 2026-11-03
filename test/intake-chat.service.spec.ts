@@ -75,7 +75,7 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
     (CaseAreaSvc as any).labeller = async () => (codes: string[]) => codes.map((c) => ({ code: c, name: "Employment" }));
     (ClientCaseSvc as any).lawyerReadiness = async () => {
       jevCalls++;
-      return { enabled: true, ready: jevReady };
+      return { enabled: true, ready: jevReady, criteria: [] };
     };
     (ClientIntakeSvc as any).scheduleAuto = async () => undefined;
     (IntakeChatRepo as any).findReplyState = async () => ({ id: JOB.jobId, caseId: JOB.caseId, role: "user", userId: JOB.userId, replyStatus: "PENDING", pendingReplyContent: null });
@@ -104,7 +104,9 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
   it("marks the message ready and emits intake:case-ready when Jev agrees", async () => {
     jevReady = true;
     await IntakeChatSvc.processIntakeGenerationJob(JOB);
-    expect(jevCalls).to.equal(1);
+    // Once for the pre-generation readiness grounding (see readinessContext), once for the
+    // post-generation mark_case_ready() gate — this mock has no caching, so both count.
+    expect(jevCalls).to.equal(2);
     expect(marked).to.deep.equal(["assistant-1"]);
     expect(emitted.some(([, event]) => event === "intake:case-ready")).to.equal(true);
   });
@@ -112,17 +114,19 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
   it("does nothing when intake declares readiness but Jev disagrees", async () => {
     jevReady = false;
     await IntakeChatSvc.processIntakeGenerationJob(JOB);
-    expect(jevCalls).to.equal(1);
+    expect(jevCalls).to.equal(2);
     expect(marked).to.deep.equal([]);
     expect(emitted.some(([, event]) => event === "intake:case-ready")).to.equal(false);
     // The turn still completes normally either way.
     expect(emitted.some(([, event]) => event === "chat:done")).to.equal(true);
   });
 
-  it("never asks Jev when intake didn't declare readiness this turn", async () => {
+  it("still asks Jev once for pre-reply grounding even when intake didn't declare readiness", async () => {
     (intakeChatWonder as any).streamIntakeChatWonderMessage = async () => ({ content: "Tell me more.", lawyerMatches: [], caseReady: false });
     await IntakeChatSvc.processIntakeGenerationJob(JOB);
-    expect(jevCalls).to.equal(0);
+    // The pre-generation readiness fetch always runs (so the model can see what's already
+    // confirmed); only the post-generation mark_case_ready() gate is conditional on caseReady.
+    expect(jevCalls).to.equal(1);
     expect(marked).to.deep.equal([]);
   });
 
@@ -154,6 +158,29 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
     expect(sentDocumentContext).to.include("Town or city: Manchester");
     expect(sentDocumentContext).to.include("The client is: bringing the complaint");
     expect(sentDocumentContext).to.include("Acme Ltd (Opposing party)");
+  });
+
+  it("tells chat-wonder what Jev's own readiness check already confirmed, so intake never re-asks it either", async () => {
+    // Regression for a live bug (2026-11-03): the model kept re-asking things already answered in
+    // the conversation (a goal stated inline, "nothing's been signed" restated) because it had to
+    // re-derive "already answered" purely by re-reading raw chat text — Jev's own check already
+    // knew these were settled (it drives the client's readiness checklist UI) but intake never saw
+    // that verdict until now.
+    (ClientCaseSvc as any).lawyerReadiness = async () => {
+      jevCalls++;
+      return {
+        enabled: true,
+        ready: true,
+        criteria: [
+          { key: "goal", label: "What you want to get out of it", met: true, confidence: 0.9 },
+          { key: "events", label: "What happened, and roughly when", met: false, confidence: 0.1 },
+        ],
+      };
+    };
+    await IntakeChatSvc.processIntakeGenerationJob(JOB);
+    expect(sentDocumentContext).to.include("Already confirmed");
+    expect(sentDocumentContext).to.include("What you want to get out of it");
+    expect(sentDocumentContext).to.not.include("What happened, and roughly when");
   });
 
   it("still refreshes the overview every turn, whether or not Jev confirms readiness", async () => {

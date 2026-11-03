@@ -4,7 +4,7 @@
  * two surviving sources for a conflict. No DB, no Chat Wonder call. */
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { parseIntakeReply, buildIntakePrompt, caseDetailsBlock, caseDetailsPeople, type IntakeMessageInput } from "../src/utils/client-intake-extract";
+import { parseIntakeReply, buildIntakePrompt, caseDetailsBlock, caseDetailsPeople, readinessBlock, type IntakeMessageInput } from "../src/utils/client-intake-extract";
 import type { CaseDoc } from "../src/utils/case-document-handles";
 
 const docs: CaseDoc[] = [
@@ -154,6 +154,44 @@ describe("Client intake extraction", () => {
 
     it("reads RESPONDENT as responding to the complaint", () => {
       expect(caseDetailsBlock({ ...details, side: "RESPONDENT" }, [])).to.include("The client is: responding to one");
+    });
+  });
+
+  describe("readinessBlock", () => {
+    // Regression for a live bug (2026-11-03): the chat model kept re-asking things the
+    // conversation had already answered (a goal stated inline, "nothing's been signed yet"
+    // restated as an emphatic answer) because it had to re-derive "already answered" purely by
+    // re-reading raw chat text itself, every turn — unreliable in a long conversation. Jev's own
+    // independent readiness check (lawyer-readiness-jev.ts) already computes this correctly, every
+    // turn, for the client's own checklist UI — this feeds that same verdict back into the model's
+    // own context as ground truth, instead of asking it to re-derive what Jev already knows.
+    const criteria = [
+      { key: "problem", label: "What kind of problem it is", met: true, confidence: 0.9 },
+      { key: "place", label: "Where in the UK it happened", met: true, confidence: 0.85 },
+      { key: "otherSide", label: "Who the other side is", met: false, confidence: 0.2 },
+      { key: "events", label: "What happened, and roughly when", met: false, confidence: 0.1 },
+      { key: "goal", label: "What you want to get out of it", met: true, confidence: 0.95 },
+      { key: "status", label: "What's happened since, and where things stand now", met: true, confidence: 0.8 },
+    ] as const;
+
+    it("lists only the met criteria, never asking the reader to ask about them again", () => {
+      const block = readinessBlock([...criteria]);
+      expect(block).to.include("Already confirmed");
+      expect(block).to.include("do not ask about");
+      expect(block).to.include("What kind of problem it is");
+      expect(block).to.include("Where in the UK it happened");
+      expect(block).to.include("What you want to get out of it");
+      expect(block).to.include("What's happened since, and where things stand now");
+      expect(block).to.not.include("Who the other side is");
+      expect(block).to.not.include("What happened, and roughly when");
+    });
+
+    it("is empty when nothing is confirmed yet, rather than an empty-looking block", () => {
+      expect(readinessBlock(criteria.map((c) => ({ ...c, met: false })))).to.equal("");
+    });
+
+    it("is empty for an empty criteria list (Jev disabled, or not checked yet)", () => {
+      expect(readinessBlock([])).to.equal("");
     });
   });
 

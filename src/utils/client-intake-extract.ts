@@ -65,6 +65,19 @@ The client's note: ${caseDetails.notes || "none"}
 People already named on the case form (don't list these again under "people" unless the conversation adds new detail about them that isn't on the form): ${parties.map((p) => `${p.name} (${p.designation})`).join(", ") || "none"}`;
 }
 
+/** Jev's own independent readiness check (lawyer-readiness-jev.ts) already decides, every turn,
+ * whether each must-have is covered — the same verdict the client's own readiness checklist UI
+ * shows. Feeding that verdict back into chat-wonder's context turns "is this already answered"
+ * from the model re-deriving it by re-reading raw chat text (unreliable over a long conversation)
+ * into a lookup against ground truth it's explicitly told to trust. Empty string when nothing is
+ * confirmed yet, so an empty/all-unmet result adds nothing to the prompt rather than an
+ * empty-looking block. */
+export function readinessBlock(criteria: { label: string; met: boolean }[]): string {
+  const met = criteria.filter((c) => c.met).map((c) => `- ${c.label}`);
+  if (!met.length) return "";
+  return `Already confirmed by an independent check — do not ask about these again, regardless of how the conversation reads:\n${met.join("\n")}`;
+}
+
 export function buildIntakePrompt(input: {
   /** `caseAreas` are the case areas' names. */
   caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null };
