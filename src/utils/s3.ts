@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, CopyObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import jwt from "jsonwebtoken";
 import type { Readable } from "stream";
@@ -51,6 +51,12 @@ export async function uploadToS3(key: string, body: Buffer, contentType: string)
 }
 
 /** Server-side copy within the bucket — the bytes never pass through the API. */
+/** Removes one object. Callers that clean up after themselves decide what a failure means. */
+export async function deleteFromS3(key: string): Promise<void> {
+  if (!AWS_S3_BUCKET) throw new Error("AWS_S3_BUCKET is not configured");
+  await client.send(new DeleteObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key }));
+}
+
 export async function copyS3Object(sourceKey: string, destinationKey: string): Promise<void> {
   if (!AWS_S3_BUCKET) {
     throw new Error("AWS_S3_BUCKET is not configured");
