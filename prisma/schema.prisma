@@ -528,6 +528,12 @@ model IntakeMessage {
   documentIds         String[]                  @default([])
   findLawyerResultIds String[]                  @default([])
   markedReady         Boolean                   @default(false)
+  // Set on a voice-originated user message: the S3 key of the client's own recording, retained
+  // (not deleted after transcription) the same way other case evidence is kept.
+  audioKey            String?
+  // Set on a voice-originated turn's assistant reply once Polly has synthesized it — null for an
+  // ordinary typed turn, and null on the user message itself (that's audioKey, above).
+  replyAudioKey       String?
 
   case    Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
   parent  IntakeMessage?  @relation("IntakeMessageThread", fields: [parentMessageId], references: [id], onDelete: SetNull)

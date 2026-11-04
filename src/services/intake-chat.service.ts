@@ -9,7 +9,7 @@ import IntakeChatGenerationQueue, { IntakeChatGenerationJob } from "../queues/in
 import { streamIntakeChatWonderMessage, getChatWonderSessionIdForIntake, IntakeGenerationCancelledError } from "../utils/intakeChatWonder";
 import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { excerptsWithHandles } from "../utils/case-document-handles";
-import { caseDetailsBlock } from "../utils/client-intake-extract";
+import { caseDetailsBlock, readinessBlock } from "../utils/client-intake-extract";
 import { redis } from "../lib/redis";
 import { emitToUser } from "../lib/socket";
 import { runInLlmUsageScope } from "../lib/llm-usage-scope";
@@ -18,6 +18,10 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { stripStructuredBlocks } from "../utils/response-parser";
 import { redactDocumentIds } from "../utils/document-references";
+import { getProxyFileUrl, uploadToS3 } from "../utils/s3";
+import { transcribeS3Media } from "./transcription.service";
+import { synthesizeSpeechToBuffer } from "../utils/polly";
+import { toSpeechPlainText } from "../utils/tts-text";
 
 /** How a running intake turn is stopped — same shape as ChatSvc's GenerationControl, its own
  * copy (see intake-field-crypto.ts's doc comment on why duplication here is deliberate). */
@@ -56,32 +60,44 @@ export default class IntakeChatSvc {
     const visible = messages.filter((m) => m.role === "user" || m.role === "assistant");
     return {
       replying: visible.some((m) => m.role === "user" && m.replyStatus === "PENDING"),
-      messages: visible.map((m) => ({
-        id: m.id,
-        role: m.role === "user" ? ("user" as const) : ("ai" as const),
-        text: m.content,
-        replyStatus: m.role === "user" ? m.replyStatus : null,
-        // Document names/status aren't resolved inline here (IntakeMessage carries only ids, no
-        // relation like Message.documents) — the frontend already has a document-list endpoint
-        // for a case; resolve names there rather than duplicating that join on every message read.
-        documentIds: m.role === "user" ? m.documentIds : [],
-        createdAt: m.createdAt,
-      })),
+      messages: visible.map((m) => {
+        // audioKey (the client's own recording) on a user turn, replyAudioKey (the Polly
+        // synthesis) on its assistant reply — never both on the same row. Inline disposition: it's
+        // played in the chat, never offered as a download.
+        const audioKey = m.role === "user" ? m.audioKey : m.replyAudioKey;
+        return {
+          id: m.id,
+          role: m.role === "user" ? ("user" as const) : ("ai" as const),
+          text: m.content,
+          replyStatus: m.role === "user" ? m.replyStatus : null,
+          // Document names/status aren't resolved inline here (IntakeMessage carries only ids, no
+          // relation like Message.documents) — the frontend already has a document-list endpoint
+          // for a case; resolve names there rather than duplicating that join on every message read.
+          documentIds: m.role === "user" ? m.documentIds : [],
+          audioUrl: audioKey ? getProxyFileUrl(audioKey, { disposition: "inline" }) : null,
+          createdAt: m.createdAt,
+        };
+      }),
     };
   }
 
   /** Enqueues a turn on the intake pipeline's own queue. Credit spend/refund and attachment
    * ownership checks stay in ClientCaseSvc.sendMessage (the caller) — this only owns the
-   * generation job itself, same split of responsibility ChatSvc.enqueueChatGeneration had. */
+   * generation job itself, same split of responsibility ChatSvc.enqueueChatGeneration had.
+   *
+   * `audioKey` marks this as a voice turn: `text` is then just a placeholder (there's no
+   * transcript yet), and the worker's first step (runIntakeGenerationJob) transcribes audioKey
+   * and overwrites the placeholder with the real content before doing anything else. */
   static async enqueueIntakeGeneration(
     workspace: ClientWorkspace,
     userId: string,
     caseId: string,
     text: string,
     documentIds?: string[],
+    audioKey?: string,
   ): Promise<{ messageId: string; sessionId: string; replyStatus: "PENDING" }> {
     const sessionId = await IntakeChatSvc.resolveSession(caseId);
-    const userMessage = await IntakeChatRepo.createUserMessageIfNoPendingTurn(caseId, text, userId, documentIds);
+    const userMessage = await IntakeChatRepo.createUserMessageIfNoPendingTurn(caseId, text, userId, documentIds, audioKey);
     if (!userMessage) {
       throw new HttpError("A reply is already generating for this case", 409);
     }
@@ -94,6 +110,7 @@ export default class IntakeChatSvc {
       sessionId,
       userInput: text,
       documentIds,
+      audioS3Key: audioKey,
     };
     IntakeChatGenerationQueue.enqueue(job);
     return { messageId: userMessage.id, sessionId, replyStatus: "PENDING" };
@@ -181,7 +198,8 @@ export default class IntakeChatSvc {
 
   private static async runIntakeGenerationJob(job: IntakeChatGenerationJob, control: IntakeGenerationControl): Promise<void> {
     const { signal } = control.abort;
-    const { jobId: parentMessageId, caseId, userId, sessionId, userInput } = job;
+    const { jobId: parentMessageId, caseId, userId, sessionId } = job;
+    let userInput = job.userInput;
 
     const initialState = await IntakeChatRepo.findReplyState(parentMessageId).catch(() => null);
     if (initialState?.replyStatus === "CANCELLED") return;
@@ -194,6 +212,29 @@ export default class IntakeChatSvc {
       }
     };
     emitEvent("chat:started", {});
+
+    // A voice turn arrives with no transcript yet — userInput is just the placeholder
+    // enqueueIntakeGeneration wrote. Transcribe before anything else so the rest of this function
+    // (grounding, the chat-wonder call, persistence) never has to know a turn was spoken rather
+    // than typed. Failing this fails the turn exactly like the AI-call failure path below.
+    if (job.audioS3Key) {
+      try {
+        // A client talking to this chat is always one voice — never speaker-labelled, unlike the
+        // evidence-transcription path this function also serves (recorded hearings, calls).
+        // Diarization misfiring on a single speaker (a pause or pitch shift read as a second
+        // speaker) would otherwise leak "[TS:0.82] [Speaker 0]: ..." tags into the chat transcript.
+        const transcript = (await transcribeS3Media(job.audioS3Key, `voice-msg-${parentMessageId}`, { speakerLabels: false })).trim();
+        if (!transcript) throw new Error("Transcribe returned an empty transcript");
+        userInput = transcript;
+        await IntakeChatRepo.setTranscribedContent(parentMessageId, transcript);
+        emitEvent("chat:voice-transcribed", {});
+      } catch (err) {
+        logger.error("Intake chat generation: voice transcription failed", { err, jobId: parentMessageId, caseId });
+        await IntakeChatRepo.setReplyStatus(parentMessageId, "FAILED", { clearPendingContent: true }).catch(() => {});
+        emitEvent("chat:error", { message: "Couldn't transcribe that recording" });
+        return;
+      }
+    }
 
     // Case-details grounding: what the client already answered on the case-creation wizard
     // (type of problem, jurisdiction, town, side, notes, named parties). Without this, intake has
@@ -220,6 +261,28 @@ export default class IntakeChatSvc {
       }
     } catch (err) {
       logger.warn("Intake chat generation: case-details grounding unavailable, continuing without it", { err, caseId });
+    }
+
+    // Readiness grounding: Jev's own independent check (confirmReadyWithJev below reuses the same
+    // call) already decides every turn whether each must-have is covered — the same verdict the
+    // client's readiness checklist UI shows. Without this, the model has to re-derive "already
+    // answered" purely by re-reading raw chat text itself every turn, which is where the re-asking
+    // bugs came from (caught live 2026-11-03): it kept asking things already answered — a goal
+    // stated inline with the problem, "nothing's been signed" restated as an emphatic answer —
+    // because nothing told it those were already settled. Cached per latest-AI-message-id
+    // (ClientCaseSvc.lawyerReadiness), so this costs nothing extra beyond what the checklist UI's
+    // own query already pays for the same turn.
+    let readinessContext = "";
+    try {
+      const organizationId = await CaseRepo.findOrganizationId(caseId);
+      if (organizationId) {
+        const { default: ClientCaseSvc } = await import("./client-case.service");
+        const workspace: ClientWorkspace = { id: organizationId, role: "OWNER", tenantCode: job.tenantCode };
+        const readiness = await ClientCaseSvc.lawyerReadiness(workspace, userId, caseId);
+        readinessContext = readinessBlock(readiness.criteria);
+      }
+    } catch (err) {
+      logger.warn("Intake chat generation: readiness grounding unavailable, continuing without it", { err, caseId });
     }
 
     // Document excerpt grounding — the ambient-awareness requirement: reuses ClientIntakeSvc's
@@ -251,7 +314,7 @@ export default class IntakeChatSvc {
 
     // One combined block, under chat-wonder's single "[CASE CONTEXT]" label (intake_prompt.txt /
     // the_server.py's _document_context_injection) — case-form facts first, then document excerpts.
-    const documentContext = [caseContext, documentExcerptContext].filter(Boolean).join("\n\n");
+    const documentContext = [caseContext, readinessContext, documentExcerptContext].filter(Boolean).join("\n\n");
 
     let fullResponse: string;
     let lawyerMatches: unknown[] = [];
@@ -280,8 +343,15 @@ export default class IntakeChatSvc {
     };
 
     try {
-      const result = await streamIntakeChatWonderMessage(sessionId, userInput, checkpointedOnChunk, documentContext || undefined, signal, () =>
-        emitEvent("chat:answer-complete", {}),
+      const result = await streamIntakeChatWonderMessage(
+        sessionId,
+        userInput,
+        checkpointedOnChunk,
+        documentContext || undefined,
+        signal,
+        () => emitEvent("chat:answer-complete", {}),
+        caseId,
+        userId,
       );
       await checkpointChain;
       fullResponse = redactDocumentIds(result.content, scopeDocs);
@@ -330,6 +400,22 @@ export default class IntakeChatSvc {
         );
       } else {
         logger.info("Intake chat generation: intake declared ready but Jev disagreed, not acting on it", { caseId, messageId: assistantMessage.id });
+      }
+    }
+
+    // Voice turn: synthesize the reply's audio BEFORE chat:done fires, so that event always means
+    // "everything, including audio, is ready" — never a second event the client has to wait on
+    // separately. A synthesis failure here must not fail a turn whose text answer is already
+    // good and already persisted; the client still gets a text-only reply.
+    if (assistantMessage && job.audioS3Key) {
+      try {
+        const speechText = toSpeechPlainText(fullResponse);
+        const audio = await synthesizeSpeechToBuffer(speechText);
+        const replyAudioKey = `voice-messages/${caseId}/${assistantMessage.id}-reply.mp3`;
+        await uploadToS3(replyAudioKey, audio, "audio/mpeg");
+        await IntakeChatRepo.setReplyAudio(assistantMessage.id, replyAudioKey);
+      } catch (err) {
+        logger.error("Intake chat generation: voice reply synthesis failed, continuing text-only", { err, caseId, messageId: assistantMessage.id });
       }
     }
 

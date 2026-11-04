@@ -112,9 +112,13 @@ const TRANSCRIBE_MAX_WAIT_MS = 12 * 60_000;
 
 /** Transcribes S3 media end-to-end (start job, poll to completion) and returns the formatted
  * transcript text. Throws if the job fails or times out. */
-export async function transcribeS3Media(s3Key: string, jobLabel: string): Promise<string> {
+export async function transcribeS3Media(
+  s3Key: string,
+  jobLabel: string,
+  options?: { languageOptions?: string[]; speakerLabels?: boolean },
+): Promise<string> {
   const jobName = `${jobLabel}-${Date.now()}`;
-  await startTranscribeJob(s3Key, jobName);
+  await startTranscribeJob(s3Key, jobName, options);
 
   const deadline = Date.now() + TRANSCRIBE_MAX_WAIT_MS;
   while (Date.now() < deadline) {

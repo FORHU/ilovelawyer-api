@@ -11,8 +11,8 @@ for q in \
   ai-generation \
   message-persistence \
   client-chat-generation \
-  case-graph-promotion \
-  intake-chat-generation
+  intake-chat-generation \
+  case-graph-promotion
 do
   echo "Creating queue: $q"
   aws --endpoint-url="$ENDPOINT" sqs create-queue --queue-name "$q" --output text

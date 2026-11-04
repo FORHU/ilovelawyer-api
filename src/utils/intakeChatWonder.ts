@@ -56,6 +56,8 @@ export function streamIntakeChatWonderMessage(
   documentContext?: string,
   signal?: AbortSignal,
   onAnswerComplete?: () => void,
+  caseId?: string,
+  userId?: string,
 ): Promise<IntakeChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new IntakeGenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -110,13 +112,23 @@ export function streamIntakeChatWonderMessage(
     };
 
     ws.onopen = () => {
-      const payload: { type: string; user_input: string; session_id: string; use_full_legal_chain: boolean; document_context?: string } = {
+      const payload: {
+        type: string;
+        user_input: string;
+        session_id: string;
+        use_full_legal_chain: boolean;
+        document_context?: string;
+        case_id?: string;
+        user_id?: string;
+      } = {
         type: "chat",
         user_input: `${INTAKE_TAG} ${userInput}`,
         session_id: sessionId,
         use_full_legal_chain: false,
       };
       if (documentContext) payload.document_context = documentContext;
+      if (caseId) payload.case_id = caseId;
+      if (userId) payload.user_id = userId;
       ws.send(JSON.stringify(payload));
     };
 

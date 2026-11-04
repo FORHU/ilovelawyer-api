@@ -79,7 +79,13 @@ export default class IntakeChatRepo {
    * caller's check, inside the same lock, now sees the first's row. Returns null (same meaning as
    * hasPendingTurn returning true) when another turn is already pending; the created message
    * otherwise. */
-  static async createUserMessageIfNoPendingTurn(caseId: string, content: string, userId: string, documentIds?: string[]) {
+  static async createUserMessageIfNoPendingTurn(
+    caseId: string,
+    content: string,
+    userId: string,
+    documentIds?: string[],
+    audioKey?: string,
+  ) {
     return prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKeyFor(caseId)})`;
       const last = await tx.intakeMessage.findFirst({
@@ -89,9 +95,28 @@ export default class IntakeChatRepo {
       });
       if (last?.role === "user" && last.replyStatus === "PENDING") return null;
       const stored = await tx.intakeMessage.create({
-        data: { caseId, role: "user", content: sealIntakeMessageContent(content), userId, documentIds: documentIds ?? [], replyStatus: "PENDING" },
+        data: { caseId, role: "user", content: sealIntakeMessageContent(content), userId, documentIds: documentIds ?? [], replyStatus: "PENDING", audioKey },
       });
       return openIntakeMessage(stored) ?? stored;
+    });
+  }
+
+  /** Overwrites a voice turn's placeholder content with its transcript once Amazon Transcribe
+   * finishes — the one write IntakeChatSvc.runIntakeGenerationJob does before generation starts. */
+  static async setTranscribedContent(messageId: string, transcript: string) {
+    const stored = await prisma.intakeMessage.update({
+      where: { id: messageId },
+      data: { content: sealIntakeMessageContent(transcript) },
+    });
+    return openIntakeMessage(stored) ?? stored;
+  }
+
+  /** Stamps a voice turn's assistant reply with its synthesized audio's S3 key, called before
+   * chat:done fires so the event always means "everything, including audio, is ready". */
+  static async setReplyAudio(messageId: string, audioKey: string) {
+    return prisma.intakeMessage.update({
+      where: { id: messageId },
+      data: { replyAudioKey: audioKey },
     });
   }
 

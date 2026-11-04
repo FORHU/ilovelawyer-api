@@ -1,10 +1,11 @@
 import { openIntakeField, sealIntakeField } from "./intake-field-crypto";
 import logger from "./logger";
 
-/** Sealing for IntakeMessage text, via intake-field-crypto.ts — the intake pipeline's own key and
- * implementation, never field-crypto.ts/message-content.ts (those seal the lawyer side's Message
- * table). Sealed only while INTAKE_FIELD_ENCRYPTION_ENABLED is on; reading never depends on the
- * switch, and text that was never sealed reads back as it is.
+/** Sealing for IntakeMessage text, via intake-field-crypto.ts — its own implementation, never
+ * field-crypto.ts/message-content.ts (those seal the lawyer side's Message table), but now sharing
+ * the same FIELD_ENCRYPTION_KEY/FIELD_ENCRYPTION_ENABLED switch as the lawyer side. Sealed only
+ * while that switch is on; reading never depends on the switch, and text that was never sealed
+ * reads back as it is.
  *
  * Labels are `<Model>.<field>`, bound into each value. Every place that writes or returns
  * IntakeMessage.content or IntakeMessage.pendingReplyContent goes through these. */
@@ -16,7 +17,11 @@ export const sealIntakeMessageContent = (plain: string): string => sealIntakeFie
 
 export const sealIntakePendingReply = (plain: string): string => sealIntakeField(plain, INTAKE_PENDING_REPLY, true);
 
-type IntakeMessageText = { id?: string; content?: string; pendingReplyContent?: string | null };
+type IntakeMessageText = {
+  id?: string;
+  content?: string;
+  pendingReplyContent?: string | null;
+};
 
 /** `row` with its message text opened, or null when its content is sealed and cannot be opened: that
  * one message is left out so the rest of the thread still loads. */
