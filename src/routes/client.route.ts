@@ -8,6 +8,7 @@ import requireConsent from "../middleware/require-consent.middleware";
 import ClientCaseCtrl from "../controllers/client-case.controller";
 import ClientRequestCtrl from "../controllers/client-request.controller";
 import ClientDictationCtrl from "../controllers/client-dictation.controller";
+import ClientLawyerCtrl from "../controllers/client-lawyer.controller";
 
 // A spoken answer is a short clip (180s at most in the app); in memory, since it goes straight to S3
 // for the Transcribe job.
@@ -71,6 +72,10 @@ router.post("/cases/:caseId/intake/refresh", requireConsent("AI_PROCESSING"), as
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 // A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
 router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
+
+// The lawyer marketplace: verified lawyers taking requests, filtered and sorted.
+router.get("/lawyers", asyncHandler(ClientLawyerCtrl.list));
+router.get("/lawyers/:id", asyncHandler(ClientLawyerCtrl.get));
 
 // Asking for a lawyer on one of the client's cases (the UK client-to-lawyer hand-off).
 router.get("/lawyer-requests/consent", asyncHandler(ClientRequestCtrl.consent));

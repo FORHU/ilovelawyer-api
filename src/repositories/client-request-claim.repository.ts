@@ -36,8 +36,9 @@ export async function lockRouted(tx: Tx, requestId: string, now: Date, where: Pr
 /**
  * After a claim ends without an engagement: the lawyer isn't offered the request again, and its place
  * is free for another lawyer while the 48h are open. With no claim left open, the request goes back in
- * the pool for a fresh 48h, to be announced again, as when one lawyer held it. With no quote left
- * open, there's nothing for the client to pick, so no pick-by date.
+ * the pool for a fresh 48h, to be announced again, as when one lawyer held it; one the client sent to
+ * a lawyer by name goes to every matching lawyer then, as they agreed. With no quote left open,
+ * there's nothing for the client to pick, so no pick-by date.
  */
 export async function afterClaimEnded(tx: Tx, requestId: string, lawyerId: string, now: Date) {
   const open = await tx.clientRequestClaim.findMany({ where: { requestId, outcome: null }, select: { quotedAt: true } });
@@ -45,7 +46,7 @@ export async function afterClaimEnded(tx: Tx, requestId: string, lawyerId: strin
     where: { id: requestId },
     data: {
       excludedLawyerIds: { push: lawyerId },
-      ...(open.length === 0 ? { routedAt: now, routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS), announcedAt: null } : {}),
+      ...(open.length === 0 ? { routedAt: now, routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS), announcedAt: null, requestedOnly: false } : {}),
       ...(open.every((c) => !c.quotedAt) ? { pickByAt: null } : {}),
     },
   });
@@ -183,6 +184,7 @@ export default class ClientRequestClaimRepo {
             routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS),
             announcedAt: null,
             pickByAt: null,
+            requestedOnly: false,
             excludedLawyerIds: { push: unpaid.claim.lawyerId },
           },
         });

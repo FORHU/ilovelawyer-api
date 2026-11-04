@@ -180,7 +180,9 @@ model User {
   deadlineConfirmations       ProceduralDeadlineConfirmation[]
   caseBriefExports            CaseBriefExport[]
   caseViews                   CaseView[]
-  clientRequests              ClientRequest[]
+  clientRequests              ClientRequest[]                  @relation("ClientRequestClient")
+  // Requests a client sent to this lawyer by name, from the marketplace (ClientRequest.requestedLawyerId).
+  requestedClientRequests     ClientRequest[]                  @relation("ClientRequestRequestedLawyer")
   engagementMessages          EngagementMessage[]
   clientRequestClaims         ClientRequestClaim[]
   updatedTenantSettings       TenantSetting[]
@@ -1381,6 +1383,13 @@ model ClientRequest {
   // Lawyers excluded from matching this request again after they passed, released or lapsed on it
   // (#509/#511/#512) — a client decline does the same once a quote is declined (#512).
   excludedLawyerIds String[]            @default([])
+  // A client asking for one lawyer by name, from the marketplace: who they named, kept once it has
+  // gone wider. While `requestedOnly`, only that lawyer is offered it, for
+  // CLIENT_REQUEST_DIRECT_WINDOW_MS. Once they pass, give it back, let it lapse or don't take it up
+  // in time, it goes to every matching lawyer for a fresh 48h (requestedOnly false), as the client
+  // agreed when sending it.
+  requestedLawyerId String?
+  requestedOnly     Boolean             @default(false)
   withdrawnAt       DateTime?
   // When the per-case fee went through and the request became ENGAGED (#513).
   engagedAt         DateTime?
@@ -1394,16 +1403,18 @@ model ClientRequest {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
-  case       Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  client     User                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  claims     ClientRequestClaim[]
-  charges    OrganizationCharge[]
-  feedback   EngagementFeedback?
-  messages   EngagementMessage[]
-  quotations Quotation[]
+  case            Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client          User                 @relation("ClientRequestClient", fields: [clientId], references: [id], onDelete: Cascade)
+  requestedLawyer User?                @relation("ClientRequestRequestedLawyer", fields: [requestedLawyerId], references: [id], onDelete: SetNull)
+  claims          ClientRequestClaim[]
+  charges         OrganizationCharge[]
+  feedback        EngagementFeedback?
+  messages        EngagementMessage[]
+  quotations      Quotation[]
 
   @@index([caseId, status])
   @@index([clientId, createdAt])
+  @@index([requestedLawyerId])
   @@index([status])
 }
 

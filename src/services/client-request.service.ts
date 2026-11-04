@@ -19,9 +19,13 @@ import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
+import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
 import {
   CLIENT_REQUEST_CONSENT_TEXT,
   CLIENT_REQUEST_CONSENT_VERSION,
+  CLIENT_REQUEST_DIRECT_CONSENT_TEXT,
+  CLIENT_REQUEST_DIRECT_CONSENT_VERSION,
+  CLIENT_REQUEST_DIRECT_WINDOW_MS,
   CLIENT_REQUEST_MAX_LAWYERS,
   CLIENT_REQUEST_REFERRAL_DISCLOSURE,
 } from "../constants/client-request.constants";
@@ -43,6 +47,8 @@ export interface NewClientRequest {
   note?: string;
   consentVersion: string;
   consentAccepted: boolean;
+  /** The lawyer the client asked for by name, from the marketplace: only they are offered it at first. */
+  lawyerId?: string;
 }
 
 /** The lawyer as the client sees them once they've quoted (LawyerPublicProfile in the contract):
@@ -126,7 +132,12 @@ function toDto(r: ClientRequestForClient) {
       r.status === "ROUTED" &&
       !!r.routingExpiresAt &&
       r.routingExpiresAt > new Date() &&
-      r.claims.filter((c) => c.outcome === null).length < CLIENT_REQUEST_MAX_LAWYERS,
+      r.claims.filter((c) => c.outcome === null).length < (r.requestedOnly ? 1 : CLIENT_REQUEST_MAX_LAWYERS),
+    // The lawyer the client asked for by name, if they did. `requestedOnly`: only they are offered
+    // it, until `routingExpiresAt`; then (or once they pass) it goes to every matching lawyer.
+    requestedLawyer: r.requestedLawyer ? { id: r.requestedLawyer.id, name: r.requestedLawyer.name ?? "" } : null,
+    requestedOnly: r.requestedOnly,
+    routingExpiresAt: r.status === "ROUTED" ? r.routingExpiresAt : null,
     lawyer: one ? lawyerDto(one) : null,
     quote: one ? quoteDto(one) : null,
     quotation: one ? quotationFor(one) : null,
@@ -147,8 +158,11 @@ function toDto(r: ClientRequestForClient) {
  * it is a later issue (#511).
  */
 export default class ClientRequestSvc {
-  static consent() {
-    return { version: CLIENT_REQUEST_CONSENT_VERSION, consentText: CLIENT_REQUEST_CONSENT_TEXT, referralDisclosure: CLIENT_REQUEST_REFERRAL_DISCLOSURE };
+  /** What the client agrees to: asking every matching lawyer, or (`direct`) one lawyer by name first. */
+  static consent(direct = false) {
+    return direct
+      ? { version: CLIENT_REQUEST_DIRECT_CONSENT_VERSION, consentText: CLIENT_REQUEST_DIRECT_CONSENT_TEXT, referralDisclosure: CLIENT_REQUEST_REFERRAL_DISCLOSURE }
+      : { version: CLIENT_REQUEST_CONSENT_VERSION, consentText: CLIENT_REQUEST_CONSENT_TEXT, referralDisclosure: CLIENT_REQUEST_REFERRAL_DISCLOSURE };
   }
 
   /** Whether the app should offer "Get a lawyer" on this case, and if not, why. */
@@ -167,28 +181,48 @@ export default class ClientRequestSvc {
 
   static async create(workspace: ClientWorkspace, clientId: string, input: NewClientRequest) {
     if (!input.consentAccepted) throw new HttpError("Agree to the consent to ask for a lawyer.", 400, "CONSENT_REQUIRED");
-    if (input.consentVersion !== CLIENT_REQUEST_CONSENT_VERSION) {
-      throw new HttpError("The consent text has changed. Read it again before sending.", 409, "CONSENT_VERSION_STALE", { version: CLIENT_REQUEST_CONSENT_VERSION });
+    const consent = ClientRequestSvc.consent(!!input.lawyerId);
+    if (input.consentVersion !== consent.version) {
+      throw new HttpError("The consent text has changed. Read it again before sending.", 409, "CONSENT_VERSION_STALE", { version: consent.version });
     }
     const check = await ClientRequestSvc.eligibility(workspace, input.caseId);
     if (check.reason) {
       const refusal = REFUSALS[check.reason];
       throw new HttpError(refusal.message, refusal.status, check.reason, check.openRequestId ? { openRequestId: check.openRequestId } : undefined);
     }
+    const requestedLawyer = input.lawyerId ? await ClientRequestSvc.assertLawyerTakes(workspace, input.caseId, input.lawyerId) : null;
     const created = await ClientRequestRepo.create({
       caseId: input.caseId,
       clientId,
       note: input.note?.trim() ?? "",
       consentVersion: input.consentVersion,
       consentAcceptedAt: new Date(),
+      requestedLawyerId: requestedLawyer?.id ?? null,
     });
     // The anonymised brief lawyers will see (#508). Written in the background: the AI takes a while.
     ClientRequestBriefSvc.generateInBackground(created.id);
     // Routed (#509) straight away, even with zero current matches — the client just sees "Finding
-    // a lawyer" either way; EXPIRED (#510) is what ends that wait.
-    const routed = await ClientRequestMatchingSvc.route(created.id);
+    // a lawyer" either way; EXPIRED (#510) is what ends that wait. Asked by name: only that lawyer,
+    // for their 24h, then every matching lawyer (ClientRequestNotifySvc.openDirectDue).
+    const routed = await ClientRequestMatchingSvc.route(created.id, requestedLawyer ? CLIENT_REQUEST_DIRECT_WINDOW_MS : undefined);
     // Brand new, so nobody has claimed or quoted it.
-    return toDto({ ...routed, claims: [], feedback: null });
+    return toDto({ ...routed, claims: [], feedback: null, requestedLawyer });
+  }
+
+  /** The lawyer a client asks for by name: verified, taking requests, and taking cases like this one
+   * (its area and part of the UK). 404 LAWYER_NOT_FOUND, else 422 LAWYER_NOT_AVAILABLE or
+   * LAWYER_NOT_A_MATCH. */
+  private static async assertLawyerTakes(workspace: ClientWorkspace, caseId: string, lawyerId: string) {
+    const lawyer = await LawyerProfileRepo.findVerifiedById(lawyerId);
+    if (!lawyer) throw new HttpError("That lawyer isn't listed.", 404, "LAWYER_NOT_FOUND");
+    if (!ClientRequestMatchingSvc.isAvailable(lawyer)) throw new HttpError("This lawyer isn't taking new requests right now.", 422, "LAWYER_NOT_AVAILABLE");
+    const row = await ClientCaseRepo.findById(caseId, workspace.id);
+    if (!row) throw new HttpError("Case not found", 404);
+    if (!ClientRequestMatchingSvc.matches(lawyer, { caseAreas: row.caseAreas, ukJurisdiction: row.ukJurisdiction })) {
+      throw new HttpError("This lawyer doesn't take cases like this one, or not in your part of the UK.", 422, "LAWYER_NOT_A_MATCH");
+    }
+    const name = (await LawyerProfileRepo.findForMarketplace(lawyerId))[0]?.user.name ?? "";
+    return { id: lawyerId, name };
   }
 
   static async list(clientId: string, query: { caseId?: string; page: number; limit: number }) {

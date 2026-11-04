@@ -145,6 +145,51 @@ describe("ClientRequestNotifySvc", () => {
     });
   });
 
+  describe("a request the client sent to one lawyer by name", () => {
+    let opens: boolean;
+    let announcedInBackground: string[];
+
+    beforeEach(() => {
+      restore.push(stash(ClientRequestRepo, ["openToAll", "findDirectDue"]), stash(ClientRequestNotifySvc, ["announceInBackground"]));
+      opens = true;
+      announcedInBackground = [];
+      (ClientRequestRepo as any).openToAll = async () => opens;
+      (ClientRequestNotifySvc as any).announceInBackground = (id: string) => announcedInBackground.push(id);
+    });
+
+    it("is announced to that lawyer as asked for them", async () => {
+      (ClientRequestRepo as any).findForAnnouncement = async (id: string) => request(id, { requestedOnly: true, routingExpiresAt: new Date(NOW.getTime() + 23 * HOUR_MS) });
+      eligible = ["lawyer-a"];
+      await ClientRequestNotifySvc.announce("req-1", NOW);
+      expect(emails[0]!.subject).to.equal("A client asked for you: Employment, England and Wales");
+      expect(rendered[0]!.vars).to.deep.include({ askedForYou: true });
+      expect(notifications[0]).to.deep.include({ title: "A client asked for you" });
+    });
+
+    it("goes to every matching lawyer: the client's app is told, and the lawyers now", async () => {
+      expect(await ClientRequestNotifySvc.openToAll("req-1", "client-req-1", NOW)).to.equal(true);
+      expect(emitted).to.deep.equal([["client-req-1", "client-request:updated", { requestId: "req-1", status: "ROUTED", updatedAt: NOW.toISOString() }]]);
+      expect(announcedInBackground).to.deep.equal(["req-1"]);
+    });
+
+    it("tells nobody when it had already gone wider or a lawyer got on it first", async () => {
+      opens = false;
+      expect(await ClientRequestNotifySvc.openToAll("req-1", "client-req-1", NOW)).to.equal(false);
+      expect(emitted).to.deep.equal([]);
+      expect(announcedInBackground).to.deep.equal([]);
+    });
+
+    it("openDirectDue opens each whose 24h ended, and counts the ones it opened", async () => {
+      (ClientRequestRepo as any).findDirectDue = async () => [
+        { id: "req-1", clientId: "client-req-1", requestedLawyerId: "lawyer-a" },
+        { id: "req-2", clientId: "client-req-2", requestedLawyerId: "lawyer-b" },
+      ];
+      (ClientRequestRepo as any).openToAll = async (id: string) => id === "req-1";
+      expect(await ClientRequestNotifySvc.openDirectDue(NOW)).to.equal(1);
+      expect(announcedInBackground).to.deep.equal(["req-1"]);
+    });
+  });
+
   describe("expireDue", () => {
     let expirable: Set<string>;
     beforeEach(() => {

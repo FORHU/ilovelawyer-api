@@ -3,7 +3,8 @@ import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
 import OrganizationRepo from "../repositories/organization.repository";
-import ClientRequestMatchingSvc, { caseAreasOf } from "./client-request-matching.service";
+import ClientRequestMatchingSvc, { caseAreasOf, onlyLawyerOf } from "./client-request-matching.service";
+import ClientRequestNotifySvc from "./client-request-notify.service";
 import CaseAreaSvc from "./case-area.service";
 import ClientRequestBriefSvc from "./client-request-brief.service";
 import OrganizationChargeSvc, { chargeDto } from "./organization-charge.service";
@@ -115,9 +116,13 @@ function toDto(r: LawyerRequest, lawyerId: string, terms: LawyerTerms, brief: un
     brief,
     routedAt: r.routedAt,
     routingExpiresAt: r.status === "ROUTED" ? r.routingExpiresAt : null,
-    // Several lawyers: how many are on it now, of CLIENT_REQUEST_MAX_LAWYERS.
+    // Several lawyers: how many are on it now, of maxLawyersOf.
     lawyersOn: openClaims(r).length,
-    maxLawyers: CLIENT_REQUEST_MAX_LAWYERS,
+    maxLawyers: maxLawyersOf(r),
+    // The client asked for this lawyer by name, from the marketplace.
+    askedForYou: r.requestedLawyerId === lawyerId,
+    // Only they are offered it until routingExpiresAt; after that it goes to every matching lawyer.
+    onlyForYou: r.requestedOnly && r.requestedLawyerId === lawyerId,
     claim: mine
       ? {
           byMe: true,
@@ -171,7 +176,13 @@ function chargeOf(r: LawyerRequest, lawyerId: string) {
 }
 
 function criteriaOf(r: LawyerRequest) {
-  return { caseAreas: r.case.caseAreas, ukJurisdiction: r.case.ukJurisdiction };
+  return { caseAreas: r.case.caseAreas, ukJurisdiction: r.case.ukJurisdiction, onlyLawyerId: onlyLawyerOf(r) };
+}
+
+/** How many lawyers can be on the request at once: one while it's limited to the lawyer the client
+ * named, else CLIENT_REQUEST_MAX_LAWYERS. */
+function maxLawyersOf(r: LawyerRequest) {
+  return r.requestedOnly ? 1 : CLIENT_REQUEST_MAX_LAWYERS;
 }
 
 /**
@@ -200,7 +211,7 @@ export default class ClientRequestLawyerSvc {
     const inbox = candidates.filter(
       (r) =>
         !r.claims.some((c) => c.lawyerId === lawyer.userId && c.outcome === null) &&
-        openClaims(r).length < CLIENT_REQUEST_MAX_LAWYERS &&
+        openClaims(r).length < maxLawyersOf(r) &&
         ClientRequestMatchingSvc.matches(profile, criteriaOf(r), now),
     );
     const start = (query.page - 1) * query.limit;
@@ -215,7 +226,7 @@ export default class ClientRequestLawyerSvc {
     if (!request) throw NOT_FOUND();
     const held = request.claims.some((c) => c.lawyerId === lawyer.userId);
     const open =
-      request.status === "ROUTED" && !!request.routingExpiresAt && request.routingExpiresAt > new Date() && openClaims(request).length < CLIENT_REQUEST_MAX_LAWYERS;
+      request.status === "ROUTED" && !!request.routingExpiresAt && request.routingExpiresAt > new Date() && openClaims(request).length < maxLawyersOf(request);
     if (!held && !(open && ClientRequestLawyerSvc.isFor(request, lawyer.userId, profile))) throw NOT_FOUND();
     // Rewritten first if the case changed and nobody has claimed it yet (#508).
     return toDto(request, lawyer.userId, await feeOf(lawyer), await ClientRequestBriefSvc.current(id));
@@ -661,8 +672,9 @@ export default class ClientRequestLawyerSvc {
     return request;
   }
 
-  /** Pass: the lawyer stops seeing the request. Nothing else about it changes. A lawyer holding it
-   * releases it instead (#512), which also puts it back in the pool. */
+  /** Pass: the lawyer stops seeing the request. Nothing else about it changes, unless the client sent
+   * it to them by name: then it goes to every matching lawyer straight away, as the client agreed. A
+   * lawyer holding it releases it instead (#512), which also puts it back in the pool. */
   static async pass(lawyer: LawyerContext, id: string) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
     const request = await ClientRequestRepo.findForLawyer(id);
@@ -671,6 +683,7 @@ export default class ClientRequestLawyerSvc {
       throw new HttpError("You hold this request. Release it instead.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     }
     await ClientRequestRepo.exclude(id, lawyer.userId);
+    if (request.requestedOnly && request.requestedLawyerId === lawyer.userId) await ClientRequestNotifySvc.openToAll(id, request.clientId);
   }
 
   /**

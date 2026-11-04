@@ -7,7 +7,7 @@
  */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
-import ClientRequestMatchingSvc, { budgetFitScoreOf, caseAreasOf, type ClientBudget, type MatchablePracticeArea } from "../src/services/client-request-matching.service";
+import ClientRequestMatchingSvc, { budgetFitScoreOf, caseAreasOf, onlyLawyerOf, type ClientBudget, type MatchablePracticeArea } from "../src/services/client-request-matching.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 
@@ -70,6 +70,15 @@ describe("ClientRequestMatchingSvc.matches", () => {
 
   it("refuses a lawyer without the case's practice area", () => {
     expect(ClientRequestMatchingSvc.matches({ ...ELIGIBLE, practiceAreas: [mapped("FAMILY")] }, CRITERIA)).to.equal(false);
+  });
+
+  it("matches only the named lawyer while a request is limited to them", () => {
+    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { ...CRITERIA, onlyLawyerId: "lawyer-1" })).to.equal(true);
+    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { ...CRITERIA, onlyLawyerId: "lawyer-2" })).to.equal(false);
+    // Their account has gone: nobody.
+    expect(ClientRequestMatchingSvc.matches(ELIGIBLE, { ...CRITERIA, onlyLawyerId: "" })).to.equal(false);
+    expect(onlyLawyerOf({ requestedOnly: true, requestedLawyerId: null })).to.equal("");
+    expect(onlyLawyerOf({ requestedOnly: false, requestedLawyerId: "lawyer-1" })).to.equal(null);
   });
 
   it("matches a case with several areas through any one of them", () => {

@@ -12,6 +12,7 @@ import ClientRequestClaimRepo from "../src/repositories/client-request-claim.rep
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 import OrganizationRepo from "../src/repositories/organization.repository";
 import ClientRequestBriefSvc from "../src/services/client-request-brief.service";
+import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import AccountLimitsSvc from "../src/services/account-limits.service";
 import HttpError from "../src/utils/http-error";
@@ -131,7 +132,7 @@ describe("ClientRequestLawyerSvc", () => {
     (LawyerProfileRepo as any).countOpenForLawyers = async (ids: string[]) => new Map(ids.map((id) => [id, openCounts.get(id) ?? 0]));
     (ClientRequestRepo as any).findForMatching = async (id: string) => {
       const r = requests.get(id);
-      return r ? { excludedLawyerIds: r.excludedLawyerIds, case: r.case } : null;
+      return r ? { excludedLawyerIds: r.excludedLawyerIds, requestedOnly: !!r.requestedOnly, requestedLawyerId: r.requestedLawyerId ?? null, case: r.case } : null;
     };
     (ClientRequestRepo as any).findForLawyer = async (id: string) => {
       const r = requests.get(id);
@@ -343,6 +344,50 @@ describe("ClientRequestLawyerSvc", () => {
     it("answers 404 for a request not for them", async () => {
       routed("req-1", { case: { caseAreas: ["FAMILY"], ukJurisdiction: "England and Wales" } });
       expect(await errorOf(ClientRequestLawyerSvc.pass(me, "req-1"))).to.deep.include({ status: 404 });
+    });
+  });
+
+  describe("a request the client sent to one lawyer by name", () => {
+    let opened: [string, string][];
+    const other: LawyerContext = { ...me, userId: "lawyer-other" };
+    const inboxIds = async (lawyer: LawyerContext) => (await ClientRequestLawyerSvc.list(lawyer, { view: "inbox", page: 1, limit: 20 })).data.map((r) => r.id);
+
+    beforeEach(() => {
+      restore.push(stash(ClientRequestNotifySvc, ["openToAll"]));
+      opened = [];
+      (ClientRequestNotifySvc as any).openToAll = async (id: string, clientId: string) => (opened.push([id, clientId]), true);
+      routed("req-1", { requestedOnly: true, requestedLawyerId: "lawyer-me", routingExpiresAt: new Date(Date.now() + 23 * HOUR_MS) });
+    });
+
+    it("is in that lawyer's inbox only, as asked for them, with one place", async () => {
+      expect(await inboxIds(me)).to.deep.equal(["req-1"]);
+      expect(await inboxIds(other)).to.deep.equal([]);
+      const [dto] = (await ClientRequestLawyerSvc.list(me, { view: "inbox", page: 1, limit: 20 })).data;
+      expect(dto).to.deep.include({ askedForYou: true, onlyForYou: true, maxLawyers: 1 });
+    });
+
+    it("can be taken up by that lawyer, and nobody else", async () => {
+      expect(await errorOf(ClientRequestLawyerSvc.claim(other, "req-1"))).to.deep.include({ status: 404 });
+      expect((await ClientRequestLawyerSvc.claim(me, "req-1")).status).to.equal("CLAIMED");
+    });
+
+    it("goes to every matching lawyer straight away when that lawyer passes", async () => {
+      await ClientRequestLawyerSvc.pass(me, "req-1");
+      expect(requests.get("req-1")!.excludedLawyerIds).to.deep.equal(["lawyer-me"]);
+      expect(opened).to.deep.equal([["req-1", "client-req-1"]]);
+    });
+
+    it("is offered to everyone once it has gone wider, still showing it was asked for them", async () => {
+      requests.get("req-1")!.requestedOnly = false;
+      expect(await inboxIds(other)).to.deep.equal(["req-1"]);
+      const [mine] = (await ClientRequestLawyerSvc.list(me, { view: "inbox", page: 1, limit: 20 })).data;
+      expect(mine).to.deep.include({ askedForYou: true, onlyForYou: false, maxLawyers: 3 });
+    });
+
+    it("doesn't open a request to everyone when someone else passes on an open one", async () => {
+      routed("req-2");
+      await ClientRequestLawyerSvc.pass(me, "req-2");
+      expect(opened).to.deep.equal([]);
     });
   });
 

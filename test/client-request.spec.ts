@@ -11,7 +11,8 @@ import ClientRequestBriefSvc from "../src/services/client-request-brief.service"
 import ClientRequestMatchingSvc from "../src/services/client-request-matching.service";
 import * as socket from "../src/lib/socket";
 import type { ClientWorkspace } from "../src/services/client-case.service";
-import { CLIENT_REQUEST_CONSENT_VERSION } from "../src/constants/client-request.constants";
+import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
+import { CLIENT_REQUEST_CONSENT_VERSION, CLIENT_REQUEST_DIRECT_CONSENT_VERSION, CLIENT_REQUEST_DIRECT_WINDOW_MS } from "../src/constants/client-request.constants";
 import { createClientRequestSchema } from "../src/validation/client-request.validation";
 
 async function errorOf(promise: Promise<unknown>): Promise<{ status?: number; code?: string } | undefined> {
@@ -95,6 +96,76 @@ describe("Client lawyer requests", () => {
 
   const ask = (overrides: Record<string, unknown> = {}) =>
     ClientRequestSvc.create(workspace, "client-1", { caseId: CASE_ID, note: "  Prefer a fixed fee. ", consentVersion: CLIENT_REQUEST_CONSENT_VERSION, consentAccepted: true, ...overrides });
+
+  describe("asking one lawyer by name (the marketplace's Request)", () => {
+    const LAWYER_ID = "22222222-2222-4222-8222-222222222222";
+    let lawyer: any;
+    let routedFor: number | undefined;
+
+    beforeEach(() => {
+      restore.push(stash(LawyerProfileRepo, ["findVerifiedById", "findForMarketplace"]));
+      caseRow.caseAreas = ["EMPLOYMENT"];
+      lawyer = {
+        userId: LAWYER_ID,
+        acceptingRequests: true,
+        enabledByOrganization: true,
+        pausedUntil: null,
+        capacityLimit: null,
+        openCount: 0,
+        firstConsultationFeeMinor: null,
+        practiceAreas: [{ caseArea: "EMPLOYMENT", isActive: true }],
+        qualifiedJurisdictions: ["England and Wales"],
+      };
+      (LawyerProfileRepo as any).findVerifiedById = async (id: string) => (lawyer && id === LAWYER_ID ? lawyer : null);
+      (LawyerProfileRepo as any).findForMarketplace = async () => [{ user: { name: "Priya Natarajan" } }];
+      routedFor = undefined;
+      (ClientRequestRepo as any).route = async (id: string, windowMs?: number) => {
+        routedFor = windowMs;
+        const r = requests.get(id);
+        Object.assign(r, { status: "ROUTED", routingExpiresAt: new Date(Date.now() + (windowMs ?? 0)) });
+        return r;
+      };
+    });
+
+    const askLawyer = (overrides: Record<string, unknown> = {}) => ask({ lawyerId: LAWYER_ID, consentVersion: CLIENT_REQUEST_DIRECT_CONSENT_VERSION, ...overrides });
+
+    it("offers the direct consent, with its own version", () => {
+      expect(ClientRequestSvc.consent(true).version).to.equal(CLIENT_REQUEST_DIRECT_CONSENT_VERSION);
+      expect(ClientRequestSvc.consent(true).consentText).to.include("only them at first");
+      expect(ClientRequestSvc.consent().version).to.equal(CLIENT_REQUEST_CONSENT_VERSION);
+    });
+
+    it("sends it to that lawyer only, for their 24h", async () => {
+      const dto = await askLawyer();
+      expect(requests.get(dto.id)).to.include({ requestedLawyerId: LAWYER_ID });
+      expect(routedFor).to.equal(CLIENT_REQUEST_DIRECT_WINDOW_MS);
+      expect(dto.requestedLawyer).to.deep.equal({ id: LAWYER_ID, name: "Priya Natarajan" });
+    });
+
+    it("needs the direct consent's version, not the one for every lawyer", async () => {
+      expect(await errorOf(askLawyer({ consentVersion: CLIENT_REQUEST_CONSENT_VERSION }))).to.deep.equal({ status: 409, code: "CONSENT_VERSION_STALE" });
+    });
+
+    it("refuses a lawyer who isn't listed, isn't taking requests, or doesn't take this case", async () => {
+      expect(await errorOf(askLawyer({ lawyerId: "33333333-3333-4333-8333-333333333333" }))).to.deep.equal({ status: 404, code: "LAWYER_NOT_FOUND" });
+      lawyer.acceptingRequests = false;
+      expect(await errorOf(askLawyer())).to.deep.equal({ status: 422, code: "LAWYER_NOT_AVAILABLE" });
+      lawyer.acceptingRequests = true;
+      lawyer.qualifiedJurisdictions = ["Scotland"];
+      expect(await errorOf(askLawyer())).to.deep.equal({ status: 422, code: "LAWYER_NOT_A_MATCH" });
+      lawyer.qualifiedJurisdictions = ["England and Wales"];
+      caseRow.caseAreas = ["FAMILY"];
+      expect(await errorOf(askLawyer())).to.deep.equal({ status: 422, code: "LAWYER_NOT_A_MATCH" });
+      expect(requests.size).to.equal(0);
+    });
+
+    it("leaves a request to every lawyer with its 48h and nobody named", async () => {
+      const dto = await ask();
+      expect(routedFor).to.equal(undefined);
+      expect(requests.get(dto.id).requestedLawyerId).to.equal(null);
+      expect(dto.requestedLawyer).to.equal(null);
+    });
+  });
 
   describe("eligibility", () => {
     it("is eligible on a UK case with no open request (cases are free, so there's no payment to check)", async () => {

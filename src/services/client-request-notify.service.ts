@@ -69,9 +69,13 @@ export default class ClientRequestNotifySvc {
     // The brief's summary stays behind sign-in: an email carries only what the inbox row shows.
     const practiceArea = areasLabel(caseAreas);
     const closes = formatUk(request.routingExpiresAt);
-    const subject = `New client request: ${practiceArea}, ${ukJurisdiction}`;
-    const html = await renderTemplate("client-request-new", { practiceArea, ukJurisdiction, urgency: URGENCY_LABELS[urgency], routingExpiresAt: closes, inboxLink: lawyerInboxLink() });
-    const text = `A client request matches you: ${practiceArea}, ${ukJurisdiction}. Urgency: ${URGENCY_LABELS[urgency]}. Open to accept until ${closes}.\n\n${lawyerInboxLink()}`;
+    // Sent to one lawyer by name: matching has only them (onlyLawyerOf).
+    const askedForYou = request.requestedOnly;
+    const subject = askedForYou ? `A client asked for you: ${practiceArea}, ${ukJurisdiction}` : `New client request: ${practiceArea}, ${ukJurisdiction}`;
+    const html = await renderTemplate("client-request-new", { askedForYou, practiceArea, ukJurisdiction, urgency: URGENCY_LABELS[urgency], routingExpiresAt: closes, inboxLink: lawyerInboxLink() });
+    const text = askedForYou
+      ? `A client asked for you: ${practiceArea}, ${ukJurisdiction}. Urgency: ${URGENCY_LABELS[urgency]}. Yours to accept until ${closes}; after that it goes to other lawyers.\n\n${lawyerInboxLink()}`
+      : `A client request matches you: ${practiceArea}, ${ukJurisdiction}. Urgency: ${URGENCY_LABELS[urgency]}. Open to accept until ${closes}.\n\n${lawyerInboxLink()}`;
     const emails = new Map((await LawyerProfileRepo.findEmails(lawyerIds)).map((u) => [u.id, u.email]));
 
     const results = await Promise.allSettled(
@@ -81,7 +85,7 @@ export default class ClientRequestNotifySvc {
         await NotificationSvc.create({
           userId,
           type: "CLIENT_REQUEST",
-          title: "New client request",
+          title: askedForYou ? "A client asked for you" : "New client request",
           message: `${practiceArea}, ${ukJurisdiction}. ${URGENCY_LABELS[urgency]}.`,
           link: LAWYER_INBOX_PATH,
         }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId, userId }));
@@ -109,6 +113,33 @@ export default class ClientRequestNotifySvc {
       }
     }
     return announced;
+  }
+
+  /**
+   * A request the client sent to one lawyer by name goes to every matching lawyer: the lawyer passed,
+   * or their 24h ended with nobody on it. The client's app is told, and the matching lawyers are told
+   * now rather than on the next sweep. False when it had already gone wider or a lawyer got on it first.
+   */
+  static async openToAll(requestId: string, clientId: string, now: Date = new Date()): Promise<boolean> {
+    if (!(await ClientRequestRepo.openToAll(requestId, now))) return false;
+    const updated: ClientRequestUpdatedEvent = { requestId, status: "ROUTED", updatedAt: now.toISOString() };
+    emitToUser(clientId, "client-request:updated", updated);
+    ClientRequestNotifySvc.announceInBackground(requestId);
+    return true;
+  }
+
+  /** The sweep: requests sent to one lawyer by name whose 24h ended with nobody on them go to every
+   * matching lawyer. How many went wider. */
+  static async openDirectDue(now: Date): Promise<number> {
+    let opened = 0;
+    for (const request of await ClientRequestRepo.findDirectDue(now)) {
+      try {
+        if (await ClientRequestNotifySvc.openToAll(request.id, request.clientId, now)) opened++;
+      } catch (err) {
+        logger.error("Client request: opening a direct request to every lawyer failed", { requestId: request.id, err });
+      }
+    }
+    return opened;
   }
 
   /** Routed requests nobody claimed within 48h become EXPIRED. Their lawyers drop them, the

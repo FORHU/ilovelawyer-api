@@ -6,6 +6,7 @@ import QuotationPaymentSvc from "../services/quotation-payment.service";
 import EngagementMessageSvc from "../services/engagement-message.service";
 import HttpError from "../utils/http-error";
 import {
+  clientRequestConsentSchema,
   clientRequestEligibilitySchema,
   acceptQuotationSchema,
   confirmClientRequestSchema,
@@ -29,8 +30,9 @@ function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
 /** The client app's lawyer requests (/api/client/lawyer-requests). requireClientAccount has set
  * the request's workspace to the client's personal workspace. */
 export default class ClientRequestCtrl {
-  static async consent(_req: Request, res: Response) {
-    res.status(200).json(ClientRequestSvc.consent());
+  static async consent(req: Request, res: Response) {
+    const { direct } = validate(clientRequestConsentSchema, req.query);
+    res.status(200).json(ClientRequestSvc.consent(direct));
   }
 
   static async eligibility(req: Request, res: Response) {

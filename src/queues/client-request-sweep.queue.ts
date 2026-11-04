@@ -18,13 +18,24 @@ const SCHEDULE = "* * * * *";
 type LapsedClaim = Awaited<ReturnType<typeof ClientRequestClaimRepo.findLapsed>>[number];
 type UnpaidFee = Awaited<ReturnType<typeof ClientRequestClaimRepo.findUnpaid>>[number];
 
-type SweepResult = { lapsed: number; unpaid: number; quotesExpired: number; expired: number; reminded: number; announced: number; released: number; payoutsResumed: number };
+type SweepResult = {
+  lapsed: number;
+  unpaid: number;
+  quotesExpired: number;
+  openedToAll: number;
+  expired: number;
+  reminded: number;
+  announced: number;
+  released: number;
+  payoutsResumed: number;
+};
 
 /**
  * The client request timers (the UK client-to-lawyer hand-off), in order: a claim's 24h hold
  * lapsing back to the pool (#511), a confirmed request whose introduction fee still hasn't gone
  * through after 48h going back too (#933), quotations past the lawyer's expiry (QuotationPaymentSvc:
- * the claim ends, and an accepted but unpaid one sends the request back to other lawyers), then a
+ * the claim ends, and an accepted but unpaid one sends the request back to other lawyers), a request
+ * the client sent to one lawyer by name going to every matching lawyer once its 24h end, then a
  * routed request nobody claimed within 48h expiring, the 2h-before reminder to a lawyer holding one,
  * announcing routed requests nobody has been told about yet, including the ones a lapse just put back
  * (#510, ClientRequestNotifySvc), lawyers' earnings whose hold is over becoming available to
@@ -49,13 +60,15 @@ export default class ClientRequestSweepQueue {
 
   /** One sweep. Called by the cron schedule; exposed for tests. */
   static async tick(now: Date = new Date()): Promise<SweepResult> {
-    const result: SweepResult = { lapsed: 0, unpaid: 0, quotesExpired: 0, expired: 0, reminded: 0, announced: 0, released: 0, payoutsResumed: 0 };
+    const result: SweepResult = { lapsed: 0, unpaid: 0, quotesExpired: 0, openedToAll: 0, expired: 0, reminded: 0, announced: 0, released: 0, payoutsResumed: 0 };
     if (this.ticking) return result;
     this.ticking = true;
     try {
       result.lapsed = await this.step("lapse", () => this.lapseDue(now));
       result.unpaid = await this.step("unpaid", () => this.lapseUnpaidDue(now));
       result.quotesExpired = await this.step("quote-expiry", () => QuotationPaymentSvc.expireDue(now));
+      // Before expiry: a request the client sent to one lawyer goes wider when its 24h end, never expires then.
+      result.openedToAll = await this.step("open-direct", () => ClientRequestNotifySvc.openDirectDue(now));
       result.expired = await this.step("expire", () => ClientRequestNotifySvc.expireDue(now));
       result.reminded = await this.step("remind", () => ClientRequestNotifySvc.remindDue(now));
       result.announced = await this.step("announce", () => ClientRequestNotifySvc.announceDue(now));

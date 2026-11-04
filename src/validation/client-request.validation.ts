@@ -13,6 +13,13 @@ export const createClientRequestSchema = Joi.object({
   consentVersion: Joi.string().required(),
   // Not `valid(true)`: false gets its own CONSENT_REQUIRED answer from the service.
   consentAccepted: Joi.boolean().required(),
+  // Asking one lawyer by name, from the marketplace (with the direct consent version).
+  lawyerId: Joi.string().uuid().optional(),
+});
+
+/** GET /client/lawyer-requests/consent: `direct` for asking one lawyer by name. */
+export const clientRequestConsentSchema = Joi.object({
+  direct: Joi.boolean().default(false),
 });
 
 export const clientRequestEligibilitySchema = Joi.object({
