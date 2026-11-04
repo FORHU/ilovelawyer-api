@@ -11,6 +11,7 @@ import {
   CLIENT_REQUEST_STATUSES,
   LAWYER_REGULATORS,
   LAWYER_VERIFICATION_STATUSES,
+  PASS_REASONS,
   QUOTE_TYPES,
   RELEASE_REASONS,
   REQUEST_URGENCIES,
@@ -88,11 +89,13 @@ interface Op {
   description?: string;
   parameters?: Parameter[];
   body?: Schema;
+  /** The body may be left out entirely (it is required otherwise). */
+  bodyOptional?: boolean;
   responses: Record<number, object>;
 }
 
 /** One operation, planned unless `built`. Every hand-off route needs a session, so 401 is added to all. */
-function op({ tag, issue, built, summary, description, parameters, body, responses }: Op): Operation {
+function op({ tag, issue, built, summary, description, parameters, body, bodyOptional, responses }: Op): Operation {
   const status = built ? `Built in ${issue}.` : `**Planned (${issue}), not implemented yet.**`;
   return {
     tags: [tag],
@@ -101,7 +104,7 @@ function op({ tag, issue, built, summary, description, parameters, body, respons
     "x-implemented": !!built,
     security: [{ bearerAuth: [] }],
     ...(parameters ? { parameters } : {}),
-    ...(body ? { requestBody: { required: true, content: json(body) } } : {}),
+    ...(body ? { requestBody: { required: !bodyOptional, content: json(body) } } : {}),
     responses: { ...responses, 401: err("Not signed in") },
   };
 }
@@ -1085,8 +1088,12 @@ export const clientHandoffPaths: Paths = {
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#511", built: true,
       summary: "Pass: hide the request from you",
+      description:
+        "The body is optional. A reason and note, when given, are kept for ilovelawyer staff only and are never shown to the client; a pass with neither stores nothing.",
       parameters: requestId,
-      responses: { 204: ok("Hidden"), 403: LAWYER_ONLY, 404: NOT_FOUND },
+      body: { type: "object", properties: { reason: enumOf(PASS_REASONS), note: { type: "string", maxLength: 500 } } },
+      bodyOptional: true,
+      responses: { 204: ok("Hidden"), 400: err("Unknown reason, or a note over 500 characters"), 403: LAWYER_ONLY, 404: NOT_FOUND },
     }),
   },
   "/client-requests/{id}/parties": {

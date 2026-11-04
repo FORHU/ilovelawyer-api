@@ -1,4 +1,4 @@
-import { ClaimOutcome, ClientRequestStatus, Prisma } from "@prisma/client";
+import { ClaimOutcome, ClientRequestStatus, PassReason, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { shownStatus } from "../utils/client-request-status";
 import { PRACTICE_AREAS_INCLUDE } from "./practice-area.repository";
@@ -391,11 +391,16 @@ export default class ClientRequestRepo {
     });
   }
 
-  /** Stops one lawyer seeing a request again (a pass, #511). Status untouched. */
-  static async exclude(id: string, lawyerId: string) {
-    await prisma.clientRequest.updateMany({
-      where: { id, NOT: { excludedLawyerIds: { has: lawyerId } } },
-      data: { excludedLawyerIds: { push: lawyerId } },
+  /** Stops one lawyer seeing a request again (a pass, #511). Status untouched. `said` is the reason
+   * and note they gave: kept with the exclusion, and only when this call is the one that excluded
+   * them, so a second pass can't add or change it. */
+  static async exclude(id: string, lawyerId: string, said?: { reason: PassReason | null; note: string | null }) {
+    await prisma.$transaction(async (tx) => {
+      const { count } = await tx.clientRequest.updateMany({
+        where: { id, NOT: { excludedLawyerIds: { has: lawyerId } } },
+        data: { excludedLawyerIds: { push: lawyerId } },
+      });
+      if (count && said) await tx.clientRequestPass.createMany({ data: [{ requestId: id, lawyerId, ...said }], skipDuplicates: true });
     });
   }
 }

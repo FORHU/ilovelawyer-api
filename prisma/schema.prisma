@@ -185,6 +185,7 @@ model User {
   requestedClientRequests     ClientRequest[]                  @relation("ClientRequestRequestedLawyer")
   engagementMessages          EngagementMessage[]
   clientRequestClaims         ClientRequestClaim[]
+  clientRequestPasses         ClientRequestPass[]
   updatedTenantSettings       TenantSetting[]
   clientPayments              ClientPayment[]
   accountAiTopUps             AccountAiTopUp[]
@@ -1413,6 +1414,7 @@ model ClientRequest {
   client          User                 @relation("ClientRequestClient", fields: [clientId], references: [id], onDelete: Cascade)
   requestedLawyer User?                @relation("ClientRequestRequestedLawyer", fields: [requestedLawyerId], references: [id], onDelete: SetNull)
   claims          ClientRequestClaim[]
+  passes          ClientRequestPass[]
   charges         OrganizationCharge[]
   feedback        EngagementFeedback?
   messages        EngagementMessage[]
@@ -1487,6 +1489,16 @@ enum ReleaseReason {
   OTHER
 }
 
+// types/client-handoff.ts PASS_REASONS: why a lawyer passed on a request they never claimed.
+enum PassReason {
+  CONFLICT
+  CAPACITY
+  OUT_OF_SCOPE
+  FEE_MISMATCH
+  NOT_ENOUGH_INFO
+  OTHER
+}
+
 // How a lawyer's claim on a client request ended (types/client-handoff.ts CLAIM_OUTCOMES).
 enum ClaimOutcome {
   RELEASED
@@ -1539,6 +1551,24 @@ model ClientRequestClaim {
   @@index([requestId])
   @@index([lawyerId, outcome])
   @@index([outcome, expiresAt])
+}
+
+// Why a lawyer passed on a request they never claimed: the reason and note they gave in the Pass
+// dialog, one per lawyer per request. Only ilovelawyer staff read it; the client never does. A pass
+// with nothing said has no row (the lawyer is only in ClientRequest.excludedLawyerIds).
+model ClientRequestPass {
+  id        String      @id @default(uuid())
+  requestId String
+  lawyerId  String
+  reason    PassReason?
+  note      String?     @db.Text
+  createdAt DateTime    @default(now())
+
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  lawyer  User          @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, lawyerId])
+  @@index([lawyerId])
 }
 
 // A Quotation's lifecycle (types/client-handoff.ts QUOTATION_STATUSES). NOT_CHOSEN: the client
