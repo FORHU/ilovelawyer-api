@@ -396,10 +396,10 @@ export default class ClientRequestLawyerSvc {
   }
 
   /**
-   * Saves the lawyer's quotation as a draft (PUT /client-requests/:id/quotation): the type, their
-   * service fee (paid out to them in full), the message and when it expires (the client accepts and
-   * pays before then; at most QUOTATION_MAX_VALIDITY_DAYS away). Priced with the tenant's platform fee
-   * as it is now, so the app can show the client's total. Inside the 24h after joining, until sent.
+   * Saves the lawyer's quotation as a draft (PUT /client-requests/:id/quotation): the type, the
+   * amount the client pays, the message and when it expires (the client accepts and pays before then;
+   * at most QUOTATION_MAX_VALIDITY_DAYS away). Priced with the tenant's platform fee as it is now, so
+   * the app can show what the lawyer receives once it's deducted. Inside the 24h after joining, until sent.
    * A fixed fee needs an amount; a first consultation may be free. Nothing is charged to the lawyer,
    * so no card on file is needed.
    */
@@ -422,7 +422,7 @@ export default class ClientRequestLawyerSvc {
     if (expiresAt.getTime() - now.getTime() > QUOTATION_MAX_VALIDITY_DAYS * DAY_MS) {
       throw new HttpError(`A quote can be valid for at most ${QUOTATION_MAX_VALIDITY_DAYS} days.`, 400, "QUOTATION_EXPIRY_INVALID");
     }
-    return { type: input.type, serviceFeeMinor: input.amount.amountMinor, currency: input.amount.currency, message: input.message.trim(), expiresAt };
+    return { type: input.type, amountMinor: input.amount.amountMinor, currency: input.amount.currency, message: input.message.trim(), expiresAt };
   }
 
   /** A quotation went out: the case's activity, and the client told. */

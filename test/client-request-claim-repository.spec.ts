@@ -20,7 +20,7 @@ const TERMS = { platformFeeBps: 1500, minPlatformFeeMinor: 500 };
 /** The lawyer drafts and sends their quotation at `at`, valid for 7 days from then. False when
  * either step was refused. */
 async function quote(claim: { id: string; requestId: string; lawyerId: string }, q = QUOTE, at: Date = new Date()) {
-  const draft = { type: q.type, serviceFeeMinor: q.amountMinor, currency: q.currency, message: q.message, expiresAt: new Date(at.getTime() + CLIENT_REQUEST_PICK_WINDOW_MS) };
+  const draft = { type: q.type, amountMinor: q.amountMinor, currency: q.currency, message: q.message, expiresAt: new Date(at.getTime() + CLIENT_REQUEST_PICK_WINDOW_MS) };
   const saved = await QuotationRepo.saveDraft(claim, draft, TERMS, at);
   if ("refused" in saved && saved.refused !== "SENT") return false;
   return !("refused" in (await QuotationRepo.send(claim, TERMS, at)));

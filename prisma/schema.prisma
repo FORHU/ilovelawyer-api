@@ -1548,9 +1548,11 @@ enum QuotationStatus {
   NOT_CHOSEN
 }
 
-// The lawyer's quote to the client (QuotationSvc), one per claim. The lawyer sets the service fee,
-// which is paid out to them in full; the platform fee is added on top for the client from the
-// tenant's PayoutSettings, frozen when the quote is sent, so the total the client sees never changes.
+// The lawyer's quote to the client (QuotationSvc), one per claim. The lawyer sets the amount, which is
+// what the client pays (totalAmountMinor). The platform fee, from the tenant's PayoutSettings, is
+// deducted from it and the lawyer receives the rest (serviceFeeMinor); both are frozen when the quote
+// is sent. Quotes sent before the fee moved to the lawyer have the same split with the fee on top
+// (total = serviceFee + platformFee).
 // The lawyer also sets `expiresAt`: the client accepts and pays before it. The claim's quote columns
 // (quoteType, quoteAmountMinor, ..., quotedAt) are kept in step on send for the queries that predate
 // this table (the lapse, the reminder, the pick-by date); this row is what the apps read.

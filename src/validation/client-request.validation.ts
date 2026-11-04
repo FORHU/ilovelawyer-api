@@ -48,8 +48,8 @@ export const releaseClientRequestSchema = Joi.object({
 });
 
 /** PUT /client-requests/:id/quotation (a draft) and POST /client-requests/:id/quote (draft and send
- * in one). GBP only: client requests are UK only. `amount` is the lawyer's service fee, paid out to
- * them in full; the platform fee is added on top for the client. A first consultation may be free
+ * in one). GBP only: client requests are UK only. `amount` is what the client pays; the platform fee
+ * is deducted from it and the lawyer receives the rest. A first consultation may be free
  * (0); the service refuses a fixed fee of 0. `expiresAt` is the lawyer's: the client accepts and pays
  * before it. */
 export const quoteClientRequestSchema = Joi.object({

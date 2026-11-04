@@ -41,10 +41,10 @@ export const CLIENT_REQUEST_DIRECT_CONSENT_TEXT = [
 ].join("\n\n");
 
 /** How the platform is paid, shown on every quote and acknowledged to accept one. DRAFT wording,
- * pending the same review as the consent text (#846): the client pays ilovelawyer's fee on top of the
- * lawyer's quote, and pays both through ilovelawyer. */
+ * pending the same review as the consent text (#846): the client pays the lawyer's quote through
+ * ilovelawyer, nothing more; ilovelawyer's fee is deducted from what the lawyer receives. */
 export const CLIENT_REQUEST_REFERRAL_DISCLOSURE =
-  "You pay through ilovelawyer: the lawyer's fee, plus ilovelawyer's platform fee shown on the quote. The lawyer receives their full fee, and the platform fee doesn't change what the lawyer charges you.";
+  "You pay the lawyer's quoted fee, nothing more, through ilovelawyer. ilovelawyer's platform fee comes out of what the lawyer receives, so it adds nothing to what you pay.";
 
 export const CLIENT_REQUEST_NOTE_MAX_LENGTH = 1000;
 

@@ -1,6 +1,7 @@
 /** Quotation payments end to end, through the real routes against the real database: the lawyer drafts
- * and sends a quotation (service fee, platform fee on top, their own expiry), the client accepts and
- * pays it through ilovelawyer, the lawyer's service fee lands in their firm's wallet PENDING, the sweep
+ * and sends a quotation (the amount the client pays, the platform fee deducted from it, their own
+ * expiry), the client accepts and pays it through ilovelawyer, the rest lands in their firm's wallet
+ * PENDING, the sweep
  * releases it, and they withdraw it. Also the expiry, a free first consultation, refunds, a Stripe
  * PaymentIntent settled by its webhook, and the admin's payout settings. The dummy providers stand in
  * for Stripe unless a test sets a fake. */
@@ -151,14 +152,14 @@ describe("quotation payments", function () {
   });
 
   describe("the lawyer's quotation", () => {
-    it("prices a draft with the platform fee on top, and keeps it from the client until sent", async () => {
+    it("prices a draft with the platform fee taken out of the quote, and keeps it from the client until sent", async () => {
       const { body } = await draft(FIXED_FEE(60000)).expect(200);
       const fee = platformFeeOf(60000, PAYOUT_SETTINGS_DEFAULTS.platformFeeBps, PAYOUT_SETTINGS_DEFAULTS.minPlatformFeeMinor);
       expect(fee).to.equal(9000);
       expect(body.quotation).to.deep.include({ status: "DRAFT", platformFeeBps: 1500 });
-      expect(body.quotation.serviceFee).to.deep.equal({ amountMinor: 60000, currency: "GBP" });
+      expect(body.quotation.serviceFee).to.deep.equal({ amountMinor: 51000, currency: "GBP" });
       expect(body.quotation.platformFee).to.deep.equal({ amountMinor: 9000, currency: "GBP" });
-      expect(body.quotation.total).to.deep.equal({ amountMinor: 69000, currency: "GBP" });
+      expect(body.quotation.total).to.deep.equal({ amountMinor: 60000, currency: "GBP" });
       expect(body.quoteTerms).to.deep.equal({ platformFeeBps: 1500, minPlatformFee: { amountMinor: 500, currency: "GBP" } });
       expect(body.status).to.equal("CLAIMED");
       const client = (await clientView().expect(200)).body;
@@ -166,10 +167,14 @@ describe("quotation payments", function () {
       expect(client.status).to.equal("CLAIMED");
     });
 
-    it("never takes less than the minimum platform fee", async () => {
+    it("never takes less than the minimum platform fee, nor more than the quote", async () => {
       const { body } = await draft(FIXED_FEE(2000)).expect(200);
       expect(body.quotation.platformFee.amountMinor).to.equal(500);
-      expect(body.quotation.total.amountMinor).to.equal(2500);
+      expect(body.quotation.serviceFee.amountMinor).to.equal(1500);
+      expect(body.quotation.total.amountMinor).to.equal(2000);
+
+      const small = (await draft(FIXED_FEE(300)).expect(200)).body.quotation;
+      expect([small.total.amountMinor, small.platformFee.amountMinor, small.serviceFee.amountMinor]).to.deep.equal([300, 300, 0]);
     });
 
     it("needs an expiry in the future, and no more than 90 days away", async () => {
@@ -190,8 +195,8 @@ describe("quotation payments", function () {
       const client = (await clientView().expect(200)).body;
       expect(client.status).to.equal("QUOTED");
       expect(client.quotation).to.deep.include({ status: "SENT", expiresAt: new Date(expiresAt).toISOString() });
-      expect(client.quotation.total.amountMinor).to.equal(69000);
-      expect(client.referralDisclosure).to.include("The lawyer receives their full fee");
+      expect(client.quotation.total.amountMinor).to.equal(60000);
+      expect(client.referralDisclosure).to.include("You pay the lawyer's quoted fee, nothing more");
       const row = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId }, include: { claims: true } });
       expect(row.pickByAt?.toISOString()).to.equal(new Date(expiresAt).toISOString());
       expect(row.claims[0]!.quotedAt).to.be.instanceOf(Date);
@@ -201,7 +206,7 @@ describe("quotation payments", function () {
       const id = await quoted(FIXED_FEE(60000));
       await request(app).patch("/api/admin/settings/tenants/UK/payout-settings").set(auth(adminId)).send({ platformFeeBps: 2000 }).expect(200);
       const q = await prisma.quotation.findUniqueOrThrow({ where: { id } });
-      expect(q).to.deep.include({ platformFeeBps: 1500, platformFeeMinor: 9000, totalAmountMinor: 69000 });
+      expect(q).to.deep.include({ platformFeeBps: 1500, platformFeeMinor: 9000, serviceFeeMinor: 51000, totalAmountMinor: 60000 });
       expect((await lawyerView().expect(200)).body.quoteTerms.platformFeeBps).to.equal(2000);
     });
   });
@@ -226,18 +231,18 @@ describe("quotation payments", function () {
       expect(body.status).to.equal("CONFIRMED");
       expect(body.awaitingPayment).to.equal(true);
       expect(body.quotation).to.deep.include({ status: "ACCEPTED" });
-      expect(body.quotation.acceptedAmount).to.deep.equal({ amountMinor: 69000, currency: "GBP" });
+      expect(body.quotation.acceptedAmount).to.deep.equal({ amountMinor: 60000, currency: "GBP" });
       expect(await prisma.organizationCharge.count({ where: { requestId } })).to.equal(0);
     });
 
-    it("the client pays the total; the lawyer's firm gets the full service fee, PENDING, and access to the case", async () => {
+    it("the client pays the quote; the lawyer's firm gets it less the platform fee, PENDING, and access to the case", async () => {
       const id = await quoted();
       await accept(id).expect(200);
       const paid = (await pay(id).expect(200)).body;
       expect(paid.intent).to.equal(null);
       expect(paid.payment).to.deep.include({ status: "SUCCEEDED", provider: "DUMMY" });
-      expect(paid.payment.amount.amountMinor).to.equal(69000);
-      expect(paid.payment.serviceFee.amountMinor).to.equal(60000);
+      expect(paid.payment.amount.amountMinor).to.equal(60000);
+      expect(paid.payment.serviceFee.amountMinor).to.equal(51000);
       expect(paid.payment.platformFee.amountMinor).to.equal(9000);
 
       const client = (await clientView().expect(200)).body;
@@ -247,11 +252,11 @@ describe("quotation payments", function () {
       expect(access?.permission).to.equal("VIEW");
 
       const w = (await wallet().expect(200)).body;
-      expect(w.balances.pending.amountMinor).to.equal(60000);
+      expect(w.balances.pending.amountMinor).to.equal(51000);
       expect(w.balances.available.amountMinor).to.equal(0);
       expect(w.minWithdrawal.amountMinor).to.equal(1000);
       const earning = await prisma.earning.findFirstOrThrow({ where: { requestId } });
-      expect(earning).to.deep.include({ grossMinor: 69000, platformFeeMinor: 9000, netMinor: 60000, status: "PENDING" });
+      expect(earning).to.deep.include({ grossMinor: 60000, platformFeeMinor: 9000, netMinor: 51000, status: "PENDING" });
       expect(earning.availableAt.getTime()).to.be.closeTo(Date.now() + 7 * DAY_MS, 60_000);
     });
 
@@ -366,7 +371,7 @@ describe("quotation payments", function () {
       await webhook(pi, payment.id);
 
       expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).status).to.equal("CONFIRMED");
-      expect(await paymentRow(payment.id)).to.deep.include({ status: "REFUNDED", refundedMinor: 69000 });
+      expect(await paymentRow(payment.id)).to.deep.include({ status: "REFUNDED", refundedMinor: 60000 });
       expect(await prisma.earning.count({ where: { requestId } })).to.equal(0);
     });
 
@@ -380,11 +385,11 @@ describe("quotation payments", function () {
       });
       const body = (await refund(paymentId, { reason: "Client cancelled" }).expect(200)).body;
       expect(body.refunds[0].status).to.equal("PENDING");
-      expect([body.refundPending.amountMinor, body.refundable.amountMinor]).to.deep.equal([69000, 0]);
+      expect([body.refundPending.amountMinor, body.refundable.amountMinor]).to.deep.equal([60000, 0]);
       expect((await refund(paymentId, { reason: "Again" }).expect(400)).body.code).to.equal("REFUND_EXCEEDS_CHARGE");
 
       await QuotationPaymentSvc.applyStripeRefund({ id: "re_late", status: "succeeded", metadata: { refundId: body.refunds[0].id } } as unknown as Stripe.Refund);
-      expect(await paymentRow(paymentId)).to.deep.include({ status: "REFUNDED", refundedMinor: 69000 });
+      expect(await paymentRow(paymentId)).to.deep.include({ status: "REFUNDED", refundedMinor: 60000 });
       expect((await earningRow()).status).to.equal("REVERSED");
     });
 
@@ -452,7 +457,7 @@ describe("quotation payments", function () {
       expect(await WalletSvc.releaseDue()).to.equal(0);
       const w = (await wallet().expect(200)).body;
       expect(w.balances.pending.amountMinor).to.equal(0);
-      expect(w.balances.available.amountMinor).to.equal(60000);
+      expect(w.balances.available.amountMinor).to.equal(51000);
     });
 
     it("is the firm's OWNERs' and ADMINs' only", async () => {
@@ -472,7 +477,7 @@ describe("quotation payments", function () {
       expect((await withdraw(500).expect(400)).body.code).to.equal("WITHDRAWAL_BELOW_MINIMUM");
       const tooMuch = (await withdraw(60001).expect(409)).body;
       expect(tooMuch.code).to.equal("INSUFFICIENT_BALANCE");
-      expect(tooMuch.available).to.deep.equal({ amountMinor: 60000, currency: "GBP" });
+      expect(tooMuch.available).to.deep.equal({ amountMinor: 51000, currency: "GBP" });
 
       const key = crypto.randomUUID();
       const paid = (await withdraw(20000, key).expect(201)).body;
@@ -481,7 +486,7 @@ describe("quotation payments", function () {
       expect(same.id).to.equal(paid.id);
 
       const w = (await wallet().expect(200)).body;
-      expect(w.balances.available.amountMinor).to.equal(40000);
+      expect(w.balances.available.amountMinor).to.equal(31000);
       expect(w.balances.withdrawn.amountMinor).to.equal(20000);
       expect(w.balances.reserved.amountMinor).to.equal(0);
     });
@@ -502,7 +507,7 @@ describe("quotation payments", function () {
       await request(app).post(`/api/organizations/${orgId}/wallet/payout-account/onboarding-link`).set(auth(lawyerId)).send({ returnUrl: "http://localhost:3000/earnings" }).expect(200);
       const failed = (await withdraw(20000).expect(201)).body;
       expect(failed).to.deep.include({ status: "FAILED", failureReason: "The bank refused the payout." });
-      expect((await wallet().expect(200)).body.balances.available.amountMinor).to.equal(60000);
+      expect((await wallet().expect(200)).body.balances.available.amountMinor).to.equal(51000);
     });
 
     describe("through Stripe Connect", () => {
@@ -585,7 +590,7 @@ describe("quotation payments", function () {
         expect(reversals).to.deep.equal([`tr_${id}`]);
         expect(await statusOf(id)).to.equal("FAILED");
         const b = await balances();
-        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.available.amountMinor).to.equal(51000);
         expect(b.reserved.amountMinor).to.equal(0);
       });
 
@@ -598,7 +603,7 @@ describe("quotation payments", function () {
         await payoutEvent("payout.failed", id);
         expect(await statusOf(id)).to.equal("FAILED");
         const b = await balances();
-        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.available.amountMinor).to.equal(51000);
         expect(b.reserved.amountMinor).to.equal(0);
       });
 
@@ -610,7 +615,7 @@ describe("quotation payments", function () {
         const b = await balances();
         expect(b.withdrawn.amountMinor).to.equal(20000);
         expect(b.reserved.amountMinor).to.equal(0);
-        expect(b.available.amountMinor).to.equal(40000);
+        expect(b.available.amountMinor).to.equal(31000);
       });
 
       it("a payout that lands after its withdrawal failed moves nothing back", async () => {
@@ -619,7 +624,7 @@ describe("quotation payments", function () {
         await payoutEvent("payout.paid", id);
         expect(await statusOf(id)).to.equal("FAILED");
         const b = await balances();
-        expect(b.available.amountMinor).to.equal(60000);
+        expect(b.available.amountMinor).to.equal(51000);
         expect(b.withdrawn.amountMinor).to.equal(0);
       });
 
@@ -638,7 +643,7 @@ describe("quotation payments", function () {
         const b = await balances();
         expect(b.withdrawn.amountMinor).to.equal(20000);
         expect(b.reserved.amountMinor).to.equal(10000);
-        expect(b.available.amountMinor).to.equal(30000);
+        expect(b.available.amountMinor).to.equal(21000);
       });
 
       it("ignores a reversed transfer that isn't a withdrawal's", async () => {
@@ -647,7 +652,7 @@ describe("quotation payments", function () {
           type: "transfer.reversed",
           data: { object: { id: "tr_elsewhere", amount: 5000, amount_reversed: 5000, metadata: {} } },
         } as unknown as Stripe.Event);
-        expect((await balances()).available.amountMinor).to.equal(60000);
+        expect((await balances()).available.amountMinor).to.equal(51000);
       });
     });
   });
@@ -706,12 +711,12 @@ describe("quotation payments", function () {
 
       const partial = (await refund(payment.id, { amount: { amountMinor: 10000, currency: "GBP" }, reason: "Part of the work wasn't done" }).expect(200)).body;
       expect(partial.status).to.equal("PARTIALLY_REFUNDED");
-      expect((await wallet().expect(200)).body.balances.pending.amountMinor).to.equal(50000);
+      expect((await wallet().expect(200)).body.balances.pending.amountMinor).to.equal(41000);
 
       const full = (await refund(payment.id, { reason: "Client cancelled" }).expect(200)).body;
       expect(full.status).to.equal("REFUNDED");
       expect(full.refunds.map((r: { amount: { amountMinor: number }; platformFee: { amountMinor: number } }) => [r.amount.amountMinor, r.platformFee.amountMinor])).to.deep.equal([
-        [59000, 9000],
+        [50000, 9000],
         [10000, 0],
       ]);
       expect((await wallet().expect(200)).body.balances.pending.amountMinor).to.equal(0);
@@ -721,15 +726,15 @@ describe("quotation payments", function () {
     it("splits a refund by what's left when it's recorded, not when it was checked", async () => {
       await engaged();
       const payment = await prisma.quotationPayment.findFirstOrThrow({ where: { requestId, status: "SUCCEEDED" } });
-      // Two admins at once: one refunds 10000 while the other has checked 59000 as a partial refund.
+      // Two admins at once: one refunds 10000 while the other has checked 50000 as a partial refund.
       await refund(payment.id, { amount: { amountMinor: 10000, currency: "GBP" }, reason: "Part of the work wasn't done" }).expect(200);
-      const late = await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 59000, reason: "Client cancelled", createdById: adminId });
-      // 59000 is now all that's left: the platform fee comes back too, and the lawyer's part is only what's left of theirs.
-      expect(late).to.deep.include({ amountMinor: 59000, serviceFeeMinor: 50000, platformFeeMinor: 9000 });
+      const late = await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 50000, reason: "Client cancelled", createdById: adminId });
+      // 50000 is now all that's left: the platform fee comes back too, and the lawyer's part is only what's left of theirs.
+      expect(late).to.deep.include({ amountMinor: 50000, serviceFeeMinor: 41000, platformFeeMinor: 9000 });
 
       // A partial refund bigger than what's left of the lawyer's fee is refused.
       await prisma.quotationRefund.delete({ where: { id: late!.id } });
-      expect(await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 55000, reason: "Too much", createdById: adminId })).to.equal(null);
+      expect(await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: 45000, reason: "Too much", createdById: adminId })).to.equal(null);
     });
   });
 
@@ -744,7 +749,7 @@ describe("quotation payments", function () {
       expect(body.invoice.number).to.match(/^INV-\d{8}-[0-9A-F]{8}$/);
       expect(body.invoice.payee).to.deep.equal({ name: "Lena Law LLP", lawyerName: "Lena Lawyer" });
       expect(body.invoice.client).to.deep.equal({ name: "Clara Client" });
-      expect([body.invoice.serviceFee.amountMinor, body.invoice.platformFee.amountMinor, body.invoice.total.amountMinor]).to.deep.equal([60000, 9000, 69000]);
+      expect([body.invoice.serviceFee.amountMinor, body.invoice.platformFee.amountMinor, body.invoice.total.amountMinor]).to.deep.equal([51000, 9000, 60000]);
       expect(body.invoice.payment.provider).to.equal("DUMMY");
       expect((await invoice().expect(200)).body.invoice.number).to.equal(body.invoice.number);
     });

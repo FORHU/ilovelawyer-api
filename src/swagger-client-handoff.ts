@@ -114,7 +114,7 @@ export const clientHandoffTags: Tags = [
   {
     name: WALLET_TAG,
     description:
-      "A payee's earnings from client quotations (WalletSvc): a firm's under /organizations/{id}/wallet (OWNER/ADMIN), a solo lawyer's under /users/me/wallet. Each client payment puts the lawyer's full service fee in PENDING for the tenant's hold (PayoutSettings.earningsHoldDays), then the sweep makes it AVAILABLE. Withdrawals go to the payee's bank through Stripe Connect (an Express account set up on Stripe's pages), at least the tenant's minimum.",
+      "A payee's earnings from client quotations (WalletSvc): a firm's under /organizations/{id}/wallet (OWNER/ADMIN), a solo lawyer's under /users/me/wallet. Each client payment puts what the lawyer receives (the quote less the platform fee) in PENDING for the tenant's hold (PayoutSettings.earningsHoldDays), then the sweep makes it AVAILABLE. Withdrawals go to the payee's bank through Stripe Connect (an Express account set up on Stripe's pages), at least the tenant's minimum.",
   },
   {
     name: CLIENT_TAG,
@@ -406,12 +406,12 @@ export const clientHandoffSchemas: Schemas = {
   },
   QuoteTerms: {
     type: "object",
-    description: "How the platform fee on a quote is worked out now: platformFeeBps of the service fee, never below minPlatformFee; none on a free quote",
+    description: "How the platform fee deducted from a quote is worked out now: platformFeeBps of the quoted amount, never below minPlatformFee nor above the amount; none on a free quote",
     properties: { platformFeeBps: { type: "integer", example: 1500 }, minPlatformFee: money() },
   },
   Quotation: {
     type: "object",
-    description: "The lawyer's quotation. serviceFee is paid out to the lawyer in full; the client pays total = serviceFee + platformFee. The fee is fixed when it's sent; acceptedAmount when the client accepts.",
+    description: "The lawyer's quotation. total is the amount the lawyer quoted, what the client pays; platformFee is deducted from it and serviceFee (total - platformFee) is what the lawyer receives. The fee is fixed when it's sent; acceptedAmount when the client accepts.",
     properties: {
       id: { type: "string" },
       claimId: { type: "string" },
@@ -489,7 +489,7 @@ export const clientHandoffSchemas: Schemas = {
       status: enumOf(EARNING_STATUSES),
       gross: money("What the client paid"),
       platformFee: money(),
-      net: money("The lawyer's service fee"),
+      net: money("What the lawyer receives: gross less the platform fee"),
       reversed: money("Taken back by refunds or a lost dispute"),
       disputed: { type: "boolean" },
       availableAt: dateTime(),
@@ -894,7 +894,7 @@ export const clientHandoffPaths: Paths = {
       issue: "quotation payments", built: true,
       summary: "Pay the accepted quotation",
       description:
-        "Starts (or resumes) paying the accepted amount, before the quotation's expiry (409 QUOTATION_EXPIRED). With Stripe: a PENDING payment and a PaymentIntent on ilovelawyer's account, whose client secret the app hands to Stripe's Payment Element; the same intent comes back while it's open. It settles on payment_intent.succeeded or GET .../payment. With the dummy provider: it settles now (402 PAYMENT_DECLINED for testOutcome decline). Paid: ENGAGED, the lawyer gets read-only access, and their service fee goes to their wallet.",
+        "Starts (or resumes) paying the accepted amount, before the quotation's expiry (409 QUOTATION_EXPIRED). With Stripe: a PENDING payment and a PaymentIntent on ilovelawyer's account, whose client secret the app hands to Stripe's Payment Element; the same intent comes back while it's open. It settles on payment_intent.succeeded or GET .../payment. With the dummy provider: it settles now (402 PAYMENT_DECLINED for testOutcome decline). Paid: ENGAGED, the lawyer gets read-only access, and the amount less the platform fee goes to their wallet.",
       parameters: [...requestId, idParam("quotationId")],
       body: { type: "object", properties: { testOutcome: { type: "string", enum: ["decline"], description: "Dummy provider only" } } },
       responses: {
@@ -1129,7 +1129,7 @@ export const clientHandoffPaths: Paths = {
       issue: "ilovelawyer-api#512", built: true,
       summary: "Send your quote to the client (draft and send in one)",
       description:
-        "Allowed while CLAIMED and inside the 24h hold (409 CLAIM_EXPIRED after it). Moves to QUOTED, once. GBP only. `amount` is the lawyer's service fee, paid out to them in full; the client pays the tenant's platform fee on top (QuoteTerms), fixed when the quote is sent. `expiresAt` is the lawyer's: the client accepts and pays before it (at most 90 days away). A FIXED_FEE needs an amount above 0; a FIRST_CONSULTATION may be free (no platform fee, nothing to pay). Nothing is charged to the lawyer, so no card on file is needed.",
+        "Allowed while CLAIMED and inside the 24h hold (409 CLAIM_EXPIRED after it). Moves to QUOTED, once. GBP only. `amount` is what the client pays; the tenant's platform fee (QuoteTerms) is deducted from it and the lawyer receives the rest, fixed when the quote is sent. `expiresAt` is the lawyer's: the client accepts and pays before it (at most 90 days away). A FIXED_FEE needs an amount above 0; a FIRST_CONSULTATION may be free (no platform fee, nothing to pay). Nothing is charged to the lawyer, so no card on file is needed.",
       parameters: requestId,
       body: {
         type: "object",
@@ -1144,7 +1144,7 @@ export const clientHandoffPaths: Paths = {
       tag: LAWYER_TAG,
       issue: "quotation payments", built: true,
       summary: "Save your quotation as a draft",
-      description: "Same body as POST .../quote. Priced with the tenant's platform fee as it is now, so the app can show the client's total. Only the lawyer sees a draft. Inside the 24h hold, until sent (409 once sent).",
+      description: "Same body as POST .../quote. Priced with the tenant's platform fee as it is now, so the app can show what the lawyer receives. Only the lawyer sees a draft. Inside the 24h hold, until sent (409 once sent).",
       parameters: requestId,
       body: {
         type: "object",

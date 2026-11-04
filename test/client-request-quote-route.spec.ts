@@ -346,7 +346,7 @@ describe("client request conflict check, release and quote", () => {
       for (let round = 0; round < ROUNDS; round++) {
         const r = await freshClaim();
         const terms = { platformFeeBps: 1500, minPlatformFeeMinor: 500 };
-        await QuotationRepo.saveDraft({ id: r.claimId, requestId: r.requestId, lawyerId }, { type: "FIXED_FEE", serviceFeeMinor: 100, currency: "GBP", message: "x", expiresAt: new Date(EXPIRES_AT) }, terms);
+        await QuotationRepo.saveDraft({ id: r.claimId, requestId: r.requestId, lawyerId }, { type: "FIXED_FEE", amountMinor: 100, currency: "GBP", message: "x", expiresAt: new Date(EXPIRES_AT) }, terms);
         const [sent, lapsed] = await Promise.all([
           QuotationRepo.send({ id: r.claimId, requestId: r.requestId }, terms),
           ClaimRepo.lapse({ id: r.claimId, requestId: r.requestId, lawyerId }),
