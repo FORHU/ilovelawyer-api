@@ -22,11 +22,29 @@ export const CLIENT_REQUEST_CONSENT_TEXT = [
   "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.",
 ].join("\n\n");
 
+/** A request to one lawyer by name (the marketplace's Request): how long only they are offered it
+ * before it goes to every matching lawyer. */
+export const CLIENT_REQUEST_DIRECT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** What a client agrees to when asking one lawyer by name. Same DRAFT status and review as the text
+ * above, which it follows, and which applies if the request goes wider. Its own version: bump it
+ * whenever this text changes. */
+export const CLIENT_REQUEST_DIRECT_CONSENT_VERSION = "2026-11-04-direct-draft-3";
+
+// Laid out like CLIENT_REQUEST_CONSENT_TEXT, paragraph for paragraph and about as long, so the two
+// forms look the same and fit the same screen.
+export const CLIENT_REQUEST_DIRECT_CONSENT_TEXT = [
+  "We'll share an anonymised summary of your case with the lawyer you chose, and only them at first. It leaves out names and documents.",
+  `If they take it up, they'll also see the names of the people and organisations in your case, only to check for conflicts, and can send you a quote. If not within 24 hours, up to ${CLIENT_REQUEST_MAX_LAWYERS} other matching lawyers can.`,
+  "If you hire a lawyer, you pay their quote and ilovelawyer's platform fee through ilovelawyer. Once paid, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
+  "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.",
+].join("\n\n");
+
 /** How the platform is paid, shown on every quote and acknowledged to accept one. DRAFT wording,
- * pending the same review as the consent text (#846): the client pays ilovelawyer's fee on top of the
- * lawyer's quote, and pays both through ilovelawyer. */
+ * pending the same review as the consent text (#846): the client pays the lawyer's quote through
+ * ilovelawyer, nothing more; ilovelawyer's fee is deducted from what the lawyer receives. */
 export const CLIENT_REQUEST_REFERRAL_DISCLOSURE =
-  "You pay through ilovelawyer: the lawyer's fee, plus ilovelawyer's platform fee shown on the quote. The lawyer receives their full fee, and the platform fee doesn't change what the lawyer charges you.";
+  "You pay the lawyer's quoted fee, nothing more, through ilovelawyer. ilovelawyer's platform fee comes out of what the lawyer receives, so it adds nothing to what you pay.";
 
 export const CLIENT_REQUEST_NOTE_MAX_LENGTH = 1000;
 

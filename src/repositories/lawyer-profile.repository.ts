@@ -164,8 +164,18 @@ export default class LawyerProfileRepo {
    * checked in ClientRequestMatchingSvc.matches — the single source of truth for the rule, so it
    * stays unit-testable without a database. `openCount` comes from countOpenForLawyers below. */
   static async findVerified(excludeUserIds: string[]) {
+    return LawyerProfileRepo.findVerifiedWhere({ userId: { notIn: excludeUserIds } });
+  }
+
+  /** One verified UK lawyer as matching reads them (findVerified), or null: who a client asks for by
+   * name from the marketplace. */
+  static async findVerifiedById(userId: string) {
+    return (await LawyerProfileRepo.findVerifiedWhere({ userId }))[0] ?? null;
+  }
+
+  private static async findVerifiedWhere(where: Prisma.LawyerClientProfileWhereInput) {
     const rows = await prisma.lawyerClientProfile.findMany({
-      where: { country: "UK", verificationStatus: "VERIFIED", userId: { notIn: excludeUserIds } },
+      where: { ...where, country: "UK", verificationStatus: "VERIFIED" },
       select: {
         userId: true,
         acceptingRequests: true,
@@ -184,6 +194,57 @@ export default class LawyerProfileRepo {
       qualifiedJurisdictions: ukRegistration?.qualifiedJurisdictions ?? [],
       openCount: openCounts.get(r.userId) ?? 0,
     }));
+  }
+
+  /** The client app's lawyer marketplace (ClientLawyerSvc): verified UK lawyers, with what the
+   * client sees of them and what availability is checked on (ClientRequestMatchingSvc.isAvailable).
+   * Their firm is their organization's (a user is in at most one). */
+  static async findForMarketplace(userId?: string) {
+    const rows = await prisma.lawyerClientProfile.findMany({
+      where: { country: "UK", verificationStatus: "VERIFIED", ...(userId ? { userId } : {}) },
+      include: {
+        ...REGISTRATIONS,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatar: { select: { s3Key: true } },
+            organizationMemberships: { select: { organization: { select: { name: true, isPersonal: true, city: true } } } },
+          },
+        },
+      },
+    });
+    const openCounts = await LawyerProfileRepo.countOpenForLawyers(rows.map((r) => r.userId));
+    return rows.map((row) => ({ ...flatten(row), openCount: openCounts.get(row.userId) ?? 0 }));
+  }
+
+  /** Each lawyer's ratings from clients whose engagement with them ended (EngagementFeedback, #519):
+   * the request's lawyer is the one whose claim was ENGAGED. Lawyers with none are left out. */
+  static async ratingsFor(lawyerIds: string[]): Promise<Map<string, { average: number; count: number }>> {
+    if (lawyerIds.length === 0) return new Map();
+    const rows = await prisma.engagementFeedback.findMany({
+      where: { request: { claims: { some: { lawyerId: { in: lawyerIds }, outcome: "ENGAGED" } } } },
+      select: { rating: true, request: { select: { claims: { where: { outcome: "ENGAGED" }, select: { lawyerId: true } } } } },
+    });
+    const sums = new Map<string, { total: number; count: number }>();
+    for (const row of rows) {
+      const lawyerId = row.request.claims[0]?.lawyerId;
+      if (!lawyerId) continue;
+      const sum = sums.get(lawyerId) ?? { total: 0, count: 0 };
+      sums.set(lawyerId, { total: sum.total + row.rating, count: sum.count + 1 });
+    }
+    return new Map([...sums].map(([id, s]) => [id, { average: s.total / s.count, count: s.count }]));
+  }
+
+  /** Every rating clients gave this lawyer once their engagement ended (EngagementFeedback, #519),
+   * newest first, with the case's areas. Shown on their marketplace profile. */
+  static async feedbackFor(lawyerId: string) {
+    const rows = await prisma.engagementFeedback.findMany({
+      where: { request: { claims: { some: { lawyerId, outcome: "ENGAGED" } } } },
+      select: { rating: true, comment: true, createdAt: true, request: { select: { case: { select: { caseAreas: true } } } } },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map((r) => ({ rating: r.rating, comment: r.comment, createdAt: r.createdAt, caseAreas: r.request.case.caseAreas }));
   }
 
   /** How many open client requests (#514) each of these lawyers is holding: one they've joined and

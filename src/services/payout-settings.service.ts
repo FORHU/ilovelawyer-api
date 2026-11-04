@@ -38,8 +38,9 @@ function termsOf(row: Partial<PayoutTerms> | null): PayoutTerms {
 
 /**
  * The quotation payment terms per tenant (PayoutSettings), edited by admins on the admin Settings
- * page: the platform fee rate and its minimum (added on top of a lawyer's service fee for the
- * client), how long an earning waits before it can be withdrawn, and the smallest withdrawal. Read
+ * page: the platform fee rate and its minimum (deducted from the amount a lawyer quotes, which is
+ * what the client pays), how long an earning waits before it can be withdrawn, and the smallest
+ * withdrawal. Read
  * through forTenant(), cached per tenant for PAYOUT_SETTINGS_CACHE_TTL_S. A change only reaches what
  * comes after it: a sent quote keeps its fee (Quotation.platformFeeBps), an earning its availableAt.
  * Every change is recorded in the security audit log.

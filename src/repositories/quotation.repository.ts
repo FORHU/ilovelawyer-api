@@ -49,7 +49,8 @@ export async function closeOpenQuotations(tx: Tx, where: Prisma.QuotationWhereIn
 
 export interface QuotationDraft {
   type: QuoteType;
-  serviceFeeMinor: number;
+  /** What the lawyer quoted: what the client pays. */
+  amountMinor: number;
   currency: string;
   message: string;
   expiresAt: Date;
@@ -60,9 +61,11 @@ export interface FeeTerms {
   minPlatformFeeMinor: number;
 }
 
-function priced(serviceFeeMinor: number, terms: FeeTerms) {
-  const platformFeeMinor = platformFeeOf(serviceFeeMinor, terms.platformFeeBps, terms.minPlatformFeeMinor);
-  return { platformFeeBps: terms.platformFeeBps, platformFeeMinor, totalAmountMinor: serviceFeeMinor + platformFeeMinor };
+/** A quoted amount split: the client pays all of it (totalAmountMinor), the platform fee is deducted
+ * from it, and the lawyer receives the rest (serviceFeeMinor). */
+function priced(amountMinor: number, terms: FeeTerms) {
+  const platformFeeMinor = platformFeeOf(amountMinor, terms.platformFeeBps, terms.minPlatformFeeMinor);
+  return { platformFeeBps: terms.platformFeeBps, platformFeeMinor, serviceFeeMinor: amountMinor - platformFeeMinor, totalAmountMinor: amountMinor };
 }
 
 /** QuotationRepo.saveDraft's work, inside a transaction that has locked the routed request. */
@@ -71,7 +74,8 @@ async function saveDraftTx(tx: Tx, claim: { id: string; requestId: string; lawye
   if (!open) throw new MovedOn();
   const existing = await tx.quotation.findUnique({ where: { claimId: claim.id }, select: { status: true } });
   if (existing && existing.status !== "DRAFT") throw new MovedOn("SENT");
-  const data = { ...draft, ...priced(draft.serviceFeeMinor, terms) };
+  const { amountMinor, ...rest } = draft;
+  const data = { ...rest, ...priced(amountMinor, terms) };
   return tx.quotation.upsert({
     where: { claimId: claim.id },
     create: { claimId: claim.id, requestId: claim.requestId, lawyerId: claim.lawyerId, ...data },
@@ -85,10 +89,10 @@ async function sendTx(tx: Tx, claim: { id: string; requestId: string }, terms: F
   if (!draft) throw new MovedOn();
   if (draft.status !== "DRAFT") throw new MovedOn("SENT");
   if (draft.expiresAt <= now) throw new MovedOn("EXPIRED");
-  const sent = await tx.quotation.update({ where: { id: draft.id }, data: { ...priced(draft.serviceFeeMinor, terms), status: "SENT", sentAt: now } });
+  const sent = await tx.quotation.update({ where: { id: draft.id }, data: { ...priced(draft.totalAmountMinor, terms), status: "SENT", sentAt: now } });
   const quoted = await tx.clientRequestClaim.updateMany({
     where: { id: claim.id, outcome: null, quotedAt: null, expiresAt: { gt: now } },
-    data: { quoteType: sent.type, quoteAmountMinor: sent.serviceFeeMinor, quoteCurrency: sent.currency, quoteMessage: sent.message, quotedAt: now },
+    data: { quoteType: sent.type, quoteAmountMinor: sent.totalAmountMinor, quoteCurrency: sent.currency, quoteMessage: sent.message, quotedAt: now },
   });
   if (quoted.count !== 1) throw new MovedOn();
   const request = await tx.clientRequest.findUniqueOrThrow({ where: { id: claim.requestId }, select: { pickByAt: true } });

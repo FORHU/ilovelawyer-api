@@ -11,9 +11,19 @@ export const CLOSED_REQUEST_STATUSES: ClientRequestStatus[] = ["CLOSED", "EXPIRE
 export const ROUTING_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 /** A routed request has run out when its 48h are over with no lawyer on it, or when the client
- * hasn't picked a quote by its pick-by date (several lawyers, phase 5). */
+ * hasn't picked a quote by its pick-by date (several lawyers, phase 5). One still limited to the
+ * lawyer the client named doesn't run out when its window ends: it goes to every matching lawyer
+ * instead (findDirectDue, openToAll). */
 function expiredWhere(now: Date): Prisma.ClientRequestWhereInput {
-  return { status: "ROUTED", OR: [{ routingExpiresAt: { lte: now }, claims: { none: { outcome: null } } }, { pickByAt: { lte: now } }] };
+  return {
+    status: "ROUTED",
+    OR: [{ requestedOnly: false, routingExpiresAt: { lte: now }, claims: { none: { outcome: null } } }, { pickByAt: { lte: now } }],
+  };
+}
+
+/** A request limited to the client's named lawyer that nobody is on: what openToAll acts on. */
+function directWhere(): Prisma.ClientRequestWhereInput {
+  return { status: "ROUTED", requestedOnly: true, claims: { none: { outcome: null } } };
 }
 
 /** How a claim ends without an engagement: these show in the lawyer's history straight away. */
@@ -50,13 +60,16 @@ const FOR_CLIENT = {
     },
   },
   feedback: true,
+  // The lawyer the client asked for by name, if they did.
+  requestedLawyer: { select: { id: true, name: true } },
 } satisfies Prisma.ClientRequestInclude;
 
 export type ClientRequestForClient = Prisma.ClientRequestGetPayload<{ include: typeof FOR_CLIENT }>;
 
 export default class ClientRequestRepo {
-  static async create(data: { caseId: string; clientId: string; note: string; consentVersion: string; consentAcceptedAt: Date }) {
-    return prisma.clientRequest.create({ data });
+  /** `requestedLawyerId`: the lawyer the client asked for by name; only they are offered it at first. */
+  static async create(data: { caseId: string; clientId: string; note: string; consentVersion: string; consentAcceptedAt: Date; requestedLawyerId?: string | null }) {
+    return prisma.clientRequest.create({ data: { ...data, requestedOnly: !!data.requestedLawyerId } });
   }
 
   /** The case's open request with its status, for deciding what a change to the case may do. */
@@ -196,20 +209,44 @@ export default class ClientRequestRepo {
 
 
   /** REQUESTED -> ROUTED, right after create() — nothing else touches a brand new request at the
-   * same instant, so this doesn't need transition()'s guard. */
-  static async route(id: string) {
+   * same instant, so this doesn't need transition()'s guard. Open for `windowMs`: 48h, or the named
+   * lawyer's 24h. */
+  static async route(id: string, windowMs: number = ROUTING_WINDOW_MS) {
     return prisma.clientRequest.update({
       where: { id },
-      data: { status: "ROUTED", routedAt: new Date(), routingExpiresAt: new Date(Date.now() + ROUTING_WINDOW_MS) },
+      data: { status: "ROUTED", routedAt: new Date(), routingExpiresAt: new Date(Date.now() + windowMs) },
     });
   }
 
-  /** The case's practice area and jurisdiction, and who's already excluded (#509's matching). */
+  /** The case's practice area and jurisdiction, who's already excluded, and whether it's still
+   * limited to the lawyer the client named (#509's matching). */
   static async findForMatching(id: string) {
     return prisma.clientRequest.findUnique({
       where: { id },
-      select: { excludedLawyerIds: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
+      select: { excludedLawyerIds: true, requestedOnly: true, requestedLawyerId: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
     });
+  }
+
+  /** Requests limited to the client's named lawyer whose window ended with nobody on them: due to go
+   * to every matching lawyer (openToAll). */
+  static async findDirectDue(now: Date) {
+    return prisma.clientRequest.findMany({
+      where: { ...directWhere(), routingExpiresAt: { lte: now } },
+      select: { id: true, clientId: true, requestedLawyerId: true },
+      orderBy: { routingExpiresAt: "asc" },
+    });
+  }
+
+  /** A request limited to the client's named lawyer goes to every matching lawyer, as the client
+   * agreed: open for a fresh 48h, to be announced again (ClientRequestNotifySvc.announceDue). Only
+   * while it's still limited and nobody is on it, so a lawyer who joined first wins. True when this
+   * call opened it. */
+  static async openToAll(id: string, now: Date): Promise<boolean> {
+    const { count } = await prisma.clientRequest.updateMany({
+      where: { id, ...directWhere() },
+      data: { requestedOnly: false, routedAt: now, routingExpiresAt: new Date(now.getTime() + ROUTING_WINDOW_MS), announcedAt: null, pickByAt: null },
+    });
+    return count === 1;
   }
 
   static async findForLawyer(id: string) {
@@ -226,6 +263,8 @@ export default class ClientRequestRepo {
         routingExpiresAt: { gt: now },
         briefGeneratedAt: { not: null },
         NOT: { excludedLawyerIds: { has: lawyerId } },
+        // One the client sent to a lawyer by name is only theirs until it goes wider.
+        OR: [{ requestedOnly: false }, { requestedLawyerId: lawyerId }],
         case: { caseAreas: { hasSome: areas.caseAreas }, ukJurisdiction: { in: areas.jurisdictions } },
       },
       orderBy: [{ routedAt: "desc" }, { id: "asc" }],
@@ -274,7 +313,7 @@ export default class ClientRequestRepo {
   static async findForAnnouncement(id: string) {
     return prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, brief: true, routingExpiresAt: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
+      select: { id: true, brief: true, routingExpiresAt: true, requestedOnly: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
     });
   }
 

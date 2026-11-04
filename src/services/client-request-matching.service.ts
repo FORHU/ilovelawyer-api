@@ -14,6 +14,15 @@ export interface MatchCriteria {
   /** The case's areas (Case.caseAreas). */
   caseAreas: string[];
   ukJurisdiction: string | null;
+  /** A request the client sent to one lawyer by name, while only they are offered it (onlyLawyerOf):
+   * nobody else matches. Null or omitted: anyone who fits. */
+  onlyLawyerId?: string | null;
+}
+
+/** Who a request is limited to while the client's named lawyer is the only one offered it: their id,
+ * or "" (nobody) if their account has gone since. Null once it's open to every matching lawyer. */
+export function onlyLawyerOf(r: { requestedOnly: boolean; requestedLawyerId: string | null }): string | null {
+  return r.requestedOnly ? (r.requestedLawyerId ?? "") : null;
 }
 
 /** Criteria for matching that isn't tied to an existing ClientRequest — the intake chat's
@@ -55,6 +64,7 @@ export interface MatchablePracticeArea {
  * `openCount` is how many requests they're currently holding (LawyerProfileRepo.countOpenForLawyers);
  * `capacityLimit` null means unlimited. */
 export interface LawyerForMatching {
+  userId: string;
   acceptingRequests: boolean;
   enabledByOrganization: boolean;
   pausedUntil: Date | null;
@@ -74,15 +84,24 @@ export function caseAreasOf(practiceAreas: MatchablePracticeArea[]): string[] {
  * The request matching engine (#509): which lawyers a client request is routed to. A lawyer
  * matches when they're verified, accepting requests, enabled by their organization (#518), not
  * paused, under capacity, and qualified for any one of the case's areas (through caseAreasOf) and
- * its UK jurisdiction.
+ * its UK jurisdiction. A request the client sent to one lawyer by name matches only them until it
+ * goes wider (onlyLawyerOf).
  */
 export default class ClientRequestMatchingSvc {
-  static matches(lawyer: LawyerForMatching, criteria: MatchCriteria, now: Date = new Date()): boolean {
-    if (criteria.caseAreas.length === 0 || !criteria.ukJurisdiction) return false;
+  /** Whether the lawyer is taking new requests at all: accepting, enabled by their organization, not
+   * paused and under capacity. The marketplace (ClientLawyerSvc) lists only these. */
+  static isAvailable(lawyer: Omit<LawyerForMatching, "userId" | "practiceAreas" | "qualifiedJurisdictions">, now: Date = new Date()): boolean {
     if (!lawyer.acceptingRequests) return false;
     if (!lawyer.enabledByOrganization) return false;
     if (lawyer.pausedUntil && lawyer.pausedUntil > now) return false;
     if (lawyer.capacityLimit !== null && lawyer.openCount >= lawyer.capacityLimit) return false;
+    return true;
+  }
+
+  static matches(lawyer: LawyerForMatching, criteria: MatchCriteria, now: Date = new Date()): boolean {
+    if (criteria.caseAreas.length === 0 || !criteria.ukJurisdiction) return false;
+    if (criteria.onlyLawyerId != null && criteria.onlyLawyerId !== lawyer.userId) return false;
+    if (!ClientRequestMatchingSvc.isAvailable(lawyer, now)) return false;
     const takes = caseAreasOf(lawyer.practiceAreas);
     if (!criteria.caseAreas.some((area) => takes.includes(area))) return false;
     if (!lawyer.qualifiedJurisdictions.includes(criteria.ukJurisdiction)) return false;
@@ -91,8 +110,8 @@ export default class ClientRequestMatchingSvc {
 
   /** REQUESTED -> ROUTED, right after the request is created. Unconditional — the client sees
    * "Finding a lawyer" even with zero current matches; EXPIRED (#510) is what ends that wait. */
-  static async route(requestId: string) {
-    return ClientRequestRepo.route(requestId);
+  static async route(requestId: string, windowMs?: number) {
+    return ClientRequestRepo.route(requestId, windowMs);
   }
 
   /** Every verified lawyer who currently matches this request, minus anyone already excluded from
@@ -101,7 +120,7 @@ export default class ClientRequestMatchingSvc {
     const request = await ClientRequestRepo.findForMatching(requestId);
     if (!request) return [];
     const candidates = await LawyerProfileRepo.findVerified(request.excludedLawyerIds);
-    const criteria: MatchCriteria = { caseAreas: request.case.caseAreas, ukJurisdiction: request.case.ukJurisdiction };
+    const criteria: MatchCriteria = { caseAreas: request.case.caseAreas, ukJurisdiction: request.case.ukJurisdiction, onlyLawyerId: onlyLawyerOf(request) };
     return candidates.filter((lawyer) => ClientRequestMatchingSvc.matches(lawyer, criteria)).map((lawyer) => lawyer.userId);
   }
 

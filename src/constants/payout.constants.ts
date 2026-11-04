@@ -1,7 +1,7 @@
 /**
  * The quotation payment terms every tenant starts with (PayoutSettingsSvc), edited per tenant in the
- * admin app. The platform fee is added on top of the lawyer's service fee for the client to pay; the
- * lawyer receives the service fee in full. Stripe's processing fee comes out of the platform fee.
+ * admin app. The client pays the lawyer's quoted amount, nothing more; the platform fee is deducted
+ * from it, and the lawyer receives the rest. Stripe's processing fee comes out of the platform fee.
  */
 export const PAYOUT_SETTINGS_DEFAULTS = {
   currency: "GBP",
@@ -33,10 +33,11 @@ export const QUOTATION_MAX_VALIDITY_DAYS = 90;
 export const QUOTATION_DEFAULT_VALIDITY_DAYS = 7;
 
 /**
- * The platform fee on a service fee: `bps` of it rounded half-up, never below `minFeeMinor`. A free
- * quote (a free first consultation) has no fee: there's nothing to pay.
+ * The platform fee deducted from a quoted amount: `bps` of it rounded half-up, never below
+ * `minFeeMinor`, and never more than the amount itself (the lawyer can't be left owing). A free quote
+ * (a free first consultation) has no fee: there's nothing to deduct it from.
  */
-export function platformFeeOf(serviceFeeMinor: number, bps: number, minFeeMinor: number): number {
-  if (serviceFeeMinor <= 0) return 0;
-  return Math.max(Math.floor((serviceFeeMinor * bps + 5000) / 10000), minFeeMinor);
+export function platformFeeOf(quotedMinor: number, bps: number, minFeeMinor: number): number {
+  if (quotedMinor <= 0) return 0;
+  return Math.min(Math.max(Math.floor((quotedMinor * bps + 5000) / 10000), minFeeMinor), quotedMinor);
 }

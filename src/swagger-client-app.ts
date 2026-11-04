@@ -445,6 +445,105 @@ export const clientAppPaths: Paths = {
       },
     },
   },
+  "/client/lawyers": {
+    get: {
+      tags: [TAG],
+      summary: "The lawyer marketplace",
+      description:
+        "Verified UK lawyers taking requests: accepting, enabled by their firm, not paused and under capacity. Filters combine; `total` counts every lawyer they let through.",
+      security,
+      parameters: [
+        { name: "area", in: "query", schema: { type: "string", example: "EMPLOYMENT" }, description: "A code from GET /client/case-areas: only lawyers who take it" },
+        { name: "caseArea", in: "query", schema: { type: "string" }, description: "The client's case's area. Filters nothing; sort=match puts lawyers who take it first" },
+        { name: "jurisdiction", in: "query", schema: { type: "string", enum: ["England and Wales", "Scotland", "Northern Ireland"] }, description: "Only lawyers qualified there" },
+        { name: "maxConsultationMinor", in: "query", schema: { type: "integer", minimum: 0 }, description: "Pence. Only lawyers whose first consultation costs this or less; one who offers none is left out" },
+        {
+          name: "languages",
+          in: "query",
+          schema: { type: "array", items: { type: "string" } },
+          style: "form",
+          explode: true,
+          description: "Speaks any of these. \"Other\": any language but English and Welsh",
+        },
+        { name: "q", in: "query", schema: { type: "string", maxLength: 100 }, description: "Part of the lawyer's name, firm or town, any case" },
+        { name: "sort", in: "query", schema: { type: "string", enum: ["match", "rating", "price"], default: "match" }, description: "match: takes caseArea first, then highest rated. price: lowest first consultation fee" },
+        { name: "page", in: "query", schema: { type: "integer", minimum: 1, default: 1 } },
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: {
+          description: "A page of lawyers",
+          content: json({
+            type: "object",
+            properties: {
+              total: { type: "integer" },
+              data: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    name: { type: "string" },
+                    avatarUrl: { type: "string", nullable: true },
+                    firmName: { type: "string", nullable: true, description: "Null for a solo lawyer" },
+                    town: { type: "string", nullable: true, description: "Their firm's city" },
+                    regulator: { type: "string", enum: ["SRA", "LSS", "LSNI"], nullable: true },
+                    registrationNumber: { type: "string", nullable: true },
+                    practiceAreas: { type: "array", items: { type: "string" }, description: "By name, in the site's order" },
+                    caseAreas: { type: "array", items: { type: "string" }, description: "Case area codes they take" },
+                    qualifiedJurisdictions: { type: "array", items: { type: "string" } },
+                    languages: { type: "array", items: { type: "string" } },
+                    bio: { type: "string" },
+                    firstConsultationFee: { ...money, nullable: true, description: "GBP. 0: free. Null: no first consultation offered" },
+                    verifiedAt: { type: "string", format: "date-time", nullable: true },
+                    rating: { type: "number", nullable: true, description: "Average of their clients' ratings (1-5), one decimal. Null with no reviews" },
+                    reviewCount: { type: "integer" },
+                  },
+                },
+              },
+            },
+          }),
+        },
+        400: err("A filter isn't valid"),
+      },
+    },
+  },
+  "/client/lawyers/{id}": {
+    get: {
+      tags: [TAG],
+      summary: "One lawyer's marketplace profile",
+      description:
+        "What the list shows, plus how their ratings spread and their clients' latest comments (without the client's name). A verified lawyer who isn't taking requests right now is still shown, with available false.",
+      security,
+      parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+      responses: {
+        200: {
+          description: "The lawyer, as in GET /client/lawyers, with these too",
+          content: json({
+            type: "object",
+            properties: {
+              available: { type: "boolean", description: "Taking new requests now: accepting, enabled by their firm, not paused and under capacity" },
+              ratingBreakdown: { type: "array", items: { type: "integer" }, minItems: 5, maxItems: 5, description: "How many ratings at 5, 4, 3, 2 and 1 stars" },
+              reviews: {
+                type: "array",
+                description: "Up to 10 ratings with a comment, newest first",
+                items: {
+                  type: "object",
+                  properties: {
+                    rating: { type: "integer", minimum: 1, maximum: 5 },
+                    comment: { type: "string" },
+                    caseAreas: { type: "array", items: { type: "string" }, description: "The case's areas, by name" },
+                    createdAt: { type: "string", format: "date-time" },
+                  },
+                },
+              },
+            },
+          }),
+        },
+        404: err("LAWYER_NOT_FOUND: not a verified UK lawyer"),
+      },
+    },
+  },
   "/client/cases/{caseId}": {
     get: {
       tags: [TAG],

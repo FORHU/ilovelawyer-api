@@ -73,7 +73,7 @@ router.get("/settings/lawyer-pricing", asyncHandler(LawyerPricingAdminCtrl.get))
 router.patch("/settings/tenants/:code/lawyer-pricing/intro-fee", asyncHandler(LawyerPricingAdminCtrl.updateIntroFee));
 router.post("/settings/tenants/:code/lawyer-pricing/packs", asyncHandler(LawyerPricingAdminCtrl.createPack));
 router.patch("/settings/lawyer-pricing/packs/:id", asyncHandler(LawyerPricingAdminCtrl.updatePack));
-// Quotation payments per tenant: the platform fee on top of a lawyer's quote, the earnings hold and
+// Quotation payments per tenant: the platform fee deducted from a lawyer's quote, the earnings hold and
 // the minimum withdrawal (PayoutSettingsSvc).
 router.get("/settings/payout-settings", asyncHandler(PayoutAdminCtrl.getSettings));
 router.patch("/settings/tenants/:code/payout-settings", asyncHandler(PayoutAdminCtrl.updateSettings));
