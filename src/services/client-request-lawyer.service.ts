@@ -1,4 +1,4 @@
-import type { ClientRequestStatus, Quotation, QuoteType, ReleaseReason } from "@prisma/client";
+import type { ClientRequestStatus, PassReason, Quotation, QuoteType, ReleaseReason } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
@@ -674,15 +674,18 @@ export default class ClientRequestLawyerSvc {
 
   /** Pass: the lawyer stops seeing the request. Nothing else about it changes, unless the client sent
    * it to them by name: then it goes to every matching lawyer straight away, as the client agreed. A
-   * lawyer holding it releases it instead (#512), which also puts it back in the pool. */
-  static async pass(lawyer: LawyerContext, id: string) {
+   * lawyer holding it releases it instead (#512), which also puts it back in the pool. The reason
+   * and note they give are kept for ilovelawyer staff and never shown to the client; a pass with
+   * neither stores nothing. */
+  static async pass(lawyer: LawyerContext, id: string, input: { reason?: PassReason; note?: string } = {}) {
     const profile = await ClientRequestLawyerSvc.assertVerifiedLawyer(lawyer);
     const request = await ClientRequestRepo.findForLawyer(id);
     if (!request || !ClientRequestLawyerSvc.isFor(request, lawyer.userId, profile)) throw NOT_FOUND();
     if (request.claims.some((c) => c.lawyerId === lawyer.userId && c.outcome === null)) {
       throw new HttpError("You hold this request. Release it instead.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     }
-    await ClientRequestRepo.exclude(id, lawyer.userId);
+    const said = { reason: input.reason ?? null, note: input.note?.trim() || null };
+    await ClientRequestRepo.exclude(id, lawyer.userId, said.reason || said.note ? said : undefined);
     if (request.requestedOnly && request.requestedLawyerId === lawyer.userId) await ClientRequestNotifySvc.openToAll(id, request.clientId);
   }
 

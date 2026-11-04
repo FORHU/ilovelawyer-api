@@ -1,11 +1,12 @@
 import Joi from "joi";
 import {
   CLIENT_REQUEST_NOTE_MAX_LENGTH,
+  CLIENT_REQUEST_PASS_NOTE_MAX_LENGTH,
   CLIENT_REQUEST_QUOTE_MAX_MINOR,
   CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH,
   CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH,
 } from "../constants/client-request.constants";
-import { QUOTE_TYPES, RELEASE_REASONS } from "../types/client-handoff";
+import { PASS_REASONS, QUOTE_TYPES, RELEASE_REASONS } from "../types/client-handoff";
 
 export const createClientRequestSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
@@ -37,6 +38,14 @@ export const listLawyerClientRequestsSchema = Joi.object({
   view: Joi.string().valid("inbox", "mine", "history").default("inbox"),
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
+});
+
+/** POST /client-requests/:id/pass: why the lawyer is passing. Both optional; the body may be absent. */
+export const passClientRequestSchema = Joi.object({
+  reason: Joi.string()
+    .valid(...PASS_REASONS)
+    .optional(),
+  note: Joi.string().trim().allow("").max(CLIENT_REQUEST_PASS_NOTE_MAX_LENGTH).optional(),
 });
 
 /** POST /client-requests/:id/release: why the lawyer is giving it back. */

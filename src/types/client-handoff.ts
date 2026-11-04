@@ -93,6 +93,10 @@ export type QuoteType = (typeof QUOTE_TYPES)[number];
 export const RELEASE_REASONS = ["CONFLICT", "CAPACITY", "OUT_OF_SCOPE", "OTHER"] as const;
 export type ReleaseReason = (typeof RELEASE_REASONS)[number];
 
+/** Why a lawyer passed on a request they never claimed (the Pass dialog). */
+export const PASS_REASONS = ["CONFLICT", "CAPACITY", "OUT_OF_SCOPE", "FEE_MISMATCH", "NOT_ENOUGH_INFO", "OTHER"] as const;
+export type PassReason = (typeof PASS_REASONS)[number];
+
 export const LAWYER_VERIFICATION_STATUSES = ["UNSUBMITTED", "PENDING", "VERIFIED", "REJECTED"] as const;
 export type LawyerVerificationStatus = (typeof LAWYER_VERIFICATION_STATUSES)[number];
 
