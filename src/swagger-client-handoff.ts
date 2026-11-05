@@ -1437,7 +1437,7 @@ export const clientHandoffPaths: Paths = {
     get: op({
       tag: ADMIN_TAG,
       issue: "ilovelawyer-api#506",
-      summary: "Lawyer Applications for one site, with the register check",
+      summary: "Lawyer Applications for one site, with the register check, newest submission first",
       parameters: [
         { name: "site", in: "query", schema: { ...enumOf(LAWYER_COUNTRIES), default: "UK" } },
         { name: "status", in: "query", schema: { ...enumOf(LAWYER_VERIFICATION_STATUSES), default: "PENDING" } },

@@ -160,7 +160,7 @@ export default class AdminCtrl {
   }
 
   /** GET /api/admin/lawyer-verifications — the Lawyer Application queue for one site (default UK)
-   * and status (default PENDING), oldest submission first. */
+   * and status (default PENDING), newest submission first. */
   static async listLawyerVerifications(req: Request, res: Response) {
     const { error, value } = listLawyerVerificationsSchema.validate(req.query, { convert: true });
     if (error) throw new HttpError(error.message, 400);
