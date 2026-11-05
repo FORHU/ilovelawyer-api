@@ -19,6 +19,11 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
 const loggedTokens = new Map<string, number>();
 const LOGGED_TOKENS_MAX = 10_000;
 
+/** How long the presigned GET behind a /files link lives. Only the apps' file routes fetch it,
+ * server to server, straight away — but S3 checks it against AWS's clock, not ours, so a minute
+ * left every file 404ing on a machine whose clock ran a minute and a half slow. */
+const RESOLVED_GET_SECONDS = 300;
+
 function firstResolveOf(token: string, expiresAtMs: number, now = Date.now()): boolean {
   const key = crypto.createHash("sha256").update(token).digest("base64url");
   if (loggedTokens.has(key)) return false;
@@ -53,7 +58,7 @@ export default class FilesSvc {
     return files;
   }
 
-  /** Verifies a getProxyFileUrl token and mints the real (60s) presigned GET behind it. Any
+  /** Verifies a getProxyFileUrl token and mints the real (short-lived) presigned GET behind it. Any
    * failure — bad signature, expired, wrong shape — reports as a generic 404: never echo the
    * jwt error message, which can hint that the token is a JWT at all. */
   static async resolve(token: string): Promise<string> {
@@ -83,6 +88,6 @@ export default class FilesSvc {
 
     // The token carries no user, only the org it was minted for, so the event has no actor.
     await AuditSvc.record({ action: AuditAction.FileDownloaded, payload: { s3Key: payload.s3Key, orgId: payload.orgId } });
-    return getPresignedGetUrl(payload.s3Key, 60, payload.filename, payload.disposition);
+    return getPresignedGetUrl(payload.s3Key, RESOLVED_GET_SECONDS, payload.filename, payload.disposition);
   }
 }

@@ -52,7 +52,7 @@ describe("getProxyFileUrl / FilesSvc.resolve", () => {
     expect(presignCalls).to.have.length(0);
   }
 
-  it("round-trips: resolve() mints a fresh 60s presigned GET for the key/filename/disposition getProxyFileUrl signed", async () => {
+  it("round-trips: resolve() mints a fresh 5-minute presigned GET for the key/filename/disposition getProxyFileUrl signed", async () => {
     const url = getProxyFileUrl("generated-documents/abc.pdf", { filename: "Affidavit.pdf", disposition: "attachment" });
     expect(url).to.match(/^\/files\/.+/);
 
@@ -60,7 +60,7 @@ describe("getProxyFileUrl / FilesSvc.resolve", () => {
 
     expect(resolved).to.equal("https://s3.example/presigned/generated-documents/abc.pdf");
     expect(presignCalls).to.deep.equal([
-      { key: "generated-documents/abc.pdf", expiresIn: 60, filename: "Affidavit.pdf", disposition: "attachment" },
+      { key: "generated-documents/abc.pdf", expiresIn: 300, filename: "Affidavit.pdf", disposition: "attachment" },
     ]);
   });
 
@@ -68,7 +68,7 @@ describe("getProxyFileUrl / FilesSvc.resolve", () => {
     const url = getProxyFileUrl("case-briefs/case-1/123.pdf");
     await FilesSvc.resolve(tokenFromProxyUrl(url));
     expect(presignCalls).to.deep.equal([
-      { key: "case-briefs/case-1/123.pdf", expiresIn: 60, filename: undefined, disposition: "attachment" },
+      { key: "case-briefs/case-1/123.pdf", expiresIn: 300, filename: undefined, disposition: "attachment" },
     ]);
   });
 
