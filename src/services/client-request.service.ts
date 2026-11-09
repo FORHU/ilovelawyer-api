@@ -34,6 +34,7 @@ import {
   CLIENT_REQUEST_DIRECT_CONSENT_VERSION,
   CLIENT_REQUEST_DIRECT_WINDOW_MS,
   CLIENT_REQUEST_MAX_LAWYERS,
+  CLIENT_REQUEST_HIRE_NOTICE,
   CLIENT_REQUEST_REFERRAL_DISCLOSURE,
 } from "../constants/client-request.constants";
 
@@ -180,6 +181,7 @@ function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = n
     // A quote accepted before quotation payments has no accepted amount: it's paid outside ilovelawyer.
     awaitingPayment: r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED" && one.quotation.acceptedAmountMinor !== null,
     referralDisclosure: lawyers.some((l) => l.quote) ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
+    sharingNotice: lawyers.some((l) => l.quote) ? CLIENT_REQUEST_HIRE_NOTICE : null,
     engagedAt: r.engagedAt,
     closedAt: r.closedAt,
     closedBy: r.closedBy,

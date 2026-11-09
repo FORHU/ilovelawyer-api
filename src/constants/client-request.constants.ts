@@ -15,11 +15,19 @@ export const CLIENT_REQUEST_PICK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const CLIENT_REQUEST_CONSENT_VERSION = "2026-11-10-draft";
 
+// What hiring a lawyer hands over, in the consent text and again on the quote and payment screens
+// (CLIENT_REQUEST_HIRE_NOTICE, #922), so the two can't drift apart.
+const WHAT_HIRING_SHARES = "Once paid, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.";
+const LAWYER_KEEPS_COPY = "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.";
+
+/** Shown with every quote and on the payment screen, where the lawyer is actually given the case. */
+export const CLIENT_REQUEST_HIRE_NOTICE = `${WHAT_HIRING_SHARES} ${LAWYER_KEEPS_COPY}`;
+
 export const CLIENT_REQUEST_CONSENT_TEXT = [
   "We'll share an anonymised summary of your case with verified UK lawyers who may take it on. It leaves out names and documents.",
   `Up to ${CLIENT_REQUEST_MAX_LAWYERS} lawyers can take up your request. Each will also see the names of the people and organisations in your case, only to check they have no conflict of interest, and can send you a quote.`,
-  "If you hire one of them, you pay their quote and ilovelawyer's platform fee through ilovelawyer. Once paid, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
-  "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.",
+  `If you hire one of them, you pay their quote and ilovelawyer's platform fee through ilovelawyer. ${WHAT_HIRING_SHARES}`,
+  LAWYER_KEEPS_COPY,
 ].join("\n\n");
 
 /** A request to one lawyer by name (the marketplace's Request): how long only they are offered it
@@ -36,8 +44,8 @@ export const CLIENT_REQUEST_DIRECT_CONSENT_VERSION = "2026-11-04-direct-draft-3"
 export const CLIENT_REQUEST_DIRECT_CONSENT_TEXT = [
   "We'll share an anonymised summary of your case with the lawyer you chose, and only them at first. It leaves out names and documents.",
   `If they take it up, they'll also see the names of the people and organisations in your case, only to check for conflicts, and can send you a quote. If not within 24 hours, up to ${CLIENT_REQUEST_MAX_LAWYERS} other matching lawyers can.`,
-  "If you hire a lawyer, you pay their quote and ilovelawyer's platform fee through ilovelawyer. Once paid, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.",
-  "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.",
+  `If you hire a lawyer, you pay their quote and ilovelawyer's platform fee through ilovelawyer. ${WHAT_HIRING_SHARES}`,
+  LAWYER_KEEPS_COPY,
 ].join("\n\n");
 
 /** How the platform is paid, shown on every quote and acknowledged to accept one. DRAFT wording,

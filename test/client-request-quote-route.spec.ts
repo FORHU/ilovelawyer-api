@@ -15,7 +15,7 @@ import SecurityAuditRepo from "../src/repositories/security-audit.repository";
 import ClaimRepo, { CLAIM_HOLD_MS } from "../src/repositories/client-request-claim.repository";
 import QuotationRepo from "../src/repositories/quotation.repository";
 import RequestRepo from "../src/repositories/client-request.repository";
-import { CLIENT_REQUEST_REFERRAL_DISCLOSURE } from "../src/constants/client-request.constants";
+import { CLIENT_REQUEST_CONSENT_TEXT, CLIENT_REQUEST_HIRE_NOTICE, CLIENT_REQUEST_REFERRAL_DISCLOSURE } from "../src/constants/client-request.constants";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -207,7 +207,7 @@ describe("client request conflict check, release and quote", () => {
       await quote(FIXED_FEE).expect(200);
       await release({ reason: "OUT_OF_SCOPE" }).expect(200);
       const { body } = await clientView().expect(200);
-      expect(body).to.deep.include({ status: "ROUTED", lawyer: null, quote: null, referralDisclosure: null });
+      expect(body).to.deep.include({ status: "ROUTED", lawyer: null, quote: null, referralDisclosure: null, sharingNotice: null });
     });
 
     it("needs a known reason", async () => {
@@ -282,7 +282,7 @@ describe("client request conflict check, release and quote", () => {
     });
 
     it("lets the client read the quote, the lawyer's public profile and the referral disclosure", async () => {
-      expect((await clientView().expect(200)).body).to.deep.include({ lawyer: null, quote: null, referralDisclosure: null });
+      expect((await clientView().expect(200)).body).to.deep.include({ lawyer: null, quote: null, referralDisclosure: null, sharingNotice: null });
       await claim().expect(200);
       // Claimed but not quoted: the client still sees nobody.
       expect((await clientView().expect(200)).body).to.deep.include({ status: "CLAIMED", lawyer: null, quote: null });
@@ -292,6 +292,9 @@ describe("client request conflict check, release and quote", () => {
       expect(body.status).to.equal("QUOTED");
       expect(body.quote).to.deep.include({ type: "FIRST_CONSULTATION", amount: { amountMinor: 0, currency: "GBP" }, message: "Free first call this week." });
       expect(body.referralDisclosure).to.equal(CLIENT_REQUEST_REFERRAL_DISCLOSURE);
+      expect(body.sharingNotice).to.equal(CLIENT_REQUEST_HIRE_NOTICE);
+      // Said in the same words as what the client agreed to when asking.
+      expect(CLIENT_REQUEST_CONSENT_TEXT).to.include(CLIENT_REQUEST_HIRE_NOTICE.split(". ")[0]).and.to.include(CLIENT_REQUEST_HIRE_NOTICE.split(". ").at(-1));
       expect(body.lawyer).to.deep.equal({
         id: lawyerId,
         name: "Lena Lawyer",
