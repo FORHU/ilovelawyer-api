@@ -98,12 +98,13 @@ export default class QuotationPaymentRepo {
    * Money was taken: the payment SUCCEEDED (even one we'd marked FAILED or CANCELED: the money is
    * real), and, while the request is still CONFIRMED on this quotation, the request is ENGAGED, the
    * quotation PAID, the claim ENGAGED and the lawyer's earning (the service fee) goes into `walletId`
-   * PENDING until `availableAt`. `orphaned`: the money came in after the request had moved on (it
-   * expired a moment before), so the caller refunds it. Once: settled is false when it already had.
+   * PENDING, with no availableAt: its hold starts when the engagement closes (ClientRequestRepo.close).
+   * `orphaned`: the money came in after the request had moved on (it expired a moment before), so the
+   * caller refunds it. Once: settled is false when it already had.
    */
   static async settle(
     paymentId: string,
-    earning: { walletId: string; lawyerId: string; availableAt: Date },
+    earning: { walletId: string; lawyerId: string },
     paymentIntentId: string | null,
     now: Date = new Date(),
   ): Promise<{ settled: false } | { settled: true; engaged: boolean; orphaned: boolean; earning: Earning | null; payment: QuotationPayment }> {
@@ -142,7 +143,7 @@ export default class QuotationPaymentRepo {
           platformFeeMinor: payment.platformFeeMinor,
           netMinor: payment.serviceFeeMinor,
           currency: payment.currency,
-          availableAt: earning.availableAt,
+          availableAt: null,
         });
         return { settled: true as const, engaged: true, orphaned: false, earning: created, payment: settledPayment };
       });
@@ -184,6 +185,17 @@ export default class QuotationPaymentRepo {
       if (err instanceof MovedOn) return null;
       throw err;
     }
+  }
+
+  /** The payments that took money on these quotations, each with every refund (newest first): what
+   * the client app shows of a request's payment and its refunds. */
+  static async findPaidWithRefunds(quotationIds: string[]) {
+    if (!quotationIds.length) return [];
+    return prisma.quotationPayment.findMany({
+      where: { quotationId: { in: quotationIds }, status: { in: PAID_QUOTATION_PAYMENT_STATUSES } },
+      include: { refunds: { orderBy: { createdAt: "desc" } } },
+      orderBy: { attempt: "desc" },
+    });
   }
 
   /** What's been given back or is on its way, split into the lawyer's and the platform's parts. */

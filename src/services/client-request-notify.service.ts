@@ -9,6 +9,7 @@ import { renderTemplate } from "../utils/template";
 import { emailLinkOriginForAccount } from "../utils/tenant-host";
 import { OPS_ALERT_EMAILS } from "../config";
 import logger from "../utils/logger";
+import prisma from "../lib/prisma";
 import CaseAreaSvc from "./case-area.service";
 import type { ClientRequestClaimExpiringEvent, ClientRequestNewEvent, ClientRequestTakenEvent, ClientRequestUpdatedEvent, RequestUrgency, UkJurisdiction } from "../types/client-handoff";
 
@@ -210,6 +211,50 @@ export default class ClientRequestNotifySvc {
       }
     }
     return reminded;
+  }
+
+  /**
+   * Tells the client their lawyer closed the engagement (#972), in the bell and by email: that the
+   * work is finished, or (`exit`) that the lawyer can't continue, and what happens to their money.
+   * Never why the lawyer left: that stays with ilovelawyer. Best effort: a failure is logged.
+   */
+  static async tellClientClosed(input: {
+    requestId: string;
+    caseId: string;
+    clientId: string;
+    lawyerName: string;
+    exit: { status: "REFUNDING" | "AWAITING_REVIEW" | "WAITING_ON_DISPUTE" | "NEEDS_ATTENTION" | "SETTLED"; paid: boolean } | null;
+  }) {
+    const lawyer = input.lawyerName || "Your lawyer";
+    const heading = input.exit ? `${lawyer} can't continue with your case` : `${lawyer} has closed your engagement`;
+    const message = input.exit
+      ? `${lawyer} has stopped acting on your case, and no longer has access to it.`
+      : `${lawyer} has finished the work and closed the engagement. They no longer have access to your case.`;
+    const refund = !input.exit?.paid
+      ? null
+      : input.exit.status === "WAITING_ON_DISPUTE"
+        ? "Your bank is looking at a dispute on this payment, so it decides what you get back."
+        : "We're reviewing your refund, to decide how much of your payment comes back to you. We'll let you know.";
+    const next = input.exit ? "You can ask for another lawyer from your case whenever you're ready." : "You can rate your lawyer from your case.";
+    const caseLink = clientCaseLink(input.caseId);
+
+    await NotificationSvc.create({
+      userId: input.clientId,
+      type: "CLIENT_REQUEST",
+      title: heading,
+      message: [message, refund].filter(Boolean).join(" "),
+      link: `/cases/${input.caseId}`,
+    }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: input.requestId }));
+
+    try {
+      const client = await prisma.user.findUnique({ where: { id: input.clientId }, select: { email: true } });
+      if (!client?.email) return;
+      const html = await renderTemplate("client-request-closed-client", { heading, message, refund, next, caseLink });
+      const text = [message, refund, next, caseLink].filter(Boolean).join("\n\n");
+      await sendEmail({ to: client.email, subject: heading, text, html });
+    } catch (err) {
+      logger.error("Client request: close email failed", { err, requestId: input.requestId });
+    }
   }
 
   /** `unpicked`: lawyers quoted, but the client didn't pick one in time (several lawyers, phase 5). */

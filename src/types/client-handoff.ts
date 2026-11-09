@@ -93,6 +93,22 @@ export type QuoteType = (typeof QUOTE_TYPES)[number];
 export const RELEASE_REASONS = ["CONFLICT", "CAPACITY", "OUT_OF_SCOPE", "OTHER"] as const;
 export type ReleaseReason = (typeof RELEASE_REASONS)[number];
 
+/** How the lawyer closes an engagement. WORK_FINISHED: the client is asked to confirm the work is
+ * finished (EngagementCompletion); it closes when they do, or by itself after
+ * ENGAGEMENT_COMPLETION_CONFIRM_DAYS. Nothing is refunded, and the earning's hold starts at the close.
+ * CANT_CONTINUE: a Lawyer Exit, which closes it at once, with a reason (RELEASE_REASONS) and whether
+ * any work was done; an admin decides the client's refund from the reason and any work claimed. */
+export const CLOSE_OUTCOMES = ["WORK_FINISHED", "CANT_CONTINUE"] as const;
+export type CloseOutcome = (typeof CLOSE_OUTCOMES)[number];
+
+/** Where a Lawyer Exit stands. AWAITING_REVIEW: an admin decides the refund (every paid exit starts
+ * here; nothing is refunded automatically). REFUNDING: the refund they decided is on its way to the
+ * payment provider. WAITING_ON_DISPUTE: the client's bank is
+ * disputing the payment and decides first. NEEDS_ATTENTION: a refund failed and an admin has to act.
+ * SETTLED: done; the lawyer's earning (what's left of it) starts its hold. */
+export const LAWYER_EXIT_STATUSES = ["REFUNDING", "AWAITING_REVIEW", "WAITING_ON_DISPUTE", "NEEDS_ATTENTION", "SETTLED"] as const;
+export type LawyerExitStatus = (typeof LAWYER_EXIT_STATUSES)[number];
+
 /** Why a lawyer passed on a request they never claimed (the Pass dialog). */
 export const PASS_REASONS = ["CONFLICT", "CAPACITY", "OUT_OF_SCOPE", "FEE_MISMATCH", "NOT_ENOUGH_INFO", "OTHER"] as const;
 export type PassReason = (typeof PASS_REASONS)[number];
@@ -118,7 +134,9 @@ export type QuotationStatus = (typeof QUOTATION_STATUSES)[number];
 export const QUOTATION_PAYMENT_STATUSES = ["PENDING", "SUCCEEDED", "FAILED", "CANCELED", "REFUNDED", "PARTIALLY_REFUNDED", "DISPUTED"] as const;
 export type QuotationPaymentStatus = (typeof QUOTATION_PAYMENT_STATUSES)[number];
 
-/** The lawyer's share of a payment: PENDING through the hold, then AVAILABLE to withdraw. */
+/** The lawyer's share of a payment: PENDING through the hold, then AVAILABLE to withdraw. The hold
+ * starts when the engagement closes: until then (and while a Lawyer Exit on it is unsettled) its
+ * `availableAt` is null. */
 export const EARNING_STATUSES = ["PENDING", "AVAILABLE", "REVERSED"] as const;
 export type EarningStatus = (typeof EARNING_STATUSES)[number];
 
@@ -186,6 +204,43 @@ export interface QuotationInvoice {
   payment: { provider: string; reference: string };
 }
 
+/** A Lawyer Exit as the lawyer who made it reads it (engagement.exit on their request): what they
+ * said and where the refund stands. `refunded` is what the client has been given back for it. */
+export interface LawyerExitForLawyer {
+  status: LawyerExitStatus;
+  reason: ReleaseReason;
+  workDone: boolean;
+  claimed: Money | null;
+  refunded: Money;
+  createdAt: string;
+  settledAt: string | null;
+}
+
+/** The client's payment for the lawyer they hired, and the refunds on it (refund on their request).
+ * `lawyerExit` is set when the lawyer stopped acting: where the refund stands, never why they left. */
+export interface ClientRefundSummary {
+  paid: Money;
+  refunded: Money;
+  /** Refunds sent to the bank and not back yet. */
+  pending: Money;
+  refunds: { id: string; amount: Money; status: "PENDING" | "SUCCEEDED" | "FAILED"; createdAt: string }[];
+  lawyerExit: { status: LawyerExitStatus; createdAt: string; settledAt: string | null } | null;
+}
+
+/** The lawyer's "the work is finished", which the client confirms (engagement.completion for the
+ * lawyer, completion for the client). While it waits on the client, `requestedAt` is set, with the
+ * lawyer's `note`, and it closes by itself at `autoClosesAt`. `declinedAt`/`declineReason`: the
+ * client's last "it isn't finished yet", until the lawyer asks again. `confirmedBy`: how it closed, once
+ * it has. Null when the lawyer has never asked. */
+export interface EngagementCompletion {
+  requestedAt: string | null;
+  note: string | null;
+  autoClosesAt: string | null;
+  declinedAt: string | null;
+  declineReason: string | null;
+  confirmedBy: "CLIENT" | "AUTO" | null;
+}
+
 /** Amounts in the currency's minor unit (pence). Prices are placeholders until
  * FORHU/ilovelawyer-app#846 and are read from config, never hard-coded in an app. */
 export interface Money {
@@ -202,6 +257,7 @@ export const CLIENT_HANDOFF_ERROR_CODES = {
   CONSENT_REQUIRED: "CONSENT_REQUIRED", // 400
   CONSENT_VERSION_STALE: "CONSENT_VERSION_STALE", // 409: the consent text changed; show the new one
   DISCLOSURE_NOT_ACKNOWLEDGED: "DISCLOSURE_NOT_ACKNOWLEDGED", // 400: confirm without the referral-fee disclosure
+  LAWYER_LEFT_CASE: "LAWYER_LEFT_CASE", // 422: the lawyer asked for by name stopped acting on this case (a Lawyer Exit)
   // Lawyer app
   NOT_UK_TENANT: "NOT_UK_TENANT", // 403
   PROFILE_INCOMPLETE: "PROFILE_INCOMPLETE", // 422: details.missing lists the fields
@@ -215,8 +271,13 @@ export const CLIENT_HANDOFF_ERROR_CODES = {
   REASSIGN_TARGET_NOT_ELIGIBLE: "REASSIGN_TARGET_NOT_ELIGIBLE", // 400
   // Both
   INVALID_REQUEST_STATUS: "INVALID_REQUEST_STATUS", // 409: details.status is the current status
+  CLOSE_OUTCOME_REQUIRED: "CLOSE_OUTCOME_REQUIRED", // 400: a paid engagement closes with an outcome (CLOSE_OUTCOMES)
+  CLAIM_EXCEEDS_FEE: "CLAIM_EXCEEDS_FEE", // 400: a Lawyer Exit can claim at most the lawyer's share (details.maximum)
+  COMPLETION_PENDING: "COMPLETION_PENDING", // 409: the lawyer already said the work is finished; it waits on the client
+  COMPLETION_NOT_REQUESTED: "COMPLETION_NOT_REQUESTED", // 409: there's no "the work is finished" to confirm or decline
   // Admin
   REFUND_EXCEEDS_CHARGE: "REFUND_EXCEEDS_CHARGE", // 400
+  LAWYER_EXIT_NOT_OPEN: "LAWYER_EXIT_NOT_OPEN", // 409: the Lawyer Exit isn't waiting on an admin (details.status)
   // Quotation payments and the lawyer's wallet
   QUOTATION_EXPIRED: "QUOTATION_EXPIRED", // 409: the lawyer's expiry has passed
   QUOTATION_EXPIRY_INVALID: "QUOTATION_EXPIRY_INVALID", // 400: the expiry isn't in the future, or is more than the maximum away

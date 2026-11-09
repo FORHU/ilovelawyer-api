@@ -1,4 +1,4 @@
-import type { ClientRequestStatus, PassReason, Quotation, QuoteType, ReleaseReason } from "@prisma/client";
+import type { ClientRequestStatus, LawyerExit, PassReason, Quotation, QuoteType, ReleaseReason } from "@prisma/client";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientRequestClaimRepo from "../repositories/client-request-claim.repository";
 import LawyerProfileRepo, { type LawyerProfileRow } from "../repositories/lawyer-profile.repository";
@@ -13,6 +13,11 @@ import OrganizationChargeRepo from "../repositories/organization-charge.reposito
 import QuotationRepo, { type QuotationDraft, type QuotationRefusal } from "../repositories/quotation.repository";
 import QuotationPaymentRepo from "../repositories/quotation-payment.repository";
 import PayoutSettingsSvc from "./payout-settings.service";
+import LawyerExitSvc, { initialLawyerExitStatus } from "./lawyer-exit.service";
+import EngagementCompletionSvc, { completionDto } from "./engagement-completion.service";
+import LawyerExitRepo from "../repositories/lawyer-exit.repository";
+import WalletSvc from "./wallet.service";
+import WalletRepo from "../repositories/wallet.repository";
 import { quotationDto } from "./quotation.dto";
 import { QUOTATION_DEFAULT_VALIDITY_DAYS, QUOTATION_MAX_VALIDITY_DAYS } from "../constants/payout.constants";
 import CaseCopyRepo from "../repositories/case-copy.repository";
@@ -24,7 +29,7 @@ import AccountLimitsSvc from "./account-limits.service";
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
-import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent, QuotationInvoice, QuoteTerms } from "../types/client-handoff";
+import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent, CloseOutcome, LawyerExitForLawyer, QuotationInvoice, QuoteTerms } from "../types/client-handoff";
 import { CLIENT_REQUEST_MAX_LAWYERS } from "../constants/client-request.constants";
 import ChatRepo from "../repositories/chat.repository";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
@@ -108,7 +113,37 @@ function statusFor(r: LawyerRequest, mine: LawyerRequest["claims"][number] | und
  * until then it's always empty. The per-case fee's charge shows only to the lawyer it's for, and only
  * on a request accepted before quotation payments. `quoteTerms` is how the platform fee on a quote is
  * worked out now (QuoteTerms), for the app's preview. */
-function toDto(r: LawyerRequest, lawyerId: string, terms: LawyerTerms, brief: unknown = r.brief) {
+/** What the engagement's money looks like to the lawyer: whether the client paid through ilovelawyer
+ * (so closing needs an outcome), and their Lawyer Exit, if they made one. */
+interface EngagementMoney {
+  paid: boolean;
+  exit: LawyerExitForLawyer | null;
+}
+
+function exitForLawyer(e: LawyerExit): LawyerExitForLawyer {
+  const money = (amountMinor: number) => ({ amountMinor, currency: e.currency as "GBP" });
+  return {
+    status: e.status,
+    reason: e.reason,
+    workDone: e.workDone,
+    claimed: e.claimedMinor === null ? null : money(e.claimedMinor),
+    refunded: money(e.refundedMinor),
+    createdAt: e.createdAt.toISOString(),
+    settledAt: e.settledAt?.toISOString() ?? null,
+  };
+}
+
+/** EngagementMoney for the lawyer's engaged claim, or null when they aren't the one engaged. */
+async function engagementMoneyOf(r: LawyerRequest, lawyerId: string): Promise<EngagementMoney | null> {
+  const mine = r.claims.find((c) => c.lawyerId === lawyerId && c.outcome === "ENGAGED");
+  if (!mine) return null;
+  const [payment, exit] = await Promise.all([mine.quotation ? QuotationPaymentRepo.findPaid(mine.quotation.id) : null, LawyerExitRepo.findByRequest(r.id)]);
+  return { paid: !!payment, exit: exit && exit.lawyerId === lawyerId ? exitForLawyer(exit) : null };
+}
+
+/** `money` (the engagement's payment and Lawyer Exit) is filled in on one request (GET, close), not
+ * on lists. */
+function toDto(r: LawyerRequest, lawyerId: string, terms: LawyerTerms, brief: unknown = r.brief, money: EngagementMoney | null = null) {
   const mine = r.claims.find((c) => c.lawyerId === lawyerId);
   return {
     id: r.id,
@@ -151,6 +186,9 @@ function toDto(r: LawyerRequest, lawyerId: string, terms: LawyerTerms, brief: un
             closedAt: r.closedAt,
             closedBy: r.closedBy,
             copyCaseId: r.copyCaseId,
+            // The lawyer's "the work is finished", waiting on the client or answered.
+            completion: completionDto(r),
+            ...(money ? { paid: money.paid, exit: money.exit } : {}),
           }
         : null,
   };
@@ -229,7 +267,7 @@ export default class ClientRequestLawyerSvc {
       request.status === "ROUTED" && !!request.routingExpiresAt && request.routingExpiresAt > new Date() && openClaims(request).length < maxLawyersOf(request);
     if (!held && !(open && ClientRequestLawyerSvc.isFor(request, lawyer.userId, profile))) throw NOT_FOUND();
     // Rewritten first if the case changed and nobody has claimed it yet (#508).
-    return toDto(request, lawyer.userId, await feeOf(lawyer), await ClientRequestBriefSvc.current(id));
+    return toDto(request, lawyer.userId, await feeOf(lawyer), await ClientRequestBriefSvc.current(id), await engagementMoneyOf(request, lawyer.userId));
   }
 
   /**
@@ -630,20 +668,70 @@ export default class ClientRequestLawyerSvc {
   }
 
   /**
-   * The lawyer closes the engagement (#519): ENGAGED -> CLOSED, once, and their read-only access
-   * on the client's case ends immediately. Their workspace copy, if they made one, stays theirs.
+   * The lawyer closes the engagement (#519). Their workspace copy, if they made one, stays theirs.
    * The client can also end it from their side (ClientRequestSvc.end).
+   *
+   * A paid engagement closes with an outcome (400 CLOSE_OUTCOME_REQUIRED without); one with nothing
+   * paid through ilovelawyer is WORK_FINISHED without one. WORK_FINISHED doesn't close it yet: the
+   * client is asked to confirm the work is finished, with `note` as the lawyer's note to them
+   * (EngagementCompletionSvc), and it stays ENGAGED, the lawyer keeping their access, until they do or
+   * ENGAGEMENT_COMPLETION_CONFIRM_DAYS pass (409 COMPLETION_PENDING when already asked). CANT_CONTINUE
+   * is a Lawyer Exit (#972), which closes it at once (ENGAGED -> CLOSED, access removed). Nothing is
+   * refunded automatically: an admin decides the refund from the reason and any work claimed (at most
+   * the lawyer's share: 400 CLAIM_EXCEEDS_FEE). The Lawyer Exit's notes may name the other party, so they stay on the exit
+   * only: never in the case's activity feed or the audit log. The client is told by bell and email.
    */
-  static async close(lawyer: LawyerContext, id: string, input: { note?: string }) {
+  static async close(
+    lawyer: LawyerContext,
+    id: string,
+    input: { outcome?: CloseOutcome; note?: string; reason?: ReleaseReason; workDone?: boolean; claimed?: { amountMinor: number; currency: string }; claimNote?: string },
+  ) {
     const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "This request isn't engaged.");
+    const claim = request.claims.find((c) => c.lawyerId === lawyer.userId && c.outcome === "ENGAGED")!;
+    const payment = claim.quotation ? await QuotationPaymentRepo.findPaid(claim.quotation.id) : null;
+    if (payment && !input.outcome) {
+      throw new HttpError("Choose whether the work is finished or you can't continue.", 400, "CLOSE_OUTCOME_REQUIRED");
+    }
+    const outcome: CloseOutcome = input.outcome ?? "WORK_FINISHED";
+    const note = input.note?.trim() || null;
     const now = new Date();
-    if (!(await ClientRequestRepo.close(id, "LAWYER", now))) {
+
+    if (outcome === "WORK_FINISHED") {
+      await EngagementCompletionSvc.request({ requestId: id, caseId: request.caseId, clientId: request.clientId, lawyerId: lawyer.userId, lawyerName: claim.lawyer.name ?? "", note }, now);
+      const after = (await ClientRequestRepo.findForLawyer(id))!;
+      return toDto(after, lawyer.userId, await feeOf(lawyer), after.brief, await engagementMoneyOf(after, lawyer.userId));
+    }
+
+    // Work claimed only means something on money paid through ilovelawyer.
+    const workDone = !!input.workDone && !!payment;
+    if (workDone && payment && input.claimed!.amountMinor > payment.serviceFeeMinor) {
+      throw new HttpError(`You can claim at most your share of the fee, £${(payment.serviceFeeMinor / 100).toFixed(2)}.`, 400, "CLAIM_EXCEEDS_FEE", {
+        maximum: { amountMinor: payment.serviceFeeMinor, currency: payment.currency },
+      });
+    }
+    const exit = {
+      caseId: request.caseId,
+      clientId: request.clientId,
+      lawyerId: lawyer.userId,
+      organizationId: claim.organizationId,
+      paymentId: payment?.id ?? null,
+      reason: input.reason!,
+      note,
+      workDone,
+      claimedMinor: workDone ? input.claimed!.amountMinor : null,
+      claimNote: workDone ? input.claimNote!.trim() : null,
+      currency: payment?.currency ?? "GBP",
+      status: initialLawyerExitStatus(payment),
+    };
+    const closed = await ClientRequestRepo.close(id, "LAWYER", now, { exit });
+    if (!closed.closed) {
       const current = await ClientRequestRepo.findForLawyer(id);
       throw new HttpError("This request isn't engaged.", 409, "INVALID_REQUEST_STATUS", { status: current?.status ?? request.status });
     }
 
     await EngagementAccessSvc.revoke({ requestId: id, caseId: request.caseId, lawyerId: lawyer.userId });
-    const payload = { requestId: id, closedBy: "LAWYER", note: input.note?.trim() || null };
+    // A Lawyer Exit's reason is a category; its note stays on the exit.
+    const payload = { requestId: id, closedBy: "LAWYER", outcome, reason: closed.exit!.reason, workDone: closed.exit!.workDone };
     await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.closed", payload });
     await SecurityAuditSvc.record({
       action: "client_request.closed",
@@ -656,9 +744,20 @@ export default class ClientRequestLawyerSvc {
     });
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CLOSED", updatedAt: now.toISOString() };
     emitToUser(request.clientId, "client-request:updated", updated);
+    await ClientRequestNotifySvc.tellClientClosed({
+      requestId: id,
+      caseId: request.caseId,
+      clientId: request.clientId,
+      lawyerName: claim.lawyer.name ?? "",
+      exit: { status: closed.exit!.status, paid: !!payment },
+    });
+    await LawyerExitSvc.start(closed.exit!);
+    for (const walletId of await WalletRepo.walletsForRequest(id)) await WalletSvc.changedById(walletId);
 
-    return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
+    const after = (await ClientRequestRepo.findForLawyer(id))!;
+    return toDto(after, lawyer.userId, await feeOf(lawyer), after.brief, await engagementMoneyOf(after, lawyer.userId));
   }
+
 
   /** `id` is ENGAGED and `lawyer` is the one it's engaged on — what both copy() and close() need
    * before touching the live case. 404 when they've never held it; 409 `message` otherwise. */

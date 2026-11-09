@@ -1,0 +1,6 @@
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">{{heading}}</mj-text>
+<mj-text>Hello,</mj-text>
+<mj-text>{{message}}</mj-text>
+{{#if refund}}<mj-text>{{refund}}</mj-text>{{/if}}
+<mj-text>{{next}}</mj-text>
+<mj-button href="{{caseLink}}">Go to your case</mj-button>
