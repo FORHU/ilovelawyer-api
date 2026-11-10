@@ -161,9 +161,26 @@ export default class WalletRepo {
     return out;
   }
 
-  /** Earnings whose hold is over, not under dispute, still PENDING. */
+  /** Earnings whose hold is over, not under dispute, still PENDING. One whose hold hasn't started
+   * (availableAt null: the engagement is open, or a Lawyer Exit on it isn't settled) never is. */
   static async findReleasable(now: Date, take = 200) {
-    return prisma.earning.findMany({ where: { status: "PENDING", disputed: false, availableAt: { lte: now } }, orderBy: { availableAt: "asc" }, take });
+    return prisma.earning.findMany({ where: { status: "PENDING", disputed: false, availableAt: { not: null, lte: now } }, orderBy: { availableAt: "asc" }, take });
+  }
+
+  /** The wallets a request's earnings are in: who to tell when something changes them. */
+  static async walletsForRequest(requestId: string): Promise<string[]> {
+    const rows = await prisma.earning.findMany({ where: { requestId }, select: { walletId: true } });
+    return [...new Set(rows.map((r) => r.walletId))];
+  }
+
+  /** Starts the hold on a request's earnings still waiting for it (PENDING, no availableAt): they're
+   * released at `availableAt`. Earnings that already have a date keep it. Returns the wallets that
+   * changed. */
+  static async startHold(requestId: string, availableAt: Date): Promise<string[]> {
+    const waiting = await prisma.earning.findMany({ where: { requestId, status: "PENDING", availableAt: null }, select: { id: true, walletId: true } });
+    if (!waiting.length) return [];
+    await prisma.earning.updateMany({ where: { id: { in: waiting.map((e) => e.id) }, status: "PENDING", availableAt: null }, data: { availableAt } });
+    return [...new Set(waiting.map((e) => e.walletId))];
   }
 
   /** PENDING -> AVAILABLE for what's left of the earning after any reversal, once. Null when another
@@ -173,7 +190,7 @@ export default class WalletRepo {
       return await prisma.$transaction(async (tx) => {
         await lockWallet(tx, earning.walletId);
         const fresh = await tx.earning.findUnique({ where: { id: earning.id } });
-        if (!fresh || fresh.status !== "PENDING" || fresh.disputed || fresh.availableAt > now) throw new MovedOn();
+        if (!fresh || fresh.status !== "PENDING" || fresh.disputed || !fresh.availableAt || fresh.availableAt > now) throw new MovedOn();
         const { count } = await tx.earning.updateMany({ where: { id: fresh.id, status: "PENDING", reversedMinor: fresh.reversedMinor }, data: { status: "AVAILABLE", releasedAt: now } });
         if (count !== 1) throw new MovedOn();
         const amountMinor = fresh.netMinor - fresh.reversedMinor;

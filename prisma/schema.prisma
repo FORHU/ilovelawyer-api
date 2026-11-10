@@ -1407,6 +1407,16 @@ model ClientRequest {
   // access ends immediately either way; the lawyer's workspace copy, if any, is kept.
   closedAt          DateTime?
   closedBy          ClosedBy?
+  // The lawyer says the work is finished (close with WORK_FINISHED): the engagement stays ENGAGED
+  // until the client confirms, or closes by itself ENGAGEMENT_COMPLETION_CONFIRM_DAYS after it was
+  // asked (EngagementCompletionSvc). `completionNote` is the lawyer's note to the client. A client
+  // who says it isn't finished clears the ask; when and why stay until the lawyer asks again.
+  completionRequestedAt   DateTime?
+  completionNote          String?                @db.Text
+  completionDeclinedAt    DateTime?
+  completionDeclineReason String?                @db.Text
+  // How a finished engagement closed: the client confirmed it, or nobody answered in time.
+  completionConfirmedBy   CompletionConfirmedBy?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -1424,12 +1434,20 @@ model ClientRequest {
   @@index([clientId, createdAt])
   @@index([requestedLawyerId])
   @@index([status])
+  @@index([status, completionRequestedAt])
 }
 
 // Who closed an engagement (ClientRequest.closedBy, #519).
 enum ClosedBy {
   LAWYER
   CLIENT
+}
+
+// Who confirmed the lawyer's "the work is finished" (ClientRequest.completionConfirmedBy): the
+// client, or nobody in time (AUTO, the sweep).
+enum CompletionConfirmedBy {
+  CLIENT
+  AUTO
 }
 
 // Who wrote an engagement message. SYSTEM: written by the platform (none yet).
@@ -1671,9 +1689,11 @@ enum QuotationRefundStatus {
   FAILED
 }
 
-// Money given back on a QuotationPayment by a platform admin. A full refund gives back the platform fee
-// too; a partial one comes out of the lawyer's service fee only (`serviceFeeMinor`), and the platform
-// fee is kept. The lawyer's earning is reversed by `serviceFeeMinor` once the refund succeeds.
+// Money given back on a QuotationPayment, by a platform admin (`createdById`) or by ilovelawyer itself
+// (null: a Lawyer Exit with no work done, or money that came in after the request moved on). A full
+// refund gives back the platform fee too; a partial one comes out of the lawyer's service fee only
+// (`serviceFeeMinor`), and the platform fee is kept. The lawyer's earning is reversed by
+// `serviceFeeMinor` once the refund succeeds.
 model QuotationRefund {
   id               String                @id @default(uuid())
   paymentId        String
@@ -1728,10 +1748,64 @@ enum EarningStatus {
   REVERSED
 }
 
+// Where a Lawyer Exit stands (types/client-handoff.ts LAWYER_EXIT_STATUSES).
+enum LawyerExitStatus {
+  // A refund an admin decided was sent to the payment provider and hasn't come back yet.
+  REFUNDING
+  // An admin decides how much the client gets back (every paid exit starts here).
+  AWAITING_REVIEW
+  // The client's bank is disputing the payment: it decides first.
+  WAITING_ON_DISPUTE
+  // A refund failed: an admin has to act.
+  NEEDS_ATTENTION
+  SETTLED
+}
+
+// A lawyer ending a paid engagement because they can't continue (LawyerExitSvc, FORHU/ilovelawyer-app#972).
+// One per request. Nothing is refunded automatically: an admin decides the refund from the reason and
+// any work claimed (`claimedMinor`, with `claimNote`): everything, the platform fee included, part of
+// the lawyer's share, or nothing. The lawyer's earning isn't released until it's SETTLED. `note` and `claimNote` may
+// name the other party (a conflict), so they're kept here only: never in the case's activity feed or
+// the audit log. `paymentId` is null when nothing was paid through ilovelawyer (a free first
+// consultation, or a request accepted before quotation payments). `refundedMinor` is what this exit
+// gave back; `refundId` is its refund still on its way (REFUNDING), so the provider's webhook can
+// settle the exit. Plain ids, no foreign keys: like the payment, it outlives a deleted case or account.
+model LawyerExit {
+  id             String           @id @default(uuid())
+  requestId      String           @unique
+  caseId         String
+  clientId       String
+  lawyerId       String
+  organizationId String?
+  paymentId      String?
+  reason         ReleaseReason
+  note           String?          @db.Text
+  workDone       Boolean
+  claimedMinor   Int?
+  claimNote      String?          @db.Text
+  currency       String           @default("GBP")
+  status         LawyerExitStatus
+  refundedMinor  Int              @default(0)
+  refundId       String?
+  failureReason  String?
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionNote   String?          @db.Text
+  settledAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([caseId])
+  @@index([paymentId])
+  @@index([status, createdAt])
+}
+
 // The lawyer's share of one successful QuotationPayment: always the quotation's service fee. PENDING
-// until `availableAt` (the tenant's earningsHoldDays after payment), then AVAILABLE. `disputed` holds
-// it back from release while the client's bank dispute is open. `reversedMinor` is what refunds or a
-// lost dispute took back.
+// until `availableAt`, then AVAILABLE. `availableAt` is null while the engagement is open (the hold
+// starts when it closes: the tenant's earningsHoldDays after the close) and while a Lawyer Exit on it
+// is unsettled; earnings made before that rule keep the date they were given at payment. `disputed`
+// holds it back from release while the client's bank dispute is open. `reversedMinor` is what refunds
+// or a lost dispute took back.
 model Earning {
   id               String        @id @default(uuid())
   paymentId        String        @unique
@@ -1746,7 +1820,7 @@ model Earning {
   currency         String
   status           EarningStatus @default(PENDING)
   disputed         Boolean       @default(false)
-  availableAt      DateTime
+  availableAt      DateTime?
   releasedAt       DateTime?
   createdAt        DateTime      @default(now())
 

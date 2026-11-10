@@ -93,6 +93,12 @@ describe("client confirms and pays, and the engagement", () => {
   const fees = (as = lawyerId) => request(app).get(`/api/organizations/${orgId}/billing/fees`).set(auth(as));
   const copy = (id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/copy`).set({ ...auth(id), "X-Organization-Id": org });
   const close = (body: object = {}, id = lawyerId, org = orgId) => request(app).post(`/api/client-requests/${requestId}/close`).set({ ...auth(id), "X-Organization-Id": org }).send(body);
+  const confirmFinished = () => request(app).post(`/api/client/lawyer-requests/${requestId}/completion/confirm`).set(auth(clientId)).send({});
+  /** The lawyer says the work is finished and the client confirms it: CLOSED. */
+  const closeFinished = async () => {
+    await close({ outcome: "WORK_FINISHED" }).expect(200);
+    return confirmFinished().expect(200);
+  };
   const end = (body: object = {}) => request(app).post(`/api/client/lawyer-requests/${requestId}/end`).set(auth(clientId)).send(body);
   const feedback = (body: object) => request(app).post(`/api/client/lawyer-requests/${requestId}/feedback`).set(auth(clientId)).send(body);
 
@@ -172,6 +178,7 @@ describe("client confirms and pays, and the engagement", () => {
   after(async () => {
     await cleanQuotationMoney({ organizationIds: [orgId, otherOrgId] }, [clientId]);
     await prisma.organizationCharge.deleteMany({ where: { organizationId: { in: [orgId, otherOrgId] } } });
+    await prisma.lawyerExit.deleteMany({ where: { caseId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.auditEvent.deleteMany({ where: { caseId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId, otherLawyerId, clientId] } } });
@@ -190,6 +197,7 @@ describe("client confirms and pays, and the engagement", () => {
     stripeNow = new Map();
     setOrganizationCardProvider(fakeStripe);
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
+    await prisma.lawyerExit.deleteMany({ where: { caseId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.organizationBilling.deleteMany({ where: { organizationId: orgId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId] } } });
@@ -345,15 +353,21 @@ describe("client confirms and pays, and the engagement", () => {
     });
   });
 
-  describe("close", () => {
+  describe("close", function () {
+    this.timeout(20_000);
     const asGuest = (id = lawyerId) => ({ ...auth(id), "X-Organization-Id": clientOrgId });
 
     beforeEach(async () => {
       await engage();
     });
 
-    it("closes the engagement and removes the lawyer's access", async () => {
-      const { body } = await close().expect(200);
+    it("work finished waits on the client, then closes the engagement and removes the lawyer's access", async () => {
+      const asked = (await close({ outcome: "WORK_FINISHED" }).expect(200)).body;
+      expect(asked.status).to.equal("ENGAGED");
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
+
+      await confirmFinished().expect(200);
+      const { body } = await lawyerView().expect(200);
       expect(body.status).to.equal("CLOSED");
       expect(body.engagement).to.include({ closedBy: "LAWYER" });
       expect(body.engagement.closedAt).to.be.a("string");
@@ -362,10 +376,16 @@ describe("client confirms and pays, and the engagement", () => {
       await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(403);
     });
 
+    it("can't continue closes it at once", async () => {
+      const { body } = await close({ outcome: "CANT_CONTINUE", reason: "CAPACITY", workDone: true, claimed: { amountMinor: 100, currency: "GBP" }, claimNote: "A call." }).expect(200);
+      expect(body.status).to.equal("CLOSED");
+      expect(await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } })).to.equal(null);
+    });
+
     it("keeps the lawyer's workspace copy made before close", async () => {
       const { body: copied } = await copy().expect(202);
       await CaseCopyQueue.tick();
-      await close().expect(200);
+      await closeFinished();
 
       const job = await prisma.caseCopy.findUniqueOrThrow({ where: { id: copied.caseCopyId } });
       expect(job.status).to.equal("DONE");
@@ -373,8 +393,8 @@ describe("client confirms and pays, and the engagement", () => {
     });
 
     it("can't be closed twice", async () => {
-      await close().expect(200);
-      expect((await close().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+      await closeFinished();
+      expect((await close({ outcome: "WORK_FINISHED" }).expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
     });
 
     it("refuses a lawyer who isn't the one engaged on the request", async () => {
@@ -407,7 +427,8 @@ describe("client confirms and pays, and the engagement", () => {
     });
   });
 
-  describe("feedback", () => {
+  describe("feedback", function () {
+    this.timeout(20_000);
     beforeEach(async () => {
       await engage();
     });
@@ -417,7 +438,7 @@ describe("client confirms and pays, and the engagement", () => {
     });
 
     it("stores the rating once the engagement is closed, and shows it on the request", async () => {
-      await close().expect(200);
+      await closeFinished();
       const { body } = await feedback({ rating: 4, comment: "Clear and responsive." }).expect(201);
       expect(body).to.deep.include({ rating: 4, comment: "Clear and responsive." });
 
@@ -426,13 +447,13 @@ describe("client confirms and pays, and the engagement", () => {
     });
 
     it("can only be given once", async () => {
-      await close().expect(200);
+      await closeFinished();
       await feedback({ rating: 4 }).expect(201);
       expect((await feedback({ rating: 2 }).expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
     });
 
     it("needs a rating from 1 to 5", async () => {
-      await close().expect(200);
+      await closeFinished();
       await feedback({ rating: 0 }).expect(400);
       await feedback({ rating: 6 }).expect(400);
     });

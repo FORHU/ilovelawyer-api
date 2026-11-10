@@ -99,6 +99,12 @@ router.post("/charges/:chargeId/refund", asyncHandler(ClientRequestAdminCtrl.ref
 // Clients paying lawyers' quotations through ilovelawyer, refunds of them, and the lawyers' wallets.
 router.get("/quotation-payments", asyncHandler(PayoutAdminCtrl.listPayments));
 router.post("/quotation-payments/:id/refund", asyncHandler(PayoutAdminCtrl.refundPayment));
+// Lawyer Exits (#972): lawyers who stopped acting after the client paid, waiting on a refund decision.
+router.get("/lawyer-exits", asyncHandler(PayoutAdminCtrl.listLawyerExits));
+router.get("/lawyer-exits/:id", asyncHandler(PayoutAdminCtrl.getLawyerExit));
+router.post("/lawyer-exits/:id/decide", asyncHandler(PayoutAdminCtrl.decideLawyerExit));
 router.get("/wallets", asyncHandler(PayoutAdminCtrl.listWallets));
+// Lawyers' monthly plan subscriptions: who's on which plan, behind on payment, or cancelling.
+router.get("/lawyer-subscriptions", asyncHandler(PayoutAdminCtrl.listLawyerSubscriptions));
 
 export default router;

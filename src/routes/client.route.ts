@@ -98,6 +98,9 @@ router.post("/lawyer-requests/:id/quotations/:quotationId/payment", asyncHandler
 router.get("/lawyer-requests/:id/payment", asyncHandler(ClientRequestCtrl.payment));
 // The client's side of closing the engagement, and rating the lawyer afterwards (#519).
 router.post("/lawyer-requests/:id/end", asyncHandler(ClientRequestCtrl.end));
+// The lawyer said the work is finished: the client confirms it (the engagement closes) or says it isn't.
+router.post("/lawyer-requests/:id/completion/confirm", asyncHandler(ClientRequestCtrl.confirmCompletion));
+router.post("/lawyer-requests/:id/completion/decline", asyncHandler(ClientRequestCtrl.declineCompletion));
 router.post("/lawyer-requests/:id/feedback", asyncHandler(ClientRequestCtrl.feedback));
 // The engagement thread with the lawyer (#517).
 router.get("/lawyer-requests/:id/messages", asyncHandler(ClientRequestCtrl.messages));

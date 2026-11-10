@@ -9,6 +9,7 @@ export const PAYOUT_SETTINGS_DEFAULTS = {
   platformFeeBps: 1500,
   /** £5: enough to cover Stripe's fee on a small first consultation. */
   minPlatformFeeMinor: 500,
+  /** How long an earning waits after the engagement closes before it can be withdrawn. */
   earningsHoldDays: 7,
   /** £10. */
   minWithdrawalMinor: 1000,

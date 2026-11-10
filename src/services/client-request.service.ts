@@ -1,4 +1,4 @@
-import type { ClientRequestStatus } from "@prisma/client";
+import type { ClientRequestStatus, LawyerExit, QuotationPayment, QuotationRefund } from "@prisma/client";
 import ClientRequestRepo, { type ClientRequestForClient } from "../repositories/client-request.repository";
 import { toPracticeAreaRefs } from "../repositories/practice-area.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
@@ -6,7 +6,14 @@ import ClientRequestBriefSvc from "./client-request-brief.service";
 import ClientRequestMatchingSvc from "./client-request-matching.service";
 import EngagementAccessSvc from "./engagement-access.service";
 import QuotationPaymentSvc from "./quotation-payment.service";
+import EngagementCompletionSvc, { completionDto } from "./engagement-completion.service";
 import QuotationRepo from "../repositories/quotation.repository";
+import QuotationPaymentRepo from "../repositories/quotation-payment.repository";
+import LawyerExitRepo from "../repositories/lawyer-exit.repository";
+import WalletRepo from "../repositories/wallet.repository";
+import PayoutSettingsSvc from "./payout-settings.service";
+import ClientPricingSvc from "./client-pricing.service";
+import WalletSvc from "./wallet.service";
 import { quotationDto } from "./quotation.dto";
 import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
@@ -18,7 +25,7 @@ import { shownStatus } from "../utils/client-request-status";
 import { getStableProxyFileUrl } from "../utils/s3";
 import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
-import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
+import type { ClientRefundSummary, ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
 import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
 import {
   CLIENT_REQUEST_CONSENT_TEXT,
@@ -38,6 +45,8 @@ const REFUSALS: Record<IneligibleReason, { status: number; message: string }> = 
   PERSONAL_INJURY_EXCLUDED: { status: 422, message: "We can't connect personal injury cases with a lawyer yet." },
   REQUEST_ALREADY_OPEN: { status: 409, message: "You've already asked for a lawyer on this case." },
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A client can withdraw until they've confirmed a lawyer. */
 const WITHDRAWABLE: ClientRequestStatus[] = ["REQUESTED", "ROUTED", "CLAIMED", "QUOTED"];
@@ -108,6 +117,33 @@ function oneLawyer(r: ClientRequestForClient): ClaimForClient | null {
   return quoted.length === 1 ? quoted[0]! : null;
 }
 
+/** ClientRefundSummary: what the client paid the lawyer they hired, what's come back, and, when the
+ * lawyer stopped acting, where that refund stands (never why they left). */
+function refundSummary(payment: QuotationPayment & { refunds: QuotationRefund[] }, exit: LawyerExit | null): ClientRefundSummary {
+  const money = (amountMinor: number) => ({ amountMinor, currency: payment.currency as "GBP" });
+  return {
+    paid: money(payment.amountMinor),
+    refunded: money(payment.refundedMinor),
+    pending: money(payment.refunds.filter((r) => r.status === "PENDING").reduce((sum, r) => sum + r.amountMinor, 0)),
+    refunds: payment.refunds.map((r) => ({ id: r.id, amount: money(r.amountMinor), status: r.status, createdAt: r.createdAt.toISOString() })),
+    lawyerExit: exit ? { status: exit.status, createdAt: exit.createdAt.toISOString(), settledAt: exit.settledAt?.toISOString() ?? null } : null,
+  };
+}
+
+/** The refund summary of each request whose hired lawyer the client paid through ilovelawyer. */
+async function refundsFor(requests: ClientRequestForClient[]): Promise<Map<string, ClientRefundSummary>> {
+  const engaged = requests.flatMap((r) => r.claims.filter((c) => c.outcome === "ENGAGED" && c.quotation).map((c) => ({ requestId: r.id, quotationId: c.quotation!.id })));
+  if (!engaged.length) return new Map();
+  const [payments, exits] = await Promise.all([QuotationPaymentRepo.findPaidWithRefunds(engaged.map((e) => e.quotationId)), LawyerExitRepo.findByRequests(engaged.map((e) => e.requestId))]);
+  const out = new Map<string, ClientRefundSummary>();
+  for (const { requestId, quotationId } of engaged) {
+    // The newest attempt that took money (there's one).
+    const payment = payments.find((p) => p.quotationId === quotationId);
+    if (payment) out.set(requestId, refundSummary(payment, exits.get(requestId) ?? null));
+  }
+  return out;
+}
+
 /** LawyerRequestForClient in the contract. Several lawyers (phase 5): `lawyers` is everyone on the
  * request now, oldest first, each with their quote once sent (`claimId` is what confirm and decline
  * take, `quotation.id` what accept, reject and pay take); `pickByAt` is when it expires without a
@@ -115,7 +151,7 @@ function oneLawyer(r: ClientRequestForClient): ClaimForClient | null {
  * so the app doesn't promise quotes that can't come. `lawyer`/`quote`/`quotation` stay for one
  * lawyer (the one hired, or the only quote). The disclosure is what the client acknowledges to
  * accept. `awaitingPayment`: the client accepted a quotation and hasn't paid it yet. */
-function toDto(r: ClientRequestForClient) {
+function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = null) {
   const one = oneLawyer(r);
   const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c), quotation: quotationFor(c) }));
   return {
@@ -148,6 +184,10 @@ function toDto(r: ClientRequestForClient) {
     closedAt: r.closedAt,
     closedBy: r.closedBy,
     feedback: r.feedback ? { rating: r.feedback.rating, comment: r.feedback.comment, createdAt: r.feedback.createdAt } : null,
+    // The lawyer's "the work is finished": waiting on the client to confirm it, or answered.
+    completion: completionDto(r),
+    // What the client paid the lawyer they hired, and any refunds: null until paid through ilovelawyer.
+    refund,
   };
 }
 
@@ -190,6 +230,11 @@ export default class ClientRequestSvc {
       const refusal = REFUSALS[check.reason];
       throw new HttpError(refusal.message, refusal.status, check.reason, check.openRequestId ? { openRequestId: check.openRequestId } : undefined);
     }
+    // A lawyer who stopped acting on this case (a Lawyer Exit, #972) isn't offered it again.
+    const leftCase = await LawyerExitRepo.lawyerIdsForCase(input.caseId);
+    if (input.lawyerId && leftCase.includes(input.lawyerId)) {
+      throw new HttpError("This lawyer stopped acting on this case, so they can't be asked to take it again. Ask another lawyer.", 422, "LAWYER_LEFT_CASE");
+    }
     const requestedLawyer = input.lawyerId ? await ClientRequestSvc.assertLawyerTakes(workspace, input.caseId, input.lawyerId) : null;
     const created = await ClientRequestRepo.create({
       caseId: input.caseId,
@@ -198,6 +243,7 @@ export default class ClientRequestSvc {
       consentVersion: input.consentVersion,
       consentAcceptedAt: new Date(),
       requestedLawyerId: requestedLawyer?.id ?? null,
+      excludedLawyerIds: leftCase,
     });
     // The anonymised brief lawyers will see (#508). Written in the background: the AI takes a while.
     ClientRequestBriefSvc.generateInBackground(created.id);
@@ -227,11 +273,12 @@ export default class ClientRequestSvc {
 
   static async list(clientId: string, query: { caseId?: string; page: number; limit: number }) {
     const { total, data } = await ClientRequestRepo.listForClient(clientId, query.caseId, query.page, query.limit);
-    return { total, data: data.map(toDto) };
+    const refunds = await refundsFor(data);
+    return { total, data: data.map((r) => toDto(r, refunds.get(r.id) ?? null)) };
   }
 
   static async get(clientId: string, id: string) {
-    return toDto(await ClientRequestSvc.load(clientId, id));
+    return ClientRequestSvc.view(clientId, id);
   }
 
   /** Until a lawyer is confirmed, the client can take the request back. The lawyers on it lose their
@@ -247,7 +294,7 @@ export default class ClientRequestSvc {
     for (const lawyerId of heldBy) emitToUser(lawyerId, "client-request:updated", updated);
     const taken: ClientRequestTakenEvent = { requestId: id };
     for (const lawyerId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) if (!heldBy.includes(lawyerId)) emitToUser(lawyerId, "client-request:taken", taken);
-    return toDto(await ClientRequestSvc.load(clientId, id));
+    return ClientRequestSvc.view(clientId, id);
   }
 
   /**
@@ -305,9 +352,9 @@ export default class ClientRequestSvc {
     }
 
     if (free && (await QuotationRepo.engageUnpaid(accepted.quotation))) {
-      await QuotationPaymentSvc.afterEngaged(accepted.quotation, accepted.claim, 0, null, null);
+      await QuotationPaymentSvc.afterEngaged(accepted.quotation, accepted.claim, 0, null);
     }
-    return toDto(await ClientRequestSvc.load(clientId, id));
+    return ClientRequestSvc.view(clientId, id);
   }
 
   /** The client accepts a quotation by its id (POST .../quotations/:quotationId/accept). */
@@ -347,7 +394,7 @@ export default class ClientRequestSvc {
       message: "The client declined your quote. Nothing was charged.",
       link: "/client-requests?view=history",
     }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
-    return toDto(await ClientRequestSvc.load(clientId, id));
+    return ClientRequestSvc.view(clientId, id);
   }
 
   /**
@@ -362,7 +409,9 @@ export default class ClientRequestSvc {
       throw new HttpError("This engagement can't be ended now.", 409, "INVALID_REQUEST_STATUS", { status: request.status });
     }
     const now = new Date();
-    if (!(await ClientRequestRepo.close(id, "CLIENT", now))) {
+    // The lawyer's earning starts its hold now, as when they close it themselves.
+    const terms = await PayoutSettingsSvc.forTenant(await ClientPricingSvc.tenantIdForClient(clientId));
+    if (!(await ClientRequestRepo.close(id, "CLIENT", now, { holdUntil: new Date(now.getTime() + terms.earningsHoldDays * DAY_MS) })).closed) {
       const current = await ClientRequestSvc.load(clientId, id);
       throw new HttpError("This engagement can't be ended now.", 409, "INVALID_REQUEST_STATUS", { status: current.status });
     }
@@ -388,8 +437,25 @@ export default class ClientRequestSvc {
       message: input.reason?.trim() || "The client ended the engagement. Your workspace copy, if you made one, is still yours.",
       link: "/client-requests?view=history",
     }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
+    for (const walletId of await WalletRepo.walletsForRequest(id)) await WalletSvc.changedById(walletId);
 
-    return toDto(await ClientRequestSvc.load(clientId, id));
+    return ClientRequestSvc.view(clientId, id);
+  }
+
+  /** The client confirms the lawyer's "the work is finished": the engagement closes, as the lawyer's
+   * close (EngagementCompletionSvc). 409 COMPLETION_NOT_REQUESTED when the lawyer hasn't asked. */
+  static async confirmCompletion(clientId: string, id: string) {
+    await ClientRequestSvc.load(clientId, id);
+    await EngagementCompletionSvc.confirm(clientId, id);
+    return ClientRequestSvc.view(clientId, id);
+  }
+
+  /** The client says the work isn't finished yet, and why: the engagement carries on, and the lawyer
+   * is told. 409 COMPLETION_NOT_REQUESTED when the lawyer hasn't asked. */
+  static async declineCompletion(clientId: string, id: string, input: { reason: string }) {
+    await ClientRequestSvc.load(clientId, id);
+    await EngagementCompletionSvc.decline(clientId, id, input.reason.trim());
+    return ClientRequestSvc.view(clientId, id);
   }
 
   /** The client's rating of the lawyer (#519), once CLOSED, once. */
@@ -416,6 +482,12 @@ export default class ClientRequestSvc {
     const claim = claimId ? quoted.find((c) => c.id === claimId) : quoted[0];
     if (!claim) throw new HttpError(notNow, 409, "INVALID_REQUEST_STATUS", { status });
     return claim;
+  }
+
+  /** The request as the client app reads it, with its refund summary. */
+  private static async view(clientId: string, id: string) {
+    const request = await ClientRequestSvc.load(clientId, id);
+    return toDto(request, (await refundsFor([request])).get(id) ?? null);
   }
 
   private static async load(clientId: string, id: string) {

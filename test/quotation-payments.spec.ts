@@ -257,7 +257,8 @@ describe("quotation payments", function () {
       expect(w.minWithdrawal.amountMinor).to.equal(1000);
       const earning = await prisma.earning.findFirstOrThrow({ where: { requestId } });
       expect(earning).to.deep.include({ grossMinor: 60000, platformFeeMinor: 9000, netMinor: 51000, status: "PENDING" });
-      expect(earning.availableAt.getTime()).to.be.closeTo(Date.now() + 7 * DAY_MS, 60_000);
+      // Held while the engagement is open: the hold starts when it closes (#972, lawyer-exit.spec.ts).
+      expect(earning.availableAt).to.equal(null);
     });
 
     it("a declined payment leaves the request waiting, and the next attempt goes through", async () => {
