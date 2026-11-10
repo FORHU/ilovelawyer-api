@@ -6,6 +6,7 @@ import { after, before, describe, it } from "mocha";
 import app from "../src/app";
 import prisma from "../src/lib/prisma";
 import { ACCESS_TOKEN_SECRET } from "../src/config";
+import { LAW_QUERY_MAX_LENGTH } from "../src/validation/law.validation";
 
 function tokenFor(userId: string) {
   return jwt.sign({ userId }, ACCESS_TOKEN_SECRET, { expiresIn: "1h" });
@@ -137,6 +138,22 @@ describe("GET /api/law/search (app-facing, tenant-gated)", () => {
       .set("Authorization", `Bearer ${tokenFor(ukUser)}`)
       .set("X-Organization-Id", ukOrgId);
 
+    expect(res.status).to.equal(400);
+    expect(res.body).to.not.have.property("items");
+  });
+
+  // The lawyer app's search box stops at LAW_QUERY_MAX_LENGTH (FORHU/ilovelawyer-app#992): keep the two the same.
+  it("refuses a search longer than LAW_QUERY_MAX_LENGTH with 400 and never calls juris.ph", async () => {
+    stubFetch(() => {
+      throw new Error("juris.ph must not be reached for a search that's too long");
+    });
+
+    const res = await request(app)
+      .get(`/api/law/search?category=jurisprudence&q=${"x".repeat(LAW_QUERY_MAX_LENGTH + 1)}`)
+      .set("Authorization", `Bearer ${tokenFor(phUser)}`)
+      .set("X-Organization-Id", phOrgId);
+
+    expect(LAW_QUERY_MAX_LENGTH).to.equal(300);
     expect(res.status).to.equal(400);
     expect(res.body).to.not.have.property("items");
   });

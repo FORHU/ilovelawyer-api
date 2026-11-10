@@ -52,7 +52,8 @@ export default class UsersCtrl {
     const { name, username } = req.body;
 
     const { error, value } = updateMeSchema.validate({ name, username });
-    if (error) throw new HttpError(error.message, 400);
+    // A username the rules don't allow: a readable message, and a code the apps can branch on.
+    if (error) throw new HttpError(error.message, 400, error.details[0]?.path[0] === "username" ? "INVALID_USERNAME" : undefined);
 
     const user = await UsersSvc.updateMe(req.user.userId, value);
     return res.status(200).json(user);

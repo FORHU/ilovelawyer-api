@@ -7,14 +7,27 @@ const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z0-9]).{10,
 const PASSWORD_MESSAGE =
   "Password must be at least 10 characters and include an uppercase letter, a lowercase letter, a number, and a special character.";
 
+// Must stay in sync with saveUsername in apps/web/app/(protected)/homepage/profile/page.tsx in
+// ilovelawyer-app (FORHU/ilovelawyer-api#642): letters, numbers, dots, underscores and hyphens, 3 to 30.
+export const USERNAME_PATTERN = /^[a-zA-Z0-9._-]+$/;
+export const USERNAME_MIN_LENGTH = 3;
+export const USERNAME_MAX_LENGTH = 30;
+
 export const updateMeSchema = Joi.object({
   name: Joi.string().trim().min(1).max(100).optional(),
   username: Joi.string()
     .trim()
-    .min(3)
-    .max(30)
-    .pattern(/^[a-zA-Z0-9._]+$/)
-    .optional(),
+    .min(USERNAME_MIN_LENGTH)
+    .max(USERNAME_MAX_LENGTH)
+    .pattern(USERNAME_PATTERN)
+    .optional()
+    .messages({
+      "string.empty": "Enter a username.",
+      "string.min": `Username must be at least ${USERNAME_MIN_LENGTH} characters.`,
+      "string.max": `Username can be at most ${USERNAME_MAX_LENGTH} characters.`,
+      "string.pattern.base": "Usernames can only contain letters, numbers, dots, underscores and hyphens.",
+      "string.base": "Enter a username.",
+    }),
 }).min(1);
 
 export const changePasswordSchema = Joi.object({
