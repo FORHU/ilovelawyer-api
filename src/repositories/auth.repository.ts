@@ -9,9 +9,10 @@ import { DAY_MS, LIVE_SUBSCRIPTION_STATUSES, PLAN_TRIAL_DAYS } from "../constant
 
 // Shared by findById/updateProfile/setDeletionRequested below — the frontend replaces its
 // entire cached /me response with whatever any of these return, so all three must expose the
-// same shape (see setDeletionRequested's note). `password`, `avatar` and `googleRefreshToken` are
-// selected only to derive `hasPassword`, `avatarUrl` and `googleCalendarConnected` in
-// toPublicUser and are never included in what's returned.
+// same shape (see setDeletionRequested's note). `password`, `avatar`, `googleRefreshToken` and
+// `gmailRefreshToken` are selected only to derive `hasPassword`, `avatarUrl`,
+// `googleCalendarConnected` and `gmailConnected` in toPublicUser and are never included in what's
+// returned.
 const PUBLIC_USER_SELECT = {
   id: true,
   username: true,
@@ -36,34 +37,40 @@ const PUBLIC_USER_SELECT = {
   password: true,
   avatar: { select: { s3Key: true } },
   googleRefreshToken: true,
+  gmailRefreshToken: true,
+  gmailEmail: true,
 } as const;
 
 /** `hasPassword` means "can sign in with a password" — always false for a Google SSO account,
  * even one holding a password an older build let it set through the reset flow. */
 /** `avatarUrl` is a same-origin /files/<token> URL (stable for an hour — see
  * getStableProxyFileUrl), or null when there's no avatar and the app shows initials.
- * `googleCalendarConnected` only reports that a refresh token is stored; the token never leaves. */
+ * `googleCalendarConnected` and `gmailConnected` only report that a refresh token is stored; the
+ * tokens never leave. `gmailEmail` is the connected mailbox, which may differ from the sign-in email. */
 function toPublicUser<
   T extends {
     password: string | null;
     provider: string | null;
     avatar?: { s3Key: string | null } | null;
     googleRefreshToken?: string | null;
+    gmailRefreshToken?: string | null;
     trialExpiresAt?: Date | null;
     trialMessagesUsed?: number;
   },
->(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken"> & {
+>(user: T): Omit<T, "password" | "avatar" | "googleRefreshToken" | "gmailRefreshToken"> & {
   hasPassword: boolean;
   avatarUrl: string | null;
   googleCalendarConnected: boolean;
+  gmailConnected: boolean;
   trialMessagesLeft: number | null;
 } {
-  const { password, avatar, googleRefreshToken, ...rest } = user;
+  const { password, avatar, googleRefreshToken, gmailRefreshToken, ...rest } = user;
   return {
     ...rest,
     hasPassword: password !== null && !isGoogleSsoAccount(user),
     avatarUrl: avatar?.s3Key ? getStableProxyFileUrl(avatar.s3Key) : null,
     googleCalendarConnected: !!googleRefreshToken,
+    gmailConnected: !!gmailRefreshToken,
     // Only a trial guest has one: what is left of their TRIAL_MESSAGE_LIMIT, so the app never has
     // to know the limit itself.
     trialMessagesLeft: user.trialExpiresAt ? Math.max(0, TRIAL_MESSAGE_LIMIT - (user.trialMessagesUsed ?? 0)) : null,
@@ -463,6 +470,41 @@ export default class AuthRepo {
     return prisma.user.update({
       where: { id: userId },
       data: { googleAccessToken: null, googleRefreshToken: null, googleCalendarSyncToken: null },
+    });
+  }
+
+  /** The stored (encrypted) Gmail refresh token and last access token. Kept apart from the
+   * Calendar columns so disconnecting one never clears the other. GmailConnectionSvc is the only
+   * caller that decrypts them. */
+  static async findGmailTokens(userId: string) {
+    return prisma.user.findUnique({
+      where: { id: userId },
+      select: { gmailAccessToken: true, gmailRefreshToken: true, gmailEmail: true },
+    });
+  }
+
+  /** `encryptedRefreshToken` is omitted when Google didn't return a new one (a reconnect without
+   * fresh consent); the stored one is kept rather than overwritten with null. */
+  static async setGmailTokens(userId: string, data: { accessToken: string; encryptedRefreshToken?: string; email: string }) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        gmailAccessToken: data.accessToken,
+        ...(data.encryptedRefreshToken ? { gmailRefreshToken: data.encryptedRefreshToken } : {}),
+        gmailEmail: data.email,
+        gmailConnectedAt: new Date(),
+      },
+    });
+  }
+
+  static async updateGmailAccessToken(userId: string, accessToken: string) {
+    return prisma.user.update({ where: { id: userId }, data: { gmailAccessToken: accessToken } });
+  }
+
+  static async clearGmailTokens(userId: string) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: { gmailAccessToken: null, gmailRefreshToken: null, gmailEmail: null, gmailConnectedAt: null },
     });
   }
 

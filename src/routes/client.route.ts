@@ -9,6 +9,7 @@ import ClientCaseCtrl from "../controllers/client-case.controller";
 import ClientRequestCtrl from "../controllers/client-request.controller";
 import ClientDictationCtrl from "../controllers/client-dictation.controller";
 import ClientLawyerCtrl from "../controllers/client-lawyer.controller";
+import ClientGmailCtrl from "../controllers/client-gmail.controller";
 
 // A spoken answer is a short clip (180s at most in the app); in memory, since it goes straight to S3
 // for the Transcribe job.
@@ -20,6 +21,15 @@ const dictationLimiter = rateLimit({
   max: 20,
   keyGenerator: (req) => req.user.userId,
   message: { message: "You've used voice input a lot just now. Try again in a few minutes, or type instead." },
+});
+
+// Each Gmail search fans out to up to 50 Gmail reads, and Google limits each user's quota, so a
+// client gets a generous but bounded number of inbox calls.
+const gmailLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "That's a lot of Gmail searches in a short time. Wait a minute and try again." },
 });
 
 /** The client app (ilovelawyer-client): a client's own cases, their AI chat and their documents.
@@ -76,6 +86,13 @@ router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
 
 // The lawyer marketplace: verified lawyers taking requests, filtered and sorted.
+// Email import (EPIC #982): the client's own Gmail, read-only. Nothing read here is stored.
+router.post("/gmail/connect", asyncHandler(ClientGmailCtrl.connect));
+router.delete("/gmail", asyncHandler(ClientGmailCtrl.disconnect));
+router.get("/gmail/messages", gmailLimiter, asyncHandler(ClientGmailCtrl.search));
+router.get("/gmail/messages/:messageId", gmailLimiter, asyncHandler(ClientGmailCtrl.message));
+router.get("/gmail/messages/:messageId/attachments/:partId/download", gmailLimiter, asyncHandler(ClientGmailCtrl.downloadAttachment));
+
 router.get("/lawyers", asyncHandler(ClientLawyerCtrl.list));
 router.get("/lawyers/:id", asyncHandler(ClientLawyerCtrl.get));
 

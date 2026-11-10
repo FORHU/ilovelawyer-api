@@ -25,6 +25,10 @@ export const SECURITY_AUDIT_ACTIONS = [
   "consent.changed",
   "integration.connected",
   "integration.disconnected",
+  // Client app email import (EPIC #982): a search of the connected Gmail inbox (payload carries
+  // the result count, never the query or any content) and an attachment fetched from it.
+  "gmail.searched",
+  "gmail.attachment_downloaded",
 
   // Organization membership and permissions
   "org.created",
@@ -184,6 +188,8 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "consent.changed": "Consent granted or withdrawn",
   "integration.connected": "Integration connected",
   "integration.disconnected": "Integration disconnected",
+  "gmail.searched": "Gmail inbox searched",
+  "gmail.attachment_downloaded": "Gmail attachment downloaded",
   "org.created": "Organization created",
   "org.updated": "Organization details changed",
   "org.member_invited": "Member invited",

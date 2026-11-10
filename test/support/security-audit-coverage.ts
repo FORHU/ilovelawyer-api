@@ -269,6 +269,11 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/cases/:caseId/documents/:documentId/retry": { exempt: "Reads a document that failed again; no data is added, opened or removed" },
   "POST /client/cases/:caseId/overview/generate": AI_RUN,
   "POST /client/cases/:caseId/intake/refresh": AI_RUN,
+  // Email import (EPIC #982): the client's own Gmail connection. Searches write gmail.searched
+  // in the service, though GETs aren't required to be classified here.
+  "POST /client/gmail/connect": ["integration.connected"],
+  "DELETE /client/gmail": ["integration.disconnected"],
+  "GET /client/gmail/messages/:messageId/attachments/:partId/download": ["gmail.attachment_downloaded"],
   // Chat Wonder's create_case intake tool (service-to-service, apiKeyMiddleware): writes the same
   // ClientCaseSvc.update case fields as PATCH /client/cases/:caseId above, so it gets the same action.
   "PATCH /intake-cases/:caseId": CASE_FEED,
