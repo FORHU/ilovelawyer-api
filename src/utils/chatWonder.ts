@@ -28,7 +28,9 @@ import {
   parseAudioOverviewPayload,
   parseReasoningPayload,
   parseDecisionsPayload,
+  parseConfidencePayload,
   parseTraceFrame,
+  ConfidencePayload,
   MindMapItem,
   TimelineItem,
   AudioOverviewTurn,
@@ -400,6 +402,12 @@ export interface ChatWonderStreamResult {
    * Absent whenever the turn produced no legal-analysis conclusions worth recording, or
    * generation failed silently. Absence is the normal case for many turns, not an error. */
   decisions?: DecisionRecordsPayload;
+  /** From Chat Wonder's post-`__END__` `{"type":"confidence","v":1,...}` typed message (legal/
+   * legal_uk only; see confidence.py) — Confidence view's per-sentence provenance. Citation `ref`s
+   * are still chat-wonder's original hrefs here; persistAssistantTurn remaps them to the Library
+   * hrefs rewriteLegalCitationLinks writes. Absent from older chat-wonder builds, when its
+   * CONFIDENCE_SPANS flag is off, or for any other persona — the normal case, not an error. */
+  confidence?: ConfidencePayload;
   /** From Chat Wonder's pre-`__END__` `[GENERATED_FILE_DATA]` frame (legal persona only) — the
    * raw drafted text from a successful generate_legal_document/draft_pleading tool call, not yet
    * rendered to a file. Rendering happens here, in-process, via GeneratedDocumentExportSvc — see
@@ -581,6 +589,7 @@ function streamChatWonderMessageOnce(
     let audioOverviewTurns: AudioOverviewTurn[] | undefined;
     let reasoningExplanation: ReasoningExplanation | undefined;
     let decisionRecords: DecisionRecordsPayload | undefined;
+    let confidencePayload: ConfidencePayload | undefined;
     let draftedDocument: ChatWonderStreamResult["draftedDocument"];
     let inlinedCaseDocumentIds: string[] = [];
     const researchSteps = new Map<string, TraceStep>();
@@ -641,6 +650,7 @@ function streamChatWonderMessageOnce(
         audioOverview: audioOverviewTurns,
         reasoning: reasoningExplanation,
         decisions: decisionRecords,
+        confidence: confidencePayload,
         draftedDocument,
         researchSteps: Array.from(researchSteps.values()),
         inlinedCaseDocumentIds,
@@ -809,6 +819,22 @@ function streamChatWonderMessageOnce(
         logger.info("Chat Wonder usage", typedEnvelope.data);
         const reported = parseReportedUsage(typedEnvelope.data);
         if (reported && opts?.usageProbe) opts.usageProbe.reported = reported;
+        return;
+      }
+      // Confidence view (chat-wonder's confidence.py), sent right after __END__. Flat payload —
+      // the whole envelope goes to the parser, not a `.data` field.
+      if (typedEnvelope && typedEnvelope.type === "confidence") {
+        const parsed = parseConfidencePayload(typedEnvelope);
+        if (parsed) confidencePayload = parsed;
+        return;
+      }
+      // Any OTHER typed envelope this build doesn't know. Without this it fell through to the
+      // text branches below and — on a turn with no [Sources] frame to set sourcesDropped — was
+      // appended to `accumulated`: raw JSON streamed to the user and saved into their history.
+      // That's what chat-wonder's confidence envelope would have done before the branch above
+      // existed, and what the next new envelope type would do. Log it and drop it.
+      if (typedEnvelope && typeof typedEnvelope === "object" && !Array.isArray(typedEnvelope) && typeof typedEnvelope.type === "string") {
+        logger.info("Chat Wonder: ignoring unrecognized typed envelope", { sessionId, type: typedEnvelope.type });
         return;
       }
 

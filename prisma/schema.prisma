@@ -367,6 +367,7 @@ model Message {
   reasoning         MessageReasoning?
   decisionRecords   MessageDecisionRecord?
   researchSteps     MessageResearchSteps?
+  confidence        MessageConfidence?
   documents         Document[]
   generatedDocument MessageGeneratedDocument?
   groundingChecks   AnswerGroundingCheck[]
@@ -676,6 +677,22 @@ model MessageResearchSteps {
   id        String   @id @default(uuid())
   messageId String   @unique
   steps     Json
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+}
+
+// Confidence view for one assistant turn (chat-wonder-v2-api's confidence.py, schema v1): every
+// sentence of a legal answer classified QUOTED / SOURCED / UNSOURCED by where it came from — never
+// whether it is correct. On the turn's LAST assistant message, like MessageReasoning. `payload` is
+// the JSON SEALED with field-crypto ("MessageConfidence.payload"), not a Json column: its spans
+// quote the answer's sentences verbatim, so it must be protected exactly like Message.content
+// (issue #277). Absent when CONFIDENCE_VIEW_ENABLED is off, for non-legal turns, or from older
+// chat-wonder builds — the normal case, not an error. See docs/plans/confidence-view-integration.md.
+model MessageConfidence {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  payload   String   @db.Text
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)

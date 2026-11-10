@@ -16,6 +16,11 @@ export interface CitationRewriteResult {
    * non-clickable text rather than left as an external link — see the "no fallback" policy on
    * `rewriteLegalCitationLinks`. */
   strippedCount: number;
+  /** Every citation href in the original content -> the Library href it was rewritten to, or null
+   * when it was stripped to plain text. Absent when nothing was rewritten (no links, or the
+   * whole rewrite failed and the original links were kept). Lets callers re-point other data
+   * keyed by the original href — Confidence view's citation spans — at the link as saved. */
+  hrefMap?: Map<string, string | null>;
 }
 
 // A surviving citation's URL is always an exact match from that turn's retrieved tool results
@@ -235,7 +240,13 @@ export async function rewriteLegalCitationLinks(
       .replace(MD_LINK_RE, (_full, label: string, href: string) => rewrite(label, href))
       .replace(HTML_LINK_RE, (_full, href: string, label: string) => rewrite(label, href));
 
-    return { content: rewritten, rewrittenCount, attemptedCount: attempted.length, strippedCount };
+    const hrefMap = new Map<string, string | null>();
+    for (const href of labelByHref.keys()) {
+      const resolution = resolutions.get(href);
+      hrefMap.set(href, resolution ? libraryHref(tenantCode, resolution) : null);
+    }
+
+    return { content: rewritten, rewrittenCount, attemptedCount: attempted.length, strippedCount, hrefMap };
   } catch (err) {
     logger.warn("Legal citation link rewrite: failed, keeping original links", { err, tenantCode });
     return { content, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 };
