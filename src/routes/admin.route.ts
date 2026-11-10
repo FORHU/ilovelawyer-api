@@ -104,5 +104,7 @@ router.get("/lawyer-exits", asyncHandler(PayoutAdminCtrl.listLawyerExits));
 router.get("/lawyer-exits/:id", asyncHandler(PayoutAdminCtrl.getLawyerExit));
 router.post("/lawyer-exits/:id/decide", asyncHandler(PayoutAdminCtrl.decideLawyerExit));
 router.get("/wallets", asyncHandler(PayoutAdminCtrl.listWallets));
+// Lawyers' monthly plan subscriptions: who's on which plan, behind on payment, or cancelling.
+router.get("/lawyer-subscriptions", asyncHandler(PayoutAdminCtrl.listLawyerSubscriptions));
 
 export default router;

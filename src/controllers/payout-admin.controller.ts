@@ -4,6 +4,7 @@ import PayoutSettingsSvc from "../services/payout-settings.service";
 import QuotationPaymentSvc from "../services/quotation-payment.service";
 import WalletSvc from "../services/wallet.service";
 import LawyerExitSvc from "../services/lawyer-exit.service";
+import LawyerSubscriptionAdminSvc, { LAWYER_SUBSCRIPTION_FILTERS, type LawyerSubscriptionFilter } from "../services/lawyer-subscription-admin.service";
 import { LAWYER_EXIT_STATUSES, QUOTATION_PAYMENT_STATUSES, type LawyerExitStatus, type QuotationPaymentStatus } from "../types/client-handoff";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
@@ -40,6 +41,13 @@ const lawyerExitsSchema = Joi.object({
   status: Joi.string()
     .valid("OPEN", "ALL", ...LAWYER_EXIT_STATUSES)
     .default("OPEN"),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+});
+const lawyerSubscriptionsSchema = Joi.object({
+  status: Joi.string()
+    .valid(...LAWYER_SUBSCRIPTION_FILTERS)
+    .default("ALL"),
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
 });
@@ -105,6 +113,11 @@ export default class PayoutAdminCtrl {
   static async decideLawyerExit(req: Request, res: Response) {
     const body = validate<{ refund: { amountMinor: number; currency: string }; note?: string }>(decideSchema, req.body);
     res.status(200).json(await LawyerExitSvc.decide(req.params.id, { amount: body.refund, note: body.note }, req.user.userId));
+  }
+
+  /** GET /api/admin/lawyer-subscriptions[?status=ALL|ACTIVE|PAST_DUE|CHANGING|ENDED|PENDING&page=&limit=] */
+  static async listLawyerSubscriptions(req: Request, res: Response) {
+    res.status(200).json(await LawyerSubscriptionAdminSvc.list(validate<{ status: LawyerSubscriptionFilter; page: number; limit: number }>(lawyerSubscriptionsSchema, req.query)));
   }
 
   /** GET /api/admin/wallets[?page=&limit=] */

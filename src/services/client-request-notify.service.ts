@@ -214,6 +214,43 @@ export default class ClientRequestNotifySvc {
   }
 
   /**
+   * Tells the client, in the bell and by email, that the refund an admin decided on a Lawyer Exit
+   * (#972) went through: how much, and whether it's everything they paid. Only once it has succeeded
+   * (at once, or on Stripe's webhook). Never the admin's note, nor why the lawyer left. Best effort:
+   * a failure is logged.
+   */
+  static async tellClientRefunded(input: { requestId: string; caseId: string; clientId: string; refundedMinor: number; paidMinor: number | null }) {
+    const gbp = (minor: number) => `£${(minor / 100).toFixed(2)}`;
+    const amount = gbp(input.refundedMinor);
+    const full = input.paidMinor !== null && input.refundedMinor >= input.paidMinor;
+    const heading = `Your refund of ${amount} has been sent`;
+    const message = full
+      ? `We've reviewed what happened when your lawyer stopped acting on your case, and refunded your whole payment of ${amount}, ilovelawyer's fee included.`
+      : input.paidMinor !== null
+        ? `We've reviewed what happened when your lawyer stopped acting on your case, and refunded ${amount} of the ${gbp(input.paidMinor)} you paid.`
+        : `We've reviewed what happened when your lawyer stopped acting on your case, and refunded ${amount}.`;
+    const timing = "It's gone back to the card you paid with. It can take 5 to 10 working days to show on your statement.";
+    const caseLink = clientCaseLink(input.caseId);
+
+    await NotificationSvc.create({
+      userId: input.clientId,
+      type: "CLIENT_REQUEST",
+      title: "Your refund is on its way",
+      message: `We've refunded ${amount} to the card you paid with. It can take 5 to 10 working days to show on your statement.`,
+      link: `/cases/${input.caseId}`,
+    }).catch((err) => logger.error("Lawyer exit: failed to create refund notification", { err, requestId: input.requestId }));
+
+    try {
+      const client = await prisma.user.findUnique({ where: { id: input.clientId }, select: { email: true } });
+      if (!client?.email) return;
+      const html = await renderTemplate("client-refund-succeeded", { heading, message, timing, caseLink });
+      await sendEmail({ to: client.email, subject: heading, text: [message, timing, caseLink].join("\n\n"), html });
+    } catch (err) {
+      logger.error("Lawyer exit: refund email failed", { err, requestId: input.requestId });
+    }
+  }
+
+  /**
    * Tells the client their lawyer closed the engagement (#972), in the bell and by email: that the
    * work is finished, or (`exit`) that the lawyer can't continue, and what happens to their money.
    * Never why the lawyer left: that stays with ilovelawyer. Best effort: a failure is logged.

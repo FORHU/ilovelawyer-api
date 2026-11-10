@@ -255,6 +255,13 @@ describe("lawyer exit", function () {
       expect(refund).to.deep.include({ amountMinor: 60000, serviceFeeMinor: 51000, platformFeeMinor: 9000, status: "SUCCEEDED", createdById: adminId });
       expect((await earningRow()).status).to.equal("REVERSED");
       expect((await walletOf()).balances.pending.amountMinor).to.equal(0);
+
+      // The client is emailed that it went through, never the admin's note.
+      const sent = emails.find((e) => e.subject === "Your refund of £600.00 has been sent");
+      expect(sent?.to).to.equal(`exit-${clientId}@example.com`);
+      expect(sent?.text).to.include("refunded your whole payment of £600.00, ilovelawyer's fee included");
+      expect(sent?.text).to.include("5 to 10 working days");
+      expect(sent?.text).to.not.include("Genuine conflict");
     });
 
     it("the admin can refuse a refund when the reason doesn't hold up: the lawyer's fee is released after the hold", async () => {
@@ -262,6 +269,7 @@ describe("lawyer exit", function () {
       await close(CANT_CONTINUE).expect(200);
       await decide((await exitRow()).id, 0, "Reason not supported").expect(200);
       expect(await exitRow()).to.deep.include({ status: "SETTLED", refundedMinor: 0 });
+      expect(emails.filter((e) => e.subject.startsWith("Your refund of"))).to.have.length(0);
       expect((await paymentRow()).status).to.equal("SUCCEEDED");
       expect(await releaseAt(8)).to.not.equal(null);
       const bell = await prisma.notification.findFirstOrThrow({ where: { userId: clientId, title: "We've reviewed your refund" } });
@@ -345,6 +353,9 @@ describe("lawyer exit", function () {
       expect(decided).to.deep.include({ status: "SETTLED" });
       expect(decided.refunded.amountMinor).to.equal(31000);
       expect(decided.decision.note).to.equal("Claim looks right");
+      const sent = emails.find((e) => e.subject === "Your refund of £310.00 has been sent");
+      expect(sent?.text).to.include("refunded £310.00 of the £600.00 you paid");
+      expect(sent?.text).to.not.include("Claim looks right");
 
       const payment = await paymentRow();
       expect(payment).to.deep.include({ status: "PARTIALLY_REFUNDED", refundedMinor: 31000 });
@@ -520,9 +531,11 @@ describe("lawyer exit", function () {
       const exit = await exitRow();
       expect(exit.status).to.equal("REFUNDING");
       expect((await clientView().expect(200)).body.refund).to.deep.include({ pending: { amountMinor: 60000, currency: "GBP" } });
+      expect(emails.filter((e) => e.subject.startsWith("Your refund of"))).to.have.length(0);
 
       await QuotationPaymentSvc.applyStripeRefund({ id: `re_${crypto.randomUUID()}`, status: "succeeded", metadata: { refundId: exit.refundId } } as unknown as Stripe.Refund);
       expect(await exitRow()).to.deep.include({ status: "SETTLED", refundedMinor: 60000, refundId: null });
+      expect(emails.filter((e) => e.subject === "Your refund of £600.00 has been sent")).to.have.length(1);
     });
 
     it("a refund that fails at Stripe later lands in the admin's queue", async () => {
@@ -533,6 +546,7 @@ describe("lawyer exit", function () {
       const { refundId } = await exitRow();
       await QuotationPaymentSvc.applyStripeRefund({ id: `re_${crypto.randomUUID()}`, status: "failed", failure_reason: "expired_or_canceled_card", metadata: { refundId } } as unknown as Stripe.Refund);
       expect(await exitRow()).to.deep.include({ status: "NEEDS_ATTENTION", failureReason: "expired_or_canceled_card" });
+      expect(emails.filter((e) => e.subject.startsWith("Your refund of"))).to.have.length(0);
     });
   });
 

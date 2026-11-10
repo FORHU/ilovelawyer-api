@@ -178,6 +178,7 @@ describe("client confirms and pays, and the engagement", () => {
   after(async () => {
     await cleanQuotationMoney({ organizationIds: [orgId, otherOrgId] }, [clientId]);
     await prisma.organizationCharge.deleteMany({ where: { organizationId: { in: [orgId, otherOrgId] } } });
+    await prisma.lawyerExit.deleteMany({ where: { caseId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.auditEvent.deleteMany({ where: { caseId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId, otherLawyerId, clientId] } } });
@@ -196,6 +197,7 @@ describe("client confirms and pays, and the engagement", () => {
     stripeNow = new Map();
     setOrganizationCardProvider(fakeStripe);
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
+    await prisma.lawyerExit.deleteMany({ where: { caseId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.organizationBilling.deleteMany({ where: { organizationId: orgId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId] } } });

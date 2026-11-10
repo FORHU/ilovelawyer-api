@@ -55,11 +55,11 @@ export default class LawyerExitRepo {
     return count === 1;
   }
 
-  /** The admin queue, oldest first so the longest wait is on top. */
+  /** The admin queue, newest first. */
   static async list(where: Prisma.LawyerExitWhereInput, page: number, limit: number) {
     const [total, data] = await prisma.$transaction([
       prisma.lawyerExit.count({ where }),
-      prisma.lawyerExit.findMany({ where, orderBy: [{ createdAt: "asc" }, { id: "asc" }], skip: (page - 1) * limit, take: limit }),
+      prisma.lawyerExit.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * limit, take: limit }),
     ]);
     return { total, data };
   }

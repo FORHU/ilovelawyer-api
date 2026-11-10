@@ -6,6 +6,7 @@ import QuotationRefundSvc from "./quotation-refund.service";
 import PayoutSettingsSvc from "./payout-settings.service";
 import ClientPricingSvc from "./client-pricing.service";
 import NotificationSvc from "./notification.service";
+import ClientRequestNotifySvc from "./client-request-notify.service";
 import SecurityAuditSvc from "./security-audit.service";
 import WalletSvc from "./wallet.service";
 import prisma from "../lib/prisma";
@@ -162,7 +163,7 @@ export default class LawyerExitSvc {
     return LawyerExitSvc.getForAdmin(exit.id);
   }
 
-  /** The admin queue: every exit still open by default (oldest first), or those in one status. */
+  /** The admin queue: every exit still open by default (newest first), or those in one status. */
   static async listForAdmin(query: { status?: LawyerExitStatus | "OPEN" | "ALL"; page: number; limit: number }) {
     const status = query.status ?? "OPEN";
     const where = status === "ALL" ? {} : status === "OPEN" ? { status: { in: OPEN_LAWYER_EXIT_STATUSES } } : { status };
@@ -240,11 +241,16 @@ export default class LawyerExitSvc {
     if (!(await LawyerExitRepo.move(exit.id, from, { status: "SETTLED", settledAt: now, refundedMinor: { increment: refundedMinor }, refundId: null, failureReason: null }))) return;
     const settled = (await LawyerExitRepo.findById(exit.id))!;
     await LawyerExitSvc.afterSettled(settled, opts);
+    // The refund an admin decided went through: the client hears it by bell and email. Never the
+    // admin's note, which may name the other party.
     if (refundedMinor > 0) {
-      await notify(exit.clientId, {
-        title: "Your refund is on its way",
-        message: `We've refunded ${gbp(refundedMinor)} to the card you paid with. It can take 5 to 10 working days to show on your statement.`,
-        link: `/cases/${exit.caseId}`,
+      const payment = exit.paymentId ? await QuotationPaymentRepo.findById(exit.paymentId) : null;
+      await ClientRequestNotifySvc.tellClientRefunded({
+        requestId: exit.requestId,
+        caseId: exit.caseId,
+        clientId: exit.clientId,
+        refundedMinor,
+        paidMinor: payment?.amountMinor ?? null,
       });
     }
   }

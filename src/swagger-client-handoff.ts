@@ -1891,7 +1891,7 @@ export const clientHandoffPaths: Paths = {
       tag: ADMIN_TAG,
       issue: "FORHU/ilovelawyer-app#972", built: true,
       summary: "Lawyer Exits: lawyers who stopped acting after the client paid",
-      description: "OPEN (the default): every one not settled yet, oldest first (AWAITING_REVIEW and NEEDS_ATTENTION wait on an admin). ALL, or one status.",
+      description: "OPEN (the default): every one not settled yet, newest first (AWAITING_REVIEW and NEEDS_ATTENTION wait on an admin). ALL, or one status.",
       parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["OPEN", "ALL", ...LAWYER_EXIT_STATUSES] } }, ...pageParams],
       responses: { 200: ok("A page of exits", page("LawyerExitForAdmin")), 403: err("Not a platform admin") },
     }),
@@ -1920,5 +1920,20 @@ export const clientHandoffPaths: Paths = {
   },
   "/admin/wallets": {
     get: op({ tag: ADMIN_TAG, issue: "quotation payments", built: true, summary: "Every payee's wallet with its balances", parameters: pageParams, responses: { 200: ok("A page of wallets"), 403: err("Not a platform admin") } }),
+  },
+  "/admin/lawyer-subscriptions": {
+    get: op({
+      tag: ADMIN_TAG,
+      issue: "lawyer subscriptions",
+      built: true,
+      summary: "Lawyers' monthly plan subscriptions",
+      description:
+        "Newest first. ALL (the default): everything but checkouts that were never paid. ACTIVE: paying, nothing changing. PAST_DUE: a renewal failed. CHANGING: cancelling or downgrading at the end of the period. ENDED: cancelled. PENDING: a checkout still open. `summary` covers every subscription whatever the filter: active, monthlyUsd (what active ones bill at today's plan fees), pastDue, changing.",
+      parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["ALL", "ACTIVE", "PAST_DUE", "CHANGING", "ENDED", "PENDING"] } }, ...pageParams],
+      responses: {
+        200: ok("A page of subscriptions, each with its lawyer (and firm), plan (name, feeUsd, tenantCode), current period, cancelAtPeriodEnd and scheduledPlan (a downgrade at the period's end), with the summary"),
+        403: err("Not a platform admin"),
+      },
+    }),
   },
 };
