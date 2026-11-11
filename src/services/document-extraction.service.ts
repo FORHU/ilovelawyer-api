@@ -36,6 +36,17 @@ async function transcribeMedia(s3Key: string, documentId: string, filename: stri
   return `[Audio/video file "${filename}" — no speech was detected, so there is no transcript to index.]`;
 }
 
+/**
+ * What's indexed for an image OCR found no text in, when the vision-description fallback is
+ * also unavailable (no description, oversized image, or the call failed): a photo of damage,
+ * an injury, a place. A photo without writing is valid evidence, not a failed upload, so it's
+ * READY and findable by name instead of stuck on "Couldn't read" with advice to re-scan it. The
+ * AI is told what it doesn't know rather than left to guess.
+ */
+export function imageWithoutTextPlaceholder(filename: string): string {
+  return `[Image "${filename}": a photo or picture with no readable text in it, so what it shows isn't known from the file itself. Ask the client to describe it if it matters.]`;
+}
+
 /** Chunks embedded and stored per round (see process). A multiple of every chunking tier's
  * embeddingBatchSize (100, 50, 32), so rounds never split a batch. */
 export const EMBED_ROUND_CHUNKS = 3_200;
@@ -167,21 +178,25 @@ export default class DocumentExtractionSvc {
       let trimmedPages = pages.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text.length > 0);
       if (trimmedPages.length === 0 && isImageDocument(doc.mimeType, doc.name) && doc.file.s3Key) {
         const downloadedBytes = download?.bytes ?? doc.fileSize ?? 0;
+        let description: string | null = null;
         if (downloadedBytes <= VISION_FALLBACK_MAX_BYTES) {
-          const description = await describeImage(doc.file.s3Key, doc.name, {
+          description = await describeImage(doc.file.s3Key, doc.name, {
             userId: doc.userId,
             caseId: doc.caseId,
             consultationId: doc.consultationId,
           });
-          if (description) {
-            trimmedPages = [{
-              pageNumber: 1,
-              text: `[AI-generated visual description — this photo had no machine-readable text; the AI produced the description below from the image and it may be imperfect]\n\n${description}`,
-            }];
-            method = "vision";
-          }
         } else {
           logger.warn("Document extraction: image exceeds vision fallback size limit, skipping", { documentId, bytes: downloadedBytes });
+        }
+        if (description) {
+          trimmedPages = [{
+            pageNumber: 1,
+            text: `[AI-generated visual description — this photo had no machine-readable text; the AI produced the description below from the image and it may be imperfect]\n\n${description}`,
+          }];
+          method = "vision";
+        } else {
+          logger.info("Document extraction: image has no readable text and no vision description, indexing it by name", { documentId, name: doc.name });
+          trimmedPages = [{ pageNumber: 1, text: imageWithoutTextPlaceholder(doc.name) }];
         }
       }
 
@@ -191,9 +206,9 @@ export default class DocumentExtractionSvc {
         ocrAttempted,
       });
 
-      // Empty extraction (scanned PDF with failed OCR) counts as failed, not ready. An image
-      // with no OCR text got one chance above (the vision-description fallback); if that also
-      // came back empty — or was skipped for size — it fails here like any other empty document.
+      // Empty extraction (scanned PDF with failed OCR) counts as failed, not ready. An image with
+      // empty OCR text always gets a vision description or the placeholder above — it never
+      // reaches here. Only a genuinely empty non-image document does.
       if (trimmedPages.length === 0) {
         logger.warn("Document extraction: no text extracted", { documentId, name: doc.name, ocrAttempted });
         await DocumentExtractionSvc.setStatus(documentId, "FAILED", "document:failed");

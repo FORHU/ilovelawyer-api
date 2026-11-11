@@ -19,7 +19,7 @@ import * as chatWonder from "../src/utils/chatWonder";
 import prisma from "../src/lib/prisma";
 import DocumentRepo from "../src/repositories/document.repository";
 import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
-import DocumentExtractionSvc, { EMBED_ROUND_CHUNKS } from "../src/services/document-extraction.service";
+import DocumentExtractionSvc, { EMBED_ROUND_CHUNKS, imageWithoutTextPlaceholder } from "../src/services/document-extraction.service";
 
 interface Emitted {
   userId: string;
@@ -206,14 +206,21 @@ describe("DocumentExtractionSvc socket events", () => {
     expect(emitted.map((e) => e.event)).to.deep.equal(["document:started", "document:ready"]);
   });
 
-  it("still fails when the vision fallback also returns nothing", async () => {
+  it("falls back to the generic placeholder (and still resolves READY) when the vision fallback also returns nothing", async () => {
     doc = { ...baseDoc, name: "car_accident.jpg", mimeType: "image/jpeg" };
     pages = [{ pageNumber: 1, text: "" }];
     (chatWonder as any).describeImage = async () => null;
+    const embedded: string[] = [];
+    (embedding as any).embedTexts = async (texts: string[]) => {
+      embedded.push(...texts);
+      return texts.map(() => [0.1, 0.2]);
+    };
 
     await DocumentExtractionSvc.process("doc1");
 
-    expect(statusWrites).to.deep.equal(["FAILED"]);
+    expect(statusWrites).to.include("READY");
+    expect(statusWrites).to.not.include("FAILED");
+    expect(embedded.join(" ")).to.include(imageWithoutTextPlaceholder("car_accident.jpg"));
   });
 
   it("never calls the vision fallback for a non-image document with empty OCR text", async () => {
@@ -238,7 +245,7 @@ describe("DocumentExtractionSvc socket events", () => {
     expect(emitted[1].payload.category).to.equal("Evidence");
   });
 
-  it("skips the vision fallback for an image over VISION_FALLBACK_MAX_BYTES without calling chat-wonder", async () => {
+  it("skips the vision fallback for an image over VISION_FALLBACK_MAX_BYTES without calling chat-wonder, falling back to the placeholder and resolving READY", async () => {
     const { VISION_FALLBACK_MAX_BYTES } = await import("../src/utils/ocr");
     doc = { ...baseDoc, name: "huge.jpg", mimeType: "image/jpeg" };
     (s3 as any).downloadObjectToTempFile = async () => ({
@@ -251,11 +258,18 @@ describe("DocumentExtractionSvc socket events", () => {
     pages = [{ pageNumber: 1, text: "" }];
     let called = false;
     (chatWonder as any).describeImage = async () => { called = true; return "should not happen"; };
+    const embedded: string[] = [];
+    (embedding as any).embedTexts = async (texts: string[]) => {
+      embedded.push(...texts);
+      return texts.map(() => [0.1, 0.2]);
+    };
 
     await DocumentExtractionSvc.process("doc1");
 
     expect(called).to.equal(false);
-    expect(statusWrites).to.deep.equal(["FAILED"]);
+    expect(statusWrites).to.include("READY");
+    expect(statusWrites).to.not.include("FAILED");
+    expect(embedded.join(" ")).to.include(imageWithoutTextPlaceholder("huge.jpg"));
   });
 
   it("emits document:failed when extraction throws a non-rate-limit error", async () => {
