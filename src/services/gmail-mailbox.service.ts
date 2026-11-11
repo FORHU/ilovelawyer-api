@@ -9,6 +9,10 @@ const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const GET_CONCURRENCY = 10;
 export const GMAIL_SEARCH_MAX_LIMIT = 50;
 const RATE_LIMIT_RETRY_MS = 1000;
+/** Inline images (`cid:` in the HTML) are embedded in the body up to these sizes. A bigger one is
+ * left as a broken image in the body; it's still in the attachment list to download. */
+export const INLINE_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+export const INLINE_IMAGES_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 
 /** The part of the MIME tree a search row needs: headers and attachment filenames, never body
  * data (Gmail's partial-response `fields`). Three levels of nesting covers mixed > alternative >
@@ -157,6 +161,54 @@ export function bodyPartsOf(payload: GmailPart | undefined): { text: GmailPart |
     });
   }
   return { text, html };
+}
+
+/** A `cid:` reference as it appears in HTML, up to the closing quote, bracket or space. */
+const CID_REFERENCE = /cid:([^"'\s)>]+)/gi;
+
+/** A Content-ID or `cid:` value in one comparable form: URL-decoded, without angle brackets, and
+ * lowercased (mail clients disagree on case). */
+function normalizeCid(id: string): string {
+  let decoded = id;
+  try {
+    decoded = decodeURIComponent(id);
+  } catch {
+    // keep it as written
+  }
+  return decoded.trim().replace(/^<|>$/g, "").trim().toLowerCase();
+}
+
+/** Every `cid:` the HTML refers to, normalized. */
+export function cidReferencesOf(html: string): Set<string> {
+  const refs = new Set<string>();
+  for (const match of html.matchAll(CID_REFERENCE)) refs.add(normalizeCid(match[1]));
+  return refs;
+}
+
+/** Only a plain image type may go into a data: URI, so nothing from the email can break out of
+ * the attribute it's written into. */
+const IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
+
+/** The image parts the HTML shows inline, keyed by normalized Content-ID: parts with a
+ * Content-ID that the HTML references as `cid:`. Such a part need not have a filename. */
+export function inlineImagePartsOf(payload: GmailPart | undefined, html: string): Map<string, GmailPart> {
+  const found = new Map<string, GmailPart>();
+  const refs = cidReferencesOf(html);
+  if (!payload || refs.size === 0) return found;
+  walk(payload, (p) => {
+    const contentId = header(p.headers, "Content-ID");
+    if (!contentId || !IMAGE_MIME.test(p.mimeType ?? "")) return;
+    const key = normalizeCid(contentId);
+    if (refs.has(key) && !found.has(key)) found.set(key, p);
+  });
+  return found;
+}
+
+/** The HTML with each resolved `cid:` replaced by its data: URI. Unresolved ones are left as they
+ * are and show as a broken image. */
+export function replaceCidReferences(html: string, dataUris: Map<string, string>): string {
+  if (dataUris.size === 0) return html;
+  return html.replace(CID_REFERENCE, (match, id: string) => dataUris.get(normalizeCid(id)) ?? match);
 }
 
 function isoFromInternalDate(internalDate: string | undefined): string | null {
@@ -351,16 +403,49 @@ export default class GmailMailboxSvc {
     return bytes ? decodeText(bytes, charsetOf(part)) : null;
   }
 
-  /** One message in full: headers, plain and HTML bodies, and its attachments (metadata only). */
+  /**
+   * The HTML body with its inline images (`cid:` references) embedded as data: URIs, so they show
+   * in the client's locked-down email frame, which loads nothing from outside. Images are fetched
+   * in document order until the size limits are reached; one that fails to load or is too big is
+   * left out, never failing the whole message.
+   */
+  private static async embedInlineImages(userId: string, messageId: string, payload: GmailPart | undefined, html: string, auth: GmailToken): Promise<string> {
+    const parts = [...inlineImagePartsOf(payload, html)].filter(([, part]) => (part.body?.size ?? 0) <= INLINE_IMAGE_MAX_BYTES);
+    if (parts.length === 0) return html;
+
+    const fetched = await mapPool(parts, GET_CONCURRENCY, async ([cid, part]) => {
+      try {
+        const bytes = await GmailMailboxSvc.partBytes(userId, messageId, part, auth);
+        return bytes && bytes.length <= INLINE_IMAGE_MAX_BYTES ? { cid, part, bytes } : null;
+      } catch (err) {
+        logger.warn("Couldn't embed an inline Gmail image", { userId, messageId, partId: part.partId, err });
+        return null;
+      }
+    });
+
+    const dataUris = new Map<string, string>();
+    let total = 0;
+    for (const image of fetched) {
+      if (!image) continue;
+      total += image.bytes.length;
+      if (total > INLINE_IMAGES_MAX_TOTAL_BYTES) break;
+      dataUris.set(image.cid, `data:${image.part.mimeType!.toLowerCase()};base64,${image.bytes.toString("base64")}`);
+    }
+    return replaceCidReferences(html, dataUris);
+  }
+
+  /** One message in full: headers, plain and HTML bodies (inline images embedded), and its
+   * attachments (metadata only). */
   static async getMessage(userId: string, id: string): Promise<GmailMessageView> {
     const auth = new GmailToken(userId);
     const msg = await GmailMailboxSvc.getFull(userId, id, auth);
     const headers = msg.payload?.headers;
     const { text, html } = bodyPartsOf(msg.payload);
-    const [textBody, htmlBody] = await Promise.all([
+    const [textBody, rawHtml] = await Promise.all([
       GmailMailboxSvc.partText(userId, msg.id, text, auth),
       GmailMailboxSvc.partText(userId, msg.id, html, auth),
     ]);
+    const htmlBody = rawHtml ? await GmailMailboxSvc.embedInlineImages(userId, msg.id, msg.payload, rawHtml, auth) : null;
 
     return {
       id: msg.id,

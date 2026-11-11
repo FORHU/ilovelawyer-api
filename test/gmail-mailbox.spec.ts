@@ -4,10 +4,14 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import GmailMailboxSvc, {
+  INLINE_IMAGE_MAX_BYTES,
   attachmentsOf,
   bodyPartsOf,
+  cidReferencesOf,
   decodeBase64Url,
   decodeText,
+  inlineImagePartsOf,
+  replaceCidReferences,
   toSearchRow,
   type GmailPart,
 } from "../src/services/gmail-mailbox.service";
@@ -67,7 +71,50 @@ const PAYLOAD: GmailPart = {
   ],
 };
 
+/** related > html referencing two inline images (one with no filename), a third too big to embed,
+ * a cid the message doesn't have, and a non-image part that shares a referenced Content-ID. */
+const INLINE_HTML =
+  '<p>Hi</p><img src="cid:Logo@Mail"><img src=cid:sig%40mail><img src="cid:huge"><img src="cid:missing">';
+const INLINE_PAYLOAD: GmailPart = {
+  partId: "",
+  mimeType: "multipart/related",
+  headers: [{ name: "Subject", value: "With pictures" }],
+  parts: [
+    { partId: "0", mimeType: "text/html", headers: [{ name: "Content-Type", value: "text/html; charset=utf-8" }], body: { data: b64url(INLINE_HTML) } },
+    {
+      partId: "1",
+      mimeType: "image/png",
+      filename: "logo.png",
+      headers: [{ name: "Content-ID", value: "<logo@mail>" }],
+      body: { attachmentId: "att-logo", size: 4 },
+    },
+    { partId: "2", mimeType: "IMAGE/JPEG", headers: [{ name: "Content-ID", value: "<sig@mail>" }], body: { data: b64url("JPEG"), size: 4 } },
+    {
+      partId: "3",
+      mimeType: "image/png",
+      headers: [{ name: "Content-ID", value: "<huge>" }],
+      body: { attachmentId: "att-huge", size: INLINE_IMAGE_MAX_BYTES + 1 },
+    },
+    { partId: "4", mimeType: "text/plain", headers: [{ name: "Content-ID", value: "<missing>" }], body: { data: b64url("not an image") } },
+  ],
+};
+
 describe("Gmail MIME helpers", () => {
+  it("collects cid: references URL-decoded, without brackets and in one case", () => {
+    expect([...cidReferencesOf(INLINE_HTML)]).to.deep.equal(["logo@mail", "sig@mail", "huge", "missing"]);
+  });
+
+  it("matches only image parts whose Content-ID the HTML references", () => {
+    const parts = inlineImagePartsOf(INLINE_PAYLOAD, INLINE_HTML);
+    expect([...parts.keys()]).to.deep.equal(["logo@mail", "sig@mail", "huge"]);
+    expect(inlineImagePartsOf(INLINE_PAYLOAD, "<p>no pictures</p>").size).to.equal(0);
+  });
+
+  it("replaces resolved cid: references and leaves the rest as written", () => {
+    const html = replaceCidReferences('<img src="cid:A"><img src="cid:b">', new Map([["a", "data:image/png;base64,QQ=="]]));
+    expect(html).to.equal('<img src="data:image/png;base64,QQ=="><img src="cid:b">');
+  });
+
   it("decodes base64url with or without padding", () => {
     expect(decodeBase64Url(b64url("hello?>")).toString()).to.equal("hello?>");
     expect(decodeBase64Url(b64url("a")).toString()).to.equal("a");
@@ -248,6 +295,30 @@ describe("GmailMailboxSvc", () => {
     expect(msg.textBody).to.equal("Here’s what happened…");
     expect(msg.htmlBody).to.equal("<p>é</p>");
     expect(msg.attachments).to.have.length(3);
+  });
+
+  it("embeds the inline images the HTML references as data: URIs, skipping one too big to embed", async () => {
+    respond = (url) => {
+      if (url.includes("/attachments/att-logo")) return ok({ data: b64url("PNG!") });
+      return ok({ id: "m1", threadId: "t1", payload: INLINE_PAYLOAD });
+    };
+    const msg = await GmailMailboxSvc.getMessage("user-1", "m1");
+    expect(msg.htmlBody).to.equal(
+      `<p>Hi</p><img src="data:image/png;base64,${Buffer.from("PNG!").toString("base64")}">` +
+        `<img src=data:image/jpeg;base64,${Buffer.from("JPEG").toString("base64")}>` +
+        '<img src="cid:huge"><img src="cid:missing">',
+    );
+    expect(calls.some((c) => c.url.includes("att-huge"))).to.equal(false);
+  });
+
+  it("still shows the email when an inline image can't be fetched", async () => {
+    respond = (url) => {
+      if (url.includes("/attachments/att-logo")) return new Response("", { status: 500 });
+      return ok({ id: "m1", threadId: "t1", payload: INLINE_PAYLOAD });
+    };
+    const msg = await GmailMailboxSvc.getMessage("user-1", "m1");
+    expect(msg.htmlBody).to.include('<img src="cid:Logo@Mail">');
+    expect(msg.htmlBody).to.include("data:image/jpeg;base64,");
   });
 
   it("downloads an attachment by partId using the current attachmentId and Gmail's own filename", async () => {
