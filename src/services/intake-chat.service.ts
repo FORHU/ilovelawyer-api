@@ -34,6 +34,30 @@ const CANCEL_POLL_INTERVAL_MS = 1_000;
 const CHAT_WONDER_SESSION_TTL_S = 60 * 60 * 24; // 1 day, same as the lawyer/client pipeline's session TTL
 const MAX_DOCUMENT_EXCERPT_CHARS = 12_000;
 
+/** How much of the earlier chat is handed to a new Chat Wonder session (see earlierConversationBlock). */
+const EARLIER_CONVERSATION_MAX_MESSAGES = 30;
+const EARLIER_CONVERSATION_MAX_CHARS_PER_MESSAGE = 1_500;
+
+/** Chat Wonder keeps sessions in memory and forgets them on restart; it then answers a turn on
+ * the old session with "Unknown session." as its first frame, before any content. */
+export function isUnknownSessionError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("Unknown session");
+}
+
+/** The chat before the turn `currentMessageId`, oldest first, for a new Chat Wonder session that
+ * never saw it. Intake relies on the session to remember the conversation (only the case details,
+ * readiness and document excerpts are sent each turn), so without this the client's earlier
+ * answers would be lost and the AI would start the interview over. Empty when there's no history. */
+export function earlierConversationBlock(rows: { id: string; role: string; content: string }[], currentMessageId: string): string {
+  const end = rows.findIndex((m) => m.id === currentMessageId);
+  const before = (end < 0 ? rows : rows.slice(0, end))
+    .filter((m) => (m.role === "user" || m.role === "assistant") && m.content.trim())
+    .slice(-EARLIER_CONVERSATION_MAX_MESSAGES);
+  if (!before.length) return "";
+  const lines = before.map((m) => `${m.role === "user" ? "Client" : "You"}: ${m.content.trim().slice(0, EARLIER_CONVERSATION_MAX_CHARS_PER_MESSAGE)}`);
+  return `Earlier conversation with this client (the chat session was restarted, so it is repeated here). Carry on from it: don't greet the client again or ask what they've already answered.\n${lines.join("\n")}`;
+}
+
 function intakeSessionKey(caseId: string): string {
   // A distinct key prefix from chatWonderSessionKey's "chatwonder:session:<consultationId>" —
   // the intake pipeline's own session cache namespace, never colliding with the lawyer/client one.
@@ -122,6 +146,11 @@ export default class IntakeChatSvc {
       await redis.set(intakeSessionKey(caseId), stored, CHAT_WONDER_SESSION_TTL_S);
       return stored;
     }
+    return IntakeChatSvc.newSession(caseId);
+  }
+
+  /** A fresh Chat Wonder session for the case, stored so the next turns use it too. */
+  static async newSession(caseId: string): Promise<string> {
     const fresh = await getChatWonderSessionIdForIntake();
     await redis.set(intakeSessionKey(caseId), fresh, CHAT_WONDER_SESSION_TTL_S);
     return fresh;
@@ -342,17 +371,25 @@ export default class IntakeChatSvc {
       }
     };
 
+    const stream = (sid: string, context: string) =>
+      streamIntakeChatWonderMessage(sid, userInput, checkpointedOnChunk, context || undefined, signal, () => emitEvent("chat:answer-complete", {}), caseId, userId);
+
     try {
-      const result = await streamIntakeChatWonderMessage(
-        sessionId,
-        userInput,
-        checkpointedOnChunk,
-        documentContext || undefined,
-        signal,
-        () => emitEvent("chat:answer-complete", {}),
-        caseId,
-        userId,
-      );
+      let result: Awaited<ReturnType<typeof stream>>;
+      try {
+        result = await stream(sessionId, documentContext);
+      } catch (err) {
+        // Chat Wonder forgot the session (it restarted): every turn on it would fail the same way
+        // until the cached id expired, so start a new one now, store it for the next turns, and
+        // hand it the earlier chat it never saw. Safe to send again: "Unknown session." arrives
+        // before any content, so nothing has been streamed to the client yet. Same recovery as
+        // the lawyer chat's ChatSvc.streamWithSessionRetry.
+        if (!isUnknownSessionError(err)) throw err;
+        logger.warn("Intake chat generation: Chat Wonder no longer knows the session; starting a new one", { caseId, jobId: parentMessageId });
+        const freshSessionId = await IntakeChatSvc.newSession(caseId);
+        const history = earlierConversationBlock(await IntakeChatRepo.listByCase(caseId), parentMessageId);
+        result = await stream(freshSessionId, [documentContext, history].filter(Boolean).join("\n\n"));
+      }
       await checkpointChain;
       fullResponse = redactDocumentIds(result.content, scopeDocs);
       lawyerMatches = result.lawyerMatches;

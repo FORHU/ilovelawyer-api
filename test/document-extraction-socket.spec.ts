@@ -163,6 +163,29 @@ describe("DocumentExtractionSvc socket events", () => {
     expect(statusWrites).to.deep.equal(["FAILED"]);
   });
 
+  it("marks a photo with no readable text READY, indexed by its name, instead of failing it", async () => {
+    doc = { ...baseDoc, name: "car_accident.jpg", mimeType: "image/jpeg" } as any;
+    pages = [{ pageNumber: 1, text: "" }];
+    const embedded: string[] = [];
+    (embedding as any).embedTexts = async (texts: string[]) => {
+      embedded.push(...texts);
+      return texts.map(() => [0.1, 0.2]);
+    };
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(emitted.map((e) => e.event)).to.deep.equal(["document:started", "document:ready"]);
+    expect(statusWrites).to.include("READY");
+    expect(statusWrites).to.not.include("FAILED");
+    expect(embedded.join(" ")).to.include('Image "car_accident.jpg"');
+  });
+
+  it("still fails a PDF with no text, which is a scan OCR couldn't read", async () => {
+    doc = { ...baseDoc, name: "scan.pdf", mimeType: "application/pdf" } as any;
+    pages = [{ pageNumber: 1, text: "" }];
+    await DocumentExtractionSvc.process("doc1");
+    expect(statusWrites).to.deep.equal(["FAILED"]);
+  });
+
   it("emits document:failed when extraction throws a non-rate-limit error", async () => {
     (embedding as any).embedTexts = async () => {
       throw new Error("boom");
