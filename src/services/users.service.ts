@@ -29,7 +29,7 @@ export default class UsersSvc {
     if (data.username) {
       const existing = await AuthRepo.findByUsername(data.username);
       if (existing && existing.id !== userId) {
-        throw new HttpError("Username is already taken", 409);
+        throw new HttpError("That username is taken. Try another one.", 409, "USERNAME_TAKEN");
       }
     }
 
