@@ -19,7 +19,8 @@ import HttpError from "../utils/http-error";
 import { consultationInWorkspace } from "../utils/consultation-scope";
 import logger from "../utils/logger";
 import { runInLlmUsageScope } from "../lib/llm-usage-scope";
-import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep } from "../utils/response-parser";
+import { extractTimeline, extractMindMap, stripStructuredBlocks, splitIntoTopics, MindMapItem, TimelineItem, AudioOverviewTurn, ReasoningExplanation, DecisionRecordsPayload, TraceStep, ConfidencePayload } from "../utils/response-parser";
+import { confidenceViewEnabled, remapConfidenceCitations } from "../utils/message-confidence";
 import { DocumentRef, redactDocumentIds, sanitizeDecisionRecords, decisionRecordsNeedSanitizing } from "../utils/document-references";
 import DecisionRecordSvc from "./decision-record.service";
 import GeneratedDocumentExportSvc from "./generated-document-export.service";
@@ -104,6 +105,9 @@ export interface AssistantTurnPayload {
   audioOverview?: AudioOverviewTurn[];
   reasoning?: ReasoningExplanation;
   decisions?: DecisionRecordsPayload;
+  /** Confidence view (chat-wonder confidence.py) — citation refs still chat-wonder's original
+   * hrefs; remapped to the saved links in persistAssistantTurn. */
+  confidence?: ConfidencePayload;
   draftedDocument?: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string };
   researchSteps?: TraceStep[];
 }
@@ -1043,6 +1047,7 @@ export default class ChatSvc {
     let streamedAudioOverview: AudioOverviewTurn[] | undefined;
     let streamedReasoning: ReasoningExplanation | undefined;
     let streamedDecisions: DecisionRecordsPayload | undefined;
+    let streamedConfidence: ConfidencePayload | undefined;
     let streamedDraftedDocument: { content: string; format: "docx" | "pdf"; documentType?: string; documentName?: string } | undefined;
     let streamedResearchSteps: TraceStep[] | undefined;
     try {
@@ -1164,6 +1169,7 @@ export default class ChatSvc {
         streamedAudioOverview = result.audioOverview;
         streamedReasoning = result.reasoning;
         streamedDecisions = result.decisions;
+        streamedConfidence = result.confidence;
         streamedDraftedDocument = result.draftedDocument;
         streamedResearchSteps = result.researchSteps;
         inlinedCaseDocumentIds = result.inlinedCaseDocumentIds;
@@ -1234,6 +1240,7 @@ export default class ChatSvc {
       audioOverview: streamedAudioOverview,
       reasoning: streamedReasoning,
       decisions: streamedDecisions,
+      confidence: streamedConfidence,
       draftedDocument: streamedDraftedDocument,
       researchSteps: streamedResearchSteps,
     };
@@ -1471,13 +1478,18 @@ export default class ChatSvc {
       rewrittenCount,
       attemptedCount,
       strippedCount,
+      hrefMap,
     } = await rewriteLegalCitationLinks(cleanedContent, p.tenantCode).catch((err) => {
       logger.warn("Message persistence: citation link rewrite failed, keeping original links", {
         err,
         parentMessageId: p.parentMessageId,
       });
-      return { content: cleanedContent, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 };
+      return { content: cleanedContent, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0, hrefMap: undefined };
     });
+    // Confidence view's citation spans point at chat-wonder's original hrefs; re-point them at the
+    // links as saved (or drop them where a link was stripped). Off entirely without the flag.
+    const confidence =
+      p.confidence && confidenceViewEnabled() ? remapConfidenceCitations(p.confidence, hrefMap) : undefined;
     cleanedContent = rewrittenContent;
     if (attemptedCount > 0 || strippedCount > 0) {
       logger.info("Message persistence: legal citation links rewritten", {
@@ -1541,6 +1553,12 @@ export default class ChatSvc {
     if (reasoning) {
       await ChatRepo.saveReasoning(assistantMessage.id, reasoning).catch((err) => {
         logger.error("Failed to persist reasoning explanation", { err, messageId: assistantMessage.id });
+      });
+    }
+    // Same anchor as reasoning: the turn's LAST assistant message (a split reply's last topic).
+    if (confidence?.spans.length) {
+      await ChatRepo.saveConfidence(assistantMessage.id, confidence).catch((err) => {
+        logger.error("Failed to persist confidence view", { err, messageId: assistantMessage.id });
       });
     }
     if (decisions?.records.length) {

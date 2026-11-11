@@ -59,3 +59,9 @@ export const CLIENT_REQUEST_PASS_NOTE_MAX_LENGTH = 500;
 /** How long a confirmed client waits on a lawyer's failing introduction fee before the request goes
  * back to other lawyers (#933, ClientRequestSweepQueue): from when the client confirmed. */
 export const CLIENT_REQUEST_UNPAID_FEE_HOURS = 48;
+
+/** How long the client has to answer the lawyer's "the work is finished" before the engagement closes
+ * by itself (EngagementCompletionSvc, ClientRequestSweepQueue): from when the lawyer asked. */
+export const ENGAGEMENT_COMPLETION_CONFIRM_DAYS = 7;
+/** The client's reason when they say the work isn't finished, shown to the lawyer. */
+export const ENGAGEMENT_COMPLETION_DECLINE_MAX_LENGTH = 1000;

@@ -1,26 +1,24 @@
 import type Stripe from "stripe";
-import type { Quotation, QuotationPayment, QuotationRefund } from "@prisma/client";
+import type { LawyerExit, Quotation, QuotationPayment, QuotationRefund } from "@prisma/client";
 import QuotationRepo from "../repositories/quotation.repository";
 import QuotationPaymentRepo, { PAID_QUOTATION_PAYMENT_STATUSES } from "../repositories/quotation-payment.repository";
+import LawyerExitRepo from "../repositories/lawyer-exit.repository";
 import WalletRepo from "../repositories/wallet.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
 import OrganizationRepo from "../repositories/organization.repository";
-import PayoutSettingsSvc from "./payout-settings.service";
-import ClientPricingSvc from "./client-pricing.service";
 import EngagementAccessSvc from "./engagement-access.service";
 import NotificationSvc from "./notification.service";
-import SecurityAuditSvc from "./security-audit.service";
+import QuotationRefundSvc from "./quotation-refund.service";
+import LawyerExitSvc from "./lawyer-exit.service";
 import WalletSvc, { payeeOf } from "./wallet.service";
 import { quotationPaymentProvider, quotationPaymentProviderNamed, type QuotationPaymentResult } from "../payments/quotation-payment-provider";
-import { stripeRefused } from "../payments/stripe-client";
 import { emitToUser } from "../lib/socket";
 import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import type { ClientRequestUpdatedEvent } from "../types/client-handoff";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const UNREACHABLE = "We couldn't reach the payment provider. Try again in a moment.";
 const gbp = (minor: number) => `£${(minor / 100).toFixed(2)}`;
 const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
@@ -64,8 +62,10 @@ async function notify(userId: string, n: { title: string; message: string; link:
  * payment does once it's in: the request ENGAGED, the lawyer given read-only access to the case, and
  * their service fee in their wallet, PENDING for the tenant's hold (WalletSvc). The platform fee stays
  * on ilovelawyer's Stripe balance. Settled once, on payment_intent.succeeded or when the client app
- * asks (status), whichever comes first. Also: expiring quotations the client didn't accept or pay in
- * time (expireDue), admin refunds, and the client's bank disputing a payment.
+ * asks (status), whichever comes first. The earning's hold starts when the engagement closes
+ * (ClientRequestRepo.close), not here. Also: expiring quotations the client didn't accept or pay in
+ * time (expireDue), admin refunds (QuotationRefundSvc), and the client's bank disputing a payment,
+ * which a Lawyer Exit on it waits for (LawyerExitSvc).
  */
 export default class QuotationPaymentSvc {
   /**
@@ -168,11 +168,16 @@ export default class QuotationPaymentSvc {
     if (!payment) return;
     if (opened) {
       await QuotationPaymentRepo.openDispute(payment.id);
+      await LawyerExitSvc.disputeOpened(payment.id);
       return;
     }
     // Only "lost" takes the money back; "won" and an inquiry's "warning_closed" leave it with us.
-    const walletId = await QuotationPaymentRepo.closeDispute(payment.id, dispute.status === "lost", dispute.id);
+    const lost = dispute.status === "lost";
+    const walletId = await QuotationPaymentRepo.closeDispute(payment.id, lost, dispute.id);
     if (walletId) await WalletSvc.changedById(walletId);
+    // A Lawyer Exit waiting on the bank carries on now. Its earning stays held until it settles (an
+    // exit's earning has no availableAt), so a won dispute releases nothing early.
+    await LawyerExitSvc.disputeClosed(payment.id, lost);
   }
 
   /** refund.updated / refund.failed for a refund of ours. */
@@ -183,6 +188,8 @@ export default class QuotationPaymentSvc {
     if (!status) return;
     const settled = await QuotationPaymentRepo.settleRefund(refundId, { status, externalId: refund.id, failureReason: status === "FAILED" ? (refund.failure_reason ?? "Stripe couldn't complete the refund") : null });
     if (settled?.walletId) await WalletSvc.changedById(settled.walletId);
+    // A Lawyer Exit waiting on this refund: settled, or handed to an admin when it failed.
+    await LawyerExitSvc.afterRefund(refundId);
   }
 
   /**
@@ -218,78 +225,34 @@ export default class QuotationPaymentSvc {
    * An admin refund, in full when no amount is given. A full refund gives back the platform fee too; a
    * partial one comes out of the lawyer's service fee only, so it can be at most what's left of that,
    * and the platform fee is kept. The lawyer's earning is reversed by the service-fee part once the
-   * refund goes through. Audited. Gives back money only: the engagement carries on.
+   * refund goes through. Audited. Gives back money only: the engagement carries on. (A Lawyer Exit's
+   * refund is decided on the exit instead: LawyerExitSvc.decide.)
    */
   static async refund(paymentId: string, input: { amount?: { amountMinor: number; currency: string }; reason: string }, adminId: string) {
     const payment = await QuotationPaymentRepo.findById(paymentId);
     if (!payment) throw new HttpError("Payment not found", 404);
-    if (!PAID_QUOTATION_PAYMENT_STATUSES.includes(payment.status) || payment.status === "REFUNDED") {
-      throw new HttpError("Only a payment that took money, and isn't fully refunded, can be refunded.", 409, "NOT_REFUNDABLE");
-    }
-    // Stripe refuses refunds on a disputed charge (charge_disputed): the bank decides it.
-    if (payment.status === "DISPUTED") throw new HttpError("This payment is disputed: the client's bank decides the outcome.", 409, "NOT_REFUNDABLE");
     if (input.amount && input.amount.currency !== payment.currency) throw new HttpError(`This payment is in ${payment.currency}.`, 400, "REFUND_CURRENCY_MISMATCH");
-
-    // Checked here for a clear answer, and again under the lock (createRefund), which also splits it.
-    const so = await QuotationPaymentRepo.refundedSoFar(paymentId);
-    const left = payment.amountMinor - so.amountMinor;
-    const serviceLeft = payment.serviceFeeMinor - so.serviceFeeMinor;
-    const amountMinor = input.amount?.amountMinor ?? left;
-    if (amountMinor <= 0 || amountMinor > left) throw new HttpError(`At most ${gbp(left)} is left to refund.`, 400, "REFUND_EXCEEDS_CHARGE");
-    // Everything that's left: the platform fee comes back too. Less: only the lawyer's part.
-    if (amountMinor !== left && amountMinor > serviceLeft) {
-      throw new HttpError(`A partial refund comes out of the lawyer's fee: at most ${gbp(serviceLeft)}. Refund ${gbp(left)} to give back everything.`, 400, "REFUND_EXCEEDS_CHARGE");
-    }
-    const refund = await QuotationPaymentRepo.createRefund(paymentId, { amountMinor, reason: input.reason, createdById: adminId });
-    if (!refund) throw new HttpError("Another refund changed what's left of this payment. Look again and retry.", 409, "REFUND_EXCEEDS_CHARGE");
-    const serviceFeeMinor = refund.serviceFeeMinor;
-
-    const provider = quotationPaymentProviderNamed(payment.provider);
-    let result: { status: "PENDING" | "SUCCEEDED" | "FAILED"; externalId: string | null; failureReason: string | null };
-    try {
-      result = await provider.refund({ refundId: refund.id, paymentId, paymentIntentId: payment.paymentIntentId ?? "", amountMinor });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      if (stripeRefused(err)) {
-        result = { status: "FAILED", externalId: null, failureReason: reason };
-        logger.error("Quotation payment refund refused", { paymentId, refundId: refund.id, err: reason });
-      } else {
-        // No answer: Stripe may have made it. It stays PENDING, so refund.updated can settle it, and what
-        // it holds back stops a retry from refunding the same money twice.
-        result = { status: "PENDING", externalId: null, failureReason: null };
-        logger.error("Quotation payment refund: no answer from Stripe, left PENDING for its webhook", { paymentId, refundId: refund.id, err: reason });
-      }
-    }
-    if (result.status === "PENDING") {
-      if (result.externalId) await prisma.quotationRefund.update({ where: { id: refund.id }, data: { externalId: result.externalId } });
-    } else {
-      const settled = await QuotationPaymentRepo.settleRefund(refund.id, { status: result.status, externalId: result.externalId, failureReason: result.failureReason });
-      if (settled?.walletId) await WalletSvc.changedById(settled.walletId);
-    }
-
-    await SecurityAuditSvc.record({
-      action: "admin.quotation_payment.refunded",
-      actorId: adminId,
-      organizationId: null,
-      targetType: "quotation_payment",
-      targetId: paymentId,
-      payload: { requestId: payment.requestId, refundId: refund.id, amountMinor, serviceFeeMinor, status: result.status, reason: input.reason },
-    });
-    if (result.status === "FAILED") throw new HttpError(result.failureReason ?? "The refund failed.", 502, "REFUND_FAILED");
-    return QuotationPaymentSvc.adminDto((await QuotationPaymentRepo.list({ id: paymentId }, 1, 1)).data[0]!);
+    const amountMinor = await QuotationRefundSvc.assertRefundable(payment, input.amount?.amountMinor ?? null);
+    const issued = await QuotationRefundSvc.issue(payment, amountMinor, input.reason, { adminId });
+    if (!issued) throw new HttpError("Another refund changed what's left of this payment. Look again and retry.", 409, "REFUND_EXCEEDS_CHARGE");
+    if (issued.status === "FAILED") throw new HttpError(issued.failureReason ?? "The refund failed.", 502, "REFUND_FAILED");
+    const row = (await QuotationPaymentRepo.list({ id: paymentId }, 1, 1)).data[0]!;
+    return QuotationPaymentSvc.adminDto(row, await LawyerExitRepo.findByRequest(row.requestId));
   }
 
   /** The admin app's list: payments that took money by default, every attempt with `all`. */
   static async listForAdmin(query: { status?: QuotationPayment["status"]; all?: boolean; page: number; limit: number }) {
     const where = query.status ? { status: query.status } : query.all ? {} : { status: { in: PAID_QUOTATION_PAYMENT_STATUSES } };
     const { total, data } = await QuotationPaymentRepo.list(where, query.page, query.limit);
-    return { total, page: query.page, pageSize: query.limit, data: data.map((p) => QuotationPaymentSvc.adminDto(p)) };
+    const exits = await LawyerExitRepo.findByPayments(data.map((p) => p.id));
+    return { total, page: query.page, pageSize: query.limit, data: data.map((p) => QuotationPaymentSvc.adminDto(p, exits.get(p.id) ?? null)) };
   }
 
   /** The admin app's row. `refundable` and `refundableServiceFee` are what refund() would allow now
    * (the same count as refundedSoFar: pending refunds hold their share back), 0 when it can't be
-   * refunded at all; `refundPending` is what's on its way at Stripe. */
-  private static adminDto(p: QuotationPayment & { refunds: QuotationRefund[] }) {
+   * refunded at all; `refundPending` is what's on its way at Stripe. `lawyerExit`: the lawyer stopped
+   * acting after this payment, with their reason and notes (admins only), and where it stands. */
+  private static adminDto(p: QuotationPayment & { refunds: QuotationRefund[] }, exit: LawyerExit | null) {
     const held = p.refunds.filter((r) => r.status === "PENDING" || r.status === "SUCCEEDED");
     const pending = p.refunds.filter((r) => r.status === "PENDING").reduce((sum, r) => sum + r.amountMinor, 0);
     const refundableStatus = PAID_QUOTATION_PAYMENT_STATUSES.includes(p.status) && p.status !== "REFUNDED" && p.status !== "DISPUTED";
@@ -304,6 +267,22 @@ export default class QuotationPaymentSvc {
       refundable: money(left, p.currency),
       refundableServiceFee: money(Math.min(serviceLeft, left), p.currency),
       refunds: p.refunds.map((r) => refundDto(r, p.currency)),
+      lawyerExit:
+        exit && exit.paymentId === p.id
+          ? {
+              id: exit.id,
+              status: exit.status,
+              reason: exit.reason,
+              note: exit.note,
+              workDone: exit.workDone,
+              claimed: exit.claimedMinor === null ? null : money(exit.claimedMinor, exit.currency),
+              claimNote: exit.claimNote,
+              refunded: money(exit.refundedMinor, exit.currency),
+              failureReason: exit.failureReason,
+              createdAt: exit.createdAt,
+              settledAt: exit.settledAt,
+            }
+          : null,
     };
   }
 
@@ -327,28 +306,17 @@ export default class QuotationPaymentSvc {
       return;
     }
     const wallet = await WalletRepo.findOrCreate(payeeOf(claim), payment.currency);
-    const terms = await PayoutSettingsSvc.forTenant(await ClientPricingSvc.tenantIdForClient(payment.clientId));
     const now = new Date();
-    const availableAt = new Date(now.getTime() + terms.earningsHoldDays * DAY_MS);
-    const settled = await QuotationPaymentRepo.settle(payment.id, { walletId: wallet.id, lawyerId: claim.lawyerId, availableAt }, paymentIntentId, now);
+    // The earning waits PENDING with no date: its hold starts when the engagement closes.
+    const settled = await QuotationPaymentRepo.settle(payment.id, { walletId: wallet.id, lawyerId: claim.lawyerId }, paymentIntentId, now);
     if (!settled.settled) return;
 
     if (settled.orphaned) {
       logger.warn("Quotation payment: money taken after the request moved on, refunding", { paymentId: payment.id, requestId: payment.requestId });
-      const refund = await QuotationPaymentRepo.createRefund(payment.id, { amountMinor: payment.amountMinor, reason: "Paid after the quote expired", createdById: null });
-      if (refund) {
-        const result = await quotationPaymentProviderNamed(payment.provider)
-          .refund({ refundId: refund.id, paymentId: payment.id, paymentIntentId: settled.payment.paymentIntentId ?? "", amountMinor: payment.amountMinor })
-          // Refused: FAILED. No answer: left PENDING for refund.updated, since Stripe may have made it.
-          .catch((err) =>
-            stripeRefused(err)
-              ? { status: "FAILED" as const, externalId: null, failureReason: err instanceof Error ? err.message : String(err) }
-              : { status: "PENDING" as const, externalId: null, failureReason: null },
-          );
-        if (result.status === "SUCCEEDED" || result.status === "FAILED") {
-          await QuotationPaymentRepo.settleRefund(refund.id, { status: result.status, externalId: result.externalId, failureReason: result.failureReason });
-        }
-      }
+      // Refused: FAILED. No answer: left PENDING for refund.updated, since Stripe may have made it.
+      await QuotationRefundSvc.issue(settled.payment, payment.amountMinor, "Paid after the quote expired", "SYSTEM").catch((err) =>
+        logger.error("Quotation payment: refund of a late payment failed", { paymentId: payment.id, err: err instanceof Error ? err.message : String(err) }),
+      );
       await notify(payment.clientId, {
         title: "Your payment is being refunded",
         message: "The quote had expired by the time your payment went through, so we're giving the money back.",
@@ -356,11 +324,11 @@ export default class QuotationPaymentSvc {
       });
       return;
     }
-    await QuotationPaymentSvc.afterEngaged(quotation, claim, settled.earning?.netMinor ?? 0, availableAt, wallet.id);
+    await QuotationPaymentSvc.afterEngaged(quotation, claim, settled.earning?.netMinor ?? 0, wallet.id);
   }
 
   /** The request is ENGAGED: the lawyer gets read-only access to the case, both sides are told. */
-  static async afterEngaged(quotation: Quotation, claim: { organizationId: string | null; lawyerId: string }, earnedMinor: number, availableAt: Date | null, walletId: string | null) {
+  static async afterEngaged(quotation: Quotation, claim: { organizationId: string | null; lawyerId: string }, earnedMinor: number, walletId: string | null) {
     const request = await ClientRequestRepo.findForLawyer(quotation.requestId);
     if (!request) return;
     const now = new Date().toISOString();
@@ -372,8 +340,8 @@ export default class QuotationPaymentSvc {
     await notify(claim.lawyerId, {
       title: "You're engaged on a client request",
       message:
-        earnedMinor > 0 && availableAt
-          ? `The client paid your quote. ${gbp(earnedMinor)} is in your earnings, available to withdraw from ${availableAt.toISOString().slice(0, 10)}.`
+        earnedMinor > 0
+          ? `The client paid your quote. ${gbp(earnedMinor)} is in your earnings, held until you close the engagement and for the usual hold after that.`
           : "The client accepted your quote.",
       link: `/client-requests/${request.id}`,
     });

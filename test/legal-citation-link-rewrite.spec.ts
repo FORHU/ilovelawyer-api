@@ -92,6 +92,9 @@ describe("rewriteLegalCitationLinks", () => {
       rewrittenCount: 0,
       attemptedCount: 0,
       strippedCount: 1,
+      // Every original href -> the saved link, or null when stripped (Confidence view re-points
+      // its citation spans with this).
+      hrefMap: new Map([["https://hansard.parliament.uk/commons/2020", null]]),
     });
   });
 
@@ -111,6 +114,7 @@ describe("rewriteLegalCitationLinks", () => {
       rewrittenCount: 0,
       attemptedCount: 0,
       strippedCount: 1,
+      hrefMap: new Map([["https://hansard.parliament.uk/commons/2020", null]]),
     });
   });
 
@@ -125,6 +129,7 @@ describe("rewriteLegalCitationLinks", () => {
       rewrittenCount: 0,
       attemptedCount: 0,
       strippedCount: 1,
+      hrefMap: new Map([["https://hansard.parliament.uk/x", null]]),
     });
   });
 
@@ -138,6 +143,10 @@ describe("rewriteLegalCitationLinks", () => {
       rewrittenCount: 0,
       attemptedCount: 0,
       strippedCount: 2,
+      hrefMap: new Map([
+        ["https://hansard.parliament.uk/a", null],
+        ["https://hansard.parliament.uk/b", null],
+      ]),
     });
   });
 });

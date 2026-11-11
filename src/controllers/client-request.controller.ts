@@ -13,6 +13,7 @@ import {
   payQuotationSchema,
   createClientRequestSchema,
   declineClientRequestSchema,
+  declineCompletionSchema,
   endClientRequestSchema,
   feedbackClientRequestSchema,
   listClientRequestsSchema,
@@ -94,6 +95,17 @@ export default class ClientRequestCtrl {
   static async end(req: Request, res: Response) {
     const body = validate(endClientRequestSchema, req.body ?? {});
     res.status(200).json(await ClientRequestSvc.end(req.user.userId, req.params.id, body));
+  }
+
+  /** POST /client/lawyer-requests/:id/completion/confirm: the work is finished; the engagement closes. */
+  static async confirmCompletion(req: Request, res: Response) {
+    res.status(200).json(await ClientRequestSvc.confirmCompletion(req.user.userId, req.params.id));
+  }
+
+  /** POST /client/lawyer-requests/:id/completion/decline: it isn't finished yet, and why. */
+  static async declineCompletion(req: Request, res: Response) {
+    const body = validate(declineCompletionSchema, req.body ?? {});
+    res.status(200).json(await ClientRequestSvc.declineCompletion(req.user.userId, req.params.id, body));
   }
 
   /** The thread with one lawyer (#517; `?claimId=`, or the hired lawyer's), oldest first, with how
