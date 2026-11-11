@@ -2,11 +2,14 @@ import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import GmailConnectionSvc from "../services/gmail-connection.service";
 import GmailMailboxSvc from "../services/gmail-mailbox.service";
+import GmailCaseImportSvc from "../services/gmail-case-import.service";
+import { clientWorkspaceOf } from "../middleware/require-client-account.middleware";
 import HttpError from "../utils/http-error";
 import {
   connectGmailSchema,
   gmailAttachmentParamsSchema,
   gmailMessageParamsSchema,
+  importGmailToCaseSchema,
   searchGmailSchema,
 } from "../validation/client-gmail.validation";
 
@@ -55,5 +58,11 @@ export default class ClientGmailCtrl {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "private, no-store");
     res.status(200).send(buffer);
+  }
+
+  /** Adds an email (as a PDF) and/or chosen attachments to one of the client's cases. */
+  static async importToCase(req: Request, res: Response) {
+    const input = validate(importGmailToCaseSchema, req.body ?? {});
+    res.status(201).json(await GmailCaseImportSvc.importToCase(clientWorkspaceOf(req), req.user.userId, req.params.caseId, input));
   }
 }

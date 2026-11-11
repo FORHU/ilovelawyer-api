@@ -511,7 +511,9 @@ export default class ClientCaseSvc {
     }
   }
 
-  private static async load(workspace: ClientWorkspace, caseId: string) {
+  /** The client's own case, or 404. Also used by GmailCaseImportSvc to check the case before
+   * reading Gmail. */
+  static async load(workspace: ClientWorkspace, caseId: string) {
     const row = await ClientCaseRepo.findById(caseId, workspace.id);
     if (!row) throw new HttpError("Case not found", 404);
     return row;

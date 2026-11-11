@@ -92,6 +92,9 @@ router.delete("/gmail", asyncHandler(ClientGmailCtrl.disconnect));
 router.get("/gmail/messages", gmailLimiter, asyncHandler(ClientGmailCtrl.search));
 router.get("/gmail/messages/:messageId", gmailLimiter, asyncHandler(ClientGmailCtrl.message));
 router.get("/gmail/messages/:messageId/attachments/:partId/download", gmailLimiter, asyncHandler(ClientGmailCtrl.downloadAttachment));
+// Adding an email to a case (#986/#987): the email as a PDF and/or chosen attachments, each a
+// case document. Like an upload, it needs no AI-processing consent.
+router.post("/cases/:caseId/gmail-imports", gmailLimiter, asyncHandler(ClientGmailCtrl.importToCase));
 
 router.get("/lawyers", asyncHandler(ClientLawyerCtrl.list));
 router.get("/lawyers/:id", asyncHandler(ClientLawyerCtrl.get));

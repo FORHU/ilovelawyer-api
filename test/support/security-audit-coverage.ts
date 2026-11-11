@@ -276,6 +276,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/gmail/connect": ["integration.connected"],
   "DELETE /client/gmail": ["integration.disconnected"],
   "GET /client/gmail/messages/:messageId/attachments/:partId/download": ["gmail.attachment_downloaded"],
+  "POST /client/cases/:caseId/gmail-imports": ["gmail.imported_to_case"],
   // Chat Wonder's create_case intake tool (service-to-service, apiKeyMiddleware): writes the same
   // ClientCaseSvc.update case fields as PATCH /client/cases/:caseId above, so it gets the same action.
   "PATCH /intake-cases/:caseId": CASE_FEED,

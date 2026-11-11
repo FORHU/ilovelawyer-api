@@ -439,13 +439,31 @@ export default class GmailMailboxSvc {
   static async getMessage(userId: string, id: string): Promise<GmailMessageView> {
     const auth = new GmailToken(userId);
     const msg = await GmailMailboxSvc.getFull(userId, id, auth);
+    return GmailMailboxSvc.toView(userId, msg, auth, { embedImages: true });
+  }
+
+  /** A message and the bytes of the chosen attachments, from one read of it (for adding an email
+   * to a case, #986/#987). Inline images aren't embedded: the PDF made from it is text. Writes no
+   * audit event; the caller records what it did with them. */
+  static async getMessageWithAttachments(userId: string, id: string, partIds: string[]) {
+    const auth = new GmailToken(userId);
+    const msg = await GmailMailboxSvc.getFull(userId, id, auth);
+    const [message, files] = await Promise.all([
+      GmailMailboxSvc.toView(userId, msg, auth, { embedImages: false }),
+      mapPool(partIds, GET_CONCURRENCY, (partId) => GmailMailboxSvc.readAttachment(userId, msg, partId, auth)),
+    ]);
+    return { message, files };
+  }
+
+  private static async toView(userId: string, msg: GmailMessageResource, auth: GmailToken, options: { embedImages: boolean }): Promise<GmailMessageView> {
     const headers = msg.payload?.headers;
     const { text, html } = bodyPartsOf(msg.payload);
     const [textBody, rawHtml] = await Promise.all([
       GmailMailboxSvc.partText(userId, msg.id, text, auth),
       GmailMailboxSvc.partText(userId, msg.id, html, auth),
     ]);
-    const htmlBody = rawHtml ? await GmailMailboxSvc.embedInlineImages(userId, msg.id, msg.payload, rawHtml, auth) : null;
+    const htmlBody =
+      rawHtml && options.embedImages ? await GmailMailboxSvc.embedInlineImages(userId, msg.id, msg.payload, rawHtml, auth) : rawHtml;
 
     return {
       id: msg.id,
@@ -471,20 +489,24 @@ export default class GmailMailboxSvc {
   static async getAttachment(userId: string, messageId: string, partId: string) {
     const auth = new GmailToken(userId);
     const msg = await GmailMailboxSvc.getFull(userId, messageId, auth);
-    let part: GmailPart | undefined;
-    if (msg.payload) walk(msg.payload, (p) => p.partId === partId && isAttachment(p) && (part = p));
-    if (!part) throw new HttpError("That attachment couldn't be found.", 404, "GMAIL_NOT_FOUND");
-
-    const buffer = await GmailMailboxSvc.partBytes(userId, msg.id, part, auth);
-    if (!buffer) throw new HttpError("That attachment couldn't be read.", 502);
-
-    const mimeType = part.mimeType ?? "application/octet-stream";
+    const { buffer, filename, mimeType } = await GmailMailboxSvc.readAttachment(userId, msg, partId, auth);
     await SecurityAuditSvc.record({
       action: "gmail.attachment_downloaded",
       actorId: userId,
       targetType: "integration",
       payload: { type: "gmail", messageId: msg.id, partId, mimeType, size: buffer.length },
     });
-    return { buffer, filename: part.filename!, mimeType };
+    return { buffer, filename, mimeType };
+  }
+
+  /** The file part `partId` of a message already read, with its current bytes. */
+  private static async readAttachment(userId: string, msg: GmailMessageResource, partId: string, auth: GmailToken) {
+    let part: GmailPart | undefined;
+    if (msg.payload) walk(msg.payload, (p) => p.partId === partId && isAttachment(p) && (part = p));
+    if (!part) throw new HttpError("That attachment couldn't be found.", 404, "GMAIL_NOT_FOUND");
+
+    const buffer = await GmailMailboxSvc.partBytes(userId, msg.id, part, auth);
+    if (!buffer) throw new HttpError("That attachment couldn't be read.", 502);
+    return { partId, buffer, filename: part.filename!, mimeType: part.mimeType ?? "application/octet-stream" };
   }
 }

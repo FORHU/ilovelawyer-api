@@ -20,8 +20,17 @@ export const gmailMessageParamsSchema = Joi.object({
   messageId: Joi.string().pattern(GMAIL_ID).required(),
 });
 
+/** A MIME part path such as "1" or "0.2.1". */
+const PART_ID = Joi.string().max(32).pattern(/^\d+(\.\d+)*$/);
+
 export const gmailAttachmentParamsSchema = Joi.object({
   messageId: Joi.string().pattern(GMAIL_ID).required(),
-  /** A MIME part path such as "1" or "0.2.1". */
-  partId: Joi.string().max(32).pattern(/^\d+(\.\d+)*$/).required(),
+  partId: PART_ID.required(),
+});
+
+/** Add an email to a case (#986/#987): the email itself as a PDF, and/or chosen attachments. */
+export const importGmailToCaseSchema = Joi.object({
+  messageId: Joi.string().pattern(GMAIL_ID).required(),
+  includeEmail: Joi.boolean().default(true),
+  attachmentPartIds: Joi.array().items(PART_ID).max(25).default([]),
 });
