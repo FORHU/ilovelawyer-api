@@ -4,11 +4,28 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
-/** How many messages.get calls run at once for one search page. Gmail allows 250 quota units per
- * user per second and each get costs 5, so 10 in flight stays well under it. */
-const GET_CONCURRENCY = 10;
+/** How many messages.get calls run at once for one operation. Gmail allows 250 quota units per
+ * user per second (each get costs 5), but it also refuses too many concurrent requests per user,
+ * and a search, "Suggest by AI" and an open email can overlap; 5 keeps one user's bursts small. */
+const GET_CONCURRENCY = 5;
 export const GMAIL_SEARCH_MAX_LIMIT = 50;
-const RATE_LIMIT_RETRY_MS = 1000;
+/** Waits before each retry of a rate-limited request (Gmail's advice: exponential backoff). */
+export const RATE_LIMIT_BACKOFF_MS = [1000, 2000, 4000];
+/** Longest wait a Retry-After header is honoured for; a longer one is answered as busy at once. */
+const RETRY_AFTER_MAX_MS = 10_000;
+
+/** How long to wait before retry `attempt` (0-based) of a rate-limited request: Gmail's
+ * Retry-After (seconds or an HTTP date) when it sends one, else the backoff schedule. Null when
+ * the retries are used up or Gmail asks for longer than RETRY_AFTER_MAX_MS. */
+export function rateLimitDelayMs(retryAfter: string | null, attempt: number, schedule: number[] = RATE_LIMIT_BACKOFF_MS, now = Date.now()): number | null {
+  if (attempt >= schedule.length) return null;
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - now;
+    if (Number.isFinite(ms)) return ms > RETRY_AFTER_MAX_MS ? null : Math.max(0, ms);
+  }
+  return schedule[attempt];
+}
 /** Inline images (`cid:` in the HTML) are embedded in the body up to these sizes. A bigger one is
  * left as a broken image in the body; it's still in the attachment list to download. */
 export const INLINE_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
@@ -299,14 +316,17 @@ export class GmailToken {
  * here is stored: search rows, bodies and attachments go straight back to the client. Saving an
  * email to a case is a separate, explicit step (later sub-issues of #982). */
 export default class GmailMailboxSvc {
-  /** A GET against the Gmail API as the user. Refreshes once on a 401 (expired token), waits once
-   * when rate-limited, and turns anything else into an error the app can show. Only a refusal that
-   * means the grant is gone (a fresh token rejected, or Gmail no longer in its scopes) clears the
-   * connection; a quota limit never does. */
+  /** The backoff schedule gmailGet uses (a seam for the specs, which don't wait for real). */
+  static backoffMs: number[] = RATE_LIMIT_BACKOFF_MS;
+
+  /** A GET against the Gmail API as the user. Refreshes once on a 401 (expired token), backs off
+   * and retries when rate-limited (see rateLimitDelayMs), and turns anything else into an error the
+   * app can show. Only a refusal that means the grant is gone (a fresh token rejected, or Gmail no
+   * longer in its scopes) clears the connection; a quota limit never does. */
   static async gmailGet<T>(userId: string, path: string, auth: GmailToken = new GmailToken(userId)): Promise<T> {
     let token = await auth.get();
     let refreshed = false;
-    let waited = false;
+    let retries = 0;
 
     for (;;) {
       const res = await fetch(`${GMAIL_API}${path}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -324,9 +344,11 @@ export default class GmailMailboxSvc {
 
       const reasons = res.status === 403 ? await errorReasons(res) : new Set<string>();
       if (res.status === 429 || hasAny(reasons, QUOTA_REASONS)) {
-        if (!waited) {
-          await sleep(RATE_LIMIT_RETRY_MS);
-          waited = true;
+        const delay = rateLimitDelayMs(res.headers.get("Retry-After"), retries, GmailMailboxSvc.backoffMs);
+        logger.warn("Gmail rate-limited a request", { userId, status: res.status, reasons: [...reasons], attempt: retries + 1, retryInMs: delay });
+        if (delay !== null) {
+          await sleep(delay);
+          retries++;
           continue;
         }
         throw new HttpError("Gmail is busy right now. Try again in a minute.", 429, "GMAIL_RATE_LIMITED");
@@ -355,9 +377,21 @@ export default class GmailMailboxSvc {
       `/messages?${params}`,
       auth,
     );
-    const ids = (list.messages ?? []).map((m) => m.id);
+    const messages = await GmailMailboxSvc.readRows(userId, (list.messages ?? []).map((m) => m.id), auth);
+
+    await SecurityAuditSvc.record({
+      action: "gmail.searched",
+      actorId: userId,
+      targetType: "integration",
+      payload: { type: "gmail", resultCount: messages.length, page: input.pageToken ? "next" : "first" },
+    });
+    return { messages, nextPageToken: list.nextPageToken ?? null };
+  }
+
+  /** A search row (headers and attachment names, never body data) per id, in the same order. A
+   * message deleted between the list and its read is dropped, not the whole batch. */
+  private static async readRows(userId: string, ids: string[], auth: GmailToken): Promise<GmailSearchRow[]> {
     const fields = new URLSearchParams({ format: "full", fields: SEARCH_FIELDS });
-    // A message deleted between the list and its read is dropped, not the whole page.
     const rows = await mapPool(ids, GET_CONCURRENCY, (id) =>
       GmailMailboxSvc.gmailGet<GmailMessageResource>(userId, `/messages/${encodeURIComponent(id)}?${fields}`, auth).then(
         toSearchRow,
@@ -367,15 +401,29 @@ export default class GmailMailboxSvc {
         },
       ),
     );
-    const messages = rows.filter((row): row is GmailSearchRow => row !== null);
+    return rows.filter((row): row is GmailSearchRow => row !== null);
+  }
 
-    await SecurityAuditSvc.record({
-      action: "gmail.searched",
-      actorId: userId,
-      targetType: "integration",
-      payload: { type: "gmail", resultCount: messages.length, page: input.pageToken ? "next" : "first" },
-    });
-    return { messages, nextPageToken: list.nextPageToken ?? null };
+  /**
+   * Candidates for "Suggest by AI" (#984): the messages matching any of `queries`, newest first.
+   * One list call per query (`perQuery` ids each), ids merged without repeats, then one header
+   * read per id, up to `max`. Ids found by more queries are kept first when there are too many.
+   * Writes no audit event; the caller records the scan.
+   */
+  static async searchCandidates(userId: string, queries: string[], options: { perQuery: number; max: number }): Promise<GmailSearchRow[]> {
+    const auth = new GmailToken(userId);
+    const hits = new Map<string, number>();
+    const lists = await mapPool(queries, 3, (q) =>
+      GmailMailboxSvc.gmailGet<{ messages?: { id: string }[] }>(userId, `/messages?${new URLSearchParams({ q, maxResults: String(options.perQuery) })}`, auth),
+    );
+    for (const list of lists) for (const m of list.messages ?? []) hits.set(m.id, (hits.get(m.id) ?? 0) + 1);
+
+    const ids = [...hits.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, options.max)
+      .map(([id]) => id);
+    const rows = await GmailMailboxSvc.readRows(userId, ids, auth);
+    return rows.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
   }
 
   private static async getFull(userId: string, id: string, auth: GmailToken): Promise<GmailMessageResource> {

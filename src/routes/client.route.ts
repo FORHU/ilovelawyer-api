@@ -32,6 +32,15 @@ const gmailLimiter = rateLimit({
   message: { message: "That's a lot of Gmail searches in a short time. Wait a minute and try again." },
 });
 
+const emailImportConsent = requireConsent("EMAIL_IMPORT");
+
+const gmailSuggestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "You've asked the AI for email suggestions a lot just now. Try again in a few minutes, or search yourself." },
+});
+
 /** The client app (ilovelawyer-client): a client's own cases, their AI chat and their documents.
  * Client accounts only; everything runs in the client's personal workspace. */
 const router = express.Router();
@@ -87,14 +96,20 @@ router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), a
 
 // The lawyer marketplace: verified lawyers taking requests, filtered and sorted.
 // Email import (EPIC #982): the client's own Gmail, read-only. Nothing read here is stored.
-router.post("/gmail/connect", asyncHandler(ClientGmailCtrl.connect));
+// Everything but Disconnect needs the client's email-import consent (#989), given before they
+// connect; withdrawing it disconnects Gmail.
+router.post("/gmail/connect", emailImportConsent, asyncHandler(ClientGmailCtrl.connect));
 router.delete("/gmail", asyncHandler(ClientGmailCtrl.disconnect));
-router.get("/gmail/messages", gmailLimiter, asyncHandler(ClientGmailCtrl.search));
-router.get("/gmail/messages/:messageId", gmailLimiter, asyncHandler(ClientGmailCtrl.message));
-router.get("/gmail/messages/:messageId/attachments/:partId/download", gmailLimiter, asyncHandler(ClientGmailCtrl.downloadAttachment));
+router.get("/gmail/messages", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.search));
+router.get("/gmail/messages/:messageId", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.message));
+router.get("/gmail/messages/:messageId/attachments/:partId/download", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.downloadAttachment));
 // Adding an email to a case (#986/#987): the email as a PDF and/or chosen attachments, each a
 // case document. Like an upload, it needs no AI-processing consent.
-router.post("/cases/:caseId/gmail-imports", gmailLimiter, asyncHandler(ClientGmailCtrl.importToCase));
+router.post("/cases/:caseId/gmail-imports", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.importToCase));
+// "Suggest by AI" (#984): Intake searches the inbox for the case and ranks what it finds. Sends
+// email headers and previews to the AI, so it needs AI-processing consent, and each run is an AI
+// call plus up to ~45 Gmail reads, so it has its own tighter limit.
+router.post("/cases/:caseId/gmail-suggestions", emailImportConsent, requireConsent("AI_PROCESSING"), gmailSuggestLimiter, asyncHandler(ClientGmailCtrl.suggestForCase));
 
 router.get("/lawyers", asyncHandler(ClientLawyerCtrl.list));
 router.get("/lawyers/:id", asyncHandler(ClientLawyerCtrl.get));

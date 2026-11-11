@@ -11,6 +11,7 @@ import GmailMailboxSvc, {
   decodeBase64Url,
   decodeText,
   inlineImagePartsOf,
+  rateLimitDelayMs,
   replaceCidReferences,
   toSearchRow,
   type GmailPart,
@@ -144,6 +145,14 @@ describe("Gmail MIME helpers", () => {
     expect(attachmentsOf(root)).to.deep.equal([]);
   });
 
+  it("backs off exponentially, honours Retry-After, and gives up when retries run out or Gmail asks too long", () => {
+    expect([0, 1, 2, 3].map((attempt) => rateLimitDelayMs(null, attempt))).to.deep.equal([1000, 2000, 4000, null]);
+    expect(rateLimitDelayMs("3", 0)).to.equal(3000);
+    expect(rateLimitDelayMs("Wed, 11 Nov 2026 06:00:05 GMT", 1, undefined, Date.parse("Wed, 11 Nov 2026 06:00:00 GMT"))).to.equal(5000);
+    expect(rateLimitDelayMs("60", 0)).to.equal(null);
+    expect(rateLimitDelayMs("not a date", 2)).to.equal(4000);
+  });
+
   it("builds a search row from headers and attachment names", () => {
     const row = toSearchRow({ id: "m1", threadId: "t1", snippet: "Here’s what", internalDate: "1772529300000", payload: PAYLOAD });
     expect(row).to.deep.equal({
@@ -164,6 +173,7 @@ describe("GmailMailboxSvc", () => {
   const realStored = GmailConnectionSvc.storedAccessToken;
   const realRefresh = GmailConnectionSvc.refreshAccessToken;
   const realForget = GmailConnectionSvc.forget;
+  const realBackoff = GmailMailboxSvc.backoffMs;
   let calls: { url: string; auth: string }[];
   let refreshes: number;
   let forgotten: number;
@@ -173,6 +183,7 @@ describe("GmailMailboxSvc", () => {
     calls = [];
     refreshes = 0;
     forgotten = 0;
+    GmailMailboxSvc.backoffMs = [0, 0, 0];
     (GmailConnectionSvc as any).forget = async () => {
       forgotten++;
       return new HttpError("Gmail needs to be reconnected", 409, "GMAIL_RECONNECT_REQUIRED");
@@ -194,6 +205,7 @@ describe("GmailMailboxSvc", () => {
     (GmailConnectionSvc as any).storedAccessToken = realStored;
     (GmailConnectionSvc as any).refreshAccessToken = realRefresh;
     (GmailConnectionSvc as any).forget = realForget;
+    GmailMailboxSvc.backoffMs = realBackoff;
   });
 
   const gmailError = (status: number, reason: string) =>
@@ -229,6 +241,19 @@ describe("GmailMailboxSvc", () => {
     expect(get.searchParams.get("fields")).not.to.include("data");
     expect(result.messages.map((m) => m.subject)).to.deep.equal(["S m1", "S m2"]);
     expect(result.nextPageToken).to.equal("p2");
+  });
+
+  it("merges the ids of several searches, keeping the ones more searches found when capped, newest first", async () => {
+    const lists: Record<string, string[]> = { a: ["m1", "m2"], b: ["m2", "m3"], c: ["m4"] };
+    const dates: Record<string, string> = { m1: "1000", m2: "3000", m3: "2000", m4: "4000" };
+    respond = (url) => {
+      if (url.includes("/messages?")) return ok({ messages: lists[new URL(url).searchParams.get("q")!].map((id) => ({ id })) });
+      const id = /messages\/(m\d)/.exec(url)![1];
+      return ok({ id, threadId: id, internalDate: dates[id], payload: { headers: [] } });
+    };
+    const rows = await GmailMailboxSvc.searchCandidates("user-1", ["a", "b", "c"], { perQuery: 5, max: 3 });
+    expect(rows.map((r) => r.id)).to.deep.equal(["m2", "m3", "m1"]);
+    expect(calls.filter((c) => c.url.includes("/messages?"))).to.have.length(3);
   });
 
   it("refreshes the token once on a 401 and retries", async () => {
@@ -267,11 +292,19 @@ describe("GmailMailboxSvc", () => {
     expect(result.messages.map((m) => m.subject)).to.deep.equal(["Kept"]);
   });
 
-  it("treats a 403 quota limit as busy, never as a lost connection", async () => {
+  it("treats a 403 quota limit as busy after three retries, never as a lost connection", async () => {
     respond = () => gmailError(403, "userRateLimitExceeded");
     await expectError(GmailMailboxSvc.getMessage("user-1", "m1"), 429, "GMAIL_RATE_LIMITED");
-    expect(calls).to.have.length(2);
+    expect(calls).to.have.length(4);
     expect(forgotten).to.equal(0);
+  });
+
+  it("gets through when Gmail stops rate-limiting within the retries", async () => {
+    let refusals = 2;
+    respond = () => (refusals-- > 0 ? new Response("", { status: 429 }) : ok({ messages: [] }));
+    const result = await GmailMailboxSvc.search("user-1", {});
+    expect(result.messages).to.deep.equal([]);
+    expect(calls).to.have.length(3);
   });
 
   it("forgets the grant when Gmail is no longer in its scopes", async () => {

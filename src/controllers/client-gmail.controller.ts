@@ -1,8 +1,10 @@
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import GmailConnectionSvc from "../services/gmail-connection.service";
+import ConsentSvc from "../services/consent.service";
 import GmailMailboxSvc from "../services/gmail-mailbox.service";
 import GmailCaseImportSvc from "../services/gmail-case-import.service";
+import GmailCaseSuggestSvc from "../services/gmail-case-suggest.service";
 import { clientWorkspaceOf } from "../middleware/require-client-account.middleware";
 import HttpError from "../utils/http-error";
 import {
@@ -34,8 +36,11 @@ export default class ClientGmailCtrl {
     res.status(200).json(await GmailConnectionSvc.connect(req.user.userId, code));
   }
 
+  /** Disconnecting also withdraws email-import consent, so connecting again asks for it again. */
   static async disconnect(req: Request, res: Response) {
-    res.status(200).json(await GmailConnectionSvc.disconnect(req.user.userId));
+    const user = await GmailConnectionSvc.disconnect(req.user.userId);
+    await ConsentSvc.set(req.user.userId, "EMAIL_IMPORT", false, "gmail");
+    res.status(200).json(user);
   }
 
   static async search(req: Request, res: Response) {
@@ -58,6 +63,11 @@ export default class ClientGmailCtrl {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "private, no-store");
     res.status(200).send(buffer);
+  }
+
+  /** "Suggest by AI": emails in the client's Gmail that Intake judges relevant to the case. */
+  static async suggestForCase(req: Request, res: Response) {
+    res.status(200).json(await GmailCaseSuggestSvc.suggest(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
   }
 
   /** Adds an email (as a PDF) and/or chosen attachments to one of the client's cases. */

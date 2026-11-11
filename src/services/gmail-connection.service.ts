@@ -120,6 +120,13 @@ export default class GmailConnectionSvc {
     return AuthRepo.findById(userId);
   }
 
+  /** Disconnects only when there's a connection, so withdrawing email-import consent never writes
+   * an "integration.disconnected" event for someone who never connected. */
+  static async disconnectIfConnected(userId: string): Promise<void> {
+    const stored = await AuthRepo.findGmailTokens(userId);
+    if (stored?.gmailRefreshToken || stored?.gmailAccessToken) await GmailConnectionSvc.disconnect(userId);
+  }
+
   /** AccountDeletionQueue: same as disconnect, never throws. */
   static async releaseForDeletedUser(userId: string): Promise<void> {
     try {
