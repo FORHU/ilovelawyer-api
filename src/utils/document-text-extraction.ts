@@ -90,6 +90,10 @@ function resolveType(mimeType?: string | null, filename?: string): DocType | nul
   return null;
 }
 
+export function isImageDocument(mimeType?: string | null, filename?: string): boolean {
+  return resolveType(mimeType, filename) === "image";
+}
+
 function pagesFromText(text: string): ExtractedPage[] {
   const parts = text.split(/\f/);
   if (parts.length > 1) {

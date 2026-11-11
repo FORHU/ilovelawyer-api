@@ -7,6 +7,10 @@ export const TEXTRACT_SYNC_MAX_BYTES = 5 * 1024 * 1024;
 /** Textract's cap on a JPEG/PNG read from S3, sync or async alike — there is no larger path for
  * images (https://docs.aws.amazon.com/textract/latest/dg/limits-document.html). */
 export const TEXTRACT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** OpenAI's vision input accepts up to ~20MB per image; base64 inflates the wire size by ~33%,
+ * so this is checked against the raw file size before ever encoding it. Kept here (not in
+ * document-extraction.service.ts) so the one real limit lives next to Textract's own image caps. */
+export const VISION_FALLBACK_MAX_BYTES = 20 * 1024 * 1024;
 
 type TextractBlock = { BlockType?: string; Text?: string; Page?: number };
 
