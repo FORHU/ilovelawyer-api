@@ -141,7 +141,7 @@ export default class LawyerVerificationSvc {
     }
   }
 
-  /** The admin queue for one site and status, oldest submission first. */
+  /** The admin queue for one site and status, newest submission first. */
   static async list(params: { country: LawyerCountry; status: LawyerVerificationStatus; page: number; limit: number }) {
     const { data, total } = await LawyerProfileRepo.listForAdmin(params);
     return { data: data.map(toAdminRow), total };

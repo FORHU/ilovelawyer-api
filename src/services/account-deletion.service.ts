@@ -1,6 +1,7 @@
 import AuthRepo from "../repositories/auth.repository";
 import AvatarSvc from "./avatar.service";
 import GoogleCalendarSvc from "./google-calendar.service";
+import GmailConnectionSvc from "./gmail-connection.service";
 import NotificationSvc from "./notification.service";
 import SecurityAuditSvc from "./security-audit.service";
 import OrganizationRepo from "../repositories/organization.repository";
@@ -15,9 +16,10 @@ export default class AccountDeletionSvc {
    * self-service grace period) and AdminSvc.deleteUser (immediately). Sends no email — callers
    * that notify the user do so before calling this, while the row and its address still exist. */
   static async purge(userId: string): Promise<void> {
-    // Both non-fatal: revoke any Google Calendar grant and flag the avatar File while the
-    // User row still points at them.
+    // All non-fatal: revoke any Google Calendar and Gmail grants and flag the avatar File while
+    // the User row still points at them.
     await GoogleCalendarSvc.releaseForDeletedUser(userId);
+    await GmailConnectionSvc.releaseForDeletedUser(userId);
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);
@@ -40,6 +42,7 @@ export default class AccountDeletionSvc {
     const [user, membership] = await Promise.all([AuthRepo.findById(userId), OrganizationMemberRepo.findAnyForUser(userId)]);
 
     await GoogleCalendarSvc.releaseForDeletedUser(userId);
+    await GmailConnectionSvc.releaseForDeletedUser(userId);
     await AvatarSvc.releaseForDeletedUser(userId);
 
     await AuthRepo.deleteSessionsByUserId(userId);

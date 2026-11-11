@@ -39,6 +39,7 @@ const CATEGORY_NAMES: Record<string, string> = {
   "document.": "Documents",
   "consultation.": "Consultations",
   "admin.": "ilovelawyer staff",
+  "system.": "ilovelawyer, automatically",
 };
 
 /** What a deleted case item was, from the route template recordCaseItemDeletions stored. */

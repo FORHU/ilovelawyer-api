@@ -124,6 +124,54 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
     expect(emitted.some(([, event]) => event === "chat:done")).to.equal(true);
   });
 
+  describe("when Chat Wonder no longer knows the session (it restarted)", () => {
+    let restoreSession: (() => void)[];
+    let sessions: string[];
+    let contexts: (string | undefined)[];
+
+    beforeEach(() => {
+      sessions = [];
+      contexts = [];
+      restoreSession = [stash(IntakeChatSvc as any, ["newSession"]), stash(IntakeChatRepo, ["listByCase"])];
+      (IntakeChatSvc as any).newSession = async () => "fresh-session";
+      (IntakeChatRepo as any).listByCase = async () => [
+        { id: "m0", role: "assistant", content: "Hi, what happened?" },
+        { id: "m00", role: "user", content: "I was fired after raising a grievance." },
+        { id: "sys", role: "system", content: "internal note" },
+        { id: JOB.jobId, role: "user", content: JOB.userInput },
+      ];
+      (intakeChatWonder as any).streamIntakeChatWonderMessage = async (sessionId: string, _u: string, _c: unknown, documentContext: string | undefined) => {
+        sessions.push(sessionId);
+        contexts.push(documentContext);
+        if (sessionId === JOB.sessionId) throw new Error("Unknown session.");
+        return { content: "When did they dismiss you?", lawyerMatches: [], caseReady: false };
+      };
+    });
+    afterEach(() => restoreSession.forEach((r) => r()));
+
+    it("starts a new session and sends the turn again with the earlier chat, so the client can carry on", async () => {
+      await IntakeChatSvc.processIntakeGenerationJob(JOB);
+      expect(sessions).to.deep.equal([JOB.sessionId, "fresh-session"]);
+      expect(contexts[0]).not.to.include("Earlier conversation");
+      expect(contexts[1]).to.include("Known case details");
+      expect(contexts[1]).to.include("You: Hi, what happened?\nClient: I was fired after raising a grievance.");
+      expect(contexts[1]).not.to.include("internal note");
+      expect(contexts[1]).not.to.include(JOB.userInput);
+      expect(emitted.some(([, event]) => event === "chat:done")).to.equal(true);
+      expect(emitted.some(([, event]) => event === "chat:error")).to.equal(false);
+    });
+
+    it("still fails the turn for any other Chat Wonder error, without a new session", async () => {
+      (intakeChatWonder as any).streamIntakeChatWonderMessage = async (sessionId: string) => {
+        sessions.push(sessionId);
+        throw new Error("Chat Wonder unavailable");
+      };
+      await IntakeChatSvc.processIntakeGenerationJob(JOB).catch(() => undefined);
+      expect(sessions).to.deep.equal([JOB.sessionId]);
+      expect(emitted.some(([, event]) => event === "chat:error")).to.equal(true);
+    });
+  });
+
   it("still asks Jev once for pre-reply grounding even when intake didn't declare readiness", async () => {
     (intakeChatWonder as any).streamIntakeChatWonderMessage = async () => ({ content: "Tell me more.", lawyerMatches: [], caseReady: false });
     await IntakeChatSvc.processIntakeGenerationJob(JOB);

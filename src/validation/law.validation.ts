@@ -10,6 +10,10 @@ import { LawSourceProvider } from "../legal/law-source/law-source-provider";
 
 /** A csv facet checked against `vocab`, e.g. "ewca/civ,ewhc/admin" -> ["ewca/civ", "ewhc/admin"];
  * forbidden outright when the tenant has no such vocab. */
+/** The longest Library search. The lawyer app's search box stops here too (LAW_QUERY_MAX_LENGTH in
+ * ilovelawyer-app's lib/law/queries.ts): keep them the same. */
+export const LAW_QUERY_MAX_LENGTH = 300;
+
 const csvFacet = (vocab: readonly string[]) =>
   vocab.length > 0
     ? Joi.string()
@@ -30,7 +34,7 @@ export const lawSearchSchema = (p: LawSourceProvider) =>
     category: Joi.string()
       .valid(...p.categoryWireValues)
       .required(),
-    q: Joi.string().trim().min(1).max(300).required(),
+    q: Joi.string().trim().min(1).max(LAW_QUERY_MAX_LENGTH).required(),
     limit: Joi.number().integer().min(1).max(20).default(5),
     // UK case law only — csv, same vocab as browse. Narrows the search to these courts.
     court: csvFacet(p.facetVocab.courts),

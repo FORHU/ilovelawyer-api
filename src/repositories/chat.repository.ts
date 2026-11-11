@@ -5,6 +5,8 @@ import { RelatedCase } from "../utils/chatWonder";
 import type { MarkTiming } from "../utils/audio-overview-render";
 import { consultationDeletionDueAt } from "../constants/consultation-deletion.constants";
 import { openMessage, openMessages, sealMessageContent, sealPendingReply } from "../utils/message-content";
+import { confidenceViewEnabled, openConfidencePayload, sealConfidencePayload } from "../utils/message-confidence";
+import type { ConfidencePayload } from "../utils/response-parser";
 
 export default class ChatRepo {
   /** userId is stamped for "created by" audit purposes only — a Consultation is a shared org resource. */
@@ -211,6 +213,8 @@ export default class ChatRepo {
         reasoning: true,
         decisionRecords: true,
         researchSteps: true,
+        // Confidence view — sealed payload, opened below (and left out when the flag is off).
+        confidence: true,
         documents: { include: { file: true } },
         generatedDocument: { include: { file: true } },
         // Verification rows for this reply (docs/plans/grounding-verifier.md). `passage` is
@@ -222,7 +226,11 @@ export default class ChatRepo {
         },
       },
     });
-    return openMessages(rows);
+    const showConfidence = confidenceViewEnabled();
+    return openMessages(rows).map(({ confidence, ...row }) => {
+      const payload = showConfidence ? openConfidencePayload(confidence?.payload) : null;
+      return { ...row, confidence: payload ? { payload } : null };
+    });
   }
 
   static async createMessage(
@@ -431,6 +439,13 @@ export default class ChatRepo {
       select: { id: true, content: true, parentMessageId: true, consultationId: true, createdAt: true },
     });
     return openMessages(rows);
+  }
+
+  /** Confidence view for one turn, sealed (see MessageConfidence in schema.prisma). */
+  static async saveConfidence(messageId: string, payload: ConfidencePayload) {
+    return prisma.messageConfidence.create({
+      data: { messageId, payload: sealConfidencePayload(payload) },
+    });
   }
 
   static async saveReasoning(messageId: string, data: ReasoningExplanation) {

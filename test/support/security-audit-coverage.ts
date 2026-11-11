@@ -136,6 +136,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "PATCH /admin/settings/tenants/:code/lawyer-pricing/intro-fee": ["admin.settings.lawyer_price_changed"],
   "PATCH /admin/settings/tenants/:code/payout-settings": ["admin.settings.payout_settings_changed"],
   "POST /admin/quotation-payments/:id/refund": ["admin.quotation_payment.refunded"],
+  // A Lawyer Exit's refund decision, and the refund it sends.
+  "POST /admin/lawyer-exits/:id/decide": ["admin.lawyer_exit.decided", "admin.quotation_payment.refunded"],
   "POST /admin/settings/tenants/:code/lawyer-pricing/packs": ["admin.settings.lawyer_price_created"],
   "PATCH /admin/settings/lawyer-pricing/packs/:id": ["admin.settings.lawyer_price_changed"],
   "POST /admin/settings/tenants/:code/client-promos": ["admin.settings.client_promo_created"],
@@ -269,6 +271,13 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/cases/:caseId/documents/:documentId/retry": { exempt: "Reads a document that failed again; no data is added, opened or removed" },
   "POST /client/cases/:caseId/overview/generate": AI_RUN,
   "POST /client/cases/:caseId/intake/refresh": AI_RUN,
+  // Email import (EPIC #982): the client's own Gmail connection. Searches write gmail.searched
+  // in the service, though GETs aren't required to be classified here.
+  "POST /client/gmail/connect": ["integration.connected"],
+  "DELETE /client/gmail": ["integration.disconnected"],
+  "GET /client/gmail/messages/:messageId/attachments/:partId/download": ["gmail.attachment_downloaded"],
+  "POST /client/cases/:caseId/gmail-imports": ["gmail.imported_to_case"],
+  "POST /client/cases/:caseId/gmail-suggestions": ["gmail.suggested_for_case"],
   // Chat Wonder's create_case intake tool (service-to-service, apiKeyMiddleware): writes the same
   // ClientCaseSvc.update case fields as PATCH /client/cases/:caseId above, so it gets the same action.
   "PATCH /intake-cases/:caseId": CASE_FEED,
@@ -296,10 +305,16 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client-requests/:id/quotation/withdraw": ["client_request.released"],
   "POST /client-requests/:id/copy": ["client_request.copied"],
   "POST /client-requests/:id/ai-top-ups": ["client_request.ai_top_up_approved"],
+  // A Lawyer Exit (#972) refunds nothing by itself: an admin decides the refund.
   "POST /client-requests/:id/close": ["client_request.closed"],
   "POST /client-requests/:id/messages": { exempt: "A message to the client in the engagement thread; it changes nobody's access" },
   "POST /client-requests/:id/messages/read": { exempt: "Marks the lawyer's own thread read" },
   "POST /client/lawyer-requests/:id/end": ["client_request.closed"],
+  // The client confirming the lawyer's "the work is finished" closes the engagement, ending their access.
+  "POST /client/lawyer-requests/:id/completion/confirm": ["client_request.closed"],
+  "POST /client/lawyer-requests/:id/completion/decline": {
+    exempt: "The client saying the work isn't finished; the engagement carries on and nobody's access changes. Recorded in the case activity feed",
+  },
   "POST /client/lawyer-requests/:id/feedback": { exempt: "The client's own rating of the lawyer after the engagement closes; no access change" },
   "POST /client/lawyer-requests/:id/messages": { exempt: "A message to the engaged lawyer in their thread; it changes nobody's access (sharing a document only points at one already on the case)" },
   "POST /client/lawyer-requests/:id/messages/read": { exempt: "Marks the client's own thread read" },

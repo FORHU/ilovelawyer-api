@@ -3,33 +3,14 @@ import SecurityAuditSvc from "./security-audit.service";
 import CalendarWatchChannelRepo from "../repositories/calendar-watch-channel.repository";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
-import { decryptGoogleToken, encryptGoogleToken, isGoogleTokenEncryptionConfigured } from "../utils/google-token-crypto";
-import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET } from "../config";
+import { encryptGoogleToken, isGoogleTokenEncryptionConfigured } from "../utils/google-token-crypto";
+import { hasGrantedScope, postGoogleToken as postToken, refreshStoredGrant, revokeStoredGrant } from "../utils/google-oauth";
 
-const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const CHANNEL_STOP_URL = "https://www.googleapis.com/calendar/v3/channels/stop";
 export const GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 
-interface TokenResponse {
-  access_token?: string;
-  refresh_token?: string;
-  scope?: string;
-  error?: string;
-}
-
 function reconnectRequired(): HttpError {
   return new HttpError("Google Calendar needs to be reconnected", 409, "GOOGLE_CALENDAR_RECONNECT_REQUIRED");
-}
-
-async function postToken(params: Record<string, string>): Promise<{ ok: boolean; data: TokenResponse }> {
-  const res = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, ...params }),
-  });
-  const data = (await res.json().catch(() => ({}))) as TokenResponse;
-  return { ok: res.ok, data };
 }
 
 /** Google Calendar access, kept apart from sign-in on purpose: signing in with Google never
@@ -49,7 +30,7 @@ export default class GoogleCalendarSvc {
       throw new HttpError("Google didn't accept the authorization. Try connecting again.", 400);
     }
     // Granular consent lets the user untick Calendar and still finish the popup.
-    if (!data.scope?.split(" ").includes(GOOGLE_CALENDAR_SCOPE)) {
+    if (!hasGrantedScope(data.scope, GOOGLE_CALENDAR_SCOPE)) {
       throw new HttpError("Calendar access wasn't granted. Connect again and allow calendar access.", 400, "GOOGLE_CALENDAR_SCOPE_MISSING");
     }
 
@@ -68,40 +49,30 @@ export default class GoogleCalendarSvc {
     return AuthRepo.findById(userId);
   }
 
-  /** A fresh access token minted from the stored refresh token (and saved). A revoked, expired
-   * or undecryptable refresh token clears both columns and throws 409
-   * GOOGLE_CALENDAR_RECONNECT_REQUIRED, so the app shows Reconnect instead of a dead state. */
+  /** A fresh access token minted from the stored refresh token (and saved). A grant that can't be
+   * used any more is cleared with 409 GOOGLE_CALENDAR_RECONNECT_REQUIRED (see refreshStoredGrant). */
   static async getAccessToken(userId: string): Promise<string> {
     const stored = await AuthRepo.findGoogleCalendarTokens(userId);
     if (!stored?.googleRefreshToken) {
       throw new HttpError("Google Calendar isn't connected", 409, "GOOGLE_CALENDAR_NOT_CONNECTED");
     }
-
-    const refreshToken = decryptGoogleToken(stored.googleRefreshToken);
-    if (!refreshToken) {
-      logger.warn("Stored Google refresh token could not be decrypted; clearing it", { userId });
-      await AuthRepo.clearGoogleCalendarTokens(userId);
-      throw reconnectRequired();
-    }
-
-    const { ok, data } = await postToken({ refresh_token: refreshToken, grant_type: "refresh_token" });
-    if (!ok || !data.access_token) {
-      if (data.error === "invalid_grant") {
-        await AuthRepo.clearGoogleCalendarTokens(userId);
-        throw reconnectRequired();
-      }
-      throw new HttpError("Couldn't reach Google Calendar. Try again shortly.", 502);
-    }
-
-    await AuthRepo.updateGoogleAccessToken(userId, data.access_token);
-    return data.access_token;
+    return refreshStoredGrant(
+      { encryptedRefreshToken: stored.googleRefreshToken, accessToken: stored.googleAccessToken },
+      {
+        userId,
+        integration: "google_calendar",
+        clear: () => AuthRepo.clearGoogleCalendarTokens(userId),
+        save: (accessToken) => AuthRepo.updateGoogleAccessToken(userId, accessToken),
+        reconnectRequired,
+        unreachable: () => new HttpError("Couldn't reach Google Calendar. Try again shortly.", 502),
+      },
+    );
   }
 
   /** Stops the Calendar watch, revokes the grant at Google and clears both columns. Google-side
    * failures are logged, not fatal: the user asked to disconnect, so local state always clears. */
   static async disconnect(userId: string) {
     const stored = await AuthRepo.findGoogleCalendarTokens(userId);
-    const refreshToken = stored?.googleRefreshToken ? decryptGoogleToken(stored.googleRefreshToken) : null;
 
     const channel = await CalendarWatchChannelRepo.findForUser(userId);
     if (channel && stored?.googleAccessToken) {
@@ -114,14 +85,10 @@ export default class GoogleCalendarSvc {
     await CalendarWatchChannelRepo.deleteForUser(userId);
 
     // Revoking the refresh token also revokes every access token minted from it.
-    const toRevoke = refreshToken ?? stored?.googleAccessToken;
-    if (toRevoke) {
-      await fetch(REVOKE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ token: toRevoke }),
-      }).catch((err) => logger.error("Failed to revoke Google token", { err, userId }));
-    }
+    await revokeStoredGrant(
+      stored ? { encryptedRefreshToken: stored.googleRefreshToken, accessToken: stored.googleAccessToken } : null,
+      { userId, integration: "google_calendar" },
+    );
 
     await AuthRepo.clearGoogleCalendarTokens(userId);
     await SecurityAuditSvc.record({ action: "integration.disconnected", actorId: userId, targetType: "integration", payload: { type: "google_calendar" } });

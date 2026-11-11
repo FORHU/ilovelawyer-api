@@ -792,6 +792,102 @@ export const clientAppPaths: Paths = {
       },
     },
   },
+  "/client/gmail/connect": {
+    post: {
+      tags: [TAG],
+      summary: "Connect Gmail (read-only) with a code from Google's auth-code popup",
+      security,
+      requestBody: {
+        required: true,
+        content: json({ type: "object", required: ["code"], properties: { code: { type: "string", description: "From useGoogleLogin({ flow: \"auth-code\", scope: gmail.readonly })" } } }),
+      },
+      responses: {
+        200: { description: "The signed-in user, now with gmailConnected and gmailEmail" },
+        400: err("Google refused the code, GMAIL_SCOPE_MISSING (Gmail access unticked), or no offline access"),
+        502: err("Couldn't read the Gmail profile"),
+        503: err("GMAIL_UNAVAILABLE: token encryption isn't configured on this server"),
+      },
+    },
+  },
+  "/client/gmail": {
+    delete: {
+      tags: [TAG],
+      summary: "Disconnect Gmail: revokes the grant at Google and forgets the tokens",
+      security,
+      responses: { 200: { description: "The signed-in user, with gmailConnected false" } },
+    },
+  },
+  "/client/gmail/messages": {
+    get: {
+      tags: [TAG],
+      summary: "Search the connected inbox (Gmail search syntax), newest first. Nothing is stored.",
+      security,
+      parameters: [
+        { name: "q", in: "query", schema: { type: "string", maxLength: 500 }, description: "e.g. from:landlord@example.com has:attachment newer_than:1y" },
+        { name: "pageToken", in: "query", schema: { type: "string" } },
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 20 } },
+      ],
+      responses: {
+        200: {
+          description: "One page of results",
+          content: json({
+            type: "object",
+            properties: {
+              messages: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    threadId: { type: "string" },
+                    from: { type: "string", nullable: true },
+                    to: { type: "string", nullable: true },
+                    subject: { type: "string", nullable: true },
+                    date: { type: "string", format: "date-time", nullable: true },
+                    snippet: { type: "string" },
+                    attachmentNames: { type: "array", items: { type: "string" } },
+                  },
+                },
+              },
+              nextPageToken: { type: "string", nullable: true },
+            },
+          }),
+        },
+        409: err("GMAIL_NOT_CONNECTED or GMAIL_RECONNECT_REQUIRED"),
+        429: err("Too many Gmail calls in a minute"),
+        502: err("Gmail couldn't be reached"),
+      },
+    },
+  },
+  "/client/gmail/messages/{messageId}": {
+    get: {
+      tags: [TAG],
+      summary: "One email in full: headers (Bcc only on sent mail), plain and HTML bodies, attachment list",
+      security,
+      parameters: [{ name: "messageId", in: "path", required: true, schema: { type: "string" } }],
+      responses: {
+        200: { description: "The email. Attachments are listed with a partId for the download route." },
+        404: err("GMAIL_NOT_FOUND"),
+        409: err("GMAIL_NOT_CONNECTED or GMAIL_RECONNECT_REQUIRED"),
+      },
+    },
+  },
+  "/client/gmail/messages/{messageId}/attachments/{partId}/download": {
+    get: {
+      tags: [TAG],
+      summary: "One attachment's file, with its Gmail filename and type",
+      security,
+      parameters: [
+        { name: "messageId", in: "path", required: true, schema: { type: "string" } },
+        { name: "partId", in: "path", required: true, schema: { type: "string" }, description: "From the message's attachments list" },
+      ],
+      responses: {
+        200: { description: "The file bytes (Content-Disposition: attachment)" },
+        404: err("GMAIL_NOT_FOUND"),
+        409: err("GMAIL_NOT_CONNECTED or GMAIL_RECONNECT_REQUIRED"),
+      },
+    },
+  },
   "/client/cases/{caseId}/overview": {
     get: {
       tags: [TAG],

@@ -11,8 +11,11 @@ import {
   CLIENT_REQUEST_STATUSES,
   LAWYER_REGULATORS,
   LAWYER_VERIFICATION_STATUSES,
+  PASS_REASONS,
   QUOTE_TYPES,
   RELEASE_REASONS,
+  CLOSE_OUTCOMES,
+  LAWYER_EXIT_STATUSES,
   REQUEST_URGENCIES,
   UK_JURISDICTIONS,
 } from "./types/client-handoff";
@@ -88,11 +91,13 @@ interface Op {
   description?: string;
   parameters?: Parameter[];
   body?: Schema;
+  /** The body may be left out entirely (it is required otherwise). */
+  bodyOptional?: boolean;
   responses: Record<number, object>;
 }
 
 /** One operation, planned unless `built`. Every hand-off route needs a session, so 401 is added to all. */
-function op({ tag, issue, built, summary, description, parameters, body, responses }: Op): Operation {
+function op({ tag, issue, built, summary, description, parameters, body, bodyOptional, responses }: Op): Operation {
   const status = built ? `Built in ${issue}.` : `**Planned (${issue}), not implemented yet.**`;
   return {
     tags: [tag],
@@ -101,7 +106,7 @@ function op({ tag, issue, built, summary, description, parameters, body, respons
     "x-implemented": !!built,
     security: [{ bearerAuth: [] }],
     ...(parameters ? { parameters } : {}),
-    ...(body ? { requestBody: { required: true, content: json(body) } } : {}),
+    ...(body ? { requestBody: { required: !bodyOptional, content: json(body) } } : {}),
     responses: { ...responses, 401: err("Not signed in") },
   };
 }
@@ -114,7 +119,7 @@ export const clientHandoffTags: Tags = [
   {
     name: WALLET_TAG,
     description:
-      "A payee's earnings from client quotations (WalletSvc): a firm's under /organizations/{id}/wallet (OWNER/ADMIN), a solo lawyer's under /users/me/wallet. Each client payment puts what the lawyer receives (the quote less the platform fee) in PENDING for the tenant's hold (PayoutSettings.earningsHoldDays), then the sweep makes it AVAILABLE. Withdrawals go to the payee's bank through Stripe Connect (an Express account set up on Stripe's pages), at least the tenant's minimum.",
+      "A payee's earnings from client quotations (WalletSvc): a firm's under /organizations/{id}/wallet (OWNER/ADMIN), a solo lawyer's under /users/me/wallet. Each client payment puts what the lawyer receives (the quote less the platform fee) in PENDING. It stays there while the engagement is open; when it closes, the tenant's hold (PayoutSettings.earningsHoldDays) starts, then the sweep makes it AVAILABLE. After a Lawyer Exit nothing is released until its refund is settled. Earnings made before this rule keep the date they were given at payment. Withdrawals go to the payee's bank through Stripe Connect (an Express account set up on Stripe's pages), at least the tenant's minimum.",
   },
   {
     name: CLIENT_TAG,
@@ -492,7 +497,7 @@ export const clientHandoffSchemas: Schemas = {
       net: money("What the lawyer receives: gross less the platform fee"),
       reversed: money("Taken back by refunds or a lost dispute"),
       disputed: { type: "boolean" },
-      availableAt: dateTime(),
+      availableAt: dateTime("When it can be withdrawn: the tenant's hold after the engagement closed. Null while the engagement is open, or while a Lawyer Exit on it is unsettled", true),
       releasedAt: dateTime(undefined, true),
       createdAt: dateTime(),
     },
@@ -500,6 +505,71 @@ export const clientHandoffSchemas: Schemas = {
   Withdrawal: {
     type: "object",
     properties: { id: { type: "string" }, status: enumOf(WITHDRAWAL_STATUSES), amount: money(), failureReason: { type: "string", nullable: true }, paidAt: dateTime(undefined, true), createdAt: dateTime() },
+  },
+  LawyerExitForLawyer: {
+    type: "object",
+    description: "The lawyer's own Lawyer Exit on this engagement: what they said and where the refund stands",
+    properties: {
+      status: enumOf(LAWYER_EXIT_STATUSES),
+      reason: enumOf(RELEASE_REASONS),
+      workDone: { type: "boolean" },
+      claimed: { ...money("What they claimed for the work done"), nullable: true },
+      refunded: money("What the client has been given back for it"),
+      createdAt: dateTime(),
+      settledAt: dateTime(undefined, true),
+    },
+  },
+  EngagementCompletion: {
+    type: "object",
+    description:
+      "The lawyer's \"the work is finished\", which the client confirms. While it waits on the client, requestedAt is set and it closes by itself at autoClosesAt. declinedAt/declineReason: the client's last \"it isn't finished yet\", until the lawyer asks again. confirmedBy: how it closed, once it has",
+    properties: {
+      requestedAt: dateTime("Set while it waits on the client", true),
+      note: { type: "string", nullable: true, description: "The lawyer's note to the client" },
+      autoClosesAt: dateTime("While it waits: when the engagement closes by itself", true),
+      declinedAt: dateTime(undefined, true),
+      declineReason: { type: "string", nullable: true, description: "What the client said is left" },
+      confirmedBy: { type: "string", enum: ["CLIENT", "AUTO"], nullable: true },
+    },
+  },
+  ClientRefundSummary: {
+    type: "object",
+    description: "What the client paid the lawyer they hired, and the refunds on it. lawyerExit is set when the lawyer stopped acting: where the refund stands, never why",
+    properties: {
+      paid: money(),
+      refunded: money("Given back so far"),
+      pending: money("Sent to the bank, not back yet"),
+      refunds: { type: "array", items: { type: "object", properties: { id: { type: "string" }, amount: money(), status: { type: "string", enum: ["PENDING", "SUCCEEDED", "FAILED"] }, createdAt: dateTime() } } },
+      lawyerExit: { type: "object", nullable: true, properties: { status: enumOf(LAWYER_EXIT_STATUSES), createdAt: dateTime(), settledAt: dateTime(undefined, true) } },
+    },
+  },
+  LawyerExitForAdmin: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      requestId: { type: "string" },
+      caseId: { type: "string" },
+      caseName: { type: "string", nullable: true },
+      status: enumOf(LAWYER_EXIT_STATUSES),
+      lawyer: { type: "object", properties: { id: { type: "string" }, name: { type: "string", nullable: true }, firmName: { type: "string", nullable: true } } },
+      client: { type: "object", properties: { id: { type: "string" }, name: { type: "string", nullable: true } } },
+      reason: enumOf(RELEASE_REASONS),
+      note: { type: "string", nullable: true, description: "May name the other party: admins only, never in the activity feed or the audit log" },
+      workDone: { type: "boolean" },
+      claimed: { ...money("What the lawyer claims for the work done"), nullable: true },
+      claimNote: { type: "string", nullable: true },
+      refunded: money("What this exit gave back"),
+      failureReason: { type: "string", nullable: true, description: "Why its refund failed (NEEDS_ATTENTION)" },
+      decision: { type: "object", nullable: true, properties: { decidedById: { type: "string" }, decidedAt: dateTime(), note: { type: "string", nullable: true } } },
+      payment: {
+        type: "object",
+        nullable: true,
+        description: "Null when nothing was paid through ilovelawyer",
+        properties: { id: { type: "string" }, status: enumOf(QUOTATION_PAYMENT_STATUSES), amount: money(), serviceFee: money(), platformFee: money(), refunded: money(), refundable: money(), refundableServiceFee: money() },
+      },
+      createdAt: dateTime(),
+      settledAt: dateTime(undefined, true),
+    },
   },
   ClientRequestForLawyer: {
     type: "object",
@@ -530,6 +600,9 @@ export const clientHandoffSchemas: Schemas = {
           closedAt: dateTime(undefined, true),
           closedBy: { type: "string", enum: ["LAWYER", "CLIENT"], nullable: true },
           copyCaseId: { type: "string", nullable: true, description: "The lawyer's workspace copy, once made" },
+          completion: { ...ref("EngagementCompletion"), nullable: true, description: "Your \"the work is finished\": null until you've said it" },
+          paid: { type: "boolean", description: "GET /client-requests/{id} and close only: the client paid through ilovelawyer, so closing needs an outcome" },
+          exit: { ...ref("LawyerExitForLawyer"), nullable: true, description: "GET /client-requests/{id} and close only: the lawyer's own Lawyer Exit, if they made one" },
         },
       },
       assignedTo: { type: "object", nullable: true, properties: { id: { type: "string" }, name: { type: "string" } } },
@@ -578,6 +651,8 @@ export const clientHandoffSchemas: Schemas = {
       closedAt: dateTime(undefined, true),
       closedBy: { type: "string", enum: ["LAWYER", "CLIENT"], nullable: true },
       feedback: { ...ref("EngagementFeedback"), nullable: true },
+      completion: { ...ref("EngagementCompletion"), nullable: true, description: "The lawyer says the work is finished: confirm it or say what's left. Null until they've said it" },
+      refund: { ...ref("ClientRefundSummary"), nullable: true, description: "Null until the client paid the lawyer they hired through ilovelawyer" },
     },
   },
   ConflictParties: {
@@ -975,10 +1050,33 @@ export const clientHandoffPaths: Paths = {
       issue: "ilovelawyer-api#519",
       summary: "End the engagement (the client's side of close)",
       description:
-        "Allowed while ENGAGED. Same effect as the lawyer closing it: CLOSED with closedBy CLIENT, the lawyer's read-only access is removed at once, and the thread becomes read-only. The lawyer keeps any workspace copy they made (UK file-retention rules). The lawyer is notified.",
+        "Allowed while ENGAGED. Same effect as the lawyer closing it: CLOSED with closedBy CLIENT, the lawyer's read-only access is removed at once, and the thread becomes read-only. The lawyer keeps any workspace copy they made (UK file-retention rules). The lawyer is notified. Nothing is refunded, and the lawyer's earning starts its hold.",
       parameters: requestId,
       body: { type: "object", properties: { reason: { type: "string", maxLength: 1000, description: "Shown to the lawyer" } } },
       responses: { 200: ok("Ended", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: BAD_STATUS },
+    }),
+  },
+  "/client/lawyer-requests/{id}/completion/confirm": {
+    post: op({
+      tag: CLIENT_TAG,
+      issue: "engagement completion",
+      summary: "Confirm the work is finished (closes the engagement)",
+      description:
+        "Allowed while ENGAGED and the lawyer has said the work is finished (completion.requestedAt). CLOSED with closedBy LAWYER and completion.confirmedBy CLIENT: the lawyer's read-only access is removed and the thread becomes read-only. The lawyer is notified. Nothing is refunded, and the lawyer's earning starts its hold. Unanswered, it closes by itself at completion.autoClosesAt.",
+      parameters: requestId,
+      responses: { 200: ok("Closed", ref("LawyerRequestForClient")), 404: NOT_FOUND, 409: err("COMPLETION_NOT_REQUESTED, or INVALID_REQUEST_STATUS") },
+    }),
+  },
+  "/client/lawyer-requests/{id}/completion/decline": {
+    post: op({
+      tag: CLIENT_TAG,
+      issue: "engagement completion",
+      summary: "Say the work isn't finished yet",
+      description:
+        "Allowed while the lawyer's \"the work is finished\" waits on the client. The engagement stays ENGAGED and the lawyer carries on; they're told, with the reason, and can say it's finished again later.",
+      parameters: requestId,
+      body: { type: "object", required: ["reason"], properties: { reason: { type: "string", minLength: 1, maxLength: 1000, description: "What's left, shown to the lawyer" } } },
+      responses: { 200: ok("Still engaged", ref("LawyerRequestForClient")), 400: err("No reason"), 404: NOT_FOUND, 409: err("COMPLETION_NOT_REQUESTED, or INVALID_REQUEST_STATUS") },
     }),
   },
   "/client/lawyer-requests/{id}/feedback": {
@@ -1085,8 +1183,12 @@ export const clientHandoffPaths: Paths = {
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#511", built: true,
       summary: "Pass: hide the request from you",
+      description:
+        "The body is optional. A reason and note, when given, are kept for ilovelawyer staff only and are never shown to the client; a pass with neither stores nothing.",
       parameters: requestId,
-      responses: { 204: ok("Hidden"), 403: LAWYER_ONLY, 404: NOT_FOUND },
+      body: { type: "object", properties: { reason: enumOf(PASS_REASONS), note: { type: "string", maxLength: 500 } } },
+      bodyOptional: true,
+      responses: { 204: ok("Hidden"), 400: err("Unknown reason, or a note over 500 characters"), 403: LAWYER_ONLY, 404: NOT_FOUND },
     }),
   },
   "/client-requests/{id}/parties": {
@@ -1275,10 +1377,28 @@ export const clientHandoffPaths: Paths = {
       tag: LAWYER_TAG,
       issue: "ilovelawyer-api#519",
       summary: "Close the engagement",
-      description: "Moves to CLOSED (closedBy LAWYER), removes the read-only grant (shared-cases:changed) and makes the thread read-only. Your workspace copy stays. The client is asked for feedback. The client can also end it from their side (POST /client/lawyer-requests/{id}/end).",
+      description:
+        "Closing moves it to CLOSED (closedBy LAWYER), removes the read-only grant (shared-cases:changed) and makes the thread read-only. Your workspace copy stays. The client is told by bell and email. The client can also end it from their side (POST /client/lawyer-requests/{id}/end).\n\n" +
+        "A paid engagement (engagement.paid) needs an `outcome` (400 CLOSE_OUTCOME_REQUIRED); an unpaid one without one is WORK_FINISHED. WORK_FINISHED doesn't close it yet: the client is asked to confirm the work is finished (engagement.completion), with `note` as your note to them. It stays ENGAGED, and you keep your access, until they confirm (it closes; nothing is refunded and your earning's hold starts then) or say what's left (you carry on and can ask again); unanswered, it closes by itself at completion.autoClosesAt. 409 COMPLETION_PENDING while it already waits on them. CANT_CONTINUE closes it at once: is a Lawyer Exit (#972): give the `reason` and whether any work was done. Nothing is refunded automatically: an admin reads your reason and decides the client's refund (everything, the platform fee included, when you did no work or the reason isn't good enough; or part of your share for work you did). Work done: give what you claim for it (`claimed`, at most your share of the fee: 400 CLAIM_EXCEEDS_FEE) and why (`claimNote`). A disputed payment isn't refunded: the bank decides first. Nothing of the earning is released until the exit is settled. The client isn't offered you again on this case. A Lawyer Exit's notes stay with ilovelawyer: never shown to the client, nor in the case's activity feed or the audit log.",
       parameters: requestId,
-      body: { type: "object", properties: { note: { type: "string", maxLength: 1000, description: "Shown to the client" } } },
-      responses: { 200: ok("Closed", ref("ClientRequestForLawyer")), 403: LAWYER_ONLY, 404: NOT_FOUND, 409: BAD_STATUS },
+      body: {
+        type: "object",
+        properties: {
+          outcome: enumOf(CLOSE_OUTCOMES),
+          note: { type: "string", maxLength: 1000, description: "WORK_FINISHED: your note to the client, with the ask to confirm. CANT_CONTINUE: for ilovelawyer only" },
+          reason: { ...enumOf(RELEASE_REASONS), description: "CANT_CONTINUE only, required" },
+          workDone: { type: "boolean", description: "CANT_CONTINUE only, required" },
+          claimed: { ...money("With workDone: what you claim for the work, at most your share"), description: "Required with workDone" },
+          claimNote: { type: "string", maxLength: 500, description: "Required with workDone: what you did" },
+        },
+      },
+      responses: {
+        200: ok("Closed, or (WORK_FINISHED) still ENGAGED and waiting on the client", ref("ClientRequestForLawyer")),
+        400: err("CLOSE_OUTCOME_REQUIRED, CLAIM_EXCEEDS_FEE"),
+        403: LAWYER_ONLY,
+        404: NOT_FOUND,
+        409: err("COMPLETION_PENDING, or INVALID_REQUEST_STATUS"),
+      },
     }),
   },
   "/client-requests/{id}/reassign": {
@@ -1430,7 +1550,7 @@ export const clientHandoffPaths: Paths = {
     get: op({
       tag: ADMIN_TAG,
       issue: "ilovelawyer-api#506",
-      summary: "Lawyer Applications for one site, with the register check",
+      summary: "Lawyer Applications for one site, with the register check, newest submission first",
       parameters: [
         { name: "site", in: "query", schema: { ...enumOf(LAWYER_COUNTRIES), default: "UK" } },
         { name: "status", in: "query", schema: { ...enumOf(LAWYER_VERIFICATION_STATUSES), default: "PENDING" } },
@@ -1749,7 +1869,7 @@ export const clientHandoffPaths: Paths = {
       description: "Payments that took money, newest first; every attempt with all=true, or one status with status.",
       parameters: [{ name: "status", in: "query", schema: enumOf(QUOTATION_PAYMENT_STATUSES) }, { name: "all", in: "query", schema: { type: "boolean" } }, ...pageParams],
       responses: {
-        200: ok("A page of payments, each with its refunds (newest first), refundPending (on its way at Stripe), and refundable / refundableServiceFee: what a refund may take now, 0 for a disputed or fully refunded one"),
+        200: ok("A page of payments, each with its refunds (newest first), refundPending (on its way at Stripe), refundable / refundableServiceFee: what a refund may take now, 0 for a disputed or fully refunded one, and lawyerExit: the lawyer's Lawyer Exit after this payment, with their reason and notes (admins only)"),
         403: err("Not a platform admin"),
       },
     }),
@@ -1766,7 +1886,54 @@ export const clientHandoffPaths: Paths = {
       responses: { 200: ok("The payment with its refunds"), 400: err("REFUND_EXCEEDS_CHARGE"), 403: err("Not a platform admin"), 404: err("Payment not found"), 409: err("NOT_REFUNDABLE"), 502: err("REFUND_FAILED") },
     }),
   },
+  "/admin/lawyer-exits": {
+    get: op({
+      tag: ADMIN_TAG,
+      issue: "FORHU/ilovelawyer-app#972", built: true,
+      summary: "Lawyer Exits: lawyers who stopped acting after the client paid",
+      description: "OPEN (the default): every one not settled yet, newest first (AWAITING_REVIEW and NEEDS_ATTENTION wait on an admin). ALL, or one status.",
+      parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["OPEN", "ALL", ...LAWYER_EXIT_STATUSES] } }, ...pageParams],
+      responses: { 200: ok("A page of exits", page("LawyerExitForAdmin")), 403: err("Not a platform admin") },
+    }),
+  },
+  "/admin/lawyer-exits/{id}": {
+    get: op({ tag: ADMIN_TAG, issue: "FORHU/ilovelawyer-app#972", built: true, summary: "One Lawyer Exit", parameters: [idParam()], responses: { 200: ok("The exit", ref("LawyerExitForAdmin")), 403: err("Not a platform admin"), 404: err("Lawyer exit not found") } }),
+  },
+  "/admin/lawyer-exits/{id}/decide": {
+    post: op({
+      tag: ADMIN_TAG,
+      issue: "FORHU/ilovelawyer-app#972", built: true,
+      summary: "Decide a Lawyer Exit's refund",
+      description:
+        "Only while AWAITING_REVIEW (every paid exit starts there) or NEEDS_ATTENTION (a refund failed): 409 LAWYER_EXIT_NOT_OPEN otherwise. `refund` is what the client gets back: 0 settles it with nothing refunded; up to what's left of the lawyer's share is a partial refund out of it, and the platform fee is kept; everything left gives the platform fee back too (the reason wasn't good enough). 400 REFUND_EXCEEDS_CHARGE in between. 409 NOT_REFUNDABLE while the payment is disputed. Once settled, what's left of the lawyer's earning starts its hold, counted from the close. Audited (admin.lawyer_exit.decided, and the refund as admin.quotation_payment.refunded); the note stays on the exit.",
+      parameters: [idParam()],
+      body: { type: "object", required: ["refund"], properties: { refund: money(), note: { type: "string", maxLength: 1000 } } },
+      responses: {
+        200: ok("The exit", ref("LawyerExitForAdmin")),
+        400: err("REFUND_EXCEEDS_CHARGE"),
+        403: err("Not a platform admin"),
+        404: err("Lawyer exit not found"),
+        409: err("LAWYER_EXIT_NOT_OPEN, NOT_REFUNDABLE"),
+        502: err("REFUND_FAILED: the exit is back in NEEDS_ATTENTION"),
+      },
+    }),
+  },
   "/admin/wallets": {
     get: op({ tag: ADMIN_TAG, issue: "quotation payments", built: true, summary: "Every payee's wallet with its balances", parameters: pageParams, responses: { 200: ok("A page of wallets"), 403: err("Not a platform admin") } }),
+  },
+  "/admin/lawyer-subscriptions": {
+    get: op({
+      tag: ADMIN_TAG,
+      issue: "lawyer subscriptions",
+      built: true,
+      summary: "Lawyers' monthly plan subscriptions",
+      description:
+        "Newest first. ALL (the default): everything but checkouts that were never paid. ACTIVE: paying, nothing changing. PAST_DUE: a renewal failed. CHANGING: cancelling or downgrading at the end of the period. ENDED: cancelled. PENDING: a checkout still open. `summary` covers every subscription whatever the filter: active, monthlyUsd (what active ones bill at today's plan fees), pastDue, changing.",
+      parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["ALL", "ACTIVE", "PAST_DUE", "CHANGING", "ENDED", "PENDING"] } }, ...pageParams],
+      responses: {
+        200: ok("A page of subscriptions, each with its lawyer (and firm), plan (name, feeUsd, tenantCode), current period, cancelAtPeriodEnd and scheduledPlan (a downgrade at the period's end), with the summary"),
+        403: err("Not a platform admin"),
+      },
+    }),
   },
 };

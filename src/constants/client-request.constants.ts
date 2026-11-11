@@ -53,7 +53,15 @@ export const CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH = 2000;
 export const CLIENT_REQUEST_QUOTE_MAX_MINOR = 10_000_000;
 /** A lawyer's note when releasing a request (#512). Kept on the claim only. */
 export const CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH = 500;
+/** A lawyer's note when passing on a request. Read by ilovelawyer staff only. */
+export const CLIENT_REQUEST_PASS_NOTE_MAX_LENGTH = 500;
 
 /** How long a confirmed client waits on a lawyer's failing introduction fee before the request goes
  * back to other lawyers (#933, ClientRequestSweepQueue): from when the client confirmed. */
 export const CLIENT_REQUEST_UNPAID_FEE_HOURS = 48;
+
+/** How long the client has to answer the lawyer's "the work is finished" before the engagement closes
+ * by itself (EngagementCompletionSvc, ClientRequestSweepQueue): from when the lawyer asked. */
+export const ENGAGEMENT_COMPLETION_CONFIRM_DAYS = 7;
+/** The client's reason when they say the work isn't finished, shown to the lawyer. */
+export const ENGAGEMENT_COMPLETION_DECLINE_MAX_LENGTH = 1000;

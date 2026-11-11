@@ -1,11 +1,13 @@
 import Joi from "joi";
 import {
   CLIENT_REQUEST_NOTE_MAX_LENGTH,
+  CLIENT_REQUEST_PASS_NOTE_MAX_LENGTH,
   CLIENT_REQUEST_QUOTE_MAX_MINOR,
   CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH,
   CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH,
+  ENGAGEMENT_COMPLETION_DECLINE_MAX_LENGTH,
 } from "../constants/client-request.constants";
-import { QUOTE_TYPES, RELEASE_REASONS } from "../types/client-handoff";
+import { CLOSE_OUTCOMES, PASS_REASONS, QUOTE_TYPES, RELEASE_REASONS } from "../types/client-handoff";
 
 export const createClientRequestSchema = Joi.object({
   caseId: Joi.string().uuid().required(),
@@ -37,6 +39,14 @@ export const listLawyerClientRequestsSchema = Joi.object({
   view: Joi.string().valid("inbox", "mine", "history").default("inbox"),
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
+});
+
+/** POST /client-requests/:id/pass: why the lawyer is passing. Both optional; the body may be absent. */
+export const passClientRequestSchema = Joi.object({
+  reason: Joi.string()
+    .valid(...PASS_REASONS)
+    .optional(),
+  note: Joi.string().trim().allow("").max(CLIENT_REQUEST_PASS_NOTE_MAX_LENGTH).optional(),
 });
 
 /** POST /client-requests/:id/release: why the lawyer is giving it back. */
@@ -95,10 +105,41 @@ export const declineClientRequestSchema = Joi.object({
   claimId: Joi.string().trim().optional(),
 });
 
-/** POST /client-requests/:id/close (lawyer) and /client/lawyer-requests/:id/end (client). */
+/** POST /client-requests/:id/close (lawyer). A paid engagement closes with an `outcome` (the service
+ * refuses one without: CLOSE_OUTCOME_REQUIRED). WORK_FINISHED asks the client to confirm, with `note`
+ * as the lawyer's note to them. CANT_CONTINUE is a Lawyer Exit (#972): why, and
+ * whether any work was done; with work done, what the lawyer claims for it (at most their share) and a
+ * short explanation. `note` on a Lawyer Exit is kept for ilovelawyer staff only. */
 export const closeClientRequestSchema = Joi.object({
+  outcome: Joi.string()
+    .valid(...CLOSE_OUTCOMES)
+    .optional(),
   note: Joi.string().trim().allow("").max(1000).optional(),
+  reason: Joi.when("outcome", {
+    is: "CANT_CONTINUE",
+    then: Joi.string()
+      .valid(...RELEASE_REASONS)
+      .required(),
+    otherwise: Joi.forbidden(),
+  }),
+  workDone: Joi.when("outcome", { is: "CANT_CONTINUE", then: Joi.boolean().required(), otherwise: Joi.forbidden() }),
+  claimed: Joi.when("workDone", {
+    is: true,
+    then: Joi.object({
+      amountMinor: Joi.number().integer().min(1).max(CLIENT_REQUEST_QUOTE_MAX_MINOR).required(),
+      currency: Joi.string().valid("GBP").required(),
+    }).required(),
+    otherwise: Joi.forbidden(),
+  }),
+  claimNote: Joi.when("workDone", { is: true, then: Joi.string().trim().min(1).max(CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH).required(), otherwise: Joi.forbidden() }),
 });
+
+/** POST /client/lawyer-requests/:id/completion/decline: what's left, for the lawyer. */
+export const declineCompletionSchema = Joi.object({
+  reason: Joi.string().trim().min(1).max(ENGAGEMENT_COMPLETION_DECLINE_MAX_LENGTH).required(),
+});
+
+/** POST /client/lawyer-requests/:id/end (client). */
 export const endClientRequestSchema = Joi.object({
   reason: Joi.string().trim().allow("").max(1000).optional(),
 });

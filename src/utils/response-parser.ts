@@ -478,6 +478,66 @@ export function parseReasoningPayload(data: unknown): ReasoningExplanation | und
   return { reasoning: anyV.reasoning, citation_reasons };
 }
 
+// Confidence view (chat-wonder-v2-api's confidence.py): every sentence of a legal answer classified
+// by where it came from — QUOTED (near-verbatim from a source retrieved this turn), SOURCED (the
+// model's own conclusion drawing on one), UNSOURCED (no source). Deterministic, no LLM judge; a
+// provenance signal, never a correctness one. See docs/plans/confidence-view-integration.md.
+export type ConfidenceTier = "QUOTED" | "SOURCED" | "UNSOURCED";
+
+export interface ConfidenceSpan {
+  /** The sentence as it renders (markdown stripped) — what the app matches against. */
+  quote: string;
+  tier: ConfidenceTier;
+  /** "provenance" (sentence shading) or "citation" (a link, matched by `ref`). */
+  source: string;
+  why: string;
+  /** For citation spans: the link's href (remapped to the Library href before persisting). */
+  ref: string | null;
+}
+
+export interface ConfidencePayload {
+  v: 1;
+  persona: string;
+  model: string | null;
+  coverage: "none" | "partial" | "full";
+  spans: ConfidenceSpan[];
+}
+
+const CONFIDENCE_TIERS: readonly ConfidenceTier[] = ["QUOTED", "SOURCED", "UNSOURCED"];
+/** Personas whose answers get Confidence view. Intake's spans mean "echoes something the client
+ * said", which isn't useful to show, so they're dropped here rather than persisted. */
+const CONFIDENCE_PERSONAS = new Set(["legal", "legal_uk"]);
+
+/**
+ * Chat Wonder's `{"type":"confidence","v":1,...}` typed WebSocket message, sent right after
+ * `__END__`. Unlike reasoning/decisions the payload is FLAT (no `data` wrapper), so the whole
+ * parsed envelope is passed in. Validates shape only, drops invalid spans, and returns undefined
+ * for anything unusable (wrong schema version, non-legal persona, no spans) — never throws.
+ * Entropy `tokens` are deliberately not kept: production legal models (luna) never send them.
+ */
+export function parseConfidencePayload(envelope: unknown): ConfidencePayload | undefined {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return undefined;
+  const e = envelope as any;
+  if (e.v !== 1 || !Array.isArray(e.spans)) return undefined;
+  if (typeof e.persona !== "string" || !CONFIDENCE_PERSONAS.has(e.persona)) return undefined;
+  const spans: ConfidenceSpan[] = [];
+  for (const s of e.spans) {
+    if (!s || typeof s !== "object") continue;
+    if (typeof s.quote !== "string" || !s.quote.trim()) continue;
+    if (!CONFIDENCE_TIERS.includes(s.tier)) continue;
+    spans.push({
+      quote: s.quote,
+      tier: s.tier,
+      source: typeof s.source === "string" ? s.source : "provenance",
+      why: typeof s.why === "string" ? s.why : "",
+      ref: typeof s.ref === "string" && s.ref ? s.ref : null,
+    });
+  }
+  if (spans.length === 0) return undefined;
+  const coverage = e.coverage === "none" || e.coverage === "full" ? e.coverage : "partial";
+  return { v: 1, persona: e.persona, model: typeof e.model === "string" ? e.model : null, coverage, spans };
+}
+
 // Decision Records (differentiation program, Phase 1) — the "Why?" behind one conclusion in a
 // legal answer, already verified by chat-wonder-v2-api's legal_decisions.py before it ever
 // reaches here (every rule link checked against the retrieved pool, every evidence reference

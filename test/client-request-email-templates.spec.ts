@@ -38,6 +38,20 @@ describe("client request email templates", () => {
     for (const text of ["req-1", "req-2", "Family", "Scotland"]) expect(html).to.include(text);
   });
 
+  it("closed, for the client: what happened, what happens to their money, and a link to the case", async () => {
+    const html = await renderTemplate("client-request-closed-client", {
+      heading: "Lena Lawyer can't continue with your case",
+      message: "Lena Lawyer has stopped acting on your case, and no longer has access to it.",
+      refund: "We're refunding your payment in full.",
+      next: "You can ask for another lawyer from your case whenever you're ready.",
+      caseLink: "https://ilovelawyer.com/cases/case-1",
+    });
+    for (const text of ["can&#x27;t continue", "refunding your payment in full", "ask for another lawyer", "https://ilovelawyer.com/cases/case-1"]) expect(html).to.include(text);
+
+    const finished = await renderTemplate("client-request-closed-client", { heading: "Closed", message: "Done.", refund: null, next: "Rate your lawyer.", caseLink: "https://ilovelawyer.com/cases/case-1" });
+    expect(finished).to.not.include("refunding");
+  });
+
   it("expired, for the client: they can ask again from their case", async () => {
     const html = await renderTemplate("client-request-expired-client", { caseLink: "https://ilovelawyer.com/cases/case-1" });
     expect(html).to.include("https://ilovelawyer.com/cases/case-1");

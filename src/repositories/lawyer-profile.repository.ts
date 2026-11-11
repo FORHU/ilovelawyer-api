@@ -143,14 +143,15 @@ export default class LawyerProfileRepo {
     return flatten(row);
   }
 
-  /** The admin queue (#506) for one site and status, oldest submission first. */
+  /** The admin queue (#506) for one site and status, newest submission first, so the latest is on
+   * the first page instead of at the end of the list. */
   static async listForAdmin({ country, status, page, limit }: { country: LawyerCountry; status: LawyerVerificationStatus; page: number; limit: number }) {
     const where = { country, verificationStatus: status };
     const [rows, total] = await prisma.$transaction([
       prisma.lawyerClientProfile.findMany({
         where,
         include: ADMIN_ROW_INCLUDE,
-        orderBy: [{ submittedAt: { sort: "asc", nulls: "last" } }, { userId: "asc" }],
+        orderBy: [{ submittedAt: { sort: "desc", nulls: "last" } }, { userId: "asc" }],
         skip: (page - 1) * limit,
         take: limit,
       }),

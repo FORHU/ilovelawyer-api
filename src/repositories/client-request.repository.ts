@@ -1,4 +1,4 @@
-import { ClaimOutcome, ClientRequestStatus, Prisma } from "@prisma/client";
+import { ClaimOutcome, ClientRequestStatus, PassReason, Prisma, type CompletionConfirmedBy, type LawyerExit } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { shownStatus } from "../utils/client-request-status";
 import { PRACTICE_AREAS_INCLUDE } from "./practice-area.repository";
@@ -67,8 +67,17 @@ const FOR_CLIENT = {
 export type ClientRequestForClient = Prisma.ClientRequestGetPayload<{ include: typeof FOR_CLIENT }>;
 
 export default class ClientRequestRepo {
-  /** `requestedLawyerId`: the lawyer the client asked for by name; only they are offered it at first. */
-  static async create(data: { caseId: string; clientId: string; note: string; consentVersion: string; consentAcceptedAt: Date; requestedLawyerId?: string | null }) {
+  /** `requestedLawyerId`: the lawyer the client asked for by name; only they are offered it at first.
+   * `excludedLawyerIds`: lawyers never offered it (those who stopped acting on the case before, #972). */
+  static async create(data: {
+    caseId: string;
+    clientId: string;
+    note: string;
+    consentVersion: string;
+    consentAcceptedAt: Date;
+    requestedLawyerId?: string | null;
+    excludedLawyerIds?: string[];
+  }) {
     return prisma.clientRequest.create({ data: { ...data, requestedOnly: !!data.requestedLawyerId } });
   }
 
@@ -154,11 +163,66 @@ export default class ClientRequestRepo {
     return count === 1;
   }
 
-  /** Either side ending the engagement (#519): ENGAGED -> CLOSED, once. True when this call moved
-   * it; false when it had already closed, expired or moved on some other way. */
-  static async close(id: string, closedBy: "LAWYER" | "CLIENT", now: Date = new Date()): Promise<boolean> {
-    const { count } = await prisma.clientRequest.updateMany({ where: { id, status: "ENGAGED" }, data: { status: "CLOSED", closedAt: now, closedBy } });
+  /**
+   * Either side ending the engagement (#519): ENGAGED -> CLOSED, once, in one transaction with what
+   * the close does to the lawyer's earning. With `exit` (the lawyer can't continue, #972): the Lawyer
+   * Exit is recorded and the earning is held (no availableAt) until it's settled, even one that had a
+   * date. Otherwise, with `holdUntil`: the earning's hold starts now and ends then; an earning that
+   * already has a date keeps it. With `completion`: the lawyer's "the work is finished" being confirmed
+   * (by the client, or AUTO when nobody answered in time), only while that same ask (`requestedAt`) is
+   * still open: one the client answered, or a newer one, isn't closed by an older read. True
+   * when this call moved it; false when it had already closed, expired or moved on some other way.
+   */
+  static async close(
+    id: string,
+    closedBy: "LAWYER" | "CLIENT",
+    now: Date = new Date(),
+    opts: { exit?: Omit<Prisma.LawyerExitUncheckedCreateInput, "requestId">; holdUntil?: Date; completion?: { by: CompletionConfirmedBy; requestedAt: Date } } = {},
+  ): Promise<{ closed: false } | { closed: true; exit: LawyerExit | null }> {
+    return prisma.$transaction(async (tx) => {
+      const { count } = await tx.clientRequest.updateMany({
+        where: { id, status: "ENGAGED", ...(opts.completion ? { completionRequestedAt: opts.completion.requestedAt } : {}) },
+        data: { status: "CLOSED", closedAt: now, closedBy, ...(opts.completion ? { completionConfirmedBy: opts.completion.by } : {}) },
+      });
+      if (count !== 1) return { closed: false as const };
+      if (opts.exit) {
+        const exit = await tx.lawyerExit.create({ data: { ...opts.exit, requestId: id, ...(opts.exit.status === "SETTLED" ? { settledAt: now } : {}) } });
+        if (exit.status !== "SETTLED") await tx.earning.updateMany({ where: { requestId: id, status: "PENDING" }, data: { availableAt: null } });
+        return { closed: true as const, exit };
+      }
+      if (opts.holdUntil) await tx.earning.updateMany({ where: { requestId: id, status: "PENDING", availableAt: null }, data: { availableAt: opts.holdUntil } });
+      return { closed: true as const, exit: null };
+    });
+  }
+
+  /** The lawyer says the work is finished: the ask the client confirms, while ENGAGED with none open.
+   * A new ask clears the client's last "not finished yet". True when this call made it. */
+  static async requestCompletion(id: string, note: string | null, now: Date): Promise<boolean> {
+    const { count } = await prisma.clientRequest.updateMany({
+      where: { id, status: "ENGAGED", completionRequestedAt: null },
+      data: { completionRequestedAt: now, completionNote: note, completionDeclinedAt: null, completionDeclineReason: null },
+    });
     return count === 1;
+  }
+
+  /** The client says the work isn't finished: the open ask is cleared, and when and why are kept for
+   * the lawyer. True when this call cleared it. */
+  static async declineCompletion(id: string, reason: string, now: Date): Promise<boolean> {
+    const { count } = await prisma.clientRequest.updateMany({
+      where: { id, status: "ENGAGED", completionRequestedAt: { not: null } },
+      data: { completionRequestedAt: null, completionNote: null, completionDeclinedAt: now, completionDeclineReason: reason },
+    });
+    return count === 1;
+  }
+
+  /** Engagements whose "the work is finished" was asked on or before `askedBy` and nobody answered. */
+  static async findCompletionDue(askedBy: Date) {
+    return prisma.clientRequest.findMany({
+      where: { status: "ENGAGED", completionRequestedAt: { not: null, lte: askedBy } },
+      select: { id: true },
+      orderBy: { completionRequestedAt: "asc" },
+      take: 100,
+    });
   }
 
   /** The client's rating of the lawyer, once the engagement is CLOSED. Null when already given:
@@ -391,11 +455,16 @@ export default class ClientRequestRepo {
     });
   }
 
-  /** Stops one lawyer seeing a request again (a pass, #511). Status untouched. */
-  static async exclude(id: string, lawyerId: string) {
-    await prisma.clientRequest.updateMany({
-      where: { id, NOT: { excludedLawyerIds: { has: lawyerId } } },
-      data: { excludedLawyerIds: { push: lawyerId } },
+  /** Stops one lawyer seeing a request again (a pass, #511). Status untouched. `said` is the reason
+   * and note they gave: kept with the exclusion, and only when this call is the one that excluded
+   * them, so a second pass can't add or change it. */
+  static async exclude(id: string, lawyerId: string, said?: { reason: PassReason | null; note: string | null }) {
+    await prisma.$transaction(async (tx) => {
+      const { count } = await tx.clientRequest.updateMany({
+        where: { id, NOT: { excludedLawyerIds: { has: lawyerId } } },
+        data: { excludedLawyerIds: { push: lawyerId } },
+      });
+      if (count && said) await tx.clientRequestPass.createMany({ data: [{ requestId: id, lawyerId, ...said }], skipDuplicates: true });
     });
   }
 }

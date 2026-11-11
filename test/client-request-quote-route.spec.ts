@@ -224,6 +224,52 @@ describe("client request conflict check, release and quote", () => {
     });
   });
 
+  describe("pass", () => {
+    const pass = (body?: object, id = lawyerId, org = orgId) => {
+      const req = request(app).post(`/api/client-requests/${requestId}/pass`).set(asLawyer(id, org));
+      return body ? req.send(body) : req;
+    };
+    const passRows = () => prisma.clientRequestPass.findMany({ where: { requestId } });
+    const excluded = async () => (await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).excludedLawyerIds;
+
+    it("keeps the reason and a trimmed note with the exclusion, and the client never sees them", async () => {
+      await pass({ reason: "OUT_OF_SCOPE", note: "  Tribunal work isn't something I take on.  " }).expect(204);
+      expect(await excluded()).to.deep.equal([lawyerId]);
+      const rows = await passRows();
+      expect(rows).to.have.length(1);
+      expect(rows[0]).to.deep.include({ lawyerId, reason: "OUT_OF_SCOPE", note: "Tribunal work isn't something I take on." });
+      const res = await clientView();
+      expect(JSON.stringify(res.body)).to.not.contain("Tribunal work");
+    });
+
+    it("still passes with no body, and stores no row", async () => {
+      await pass().expect(204);
+      expect(await excluded()).to.deep.equal([lawyerId]);
+      expect(await passRows()).to.have.length(0);
+    });
+
+    it("refuses an unknown reason or an over-long note, and leaves the request in the inbox", async () => {
+      await pass({ reason: "BORED" }).expect(400);
+      await pass({ note: "x".repeat(501) }).expect(400);
+      expect(await excluded()).to.deep.equal([]);
+      expect(await passRows()).to.have.length(0);
+    });
+
+    it("keeps the first reason when the lawyer passes again", async () => {
+      await pass({ reason: "CONFLICT" }).expect(204);
+      await pass({ reason: "OTHER", note: "Changed my mind." }).expect(404);
+      const rows = await passRows();
+      expect(rows.map((r) => r.reason)).to.deep.equal(["CONFLICT"]);
+    });
+
+    it("keeps one row for each lawyer who passes", async () => {
+      await pass({ reason: "CAPACITY" }).expect(204);
+      await pass({ reason: "FEE_MISMATCH" }, otherLawyerId, otherOrgId).expect(204);
+      const rows = await passRows();
+      expect(rows.map((r) => [r.lawyerId, r.reason]).sort()).to.deep.equal([[lawyerId, "CAPACITY"], [otherLawyerId, "FEE_MISMATCH"]].sort());
+    });
+  });
+
   describe("quote", () => {
     it("shows the lawyer their quote, and the request as QUOTED to them", async () => {
       await claim().expect(200);

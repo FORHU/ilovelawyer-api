@@ -25,6 +25,14 @@ export const SECURITY_AUDIT_ACTIONS = [
   "consent.changed",
   "integration.connected",
   "integration.disconnected",
+  // Client app email import (EPIC #982): a search of the connected Gmail inbox (payload carries
+  // the result count, never the query or any content) and an attachment fetched from it.
+  "gmail.searched",
+  "gmail.attachment_downloaded",
+  // An email (as a PDF) and/or its attachments copied from Gmail into a case as documents.
+  "gmail.imported_to_case",
+  // "Suggest by AI": the inbox searched for a case and the matches ranked by Intake (counts only).
+  "gmail.suggested_for_case",
 
   // Organization membership and permissions
   "org.created",
@@ -83,6 +91,8 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.client_payment.refunded",
   "admin.organization_charge.refunded",
   "admin.quotation_payment.refunded",
+  // An admin's decision on a Lawyer Exit where the lawyer claimed work done: how much goes back.
+  "admin.lawyer_exit.decided",
   "admin.settings.payout_settings_changed",
 
   // A lawyer's wallet: where their earnings are paid out to, and money leaving it.
@@ -99,6 +109,10 @@ export const SECURITY_AUDIT_ACTIONS = [
   "client_request.copied",
   "client_request.ai_top_up_approved",
   "client_request.closed",
+
+  // Money ilovelawyer gives back on its own, with no admin: a payment that came in after the request
+  // had moved on. (A Lawyer Exit's refund is always an admin's decision.)
+  "system.quotation_payment.refunded",
 
   // Exports and downloads
   "export.case_brief",
@@ -145,6 +159,7 @@ export type SecurityAuditTargetType =
   | "practice_area"
   | "case_area"
   | "quotation_payment"
+  | "lawyer_exit"
   | "wallet"
   | "payout_settings";
 
@@ -184,6 +199,10 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "consent.changed": "Consent granted or withdrawn",
   "integration.connected": "Integration connected",
   "integration.disconnected": "Integration disconnected",
+  "gmail.searched": "Gmail inbox searched",
+  "gmail.attachment_downloaded": "Gmail attachment downloaded",
+  "gmail.imported_to_case": "Email from Gmail added to a case",
+  "gmail.suggested_for_case": "Gmail searched by AI for a case",
   "org.created": "Organization created",
   "org.updated": "Organization details changed",
   "org.member_invited": "Member invited",
@@ -235,6 +254,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.client_payment.refunded": "Client app payment refunded by ilovelawyer",
   "admin.organization_charge.refunded": "Introduction fee or AI top-up refunded by ilovelawyer",
   "admin.quotation_payment.refunded": "Client's payment for a quote refunded by ilovelawyer",
+  "admin.lawyer_exit.decided": "Refund decided for a lawyer who couldn't continue",
   "admin.settings.payout_settings_changed": "Platform fee, earnings hold or minimum withdrawal changed",
   "wallet.payout_account_started": "Payout account set up or updated",
   "wallet.withdrawal_requested": "Withdrawal from the wallet requested",
@@ -246,6 +266,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "client_request.copied": "Engaged client's case copied to the lawyer's workspace",
   "client_request.ai_top_up_approved": "AI top-up approved for an engagement and charged to the card",
   "client_request.closed": "Engagement closed, lawyer's access removed",
+  "system.quotation_payment.refunded": "Client's payment for a quote refunded automatically",
   "export.case_brief": "Case brief exported",
   "export.generated_document": "Document generated",
   "export.audit_log": "Audit log exported",

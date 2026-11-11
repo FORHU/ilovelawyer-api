@@ -9,6 +9,7 @@ import ClientCaseCtrl from "../controllers/client-case.controller";
 import ClientRequestCtrl from "../controllers/client-request.controller";
 import ClientDictationCtrl from "../controllers/client-dictation.controller";
 import ClientLawyerCtrl from "../controllers/client-lawyer.controller";
+import ClientGmailCtrl from "../controllers/client-gmail.controller";
 
 // A spoken answer is a short clip (180s at most in the app); in memory, since it goes straight to S3
 // for the Transcribe job.
@@ -20,6 +21,24 @@ const dictationLimiter = rateLimit({
   max: 20,
   keyGenerator: (req) => req.user.userId,
   message: { message: "You've used voice input a lot just now. Try again in a few minutes, or type instead." },
+});
+
+// Each Gmail search fans out to up to 50 Gmail reads, and Google limits each user's quota, so a
+// client gets a generous but bounded number of inbox calls.
+const gmailLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "That's a lot of Gmail searches in a short time. Wait a minute and try again." },
+});
+
+const emailImportConsent = requireConsent("EMAIL_IMPORT");
+
+const gmailSuggestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "You've asked the AI for email suggestions a lot just now. Try again in a few minutes, or search yourself." },
 });
 
 /** The client app (ilovelawyer-client): a client's own cases, their AI chat and their documents.
@@ -76,6 +95,22 @@ router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
 
 // The lawyer marketplace: verified lawyers taking requests, filtered and sorted.
+// Email import (EPIC #982): the client's own Gmail, read-only. Nothing read here is stored.
+// Everything but Disconnect needs the client's email-import consent (#989), given before they
+// connect; withdrawing it disconnects Gmail.
+router.post("/gmail/connect", emailImportConsent, asyncHandler(ClientGmailCtrl.connect));
+router.delete("/gmail", asyncHandler(ClientGmailCtrl.disconnect));
+router.get("/gmail/messages", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.search));
+router.get("/gmail/messages/:messageId", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.message));
+router.get("/gmail/messages/:messageId/attachments/:partId/download", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.downloadAttachment));
+// Adding an email to a case (#986/#987): the email as a PDF and/or chosen attachments, each a
+// case document. Like an upload, it needs no AI-processing consent.
+router.post("/cases/:caseId/gmail-imports", emailImportConsent, gmailLimiter, asyncHandler(ClientGmailCtrl.importToCase));
+// "Suggest by AI" (#984): Intake searches the inbox for the case and ranks what it finds. Sends
+// email headers and previews to the AI, so it needs AI-processing consent, and each run is an AI
+// call plus up to ~45 Gmail reads, so it has its own tighter limit.
+router.post("/cases/:caseId/gmail-suggestions", emailImportConsent, requireConsent("AI_PROCESSING"), gmailSuggestLimiter, asyncHandler(ClientGmailCtrl.suggestForCase));
+
 router.get("/lawyers", asyncHandler(ClientLawyerCtrl.list));
 router.get("/lawyers/:id", asyncHandler(ClientLawyerCtrl.get));
 
@@ -98,6 +133,9 @@ router.post("/lawyer-requests/:id/quotations/:quotationId/payment", asyncHandler
 router.get("/lawyer-requests/:id/payment", asyncHandler(ClientRequestCtrl.payment));
 // The client's side of closing the engagement, and rating the lawyer afterwards (#519).
 router.post("/lawyer-requests/:id/end", asyncHandler(ClientRequestCtrl.end));
+// The lawyer said the work is finished: the client confirms it (the engagement closes) or says it isn't.
+router.post("/lawyer-requests/:id/completion/confirm", asyncHandler(ClientRequestCtrl.confirmCompletion));
+router.post("/lawyer-requests/:id/completion/decline", asyncHandler(ClientRequestCtrl.declineCompletion));
 router.post("/lawyer-requests/:id/feedback", asyncHandler(ClientRequestCtrl.feedback));
 // The engagement thread with the lawyer (#517).
 router.get("/lawyer-requests/:id/messages", asyncHandler(ClientRequestCtrl.messages));

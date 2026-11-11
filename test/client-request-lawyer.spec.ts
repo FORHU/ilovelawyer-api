@@ -56,6 +56,8 @@ describe("ClientRequestLawyerSvc", () => {
 
   let requests: Map<string, any>;
   let claims: any[];
+  /** The reasons lawyers gave when passing (ClientRequestPass rows). */
+  let passes: { requestId: string; lawyerId: string; reason: string | null; note: string | null }[];
   let profiles: Map<string, any>;
   let roles: Map<string, string>;
   let openCounts: Map<string, number>;
@@ -107,6 +109,7 @@ describe("ClientRequestLawyerSvc", () => {
     ];
     requests = new Map();
     claims = [];
+    passes = [];
     profiles = new Map([
       ["lawyer-me", { ...PROFILE }],
       ["lawyer-other", { ...PROFILE, userId: "lawyer-other" }],
@@ -155,9 +158,13 @@ describe("ClientRequestLawyerSvc", () => {
       const r = requests.get(id);
       return r ? shownStatus(r.status, claims.filter((c) => c.requestId === id)) : null;
     };
-    (ClientRequestRepo as any).exclude = async (id: string, lawyerId: string) => {
+    // Like the real one, the reason is kept only by the call that excludes the lawyer.
+    (ClientRequestRepo as any).exclude = async (id: string, lawyerId: string, said?: { reason: string | null; note: string | null }) => {
       const r = requests.get(id);
-      if (r && !r.excludedLawyerIds.includes(lawyerId)) r.excludedLawyerIds.push(lawyerId);
+      if (r && !r.excludedLawyerIds.includes(lawyerId)) {
+        r.excludedLawyerIds.push(lawyerId);
+        if (said) passes.push({ requestId: id, lawyerId, ...said });
+      }
     };
     // ClientRequestClaimRepo.claim's rules (proven against Postgres in its own spec): the request
     // stays ROUTED, up to 3 lawyers on it at once.
@@ -344,6 +351,49 @@ describe("ClientRequestLawyerSvc", () => {
     it("answers 404 for a request not for them", async () => {
       routed("req-1", { case: { caseAreas: ["FAMILY"], ukJurisdiction: "England and Wales" } });
       expect(await errorOf(ClientRequestLawyerSvc.pass(me, "req-1"))).to.deep.include({ status: 404 });
+    });
+
+    describe("the reason given", () => {
+      it("keeps the reason and note the lawyer gave", async () => {
+        routed("req-1");
+        await ClientRequestLawyerSvc.pass(me, "req-1", { reason: "OUT_OF_SCOPE", note: "Tribunal work isn't something I take on." });
+        expect(passes).to.deep.equal([{ requestId: "req-1", lawyerId: "lawyer-me", reason: "OUT_OF_SCOPE", note: "Tribunal work isn't something I take on." }]);
+      });
+
+      it("trims the note, and keeps a reason given with a blank one", async () => {
+        routed("req-1");
+        await ClientRequestLawyerSvc.pass(me, "req-1", { reason: "CAPACITY", note: "   " });
+        expect(passes).to.deep.equal([{ requestId: "req-1", lawyerId: "lawyer-me", reason: "CAPACITY", note: null }]);
+      });
+
+      it("keeps a note given with no reason", async () => {
+        routed("req-1");
+        await ClientRequestLawyerSvc.pass(me, "req-1", { note: "  Too far away.  " });
+        expect(passes).to.deep.equal([{ requestId: "req-1", lawyerId: "lawyer-me", reason: null, note: "Too far away." }]);
+      });
+
+      it("still passes with nothing said, and stores nothing", async () => {
+        routed("req-1");
+        await ClientRequestLawyerSvc.pass(me, "req-1");
+        await ClientRequestLawyerSvc.pass({ ...me, userId: "lawyer-other" }, "req-1", { note: " " });
+        expect(requests.get("req-1")!.excludedLawyerIds).to.deep.equal(["lawyer-me", "lawyer-other"]);
+        expect(passes).to.deep.equal([]);
+      });
+
+      it("keeps only the first reason when the lawyer passes twice", async () => {
+        routed("req-1");
+        await ClientRequestLawyerSvc.pass(me, "req-1", { reason: "CONFLICT" });
+        // They're no longer in the inbox, so a second pass is a 404 and changes nothing.
+        expect(await errorOf(ClientRequestLawyerSvc.pass(me, "req-1", { reason: "OTHER" }))).to.deep.include({ status: 404 });
+        expect(passes.map((p) => p.reason)).to.deep.equal(["CONFLICT"]);
+      });
+
+      it("stores nothing when the pass is refused", async () => {
+        routed("req-1");
+        await ClientRequestLawyerSvc.claim(me, "req-1");
+        expect(await errorOf(ClientRequestLawyerSvc.pass(me, "req-1", { reason: "CONFLICT" }))).to.deep.include({ status: 409 });
+        expect(passes).to.deep.equal([]);
+      });
     });
   });
 
