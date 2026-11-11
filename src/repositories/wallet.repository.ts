@@ -83,13 +83,25 @@ export async function createEarningTx(tx: Tx, data: Omit<Prisma.EarningUnchecked
  * replayed webhook or an overlapping sweep can't move anything twice.
  */
 export default class WalletRepo {
-  /** The owner's wallet, made on first use. */
+  /** The owner's wallet, made on first use. Two concurrent first-uses (e.g. the page's balance and
+   * withdrawals calls both landing before either's wallet row commits) can both miss the row and
+   * both try to create it; the DB's unique index lets only one insert through and the loser's
+   * upsert() surfaces that as P2002 instead of falling back to the update. Retried as a plain fetch,
+   * since by the time of the conflict the row the winner created is already there to read. */
   static async findOrCreate(owner: WalletOwner, currency = "GBP"): Promise<Wallet> {
-    return prisma.wallet.upsert({
-      where: { ownerType_ownerId: { ownerType: owner.ownerType, ownerId: owner.ownerId } },
-      create: { ownerType: owner.ownerType, ownerId: owner.ownerId, currency },
-      update: {},
-    });
+    try {
+      return await prisma.wallet.upsert({
+        where: { ownerType_ownerId: { ownerType: owner.ownerType, ownerId: owner.ownerId } },
+        create: { ownerType: owner.ownerType, ownerId: owner.ownerId, currency },
+        update: {},
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        const wallet = await WalletRepo.findByOwner(owner);
+        if (wallet) return wallet;
+      }
+      throw err;
+    }
   }
 
   static async findByOwner(owner: WalletOwner) {
