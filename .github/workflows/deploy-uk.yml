@@ -284,6 +284,7 @@ jobs:
           USE_JEV_CASE_STRATEGY: ${{ vars.USE_JEV_CASE_STRATEGY }}
           USE_FULL_CONTRADICTION_SCAN: ${{ vars.USE_FULL_CONTRADICTION_SCAN }}
           USE_GROUNDING_VERIFIER: ${{ vars.USE_GROUNDING_VERIFIER }}
+          CONFIDENCE_VIEW_ENABLED: ${{ vars.CONFIDENCE_VIEW_ENABLED }}
           GROUNDING_MAX_ASSERTIONS: ${{ vars.GROUNDING_MAX_ASSERTIONS }}
           JURIS_PH_API_URL: ${{ secrets.JURIS_PH_API_URL }}
           UK_CASELAW_BASE_URL: ${{ secrets.UK_CASELAW_BASE_URL }}
@@ -389,6 +390,7 @@ jobs:
           add USE_JEV_CASE_STRATEGY                    "${USE_JEV_CASE_STRATEGY:-}"
           add USE_FULL_CONTRADICTION_SCAN              "${USE_FULL_CONTRADICTION_SCAN:-}"
           add USE_GROUNDING_VERIFIER                   "${USE_GROUNDING_VERIFIER:-}"
+          add CONFIDENCE_VIEW_ENABLED                  "${CONFIDENCE_VIEW_ENABLED:-}"
           add GROUNDING_MAX_ASSERTIONS                 "${GROUNDING_MAX_ASSERTIONS:-}"
           add JURIS_PH_API_URL                         "${JURIS_PH_API_URL:-}"
           add UK_CASELAW_BASE_URL                      "${UK_CASELAW_BASE_URL:-}"
