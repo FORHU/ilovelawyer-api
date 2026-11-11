@@ -22,6 +22,7 @@ import DocumentChunkRepo from "../repositories/document-chunk.repository";
 import DocumentRepo from "../repositories/document.repository";
 import { registerTurnDocuments } from "../services/case-document-callback-scope.service";
 import { embedText } from "./embedding";
+import { getPresignedGetUrl } from "./s3";
 import {
   parseStructuredDataPayload,
   parseMindMapDataPayload,
@@ -266,7 +267,8 @@ export async function categorizeDocument(
 /** Vision-description fallback for an uploaded photo Textract found no text in — see
  * DocumentExtractionSvc.processDocument, which calls this only after OCR already came back
  * empty on an image. Best-effort: any failure (Chat Wonder unreachable, no description) returns
- * null rather than throwing, so a description miss falls through to the existing FAILED path. */
+ * null rather than throwing, so a description miss falls through to the pre-existing
+ * filename-based placeholder, not a failure. */
 export async function describeImage(
   s3Key: string,
   filename: string,
@@ -277,10 +279,15 @@ export async function describeImage(
   let success = false;
   let reported: ReportedUsage | undefined;
   try {
-    const { data } = await axios.post(`${CHAT_WONDER_API_URL}/api/legal/describe-image`, {
-      s3_key: s3Key,
-      filename,
-    });
+    const imageUrl = await getPresignedGetUrl(s3Key);
+    const { data } = await axios.post(
+      `${CHAT_WONDER_API_URL}/api/legal/describe-image`,
+      {
+        image_url: imageUrl,
+        filename,
+      },
+      { timeout: CHAT_WONDER_REST_TIMEOUT_MS },
+    );
     description = typeof data?.description === "string" ? data.description.trim() : "";
     success = true;
     reported = parseReportedUsage(data?.usage);
