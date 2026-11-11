@@ -2,6 +2,7 @@ import { ConsentPurpose } from "@prisma/client";
 import ConsentRepo from "../repositories/consent.repository";
 import HttpError from "../utils/http-error";
 import SecurityAuditSvc from "./security-audit.service";
+import GmailConnectionSvc from "./gmail-connection.service";
 import {
   ACTIVE_CONSENT_PURPOSES,
   CONSENT_VERSIONS,
@@ -92,6 +93,9 @@ export default class ConsentSvc {
       throw new HttpError(`${purpose} can't be changed here`, 400);
     }
     const version = CONSENT_VERSIONS[purpose]!;
+    // Withdrawing email import stops it for good, not just for the next request: the Gmail grant
+    // is revoked at Google and the stored tokens cleared (#989).
+    if (purpose === "EMAIL_IMPORT" && !granted) await GmailConnectionSvc.disconnectIfConnected(userId);
     await ConsentRepo.set(userId, purpose, granted, version, source);
     // The consent table keeps only the latest answer per purpose; this is the history of changes.
     await SecurityAuditSvc.record({

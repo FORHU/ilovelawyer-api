@@ -35,6 +35,26 @@ async function transcribeMedia(s3Key: string, documentId: string, filename: stri
   return `[Audio/video file "${filename}" — no speech was detected, so there is no transcript to index.]`;
 }
 
+const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png"]);
+
+/** A JPG or PNG upload: photos are evidence too, and most have no text in them. */
+export function isImageDocument(mimeType?: string | null, filename?: string): boolean {
+  if (mimeType && IMAGE_MIME_TYPES.has(mimeType.toLowerCase())) return true;
+  const ext = filename?.split(".").pop()?.toLowerCase();
+  return !!ext && IMAGE_EXTENSIONS.has(ext);
+}
+
+/**
+ * What's indexed for an image OCR found no text in: a photo of damage, an injury, a place. Same
+ * reasoning as transcribeMedia's no-speech placeholder: a photo without writing is valid evidence,
+ * not a failed upload, so it's READY and findable by name instead of stuck on "Couldn't read" with
+ * advice to re-scan it. The AI is told what it doesn't know rather than left to guess.
+ */
+export function imageWithoutTextPlaceholder(filename: string): string {
+  return `[Image "${filename}": a photo or picture with no readable text in it, so what it shows isn't known from the file itself. Ask the client to describe it if it matters.]`;
+}
+
 /** Chunks embedded and stored per round (see process). A multiple of every chunking tier's
  * embeddingBatchSize (100, 50, 32), so rounds never split a batch. */
 export const EMBED_ROUND_CHUNKS = 3_200;
@@ -161,7 +181,11 @@ export default class DocumentExtractionSvc {
         ocrAttempted,
         pageCount: pages.length,
       });
-      const trimmedPages = pages.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text.length > 0);
+      let trimmedPages = pages.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text.length > 0);
+      if (trimmedPages.length === 0 && isImageDocument(doc.mimeType, doc.name)) {
+        logger.info("Document extraction: image has no readable text, indexing it by name", { documentId, name: doc.name });
+        trimmedPages = [{ ...(pages[0] ?? { pageNumber: 1 }), pageNumber: 1, text: imageWithoutTextPlaceholder(doc.name) }];
+      }
 
       await DocumentRepo.updateExtractionMeta(documentId, {
         pageCount: pages.length,
@@ -169,7 +193,8 @@ export default class DocumentExtractionSvc {
         ocrAttempted,
       });
 
-      // Empty extraction (scanned PDF with failed OCR) counts as failed, not ready.
+      // Empty extraction (scanned PDF with failed OCR) counts as failed, not ready. An image
+      // without text never gets here (see imageWithoutTextPlaceholder above).
       if (trimmedPages.length === 0) {
         logger.warn("Document extraction: no text extracted", { documentId, name: doc.name, ocrAttempted });
         await DocumentExtractionSvc.setStatus(documentId, "FAILED", "document:failed");

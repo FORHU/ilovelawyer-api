@@ -41,6 +41,12 @@ describe("ConsentSvc.isAllowed", () => {
     expect(await ConsentSvc.isAllowed("u1", "AI_PROCESSING")).to.equal(false);
   });
 
+  it("blocks email import until the person agrees, unlike AI processing", async () => {
+    expect(await ConsentSvc.isAllowed("u1", "EMAIL_IMPORT")).to.equal(false);
+    row = { withdrawnAt: null };
+    expect(await ConsentSvc.isAllowed("u1", "EMAIL_IMPORT")).to.equal(true);
+  });
+
   it("never blocks on Terms of Service, which has no answer to withdraw here", async () => {
     row = { withdrawnAt: new Date() };
     expect(await ConsentSvc.isAllowed("u1", "TERMS_OF_SERVICE")).to.equal(true);
@@ -133,5 +139,26 @@ describe("routes that start AI work", () => {
   it("all require AI_PROCESSING consent", () => {
     const unguarded = aiRoutes().filter((r) => !r.guarded).map((r) => r.route);
     expect(unguarded, `these start AI work without requireConsent("AI_PROCESSING"):\n${unguarded.join("\n")}`).to.deep.equal([]);
+  });
+});
+
+/** Email import (#989): every route that reads the client's Gmail, or connects it, needs the
+ * email-import consent. Only Disconnect doesn't: it must always work. Read from source, so a new
+ * Gmail route that forgets the guard fails here. */
+describe("routes that read the client's Gmail", () => {
+  const text = fs.readFileSync(path.join(__dirname, "..", "src", "routes", "client.route.ts"), "utf8").replace(/\r\n/g, "\n");
+  const gmailRoutes = [...text.matchAll(/router\.(get|post|put|patch|delete)\(\s*(["'`][^"'`]*gmail[^"'`]*["'`])\s*,([\s\S]*?)\);/g)].map((m) => ({
+    route: `${m[1]!.toUpperCase()} ${m[2]}`,
+    guarded: m[3]!.includes("emailImportConsent"),
+  }));
+
+  it("finds them (so this check can't pass by finding nothing)", () => {
+    expect(gmailRoutes.length).to.be.greaterThan(5);
+  });
+
+  it("guards every one but Disconnect with the email-import consent", () => {
+    expect(text).to.include('const emailImportConsent = requireConsent("EMAIL_IMPORT")');
+    const unguarded = gmailRoutes.filter((r) => !r.guarded).map((r) => r.route);
+    expect(unguarded).to.deep.equal(['DELETE "/gmail"']);
   });
 });

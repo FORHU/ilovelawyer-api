@@ -62,6 +62,10 @@ model User {
   // Where two-way Google Calendar sync left off (Google's events.list syncToken). Null → the next
   // poll takes a fresh baseline. Reset on connect and disconnect.
   googleCalendarSyncToken String?
+  gmailAccessToken        String?
+  gmailRefreshToken       String?
+  gmailEmail              String?
+  gmailConnectedAt        DateTime?
   avatarId                String?
   tenantId                String?
   isEmailVerified         Boolean @default(false)
@@ -4107,6 +4111,9 @@ enum ConsentPurpose {
   AI_PROCESSING
   ANALYTICS
   MARKETING
+  // The client app's Gmail email import (EPIC #982, #989): reading the connected inbox when the
+  // client searches or asks the AI to suggest emails. Opt-in: blocked until answered.
+  EMAIL_IMPORT
 }
 
 model Consent {

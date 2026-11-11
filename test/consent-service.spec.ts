@@ -6,6 +6,7 @@ import { ConsentPurpose } from "@prisma/client";
 import ConsentSvc from "../src/services/consent.service";
 import ConsentRepo from "../src/repositories/consent.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
+import GmailConnectionSvc from "../src/services/gmail-connection.service";
 import { CONSENT_VERSIONS } from "../src/constants/consent.constants";
 import { CLIENT_TERMS_VERSION, TERMS_VERSION } from "../src/constants/auth.constants";
 
@@ -44,7 +45,7 @@ describe("ConsentSvc", () => {
 
   it("lists the purposes the product uses (not analytics or marketing, which it does not), and a purpose never answered is not_set rather than withdrawn", async () => {
     const list = await ConsentSvc.list("u1");
-    expect(list.map((c) => c.purpose)).to.deep.equal(["TERMS_OF_SERVICE", "AI_PROCESSING"]);
+    expect(list.map((c) => c.purpose)).to.deep.equal(["TERMS_OF_SERVICE", "AI_PROCESSING", "EMAIL_IMPORT"]);
     expect(list.every((c) => c.status === "not_set" && c.version === null)).to.equal(true);
   });
 
@@ -105,6 +106,37 @@ describe("ConsentSvc", () => {
     rows = [{ purpose: "AI_PROCESSING", version: "2025-01", grantedAt: new Date("2025-01-01T00:00:00Z"), withdrawnAt: null }];
     const ai = (await ConsentSvc.list("u1")).find((c) => c.purpose === "AI_PROCESSING")!;
     expect(ai).to.deep.include({ status: "granted", outdated: true });
+  });
+
+  describe("email import (#989)", () => {
+    const realDisconnect = GmailConnectionSvc.disconnectIfConnected;
+    let disconnected: string[];
+    beforeEach(() => {
+      disconnected = [];
+      GmailConnectionSvc.disconnectIfConnected = (async (userId: string) => {
+        disconnected.push(userId);
+      }) as typeof GmailConnectionSvc.disconnectIfConnected;
+    });
+    afterEach(() => {
+      GmailConnectionSvc.disconnectIfConnected = realDisconnect;
+    });
+
+    it("is granted from the Gmail connect step at the current version, without touching the connection", async () => {
+      await ConsentSvc.set("u1", "EMAIL_IMPORT", true, "gmail");
+      expect(sets).to.deep.equal([{ purpose: "EMAIL_IMPORT", granted: true, version: CONSENT_VERSIONS.EMAIL_IMPORT!, source: "gmail" }]);
+      expect(disconnected).to.deep.equal([]);
+    });
+
+    it("disconnects Gmail when withdrawn, so withdrawing stops all reading at once", async () => {
+      const list = await ConsentSvc.set("u1", "EMAIL_IMPORT", false);
+      expect(disconnected).to.deep.equal(["u1"]);
+      expect(list.find((c) => c.purpose === "EMAIL_IMPORT")!.status).to.equal("withdrawn");
+    });
+
+    it("never disconnects Gmail for a change to another purpose", async () => {
+      await ConsentSvc.set("u1", "AI_PROCESSING", false);
+      expect(disconnected).to.deep.equal([]);
+    });
   });
 
   it("refuses to change a purpose the product does not use", async () => {

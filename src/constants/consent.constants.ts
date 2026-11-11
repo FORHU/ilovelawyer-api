@@ -5,7 +5,7 @@ import { TERMS_VERSION } from "./auth.constants";
  * the database enum (removing enum values needs a migration) but nothing in the system uses them,
  * so they are not listed, cannot be set, and have no version. Add a purpose here, with a version,
  * in the same change that adds the code that needs it. */
-export const ACTIVE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["TERMS_OF_SERVICE", "AI_PROCESSING"];
+export const ACTIVE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["TERMS_OF_SERVICE", "AI_PROCESSING", "EMAIL_IMPORT"];
 
 /** Version of the policy text behind each purpose a user can answer for. Bump one when its text
  * materially changes, so an old answer can be told apart from one given to the current text.
@@ -13,6 +13,8 @@ export const ACTIVE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["TERMS_OF_SER
 export const CONSENT_VERSIONS: Partial<Record<ConsentPurpose, string>> = {
   TERMS_OF_SERVICE: TERMS_VERSION,
   AI_PROCESSING: "2026-10",
+  // The text in ilovelawyer-client's EmailImportConsent (EMAIL_IMPORT_CONSENT_POINTS).
+  EMAIL_IMPORT: "2026-11",
 };
 
 /** What a purpose allows for someone who has never answered it. AI processing is on by default:
@@ -22,12 +24,15 @@ export const CONSENT_VERSIONS: Partial<Record<ConsentPurpose, string>> = {
 export const CONSENT_WHEN_UNANSWERED: Partial<Record<ConsentPurpose, "allowed" | "blocked">> = {
   TERMS_OF_SERVICE: "allowed",
   AI_PROCESSING: "allowed",
+  // Reading someone's inbox is never assumed: the client agrees before connecting Gmail.
+  EMAIL_IMPORT: "blocked",
 };
 
 /** Purposes a user may grant or withdraw through the consent endpoint. Terms of Service is
  * excluded: withdrawing it means closing the account, which has its own flow. */
-export const SELF_SERVICE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["AI_PROCESSING"];
+export const SELF_SERVICE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["AI_PROCESSING", "EMAIL_IMPORT"];
 
-/** Where an answer was given, stored with it. */
-export const CONSENT_SOURCES = ["settings", "first_login", "trial"] as const;
+/** Where an answer was given, stored with it. "gmail" is the client app's Gmail connect step
+ * (agreeing) or its Disconnect (withdrawing). */
+export const CONSENT_SOURCES = ["settings", "first_login", "trial", "gmail"] as const;
 export type ConsentSource = (typeof CONSENT_SOURCES)[number];
