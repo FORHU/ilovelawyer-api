@@ -57,6 +57,7 @@ function matches(row: Row, where: any): boolean {
 }
 
 const tx = {
+  $executeRaw: async () => 0,
   intakeMessage: {
     updateMany: async ({ where, data }: any) => {
       const hit = rows.filter((r) => matches(r, where));
@@ -68,6 +69,7 @@ const tx = {
       rows.push(row);
       return row;
     },
+    findFirst: async ({ where }: any) => rows.find((r) => matches(r, where)) ?? null,
     findMany: async ({ where }: any) => rows.filter((r) => matches(r, where)),
     deleteMany: async ({ where }: any) => {
       const before = rows.length;
@@ -403,6 +405,15 @@ describe("Client chat: Stop, delete and refunds (#568)", () => {
       expect(err.statusCode).to.equal(409);
       expect(err.code).to.equal("TURN_IN_PROGRESS");
       expect(rows).to.have.length(1);
+    });
+
+    it("refuses to delete an older message while a newer turn is generating, and keeps the AI's session", async () => {
+      rows = [userTurn("m1", "DONE"), aiTurn("a1", "m1"), userTurn("m2", "PENDING")];
+      const err = await IntakeChatSvc.deleteMessage(workspace, CASE_ID, "a1").catch((e) => e);
+      expect(err.statusCode).to.equal(409);
+      expect(err.code).to.equal("TURN_IN_PROGRESS");
+      expect(rows.map((r) => r.id)).to.deep.equal(["m1", "a1", "m2"]);
+      expect(droppedSessions).to.deep.equal([]);
     });
 
     it("404s for a message from another case", async () => {

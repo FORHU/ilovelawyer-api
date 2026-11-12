@@ -174,9 +174,14 @@ export default class IntakeChatRepo {
 
   /** Deletes a message and, for a user turn, the answers to it (parentMessageId only SETs NULL on
    * delete, so they'd otherwise be left behind). Returns the S3 audio the deleted rows pointed to,
-   * so the caller can remove it too. */
-  static async deleteTurn(messageId: string, caseId: string): Promise<string[]> {
+   * so the caller can remove it too — or "BUSY" without deleting anything when any turn of the case
+   * is still waiting on its answer. Under the same per-case lock a send takes, so a send can't slip
+   * in between the check and the delete. */
+  static async deleteTurn(messageId: string, caseId: string): Promise<string[] | "BUSY"> {
     return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKeyFor(caseId)})`;
+      const pending = await tx.intakeMessage.findFirst({ where: { caseId, role: "user", replyStatus: "PENDING" }, select: { id: true } });
+      if (pending) return "BUSY";
       const rows = await tx.intakeMessage.findMany({
         where: { caseId, OR: [{ id: messageId }, { parentMessageId: messageId }] },
         select: { id: true, audioKey: true, replyAudioKey: true },

@@ -203,18 +203,19 @@ export default class IntakeChatSvc {
   }
 
   /** Deletes a message from the case's chat — a user turn together with the answer to it, or just
-   * an answer. Refused while that turn's answer is still being written (Stop it first). Never
+   * an answer. Refused (409) while any answer in the case is still being written (Stop it first):
+   * the running job holds the old session, which still remembers what's being deleted. Never
    * refunds: the credit paid for an answer the client got. The case's Chat Wonder session is
    * dropped so the AI forgets what was deleted: the next turn starts a new session and is handed
    * the chat as it now stands. The deleted turn's recordings are removed from S3 as well. */
   static async deleteMessage(workspace: ClientWorkspace, caseId: string, messageId: string): Promise<void> {
     const message = await IntakeChatRepo.findInCase(messageId, caseId);
     if (!message || message.role === "system") throw new HttpError("Message not found", 404);
-    if (message.role === "user" && message.replyStatus === "PENDING") {
-      throw new HttpError("The answer to this message is still being written. Stop it first, then delete it.", 409, "TURN_IN_PROGRESS");
-    }
 
     const audioKeys = await IntakeChatRepo.deleteTurn(messageId, caseId);
+    if (audioKeys === "BUSY") {
+      throw new HttpError("An answer is still being written. Stop it first, then delete.", 409, "TURN_IN_PROGRESS");
+    }
     await redis.del(intakeSessionKey(caseId));
     for (const key of audioKeys) {
       await deleteFromS3(key).catch((err) => logger.warn("Intake chat: couldn't remove a deleted message's audio", { err, caseId, key }));

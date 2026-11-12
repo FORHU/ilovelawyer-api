@@ -761,7 +761,7 @@ export const clientAppPaths: Paths = {
       responses: {
         204: { description: "Deleted" },
         404: err("Not one of this client's cases, or not a message on it"),
-        409: err("TURN_IN_PROGRESS: the answer to this message is still being written. Stop it first"),
+        409: err("TURN_IN_PROGRESS: an answer in this case is still being written. Stop it first"),
       },
     },
   },
