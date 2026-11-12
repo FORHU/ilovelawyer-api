@@ -192,6 +192,7 @@ model User {
   clientRequestPasses         ClientRequestPass[]
   updatedTenantSettings       TenantSetting[]
   clientPayments              ClientPayment[]
+  supportTickets              SupportTicket[]
   accountAiTopUps             AccountAiTopUp[]
   clientRequestProfile        LawyerClientProfile?
   billing                     UserBilling?
@@ -4416,4 +4417,79 @@ model SupportContentVersion {
   publishedById         String?
   publishedAt           DateTime @default(now())
   rolledBackFromVersion Int?
+}
+
+enum SupportTicketStatus {
+  OPEN
+  ANSWERED
+  RESOLVED
+}
+
+enum SupportTicketSource {
+  SIGNED_IN
+  SIGNED_OUT
+}
+
+enum SupportMessageAuthor {
+  CLIENT
+  ADMIN
+  SYSTEM
+}
+
+enum SupportOutcomeKind {
+  FLOW_STARTED
+  HELPED_YES
+  HELPED_NO
+  ESCALATED
+  UNMATCHED
+}
+
+model SupportTicket {
+  id            String              @id @default(uuid())
+  userId        String?
+  openUserId    String?             @unique
+  email         String
+  name          String?
+  source        SupportTicketSource
+  status        SupportTicketStatus @default(OPEN)
+  flowId        String?
+  context       Json
+  clientReadAt  DateTime?
+  answeredAt    DateTime?
+  resolvedAt    DateTime?
+  lastMessageAt DateTime            @default(now())
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  user     User?                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages SupportTicketMessage[]
+
+  @@index([status, lastMessageAt])
+  @@index([userId])
+  @@index([email])
+}
+
+model SupportTicketMessage {
+  id           String               @id @default(uuid())
+  ticketId     String
+  author       SupportMessageAuthor
+  authorUserId String?
+  body         String               @db.Text
+  createdAt    DateTime             @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+}
+
+model SupportOutcome {
+  id             String             @id @default(uuid())
+  kind           SupportOutcomeKind
+  flowId         String?
+  contentVersion Int?
+  text           String?            @db.Text
+  createdAt      DateTime           @default(now())
+
+  @@index([createdAt, kind])
+  @@index([flowId])
 }
