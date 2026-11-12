@@ -18,7 +18,7 @@ async function seedClient(createdUserIds: string[], role: "USER" | "LAWYER" = "U
 
 // Seeds the case directly (rather than through ClientCaseSvc.create) to skip that path's regional
 // pricing lookup, which this test's workspace isn't set up for.
-async function seedCase(userId: string) {
+async function seedCase(userId: string, ukJurisdiction: string | null = "England and Wales") {
   const workspace = await ClientCaseSvc.workspaceFor(userId, "Sam Client");
   const row = await prisma.case.create({
     data: {
@@ -27,7 +27,7 @@ async function seedCase(userId: string) {
       organizationId: workspace.id,
       caseName: "Placeholder case",
       caseAreas: ["EMPLOYMENT"],
-      ukJurisdiction: "England and Wales",
+      ukJurisdiction,
       status: "ACTIVE",
     },
   });
@@ -158,5 +158,58 @@ describe("PATCH /api/v1/intake-cases/:caseId", () => {
     expect(res.body.title).to.equal("New title");
     expect(res.body.areas.map((a: { code: string }) => a.code)).to.deep.equal(["EMPLOYMENT"]);
     expect(res.body.ukJurisdiction).to.equal("England and Wales");
+  });
+
+  describe("where the case is (#973)", () => {
+    it("sets the part of the UK on a case started from the first message", async () => {
+      const userId = await seedClient(createdUserIds);
+      const caseId = await seedCase(userId, null);
+
+      const res = await request(app)
+        .patch(`/api/v1/intake-cases/${caseId}`)
+        .set("x-api-key", CHAT_WONDER_API_KEY)
+        .send({ userId, ukJurisdiction: "England and Wales", where: "Manchester" });
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.include({ ukJurisdiction: "England and Wales", outsideUk: false, where: "Manchester" });
+    });
+
+    it("ignores a null part of the UK rather than calling the case outside the UK", async () => {
+      const userId = await seedClient(createdUserIds);
+      const caseId = await seedCase(userId);
+
+      const res = await request(app)
+        .patch(`/api/v1/intake-cases/${caseId}`)
+        .set("x-api-key", CHAT_WONDER_API_KEY)
+        .send({ userId, title: "New title", ukJurisdiction: null });
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.include({ title: "New title", ukJurisdiction: "England and Wales", outsideUk: false });
+    });
+
+    it("marks the case outside the UK only when chat-wonder says so", async () => {
+      const userId = await seedClient(createdUserIds);
+      const caseId = await seedCase(userId, null);
+
+      const res = await request(app)
+        .patch(`/api/v1/intake-cases/${caseId}`)
+        .set("x-api-key", CHAT_WONDER_API_KEY)
+        .send({ userId, outsideUk: true });
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.include({ ukJurisdiction: null, outsideUk: true });
+    });
+
+    it("refuses outside the UK alongside a part of the UK", async () => {
+      const userId = await seedClient(createdUserIds);
+      const caseId = await seedCase(userId, null);
+
+      const res = await request(app)
+        .patch(`/api/v1/intake-cases/${caseId}`)
+        .set("x-api-key", CHAT_WONDER_API_KEY)
+        .send({ userId, ukJurisdiction: "Scotland", outsideUk: true });
+
+      expect(res.status).to.equal(400);
+    });
   });
 });

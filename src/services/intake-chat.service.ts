@@ -281,6 +281,7 @@ export default class IntakeChatSvc {
             title: row.caseName,
             caseAreas: label(row.caseAreas).map((a) => a.name),
             ukJurisdiction: row.ukJurisdiction,
+            outsideUk: row.outsideUk,
             where: row.jurisdiction,
             side: row.clientSide,
             notes: row.notes,

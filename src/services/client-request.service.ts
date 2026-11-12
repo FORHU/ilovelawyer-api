@@ -38,10 +38,11 @@ import {
 } from "../constants/client-request.constants";
 
 /** Why the client can't ask for a lawyer on a case (CLIENT_HANDOFF_ERROR_CODES). */
-type IneligibleReason = "NOT_UK_CASE" | "PERSONAL_INJURY_EXCLUDED" | "REQUEST_ALREADY_OPEN";
+type IneligibleReason = "NOT_UK_CASE" | "REGION_UNKNOWN" | "PERSONAL_INJURY_EXCLUDED" | "REQUEST_ALREADY_OPEN";
 
 const REFUSALS: Record<IneligibleReason, { status: number; message: string }> = {
   NOT_UK_CASE: { status: 422, message: "Lawyers are only available for cases in the UK for now." },
+  REGION_UNKNOWN: { status: 422, message: "Choose which part of the UK your case is in to ask for a lawyer." },
   PERSONAL_INJURY_EXCLUDED: { status: 422, message: "We can't connect personal injury cases with a lawyer yet." },
   REQUEST_ALREADY_OPEN: { status: 409, message: "You've already asked for a lawyer on this case." },
 };
@@ -211,7 +212,9 @@ export default class ClientRequestSvc {
     if (!row) throw new HttpError("Case not found", 404);
     const no = (reason: IneligibleReason, openRequestId: string | null = null) => ({ eligible: false, reason, openRequestId });
 
-    if (!row.ukJurisdiction) return no("NOT_UK_CASE");
+    if (row.outsideUk) return no("NOT_UK_CASE");
+    // Nobody has said where it is yet (#973): ask, rather than call it outside the UK.
+    if (!row.ukJurisdiction) return no("REGION_UNKNOWN");
     // Personal injury is spotted by the lawyer readiness check (Jev), which reads the chat.
     if ((row.lawyerReadiness as { blockedBy?: string } | null)?.blockedBy === "PERSONAL_INJURY") return no("PERSONAL_INJURY_EXCLUDED");
     const open = await ClientRequestRepo.findOpenForCase(caseId);

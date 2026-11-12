@@ -244,6 +244,7 @@ describe("Client app cases", () => {
           caseName: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
           caseAreas: ["EMPLOYMENT"],
           ukJurisdiction: "England and Wales",
+          outsideUk: false,
           jurisdiction: "Leeds",
           clientSide: "CLAIMANT",
           parties: [{ name: "Acme Ltd", designation: "Opposing party" }],
@@ -271,8 +272,28 @@ describe("Client app cases", () => {
     });
 
     it("stores no UK jurisdiction for a case outside the UK", async () => {
+      await ClientCaseSvc.create(workspace, "u1", { title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: null, outsideUk: true });
+      expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, outsideUk: true, jurisdiction: undefined, clientSide: null });
+    });
+
+    it("reads a bare null as outside the UK, as apps from before outsideUk meant it (#973)", async () => {
       await ClientCaseSvc.create(workspace, "u1", { title: "Holiday refund", areas: ["CONSUMER"], ukJurisdiction: null });
-      expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, jurisdiction: undefined, clientSide: null });
+      expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, outsideUk: true });
+    });
+
+    it("keeps a case started from the first message as not known yet, not outside the UK (#973)", async () => {
+      await ClientCaseSvc.create(workspace, "u1", { title: "I lost my job", areas: ["EMPLOYMENT"], ukJurisdiction: null, outsideUk: false });
+      expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: undefined, outsideUk: false });
+    });
+
+    it("never stores a UK case as outside the UK", async () => {
+      await ClientCaseSvc.create(workspace, "u1", { title: "Dismissed", areas: ["EMPLOYMENT"], ukJurisdiction: "Scotland" });
+      expect((calls.caseCreate as any[])[3]).to.include({ ukJurisdiction: "Scotland", outsideUk: false });
+    });
+
+    it("shows the case's outsideUk", async () => {
+      row = caseRow({ ukJurisdiction: null, outsideUk: false });
+      expect(await ClientCaseSvc.get(workspace, "case-1")).to.include({ ukJurisdiction: null, outsideUk: false });
     });
 
     it("takes several areas, each once, and shows them in the list's order", async () => {
@@ -395,7 +416,23 @@ describe("Client app cases", () => {
 
       it("maps the people and the side onto the Case", async () => {
         await ClientCaseSvc.update(workspace, "u1", "case-1", { side: "RESPONDENT", others: [{ name: "Bea Ltd", role: "Witness" }], ukJurisdiction: null });
-        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ clientSide: "RESPONDENT", parties: [{ name: "Bea Ltd", designation: "Witness" }], ukJurisdiction: null });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ clientSide: "RESPONDENT", parties: [{ name: "Bea Ltd", designation: "Witness" }], ukJurisdiction: null, outsideUk: true });
+      });
+
+      it("sets the part of the UK, outside the UK, or not known yet, keeping the two fields in step (#973)", async () => {
+        const regionAfter = async (change: Record<string, unknown>) => {
+          delete calls.caseUpdate;
+          await ClientCaseSvc.update(workspace, "u1", "case-1", change);
+          return (calls.caseUpdate as any[])[3];
+        };
+        row = caseRow({ ukJurisdiction: null, outsideUk: true });
+        expect(await regionAfter({ ukJurisdiction: "Scotland" })).to.deep.equal({ ukJurisdiction: "Scotland", outsideUk: false });
+        expect(await regionAfter({ outsideUk: true })).to.deep.equal({ ukJurisdiction: null, outsideUk: true });
+        expect(await regionAfter({ ukJurisdiction: null, outsideUk: false })).to.deep.equal({ ukJurisdiction: null, outsideUk: false });
+        // On its own, false only takes back "outside the UK"; on a UK case it changes nothing.
+        expect(await regionAfter({ outsideUk: false })).to.deep.equal({ ukJurisdiction: null, outsideUk: false });
+        row = caseRow();
+        expect(await regionAfter({ outsideUk: false })).to.deep.equal({});
       });
 
       it("answers 404 for a case that is not the client's", async () => {
@@ -416,6 +453,10 @@ describe("Client app cases", () => {
       it("keeps a case with an open request inside the UK", async () => {
         live = { id: "req-1", status: "ROUTED" };
         expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { ukJurisdiction: null }))).to.deep.equal({ status: 409, code: "CASE_LOCKED_BY_REQUEST" });
+        expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { ukJurisdiction: null, outsideUk: false }))).to.deep.equal({
+          status: 409,
+          code: "CASE_LOCKED_BY_REQUEST",
+        });
         await ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["FAMILY"] });
         expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["FAMILY"] });
       });
@@ -503,6 +544,15 @@ describe("Client app cases", () => {
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: null }).error).to.equal(undefined);
       expect(createClientCaseSchema.validate({ title: "x", areas: ["CONSUMER"] }).error).to.not.equal(undefined);
       expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: "Wales" }).error).to.not.equal(undefined);
+    });
+
+    it("takes outsideUk with a null part of the UK, but never alongside one (#973)", () => {
+      expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: null, outsideUk: false }).error).to.equal(undefined);
+      expect(createClientCaseSchema.validate({ ...valid, ukJurisdiction: null, outsideUk: true }).error).to.equal(undefined);
+      expect(createClientCaseSchema.validate({ ...valid, outsideUk: false }).error).to.equal(undefined);
+      expect(createClientCaseSchema.validate({ ...valid, outsideUk: true }).error).to.not.equal(undefined);
+      expect(updateClientCaseSchema.validate({ outsideUk: true }).error).to.equal(undefined);
+      expect(updateClientCaseSchema.validate({ ukJurisdiction: "Scotland", outsideUk: true }).error).to.not.equal(undefined);
     });
 
     it("takes the notes from the wizard, with a length cap", () => {

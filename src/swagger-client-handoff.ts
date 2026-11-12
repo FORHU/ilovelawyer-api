@@ -681,8 +681,8 @@ export const clientHandoffSchemas: Schemas = {
       reason: {
         type: "string",
         nullable: true,
-        enum: ["NOT_UK_CASE", "PERSONAL_INJURY_EXCLUDED", "REQUEST_ALREADY_OPEN", null],
-        description: "NOT_UK_CASE shows \"Not available yet\"",
+        enum: ["NOT_UK_CASE", "REGION_UNKNOWN", "PERSONAL_INJURY_EXCLUDED", "REQUEST_ALREADY_OPEN", null],
+        description: "NOT_UK_CASE (the client said it's outside the UK) shows \"Not available yet\". REGION_UNKNOWN: ask which part of the UK",
       },
       openRequestId: { type: "string", nullable: true, description: "Set with REQUEST_ALREADY_OPEN" },
     },
@@ -895,7 +895,7 @@ export const clientHandoffPaths: Paths = {
         400: err("CONSENT_REQUIRED, or a validation error"),
         404: err("No such case of yours, or LAWYER_NOT_FOUND"),
         409: err("REQUEST_ALREADY_OPEN or CONSENT_VERSION_STALE"),
-        422: err("NOT_UK_CASE, PERSONAL_INJURY_EXCLUDED, LAWYER_NOT_AVAILABLE or LAWYER_NOT_A_MATCH"),
+        422: err("NOT_UK_CASE, REGION_UNKNOWN, PERSONAL_INJURY_EXCLUDED, LAWYER_NOT_AVAILABLE or LAWYER_NOT_A_MATCH"),
       },
     }),
     get: op({

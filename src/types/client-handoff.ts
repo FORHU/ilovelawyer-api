@@ -251,7 +251,8 @@ export interface Money {
 /** `code` on an error response ({ message, code, ...details }) for the hand-off routes. */
 export const CLIENT_HANDOFF_ERROR_CODES = {
   // Client app
-  NOT_UK_CASE: "NOT_UK_CASE", // 422: the case has no UK jurisdiction ("Not available yet")
+  NOT_UK_CASE: "NOT_UK_CASE", // 422: the client said the case is outside the UK ("Not available yet")
+  REGION_UNKNOWN: "REGION_UNKNOWN", // 422: nobody has said which part of the UK the case is in yet; ask the client
   PERSONAL_INJURY_EXCLUDED: "PERSONAL_INJURY_EXCLUDED", // 422
   REQUEST_ALREADY_OPEN: "REQUEST_ALREADY_OPEN", // 409: the case already has a request that isn't closed, expired or withdrawn
   CONSENT_REQUIRED: "CONSENT_REQUIRED", // 400

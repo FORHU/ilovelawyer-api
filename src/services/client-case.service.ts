@@ -44,8 +44,11 @@ export interface NewClientCase {
   title: string;
   /** CaseArea codes, one or more. */
   areas: string[];
-  /** Null when the client said it happened outside the UK. */
+  /** Null when it's outside the UK or not known yet; outsideUk tells which. */
   ukJurisdiction: string | null;
+  /** With ukJurisdiction null: true is outside the UK, false not known yet. Left out, null means
+   * outside the UK (apps from before #973). */
+  outsideUk?: boolean;
   where?: string;
   side?: ClientSide | null;
   others?: { name: string; role: string }[];
@@ -59,11 +62,35 @@ export interface ClientCaseChanges {
   /** Replaces the case's areas. */
   areas?: string[];
   ukJurisdiction?: string | null;
+  /** As on NewClientCase. Sent alone, false only clears "outside the UK". */
+  outsideUk?: boolean;
   where?: string;
   side?: ClientSide | null;
   others?: { name: string; role: string }[];
   notes?: string;
 }
+
+/** Where a case is: one of the UK's three jurisdictions, outside the UK (the client said so), or not
+ * known yet (ukJurisdiction null, outsideUk false). */
+interface Region {
+  ukJurisdiction: string | null;
+  outsideUk: boolean;
+}
+
+/**
+ * The region a create or an edit asks for, or undefined when it leaves the region alone. A UK
+ * jurisdiction always clears outsideUk. A null ukJurisdiction with no outsideUk means outside the UK,
+ * since that's what it meant to apps from before outsideUk existed (#973).
+ */
+function regionOf(input: { ukJurisdiction?: string | null; outsideUk?: boolean }): Region | undefined {
+  if (input.ukJurisdiction) return { ukJurisdiction: input.ukJurisdiction, outsideUk: false };
+  if (input.ukJurisdiction === null) return { ukJurisdiction: null, outsideUk: input.outsideUk ?? true };
+  if (input.outsideUk === true) return { ukJurisdiction: null, outsideUk: true };
+  return undefined;
+}
+
+/** Nobody has said where the case is yet: no lawyer can be matched until they do. */
+const regionUnknown = (row: Region) => !row.ukJurisdiction && !row.outsideUk;
 
 /** Once a lawyer holds the request, their conflict check and quote rest on the case's problem, place
  * and people, so those stop being editable. CONFIRMED and ENGAGED also stop the case being removed. */
@@ -87,7 +114,10 @@ function toDto(row: ClientCaseRow, label: (codes: string[]) => CaseAreaRef[]) {
     areas: label(row.caseAreas),
     /** The first area's code, for an app that predates several per case. */
     area: row.caseAreas[0] ?? OTHER_CASE_AREA,
+    /** Null when outside the UK or not known yet; outsideUk tells which. */
     ukJurisdiction: row.ukJurisdiction,
+    /** True: the client said it's outside the UK. False with no ukJurisdiction: not known yet. */
+    outsideUk: row.outsideUk,
     where: row.jurisdiction ?? "",
     notes: row.notes ?? "",
     side: row.clientSide,
@@ -209,10 +239,12 @@ export default class ClientCaseSvc {
   static async create(workspace: ClientWorkspace, userId: string, input: NewClientCase) {
     const caseAreas = await CaseAreaSvc.forCase(input.areas);
     const { credits } = (await ClientBillingSvc.pricing(userId)).case;
+    const region = regionOf(input)!;
     const created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
       caseName: input.title,
       caseAreas,
-      ukJurisdiction: input.ukJurisdiction ?? undefined,
+      ukJurisdiction: region.ukJurisdiction ?? undefined,
+      outsideUk: region.outsideUk,
       jurisdiction: input.where || undefined,
       clientSide: input.side ?? null,
       parties: (input.others ?? []).map((o) => ({ name: o.name, designation: o.role })),
@@ -235,18 +267,24 @@ export default class ClientCaseSvc {
   static async update(workspace: ClientWorkspace, userId: string, caseId: string, input: ClientCaseChanges) {
     const row = await ClientCaseSvc.load(workspace, caseId);
     const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, row.caseAreas);
+    // `outsideUk: false` on its own only clears "outside the UK"; on a case in the UK it changes nothing.
+    let region = regionOf(input);
+    if (!region && input.outsideUk === false && row.outsideUk) region = { ukJurisdiction: null, outsideUk: false };
     const live = await ClientRequestRepo.findLiveForCase(caseId);
     if (live) {
       const held = isHeld(live);
-      const movesOutsideUk = input.ukJurisdiction === null && row.ukJurisdiction !== null;
+      // A request needs a UK jurisdiction to be matched, so it can't be taken away while one is open.
+      const leavesUk = region !== undefined && region.ukJurisdiction === null && row.ukJurisdiction !== null;
       const changesFixed =
         (caseAreas !== undefined && !sameSet(caseAreas, row.caseAreas)) ||
-        (input.ukJurisdiction !== undefined && input.ukJurisdiction !== row.ukJurisdiction) ||
+        (region !== undefined && region.ukJurisdiction !== row.ukJurisdiction) ||
         (input.others !== undefined && !samePeople(input.others, row.parties));
-      if ((held && changesFixed) || movesOutsideUk) {
+      if ((held && changesFixed) || leavesUk) {
         throw new HttpError(
-          movesOutsideUk && !held
-            ? "Withdraw your lawyer request before moving this case outside the UK."
+          leavesUk && !held
+            ? region!.outsideUk
+              ? "Withdraw your lawyer request before moving this case outside the UK."
+              : "Withdraw your lawyer request before clearing which part of the UK this case is in."
             : "A lawyer is working on your request, so the type of issue, the part of the UK and the people involved can't change now.",
           409,
           "CASE_LOCKED_BY_REQUEST",
@@ -258,7 +296,10 @@ export default class ClientCaseSvc {
     const data: CaseData = {};
     if (input.title !== undefined) data.caseName = input.title;
     if (caseAreas !== undefined) data.caseAreas = caseAreas;
-    if (input.ukJurisdiction !== undefined) data.ukJurisdiction = input.ukJurisdiction;
+    if (region) {
+      data.ukJurisdiction = region.ukJurisdiction;
+      data.outsideUk = region.outsideUk;
+    }
     if (input.where !== undefined) data.jurisdiction = input.where || null;
     if (input.side !== undefined) data.clientSide = input.side;
     if (input.notes !== undefined) data.notes = input.notes || null;
@@ -359,8 +400,10 @@ export default class ClientCaseSvc {
     if (!latestAnswer) return unchecked(row.ukJurisdiction);
 
     const cached = row.lawyerReadiness as unknown as LawyerReadiness | null;
-    // A check from before a case could have several areas (it has no caseAreas) is asked again.
-    if (cached?.basedOnMessageId === latestAnswer.id && Array.isArray(cached.caseAreas)) return cached;
+    // A check from before a case could have several areas (it has no caseAreas) is asked again, and
+    // so is one from before outsideUk (#973) that called a not-known-yet case outside the UK.
+    const staleOutsideUk = cached?.blockedBy === "OUTSIDE_UK" && !row.outsideUk;
+    if (cached?.basedOnMessageId === latestAnswer.id && Array.isArray(cached.caseAreas) && !staleOutsideUk) return cached;
 
     const [options, label] = await Promise.all([CaseAreaSvc.forJev(), CaseAreaSvc.labeller()]);
     let assessment: ReadinessAssessment;
@@ -384,13 +427,17 @@ export default class ClientCaseSvc {
       return unchecked(row.ukJurisdiction, true);
     }
 
-    const blockedBy: ReadinessBlock | null = !row.ukJurisdiction ? "OUTSIDE_UK" : assessment.personalInjury.met ? "PERSONAL_INJURY" : null;
-    const ready = !blockedBy && assessment.criteria.every((c) => c.met);
+    const blockedBy: ReadinessBlock | null = row.outsideUk ? "OUTSIDE_UK" : assessment.personalInjury.met ? "PERSONAL_INJURY" : null;
+    // Not known yet isn't a block (apps from before #973 read any other blockedBy as personal
+    // injury): "place" stays unmet until the case has a UK jurisdiction to match lawyers on, even when
+    // the chat names a town, so the app keeps asking for it.
+    const criteria = regionUnknown(row) ? assessment.criteria.map((c) => (c.key === "place" ? { ...c, met: false } : c)) : assessment.criteria;
+    const ready = !blockedBy && criteria.every((c) => c.met);
     const confidence = new Map(assessment.caseAreas.map((a) => [a.code, a.confidence]));
     const result: LawyerReadiness = {
       enabled: true,
       ready,
-      criteria: assessment.criteria,
+      criteria,
       caseAreas: label(assessment.caseAreas.map((a) => a.code)).map((a) => ({ ...a, confidence: confidence.get(a.code)! })),
       ukJurisdiction: row.ukJurisdiction,
       blockedBy,

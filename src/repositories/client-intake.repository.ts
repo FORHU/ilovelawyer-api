@@ -12,6 +12,7 @@ export interface ClientIntakeCaseSource {
   caseName: string;
   caseAreas: string[];
   ukJurisdiction: string | null;
+  outsideUk: boolean;
   jurisdiction: string | null;
   clientSide: "CLAIMANT" | "RESPONDENT" | null;
   notes: string | null;
@@ -29,6 +30,7 @@ export default class ClientIntakeRepo {
         caseName: true,
         caseAreas: true,
         ukJurisdiction: true,
+        outsideUk: true,
         jurisdiction: true,
         clientSide: true,
         notes: true,

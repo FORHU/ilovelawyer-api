@@ -35,15 +35,25 @@ const notes = Joi.string().trim().allow("").max(CLIENT_CASE_NOTES_MAX_LENGTH);
 const areas = Joi.array().items(Joi.string().max(40)).min(1).unique();
 const area = Joi.string().max(40);
 
+// Whether the client said the case is outside the UK. Sent with ukJurisdiction null: true is outside
+// the UK, false is not known yet. Left out, a null ukJurisdiction means outside the UK, as it did for
+// apps that predate this field (ClientCaseSvc.regionOf). Can't be true alongside a UK jurisdiction.
+const outsideUk = Joi.boolean().when("ukJurisdiction", {
+  is: Joi.string().required(),
+  then: Joi.valid(false).messages({ "any.only": "outsideUk can't be true when ukJurisdiction is set" }),
+});
+
 export const createClientCaseSchema = Joi.object({
   title: Joi.string().trim().min(1).max(CLIENT_CASE_TITLE_MAX_LENGTH).required(),
   areas,
   area,
-  // null: it happened outside the UK. The client still gets the AI, but no lawyer for now.
+  // null: outside the UK, or not known yet (see outsideUk). The client still gets the AI, but no
+  // lawyer until it's set.
   ukJurisdiction: Joi.string()
     .valid(...UK_JURISDICTIONS)
     .allow(null)
     .required(),
+  outsideUk: outsideUk.optional(),
   where: Joi.string().trim().allow("").max(CLIENT_CASE_WHERE_MAX_LENGTH).optional(),
   side: Joi.string()
     .valid(...CLIENT_SIDES)
@@ -61,6 +71,7 @@ export const updateClientCaseSchema = Joi.object({
   ukJurisdiction: Joi.string()
     .valid(...UK_JURISDICTIONS)
     .allow(null),
+  outsideUk,
   where: Joi.string().trim().allow("").max(CLIENT_CASE_WHERE_MAX_LENGTH),
   side: Joi.string()
     .valid(...CLIENT_SIDES)

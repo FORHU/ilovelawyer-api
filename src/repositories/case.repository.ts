@@ -59,8 +59,10 @@ export interface CaseData {
   caseName?: string;
   actionType?: string;
   jurisdiction?: string | null;
-  /** Null: outside the UK (a client moved their case out of it). */
+  /** Null: outside the UK or not known yet; outsideUk tells which. */
   ukJurisdiction?: string | null;
+  /** Client app only: the client said the case is outside the UK. */
+  outsideUk?: boolean;
   /** Client app only: CaseArea codes (CaseAreaSvc.forCase). */
   caseAreas?: string[];
   clientSide?: ClientSide | null;

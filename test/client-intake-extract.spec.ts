@@ -143,6 +143,9 @@ describe("Client intake extraction", () => {
 
     it("says plainly when a field was never set, rather than leaving it blank", () => {
       const block = caseDetailsBlock({ title: "Dismissal", caseAreas: [], ukJurisdiction: null, where: null, side: null, notes: null }, []);
+      const outside = caseDetailsBlock({ title: "Dismissal", caseAreas: [], ukJurisdiction: null, outsideUk: true, where: null, side: null, notes: null }, []);
+      // Not known yet and outside the UK read differently to the AI (#973).
+      expect(outside).to.include("Part of the UK: outside the UK (the client said so)");
       expect(block).to.include("Type of problem: not set");
       expect(block).to.include("Part of the UK: not set");
       expect(block).to.include("Town or city: not set");

@@ -63,7 +63,7 @@ describe("Client lawyer requests", () => {
       Object.assign(r, { status: "WITHDRAWN", withdrawnAt: now });
       return { moved: true, heldBy: open.map((c) => c.lawyerId) };
     };
-    caseRow = { id: CASE_ID, ukJurisdiction: "England and Wales", lawyerReadiness: null };
+    caseRow = { id: CASE_ID, ukJurisdiction: "England and Wales", outsideUk: false, lawyerReadiness: null };
     open = null;
     requests = new Map();
     briefsStarted = [];
@@ -172,9 +172,12 @@ describe("Client lawyer requests", () => {
       expect(await ClientRequestSvc.eligibility(workspace, CASE_ID)).to.deep.equal({ eligible: true, reason: null, openRequestId: null });
     });
 
-    it("says why not, in order: outside the UK, personal injury, already asked", async () => {
+    it("says why not, in order: outside the UK, part of the UK not known yet, personal injury, already asked", async () => {
       caseRow.ukJurisdiction = null;
+      caseRow.outsideUk = true;
       expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("NOT_UK_CASE");
+      caseRow.outsideUk = false;
+      expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("REGION_UNKNOWN");
       caseRow.ukJurisdiction = "Scotland";
       caseRow.lawyerReadiness = { blockedBy: "PERSONAL_INJURY" };
       expect((await ClientRequestSvc.eligibility(workspace, CASE_ID)).reason).to.equal("PERSONAL_INJURY_EXCLUDED");
@@ -207,7 +210,10 @@ describe("Client lawyer requests", () => {
 
     it("refuses with a clear reason when the case isn't eligible", async () => {
       caseRow.ukJurisdiction = null;
+      caseRow.outsideUk = true;
       expect(await errorOf(ask())).to.deep.equal({ status: 422, code: "NOT_UK_CASE" });
+      caseRow.outsideUk = false;
+      expect(await errorOf(ask())).to.deep.equal({ status: 422, code: "REGION_UNKNOWN" });
       caseRow.ukJurisdiction = "Northern Ireland";
       open = { id: "req-9" };
       expect(await errorOf(ask())).to.deep.equal({ status: 409, code: "REQUEST_ALREADY_OPEN" });

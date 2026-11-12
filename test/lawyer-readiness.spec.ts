@@ -197,7 +197,24 @@ describe("Lawyer readiness", () => {
 
     it("never suggests a lawyer outside the UK", async () => {
       row.ukJurisdiction = null;
+      row.outsideUk = true;
       expect(await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1")).to.include({ ready: false, blockedBy: "OUTSIDE_UK" });
+    });
+
+    it("waits for the part of the UK when it isn't known yet, without calling it outside the UK (#973)", async () => {
+      row.ukJurisdiction = null;
+      row.outsideUk = false;
+      const readiness = await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1");
+      expect(readiness).to.include({ ready: false, blockedBy: null });
+      expect(readiness.criteria.find((c) => c.key === "place")).to.include({ met: false });
+    });
+
+    it("asks again over a check from before outsideUk that called a not-known-yet case outside the UK", async () => {
+      row.ukJurisdiction = null;
+      row.outsideUk = false;
+      row.lawyerReadiness = { enabled: true, ready: false, basedOnMessageId: "m2", caseAreas: [], blockedBy: "OUTSIDE_UK" };
+      expect(await ClientCaseSvc.lawyerReadiness(workspace, "u1", "case-1")).to.include({ blockedBy: null });
+      expect(jevCalls).to.have.length(1);
     });
 
     it("never suggests a lawyer for personal injury, and leaves the case's areas alone", async () => {
