@@ -30,6 +30,7 @@ const checkout = {
 };
 
 const documentId = { name: "documentId", in: "path", required: true, schema: { type: "string" } };
+const messageId = { name: "messageId", in: "path", required: true, schema: { type: "string" } };
 
 const clientDocument = {
   type: "object",
@@ -677,7 +678,7 @@ export const clientAppPaths: Paths = {
         }),
       },
       responses: {
-        202: { description: "Queued; the answer appears in GET messages. Uses one chat credit" },
+        202: { description: "Queued; the answer appears in GET messages. Uses one chat credit, given back if the answer fails or is stopped" },
         402: err("OUT_OF_CREDITS: top up the case"),
         403: err("CONSENT_REQUIRED (AI processing withdrawn)"),
         404: err("Not one of this client's cases, or a documentId that isn't on this case"),
@@ -716,11 +717,51 @@ export const clientAppPaths: Paths = {
         content: json({ type: "object", required: ["key"], properties: { key: { type: "string", description: "From voice-messages/presign" } } }),
       },
       responses: {
-        202: { description: "Queued; the transcript and then the answer appear in GET messages. Uses one chat credit" },
+        202: { description: "Queued; the transcript and then the answer appear in GET messages. Uses one chat credit, given back if the answer fails or is stopped" },
         402: err("OUT_OF_CREDITS: top up the case"),
         403: err("CONSENT_REQUIRED (AI processing withdrawn)"),
         404: err("Not one of this client's cases"),
         409: err("A reply is already generating for this case. Doesn't use a credit"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/messages/{messageId}/cancel": {
+    post: {
+      tags: [TAG],
+      summary: "Stop the answer to a message (the Stop button)",
+      description:
+        "`messageId` is the client's own message. What was written so far is kept as the answer (`assistantMessageId`, absent when nothing was written yet), the message's credit is given back, and chat:cancelled is sent over the socket. Stopping an answer that has already finished, failed or been stopped changes nothing and gives nothing back: the response then carries its current `replyStatus`.",
+      security,
+      parameters: [caseId, messageId],
+      responses: {
+        200: {
+          description: "The message's reply status after the Stop",
+          content: json({
+            type: "object",
+            required: ["messageId", "replyStatus"],
+            properties: {
+              messageId: { type: "string" },
+              replyStatus: { type: "string", enum: ["PENDING", "DONE", "FAILED", "CANCELLED"], nullable: true },
+              assistantMessageId: { type: "string", description: "The partial answer kept, when there was one" },
+            },
+          }),
+        },
+        404: err("Not one of this client's cases, or not one of the client's messages on it"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/messages/{messageId}": {
+    delete: {
+      tags: [TAG],
+      summary: "Delete a message from the case's chat",
+      description:
+        "Deleting the client's own message deletes the answer to it too; deleting an answer deletes just that answer. A voice message's recordings are deleted with it. The AI forgets what was deleted: its next answer is based on the chat as it now stands. No credit is given back.",
+      security,
+      parameters: [caseId, messageId],
+      responses: {
+        204: { description: "Deleted" },
+        404: err("Not one of this client's cases, or not a message on it"),
+        409: err("TURN_IN_PROGRESS: an answer in this case is still being written. Stop it first"),
       },
     },
   },

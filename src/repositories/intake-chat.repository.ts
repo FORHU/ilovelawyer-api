@@ -48,16 +48,6 @@ export default class IntakeChatRepo {
     return prisma.intakeMessage.findFirst({ where: { parentMessageId, role: "assistant" }, select: { id: true } });
   }
 
-  /** Flips a user turn's replyStatus once its reply is known to be done or has failed — same
-   * purpose as ChatRepo.setReplyStatus. */
-  static async setReplyStatus(messageId: string, replyStatus: IntakeMessageReplyStatus, opts?: { clearPendingContent?: boolean }) {
-    const stored = await prisma.intakeMessage.update({
-      where: { id: messageId },
-      data: { replyStatus, ...(opts?.clearPendingContent ? { pendingReplyContent: null } : {}) },
-    });
-    return openIntakeMessage(stored) ?? stored;
-  }
-
   /** True when this case's most recent intake turn is a user turn still awaiting its reply — the
    * intake pipeline's own one-turn-at-a-time guard, same reasoning as ChatRepo.hasPendingTurn: one
    * Chat Wonder session per case, two turns generating concurrently on it would silently orphan
@@ -120,7 +110,7 @@ export default class IntakeChatRepo {
     });
   }
 
-  /** Turns that have been PENDING longer than is ever legitimate — swept back to FAILED by the
+  /** Turns that have been PENDING longer than is ever legitimate — swept to FAILED (and refunded) by the
    * intake queue's own stale-sweep (intake-chat-generation.queue.ts), never the lawyer/client
    * queues' unified one. */
   static async findStalePending(olderThan: Date) {
@@ -140,14 +130,66 @@ export default class IntakeChatRepo {
     return row ? openIntakeMessage(row) : row;
   }
 
-  /** PENDING -> CANCELLED as ONE conditional write, so a Stop racing the worker's own DONE/FAILED
-   * flip has exactly one winner. */
-  static async markReplyCancelled(messageId: string, caseId: string): Promise<boolean> {
-    const { count } = await prisma.intakeMessage.updateMany({
-      where: { id: messageId, caseId, role: "user", replyStatus: "PENDING" },
-      data: { replyStatus: "CANCELLED", pendingReplyContent: null },
+  /** Ends a turn that never got its full answer (Stop, or a failure) and gives the client back the
+   * credit it cost — PENDING -> CANCELLED/FAILED and the refund in ONE transaction, the status
+   * flip conditional on the turn still being PENDING. Whoever ends the turn first (Stop, the
+   * worker, the stale sweep) wins; everyone after gets false and refunds nothing, so a turn is
+   * refunded at most once. */
+  static async endPendingTurn(messageId: string, caseId: string, status: "FAILED" | "CANCELLED"): Promise<boolean> {
+    return prisma.$transaction(async (tx) => {
+      const { count } = await tx.intakeMessage.updateMany({
+        where: { id: messageId, caseId, role: "user", replyStatus: "PENDING" },
+        data: { replyStatus: status, pendingReplyContent: null },
+      });
+      if (count !== 1) return false;
+      await tx.case.update({ where: { id: caseId }, data: { clientCredits: { increment: 1 } } });
+      return true;
     });
-    return count === 1;
+  }
+
+  /** Saves the answer and marks its turn DONE in one transaction — only while the turn is still
+   * PENDING. Null when the turn was already stopped or failed (and refunded): that answer is
+   * dropped, so a late worker never delivers an answer the client got their credit back for. */
+  static async completeTurn(parentMessageId: string, caseId: string, content: string) {
+    return prisma.$transaction(async (tx) => {
+      const { count } = await tx.intakeMessage.updateMany({
+        where: { id: parentMessageId, caseId, role: "user", replyStatus: "PENDING" },
+        data: { replyStatus: "DONE", pendingReplyContent: null },
+      });
+      if (count !== 1) return null;
+      const stored = await tx.intakeMessage.create({
+        data: { caseId, role: "assistant", content: sealIntakeMessageContent(content), documentIds: [], parentMessageId },
+      });
+      return openIntakeMessage(stored) ?? stored;
+    });
+  }
+
+  /** One message of a case's chat, for deleting it — null when it isn't in that case. */
+  static async findInCase(messageId: string, caseId: string) {
+    return prisma.intakeMessage.findFirst({
+      where: { id: messageId, caseId },
+      select: { id: true, role: true, replyStatus: true },
+    });
+  }
+
+  /** Deletes a message and, for a user turn, the answers to it (parentMessageId only SETs NULL on
+   * delete, so they'd otherwise be left behind). Returns the S3 audio the deleted rows pointed to,
+   * so the caller can remove it too — or "BUSY" without deleting anything when any turn of the case
+   * is still waiting on its answer. Under the same per-case lock a send takes, so a send can't slip
+   * in between the check and the delete. */
+  static async deleteTurn(messageId: string, caseId: string): Promise<string[] | "BUSY"> {
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKeyFor(caseId)})`;
+      const pending = await tx.intakeMessage.findFirst({ where: { caseId, role: "user", replyStatus: "PENDING" }, select: { id: true } });
+      if (pending) return "BUSY";
+      const rows = await tx.intakeMessage.findMany({
+        where: { caseId, OR: [{ id: messageId }, { parentMessageId: messageId }] },
+        select: { id: true, audioKey: true, replyAudioKey: true },
+      });
+      if (!rows.length) return [];
+      await tx.intakeMessage.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+      return rows.flatMap((r) => [r.audioKey, r.replyAudioKey]).filter((k): k is string => Boolean(k));
+    });
   }
 
   /** Checkpoints the raw accumulated reply text while a turn is still streaming — throttled by the

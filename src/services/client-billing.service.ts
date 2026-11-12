@@ -207,7 +207,9 @@ export default class ClientBillingSvc {
     }
   }
 
-  /** Gives back the credit of a message the AI never took (it couldn't be queued). */
+  /** Gives back the credit of a message the AI never took (it couldn't be queued). An answer that
+   * fails or is stopped is refunded by IntakeChatRepo.endPendingTurn instead, in the same
+   * transaction that ends the turn, so it can only happen once. */
   static async refundCredit(caseId: string) {
     await ClientPaymentRepo.addCredits(caseId, 1);
   }

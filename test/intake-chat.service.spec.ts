@@ -53,9 +53,9 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
       stash(ClientIntakeSvc, ["scheduleAuto"]),
       stash(IntakeChatRepo, [
         "findReplyState",
-        "setReplyStatus",
+        "endPendingTurn",
+        "completeTurn",
         "findAssistantReplyByParent",
-        "createMessage",
         "recordFindLawyerResult",
         "markReady",
       ]),
@@ -82,9 +82,9 @@ describe("IntakeChatSvc: the Jev gate on mark_case_ready()", () => {
     };
     (ClientIntakeSvc as any).scheduleAuto = async () => undefined;
     (IntakeChatRepo as any).findReplyState = async () => ({ id: JOB.jobId, caseId: JOB.caseId, role: "user", userId: JOB.userId, replyStatus: "PENDING", pendingReplyContent: null });
-    (IntakeChatRepo as any).setReplyStatus = async () => undefined;
+    (IntakeChatRepo as any).endPendingTurn = async () => true;
     (IntakeChatRepo as any).findAssistantReplyByParent = async () => null;
-    (IntakeChatRepo as any).createMessage = async () => ({ id: "assistant-1" });
+    (IntakeChatRepo as any).completeTurn = async () => ({ id: "assistant-1" });
     (IntakeChatRepo as any).recordFindLawyerResult = async () => undefined;
     (IntakeChatRepo as any).markReady = async (messageId: string) => void marked.push(messageId);
     (intakeChatWonder as any).streamIntakeChatWonderMessage = async (
@@ -274,9 +274,9 @@ describe("IntakeChatSvc: voice turns", () => {
       stash(ClientIntakeSvc, ["scheduleAuto"]),
       stash(IntakeChatRepo, [
         "findReplyState",
-        "setReplyStatus",
+        "endPendingTurn",
+        "completeTurn",
         "findAssistantReplyByParent",
-        "createMessage",
         "recordFindLawyerResult",
         "setTranscribedContent",
         "setReplyAudio",
@@ -294,9 +294,9 @@ describe("IntakeChatSvc: voice turns", () => {
     (ClientCaseRepo as any).findById = async () => null;
     (ClientIntakeSvc as any).scheduleAuto = async () => undefined;
     (IntakeChatRepo as any).findReplyState = async () => ({ id: VOICE_JOB.jobId, caseId: VOICE_JOB.caseId, role: "user", userId: VOICE_JOB.userId, replyStatus: "PENDING", pendingReplyContent: null });
-    (IntakeChatRepo as any).setReplyStatus = async () => undefined;
+    (IntakeChatRepo as any).endPendingTurn = async () => true;
     (IntakeChatRepo as any).findAssistantReplyByParent = async () => null;
-    (IntakeChatRepo as any).createMessage = async () => ({ id: "assistant-1" });
+    (IntakeChatRepo as any).completeTurn = async () => ({ id: "assistant-1" });
     (IntakeChatRepo as any).recordFindLawyerResult = async () => undefined;
     (IntakeChatRepo as any).setTranscribedContent = async (_id: string, transcript: string) => void (transcribedContent = transcript);
     (IntakeChatRepo as any).setReplyAudio = async (_id: string, key: string) => void (replyAudioKey = key);
@@ -336,7 +336,10 @@ describe("IntakeChatSvc: voice turns", () => {
       throw new Error("Transcribe job failed");
     };
     let failedStatus: string | undefined;
-    (IntakeChatRepo as any).setReplyStatus = async (_id: string, status: string) => void (failedStatus = status);
+    (IntakeChatRepo as any).endPendingTurn = async (_id: string, _caseId: string, status: string) => {
+      failedStatus = status;
+      return true;
+    };
 
     await IntakeChatSvc.processIntakeGenerationJob(VOICE_JOB);
 

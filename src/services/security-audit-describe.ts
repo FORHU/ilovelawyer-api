@@ -59,6 +59,7 @@ const CASE_ITEM_KINDS: [RegExp, string][] = [
   [/\/edges\//, "Case map link"],
   [/\/timeline\//, "Timeline entry"],
   [/\/custody\//, "Custody record"],
+  [/\/messages\//, "Chat message"],
 ];
 
 const FILE_KINDS: Record<string, string> = {

@@ -72,6 +72,10 @@ router.post("/cases/:caseId/archive", asyncHandler(ClientCaseCtrl.archive));
 router.post("/cases/:caseId/unarchive", asyncHandler(ClientCaseCtrl.unarchive));
 router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages));
 router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
+// Stop an answer (its credit comes back) and delete a message (#568). Neither asks the AI anything,
+// so neither needs AI-processing consent.
+router.post("/cases/:caseId/messages/:messageId/cancel", asyncHandler(ClientCaseCtrl.cancelMessage));
+router.delete("/cases/:caseId/messages/:messageId", asyncHandler(ClientCaseCtrl.deleteMessage));
 router.post("/cases/:caseId/voice-messages/presign", asyncHandler(ClientCaseCtrl.presignVoiceMessage));
 router.post("/cases/:caseId/voice-messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendVoiceMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));

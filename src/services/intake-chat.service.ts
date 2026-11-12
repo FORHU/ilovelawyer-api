@@ -18,7 +18,8 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { stripStructuredBlocks } from "../utils/response-parser";
 import { redactDocumentIds } from "../utils/document-references";
-import { getProxyFileUrl, uploadToS3 } from "../utils/s3";
+import { deleteFromS3, getProxyFileUrl, uploadToS3 } from "../utils/s3";
+import SecurityAuditSvc from "./security-audit.service";
 import { transcribeS3Media } from "./transcription.service";
 import { synthesizeSpeechToBuffer } from "../utils/polly";
 import { toSpeechPlainText } from "../utils/tts-text";
@@ -120,7 +121,7 @@ export default class IntakeChatSvc {
     documentIds?: string[],
     audioKey?: string,
   ): Promise<{ messageId: string; sessionId: string; replyStatus: "PENDING" }> {
-    const sessionId = await IntakeChatSvc.resolveSession(caseId);
+    const { sessionId, fresh } = await IntakeChatSvc.resolveSession(caseId);
     const userMessage = await IntakeChatRepo.createUserMessageIfNoPendingTurn(caseId, text, userId, documentIds, audioKey);
     if (!userMessage) {
       throw new HttpError("A reply is already generating for this case", 409);
@@ -135,18 +136,22 @@ export default class IntakeChatSvc {
       userInput: text,
       documentIds,
       audioS3Key: audioKey,
+      ...(fresh ? { replayHistory: true } : {}),
     };
     IntakeChatGenerationQueue.enqueue(job);
     return { messageId: userMessage.id, sessionId, replyStatus: "PENDING" };
   }
 
-  private static async resolveSession(caseId: string): Promise<string> {
+  /** The case's Chat Wonder session. `fresh` when it's a new one that has seen none of the chat so
+   * far (the first turn, the cached id expired, or a message was deleted) — its first turn then
+   * carries the earlier chat (see IntakeChatGenerationJob.replayHistory). */
+  private static async resolveSession(caseId: string): Promise<{ sessionId: string; fresh: boolean }> {
     const stored = await redis.get<string>(intakeSessionKey(caseId));
     if (typeof stored === "string" && stored.length > 0) {
       await redis.set(intakeSessionKey(caseId), stored, CHAT_WONDER_SESSION_TTL_S);
-      return stored;
+      return { sessionId: stored, fresh: false };
     }
-    return IntakeChatSvc.newSession(caseId);
+    return { sessionId: await IntakeChatSvc.newSession(caseId), fresh: true };
   }
 
   /** A fresh Chat Wonder session for the case, stored so the next turns use it too. */
@@ -168,7 +173,9 @@ export default class IntakeChatSvc {
       throw new HttpError("Message not found", 404);
     }
 
-    const cancelled = await IntakeChatRepo.markReplyCancelled(messageId, caseId);
+    // Refunds the turn's credit along with the flip, once — a second Stop, or a Stop that lost to
+    // the worker's own DONE/FAILED, gets false here and refunds nothing.
+    const cancelled = await IntakeChatRepo.endPendingTurn(messageId, caseId, "CANCELLED");
     if (!cancelled) {
       const current = await IntakeChatRepo.findReplyState(messageId);
       return { messageId, replyStatus: current?.replyStatus ?? null };
@@ -195,10 +202,38 @@ export default class IntakeChatSvc {
     return { messageId, replyStatus: "CANCELLED", assistantMessageId };
   }
 
+  /** Deletes a message from the case's chat — a user turn together with the answer to it, or just
+   * an answer. Refused (409) while any answer in the case is still being written (Stop it first):
+   * the running job holds the old session, which still remembers what's being deleted. Never
+   * refunds: the credit paid for an answer the client got. The case's Chat Wonder session is
+   * dropped so the AI forgets what was deleted: the next turn starts a new session and is handed
+   * the chat as it now stands. The deleted turn's recordings are removed from S3 as well. */
+  static async deleteMessage(workspace: ClientWorkspace, caseId: string, messageId: string): Promise<void> {
+    const message = await IntakeChatRepo.findInCase(messageId, caseId);
+    if (!message || message.role === "system") throw new HttpError("Message not found", 404);
+
+    const audioKeys = await IntakeChatRepo.deleteTurn(messageId, caseId);
+    if (audioKeys === "BUSY") {
+      throw new HttpError("An answer is still being written. Stop it first, then delete.", 409, "TURN_IN_PROGRESS");
+    }
+    await redis.del(intakeSessionKey(caseId));
+    for (const key of audioKeys) {
+      await deleteFromS3(key).catch((err) => logger.warn("Intake chat: couldn't remove a deleted message's audio", { err, caseId, key }));
+    }
+    await SecurityAuditSvc.record({
+      action: "case.item_deleted",
+      organizationId: workspace.id,
+      targetType: "case_item",
+      targetId: messageId,
+      caseId,
+      payload: { route: "/client/cases/:caseId/messages/:messageId", role: message.role },
+    });
+  }
+
   static async processIntakeGenerationJob(job: IntakeChatGenerationJob): Promise<void> {
     if (!(await ConsentSvc.isAllowed(job.userId, "AI_PROCESSING"))) {
       logger.info("Intake chat generation: skipped, AI processing consent is withdrawn", { jobId: job.jobId, caseId: job.caseId });
-      await IntakeChatRepo.setReplyStatus(job.jobId, "FAILED").catch(() => {});
+      await IntakeChatRepo.endPendingTurn(job.jobId, job.caseId, "FAILED").catch(() => {});
       try {
         emitToUser(job.userId, "chat:error", { caseId: job.caseId, messageId: job.jobId, message: "AI processing is switched off for your account." });
       } catch (err) {
@@ -230,8 +265,10 @@ export default class IntakeChatSvc {
     const { jobId: parentMessageId, caseId, userId, sessionId } = job;
     let userInput = job.userInput;
 
+    // A turn already stopped or failed (and refunded) — e.g. SQS redelivering after a crash — is
+    // never answered again.
     const initialState = await IntakeChatRepo.findReplyState(parentMessageId).catch(() => null);
-    if (initialState?.replyStatus === "CANCELLED") return;
+    if (initialState?.replyStatus === "CANCELLED" || initialState?.replyStatus === "FAILED") return;
 
     const emitEvent = (event: string, payload: Record<string, unknown>) => {
       try {
@@ -259,7 +296,7 @@ export default class IntakeChatSvc {
         emitEvent("chat:voice-transcribed", {});
       } catch (err) {
         logger.error("Intake chat generation: voice transcription failed", { err, jobId: parentMessageId, caseId });
-        await IntakeChatRepo.setReplyStatus(parentMessageId, "FAILED", { clearPendingContent: true }).catch(() => {});
+        await IntakeChatRepo.endPendingTurn(parentMessageId, caseId, "FAILED").catch(() => {});
         emitEvent("chat:error", { message: "Couldn't transcribe that recording" });
         return;
       }
@@ -373,11 +410,22 @@ export default class IntakeChatSvc {
 
     const stream = (sid: string, context: string) =>
       streamIntakeChatWonderMessage(sid, userInput, checkpointedOnChunk, context || undefined, signal, () => emitEvent("chat:answer-complete", {}), caseId, userId);
+    // documentContext plus the chat before this turn, for a session that has never seen it.
+    const withEarlierChat = async () =>
+      [documentContext, earlierConversationBlock(await IntakeChatRepo.listByCase(caseId), parentMessageId)].filter(Boolean).join("\n\n");
 
     try {
       let result: Awaited<ReturnType<typeof stream>>;
       try {
-        result = await stream(sessionId, documentContext);
+        // A new session (the first turn, an expired session, or a deleted message) is handed the
+        // chat as it stands now; a failed read just means this turn goes without it.
+        const firstContext = job.replayHistory
+          ? await withEarlierChat().catch((err) => {
+              logger.warn("Intake chat generation: couldn't read the earlier chat for a new session, continuing without it", { err, caseId });
+              return documentContext;
+            })
+          : documentContext;
+        result = await stream(sessionId, firstContext);
       } catch (err) {
         // Chat Wonder forgot the session (it restarted): every turn on it would fail the same way
         // until the cached id expired, so start a new one now, store it for the next turns, and
@@ -387,8 +435,7 @@ export default class IntakeChatSvc {
         if (!isUnknownSessionError(err)) throw err;
         logger.warn("Intake chat generation: Chat Wonder no longer knows the session; starting a new one", { caseId, jobId: parentMessageId });
         const freshSessionId = await IntakeChatSvc.newSession(caseId);
-        const history = earlierConversationBlock(await IntakeChatRepo.listByCase(caseId), parentMessageId);
-        result = await stream(freshSessionId, [documentContext, history].filter(Boolean).join("\n\n"));
+        result = await stream(freshSessionId, await withEarlierChat());
       }
       await checkpointChain;
       fullResponse = redactDocumentIds(result.content, scopeDocs);
@@ -400,14 +447,14 @@ export default class IntakeChatSvc {
         return;
       }
       logger.error("Intake chat generation: AI call failed", { err, jobId: parentMessageId, caseId });
-      await IntakeChatRepo.setReplyStatus(parentMessageId, "FAILED", { clearPendingContent: true }).catch(() => {});
+      await IntakeChatRepo.endPendingTurn(parentMessageId, caseId, "FAILED").catch(() => {});
       emitEvent("chat:error", { message: "Generation failed" });
       throw err;
     }
 
     const stateBeforePersist = await IntakeChatRepo.findReplyState(parentMessageId).catch(() => null);
-    if (signal.aborted || stateBeforePersist?.replyStatus === "CANCELLED") {
-      logger.info("Intake chat generation: cancelled before persistence, dropping reply", { jobId: parentMessageId, caseId });
+    if (signal.aborted || stateBeforePersist?.replyStatus === "CANCELLED" || stateBeforePersist?.replyStatus === "FAILED") {
+      logger.info("Intake chat generation: turn stopped or failed before persistence, dropping reply", { jobId: parentMessageId, caseId });
       return;
     }
 
@@ -500,16 +547,18 @@ export default class IntakeChatSvc {
   }): Promise<{ id: string } | null> {
     // SQS-redelivery idempotency: a worker crash after this point but before the ack means the
     // job redelivers — if a reply already exists for this parent, this is that redelivery, not a
-    // second turn. Same guard as ChatRepo.findAssistantReplyByParent.
+    // second turn. Same guard as ChatRepo.findAssistantReplyByParent. The reply and the turn's DONE
+    // are written together (completeTurn), so an existing reply means the turn has already ended.
     const existing = await IntakeChatRepo.findAssistantReplyByParent(p.parentMessageId);
-    if (existing) {
-      await IntakeChatRepo.setReplyStatus(p.parentMessageId, "DONE", { clearPendingContent: true }).catch(() => {});
-      return existing;
-    }
+    if (existing) return existing;
 
-    const content = p.fullResponse.trim();
-    const assistantMessage = await IntakeChatRepo.createMessage(p.caseId, "assistant", content, undefined, undefined, undefined, p.parentMessageId);
-    await IntakeChatRepo.setReplyStatus(p.parentMessageId, "DONE", { clearPendingContent: true });
+    // Saved only if the turn is still PENDING: one the client stopped, or the stale sweep failed,
+    // has had its credit back, so its answer is dropped rather than delivered.
+    const assistantMessage = await IntakeChatRepo.completeTurn(p.parentMessageId, p.caseId, p.fullResponse.trim());
+    if (!assistantMessage) {
+      logger.info("Intake chat generation: turn ended before its answer was saved, dropping reply", { jobId: p.parentMessageId, caseId: p.caseId });
+      return null;
+    }
 
     if (p.lawyerMatches.length) {
       await IntakeChatRepo.recordFindLawyerResult(assistantMessage.id, p.lawyerMatches as string[]).catch((err) =>
