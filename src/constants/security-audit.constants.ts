@@ -88,6 +88,13 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.support_content.draft_updated",
   "admin.support_content.published",
   "admin.support_content.rolled_back",
+  // Support Tickets: a client or visitor asking for a person, an admin answering, and the sweep closing
+  // one nobody answered. No message text is ever written here.
+  "support_ticket.opened",
+  "admin.support_ticket.replied",
+  "admin.support_ticket.resolved",
+  "admin.support_ticket.reopened",
+  "system.support_ticket.auto_resolved",
   "admin.model_settings.updated",
   "admin.jurisdiction_module.toggled",
   "admin.lawyer.verified",
@@ -163,6 +170,7 @@ export type SecurityAuditTargetType =
   | "practice_area"
   | "case_area"
   | "support_content"
+  | "support_ticket"
   | "quotation_payment"
   | "lawyer_exit"
   | "wallet"
@@ -255,6 +263,11 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.support_content.draft_updated": "Support Chat draft saved",
   "admin.support_content.published": "Support Chat content published",
   "admin.support_content.rolled_back": "Support Chat content rolled back",
+  "support_ticket.opened": "Support ticket opened",
+  "admin.support_ticket.replied": "Support ticket answered",
+  "admin.support_ticket.resolved": "Support ticket resolved",
+  "admin.support_ticket.reopened": "Support ticket reopened",
+  "system.support_ticket.auto_resolved": "Support ticket closed automatically after 7 days without a reply",
   "admin.model_settings.updated": "AI model setting changed",
   "admin.jurisdiction_module.toggled": "Jurisdiction module switched",
   "admin.lawyer.verified": "Lawyer's client-request profile verified by ilovelawyer",

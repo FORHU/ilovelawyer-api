@@ -13,6 +13,7 @@ import PayoutAdminCtrl from "../controllers/payout-admin.controller";
 import PracticeAreaAdminCtrl from "../controllers/practice-area-admin.controller";
 import CaseAreaAdminCtrl from "../controllers/case-area-admin.controller";
 import SupportContentAdminCtrl from "../controllers/support-content-admin.controller";
+import SupportTicketAdminCtrl from "../controllers/support-ticket-admin.controller";
 
 const router = express.Router();
 
@@ -54,6 +55,14 @@ router.get("/support/content/versions", asyncHandler(SupportContentAdminCtrl.lis
 router.get("/support/content/versions/:version", asyncHandler(SupportContentAdminCtrl.getVersion));
 router.post("/support/content/versions/:version/rollback", asyncHandler(SupportContentAdminCtrl.rollback));
 router.get("/support/actions", asyncHandler(SupportContentAdminCtrl.listActions));
+
+// The Support Tickets inbox and the Support Chat's outcome report (SupportTicketSvc, SupportOutcomeSvc).
+router.get("/support/tickets", asyncHandler(SupportTicketAdminCtrl.list));
+router.get("/support/tickets/:id", asyncHandler(SupportTicketAdminCtrl.get));
+router.post("/support/tickets/:id/replies", asyncHandler(SupportTicketAdminCtrl.reply));
+router.post("/support/tickets/:id/resolve", asyncHandler(SupportTicketAdminCtrl.resolve));
+router.post("/support/tickets/:id/reopen", asyncHandler(SupportTicketAdminCtrl.reopen));
+router.get("/support/report", asyncHandler(SupportTicketAdminCtrl.report));
 
 // The kinds of problem a client's case can be about (CaseAreaSvc).
 router.get("/case-areas", asyncHandler(CaseAreaAdminCtrl.list));

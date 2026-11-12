@@ -122,6 +122,9 @@ export const CLIENT_URL = (process.env.CLIENT_URL || "").split(",").map((origin)
  * Links emailed to a client account open on one of these instead of the lawyer app — see
  * emailLinkOriginForAccount. Each must also be listed in CLIENT_URL so CORS lets it call the API. */
 export const USER_APP_URL = (process.env.USER_APP_URL || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+/** Cloudflare Turnstile secret, checked on a signed-out Support Ticket (verifyTurnstile). With none set,
+ * the check is skipped in development and fails in production. */
+export const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY?.trim() || "";
 /** Who's emailed when client requests expire unclaimed 48h after routing (#510): one digest per
  * sweep run, comma-separated. Unset, the expiry is only logged. */
 export const OPS_ALERT_EMAILS = (process.env.OPS_ALERT_EMAILS || "").split(",").map((email) => email.trim()).filter(Boolean);

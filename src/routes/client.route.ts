@@ -12,6 +12,7 @@ import ClientLawyerCtrl from "../controllers/client-lawyer.controller";
 import ClientGmailCtrl from "../controllers/client-gmail.controller";
 import SupportContentCtrl from "../controllers/support-content.controller";
 import SupportActionCtrl from "../controllers/support-action.controller";
+import SupportTicketCtrl from "../controllers/support-ticket.controller";
 
 // A spoken answer is a short clip (180s at most in the app); in memory, since it goes straight to S3
 // for the Transcribe job.
@@ -57,6 +58,18 @@ router.get("/support/content", asyncHandler(SupportContentCtrl.forClient));
 // registered first.
 router.get("/support/actions/deletion-check", asyncHandler(SupportActionCtrl.deletionCheck));
 router.post("/support/actions/:key", asyncHandler(SupportActionCtrl.run));
+// The client's Support Ticket: one conversation with the team, and the flow outcomes the chat reports
+// (SupportTicketSvc, SupportOutcomeSvc).
+const ticketMessageLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "You've sent a lot of messages just now. Wait a few minutes and try again." },
+});
+router.get("/support/ticket", asyncHandler(SupportTicketCtrl.getThread));
+router.post("/support/ticket/messages", ticketMessageLimiter, asyncHandler(SupportTicketCtrl.postMessage));
+router.post("/support/ticket/read", asyncHandler(SupportTicketCtrl.markRead));
+router.post("/support/outcomes", asyncHandler(SupportTicketCtrl.recordOutcomes));
 router.post("/payments/top-up/quote", asyncHandler(ClientCaseCtrl.quoteTopUp));
 // Removed with pay per case: 410 for a client app still open from before.
 router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.casePaymentGone));
