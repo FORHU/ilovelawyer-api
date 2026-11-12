@@ -647,6 +647,7 @@ export const clientHandoffSchemas: Schemas = {
       quotation: { ...ref("Quotation"), nullable: true, description: "That lawyer's quotation" },
       awaitingPayment: { type: "boolean", description: "The client accepted a quotation and hasn't paid it yet (CONFIRMED)" },
       referralDisclosure: { type: "string", nullable: true, description: "Shown on the quote screen; the client acknowledges it to confirm" },
+      sharingNotice: { type: "string", nullable: true, description: "What hiring a lawyer hands over (the case, documents and AI chat, and the lawyer's copy). Shown with the quotes and on the payment screen; the same words as the consent text" },
       engagedAt: dateTime(undefined, true),
       closedAt: dateTime(undefined, true),
       closedBy: { type: "string", enum: ["LAWYER", "CLIENT"], nullable: true },

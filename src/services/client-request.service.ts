@@ -34,6 +34,7 @@ import {
   CLIENT_REQUEST_DIRECT_CONSENT_VERSION,
   CLIENT_REQUEST_DIRECT_WINDOW_MS,
   CLIENT_REQUEST_MAX_LAWYERS,
+  CLIENT_REQUEST_SHARING_NOTICE,
   CLIENT_REQUEST_REFERRAL_DISCLOSURE,
 } from "../constants/client-request.constants";
 
@@ -154,6 +155,7 @@ async function refundsFor(requests: ClientRequestForClient[]): Promise<Map<strin
 function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = null) {
   const one = oneLawyer(r);
   const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c), quotation: quotationFor(c) }));
+  const hasQuote = lawyers.some((l) => l.quote);
   return {
     id: r.id,
     caseId: r.caseId,
@@ -179,7 +181,8 @@ function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = n
     quotation: one ? quotationFor(one) : null,
     // A quote accepted before quotation payments has no accepted amount: it's paid outside ilovelawyer.
     awaitingPayment: r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED" && one.quotation.acceptedAmountMinor !== null,
-    referralDisclosure: lawyers.some((l) => l.quote) ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
+    referralDisclosure: hasQuote ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
+    sharingNotice: hasQuote ? CLIENT_REQUEST_SHARING_NOTICE : null,
     engagedAt: r.engagedAt,
     closedAt: r.closedAt,
     closedBy: r.closedBy,
