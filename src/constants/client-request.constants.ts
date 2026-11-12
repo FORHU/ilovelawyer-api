@@ -73,3 +73,8 @@ export const CLIENT_REQUEST_UNPAID_FEE_HOURS = 48;
 export const ENGAGEMENT_COMPLETION_CONFIRM_DAYS = 7;
 /** The client's reason when they say the work isn't finished, shown to the lawyer. */
 export const ENGAGEMENT_COMPLETION_DECLINE_MAX_LENGTH = 1000;
+
+/** A client who has a request in one of these can't delete their account (UsersSvc.requestDeletion,
+ * 409 OPEN_LAWYER_REQUESTS): a lawyer is still working on it, may hold the client's case, or the
+ * client is part-way to hiring one. CLOSED, EXPIRED and WITHDRAWN don't block. */
+export const DELETION_BLOCKING_REQUEST_STATUSES = ["REQUESTED", "ROUTED", "CLAIMED", "QUOTED", "CONFIRMED", "ENGAGED"] as const;
