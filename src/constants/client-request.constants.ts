@@ -16,12 +16,12 @@ export const CLIENT_REQUEST_PICK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const CLIENT_REQUEST_CONSENT_VERSION = "2026-11-10-draft";
 
 // What hiring a lawyer hands over, in the consent text and again on the quote and payment screens
-// (CLIENT_REQUEST_HIRE_NOTICE, #922), so the two can't drift apart.
-const WHAT_HIRING_SHARES = "Once paid, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.";
-const LAWYER_KEEPS_COPY = "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.";
+// (CLIENT_REQUEST_SHARING_NOTICE, #922), so the two can't drift apart.
+export const WHAT_HIRING_SHARES = "Once paid, they can read your case, its documents and your chat with the AI. Either of you can end this at any time.";
+export const LAWYER_KEEPS_COPY = "The lawyer may keep a copy of your case afterwards, as solicitors are required to keep their files.";
 
 /** Shown with every quote and on the payment screen, where the lawyer is actually given the case. */
-export const CLIENT_REQUEST_HIRE_NOTICE = `${WHAT_HIRING_SHARES} ${LAWYER_KEEPS_COPY}`;
+export const CLIENT_REQUEST_SHARING_NOTICE = `${WHAT_HIRING_SHARES} ${LAWYER_KEEPS_COPY}`;
 
 export const CLIENT_REQUEST_CONSENT_TEXT = [
   "We'll share an anonymised summary of your case with verified UK lawyers who may take it on. It leaves out names and documents.",

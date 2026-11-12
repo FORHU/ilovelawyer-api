@@ -15,7 +15,7 @@ import SecurityAuditRepo from "../src/repositories/security-audit.repository";
 import ClaimRepo, { CLAIM_HOLD_MS } from "../src/repositories/client-request-claim.repository";
 import QuotationRepo from "../src/repositories/quotation.repository";
 import RequestRepo from "../src/repositories/client-request.repository";
-import { CLIENT_REQUEST_CONSENT_TEXT, CLIENT_REQUEST_HIRE_NOTICE, CLIENT_REQUEST_REFERRAL_DISCLOSURE } from "../src/constants/client-request.constants";
+import { CLIENT_REQUEST_CONSENT_TEXT, CLIENT_REQUEST_DIRECT_CONSENT_TEXT, CLIENT_REQUEST_REFERRAL_DISCLOSURE, CLIENT_REQUEST_SHARING_NOTICE, LAWYER_KEEPS_COPY, WHAT_HIRING_SHARES } from "../src/constants/client-request.constants";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -292,9 +292,10 @@ describe("client request conflict check, release and quote", () => {
       expect(body.status).to.equal("QUOTED");
       expect(body.quote).to.deep.include({ type: "FIRST_CONSULTATION", amount: { amountMinor: 0, currency: "GBP" }, message: "Free first call this week." });
       expect(body.referralDisclosure).to.equal(CLIENT_REQUEST_REFERRAL_DISCLOSURE);
-      expect(body.sharingNotice).to.equal(CLIENT_REQUEST_HIRE_NOTICE);
+      expect(body.sharingNotice).to.equal(CLIENT_REQUEST_SHARING_NOTICE);
       // Said in the same words as what the client agreed to when asking.
-      expect(CLIENT_REQUEST_CONSENT_TEXT).to.include(CLIENT_REQUEST_HIRE_NOTICE.split(". ")[0]).and.to.include(CLIENT_REQUEST_HIRE_NOTICE.split(". ").at(-1));
+      for (const text of [CLIENT_REQUEST_CONSENT_TEXT, CLIENT_REQUEST_DIRECT_CONSENT_TEXT]) expect(text).to.include(WHAT_HIRING_SHARES).and.to.include(LAWYER_KEEPS_COPY);
+      expect(CLIENT_REQUEST_SHARING_NOTICE).to.equal(`${WHAT_HIRING_SHARES} ${LAWYER_KEEPS_COPY}`);
       expect(body.lawyer).to.deep.equal({
         id: lawyerId,
         name: "Lena Lawyer",
