@@ -123,6 +123,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "PATCH /admin/case-areas/:id": ["admin.case_area.updated"],
   "DELETE /admin/case-areas/:id": ["admin.case_area.deleted"],
   "PUT /admin/support/content/draft": ["admin.support_content.draft_updated"],
+  "POST /client/support/actions/:key": { exempt: "Reads the client's own payments, credits or requests, or emails them a password reset; the reset is recorded as auth.password_reset_requested by AuthSvc" },
+  "POST /support/actions/:key": { exempt: "Asks AuthSvc to email a visitor a reset link or sign-in code; a reset is recorded as auth.password_reset_requested, a resent code is session upkeep" },
   "POST /admin/support/content/draft/validate": { exempt: "Checks the draft for problems and changes nothing" },
   "POST /admin/support/content/publish": ["admin.support_content.published"],
   "POST /admin/support/content/versions/:version/rollback": ["admin.support_content.rolled_back"],
