@@ -4395,3 +4395,20 @@ model AnswerGroundingCheck {
   @@index([messageId])
   @@index([caseId, verdict])
 }
+
+model SupportContentDraft {
+  id             String   @id @default("default")
+  content        Json
+  basedOnVersion Int?
+  updatedById    String?
+  updatedAt      DateTime @updatedAt
+}
+
+model SupportContentVersion {
+  id                    String   @id @default(uuid())
+  version               Int      @unique
+  content               Json
+  publishedById         String?
+  publishedAt           DateTime @default(now())
+  rolledBackFromVersion Int?
+}
