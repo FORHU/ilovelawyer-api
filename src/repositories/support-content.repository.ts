@@ -32,6 +32,21 @@ export default class SupportContentRepo {
     });
   }
 
+  /** Moves the draft to `content` only if it still has the updatedAt the publish read. Returns false when it changed. */
+  static async resetDraftIfUnchanged(
+    expectedUpdatedAt: Date,
+    content: Prisma.InputJsonValue,
+    basedOnVersion: number,
+    updatedById: string | null,
+    tx: Prisma.TransactionClient = prisma,
+  ): Promise<boolean> {
+    const { count } = await tx.supportContentDraft.updateMany({
+      where: { id: DRAFT_ID, updatedAt: expectedUpdatedAt },
+      data: { content, basedOnVersion, updatedById },
+    });
+    return count === 1;
+  }
+
   static async findLatestVersion(tx: Prisma.TransactionClient = prisma) {
     return tx.supportContentVersion.findFirst({ orderBy: { version: "desc" } });
   }

@@ -236,6 +236,34 @@ describe("Support Chat content", () => {
     expect(res.body.code).to.equal("NO_CHANGES");
   });
 
+  it("won't publish over a draft that was saved while it was being published, and publishes nothing", async () => {
+    const edited = await saveEdited((c) => {
+      c.settings.greeting = `Racing {firstName} (${mark})`;
+    });
+    // What publish read a moment ago, before that save.
+    const stale = { ...edited, updatedAt: new Date(new Date(edited.updatedAt).getTime() - 60_000), hasUnpublishedChanges: true };
+    const realGetDraft = SupportContentSvc.getDraft;
+    (SupportContentSvc as any).getDraft = async () => stale;
+    let failure: any;
+    try {
+      await SupportContentSvc.publish(adminId);
+    } catch (err) {
+      failure = err;
+    } finally {
+      (SupportContentSvc as any).getDraft = realGetDraft;
+    }
+
+    expect(failure).to.include({ statusCode: 409, code: "DRAFT_CONFLICT" });
+    expect((await api.clientContent().expect(200)).body.version).to.equal(baseVersion + 1);
+    expect(await prisma.supportContentVersion.count({ where: { version: { gt: baseVersion + 1 } } })).to.equal(0);
+    expect((await api.draft().expect(200)).body.content.settings.greeting).to.equal(`Racing {firstName} (${mark})`);
+    expect(auditRows.some((r) => r.action === "admin.support_content.published")).to.equal(false);
+
+    await saveEdited((c) => {
+      c.settings.greeting = `Hello {firstName} (${mark})`;
+    });
+  });
+
   it("lists versions newest first, with who published them and which is current", async () => {
     const { body } = await api.versions().expect(200);
     expect(body[0]).to.deep.include({ version: baseVersion + 1, isCurrent: true, rolledBackFromVersion: null });
