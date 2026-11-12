@@ -1,5 +1,6 @@
 import type { OAS3Definition } from "swagger-jsdoc";
 import { SUPPORT_ACTION_KEYS } from "./constants/support-actions.constants";
+import { SUPPORT_CONTENT_PROBLEM_CODES } from "./constants/support-content.constants";
 
 /**
  * The Support Chat API contract (EPIC ilovelawyer-client#120), merged into swagger.ts.
@@ -152,7 +153,7 @@ export const supportSchemas: Schemas = {
       path: { type: "string", example: "flows.refund.steps.start.options[0].target" },
       code: {
         type: "string",
-        enum: ["UNKNOWN_PLACEHOLDER", "EMPTY_MENU", "DUPLICATE_ID", "MENU_FLOW_MISSING", "MENU_FLOW_AUDIENCE", "ID_MISMATCH", "TARGET_FLOW_MISSING", "FLOW_AUDIENCE_MISMATCH", "START_STEP_MISSING", "UNKNOWN_ACTION", "ACTION_AUDIENCE_MISMATCH", "TARGET_STEP_MISSING", "INVALID_LINK", "STEP_UNREACHABLE"],
+        enum: [...SUPPORT_CONTENT_PROBLEM_CODES],
       },
       message: { type: "string" },
     },

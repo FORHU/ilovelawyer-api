@@ -1,14 +1,13 @@
 import type { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
-
-const DRAFT_ID = "default";
+import { SUPPORT_DRAFT_ID as DRAFT_ID } from "../constants/support-content.constants";
 
 export default class SupportContentRepo {
   static async findDraft() {
     return prisma.supportContentDraft.findUnique({ where: { id: DRAFT_ID } });
   }
 
-  static async createDraft(content: Prisma.InputJsonValue, basedOnVersion: number | null, updatedById: string | null) {
+  static async ensureDraft(content: Prisma.InputJsonValue, basedOnVersion: number | null, updatedById: string | null) {
     return prisma.supportContentDraft.upsert({
       where: { id: DRAFT_ID },
       create: { id: DRAFT_ID, content, basedOnVersion, updatedById },

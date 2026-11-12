@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import SupportContentSvc from "../services/support-content.service";
+import { listSupportActions } from "../constants/support-actions.constants";
 import HttpError from "../utils/http-error";
 import { supportVersionParamSchema, updateSupportDraftSchema } from "../validation/support-content.validation";
 
@@ -52,6 +53,6 @@ export default class SupportContentAdminCtrl {
 
   /** GET /api/admin/support/actions — the fixed Support Action catalog, for the editor's picker. */
   static async listActions(_req: Request, res: Response) {
-    res.status(200).json(SupportContentSvc.listActions());
+    res.status(200).json(listSupportActions());
   }
 }

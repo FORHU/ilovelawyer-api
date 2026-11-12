@@ -1,13 +1,13 @@
-import { SUPPORT_ACTIONS, actionAllowedFor, isKnownActionKey, type SupportAudience } from "../constants/support-actions.constants";
-import type { SupportContent, SupportContentProblem, SupportFlow, SupportStep, SupportTarget } from "../types/support-content";
+import { SUPPORT_ACTIONS, actionAllowedFor, isKnownActionKey } from "../constants/support-actions.constants";
+import type { SupportContentProblemCode } from "../constants/support-content.constants";
+import { SUPPORT_AUDIENCES as AUDIENCES, flowAvailableTo } from "./support-content-audience";
+import type { SupportContent, SupportContentProblem, SupportStep, SupportTarget } from "../types/support-content";
 
 const ALLOWED_PLACEHOLDERS = new Set(["firstName"]);
-const AUDIENCES: SupportAudience[] = ["SIGNED_IN", "SIGNED_OUT"];
 
 /** https, mailto, or a path in the app. A path can't start with // or /\ (a browser reads both as another host). */
 const isSafeHref = (href: string) => /^https:\/\/\S+$/i.test(href) || /^\/(?![\\/])[^\s\\]*$/.test(href) || /^mailto:\S+$/i.test(href);
 
-const flowAvailableTo = (flow: SupportFlow, audience: SupportAudience) => flow.audience === "BOTH" || flow.audience === audience;
 
 /** Every target a step points at, with the path suffix to report a problem against. */
 function targetsOf(step: SupportStep): { target: SupportTarget; at: string }[] {
@@ -54,7 +54,7 @@ function textsOf(content: SupportContent): { path: string; text: string }[] {
  * Pure: takes content that already has the right shape (supportContentSchema). */
 export function validateSupportContent(content: SupportContent): SupportContentProblem[] {
   const problems: SupportContentProblem[] = [];
-  const add = (path: string, code: string, message: string) => problems.push({ path, code, message });
+  const add = (path: string, code: SupportContentProblemCode, message: string) => problems.push({ path, code, message });
 
   for (const { path, text } of textsOf(content)) {
     for (const match of text.matchAll(/\{([^{}]*)\}/g)) {

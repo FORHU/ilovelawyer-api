@@ -63,3 +63,8 @@ export function actionAllowedFor(def: SupportActionDef, audience: SupportAudienc
 export function actionsFor(audience: SupportAudience): SupportActionDef[] {
   return SUPPORT_ACTION_KEYS.map((k) => SUPPORT_ACTIONS[k]).filter((def) => actionAllowedFor(def, audience));
 }
+
+/** The whole catalog, in key order. */
+export function listSupportActions(): SupportActionDef[] {
+  return SUPPORT_ACTION_KEYS.map((key) => SUPPORT_ACTIONS[key]);
+}

@@ -1,4 +1,5 @@
 import type { SupportActionKey, SupportAudience } from "../constants/support-actions.constants";
+import type { SupportContentProblemCode } from "../constants/support-content.constants";
 
 /** The Support Chat's editable content (EPIC ilovelawyer-client#120): one JSON document. Admins edit
  * a draft; clients read a published version. ilovelawyer-client and ilovelawyer-admin copy these types. */
@@ -61,7 +62,7 @@ export interface SupportContent {
 export interface SupportContentProblem {
   /** Where in the content, e.g. "flows.refund.steps.ask.options[1].target". */
   path: string;
-  code: string;
+  code: SupportContentProblemCode;
   message: string;
 }
 

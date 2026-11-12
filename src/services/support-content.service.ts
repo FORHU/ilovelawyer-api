@@ -5,9 +5,10 @@ import SecurityAuditSvc from "./security-audit.service";
 import { validateSupportContent } from "./support-content-validator";
 import { SUPPORT_CONTENT_V1 } from "../constants/support-content-seed";
 import prisma from "../lib/prisma";
-import { actionsFor, SUPPORT_ACTION_KEYS, SUPPORT_ACTIONS, type SupportAudience } from "../constants/support-actions.constants";
+import { actionsFor, type SupportAudience } from "../constants/support-actions.constants";
+import { flowsFor, menuFor } from "./support-content-audience";
 import HttpError from "../utils/http-error";
-import type { PublishedSupportContent, SupportContent, SupportContentProblem, SupportFlow } from "../types/support-content";
+import type { PublishedSupportContent, SupportContent, SupportContentProblem } from "../types/support-content";
 
 function isUniqueViolation(err: unknown) {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
@@ -49,27 +50,19 @@ export default class SupportContentSvc {
   static async getPublished(audience: SupportAudience): Promise<PublishedSupportContent> {
     const latest = await SupportContentSvc.latestVersion();
     const content = latest.content as unknown as SupportContent;
-    const flows: Record<string, SupportFlow> = {};
-    for (const [id, flow] of Object.entries(content.flows)) {
-      if (flow.audience === "BOTH" || flow.audience === audience) flows[id] = flow;
-    }
     return {
       version: latest.version,
       publishedAt: latest.publishedAt,
       settings: content.settings,
-      menu: content.menus[audience].filter((card) => card.enabled && flows[card.flowId]),
-      flows,
+      menu: menuFor(content, audience),
+      flows: flowsFor(content, audience),
       actions: actionsFor(audience).map(({ key, label, safetyCopy }) => ({ key, label, ...(safetyCopy ? { safetyCopy } : {}) })),
     };
   }
 
-  static listActions() {
-    return SUPPORT_ACTION_KEYS.map((key) => SUPPORT_ACTIONS[key]);
-  }
-
   static async getDraft() {
     const latest = await SupportContentSvc.latestVersion();
-    const draft = (await SupportContentRepo.findDraft()) ?? (await SupportContentRepo.createDraft(latest.content as Prisma.InputJsonValue, latest.version, null));
+    const draft = (await SupportContentRepo.findDraft()) ?? (await SupportContentRepo.ensureDraft(latest.content as Prisma.InputJsonValue, latest.version, null));
     return {
       content: draft.content as unknown as SupportContent,
       updatedAt: draft.updatedAt,
