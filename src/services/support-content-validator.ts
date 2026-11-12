@@ -4,7 +4,8 @@ import type { SupportContent, SupportContentProblem, SupportFlow, SupportStep, S
 const ALLOWED_PLACEHOLDERS = new Set(["firstName"]);
 const AUDIENCES: SupportAudience[] = ["SIGNED_IN", "SIGNED_OUT"];
 
-const isSafeHref = (href: string) => /^https:\/\/\S+$/i.test(href) || /^\/(?!\/)\S*$/.test(href) || /^mailto:\S+$/i.test(href);
+/** https, mailto, or a path in the app. A path can't start with // or /\ (a browser reads both as another host). */
+const isSafeHref = (href: string) => /^https:\/\/\S+$/i.test(href) || /^\/(?![\\/])[^\s\\]*$/.test(href) || /^mailto:\S+$/i.test(href);
 
 const flowAvailableTo = (flow: SupportFlow, audience: SupportAudience) => flow.audience === "BOTH" || flow.audience === audience;
 

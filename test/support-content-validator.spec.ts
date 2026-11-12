@@ -115,9 +115,18 @@ describe("Support content validation", () => {
       go.options[0].target = { kind: "LINK", href };
       expect(codes(content), href).to.not.include("INVALID_LINK");
     }
-    for (const href of ["javascript:alert(1)", "//evil.example", "http://plain.example", "ftp://x"]) {
+    for (const href of ["javascript:alert(1)", "//evil.example", "/\\evil.example", "/path\\with-backslash", "http://plain.example", "ftp://x"]) {
       go.options[0].target = { kind: "LINK", href };
       expect(codes(content), href).to.include("INVALID_LINK");
+    }
+  });
+
+  it("takes an https avatar or none, and nothing else", () => {
+    const withAvatar = (avatarUrl: unknown) => supportContentSchema.validate({ ...fresh(), settings: { ...fresh().settings, avatarUrl } }).error;
+    expect(withAvatar(null)).to.equal(undefined);
+    expect(withAvatar("https://cdn.example.com/lexi.png")).to.equal(undefined);
+    for (const bad of ["javascript:alert(1)", "http://cdn.example.com/lexi.png", "data:image/png;base64,AAAA", "/lexi.png", "lexi.png"]) {
+      expect(withAvatar(bad), bad).to.not.equal(undefined);
     }
   });
 

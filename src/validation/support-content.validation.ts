@@ -66,7 +66,7 @@ export const supportContentSchema = Joi.object({
   schemaVersion: Joi.number().valid(1).required(),
   settings: Joi.object({
     assistantName: title.required(),
-    avatarUrl: Joi.string().trim().max(500).allow(null).required(),
+    avatarUrl: Joi.string().trim().uri({ scheme: ["https"] }).max(500).allow(null).required(),
     greeting: text.required(),
     responseTimeLine: text.required(),
   }).required(),
