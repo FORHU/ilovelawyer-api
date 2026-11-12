@@ -17,6 +17,7 @@ import CaseCopyQueue from "./queues/case-copy.queue";
 import SecurityAuditRetentionQueue from "./queues/security-audit-retention.queue";
 import TrialGuestPurgeQueue from "./queues/trial-guest-purge.queue";
 import ClientRequestSweepQueue from "./queues/client-request-sweep.queue";
+import SupportTicketSweepQueue from "./queues/support-ticket-sweep.queue";
 import PlanTrialSweepQueue from "./queues/plan-trial-sweep.queue";
 
 import { DOCUMENT_EXTRACTION_IN_API, FREE_CREDIT_USD, PORT } from "./config";
@@ -55,6 +56,7 @@ CaseCopyQueue.start();
 SecurityAuditRetentionQueue.start();
 TrialGuestPurgeQueue.start();
 ClientRequestSweepQueue.start();
+SupportTicketSweepQueue.start();
 PlanTrialSweepQueue.start();
 DictationSweepQueue.start();
 
