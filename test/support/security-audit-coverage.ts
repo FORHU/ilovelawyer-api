@@ -263,6 +263,8 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/cases/:caseId/archive": CASE_FEED,
   "POST /client/cases/:caseId/unarchive": CASE_FEED,
   "POST /client/cases/:caseId/messages": AI_RUN,
+  "POST /client/cases/:caseId/messages/:messageId/cancel": { exempt: "Stops an AI answer and gives back its credit — no access to or removal of data" },
+  "DELETE /client/cases/:caseId/messages/:messageId": ["case.item_deleted"],
   "POST /client/cases/:caseId/voice-messages/presign": UPLOAD,
   "POST /client/cases/:caseId/voice-messages": AI_RUN,
   "POST /client/cases/:caseId/documents/presign": UPLOAD,

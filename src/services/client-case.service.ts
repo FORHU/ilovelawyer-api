@@ -326,10 +326,10 @@ export default class ClientCaseSvc {
   /** Asks the AI, for one chat credit. The answer is generated in the background, on the intake
    * pipeline's own queue (IntakeChatGenerationQueue — not ChatGenerationQueue/
    * ClientChatGenerationQueue, nothing shared with the lawyer side), shows up in listMessages, and
-   * is announced to the client by the chat:done / chat:error socket events. A message that
-   * couldn't be queued gets its credit back; one the AI then fails to answer keeps it spent, like
-   * any other AI work. `documentIds` are the case's documents sent with it, each READY (checked
-   * before the credit is spent, so a refused send costs nothing). */
+   * is announced to the client by the chat:done / chat:error socket events. The credit comes back
+   * once if the message couldn't be queued, or if its answer ends FAILED or CANCELLED (stopped) —
+   * see IntakeChatRepo.endPendingTurn. `documentIds` are the case's documents sent with it, each
+   * READY (checked before the credit is spent, so a refused send costs nothing). */
   static async sendMessage(workspace: ClientWorkspace, userId: string, caseId: string, text: string, documentIds: string[] = []) {
     // Same ownership check consultationOf used to do as a side effect — explicit now that nothing
     // resolves a consultation here anymore.
@@ -343,6 +343,21 @@ export default class ClientCaseSvc {
       await ClientBillingSvc.refundCredit(caseId);
       throw err;
     }
+  }
+
+  /** The Stop button: ends an answer that's still being written, keeps what was written so far as
+   * the reply, and gives the message's credit back (once — a second Stop refunds nothing). An
+   * answer that already finished or failed comes back with its current replyStatus. */
+  static async cancelMessage(workspace: ClientWorkspace, userId: string, caseId: string, messageId: string) {
+    await ClientCaseSvc.load(workspace, caseId);
+    return IntakeChatSvc.cancelIntakeGeneration(workspace, userId, caseId, messageId);
+  }
+
+  /** Deletes a message from the case's chat (a question together with its answer, or just an
+   * answer). No credit back; 409 TURN_IN_PROGRESS while its answer is still being written. */
+  static async deleteMessage(workspace: ClientWorkspace, caseId: string, messageId: string) {
+    await ClientCaseSvc.load(workspace, caseId);
+    await IntakeChatSvc.deleteMessage(workspace, caseId, messageId);
   }
 
   /**

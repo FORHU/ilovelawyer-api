@@ -87,6 +87,15 @@ export default class ClientCaseCtrl {
     res.status(202).json(await ClientCaseSvc.sendMessage(clientWorkspaceOf(req), req.user.userId, req.params.caseId, text, documentIds));
   }
 
+  static async cancelMessage(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.cancelMessage(clientWorkspaceOf(req), req.user.userId, req.params.caseId, req.params.messageId));
+  }
+
+  static async deleteMessage(req: Request, res: Response) {
+    await ClientCaseSvc.deleteMessage(clientWorkspaceOf(req), req.params.caseId, req.params.messageId);
+    res.status(204).end();
+  }
+
   static async presignDocument(req: Request, res: Response) {
     const file = validate(presignClientDocumentSchema, req.body);
     res.status(200).json(await ClientCaseSvc.presignDocument(clientWorkspaceOf(req), req.user.userId, req.params.caseId, file));

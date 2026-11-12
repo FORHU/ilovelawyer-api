@@ -39,6 +39,9 @@ export interface IntakeChatGenerationJob {
   /** Set only for a voice-originated turn: the client's recorded audio, already uploaded to S3.
    * The worker transcribes this first and uses the result as userInput for the rest of the job. */
   audioS3Key?: string;
+  /** The session is new and has seen none of the chat so far (the first turn, an expired session,
+   * or a message the client deleted), so this turn hands it the earlier chat from the database. */
+  replayHistory?: boolean;
   enqueuedAt?: number;
 }
 
@@ -210,8 +213,10 @@ export async function sweepStalePendingIntakeChats(): Promise<void> {
 
   for (const message of stale) {
     try {
-      await IntakeChatRepo.setReplyStatus(message.id, "FAILED", { clearPendingContent: true });
-      if (message.userId) {
+      // Refunds the turn's credit with the flip; false when the turn ended in the meantime (a
+      // Stop, or the worker finishing) — then it isn't this sweep's to fail or announce.
+      const failed = await IntakeChatRepo.endPendingTurn(message.id, message.caseId, "FAILED");
+      if (failed && message.userId) {
         emitToUser(message.userId, "chat:error", {
           caseId: message.caseId,
           messageId: message.id,
