@@ -197,7 +197,8 @@ describe("Support tickets", () => {
       expect(emitted).to.deep.equal([{ userId: clientId, event: "support:reply", payload: { ticketId: thread.id, messageId: reply.body.id } }]);
       expect(emails).to.have.length(1);
       expect(emails[0]).to.deep.include({ to: clientEmail, subject: "You have a reply from ilovelawyer support" });
-      expect(emails[0].html).to.include("?support=open");
+      expect(emails[0].html).to.match(/\?support(=|&#x3D;)open/);
+      expect(emails[0].text).to.include("/?support=open");
       expect(`${emails[0].html}${emails[0].text}`).to.not.include("went out today");
       expect(auditRows.find((r) => r.action === "admin.support_ticket.replied")).to.deep.include({ actorId: adminId, targetType: "support_ticket", targetId: thread.id });
       expect(JSON.stringify(auditRows)).to.not.include("went out today");
