@@ -43,6 +43,14 @@ describe("Support content validation", () => {
     expect(SUPPORT_CONTENT_V1.menus.SIGNED_IN.some((c) => c.flowId === "legal-question")).to.equal(false);
   });
 
+  it("keeps Talk to a person out of the menus, and the reply time in one editable place", () => {
+    const menuText = [...SUPPORT_CONTENT_V1.menus.SIGNED_IN, ...SUPPORT_CONTENT_V1.menus.SIGNED_OUT].flatMap((c) => [c.title, c.subtitle ?? ""]);
+    expect(menuText.filter((t) => /talk to a person/i.test(t))).to.deep.equal([]);
+    const stepText = Object.values(SUPPORT_CONTENT_V1.flows).flatMap((f) => Object.values(f.steps).flatMap((s) => ("text" in s && s.text ? [s.text] : [])));
+    expect(stepText.filter((t) => /working day/i.test(t))).to.deep.equal([]);
+    expect(SUPPORT_CONTENT_V1.settings.responseTimeLine).to.match(/working day/i);
+  });
+
   it("refuses a step nothing leads to", () => {
     const content = fresh();
     content.flows["credits-how"].steps.orphan = { id: "orphan", type: "MESSAGE", text: "Nobody gets here" };

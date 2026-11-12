@@ -113,7 +113,7 @@ const signedInFlows: SupportFlow[] = [
     "I want a refund",
     "SIGNED_IN",
     ["refund", "money back", "get my money", "cancel payment", "reimburse"],
-    "Refunds are decided by our team. I'll pass your request to a person, who will reply within one working day.",
+    "Refunds are decided by our team. I'll pass your request to a person, who will reply to you.",
   ),
   toPerson(
     "disputed-charge",
@@ -257,7 +257,7 @@ const signedOutFlows: SupportFlow[] = [
     "Something else",
     "SIGNED_OUT",
     ["help", "other", "something else", "contact", "support", "problem"],
-    "I'll pass this to a person. Give us your email address and tell us what's wrong, and we'll reply by email within one working day.",
+    "I'll pass this to a person. Give us your email address and tell us what's wrong, and we'll reply by email.",
   ),
 ];
 
@@ -282,7 +282,7 @@ export const SUPPORT_CONTENT_V1: SupportContent = {
       card("o-no-code", "I didn't get my code", "Send it again", "so-no-code"),
       card("o-forgot", "I forgot my password", "Reset it by email", "so-forgot-password"),
       card("o-cancel-deletion", "Cancel my account deletion", "Changed your mind?", "so-cancel-deletion"),
-      card("o-other", "Something else", "Talk to a person", "so-something-else"),
+      card("o-other", "Something else", "Tell us what is wrong", "so-something-else"),
     ],
   },
   flows: Object.fromEntries([...signedInFlows, ...signedOutFlows].map((f) => [f.id, f])),

@@ -274,7 +274,7 @@ export const supportPaths: Paths = {
     post: {
       tags: [ADMIN_TAG],
       summary: "Publish the draft as the next version",
-      description: "Refuses invalid content (422 SUPPORT_CONTENT_INVALID) and an unchanged draft (409 NO_CHANGES). Audited as admin.support_content.published.",
+      description: "Refuses invalid content (422 SUPPORT_CONTENT_INVALID) an unchanged draft (409 NO_CHANGES), and a draft saved while it was being published (409 DRAFT_CONFLICT, nothing published). Audited as admin.support_content.published.",
       security,
       ...built("ilovelawyer-api#639"),
       responses: {
@@ -312,7 +312,7 @@ export const supportPaths: Paths = {
     post: {
       tags: [ADMIN_TAG],
       summary: "Roll back to an earlier version",
-      description: "Publishes an exact copy of that version as the newest one and points the draft at it. Audited as admin.support_content.rolled_back.",
+      description: "Publishes an exact copy of that version as the newest one and points the draft at it, replacing any unpublished draft edits (the editor should confirm first). Audited as admin.support_content.rolled_back.",
       security,
       ...built("ilovelawyer-api#639"),
       parameters: [version],
