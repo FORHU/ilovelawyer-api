@@ -188,9 +188,16 @@ describe("ClientCaseOverviewSvc", () => {
 
     it("leaves out keyDates entirely for a case outside the UK (D5), without reading deadlines", async () => {
       caseRow.ukJurisdiction = null;
+      caseRow.outsideUk = true;
       const dto = await ClientCaseOverviewSvc.get(workspace, CASE_ID);
       expect(keyPaths(dto)).to.deep.equal(CONTRACT.filter((p) => !p.startsWith("keyDates") && p !== "sections.keyDates"));
       expect(deadlineReads).to.equal(0);
+    });
+
+    it("keeps keyDates while the part of the UK isn't known yet (#973)", async () => {
+      caseRow.ukJurisdiction = null;
+      caseRow.outsideUk = false;
+      expect((await ClientCaseOverviewSvc.get(workspace, CASE_ID)).keyDates).to.have.length(2);
     });
 
     it("keeps keyDates for Scotland and Northern Ireland — they're still in the UK", async () => {

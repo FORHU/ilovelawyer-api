@@ -52,13 +52,13 @@ export function caseDetailsPeople(parties: { name: string; designation: string }
  * grounding (sent to chat-wonder as part of document_context), so a client never has to repeat a
  * wizard answer to the chat itself. Same wording in both places by construction, not by convention. */
 export function caseDetailsBlock(
-  caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null },
+  caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; outsideUk?: boolean; where: string | null; side: string | null; notes: string | null },
   parties: { name: string; designation: string }[],
 ): string {
   return `Known case details (already confirmed by the client, do not repeat them as new facts):
 Title: ${caseDetails.title}
 Type of problem: ${caseDetails.caseAreas.join(", ") || "not set"}
-Part of the UK: ${caseDetails.ukJurisdiction ?? "not set"}
+Part of the UK: ${caseDetails.ukJurisdiction ?? (caseDetails.outsideUk ? "outside the UK (the client said so)" : "not set")}
 Town or city: ${caseDetails.where ?? "not set"}
 The client is: ${caseDetails.side === "CLAIMANT" ? "bringing the complaint" : caseDetails.side === "RESPONDENT" ? "responding to one" : "not set"}
 The client's note: ${caseDetails.notes || "none"}
@@ -95,7 +95,7 @@ export function readinessBlock(criteria: { label: string; met: boolean }[]): str
 
 export function buildIntakePrompt(input: {
   /** `caseAreas` are the case areas' names. */
-  caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; where: string | null; side: string | null; notes: string | null };
+  caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; outsideUk?: boolean; where: string | null; side: string | null; notes: string | null };
   parties: { name: string; designation: string }[];
   messages: IntakeMessageInput[];
   documents: IntakeDocumentInput[];

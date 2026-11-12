@@ -995,7 +995,12 @@ model Case {
   caseName              String
   actionType            String?
   jurisdiction          String?
+  /// "England and Wales", "Scotland" or "Northern Ireland"; null when not in the UK or not known yet
+  /// (outsideUk tells the two apart).
   ukJurisdiction        String?
+  /// Client app only: the client said the case is outside the UK. False with no ukJurisdiction means
+  /// nobody has said where it is yet (a case started from the first message).
+  outsideUk             Boolean                  @default(false)
   /// The kinds of problem, as CaseArea codes ("EMPLOYMENT"). Picked in the client app, one or more,
   /// and replaced by Jev's once the case is ready for a lawyer; lawyer matching reads them. Empty on
   /// cases made in the lawyer app.

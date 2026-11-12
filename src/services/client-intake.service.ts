@@ -132,6 +132,7 @@ export default class ClientIntakeSvc {
           title: source.caseName,
           caseAreas: (await CaseAreaSvc.refsOf(source.caseAreas)).map((a) => a.name),
           ukJurisdiction: source.ukJurisdiction,
+          outsideUk: source.outsideUk,
           where: source.jurisdiction,
           side: source.clientSide,
           notes: source.notes,
@@ -251,6 +252,7 @@ export default class ClientIntakeSvc {
           title: source.caseName,
           caseAreas: (await CaseAreaSvc.refsOf(source.caseAreas)).map((a) => a.name),
           ukJurisdiction: source.ukJurisdiction,
+          outsideUk: source.outsideUk,
           where: source.jurisdiction,
           side: source.clientSide,
         },
@@ -302,6 +304,8 @@ export async function fingerprintOf(source: ClientIntakeCaseSource, latestMessag
     source.clientSide,
     source.notes,
     source.parties.map((p) => [p.name, p.designation]),
+    // Only when set, so every fingerprint from before outsideUk (#973) still matches.
+    ...(source.outsideUk ? ["outsideUk"] : []),
     source.documents.filter((d) => d.ragStatus === "READY").map((d) => d.id),
     latestMessageId,
   ]);

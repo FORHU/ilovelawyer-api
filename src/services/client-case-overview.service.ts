@@ -32,8 +32,9 @@ export default class ClientCaseOverviewSvc {
   static async get(workspace: ClientWorkspace, caseId: string): Promise<CaseOverview> {
     const row = await ClientCaseRepo.findById(caseId, workspace.id);
     if (!row) throw new HttpError("Case not found", 404);
-    // A client who says the case is outside the UK has no UK jurisdiction set (ClientCaseSvc).
-    const inUk = row.ukJurisdiction !== null;
+    // Only a client who said the case is outside the UK loses key dates; a case whose part of the UK
+    // isn't known yet keeps them (#973).
+    const inUk = !row.outsideUk;
 
     const [stored, job, docs, timeline, findings, missing, deadlines, lastChange] = await Promise.all([
       ClientOverviewRepo.find(caseId),
