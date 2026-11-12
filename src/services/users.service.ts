@@ -10,6 +10,7 @@ import { ACCOUNT_DELETION_GRACE_PERIOD_DAYS, accountDeletionDueAt } from "../con
 import { BCRYPT_SALT_ROUNDS } from "../constants";
 import AuditSvc, { AuditAction } from "./audit.service";
 import PlanGateSvc from "./plan-gate.service";
+import DeletionBlockSvc from "./deletion-block.service";
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", { dateStyle: "long" });
@@ -77,11 +78,16 @@ export default class UsersSvc {
    *
    * A password account must re-enter its password, same as changePassword — an open session
    * alone isn't enough to schedule a deletion. Google SSO accounts have no password to check. A
-   * wrong password is a 400, not a 401, so the client doesn't treat it as an expired session. */
+   * wrong password is a 400, not a 401, so the client doesn't treat it as an expired session.
+   *
+   * A client account (USER) with an open or engaged lawyer request is refused first, 409
+   * OPEN_LAWYER_REQUESTS (DeletionBlockSvc): they withdraw or end it, then delete. Lawyer accounts
+   * aren't checked. */
   static async requestDeletion(userId: string, password: string | undefined) {
     const user = await AuthRepo.findById(userId);
     if (!user) throw new HttpError("User not found", 404);
     if (user.deletionRequestedAt) throw new HttpError("Account deletion is already scheduled", 409);
+    if (user.role === "USER") await DeletionBlockSvc.assertNoneOpen(userId);
 
     const credentials = await AuthRepo.findByIdWithPasswordHash(userId);
     if (credentials?.password && !isGoogleSsoAccount(credentials)) {
