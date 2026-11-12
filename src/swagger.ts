@@ -1,5 +1,6 @@
 import { OAS3Definition } from "swagger-jsdoc";
 import { clientAppPaths } from "./swagger-client-app";
+import { supportPaths, supportSchemas, supportTags } from "./swagger-support";
 import { clientHandoffPaths, clientHandoffSchemas, clientHandoffTags } from "./swagger-client-handoff";
 
 const swaggerSpec: OAS3Definition = {
@@ -398,11 +399,13 @@ const swaggerSpec: OAS3Definition = {
         },
       },
       ...clientHandoffSchemas,
+      ...supportSchemas,
     },
   },
-  tags: clientHandoffTags,
+  tags: [...clientHandoffTags, ...supportTags],
   paths: {
     ...clientHandoffPaths,
+    ...supportPaths,
     // ── Health ────────────────────────────────────────────────────────────
     "/health": {
       get: {

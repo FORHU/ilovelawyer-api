@@ -212,6 +212,26 @@ An event the record neither confirms nor contradicts: a claim only one party mak
 **Corroboration**:
 An independent case document that shows the same event a party or witness asserts. It is what moves such an account from Unverified to Verified. A record's silence (no entry for someone) is never corroboration.
 
+**Support Chat**:
+The client app's automated, Messenger-style help desk (EPIC ilovelawyer-client#120). A named assistant greets the client by first name and walks them through menu cards, buttons and quick replies. It is menu-driven, not AI: typed text is matched against each **Support Flow**'s trigger words, never sent to a model, so it never gives legal advice (ADR 0018) and never spends **Chat Credit**s. It never reads case contents. Clients only, signed in (the Guide drawer's "Contact support") or signed out ("Need help?" on the sign-in and sign-up pages, a reduced menu with no account-reading actions). Everything a client sees comes from the published **Support Content Version**. Lawyers have no Support Chat.
+_Avoid_: "chatbot", "AI assistant", "live chat" (a person only joins through a **Support Ticket**)
+
+**Support Flow**:
+One scripted answer in the Support Chat: a graph of steps (a message, buttons or quick replies that lead to another step, a flow, a link or "Talk to a person", a **Support Action**, or "Did that help?"), plus the trigger words and phrases that suggest it when a client types. A flow is available to signed-in clients, signed-out visitors or both. Admins edit flows in ilovelawyer-admin; the safety copy of an action inside one is fixed and can't be edited. Publishing refuses a flow with an unreachable step, a link to a missing step or flow, an unknown action key, or an account-reading action on a signed-out path. Types: `src/types/support-content.ts`.
+_Avoid_: "script", "intent"
+
+**Support Action**:
+Something the Support Chat does for the client instead of only explaining it: re-check a payment (`CHECK_PAYMENT`), show credits (`SHOW_CREDITS`), show lawyer requests (`SHOW_LAWYER_REQUESTS`), send a password reset (`SEND_PASSWORD_RESET`), send a sign-in code again (`RESEND_CODE`), export data (`EXPORT_MY_DATA`), delete the account (`DELETE_MY_ACCOUNT`) or open a **Support Ticket** (`OPEN_TICKET`). The catalog is fixed in code (`SUPPORT_ACTIONS`): a flow names an action by key, and admins can't change what it does or its safety copy. Each action is signed-in only, signed-out only or both, and says whether it reads the client's account (`readsAccount`); a signed-out flow can't use one that does. Signed-out actions answer the same whether or not the email has an account.
+_Avoid_: "tool", "command"
+
+**Support Ticket**:
+The Support Chat's route to a person, opened only where the bot can't help: after a second "Did that help? No", after two failed keyword matches, or straight away for a refund request, a disputed or double charge, a bug report and a complaint about a lawyer. One unresolved ticket per client; the Support Chat is one continuous conversation, so new messages join it. Statuses `OPEN` (waiting on us) → `ANSWERED` (waiting on the client) → `RESOLVED`; a client reply reopens it and it resolves itself after 7 days `ANSWERED`. Text only, no attachments, so privileged documents stay out of support. It carries the client's name and email, the flow path, the page it was opened from and the case or lawyer request id with its status, never case contents. A signed-out ticket is tied to the visitor's email and answered by email. _Status: contract only (ilovelawyer-api#641)._
+_Avoid_: "support request" (a **Client Request** is a request for a lawyer)
+
+**Support Content Version**:
+The Support Chat's whole content (settings, both menus, every flow) as one immutable JSON snapshot. Admins edit a single draft; Publish validates it and stores it as the next version (`SupportContentVersion`), and clients only ever read the latest one, so editing the draft never changes what they see. Rolling back publishes a copy of an earlier version as a new one, so the history stays linear. Publish and rollback are recorded in the security audit log (`admin.support_content.published` / `.rolled_back`). Version 1 is the bundled seed (`SUPPORT_CONTENT_V1`), published the first time anything reads the content. Admin API: `/api/admin/support/content/*`; clients: `GET /api/client/support/content`; visitors: `GET /api/support/content`.
+_Avoid_: "template", "config"
+
 ## Example dialogue
 
 > **Dev:** "Should logout delete the User's row in the DB?"
