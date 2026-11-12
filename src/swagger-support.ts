@@ -178,6 +178,91 @@ export const supportSchemas: Schemas = {
       isCurrent: { type: "boolean" },
     },
   },
+  SupportDeletionCheck: {
+    type: "object",
+    properties: {
+      blocking: {
+        type: "array",
+        description: "Lawyer requests that stop the account being deleted. Empty means the client can go on.",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            caseId: { type: "string" },
+            caseTitle: { type: "string" },
+            status: { type: "string", description: "As the app shows it (CLAIMED and QUOTED are read off a routed request's claims)" },
+            action: {
+              type: "string",
+              enum: ["WITHDRAW", "END", "REVIEW"],
+              description: "WITHDRAW: POST /client/lawyer-requests/{id}/withdraw. END: POST /client/lawyer-requests/{id}/end. REVIEW: the quote is accepted and awaiting payment; open the request.",
+            },
+          },
+        },
+      },
+      hasPassword: { type: "boolean", description: "False for a Google account: DELETE /users/me and the export take no password" },
+      creditsRemaining: { type: "integer", description: "Chat Credits across the client's active cases, which deletion loses without a refund" },
+    },
+  },
+  SupportActionResult: {
+    description: "The result of a dispatched Support Action. Its shape depends on the key.",
+    oneOf: [
+      {
+        type: "object",
+        title: "CHECK_PAYMENT",
+        properties: {
+          payments: {
+            type: "array",
+            description: "The last 5 payments from the last 30 days, newest first",
+            items: {
+              type: "object",
+              properties: {
+                paymentId: { type: "string" },
+                kind: { type: "string", enum: ["CASE", "TOP_UP"] },
+                status: { type: "string", enum: ["PENDING", "SUCCEEDED", "FAILED"] },
+                amount: { type: "object", properties: { amountMinor: { type: "integer" }, currency: { type: "string" } } },
+                credits: { type: "integer" },
+                caseId: { type: "string", nullable: true },
+                caseTitle: { type: "string", nullable: true },
+                createdAt: { type: "string", format: "date-time" },
+                failureReason: { type: "string", nullable: true },
+              },
+            },
+          },
+        },
+      },
+      {
+        type: "object",
+        title: "SHOW_CREDITS",
+        properties: { cases: { type: "array", items: { type: "object", properties: { caseId: { type: "string" }, title: { type: "string" }, credits: { type: "integer" } } } } },
+      },
+      {
+        type: "object",
+        title: "SHOW_LAWYER_REQUESTS",
+        properties: {
+          requests: {
+            type: "array",
+            description: "The latest 10, newest first",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                caseId: { type: "string" },
+                caseTitle: { type: "string" },
+                status: { type: "string" },
+                expiresAt: { type: "string", format: "date-time", nullable: true, description: "When a routed request lapses (or the client must pick a quote by); null once it isn't waiting" },
+                lawyerName: { type: "string", nullable: true },
+              },
+            },
+          },
+        },
+      },
+      {
+        type: "object",
+        title: "SEND_PASSWORD_RESET",
+        properties: { sent: { type: "boolean" }, reason: { type: "string", enum: ["GOOGLE_ACCOUNT"], description: "Present when nothing was sent because the account signs in with Google (a note saying so is emailed instead)" } },
+      },
+    ],
+  },
   SupportTicketMessage: {
     type: "object",
     properties: {
@@ -334,50 +419,55 @@ export const supportPaths: Paths = {
     },
   },
 
-  // ── Planned: Support Actions (ilovelawyer-api#640) ─────────────────────────────────────────────
+  // ── Support Actions (ilovelawyer-api#640) ──────────────────────────────────────────────────────
   "/client/support/actions/deletion-check": {
     get: {
       tags: [TAG],
       summary: "What blocks deleting the account",
-      description: "Client requests that are REQUESTED, ROUTED, CLAIMED, QUOTED, CONFIRMED or ENGAGED block `DELETE /users/me` (409 OPEN_LAWYER_REQUESTS with the same list). Link each to withdraw (action WITHDRAW) or end (action END) first.",
+      description:
+        "Run this before `DELETE /users/me`. Client requests that are REQUESTED, ROUTED, CLAIMED, QUOTED, CONFIRMED or ENGAGED block deletion (`DELETE /users/me` answers 409 OPEN_LAWYER_REQUESTS with the same `requests`). Link each one: WITHDRAW → POST /client/lawyer-requests/{id}/withdraw, END → POST /client/lawyer-requests/{id}/end, REVIEW → open the request (the quote is accepted and waiting on payment, so there is nothing to withdraw or end yet; pay it, then end it, or let it lapse). CLOSED, EXPIRED and WITHDRAWN don't block.",
       security,
-      ...planned("ilovelawyer-api#640"),
+      ...built("ilovelawyer-api#640"),
       responses: {
-        200: {
-          description: "Blocking requests",
-          content: json({
-            type: "object",
-            properties: {
-              blocking: { type: "array", items: { type: "object", properties: { id: { type: "string" }, caseId: { type: "string" }, caseTitle: { type: "string" }, status: { type: "string" }, action: { type: "string", enum: ["WITHDRAW", "END"] } } } },
-              hasPassword: { type: "boolean", description: "False for a Google account: no password is asked for" },
-              creditsRemaining: { type: "integer" },
-            },
-          }),
-        },
+        200: { description: "Blocking requests, whether a password is needed, and credits that would be lost", content: json(ref("SupportDeletionCheck")) },
+        401: err("No session"),
+        403: err("Not a client account (CLIENT_ACCOUNT_ONLY)"),
       },
     },
   },
   "/client/support/actions/{key}": {
     post: {
       tags: [TAG],
-      summary: "Run a Support Action",
+      summary: "Run a Support Action for the signed-in client",
       description:
-        "CHECK_PAYMENT { payments: [{ paymentId, kind, status, amount, credits, caseId, caseTitle, createdAt, failureReason }] } (re-checks PENDING ones with Stripe). SHOW_CREDITS { cases: [{ caseId, title, credits }] }. SHOW_LAWYER_REQUESTS { requests: [{ id, caseId, caseTitle, status, expiresAt, lawyerName? }] }. SEND_PASSWORD_RESET { sent: boolean, reason?: 'GOOGLE_ACCOUNT' }. EXPORT_MY_DATA, DELETE_MY_ACCOUNT and OPEN_TICKET are client-direct: 400 ACTION_NOT_DISPATCHABLE. Call POST /users/me/export, DELETE /users/me and POST /client/support/ticket/messages.",
+        "CHECK_PAYMENT, SHOW_CREDITS, SHOW_LAWYER_REQUESTS and SEND_PASSWORD_RESET. The result's shape is fixed per key (SupportActionResult). CHECK_PAYMENT re-checks a PENDING Stripe payment with Stripe and settles it if it has moved on. EXPORT_MY_DATA, DELETE_MY_ACCOUNT and OPEN_TICKET are client-direct: 400 ACTION_NOT_DISPATCHABLE. Call POST /users/me/export, DELETE /users/me (after the deletion check) and POST /client/support/ticket/messages. Any other key is 404 UNKNOWN_ACTION.",
       security,
-      ...planned("ilovelawyer-api#640"),
+      ...built("ilovelawyer-api#640"),
       parameters: [{ name: "key", in: "path", required: true, schema: { type: "string", enum: ["CHECK_PAYMENT", "SHOW_CREDITS", "SHOW_LAWYER_REQUESTS", "SEND_PASSWORD_RESET"] } }],
-      responses: { 200: { description: "The action's result (shape per key)", content: json({ type: "object" }) }, 400: err("ACTION_NOT_DISPATCHABLE") },
+      responses: {
+        200: { description: "The action's result", content: json(ref("SupportActionResult")) },
+        400: err("ACTION_NOT_DISPATCHABLE"),
+        401: err("No session"),
+        403: err("Not a client account (CLIENT_ACCOUNT_ONLY)"),
+        404: err("UNKNOWN_ACTION"),
+      },
     },
   },
   "/support/actions/{key}": {
     post: {
       tags: [TAG],
-      summary: "Run a signed-out Support Action",
-      description: "SEND_PASSWORD_RESET or RESEND_CODE for a visitor. Always answers 200 { ok: true }, whether or not the email has an account. Rate-limited per IP and per email.",
-      ...planned("ilovelawyer-api#640"),
+      summary: "Run a Support Action when signed out",
+      description:
+        "SEND_PASSWORD_RESET (a reset link) or RESEND_CODE (a new sign-in code) for the email given. Always answers 200 { ok: true }, whether or not the email has an account, and without waiting for the email, so neither the answer nor its timing says which. Rate-limited per IP and per email (429 for any address). Any other key is 404.",
+      ...built("ilovelawyer-api#640"),
       parameters: [{ name: "key", in: "path", required: true, schema: { type: "string", enum: ["SEND_PASSWORD_RESET", "RESEND_CODE"] } }],
-      requestBody: { required: true, content: json({ type: "object", required: ["email"], properties: { email: { type: "string" } } }) },
-      responses: { 200: { description: "Always { ok: true }", content: json({ type: "object", properties: { ok: { type: "boolean" } } }) }, 429: err("Rate limited") },
+      requestBody: { required: true, content: json({ type: "object", required: ["email"], properties: { email: { type: "string", format: "email" } } }) },
+      responses: {
+        200: { description: "Always { ok: true }", content: json({ type: "object", properties: { ok: { type: "boolean", enum: [true] } } }) },
+        400: err("Not an email address"),
+        404: err("UNKNOWN_ACTION"),
+        429: err("Rate limited"),
+      },
     },
   },
 
