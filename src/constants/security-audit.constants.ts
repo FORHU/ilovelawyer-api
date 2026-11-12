@@ -84,6 +84,10 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.case_area.created",
   "admin.case_area.updated",
   "admin.case_area.deleted",
+  // The Support Chat's content: what clients are told. Saving the draft changes nothing for clients.
+  "admin.support_content.draft_updated",
+  "admin.support_content.published",
+  "admin.support_content.rolled_back",
   "admin.model_settings.updated",
   "admin.jurisdiction_module.toggled",
   "admin.lawyer.verified",
@@ -158,6 +162,7 @@ export type SecurityAuditTargetType =
   | "client_promo"
   | "practice_area"
   | "case_area"
+  | "support_content"
   | "quotation_payment"
   | "lawyer_exit"
   | "wallet"
@@ -247,6 +252,9 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.case_area.created": "Client case type added",
   "admin.case_area.updated": "Client case type changed",
   "admin.case_area.deleted": "Client case type deleted",
+  "admin.support_content.draft_updated": "Support Chat draft saved",
+  "admin.support_content.published": "Support Chat content published",
+  "admin.support_content.rolled_back": "Support Chat content rolled back",
   "admin.model_settings.updated": "AI model setting changed",
   "admin.jurisdiction_module.toggled": "Jurisdiction module switched",
   "admin.lawyer.verified": "Lawyer's client-request profile verified by ilovelawyer",

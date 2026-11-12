@@ -12,6 +12,7 @@ import LawyerPricingAdminCtrl from "../controllers/lawyer-pricing-admin.controll
 import PayoutAdminCtrl from "../controllers/payout-admin.controller";
 import PracticeAreaAdminCtrl from "../controllers/practice-area-admin.controller";
 import CaseAreaAdminCtrl from "../controllers/case-area-admin.controller";
+import SupportContentAdminCtrl from "../controllers/support-content-admin.controller";
 
 const router = express.Router();
 
@@ -44,6 +45,15 @@ router.post("/practice-areas", asyncHandler(PracticeAreaAdminCtrl.create));
 router.post("/practice-areas/reorder", asyncHandler(PracticeAreaAdminCtrl.reorder));
 router.patch("/practice-areas/:id", asyncHandler(PracticeAreaAdminCtrl.update));
 router.delete("/practice-areas/:id", asyncHandler(PracticeAreaAdminCtrl.delete));
+// The Support Chat's content: one draft, published as immutable versions (SupportContentSvc).
+router.get("/support/content/draft", asyncHandler(SupportContentAdminCtrl.getDraft));
+router.put("/support/content/draft", asyncHandler(SupportContentAdminCtrl.updateDraft));
+router.post("/support/content/draft/validate", asyncHandler(SupportContentAdminCtrl.validateDraft));
+router.post("/support/content/publish", asyncHandler(SupportContentAdminCtrl.publish));
+router.get("/support/content/versions", asyncHandler(SupportContentAdminCtrl.listVersions));
+router.get("/support/content/versions/:version", asyncHandler(SupportContentAdminCtrl.getVersion));
+router.post("/support/content/versions/:version/rollback", asyncHandler(SupportContentAdminCtrl.rollback));
+router.get("/support/actions", asyncHandler(SupportContentAdminCtrl.listActions));
 
 // The kinds of problem a client's case can be about (CaseAreaSvc).
 router.get("/case-areas", asyncHandler(CaseAreaAdminCtrl.list));

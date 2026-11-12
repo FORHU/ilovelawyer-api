@@ -10,6 +10,7 @@ import ClientRequestCtrl from "../controllers/client-request.controller";
 import ClientDictationCtrl from "../controllers/client-dictation.controller";
 import ClientLawyerCtrl from "../controllers/client-lawyer.controller";
 import ClientGmailCtrl from "../controllers/client-gmail.controller";
+import SupportContentCtrl from "../controllers/support-content.controller";
 
 // A spoken answer is a short clip (180s at most in the app); in memory, since it goes straight to S3
 // for the Transcribe job.
@@ -48,6 +49,9 @@ const router = express.Router();
 router.use(validSession, asyncHandler(requireClientAccount));
 
 router.get("/pricing", asyncHandler(ClientCaseCtrl.pricing));
+
+// The Support Chat's published content for a signed-in client (SupportContentSvc).
+router.get("/support/content", asyncHandler(SupportContentCtrl.forClient));
 router.post("/payments/top-up/quote", asyncHandler(ClientCaseCtrl.quoteTopUp));
 // Removed with pay per case: 410 for a client app still open from before.
 router.post("/payments/case/quote", asyncHandler(ClientCaseCtrl.casePaymentGone));
