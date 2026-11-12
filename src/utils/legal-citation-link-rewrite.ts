@@ -6,7 +6,7 @@ import { TenantCode } from "../types/tenant-code";
 import type { RelatedCase } from "./chatWonder";
 import { normalizeUkLegislationUrl, resolveUkCitationToLaw, resolveUkLegislationTitleToLaw } from "./uk-citation-resolution";
 import logger from "./logger";
-import { libraryHref as buildLibraryHref, legislationSection } from "./law-library-href";
+import { hasLibrary, libraryHref as buildLibraryHref, legislationSection } from "./law-library-href";
 
 export interface CitationRewriteResult {
   content: string;
@@ -97,8 +97,15 @@ function ukHostKind(href: string): "legislation" | "caselaw" | null {
 }
 
 export function isKnownLawHost(href: string, tenantCode: TenantCode): boolean {
-  if (tenantCode === "UK") return ukHostKind(href) !== null;
-  return hostnameOf(href) === "juris.ph";
+  switch (tenantCode) {
+    case "UK":
+      return ukHostKind(href) !== null;
+    case "PH":
+      return hostnameOf(href) === "juris.ph";
+    default:
+      // No Library to link into yet (KR): no host is ours, so links are left as written.
+      return false;
+  }
 }
 
 /** UK: fast path is an exact `Law.jurisSourceId` lookup (pinpoint-normalized for legislation);
@@ -188,6 +195,9 @@ export async function rewriteLegalCitationLinks(
   tenantCode: TenantCode,
 ): Promise<CitationRewriteResult> {
   try {
+    // A tenant with no Library (KR, for now) has nothing to rewrite into: never run another
+    // tenant's resolver over its links.
+    if (!hasLibrary(tenantCode)) return { content, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 };
     const mdMatches = [...content.matchAll(MD_LINK_RE)];
     const htmlMatches = [...content.matchAll(HTML_LINK_RE)];
     if (mdMatches.length === 0 && htmlMatches.length === 0) {
@@ -293,6 +303,8 @@ export async function resolveRelatedCaseLibraryLinks(
     url: null,
     title: hasOwnLabel(item) ? item.title : fallbackTitle(item.url!),
   });
+  // No Library to point into (KR, for now): keep the source's own links rather than strip them.
+  if (!hasLibrary(tenantCode)) return items;
 
   return Promise.all(
     items.map(async (item) => {

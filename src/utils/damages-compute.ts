@@ -17,7 +17,7 @@ export interface DamageEntryInput {
 }
 
 export interface DamagesSummary {
-  currency: "PHP" | "GBP";
+  currency: "PHP" | "GBP" | "KRW";
   /** Sum of every accepted entry's amount. */
   total: number;
   /** The part of `total` already awarded or received. */
@@ -34,8 +34,11 @@ export interface DamagesSummary {
   suggestedTotal: number;
 }
 
-export function currencyForTenant(tenantCode: TenantCode | null | undefined): "PHP" | "GBP" {
-  return tenantCode === "UK" ? "GBP" : "PHP";
+const TENANT_CURRENCY: Record<TenantCode, DamagesSummary["currency"]> = { PH: "PHP", UK: "GBP", KR: "KRW" };
+
+/** The tenant's own currency; PHP when the tenant isn't known (a legacy tenant-less workspace). */
+export function currencyForTenant(tenantCode: TenantCode | null | undefined): DamagesSummary["currency"] {
+  return tenantCode ? TENANT_CURRENCY[tenantCode] : "PHP";
 }
 
 function round2(value: number): number {

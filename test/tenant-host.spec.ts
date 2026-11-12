@@ -33,3 +33,12 @@ describe("originForTenantCode", () => {
     expect(originForTenantCode("UK", ["http://localhost:3002", "http://ph.ilovelawyer.local:3002"])).to.equal("http://localhost:3002");
   });
 });
+
+describe("originForTenantCode (KR)", () => {
+  it("gives KR accounts their own site's links", () => {
+    const origins = ["http://localhost:3002", "http://uk.ilovelawyer.local:3002", "http://kr-dev.ilovelawyer.local:3002"];
+    expect(originForTenantCode("KR", origins)).to.equal("http://kr-dev.ilovelawyer.local:3002");
+    const prod = ["https://ph.ilovelawyer.com", "https://uk.ilovelawyer.com", "https://kr.ilovelawyer.com"];
+    expect(originForTenantCode("KR", prod)).to.equal("https://kr.ilovelawyer.com");
+  });
+});

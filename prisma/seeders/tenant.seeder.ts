@@ -9,6 +9,7 @@ import { LAWYER_PRICING_DEFAULTS } from "../../src/constants/lawyer-pricing.cons
 const TENANTS = [
   { code: "PH", name: "Philippines" },
   { code: "UK", name: "United Kingdom" },
+  { code: "KR", name: "South Korea" },
 ] as const;
 
 export async function seedTenants() {

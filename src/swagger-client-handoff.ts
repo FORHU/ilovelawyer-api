@@ -1857,7 +1857,7 @@ export const clientHandoffPaths: Paths = {
       issue: "quotation payments", built: true,
       summary: "Change a tenant's quotation payment terms",
       description: "Any of platformFeeBps, minPlatformFeeMinor, earningsHoldDays, minWithdrawalMinor, within the limits (400 PAYOUT_SETTING_OUT_OF_RANGE). Reaches new quotes and withdrawals within about a minute; a sent quote keeps its fee. Audited (admin.settings.payout_settings_changed).",
-      parameters: [{ name: "code", in: "path", required: true, schema: { type: "string", enum: ["UK", "PH"] } }],
+      parameters: [{ name: "code", in: "path", required: true, schema: { type: "string", enum: ["UK", "PH", "KR"] } }],
       body: { type: "object", properties: { platformFeeBps: { type: "integer" }, minPlatformFeeMinor: { type: "integer" }, earningsHoldDays: { type: "integer" }, minWithdrawalMinor: { type: "integer" } } },
       responses: { 200: ok("Saved"), 400: err("PAYOUT_SETTING_OUT_OF_RANGE"), 403: err("Not a platform admin"), 404: err("Unknown tenant") },
     }),

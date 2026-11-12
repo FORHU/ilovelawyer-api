@@ -6,7 +6,7 @@ import { CLIENT_URL, USER_APP_URL } from "../config";
 /**
  * Explicit hostname → Tenant code map. No substring/`.includes()` matching — an unrecognized
  * host always resolves to `null`, never guessed at. Keep in sync with the frontend's copy at
- * ilovelawyer-app/apps/web/lib/jurisdiction/resolve-host.ts (two separate deployables, no
+ * ilovelawyer-app/apps/web/lib/tenant-code/resolve-host.ts (two separate deployables, no
  * shared package between them).
  *
  * Three host conventions are recognized for local dev, all mapping to the same Tenant code:
@@ -34,6 +34,15 @@ const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "uk-local.ilovelawyer.com": "UK",
   "uk.ilovelawyer": "UK",
   "uk.localhost": "UK",
+  // Korea: prod kr.ilovelawyer.com, hosted dev kr-dev.ilovelawyer.com, local
+  // http://kr-dev.ilovelawyer.local:3002 — plus the same extra dev forms PH and UK have.
+  "kr.ilovelawyer.com": "KR",
+  "kr-dev.ilovelawyer.com": "KR",
+  "kr.ilovelawyer.local": "KR",
+  "kr-dev.ilovelawyer.local": "KR",
+  "kr-local.ilovelawyer.com": "KR",
+  "kr.ilovelawyer": "KR",
+  "kr.localhost": "KR",
   // The client app (ilovelawyer.com, app.ilovelawyer.com) is deliberately absent: one domain
   // serves every region, so its host never names a Tenant. Client accounts get
   // CLIENT_TENANT_CODE instead (AuthSvc.signupTenantCode).

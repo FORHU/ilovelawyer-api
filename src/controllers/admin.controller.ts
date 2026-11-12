@@ -144,7 +144,7 @@ export default class AdminCtrl {
     return res.status(200).json(user);
   }
 
-  /** PATCH /api/admin/users/:id/tenant — body { tenantCode: "PH" | "UK" }. */
+  /** PATCH /api/admin/users/:id/tenant — body { tenantCode: "PH" | "UK" | "KR" }. */
   static async changeUserTenant(req: Request, res: Response) {
     const { error, value } = updateUserTenantSchema.validate(req.body ?? {});
     if (error) throw new HttpError(error.message, 400);

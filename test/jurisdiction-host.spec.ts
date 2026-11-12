@@ -55,3 +55,16 @@ describe("resolveTenantCodeFromRequest", () => {
     expect(resolveTenantCodeFromRequest(requestWithOrigin("https://ilovelawyer.com"))).to.equal(null);
   });
 });
+
+describe("KR hosts", () => {
+  it("resolves the three KR hosts: prod, hosted dev and local", () => {
+    expect(resolveTenantCodeFromHost("kr.ilovelawyer.com")).to.equal("KR");
+    expect(resolveTenantCodeFromHost("kr-dev.ilovelawyer.com")).to.equal("KR");
+    expect(resolveTenantCodeFromHost("kr-dev.ilovelawyer.local:3002")).to.equal("KR");
+  });
+
+  it("resolves a KR request from its Origin header", () => {
+    expect(resolveTenantCodeFromRequest(requestWithOrigin("http://kr-dev.ilovelawyer.local:3002"))).to.equal("KR");
+    expect(resolveTenantCodeFromRequest(requestWithOrigin("https://kr.ilovelawyer.com"))).to.equal("KR");
+  });
+});

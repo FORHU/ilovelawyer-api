@@ -2,6 +2,7 @@ import Joi from "joi";
 import { LAWYER_REJECTION_REASONS } from "../services/lawyer-verification.service";
 import { LAWYER_VERIFICATION_STATUSES, UK_JURISDICTIONS } from "../types/client-handoff";
 import { LAWYER_COUNTRIES } from "../constants/lawyer-application.constants";
+import { TENANT_CODES } from "../types/tenant-code";
 
 export const listUsersSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -75,7 +76,7 @@ export const rejectLawyerSchema = Joi.object({
     .when("reason", { is: "OTHER", then: Joi.required(), otherwise: Joi.optional() }),
 });
 
-export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid("PH", "UK").required() });
+export const updateUserTenantSchema = Joi.object({ tenantCode: Joi.string().valid(...TENANT_CODES).required() });
 
 // strict(): only a real JSON boolean — "true"/"false"/1/0 are rejected, not coerced. At least one
 // of the two independent settings groups (signup auto-approve, account top-up fee) must be

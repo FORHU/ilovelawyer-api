@@ -141,9 +141,11 @@ describe("AdminSvc.changeTenant", () => {
 });
 
 describe("updateUserTenantSchema", () => {
-  it("accepts PH and UK only", () => {
+  it("accepts the known tenants only (PH, UK, KR)", () => {
     expect(updateUserTenantSchema.validate({ tenantCode: "PH" }).error).to.equal(undefined);
     expect(updateUserTenantSchema.validate({ tenantCode: "UK" }).error).to.equal(undefined);
+    expect(updateUserTenantSchema.validate({ tenantCode: "KR" }).error).to.equal(undefined);
+    expect(updateUserTenantSchema.validate({ tenantCode: "kr" }).error).to.exist;
     expect(updateUserTenantSchema.validate({ tenantCode: "US" }).error).to.exist;
     expect(updateUserTenantSchema.validate({ tenantCode: null }).error).to.exist;
     expect(updateUserTenantSchema.validate({}).error).to.exist;

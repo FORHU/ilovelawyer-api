@@ -53,7 +53,7 @@ const LIBRARY_LINK_RE = /\[((?:[^\[\]]|\[[^\]]*\])*)\]\((\/homepage\/library\/la
 /** Every distinct Library link in a reply's text, first label wins. Links whose category isn't one of
  * the tenant's wire categories are ignored. */
 export function extractLibraryLinks(content: string, tenantCode: TenantCode): LibraryLink[] {
-  const byWire = Object.fromEntries(Object.entries(WIRE_CATEGORY[tenantCode]).map(([cat, wire]) => [wire, cat as LawCategory]));
+  const byWire = Object.fromEntries(Object.entries(WIRE_CATEGORY[tenantCode] ?? {}).map(([cat, wire]) => [wire, cat as LawCategory]));
   const seen = new Map<string, LibraryLink>();
   for (const m of content.matchAll(LIBRARY_LINK_RE)) {
     const href = m[2];
