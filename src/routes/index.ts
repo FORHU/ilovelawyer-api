@@ -41,6 +41,7 @@ import clientRequestRoute from "./client-request.route";
 import practiceAreaRoute from "./practice-area.route";
 import lawyerMatchingRoute from "./lawyer-matching.route";
 import intakeCaseRoute from "./intake-case.route";
+import supportRoute from "./support.route";
 
 const router = express.Router();
 
@@ -104,5 +105,7 @@ router.use("/client", clientRoute);
 router.use("/client-requests", clientRequestRoute);
 // Chat Wonder's intake persona: service-to-service, api-key guarded (no user session).
 router.use("/intake-cases", intakeCaseRoute);
+// The Support Chat for visitors who are not signed in.
+router.use("/support", supportRoute);
 
 export default router;

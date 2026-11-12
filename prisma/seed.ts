@@ -4,6 +4,7 @@ import { seedTenants } from "./seeders/tenant.seeder";
 import { seedScreenPresets } from "./seeders/screen-preset-grouped.seeder";
 import { seedPracticeAreas } from "./seeders/practice-area.seeder";
 import { seedCaseAreas } from "./seeders/case-area.seeder";
+import { seedSupportContent } from "./seeders/support-content.seeder";
 
 // Runs automatically after `prisma migrate reset` (see package.json's `prisma.seed`),
 // or on demand via `npm run prisma:seed`. Each seeder is independently idempotent —
@@ -14,6 +15,7 @@ async function main() {
   await seedScreenPresets();
   await seedCaseAreas();
   await seedPracticeAreas();
+  await seedSupportContent();
 }
 
 main()
