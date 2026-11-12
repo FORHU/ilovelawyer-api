@@ -841,6 +841,11 @@ const swaggerSpec: OAS3Definition = {
         security: [{ bearerAuth: [] }],
         responses: {
           204: { description: "Account deleted" },
+          409: {
+            description:
+              "OPEN_LAWYER_REQUESTS (client accounts): a lawyer request is REQUESTED, ROUTED, CLAIMED, QUOTED, CONFIRMED or ENGAGED. `requests` lists them, each with the `action` to take first (see GET /client/support/actions/deletion-check). Also 409 when deletion is already scheduled.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+          },
           401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
