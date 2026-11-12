@@ -19,7 +19,7 @@ import * as chatWonder from "../src/utils/chatWonder";
 import prisma from "../src/lib/prisma";
 import DocumentRepo from "../src/repositories/document.repository";
 import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
-import DocumentExtractionSvc, { EMBED_ROUND_CHUNKS } from "../src/services/document-extraction.service";
+import DocumentExtractionSvc, { EMBED_ROUND_CHUNKS, imageWithoutTextPlaceholder } from "../src/services/document-extraction.service";
 
 interface Emitted {
   userId: string;
@@ -51,6 +51,7 @@ describe("DocumentExtractionSvc socket events", () => {
     extractPagesFromFile: (textExtraction as any).extractPagesFromFile,
     embedTexts: (embedding as any).embedTexts,
     categorizeDocument: (chatWonder as any).categorizeDocument,
+    describeImage: (chatWonder as any).describeImage,
     transaction: (prisma as any).$transaction,
     deleteByDocument: DocumentChunkRepo.deleteByDocument,
     insertMany: DocumentChunkRepo.insertMany,
@@ -95,6 +96,7 @@ describe("DocumentExtractionSvc socket events", () => {
     (textExtraction as any).extractPagesFromFile = async () => ({ pages, method: "text", ocrAttempted: false });
     (embedding as any).embedTexts = async (texts: string[]) => texts.map(() => [0.1, 0.2]);
     (chatWonder as any).categorizeDocument = async () => "Contract";
+    (chatWonder as any).describeImage = async () => null;
     storageCalls = [];
     insertedIndexes = [];
     (prisma as any).$transaction = async (fn: (tx: unknown) => Promise<unknown>) => {
@@ -123,6 +125,7 @@ describe("DocumentExtractionSvc socket events", () => {
     (textExtraction as any).extractPagesFromFile = originals.extractPagesFromFile;
     (embedding as any).embedTexts = originals.embedTexts;
     (chatWonder as any).categorizeDocument = originals.categorizeDocument;
+    (chatWonder as any).describeImage = originals.describeImage;
     (prisma as any).$transaction = originals.transaction;
     DocumentChunkRepo.deleteByDocument = originals.deleteByDocument;
     DocumentChunkRepo.insertMany = originals.insertMany;
@@ -163,9 +166,10 @@ describe("DocumentExtractionSvc socket events", () => {
     expect(statusWrites).to.deep.equal(["FAILED"]);
   });
 
-  it("marks a photo with no readable text READY, indexed by its name, instead of failing it", async () => {
+  it("marks a photo with no readable text READY, indexed by its AI vision description, instead of failing it", async () => {
     doc = { ...baseDoc, name: "car_accident.jpg", mimeType: "image/jpeg" } as any;
     pages = [{ pageNumber: 1, text: "" }];
+    (chatWonder as any).describeImage = async () => "A silver sedan with front-end damage, parked on a residential street.";
     const embedded: string[] = [];
     (embedding as any).embedTexts = async (texts: string[]) => {
       embedded.push(...texts);
@@ -176,7 +180,7 @@ describe("DocumentExtractionSvc socket events", () => {
     expect(emitted.map((e) => e.event)).to.deep.equal(["document:started", "document:ready"]);
     expect(statusWrites).to.include("READY");
     expect(statusWrites).to.not.include("FAILED");
-    expect(embedded.join(" ")).to.include('Image "car_accident.jpg"');
+    expect(embedded.join(" ")).to.include("A silver sedan with front-end damage");
   });
 
   it("still fails a PDF with no text, which is a scan OCR couldn't read", async () => {
@@ -184,6 +188,88 @@ describe("DocumentExtractionSvc socket events", () => {
     pages = [{ pageNumber: 1, text: "" }];
     await DocumentExtractionSvc.process("doc1");
     expect(statusWrites).to.deep.equal(["FAILED"]);
+  });
+
+  it("falls back to a vision description when an image upload has no OCR text, and resolves READY", async () => {
+    doc = { ...baseDoc, name: "car_accident.jpg", mimeType: "image/jpeg" };
+    pages = [{ pageNumber: 1, text: "" }]; // Textract found nothing
+    let describeArgs: unknown[] = [];
+    (chatWonder as any).describeImage = async (...args: unknown[]) => {
+      describeArgs = args;
+      return "A silver sedan with front-end damage, parked on a residential street.";
+    };
+
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(describeArgs[0]).to.equal("k/contract.pdf"); // baseDoc's s3Key, spread into this doc
+    expect(statusWrites).to.include("READY");
+    expect(emitted.map((e) => e.event)).to.deep.equal(["document:started", "document:ready"]);
+  });
+
+  it("falls back to the generic placeholder (and still resolves READY) when the vision fallback also returns nothing", async () => {
+    doc = { ...baseDoc, name: "car_accident.jpg", mimeType: "image/jpeg" };
+    pages = [{ pageNumber: 1, text: "" }];
+    (chatWonder as any).describeImage = async () => null;
+    const embedded: string[] = [];
+    (embedding as any).embedTexts = async (texts: string[]) => {
+      embedded.push(...texts);
+      return texts.map(() => [0.1, 0.2]);
+    };
+
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(statusWrites).to.include("READY");
+    expect(statusWrites).to.not.include("FAILED");
+    expect(embedded.join(" ")).to.include(imageWithoutTextPlaceholder("car_accident.jpg"));
+  });
+
+  it("never calls the vision fallback for a non-image document with empty OCR text", async () => {
+    pages = [{ pageNumber: 1, text: "   " }]; // baseDoc is application/pdf
+    let called = false;
+    (chatWonder as any).describeImage = async () => { called = true; return "should not happen"; };
+
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(called).to.equal(false);
+    expect(statusWrites).to.deep.equal(["FAILED"]);
+  });
+
+  it("keeps a client-supplied category on a vision-fallback document, same as any other", async () => {
+    doc = { ...baseDoc, name: "car_accident.jpg", mimeType: "image/jpeg", category: "Evidence" };
+    pages = [{ pageNumber: 1, text: "" }];
+    (chatWonder as any).describeImage = async () => "A silver sedan with front-end damage.";
+
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(emitted[1].event).to.equal("document:ready");
+    expect(emitted[1].payload.category).to.equal("Evidence");
+  });
+
+  it("skips the vision fallback for an image over VISION_FALLBACK_MAX_BYTES without calling chat-wonder, falling back to the placeholder and resolving READY", async () => {
+    const { VISION_FALLBACK_MAX_BYTES } = await import("../src/utils/ocr");
+    doc = { ...baseDoc, name: "huge.jpg", mimeType: "image/jpeg" };
+    (s3 as any).downloadObjectToTempFile = async () => ({
+      path: "/tmp/doc1",
+      bytes: VISION_FALLBACK_MAX_BYTES + 1,
+      cleanup: async () => {
+        cleanups += 1;
+      },
+    });
+    pages = [{ pageNumber: 1, text: "" }];
+    let called = false;
+    (chatWonder as any).describeImage = async () => { called = true; return "should not happen"; };
+    const embedded: string[] = [];
+    (embedding as any).embedTexts = async (texts: string[]) => {
+      embedded.push(...texts);
+      return texts.map(() => [0.1, 0.2]);
+    };
+
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(called).to.equal(false);
+    expect(statusWrites).to.include("READY");
+    expect(statusWrites).to.not.include("FAILED");
+    expect(embedded.join(" ")).to.include(imageWithoutTextPlaceholder("huge.jpg"));
   });
 
   it("emits document:failed when extraction throws a non-rate-limit error", async () => {

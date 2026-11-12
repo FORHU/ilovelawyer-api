@@ -20,3 +20,6 @@ prisma/seeders/adhoc-*.ts
 # role backfill rollback files (user ids)
 /backups
 mirror-api/
+
+# Local scratch git worktrees (superpowers subagent-driven-development)
+.worktrees/
