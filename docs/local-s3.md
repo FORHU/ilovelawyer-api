@@ -26,10 +26,10 @@ AWS_S3_ENDPOINT=http://localhost:4566
 AWS_ACCESS_KEY=test
 AWS_SECRET_ACCESS_KEY=test
 AWS_S3_BUCKET=ilovelawyer-local
-AWS_REGION=us-east-1
+AWS_REGION=ap-southeast-1
 ```
 
-Leave `CLOUDFRONT_URL` **unset**. `s3UrlForKey` (`src/utils/s3.ts`) checks `CLOUDFRONT_URL` before `AWS_S3_ENDPOINT` — if both are set, raw file URLs point at your real CloudFront distribution for a key that only exists in LocalStack, which 404s. `test`/`test` are LocalStack's conventional dummy credentials (it doesn't actually check them); `AWS_REGION` just needs to match whatever `DEFAULT_REGION` your compose setup is using so the SDK signs requests the same way LocalStack expects.
+Leave `CLOUDFRONT_URL` **unset**. `s3UrlForKey` (`src/utils/s3.ts`) checks `CLOUDFRONT_URL` before `AWS_S3_ENDPOINT` — if both are set, raw file URLs point at your real CloudFront distribution for a key that only exists in LocalStack, which 404s. `test`/`test` are LocalStack's conventional dummy credentials (it doesn't actually check them). Use `ap-southeast-1` for `AWS_REGION`, matching `docker-compose.yml`'s `DEFAULT_REGION` default — LocalStack keeps queues/buckets per region, so a mismatch here is what silently breaks SQS (see the comment in `docker/localstack-init/ready-create-queues.sh`), not just S3.
 
 ### 2. Start it
 

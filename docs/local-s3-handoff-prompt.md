@@ -18,9 +18,9 @@ Do this:
    AWS_ACCESS_KEY=test
    AWS_SECRET_ACCESS_KEY=test
    AWS_S3_BUCKET=ilovelawyer-local
-   AWS_REGION=us-east-1
+   AWS_REGION=ap-southeast-1
    ```
-4. Make sure `CLOUDFRONT_URL` is unset or commented out. Do not set it alongside `AWS_S3_ENDPOINT` — `s3UrlForKey` in `src/utils/s3.ts` checks `CLOUDFRONT_URL` first, so if both are set, file URLs resolve to a real CloudFront host for a key that only exists in LocalStack, which 404s.
+4. Make sure `CLOUDFRONT_URL` is unset or commented out. Do not set it alongside `AWS_S3_ENDPOINT` — `s3UrlForKey` in `src/utils/s3.ts` checks `CLOUDFRONT_URL` first, so if both are set, file URLs resolve to a real CloudFront host for a key that only exists in LocalStack, which 404s. `AWS_REGION` must be `ap-southeast-1` to match `docker-compose.yml`'s `DEFAULT_REGION` default — LocalStack keeps queues/buckets per region, so a mismatch here silently breaks SQS too, not just S3.
 5. Confirm `docker-compose.yml`'s `localstack` service has `SERVICES=sqs,s3` (not just `sqs`), and that `docker/localstack-init/ready-create-bucket.sh` exists. Both should be there once you're on the right branch/commit (see the note above). If they're missing, stop and tell me — don't try to add them yourself.
 6. Run `docker compose up -d` and confirm `ilovelawyer-localstack` comes up healthy (`docker compose ps`). If you'd previously set up MinIO for this project (an older approach, since replaced), remove any lingering `minio`/`minio-setup` containers or `minio_data` volume — they're no longer part of this setup.
 7. Tell me to restart `npm run dev` myself (the API only reads `.env` at startup) — don't attempt to manage that process for me.
