@@ -7,7 +7,7 @@ import { createWriteStream } from "fs";
 import { mkdtemp, rm, stat } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { AWS_S3_BUCKET, AWS_S3_REGION, CLOUDFRONT_URL, FILE_TOKEN_SECRET } from "../config";
+import { AWS_S3_BUCKET, AWS_S3_ENDPOINT, AWS_S3_REGION, CLOUDFRONT_URL, FILE_TOKEN_SECRET } from "../config";
 import { awsCredentials } from "../lib/aws-client-config";
 import { getRequestContext } from "../lib/request-context";
 import logger from "./logger";
@@ -15,6 +15,9 @@ import logger from "./logger";
 const client = new S3Client({
   region: AWS_S3_REGION,
   ...awsCredentials,
+  // Local dev only (see AWS_S3_ENDPOINT) — redirects at a per-developer MinIO instead of real
+  // AWS S3. forcePathStyle is required for MinIO: it doesn't do virtual-hosted-style buckets.
+  ...(AWS_S3_ENDPOINT ? { endpoint: AWS_S3_ENDPOINT, forcePathStyle: true } : {}),
   // SDK v3 defaults checksums into PutObject signatures; browsers don't send those
   // headers on fetch PUT, so S3 returns 403 which Chrome surfaces as a CORS error.
   requestChecksumCalculation: "WHEN_REQUIRED",
@@ -29,6 +32,9 @@ const PRESIGN_EXPIRY_SECONDS = 3600;
 export function s3UrlForKey(key: string): string {
   if (CLOUDFRONT_URL) {
     return `${CLOUDFRONT_URL.replace(/\/+$/, "")}/${key}`;
+  }
+  if (AWS_S3_ENDPOINT) {
+    return `${AWS_S3_ENDPOINT.replace(/\/+$/, "")}/${AWS_S3_BUCKET}/${key}`;
   }
   return `https://${AWS_S3_BUCKET}.s3.${AWS_S3_REGION}.amazonaws.com/${key}`;
 }

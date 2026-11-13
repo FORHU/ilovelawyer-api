@@ -12,8 +12,9 @@ import logger from "../utils/logger";
 
 const client = new SQSClient({
   ...awsClientConfig,
-  // Only SQS is redirected to LocalStack in dev — S3/Polly/Textract (src/utils/s3.ts,
-  // src/utils/polly.ts, src/utils/ocr.ts) keep talking to real AWS with the same credentials.
+  // SQS is redirected to LocalStack in dev (this client only) — Polly/Textract
+  // (src/utils/polly.ts, src/utils/ocr.ts) keep talking to real AWS with the same credentials.
+  // S3 (src/utils/s3.ts) has its own, separate local redirect (AWS_S3_ENDPOINT, to MinIO).
   ...(AWS_SQS_ENDPOINT ? { endpoint: AWS_SQS_ENDPOINT } : {}),
 });
 
