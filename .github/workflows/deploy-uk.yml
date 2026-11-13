@@ -295,6 +295,8 @@ jobs:
           FREE_CREDIT_USD: ${{ vars.FREE_CREDIT_USD }}
           MAX_CASES_PER_ACCOUNT: ${{ vars.MAX_CASES_PER_ACCOUNT }}
           CASE_SPEND_LIMIT_USD: ${{ vars.CASE_SPEND_LIMIT_USD }}
+          # Cloudflare Turnstile secret for the signed-out Support Ticket form. Unset: signed-out tickets are refused.
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
         run: |
           set -euo pipefail
           umask 077
@@ -372,6 +374,7 @@ jobs:
           add STRIPE_WEBHOOK_SECRET                    "${STRIPE_WEBHOOK_SECRET:-}"
           add STRIPE_CONNECT_WEBHOOK_SECRET            "${STRIPE_CONNECT_WEBHOOK_SECRET:-}"
           add OPS_ALERT_EMAILS                         "${OPS_ALERT_EMAILS:-}"
+          add TURNSTILE_SECRET_KEY                     "${TURNSTILE_SECRET_KEY:-}"
           add TYPESAFE_DEFAULT_MODEL                   "${TYPESAFE_DEFAULT_MODEL:-}"
           add USE_JEV_PROPOSITION                      "${USE_JEV_PROPOSITION:-}"
           add USE_JEV_VALIDITY                         "${USE_JEV_VALIDITY:-}"
