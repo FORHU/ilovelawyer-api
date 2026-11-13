@@ -69,6 +69,38 @@ services:
       - ./docker/localstack-init:/init:ro
     restart: "no"
 
+  # Per-developer S3 emulator — each developer runs their own instance, so there's no shared
+  # AWS resource in dev (see src/utils/s3.ts's AWS_S3_ENDPOINT override). Console at :9001
+  # (minioadmin/minioadmin).
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: ilovelawyer-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    restart: always
+
+  # One-shot: creates the AWS_S3_BUCKET bucket and makes it anonymously downloadable, so local
+  # presigned/proxy GETs behave like a real bucket without needing read credentials.
+  minio-setup:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: ilovelawyer-minio-setup
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin &&
+      /usr/bin/mc mb --ignore-existing local/${AWS_S3_BUCKET:-ilovelawyer-local} &&
+      /usr/bin/mc anonymous set download local/${AWS_S3_BUCKET:-ilovelawyer-local}
+      "
+    restart: "no"
+
   # Forwards Stripe test-mode webhooks to the API running on this machine (npm run dev), so a
   # payment made locally settles the same way it does when deployed: the platform's events to
   # /api/webhooks/stripe, and lawyers' connected accounts' (payouts) to /api/webhooks/stripe-connect.
@@ -96,3 +128,4 @@ services:
 
 volumes:
   postgres_data:
+  minio_data:
