@@ -14,7 +14,8 @@ const client = new SQSClient({
   ...awsClientConfig,
   // SQS is redirected to LocalStack in dev (this client only) — Polly/Textract
   // (src/utils/polly.ts, src/utils/ocr.ts) keep talking to real AWS with the same credentials.
-  // S3 (src/utils/s3.ts) has its own, separate local redirect (AWS_S3_ENDPOINT, to MinIO).
+  // S3 (src/utils/s3.ts) has its own local redirect (AWS_S3_ENDPOINT) to the same LocalStack
+  // instance, just a different emulated service.
   ...(AWS_SQS_ENDPOINT ? { endpoint: AWS_SQS_ENDPOINT } : {}),
 });
 

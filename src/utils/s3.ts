@@ -15,8 +15,9 @@ import logger from "./logger";
 const client = new S3Client({
   region: AWS_S3_REGION,
   ...awsCredentials,
-  // Local dev only (see AWS_S3_ENDPOINT) — redirects at a per-developer MinIO instead of real
-  // AWS S3. forcePathStyle is required for MinIO: it doesn't do virtual-hosted-style buckets.
+  // Local dev only (see AWS_S3_ENDPOINT) — redirects at a per-developer LocalStack instead of
+  // real AWS S3. forcePathStyle is required for LocalStack: it doesn't do virtual-hosted-style
+  // buckets.
   ...(AWS_S3_ENDPOINT ? { endpoint: AWS_S3_ENDPOINT, forcePathStyle: true } : {}),
   // SDK v3 defaults checksums into PutObject signatures; browsers don't send those
   // headers on fetch PUT, so S3 returns 403 which Chrome surfaces as a CORS error.
