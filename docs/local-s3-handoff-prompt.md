@@ -4,7 +4,9 @@ Paste everything below into a fresh Claude Code (or similar agent) session, open
 
 ---
 
-Set up local S3 for this project using the existing LocalStack container (Docker), so I don't need real AWS credentials or a shared dev bucket to run uploads/downloads locally. The infra and code support for this already exists in this repo (merged to `main`) — you're only wiring up my local environment, not writing new code.
+Set up local S3 for this project using the existing LocalStack container (Docker), so I don't need real AWS credentials or a shared dev bucket to run uploads/downloads locally. The infra and code support for this already exists in this repo — you're only wiring up my local environment, not writing new code.
+
+**As of 2026-11-13 this is on PR #660 (branch `feature/local-s3-localstack`), not yet merged to `main`.** Check which one you're on first; if `main` doesn't have it yet, check out that branch (`git fetch origin && git checkout feature/local-s3-localstack`) before continuing. Once #660 merges, this will just be on `main` and this note no longer applies.
 
 Do this:
 
@@ -19,7 +21,7 @@ Do this:
    AWS_REGION=us-east-1
    ```
 4. Make sure `CLOUDFRONT_URL` is unset or commented out. Do not set it alongside `AWS_S3_ENDPOINT` — `s3UrlForKey` in `src/utils/s3.ts` checks `CLOUDFRONT_URL` first, so if both are set, file URLs resolve to a real CloudFront host for a key that only exists in LocalStack, which 404s.
-5. Confirm `docker-compose.yml`'s `localstack` service has `SERVICES=sqs,s3` (not just `sqs`), and that `docker/localstack-init/ready-create-bucket.sh` exists. Both should already be there since this is merged to `main`. If they're missing, stop and tell me — don't try to add them yourself.
+5. Confirm `docker-compose.yml`'s `localstack` service has `SERVICES=sqs,s3` (not just `sqs`), and that `docker/localstack-init/ready-create-bucket.sh` exists. Both should be there once you're on the right branch/commit (see the note above). If they're missing, stop and tell me — don't try to add them yourself.
 6. Run `docker compose up -d` and confirm `ilovelawyer-localstack` comes up healthy (`docker compose ps`). If you'd previously set up MinIO for this project (an older approach, since replaced), remove any lingering `minio`/`minio-setup` containers or `minio_data` volume — they're no longer part of this setup.
 7. Tell me to restart `npm run dev` myself (the API only reads `.env` at startup) — don't attempt to manage that process for me.
 8. Verify: `docker compose exec localstack awslocal s3 ls s3://ilovelawyer-local` should succeed without error (bucket exists, even if empty).
