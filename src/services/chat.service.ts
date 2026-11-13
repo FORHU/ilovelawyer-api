@@ -2028,7 +2028,7 @@ export default class ChatSvc {
       if (userMessages.length === 0) return;
       const raw = await generateTitleViaWs(
         buildChatRetitlePrompt({
-          jurisdiction: p.tenantCode === "UK" ? "UK" : "Philippine",
+          jurisdiction: RETITLE_JURISDICTION_LABEL[p.tenantCode],
           currentTitle: p.currentTitle,
           userMessages,
           attachmentNames: p.attachmentNames,
@@ -2110,6 +2110,9 @@ type TitleOutcome = "saved" | "unclear" | "smalltalk" | "failed";
 
 /** How many recent user messages the re-title prompt sees — enough for the thread's direction. */
 const RETITLE_MESSAGE_WINDOW = 6;
+
+/** "You maintain the title of a ___ legal consultation": the re-title prompt's jurisdiction. */
+const RETITLE_JURISDICTION_LABEL: Record<TenantCode, string> = { PH: "Philippine", UK: "UK", KR: "South Korean" };
 
 /** A message worth re-checking the title for: two or more real words ("thanks" / "ok" / "asdf"
  * never change what a consultation is about, so they don't cost a model call). */
