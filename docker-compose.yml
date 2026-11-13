@@ -31,19 +31,27 @@ services:
       - redis
     restart: always
 
-  # Per-developer SQS emulator — each developer runs their own instance of this, so there is no
-  # shared AWS resource in dev at all: a message sent by this machine's API can only ever be
-  # received by this same machine's workers (see src/lib/sqs.ts's AWS_SQS_ENDPOINT override).
+  # Per-developer SQS + S3 emulator — each developer runs their own instance of this, so there is
+  # no shared AWS resource in dev at all: a message sent by this machine's API can only ever be
+  # received by this same machine's workers (see src/lib/sqs.ts's AWS_SQS_ENDPOINT override), and
+  # uploads only ever land in this machine's own bucket (see src/utils/s3.ts's AWS_S3_ENDPOINT
+  # override). S3 used to be a separate MinIO container, but both of MinIO's registries
+  # (Docker Hub and Quay) now require a login to pull minio/minio and minio/mc, which made that
+  # setup fail for anyone without a MinIO registry account. LocalStack emulates S3 too, so this
+  # just adds "s3" to the one already-working emulator instead of adding a second one with a new
+  # external dependency.
   localstack:
     image: localstack/localstack:3
     container_name: ilovelawyer-localstack
     environment:
-      - SERVICES=sqs
+      - SERVICES=sqs,s3
       - DEFAULT_REGION=${AWS_REGION:-ap-southeast-1}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-ilovelawyer-local}
     ports:
       - "4566:4566"
     volumes:
       - ./docker/localstack-init/ready-create-queues.sh:/etc/localstack/init/ready.d/create-queues.sh:ro
+      - ./docker/localstack-init/ready-create-bucket.sh:/etc/localstack/init/ready.d/create-bucket.sh:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 5s
@@ -67,38 +75,6 @@ services:
     entrypoint: ["/bin/sh", "/init/create-queues.sh"]
     volumes:
       - ./docker/localstack-init:/init:ro
-    restart: "no"
-
-  # Per-developer S3 emulator — each developer runs their own instance, so there's no shared
-  # AWS resource in dev (see src/utils/s3.ts's AWS_S3_ENDPOINT override). Console at :9001
-  # (minioadmin/minioadmin).
-  minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    container_name: ilovelawyer-minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    volumes:
-      - minio_data:/data
-    restart: always
-
-  # One-shot: creates the AWS_S3_BUCKET bucket and makes it anonymously downloadable, so local
-  # presigned/proxy GETs behave like a real bucket without needing read credentials.
-  minio-setup:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
-    container_name: ilovelawyer-minio-setup
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin &&
-      /usr/bin/mc mb --ignore-existing local/${AWS_S3_BUCKET:-ilovelawyer-local} &&
-      /usr/bin/mc anonymous set download local/${AWS_S3_BUCKET:-ilovelawyer-local}
-      "
     restart: "no"
 
   # Forwards Stripe test-mode webhooks to the API running on this machine (npm run dev), so a
@@ -128,4 +104,3 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:

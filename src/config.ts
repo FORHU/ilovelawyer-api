@@ -212,9 +212,10 @@ export const AWS_S3_REGION = process.env.AWS_S3_REGION || AWS_REGION;
  * dev sets this to http://localhost:4566 (see .env.example) so each developer's own LocalStack
  * instance is the only thing their SQS traffic can ever reach — no shared AWS queue in dev. */
 export const AWS_SQS_ENDPOINT = process.env.AWS_SQS_ENDPOINT || undefined;
-/** Redirects the S3 client (src/utils/s3.ts) at a local emulator (MinIO) instead of real AWS.
- * Left unset in production, which keeps talking to real AWS S3 unchanged. Local dev sets this to
- * http://localhost:9000 (see .env.example) so uploads/downloads never touch a real bucket. */
+/** Redirects the S3 client (src/utils/s3.ts) at a local emulator (LocalStack, same instance as
+ * AWS_SQS_ENDPOINT above) instead of real AWS. Left unset in production, which keeps talking to
+ * real AWS S3 unchanged. Local dev sets this to http://localhost:4566 (see .env.example) so
+ * uploads/downloads never touch a real bucket. */
 export const AWS_S3_ENDPOINT = process.env.AWS_S3_ENDPOINT || undefined;
 // SQS queue URLs — one per background job type, provisioned externally (same convention as
 // AWS_S3_BUCKET above: this app never creates its own AWS infra, only references it).
