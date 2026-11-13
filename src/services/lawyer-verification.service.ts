@@ -33,17 +33,27 @@ const REASON_TEXT: Record<LawyerCountry, Partial<Record<LawyerRejectionReason, s
     ROLL_NOT_FOUND: "We couldn't find your Roll of Attorneys number.",
     NOT_IN_GOOD_STANDING: "The IBP doesn't show you as a member in good standing.",
   },
+  KR: {
+    NAME_MISMATCH: "The name on your profile doesn't match the Korean Bar Association's register.",
+    REGISTRATION_NOT_FOUND: "We couldn't find your Korean Bar Association registration number.",
+    NOT_PRACTISING: "The Korean Bar Association's register doesn't show you as currently practising.",
+  },
 };
 
 /** What approval lets the lawyer do next, for the approval email. */
 const NEXT_STEP: Record<LawyerCountry, string> = {
   UK: "You can now turn on Accept client requests on your Profile page.",
   PH: "Your profile now shows an Approved badge.",
+  KR: "Your profile now shows an Approved badge.",
 };
 
-/** The next step for a lawyer held by verify before plan (PlanGateSvc), who isn't in the app yet. */
-const NEXT_STEP_CHOOSE_PLAN =
-  "You can now choose your plan or start your free trial. Then turn on Accept client requests on your Profile page.";
+/** The next step for a lawyer held by verify before plan (PlanGateSvc), who isn't in the app yet.
+ * Client requests are UK only, so only UK lawyers are pointed at them. */
+const NEXT_STEP_CHOOSE_PLAN: Partial<Record<LawyerCountry, string>> = {
+  UK: "You can now choose your plan or start your free trial. Then turn on Accept client requests on your Profile page.",
+  KR: "You can now choose your plan or start your free trial.",
+};
+const NEXT_STEP_CHOOSE_PLAN_DEFAULT = "You can now choose your plan or start your free trial.";
 
 const SIGNED_OUT_NOTE = "If you're signed out on this device, you'll sign in first and then go straight there.";
 const LOGIN_LINK_NOTE = "This button signs you in. It works once and will expire in 7 days.";
@@ -98,6 +108,9 @@ export function toAdminRow(p: AdminLawyerProfileRow) {
             name: org.name,
             regulator: org.firmRegulator,
             registrationNumber: org.firmRegistrationNumber,
+            // KR only.
+            firmType: org.firmType,
+            businessRegistrationNumber: org.businessRegistrationNumber,
             phone: org.phone,
             address: { line1: org.addressLine1, line2: org.addressLine2, city: org.city, postcode: org.postcode },
           }
@@ -180,7 +193,7 @@ export default class LawyerVerificationSvc {
     // A lawyer held by verify before plan stays signed in: the waiting page's poll moves them on to
     // the plan step, and the planGate middleware is what keeps them out of the rest of the API.
     await LawyerVerificationSvc.notify(userId, "lawyer-verification-approved", "Your lawyer application has been approved", async (user) => ({
-      nextStep: choosesPlan ? NEXT_STEP_CHOOSE_PLAN : NEXT_STEP[country],
+      nextStep: choosesPlan ? (NEXT_STEP_CHOOSE_PLAN[country] ?? NEXT_STEP_CHOOSE_PLAN_DEFAULT) : NEXT_STEP[country],
       ...(await nextStepButton(user, country, choosesPlan)),
     }));
 

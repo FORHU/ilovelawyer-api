@@ -29,6 +29,10 @@ export const CLIENT_TERMS_VERSION = "client-2026-10.3";
  * tell PH from UK the way the lawyer app's ph./uk. subdomains do. */
 export const CLIENT_TENANT_CODE: TenantCode = "UK";
 
+/** Sites whose new lawyers wait for their Lawyer Application's approval before choosing a plan
+ * (verify before plan, PlanGateSvc): there the application is the bar check. */
+export const VERIFY_BEFORE_PLAN_TENANTS: ReadonlySet<TenantCode> = new Set(["UK", "KR"]);
+
 /** The Terms version an account of `role` agrees to: the client Terms for USER, the lawyer Terms
  * for everyone else. */
 export function termsVersionFor(role: string): string {

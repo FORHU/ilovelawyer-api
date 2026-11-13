@@ -4,6 +4,7 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import prisma from "../src/lib/prisma";
+import AuthSvc from "../src/services/auth.service";
 import PlanGateSvc, { planGateOf, workspaceOf, type PlanGateFacts } from "../src/services/plan-gate.service";
 import { DAY_MS, PLAN_TRIAL_DAYS } from "../src/constants/plan-trial.constants";
 
@@ -188,5 +189,15 @@ describe("Plan gate (verify before plan)", () => {
       await PlanGateSvc.assertOpenForRequest("never-held-1");
       expect(reads).to.equal(1);
     });
+  });
+});
+
+describe("AuthSvc.verifiesBeforePlan", () => {
+  it("holds new lawyers on UK and KR, where the Lawyer Application is the bar check, but not on PH", () => {
+    expect(AuthSvc.verifiesBeforePlan("LAWYER", "UK")).to.equal(true);
+    expect(AuthSvc.verifiesBeforePlan("LAWYER", "KR")).to.equal(true);
+    expect(AuthSvc.verifiesBeforePlan("LAWYER", "PH")).to.equal(false);
+    expect(AuthSvc.verifiesBeforePlan("LAWYER", null)).to.equal(false);
+    expect(AuthSvc.verifiesBeforePlan("USER", "KR")).to.equal(false);
   });
 });

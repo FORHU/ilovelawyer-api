@@ -36,6 +36,7 @@ const AREAS = [
   area("uk-family", "UK", "Family Law", { caseArea: "FAMILY", sortOrder: 0 }),
   area("uk-retired", "UK", "Retired Law", { isActive: false, sortOrder: 2 }),
   area("ph-civil", "PH", "Civil Law"),
+  area("kr-civil", "KR", "민사 (Civil Law)"),
 ];
 /** How a profile row carries an area. */
 const ref = (id: string) => {
@@ -50,6 +51,7 @@ const complete = { ...ukRegistration, practiceAreas: [ref("uk-employment")] };
 const completePatch = { registration: { country: "UK" as const, ...ukRegistration }, practiceAreaIds: ["uk-employment"] };
 
 const noPh = { rollNumber: null, ibpChapter: null, ibpMembershipNumber: null, mcleNumber: null, mclePeriod: null };
+const noKr = { registrationNumber: null, localBar: null, qualificationRoute: null, qualificationCohort: null, specialties: [], registeredOn: null };
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -59,6 +61,7 @@ function row(overrides: Record<string, unknown> = {}) {
     registrationNumber: null,
     qualifiedJurisdictions: [],
     ph: noPh,
+    kr: noKr,
     practiceAreas: [],
     bio: "",
     languages: [],
@@ -87,6 +90,19 @@ describe("Lawyer Application", () => {
     it("needs the Roll number, IBP chapter and a practice area on PH, and nothing optional", () => {
       expect(missingFields(row({ country: "PH" }))).to.deep.equal(["rollNumber", "ibpChapter", "practiceAreas"]);
       expect(missingFields(row({ country: "PH", ph: { ...noPh, rollNumber: "12345", ibpChapter: "Manila III" }, practiceAreas: [ref("ph-civil")] }))).to.deep.equal([]);
+    });
+
+    it("needs the Korean Bar number, local bar and a practice area on KR, and nothing optional", () => {
+      expect(missingFields(row({ country: "KR" }))).to.deep.equal(["registrationNumber", "localBar", "practiceAreas"]);
+      expect(missingFields(row({ country: "KR", kr: { ...noKr, registrationNumber: "12345", localBar: "SEOUL" }, practiceAreas: [ref("kr-civil")] }))).to.deep.equal([]);
+    });
+
+    it("re-checks a KR profile on the registration number or local bar, not on the optional fields", () => {
+      const kr = { ...noKr, registrationNumber: "12345", localBar: "SEOUL" };
+      const verified = row({ country: "KR", kr, practiceAreas: [ref("kr-civil")], verificationStatus: "VERIFIED" });
+      expect(nextVerificationStatus(verified, { ...verified, kr: { ...kr, specialties: ["가사"], qualificationRoute: "BAR_EXAM", qualificationCohort: 9, registeredOn: "2020-04-01" } })).to.equal("VERIFIED");
+      expect(nextVerificationStatus(verified, { ...verified, kr: { ...kr, localBar: "BUSAN" } })).to.equal("PENDING");
+      expect(nextVerificationStatus(verified, { ...verified, kr: { ...kr, registrationNumber: "54321" } })).to.equal("PENDING");
     });
 
     it("sends a newly complete profile to the admin queue", () => {
@@ -173,6 +189,28 @@ describe("Lawyer Application", () => {
       expect(dto.verification.status).to.equal("PENDING");
       expect(dto.firstConsultationFee).to.deep.equal({ amountMinor: 150000, currency: "PHP" });
       expect(dto.practiceAreas).to.deep.equal([{ id: "ph-civil", name: "Civil Law", isActive: true }]);
+    });
+
+    it("gives a KR lawyer a KR application, in won", async () => {
+      who = { role: "LAWYER", tenantCode: "KR" };
+      expect((await LawyerProfileSvc.get("u1")).registration).to.deep.equal({ country: "KR", ...noKr });
+
+      const dto = await LawyerProfileSvc.update("u1", {
+        registration: { country: "KR", registrationNumber: "12345", localBar: "SEOUL", qualificationRoute: "BAR_EXAM", qualificationCohort: 9, specialties: ["가사", "이혼"], registeredOn: "2020-04-01" },
+        practiceAreaIds: ["kr-civil"],
+        firstConsultationFee: { amountMinor: 100000, currency: "KRW" },
+      });
+      expect(stored.country).to.equal("KR");
+      expect(stored.kr).to.deep.include({ registrationNumber: "12345", localBar: "SEOUL", qualificationCohort: 9, registeredOn: "2020-04-01" });
+      expect(dto.registration).to.deep.include({ country: "KR", specialties: ["가사", "이혼"] });
+      expect(dto.verification.status).to.equal("PENDING");
+      expect(dto.firstConsultationFee).to.deep.equal({ amountMinor: 100000, currency: "KRW" });
+    });
+
+    it("never lets a KR lawyer accept client requests (UK only)", async () => {
+      who = { role: "LAWYER", tenantCode: "KR" };
+      stored = row({ country: "KR", kr: { ...noKr, registrationNumber: "12345", localBar: "SEOUL" }, practiceAreas: [ref("kr-civil")], verificationStatus: "VERIFIED" });
+      expect(await errorOf(LawyerProfileSvc.update("u1", { acceptingRequests: true }))).to.deep.equal({ status: 403, code: "NOT_UK_TENANT" });
     });
 
     it("saves practice areas in the site's order and gives them back by name", async () => {
@@ -295,6 +333,28 @@ describe("Lawyer Application", () => {
       expect(ph.validate({ registration: { country: "PH", rollNumber: "12345", ibpChapter: "Manila III", mclePeriod: "VII" }, practiceAreaIds: ["ph-civil"] }).error).to.equal(undefined);
       expect(ph.validate({ firstConsultationFee: { amountMinor: 100, currency: "GBP" } }).error).to.not.equal(undefined);
       expect(ph.validate({ registration: { country: "UK", regulator: "SRA" } }).error).to.not.equal(undefined);
+    });
+  });
+
+  describe("validation (KR)", () => {
+    const kr = updateLawyerProfileSchema("KR");
+    it("takes the KR registration: digits, a known local bar and route, a cohort, specialties and a past date", () => {
+      const ok = { country: "KR", registrationNumber: "12345", localBar: "SEOUL", qualificationRoute: "JRTI", qualificationCohort: 41, specialties: ["가사법"], registeredOn: "2012-02-01" };
+      expect(kr.validate({ registration: ok, practiceAreaIds: ["kr-civil"], firstConsultationFee: { amountMinor: 100000, currency: "KRW" } }).error).to.equal(undefined);
+      expect(kr.validate({ registration: { ...ok, registrationNumber: "KBA-12345" } }).error).to.not.equal(undefined);
+      expect(kr.validate({ registration: { ...ok, localBar: "TOKYO" } }).error).to.not.equal(undefined);
+      expect(kr.validate({ registration: { ...ok, qualificationRoute: "LAW_SCHOOL" } }).error).to.not.equal(undefined);
+      expect(kr.validate({ registration: { ...ok, qualificationCohort: 0 } }).error).to.not.equal(undefined);
+      expect(kr.validate({ registration: { ...ok, specialties: ["Family 1"] } }).error).to.not.equal(undefined);
+      expect(kr.validate({ registration: { ...ok, registeredOn: "2012-02-30" } }).error).to.not.equal(undefined);
+      expect(kr.validate({ registration: { ...ok, registeredOn: "2999-01-01" } }).error).to.not.equal(undefined);
+    });
+
+    it("takes fees in won only, up to ₩10,000,000, and never another country's registration", () => {
+      expect(kr.validate({ firstConsultationFee: { amountMinor: 10_000_000, currency: "KRW" } }).error).to.equal(undefined);
+      expect(kr.validate({ firstConsultationFee: { amountMinor: 10_000_001, currency: "KRW" } }).error).to.not.equal(undefined);
+      expect(kr.validate({ firstConsultationFee: { amountMinor: 100, currency: "GBP" } }).error).to.not.equal(undefined);
+      expect(kr.validate({ registration: { country: "PH", rollNumber: "1" } }).error).to.not.equal(undefined);
     });
   });
 

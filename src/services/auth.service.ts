@@ -31,6 +31,7 @@ import {
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
   GOOGLE_PHOTO_SIGNUP_WAIT_MS,
   CLIENT_TENANT_CODE,
+  VERIFY_BEFORE_PLAN_TENANTS,
   termsVersionFor,
 } from "../constants";
 import { generateOtpCode, duplicateEmailMessage, isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
@@ -123,10 +124,10 @@ export default class AuthSvc {
     return role === "USER" ? CLIENT_TENANT_CODE : requestTenantCode;
   }
 
-  /** Verify before plan (PlanGateSvc) holds new lawyers on the UK site only: there the Lawyer
-   * Application is the bar check; on PH it's a badge. */
+  /** Verify before plan (PlanGateSvc) holds new lawyers on the UK and KR sites: there the Lawyer
+   * Application is the bar check. On PH it's a badge. */
   static verifiesBeforePlan(role: Role, tenantCode: TenantCode | null): boolean {
-    return role === "LAWYER" && tenantCode === "UK";
+    return role === "LAWYER" && !!tenantCode && VERIFY_BEFORE_PLAN_TENANTS.has(tenantCode);
   }
 
   /** The 409 for a signup whose email already has an account. An email registered in the lawyer

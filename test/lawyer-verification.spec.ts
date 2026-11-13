@@ -40,6 +40,7 @@ type StubProfile = {
   verifiedAt: Date | null;
   qualifiedJurisdictions: string[];
   ph: Record<string, string | null>;
+  kr?: Record<string, unknown>;
 };
 
 const SUBMITTED_AT = new Date("2026-10-20T09:00:00Z");
@@ -81,6 +82,8 @@ function adminRow(p: StubProfile, org: Org = FIRM) {
                 postcode: "EC4Y 1AA",
                 firmRegulator: "SRA",
                 firmRegistrationNumber: "654321",
+                firmType: null,
+                businessRegistrationNumber: null,
               },
             },
           ]
@@ -180,6 +183,8 @@ describe("LawyerVerificationSvc", () => {
         name: "Jane & Co",
         regulator: "SRA",
         registrationNumber: "654321",
+        firmType: null,
+        businessRegistrationNumber: null,
         phone: "020 7946 0000",
         address: { line1: "1 Fleet Street", line2: null, city: "London", postcode: "EC4Y 1AA" },
       });
@@ -313,6 +318,16 @@ describe("LawyerVerificationSvc", () => {
       expect(renderedTemplates[0].vars.nextStep).to.match(/Approved badge/);
     });
 
+    it("approves a KR application with no jurisdictions, and says what approval means there", async () => {
+      current!.country = "KR";
+      current!.kr = { registrationNumber: "12345", localBar: "SEOUL", qualificationRoute: null, qualificationCohort: null, specialties: [], registeredOn: null };
+      const result = await LawyerVerificationSvc.verify("lawyer-1", {}, "admin-1");
+
+      expect(result.profile.registration).to.deep.include({ country: "KR", registrationNumber: "12345", localBar: "SEOUL" });
+      expect(writes[0].confirmed).to.equal(undefined);
+      expect(renderedTemplates[0].vars.nextStep).to.match(/Approved badge/);
+    });
+
     it("keeps the admin's note in the audit trail, not on the profile the lawyer sees", async () => {
       const result = await LawyerVerificationSvc.verify(
         "lawyer-1",
@@ -389,6 +404,16 @@ describe("LawyerVerificationSvc", () => {
 
       const result = await LawyerVerificationSvc.reject("lawyer-1", "ROLL_NOT_FOUND", undefined, "admin-1");
       expect(result.profile.verification.note).to.equal("We couldn't find your Roll of Attorneys number.");
+    });
+
+    it("uses the KR wording on a KR application, and refuses another country's reason there", async () => {
+      current!.country = "KR";
+      current!.kr = { registrationNumber: "12345", localBar: "SEOUL", qualificationRoute: null, qualificationCohort: null, specialties: [], registeredOn: null };
+      expect(await errorOf(LawyerVerificationSvc.reject("lawyer-1", "ROLL_NOT_FOUND", undefined, "admin-1"))).to.equal(400);
+      expect(writes).to.have.length(0);
+
+      const result = await LawyerVerificationSvc.reject("lawyer-1", "REGISTRATION_NOT_FOUND", undefined, "admin-1");
+      expect(result.profile.verification.note).to.equal("We couldn't find your Korean Bar Association registration number.");
     });
 
     it("refuses a PH-only reason on a UK application", async () => {

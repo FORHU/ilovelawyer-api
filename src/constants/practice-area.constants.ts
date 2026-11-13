@@ -78,6 +78,20 @@ export const DEFAULT_PRACTICE_AREAS: Record<LawyerCountry, readonly DefaultPract
     { name: "Agrarian Reform Law", caseArea: "PROPERTY" },
     { name: "Anti-Graft and Corruption Law", caseArea: "PUBLIC_BODIES" },
   ],
+  // Korean first, English in brackets: the KR site opens in Korean. 민사 is the generalist area, so
+  // it takes OTHER. Matching is UK only for now, so these mappings wait for KR client cases.
+  KR: [
+    { name: "민사 (Civil Law)", caseArea: "OTHER" },
+    { name: "형사 (Criminal Law)", caseArea: "CRIMINAL" },
+    { name: "가사·이혼 (Family and Divorce)", caseArea: "FAMILY" },
+    { name: "노동 (Labour and Employment)", caseArea: "EMPLOYMENT" },
+    { name: "부동산·임대차 (Real Estate and Leases)", caseArea: "PROPERTY" },
+    { name: "기업법무 (Corporate Law)", caseArea: "BUSINESS" },
+    { name: "행정 (Administrative Law)", caseArea: "PUBLIC_BODIES" },
+    { name: "지식재산 (Intellectual Property)", caseArea: "INTELLECTUAL_PROPERTY" },
+    { name: "조세 (Tax)", caseArea: "TAX" },
+    { name: "의료 (Medical Law)", caseArea: "MEDICAL" },
+  ],
 };
 
 export const PRACTICE_AREA_NAME_MAX_LENGTH = 100;

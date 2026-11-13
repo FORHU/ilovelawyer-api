@@ -19,7 +19,7 @@ import {
   REQUEST_URGENCIES,
   UK_JURISDICTIONS,
 } from "./types/client-handoff";
-import { LAWYER_COUNTRIES, LAWYER_REJECTION_REASONS } from "./constants/lawyer-application.constants";
+import { KR_LOCAL_BARS, KR_QUALIFICATION_ROUTES, LAWYER_COUNTRIES, LAWYER_REJECTION_REASONS } from "./constants/lawyer-application.constants";
 
 /** A case's areas, by name (CaseArea). */
 const caseAreaNames = (description = "The case's areas by name, one or more"): Schema => ({ type: "array", items: { type: "string" }, description, example: ["Employment"] });
@@ -317,13 +317,26 @@ export const clientHandoffSchemas: Schemas = {
       mclePeriod: { type: "string", nullable: true, maxLength: 20, description: "As on the certificate, e.g. VII" },
     },
   },
+  KrRegistration: {
+    type: "object",
+    description: "The KR part of a Lawyer Application, checked against the Korean Bar Association. registrationNumber and localBar are required to submit.",
+    properties: {
+      country: { type: "string", enum: ["KR"] },
+      registrationNumber: { type: "string", nullable: true, maxLength: 10, description: "대한변호사협회 등록번호, digits" },
+      localBar: { ...enumOf(KR_LOCAL_BARS), nullable: true, description: "소속 지방변호사회" },
+      qualificationRoute: { ...enumOf(KR_QUALIFICATION_ROUTES), nullable: true, description: "BAR_EXAM (변호사시험) or JRTI (사법연수원)" },
+      qualificationCohort: { type: "integer", nullable: true, minimum: 1, description: "The bar exam round or JRTI class" },
+      specialties: { type: "array", items: { type: "string", maxLength: 40 }, maxItems: 10, description: "Specialist areas registered with the Korean Bar Association (전문분야)" },
+      registeredOn: { type: "string", format: "date", nullable: true, description: "Date of registration, YYYY-MM-DD" },
+    },
+  },
   ClientRequestProfile: {
     type: "object",
     description:
-      "A lawyer's Lawyer Application, UK or PH (the lawyer's site). On UK it also holds the settings for receiving client requests; on PH approval only shows a badge for now.",
+      "A lawyer's Lawyer Application, UK, PH or KR (the lawyer's site). On UK it also holds the settings for receiving client requests; on PH approval only shows a badge for now; on KR approval lets a new lawyer in (verify before plan).",
     properties: {
       country: enumOf(LAWYER_COUNTRIES),
-      registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
+      registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration"), ref("KrRegistration")], discriminator: { propertyName: "country" } },
       practiceAreas: { type: "array", items: ref("LawyerPracticeArea"), description: "From the site's list (GET /practice-areas), in its order" },
       bio: { type: "string", maxLength: 1500 },
       languages: { type: "array", items: { type: "string" } },
@@ -1120,7 +1133,7 @@ export const clientHandoffPaths: Paths = {
       body: {
         type: "object",
         properties: {
-          registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
+          registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration"), ref("KrRegistration")], discriminator: { propertyName: "country" } },
           practiceAreaIds: {
             type: "array",
             items: { type: "string" },

@@ -11,7 +11,7 @@ type Workspace = "SOLO" | "FOUNDER" | "MEMBER" | "NONE";
 
 export interface PlanGateFacts {
   role: string;
-  /** Set on a UK lawyer's sign-up (User.verifyBeforePlan). */
+  /** Set on a UK or KR lawyer's sign-up (User.verifyBeforePlan). */
   verifyBeforePlan: boolean;
   workspace: Workspace;
   /** Their Lawyer Application has been verified at least once (LawyerClientProfile.firstVerifiedAt). */
@@ -44,7 +44,7 @@ const NEVER_HELD = new Set<string>();
 const NEVER_HELD_MAX = 50_000;
 
 /**
- * Verify before plan (UK): a lawyer who signed up since it (User.verifyBeforePlan) and works solo or
+ * Verify before plan (UK, KR): a lawyer who signed up since it (User.verifyBeforePlan) and works solo or
  * founded a firm gets into the app only once an admin has verified their Lawyer Application, and
  * then chooses a plan: subscribe, or go on without paying (a solo lawyer's free trial starts then,
  * a founder's firm stays on the unpaid plan). Until then the API refuses everything but what the

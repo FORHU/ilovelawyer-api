@@ -3,11 +3,13 @@ import { OrganizationRole } from "@prisma/client";
 import { LAWYER_REGULATORS } from "../types/client-handoff";
 import {
   DIGITS_PATTERN,
+  KR_FIRM_TYPES,
   NUMBER_MAX_DIGITS,
   PHONE_MAX_DIGITS,
   PHONE_MIN_DIGITS,
   PHONE_PATTERN,
   WORDS_PATTERN,
+  isKrBusinessRegistrationNumber,
 } from "../constants/field-rules";
 
 const slugSchema = Joi.string()
@@ -31,9 +33,18 @@ const phoneSchema = firmText(24)
     return digits < PHONE_MIN_DIGITS || digits > PHONE_MAX_DIGITS ? helpers.message({ custom: `phone must have ${PHONE_MIN_DIGITS} to ${PHONE_MAX_DIGITS} digits` }) : value;
   });
 
-/** A firm's details, all optional. The firm regulator and its number are UK only, and the postcode's
- * shape depends on the site (OrganizationSvc checks both against the tenant). Each field holds only
- * what fits it (see constants/field-rules.ts). */
+/** A KR business registration number (사업자등록번호): 10 digits with a valid check digit. Sent as
+ * digits only; the apps show it as 123-45-67890. */
+const businessRegistrationNumberSchema = firmText(10)
+  .pattern(DIGITS_PATTERN, "digits")
+  .custom((value: string | null, helpers) => {
+    if (!value) return value;
+    return isKrBusinessRegistrationNumber(value) ? value : helpers.message({ custom: "businessRegistrationNumber isn't a valid business registration number" });
+  });
+
+/** A firm's details, all optional. The firm regulator and its number are UK only, the firm type and
+ * business registration number KR only, and the postcode's shape depends on the site (OrganizationSvc
+ * checks them against the tenant). Each field holds only what fits it (see constants/field-rules.ts). */
 const firmDetails = {
   phone: phoneSchema,
   addressLine1: firmText(120),
@@ -45,6 +56,11 @@ const firmDetails = {
     .allow(null)
     .optional(),
   firmRegistrationNumber: firmText(NUMBER_MAX_DIGITS).pattern(DIGITS_PATTERN, "digits"),
+  firmType: Joi.string()
+    .valid(...KR_FIRM_TYPES)
+    .allow(null)
+    .optional(),
+  businessRegistrationNumber: businessRegistrationNumberSchema,
 };
 
 export const createOrganizationSchema = Joi.object({
