@@ -5,7 +5,8 @@
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";
 import { redactBrief, labelForDesignation, type RedactionContext } from "../src/utils/brief-redaction";
-import ClientRequestBriefSvc, { parseBriefReply, ukDay, urgencyFor } from "../src/services/client-request-brief.service";
+import ClientRequestBriefSvc, { briefFingerprint, parseBriefReply, ukDay, urgencyFor } from "../src/services/client-request-brief.service";
+import CaseAreaRepo from "../src/repositories/case-area.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import IntakeChatRepo from "../src/repositories/intake-chat.repository";
 import ClientIntakeRepo from "../src/repositories/client-intake.repository";
@@ -124,6 +125,19 @@ describe("Anonymised case brief", () => {
     });
   });
 
+  describe("briefFingerprint", () => {
+    const base = {
+      note: "",
+      case: { caseName: "x", caseAreas: ["EMPLOYMENT"], clientCaseAreas: ["EMPLOYMENT", "CONSUMER"], ukJurisdiction: null, jurisdiction: null, clientSide: null, parties: [], documents: [] },
+    } as any;
+
+    it("changes when the client changes their picks, but not when Jev settles on other areas", () => {
+      const before = briefFingerprint(base, null);
+      expect(briefFingerprint({ ...base, case: { ...base.case, caseAreas: ["FAMILY"] } }, null)).to.equal(before);
+      expect(briefFingerprint({ ...base, case: { ...base.case, clientCaseAreas: ["EMPLOYMENT"] } }, null)).to.not.equal(before);
+    });
+  });
+
   describe("ClientRequestBriefSvc", () => {
     const originals = {
       findForBrief: ClientRequestRepo.findForBrief,
@@ -231,6 +245,24 @@ describe("Anonymised case brief", () => {
       expect(brief!.summary).to.equal("the client was dismissed by the other side by text after 3 years; see a document. He wants compensation.");
       expect(brief!.clientNote).to.equal("Please call me on [phone removed], ask for the client.");
       expect(saved[0].briefFingerprint).to.match(/^[0-9a-f]{64}$/);
+    });
+
+    it("lists every case type the client picked, not just the ones Jev settled on (#993)", async () => {
+      const original = CaseAreaRepo.list;
+      (CaseAreaRepo as any).list = async () => [
+        { code: "EMPLOYMENT", name: "Employment" },
+        { code: "CONSUMER", name: "Consumer" },
+        { code: "FAMILY", name: "Family" },
+      ];
+      try {
+        source.case.caseAreas = ["EMPLOYMENT"];
+        source.case.clientCaseAreas = ["EMPLOYMENT", "CONSUMER", "FAMILY"];
+        const brief = await ClientRequestBriefSvc.generate("req-1");
+        expect(brief!.caseAreas).to.deep.equal(["Employment", "Consumer", "Family"]);
+        expect(prompts[0]).to.include("Type of problem: Employment, Consumer, Family");
+      } finally {
+        (CaseAreaRepo as any).list = original;
+      }
     });
 
     it("stores the failure and keeps going when the AI's reply is unusable", async () => {

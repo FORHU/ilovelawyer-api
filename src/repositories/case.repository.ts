@@ -65,6 +65,9 @@ export interface CaseData {
   outsideUk?: boolean;
   /** Client app only: CaseArea codes (CaseAreaSvc.forCase). */
   caseAreas?: string[];
+  /** Client app only: the CaseArea codes the client picked, kept as they are when Jev replaces
+   * `caseAreas` once the case is ready. */
+  clientCaseAreas?: string[];
   clientSide?: ClientSide | null;
   notes?: string | null;
   parties?: PartyInput[];

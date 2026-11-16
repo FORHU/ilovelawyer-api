@@ -111,9 +111,9 @@ function toDto(row: ClientCaseRow, label: (codes: string[]) => CaseAreaRef[]) {
     id: row.id,
     title: row.caseName,
     /** In the site's order. A switched-off one the case still has is among them. */
-    areas: label(row.caseAreas),
+    areas: label(CaseAreaSvc.clientPicks(row)),
     /** The first area's code, for an app that predates several per case. */
-    area: row.caseAreas[0] ?? OTHER_CASE_AREA,
+    area: CaseAreaSvc.clientPicks(row)[0] ?? OTHER_CASE_AREA,
     /** Null when outside the UK or not known yet; outsideUk tells which. */
     ukJurisdiction: row.ukJurisdiction,
     /** True: the client said it's outside the UK. False with no ukJurisdiction: not known yet. */
@@ -243,6 +243,7 @@ export default class ClientCaseSvc {
     const created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
       caseName: input.title,
       caseAreas,
+      clientCaseAreas: caseAreas,
       ukJurisdiction: region.ukJurisdiction ?? undefined,
       outsideUk: region.outsideUk,
       jurisdiction: input.where || undefined,
@@ -266,7 +267,8 @@ export default class ClientCaseSvc {
    */
   static async update(workspace: ClientWorkspace, userId: string, caseId: string, input: ClientCaseChanges) {
     const row = await ClientCaseSvc.load(workspace, caseId);
-    const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, row.caseAreas);
+    const picked = CaseAreaSvc.clientPicks(row);
+    const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, picked);
     // `outsideUk: false` on its own only clears "outside the UK"; on a case in the UK it changes nothing.
     let region = regionOf(input);
     if (!region && input.outsideUk === false && row.outsideUk) region = { ukJurisdiction: null, outsideUk: false };
@@ -276,7 +278,7 @@ export default class ClientCaseSvc {
       // A request needs a UK jurisdiction to be matched, so it can't be taken away while one is open.
       const leavesUk = region !== undefined && region.ukJurisdiction === null && row.ukJurisdiction !== null;
       const changesFixed =
-        (caseAreas !== undefined && !sameSet(caseAreas, row.caseAreas)) ||
+        (caseAreas !== undefined && !sameSet(caseAreas, picked)) ||
         (region !== undefined && region.ukJurisdiction !== row.ukJurisdiction) ||
         (input.others !== undefined && !samePeople(input.others, row.parties));
       if ((held && changesFixed) || leavesUk) {
@@ -295,7 +297,10 @@ export default class ClientCaseSvc {
 
     const data: CaseData = {};
     if (input.title !== undefined) data.caseName = input.title;
-    if (caseAreas !== undefined) data.caseAreas = caseAreas;
+    if (caseAreas !== undefined) {
+      data.caseAreas = caseAreas;
+      data.clientCaseAreas = caseAreas;
+    }
     if (region) {
       data.ukJurisdiction = region.ukJurisdiction;
       data.outsideUk = region.outsideUk;
@@ -426,7 +431,7 @@ export default class ClientCaseSvc {
       assessment = await assessLawyerReadiness({
         caseDetails: {
           title: row.caseName,
-          areas: label(row.caseAreas).map((a) => a.name),
+          areas: label(CaseAreaSvc.clientPicks(row)).map((a) => a.name),
           ukJurisdiction: row.ukJurisdiction,
           where: row.jurisdiction,
           side: row.clientSide,

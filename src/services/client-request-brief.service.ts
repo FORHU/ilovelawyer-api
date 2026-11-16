@@ -91,7 +91,7 @@ export function briefFingerprint(source: BriefSource, latestMessageId: string | 
   const c = source.case;
   const basis = JSON.stringify([
     c.caseName,
-    c.caseAreas,
+    CaseAreaSvc.clientPicks(c),
     c.ukJurisdiction,
     c.jurisdiction,
     c.clientSide,
@@ -208,7 +208,7 @@ export default class ClientRequestBriefSvc {
       const { conversation, latestMessageId } = await ClientRequestBriefSvc.conversationOf(source);
       const session = await getChatWonderSessionId();
       const now = new Date();
-      const caseAreas = (await CaseAreaSvc.refsOf(source.case.caseAreas)).map((a) => a.name);
+      const caseAreas = (await CaseAreaSvc.refsOf(CaseAreaSvc.clientPicks(source.case))).map((a) => a.name);
       const ready = source.case.documents.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
       const pack = ready.length ? await buildFactExcerptPack(ready) : { text: "", chunkIds: [], factCount: 0 };
       const documentExcerpts = ready.length

@@ -1006,6 +1006,7 @@ model Case {
   /// and replaced by Jev's once the case is ready for a lawyer; lawyer matching reads them. Empty on
   /// cases made in the lawyer app.
   caseAreas             String[]                 @default([])
+  clientCaseAreas       String[]                 @default([])
   language              String                   @default("en")
   notes                 String?                  @db.Text
   lastRefreshedAt       DateTime?
