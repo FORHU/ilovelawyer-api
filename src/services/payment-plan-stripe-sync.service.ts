@@ -2,9 +2,12 @@ import type { PaymentPlan } from "@prisma/client";
 import prisma from "../lib/prisma";
 import { stripeClient } from "../payments/stripe-client";
 import logger from "../utils/logger";
+import { planPrice } from "../constants/payment-plan.constants";
 
 /**
- * Keeps a tier's Stripe Product and monthly Price in step with its feeUsd. Run lazily, when a
+ * Keeps a tier's Stripe Product and monthly Price in step with its price (priceMinor in its
+ * currency: USD, or KRW on KR, which Stripe treats as zero-decimal, so whole won go to Stripe as
+ * they are). Run lazily, when a
  * checkout needs the Price — never on an admin save — so a Stripe outage never blocks an admin edit
  * and a server without Stripe keys never calls it.
  *
@@ -15,7 +18,9 @@ import logger from "../utils/logger";
 export default class PaymentPlanStripeSyncSvc {
   /** The Price id a new checkout for this tier should use. */
   static async ensureStripePrice(plan: PaymentPlan): Promise<string> {
-    const amountMinor = Math.round(plan.feeUsd * 100);
+    const { amountMinor, currency } = planPrice(plan);
+    // The payment_plan_currency migration cleared stripePriceAmountMinor on the tiers whose
+    // currency changed, so their old Price never matches here.
     if (plan.stripePriceId && plan.stripePriceAmountMinor === amountMinor) return plan.stripePriceId;
 
     const stripe = stripeClient();
@@ -30,8 +35,8 @@ export default class PaymentPlanStripeSyncSvc {
     // The previous Price is in the key: a fee changed back to an earlier amount gets a fresh Price,
     // not the archived one Stripe would otherwise hand back for the same key.
     const price = await stripe.prices.create(
-      { product: productId, currency: "usd", unit_amount: amountMinor, recurring: { interval: "month" }, metadata: { paymentPlanId: plan.id } },
-      { idempotencyKey: `payment-plan-price-${plan.id}-${amountMinor}-${plan.stripePriceId ?? "first"}` },
+      { product: productId, currency: currency.toLowerCase(), unit_amount: amountMinor, recurring: { interval: "month" }, metadata: { paymentPlanId: plan.id } },
+      { idempotencyKey: `payment-plan-price-${plan.id}-${currency}-${amountMinor}-${plan.stripePriceId ?? "first"}` },
     );
     if (plan.stripePriceId) {
       await stripe.prices.update(plan.stripePriceId, { active: false }).catch((err) => {

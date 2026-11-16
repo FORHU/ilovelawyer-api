@@ -11,6 +11,7 @@ import SecurityAuditSvc from "../services/security-audit.service";
 import HttpError from "../utils/http-error";
 import { sendExportZip, exportAuditPayload } from "../utils/export-response";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
+import { planCurrencyOf, planPrice } from "../constants/payment-plan.constants";
 import {
   listUsersSchema,
   listAuditEventsSchema,
@@ -210,11 +211,16 @@ export default class AdminCtrl {
       AccountTopUpPricingSvc.listForAdmin(),
       PaymentPlanSvc.listForAdmin(),
     ]);
-    const merged = tenants.map((t) => ({
-      ...t,
-      accountTopUp: topUpPricing.find((p) => p.code === t.code) ?? null,
-      paymentPlans: paymentPlans.find((p) => p.code === t.code)?.paymentPlans ?? [],
-    }));
+    const merged = tenants.map((t) => {
+      const plans = paymentPlans.find((p) => p.code === t.code);
+      return {
+        ...t,
+        accountTopUp: topUpPricing.find((p) => p.code === t.code) ?? null,
+        // The currency this site's tiers are priced in (won on KR), and the tiers themselves.
+        planCurrency: plans?.planCurrency ?? planCurrencyOf(parseTenantCode(t.code)),
+        paymentPlans: plans?.paymentPlans ?? [],
+      };
+    });
     return res.status(200).json({ tenants: merged });
   }
 
@@ -239,7 +245,13 @@ export default class AdminCtrl {
     const tenant = await TenantRepo.findByCode(code);
     if (!tenant) throw new HttpError(`Unknown tenant ${code}`, 404);
     const plans = await PaymentPlanSvc.listForTenant(tenant.id);
-    return res.status(200).json({ paymentPlans: plans });
+    return res.status(200).json({
+      planCurrency: planCurrencyOf(code),
+      paymentPlans: plans.map((p) => {
+        const price = planPrice(p);
+        return { ...p, priceMinor: price.amountMinor, currency: price.currency };
+      }),
+    });
   }
 
   /** POST /api/admin/settings/tenants/:code/payment-plans — add a new tier. */

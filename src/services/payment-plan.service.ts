@@ -3,7 +3,8 @@ import prisma from "../lib/prisma";
 import TenantRepo from "../repositories/tenant.repository";
 import SecurityAuditSvc from "./security-audit.service";
 import HttpError from "../utils/http-error";
-import { TenantCode } from "../types/tenant-code";
+import { TenantCode, asTenantCode } from "../types/tenant-code";
+import { PLAN_CURRENCIES, type PlanCurrency, legacyFeeUsd, planCurrencyOf, planPrice } from "../constants/payment-plan.constants";
 
 export interface PaymentPlanInput {
   code: string;
@@ -13,7 +14,10 @@ export interface PaymentPlanInput {
   /** Admin-only — never returned to a lawyer. */
   adminNotes?: string;
   level?: number;
-  feeUsd: number;
+  /** The monthly fee in the site's plan currency's smallest unit (cents; whole won on KR). The
+   * currency itself comes from the site (PLAN_CURRENCY_BY_TENANT), never from the admin. */
+  priceMinor: number;
+  /** In US dollars on every site: it measures AI cost. */
   includedAllowanceUsd: number;
   caseLimit: number;
   /** Client requests a lawyer can take on per calendar month; 0 = unlimited. */
@@ -23,8 +27,14 @@ export interface PaymentPlanInput {
 /** `code` is set once at create: it's the stable slug signup and upgrades refer to. */
 export type PaymentPlanPatch = Partial<Omit<PaymentPlanInput, "code">>;
 
-function validateNumbers(input: { feeUsd?: number; includedAllowanceUsd?: number; caseLimit?: number; clientRequestLimit?: number }) {
-  if (input.feeUsd !== undefined && input.feeUsd < 0) throw new HttpError("Fee can't be negative", 400);
+function validateNumbers(input: { priceMinor?: number; includedAllowanceUsd?: number; caseLimit?: number; clientRequestLimit?: number }, currency: PlanCurrency) {
+  if (input.priceMinor !== undefined) {
+    const { exponent, maxMinor } = PLAN_CURRENCIES[currency];
+    if (!Number.isInteger(input.priceMinor) || input.priceMinor < 0) {
+      throw new HttpError(exponent === 0 ? `Fee must be a whole number of ${currency}` : "Fee can't be negative", 400, "PRICE_OUT_OF_RANGE");
+    }
+    if (input.priceMinor > maxMinor) throw new HttpError(`Fee can be at most ${maxMinor / 10 ** exponent} ${currency}`, 400, "PRICE_OUT_OF_RANGE");
+  }
   if (input.includedAllowanceUsd !== undefined && input.includedAllowanceUsd < 0) throw new HttpError("Included AI allowance can't be negative", 400);
   if (input.caseLimit !== undefined && (!Number.isInteger(input.caseLimit) || input.caseLimit < 0)) {
     throw new HttpError("Case limit must be a non-negative whole number", 400);
@@ -85,18 +95,29 @@ export default class PaymentPlanSvc {
         include: { updatedBy: { select: { name: true, email: true } } },
       }),
     ]);
-    return tenants.map((tenant) => ({
-      code: tenant.code as TenantCode,
-      name: tenant.name,
-      paymentPlans: plans.filter((p) => p.tenantId === tenant.id),
-    }));
+    return tenants.map((tenant) => {
+      const code = asTenantCode(tenant.code);
+      return {
+        code,
+        name: tenant.name,
+        // The currency a new tier on this site is priced in, for the admin's "Add tier" form.
+        planCurrency: planCurrencyOf(code),
+        paymentPlans: plans
+          .filter((p) => p.tenantId === tenant.id)
+          .map((p) => {
+            const price = planPrice(p);
+            return { ...p, priceMinor: price.amountMinor, currency: price.currency };
+          }),
+      };
+    });
   }
 
   static async create(code: TenantCode, input: PaymentPlanInput, adminId: string): Promise<PaymentPlan> {
     const tenant = await TenantRepo.findByCode(code);
     if (!tenant) throw new HttpError(`Unknown tenant ${code}`, 404);
     if (!input.code.trim() || !input.name.trim()) throw new HttpError("Code and name are required", 400);
-    validateNumbers(input);
+    const currency = planCurrencyOf(code);
+    validateNumbers(input, currency);
 
     // No level given (the admin "Add tier" form doesn't ask): rank it above every existing tier,
     // so it never ties with one — upgrades compare levels.
@@ -115,7 +136,9 @@ export default class PaymentPlanSvc {
           description: input.description?.trim() || null,
           adminNotes: input.adminNotes?.trim() || null,
           level,
-          feeUsd: input.feeUsd,
+          priceMinor: input.priceMinor,
+          currency,
+          feeUsd: legacyFeeUsd(input.priceMinor, currency),
           includedAllowanceUsd: input.includedAllowanceUsd,
           caseLimit: input.caseLimit,
           clientRequestLimit: input.clientRequestLimit ?? 0,
@@ -135,7 +158,7 @@ export default class PaymentPlanSvc {
       organizationId: null,
       targetType: "tenant",
       targetId: code,
-      payload: { planId: plan.id, ...input, level },
+      payload: { planId: plan.id, ...input, currency, level },
     });
     return plan;
   }
@@ -144,7 +167,8 @@ export default class PaymentPlanSvc {
     const before = await prisma.paymentPlan.findUnique({ where: { id: planId }, include: { tenant: { select: { code: true } } } });
     // The client app's B2C rows share this table; they're edited through ClientPricingSvc.
     if (!before || before.planType !== "B2B_SUBSCRIPTION") throw new HttpError("Unknown subscription tier", 404);
-    validateNumbers(patch);
+    const currency = planCurrencyOf(asTenantCode(before.tenant.code));
+    validateNumbers(patch, currency);
 
     const plan = await prisma.paymentPlan.update({
       where: { id: planId },
@@ -153,7 +177,9 @@ export default class PaymentPlanSvc {
         description: patch.description !== undefined ? patch.description.trim() || null : undefined,
         adminNotes: patch.adminNotes !== undefined ? patch.adminNotes.trim() || null : undefined,
         level: patch.level,
-        feeUsd: patch.feeUsd,
+        // A price edit also sets the currency, so a tier the payment_plan_currency migration missed
+        // is put right the first time it's edited.
+        ...(patch.priceMinor !== undefined ? { priceMinor: patch.priceMinor, currency, feeUsd: legacyFeeUsd(patch.priceMinor, currency) } : {}),
         includedAllowanceUsd: patch.includedAllowanceUsd,
         caseLimit: patch.caseLimit,
         clientRequestLimit: patch.clientRequestLimit,
@@ -167,7 +193,7 @@ export default class PaymentPlanSvc {
       organizationId: null,
       targetType: "tenant",
       targetId: before.tenant.code,
-      payload: { planId, from: before, to: patch },
+      payload: { planId, from: before, to: patch.priceMinor !== undefined ? { ...patch, currency } : patch },
     });
     return plan;
   }

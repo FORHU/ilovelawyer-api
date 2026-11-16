@@ -1942,10 +1942,15 @@ export const clientHandoffPaths: Paths = {
       built: true,
       summary: "Lawyers' monthly plan subscriptions",
       description:
-        "Newest first. ALL (the default): everything but checkouts that were never paid. ACTIVE: paying, nothing changing. PAST_DUE: a renewal failed. CHANGING: cancelling or downgrading at the end of the period. ENDED: cancelled. PENDING: a checkout still open. `summary` covers every subscription whatever the filter: active, monthlyUsd (what active ones bill at today's plan fees), pastDue, changing.",
-      parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["ALL", "ACTIVE", "PAST_DUE", "CHANGING", "ENDED", "PENDING"] } }, ...pageParams],
+        "One site's subscriptions (`tenant`), newest first. ALL (the default): everything but checkouts that were never paid. ACTIVE: paying, nothing changing. PAST_DUE: a renewal failed. CHANGING: cancelling or downgrading at the end of the period. ENDED: cancelled. PENDING: a checkout still open. `summary` covers every subscription on that site whatever the filter: active, monthly ({ amountMinor, currency }: what active ones bill at today's plan fees, in the site's plan currency, KRW on KR), pastDue, changing.",
+      parameters: [
+        { name: "tenant", in: "query", required: true, schema: { type: "string", enum: ["PH", "UK", "KR"] } },
+        { name: "status", in: "query", schema: { type: "string", enum: ["ALL", "ACTIVE", "PAST_DUE", "CHANGING", "ENDED", "PENDING"] } },
+        ...pageParams,
+      ],
       responses: {
-        200: ok("A page of subscriptions, each with its lawyer (and firm), plan (name, feeUsd, tenantCode), current period, cancelAtPeriodEnd and scheduledPlan (a downgrade at the period's end), with the summary"),
+        200: ok("A page of subscriptions, each with its lawyer (and firm), plan (name, price { amountMinor, currency }, tenantCode), current period, cancelAtPeriodEnd and scheduledPlan (a downgrade at the period's end), with the summary"),
+        400: err("No tenant, or an unknown one"),
         403: err("Not a platform admin"),
       },
     }),

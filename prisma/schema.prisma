@@ -3908,7 +3908,11 @@ model PaymentPlan {
   // Admin-chosen rank for display order and upgrade-direction comparisons. Not used for access
   // control.
   level                  Int             @default(0)
+  // Legacy: a B2B tier's price is priceMinor + currency. Kept equal to the price on a USD tier and 0
+  // on any other (legacyFeeUsd); nothing reads it for B2B tiers any more.
   feeUsd                 Float
+  // The AI usage the tier includes each month, in US dollars whatever the tier's currency: it
+  // measures AI cost, not what the lawyer pays.
   includedAllowanceUsd   Float
   // 0 = unlimited, matching MAX_CASES_PER_ACCOUNT's off-by-default convention.
   caseLimit              Int             @default(0)
@@ -3920,13 +3924,14 @@ model PaymentPlan {
   isActive               Boolean         @default(true)
   stripeProductId        String?         @unique
   // The Stripe Price new checkouts/upgrades use. Existing subscribers keep whatever Price they
-  // already have — editing feeUsd here never changes what an active subscriber is charged.
+  // already have — editing the price here never changes what an active subscriber is charged.
   stripePriceId          String?
-  // unit_amount (cents) the current stripePriceId was created with. Compared against feeUsd to
-  // detect drift that requires minting a new Price (the Stripe price sync, not built yet).
+  // unit_amount (in the tier's currency's minor unit) the current stripePriceId was created with.
+  // PaymentPlanStripeSyncSvc mints a new Price when it differs from priceMinor.
   stripePriceAmountMinor Int?
-  // B2C rows only (ClientPricingSvc); B2B tiers leave them null and use feeUsd. B2C rows set feeUsd
-  // and includedAllowanceUsd to 0 and use `level` as their display order.
+  // The price in `currency`'s smallest unit (cents; whole won for KRW). B2B tiers: the monthly fee,
+  // in their site's currency (PLAN_CURRENCY_BY_TENANT). B2C rows (ClientPricingSvc) set feeUsd and
+  // includedAllowanceUsd to 0 and use `level` as their display order.
   priceMinor             Int?
   credits                Int?
   // LAWYER_AI_TOP_UP only: the AI credit the pack adds to an engagement's budget, in pence.

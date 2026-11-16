@@ -98,7 +98,9 @@ export const createPaymentPlanSchema = Joi.object({
   // Admin-only — never returned to a lawyer.
   adminNotes: Joi.string().trim().max(1000).allow("").optional(),
   level: Joi.number().integer().min(0).optional(),
-  feeUsd: Joi.number().min(0).required(),
+  // The monthly fee in the site's currency's smallest unit (cents; whole won on KR). The site sets
+  // the currency; PaymentPlanSvc checks the range for it.
+  priceMinor: Joi.number().integer().min(0).required(),
   includedAllowanceUsd: Joi.number().min(0).required(),
   caseLimit: Joi.number().integer().min(0).required(),
   // Client requests a lawyer can take on per calendar month; 0 = unlimited. Optional: older admin
@@ -112,7 +114,7 @@ export const updatePaymentPlanSchema = Joi.object({
   description: Joi.string().trim().max(300).allow("").optional(),
   adminNotes: Joi.string().trim().max(1000).allow("").optional(),
   level: Joi.number().integer().min(0).optional(),
-  feeUsd: Joi.number().min(0).optional(),
+  priceMinor: Joi.number().integer().min(0).optional(),
   includedAllowanceUsd: Joi.number().min(0).optional(),
   caseLimit: Joi.number().integer().min(0).optional(),
   clientRequestLimit: Joi.number().integer().min(0).optional(),

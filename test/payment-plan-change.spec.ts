@@ -177,6 +177,41 @@ describe("Changing a paid plan", () => {
     });
   });
 
+  describe("on KR, in won", () => {
+    /** A KR lawyer paying for `code` (the KR tiers are priced in KRW). */
+    async function krSubscriber(code: string) {
+      const kr = await prisma.tenant.findUniqueOrThrow({ where: { code: "KR" }, select: { id: true } });
+      const plan = await prisma.paymentPlan.findUniqueOrThrow({ where: { tenantId_planType_code: { tenantId: kr.id, planType: "B2B_SUBSCRIPTION", code } } });
+      const id = crypto.randomUUID();
+      users.push(id);
+      await prisma.user.create({ data: { id, email: `change-${tag}-kr-${users.length}@example.com`, username: `change-${tag}-kr-${users.length}`, role: "LAWYER", tenantId: kr.id, paymentPlanId: plan.id, approvalStatus: "ACTIVE" } });
+      await prisma.paymentPlanSubscription.create({
+        data: { userId: id, paymentPlanId: plan.id, provider: "STRIPE", status: "ACTIVE", stripeSubscriptionId: `sub_${tag}_kr_${users.length}`, stripePriceId: `price_${code}`, currentPeriodStart: PERIOD_START, currentPeriodEnd: PERIOD_END },
+      });
+      stripe = { price: `price_${code}`, schedule: null };
+      return id;
+    }
+
+    it("previews an upgrade in whole won, with no decimals taken off", async () => {
+      const id = await krSubscriber("standard");
+      (provider as any).previewPaymentPlanUpgrade = async () => ({ amountDueMinor: 40_000, currency: "krw" });
+      expect(await PaymentPlanBillingSvc.previewChange(id, "pro")).to.include({ kind: "UPGRADE", amountDueNow: 40_000, currency: "KRW" });
+    });
+
+    it("says a downgrade is in won too", async () => {
+      const id = await krSubscriber("max");
+      expect(await PaymentPlanBillingSvc.previewChange(id, "pro")).to.include({ kind: "DOWNGRADE", amountDueNow: 0, currency: "KRW" });
+    });
+
+    it("lists the KR plans with their won prices", async () => {
+      const id = await krSubscriber("standard");
+      const { plans: options } = await PaymentPlanBillingSvc.options(id);
+      expect(options.length).to.be.greaterThan(0);
+      expect(options.every((p) => p.price.currency === "KRW")).to.equal(true);
+      expect(options[0]).to.not.have.property("feeUsd");
+    });
+  });
+
   it("refuses a change with nothing to change", async () => {
     const { id } = await subscriber("standard");
     expect(await errorOf(PaymentPlanBillingSvc.changePlan(id, "standard"))).to.deep.equal({ status: 409, code: "SAME_PLAN" });

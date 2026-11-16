@@ -14,15 +14,17 @@ const EVER_SUBSCRIBED: PaymentPlanSubscriptionStatus[] = ["ACTIVE", "PAST_DUE", 
 /** Most accounts one sweep handles per step; the next run picks up the rest. */
 const BATCH = 200;
 
-const TIME_ZONES: Record<string, string> = { UK: "Europe/London", PH: "Asia/Manila" };
+const TIME_ZONES: Record<string, string> = { UK: "Europe/London", PH: "Asia/Manila", KR: "Asia/Seoul" };
 
 const USER_SELECT = { id: true, email: true, planTrialEndsAt: true, tenant: { select: { code: true } } } satisfies Prisma.UserSelect;
 
 type TrialUser = Prisma.UserGetPayload<{ select: typeof USER_SELECT }>;
 
-/** The day, in the lawyer's own region: "Friday 6 November 2026". */
+/** The day, in the lawyer's own region: "Friday 6 November 2026", or on KR the Korean convention
+ * the KR site uses in every language, "2026년 11월 6일 금요일". */
 function formatDay(date: Date, tenantCode: string | undefined): string {
-  return date.toLocaleDateString("en-GB", { dateStyle: "full", timeZone: TIME_ZONES[tenantCode ?? ""] ?? "Europe/London" });
+  const locale = tenantCode === "KR" ? "ko-KR" : "en-GB";
+  return date.toLocaleDateString(locale, { dateStyle: "full", timeZone: TIME_ZONES[tenantCode ?? ""] ?? "Europe/London" });
 }
 
 /** The lawyer app's plans page, on the account's own region. */
