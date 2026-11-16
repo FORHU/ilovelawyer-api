@@ -290,6 +290,19 @@ export default class ClientRequestSvc {
   /** Until a lawyer is confirmed, the client can take the request back. The lawyers on it lose their
    * claims and are told; the lawyers it was routed to drop it from their inbox. */
   static async withdraw(clientId: string, id: string) {
+    await ClientRequestSvc.withdrawRequest(clientId, id);
+    return ClientRequestSvc.view(clientId, id);
+  }
+
+  /** Withdraws a request whose case is about to be deleted. The case takes the request, its claims
+   * and its quotes with it, so who to tell is worked out here and handed back for
+   * ClientRequestNotifySvc.tellCaseDeleted to use once the case is gone. */
+  static async withdrawBeforeCaseDeleted(clientId: string, id: string) {
+    return { requestId: id, ...(await ClientRequestSvc.withdrawRequest(clientId, id)) };
+  }
+
+  /** `heldBy` are the lawyers who were on the request; `matching` the other lawyers it was routed to. */
+  private static async withdrawRequest(clientId: string, id: string): Promise<{ heldBy: string[]; matching: string[] }> {
     const request = await ClientRequestSvc.load(clientId, id);
     const now = new Date();
     const { moved, heldBy } = await ClientRequestRepo.withdraw(id, WITHDRAWABLE, now);
@@ -299,8 +312,9 @@ export default class ClientRequestSvc {
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "WITHDRAWN", updatedAt: now.toISOString() };
     for (const lawyerId of heldBy) emitToUser(lawyerId, "client-request:updated", updated);
     const taken: ClientRequestTakenEvent = { requestId: id };
-    for (const lawyerId of await ClientRequestMatchingSvc.eligibleLawyerIds(id)) if (!heldBy.includes(lawyerId)) emitToUser(lawyerId, "client-request:taken", taken);
-    return ClientRequestSvc.view(clientId, id);
+    const matching = (await ClientRequestMatchingSvc.eligibleLawyerIds(id)).filter((lawyerId) => !heldBy.includes(lawyerId));
+    for (const lawyerId of matching) emitToUser(lawyerId, "client-request:taken", taken);
+    return { heldBy, matching };
   }
 
   /**
@@ -343,7 +357,7 @@ export default class ClientRequestSvc {
         type: "CLIENT_REQUEST",
         title: "A client accepted your quote",
         message: "You'll be engaged as soon as the client pays it. Nothing is charged to you.",
-        link: `/client-requests/${id}`,
+        link: `/homepage/client-requests/${id}`,
       }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
     }
     for (const other of accepted.notChosen) {
@@ -353,7 +367,7 @@ export default class ClientRequestSvc {
         type: "CLIENT_REQUEST",
         title: "The client chose another lawyer",
         message: "The client hired another lawyer for this request. Nothing was charged to you.",
-        link: "/client-requests?view=history",
+        link: "/homepage/client-requests?view=history",
       }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
     }
 

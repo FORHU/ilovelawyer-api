@@ -19,6 +19,7 @@ import DocumentSvc from "../src/services/document.service";
 import DocumentRepo from "../src/repositories/document.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientRequestSvc from "../src/services/client-request.service";
+import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
 import CaseAreaRepo from "../src/repositories/case-area.repository";
 import requireClientAccount from "../src/middleware/require-client-account.middleware";
 import clientRoute from "../src/routes/client.route";
@@ -175,7 +176,8 @@ describe("Client app cases", () => {
       const fns = [
         stash(ClientCaseRepo, ["findById", "findAnyById", "list", "clearReadiness"]),
         stash(CaseSvc, ["create", "update", "archive", "unarchive", "delete"]),
-        stash(ClientRequestSvc, ["withdraw"]),
+        stash(ClientRequestSvc, ["withdraw", "withdrawBeforeCaseDeleted"]),
+        stash(ClientRequestNotifySvc, ["tellCaseDeleted"]),
         stash(IntakeChatSvc, ["listMessages", "enqueueIntakeGeneration"]),
         // Credits are test/client-billing.spec.ts's; here a new case starts with 50.
         stash(ClientPaymentRepo, ["spendCredit", "addCredits"]),
@@ -215,6 +217,11 @@ describe("Client app cases", () => {
       (CaseSvc as any).unarchive = async (...args: unknown[]) => record("caseUnarchive")(...args);
       (CaseSvc as any).delete = async (...args: unknown[]) => record("caseDelete")(...args);
       (ClientRequestSvc as any).withdraw = async (...args: unknown[]) => record("withdraw")(...args);
+      (ClientRequestSvc as any).withdrawBeforeCaseDeleted = async (...args: unknown[]) => {
+        record("withdrawBeforeCaseDeleted")(...args);
+        return { requestId: args[1], heldBy: ["lawyer-1"], matching: ["lawyer-2"] };
+      };
+      (ClientRequestNotifySvc as any).tellCaseDeleted = async (...args: unknown[]) => record("tellCaseDeleted")(...args);
       (CaseSvc as any).create = async (...args: unknown[]) => {
         record("caseCreate")(...args);
         return { id: "case-1" };
@@ -472,8 +479,48 @@ describe("Client app cases", () => {
       it("withdraws an open request nobody has committed to before it deletes", async () => {
         live = { id: "req-1", status: "ROUTED" };
         await ClientCaseSvc.remove(workspace, "u1", "case-1");
-        expect(calls.withdraw).to.deep.equal(["u1", "req-1"]);
+        expect(calls.withdrawBeforeCaseDeleted).to.deep.equal(["u1", "req-1"]);
+        expect(calls.withdraw).to.equal(undefined);
         expect(calls.caseDelete).to.deep.equal(["case-1", { organizationId: "org-personal", ownerId: null }, "u1"]);
+      });
+
+      it("tells the lawyers on the request, and the ones it was routed to, once the case is deleted (#994)", async () => {
+        const order: string[] = [];
+        (CaseSvc as any).delete = async () => order.push("deleted");
+        (ClientRequestNotifySvc as any).tellCaseDeleted = async (...args: unknown[]) => {
+          order.push("told");
+          calls.tellCaseDeleted = args;
+        };
+        live = { id: "req-1", status: "CLAIMED" };
+        await ClientCaseSvc.remove(workspace, "u1", "case-1");
+        expect(calls.tellCaseDeleted).to.deep.equal([{ requestId: "req-1", heldBy: ["lawyer-1"], matching: ["lawyer-2"] }]);
+        expect(order).to.deep.equal(["deleted", "told"]);
+      });
+
+      it("tells nobody when the case could not be deleted", async () => {
+        (CaseSvc as any).delete = async () => {
+          throw new Error("database down");
+        };
+        live = { id: "req-1", status: "ROUTED" };
+        await errorOf(ClientCaseSvc.remove(workspace, "u1", "case-1"));
+        expect(calls.tellCaseDeleted).to.equal(undefined);
+      });
+
+      it("tells nobody about a case with no open request, or one that is only archived", async () => {
+        await ClientCaseSvc.remove(workspace, "u1", "case-1");
+        live = { id: "req-1", status: "ROUTED" };
+        await ClientCaseSvc.archive(workspace, "u1", "case-1");
+        expect(calls.tellCaseDeleted).to.equal(undefined);
+        expect(calls.withdraw).to.deep.equal(["u1", "req-1"]);
+      });
+
+      it("still deletes the case when telling the lawyers fails", async () => {
+        (ClientRequestNotifySvc as any).tellCaseDeleted = async () => {
+          throw new Error("socket down");
+        };
+        live = { id: "req-1", status: "ROUTED" };
+        await ClientCaseSvc.remove(workspace, "u1", "case-1");
+        expect(calls.caseDelete).to.not.equal(undefined);
       });
 
       it("refuses to delete or archive while a lawyer is confirmed or engaged", async () => {
