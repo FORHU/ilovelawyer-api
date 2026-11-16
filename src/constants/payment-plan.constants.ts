@@ -2,28 +2,41 @@ import type { PaymentPlan } from "@prisma/client";
 import type { TenantCode } from "../types/tenant-code";
 
 /**
- * The currencies a lawyer's monthly plan (a B2B_SUBSCRIPTION PaymentPlan) is charged in. A tier's
- * price is `priceMinor` in its `currency`, in that currency's smallest unit: cents for USD ($20 is
- * 2000), whole won for KRW (₩29,000 is 29000, since KRW has no smaller unit; Stripe treats it as a
+ * The currencies an admin can charge a site's lawyers in: their monthly plan (a B2B_SUBSCRIPTION
+ * PaymentPlan) and their account AI top-up (AccountTopUpPricingSvc). A tier's price is `priceMinor`
+ * in its `currency`, in that currency's smallest unit: cents for USD ($20 is 2000), centavos for PHP,
+ * whole won for KRW (₩29,000 is 29000, since KRW has no smaller unit; Stripe treats it as a
  * zero-decimal currency, so the same number is Stripe's unit_amount).
  *
  * `exponent` is the currency's minor-unit digits. `maxMinor` is our own ceiling, to catch a typo
- * like an extra zero ($10,000 / ₩10,000,000 a month).
+ * like an extra zero ($10,000 / ₱600,000 / ₩10,000,000 a month).
  */
 export const PLAN_CURRENCIES = {
   USD: { exponent: 2, maxMinor: 1_000_000 },
+  GBP: { exponent: 2, maxMinor: 1_000_000 },
+  PHP: { exponent: 2, maxMinor: 60_000_000 },
   KRW: { exponent: 0, maxMinor: 10_000_000 },
 } as const;
 
 export type PlanCurrency = keyof typeof PLAN_CURRENCIES;
 
-/** Each site's plan currency. It's set by the site, never by the admin, who edits only the amount.
- * Changing a site's currency needs a migration that reprices its tiers (see
- * 20261116110000_payment_plan_currency). */
-export const PLAN_CURRENCY_BY_TENANT = { PH: "USD", UK: "USD", KR: "KRW" } as const satisfies Record<TenantCode, PlanCurrency>;
+export const PLAN_CURRENCY_CODES = Object.keys(PLAN_CURRENCIES) as PlanCurrency[];
 
-export function planCurrencyOf(tenantCode: TenantCode): PlanCurrency {
-  return PLAN_CURRENCY_BY_TENANT[tenantCode];
+export function isPlanCurrency(value: unknown): value is PlanCurrency {
+  return typeof value === "string" && value in PLAN_CURRENCIES;
+}
+
+/**
+ * The currency a site's lawyers are charged in when it has no tiers yet: its local one (pesos on PH,
+ * won on KR; US dollars on UK). Once a site has tiers, its currency is theirs (PaymentPlanSvc
+ * .siteCurrency), and an admin changes it from the site's Payment plans page
+ * (PaymentPlanSvc.changeCurrency), which reprices every tier at once. So PH, whose tiers were priced
+ * in dollars before this default existed, stays in dollars until an admin moves it.
+ */
+export const PLAN_CURRENCY_DEFAULT_BY_TENANT = { PH: "PHP", UK: "USD", KR: "KRW" } as const satisfies Record<TenantCode, PlanCurrency>;
+
+export function defaultPlanCurrencyOf(tenantCode: TenantCode): PlanCurrency {
+  return PLAN_CURRENCY_DEFAULT_BY_TENANT[tenantCode];
 }
 
 /** A minor-unit amount in major units: 2000 USD is 20, 29000 KRW is 29000. */
@@ -40,6 +53,13 @@ export function planPrice(plan: Pick<PaymentPlan, "priceMinor" | "currency" | "f
   return { amountMinor: Math.round(plan.feeUsd * 100), currency: "USD" };
 }
 
+/** A site's currency from its tiers: the one they're priced in (PaymentPlanSvc.changeCurrency keeps
+ * every tier of a site in one currency), or the site's local default when it has none. */
+export function currencyOfTiers(plans: Pick<PaymentPlan, "priceMinor" | "currency" | "feeUsd" | "level">[], tenantCode: TenantCode): PlanCurrency {
+  const first = [...plans].sort((a, b) => a.level - b.level)[0];
+  return first ? planPrice(first).currency : defaultPlanCurrencyOf(tenantCode);
+}
+
 /** feeUsd is still a required column. It's kept equal to the price for a USD tier, so nothing
  * that still reads it is wrong, and 0 for a tier in any other currency, which has no US dollar
  * fee. Nothing reads it for a B2B tier any more. */
@@ -50,7 +70,8 @@ export function legacyFeeUsd(amountMinor: number, currency: PlanCurrency): numbe
 /** The placeholder B2B tiers every Tenant starts with (PaymentPlanSvc), priced in each currency. The
  * payment_plan_tiers migration seeded these into the tenants that existed then (and
  * payment_plan_currency priced KR's in won); the tenant seeder adds them to any tenant created later.
- * Keep them in step. The KR prices are placeholders until real ones are set in the admin. */
+ * Keep them in step. The won, peso and pound prices are placeholders until real ones are set in the
+ * admin. */
 interface DefaultTier {
   code: string;
   name: string;
@@ -62,7 +83,7 @@ interface DefaultTier {
 }
 
 export const PAYMENT_PLAN_DEFAULT_TIERS = [
-  { code: "standard", name: "Standard", level: 0, priceMinor: { USD: 2_000, KRW: 29_000 }, includedAllowanceUsd: 10, caseLimit: 5, clientRequestLimit: 3 },
-  { code: "pro", name: "Pro", level: 1, priceMinor: { USD: 5_000, KRW: 69_000 }, includedAllowanceUsd: 30, caseLimit: 10, clientRequestLimit: 10 },
-  { code: "max", name: "Max", level: 2, priceMinor: { USD: 10_000, KRW: 139_000 }, includedAllowanceUsd: 80, caseLimit: 50, clientRequestLimit: 0 },
+  { code: "standard", name: "Standard", level: 0, priceMinor: { USD: 2_000, GBP: 1_600, PHP: 109_900, KRW: 29_000 }, includedAllowanceUsd: 10, caseLimit: 5, clientRequestLimit: 3 },
+  { code: "pro", name: "Pro", level: 1, priceMinor: { USD: 5_000, GBP: 3_900, PHP: 279_900, KRW: 69_000 }, includedAllowanceUsd: 30, caseLimit: 10, clientRequestLimit: 10 },
+  { code: "max", name: "Max", level: 2, priceMinor: { USD: 10_000, GBP: 7_900, PHP: 559_900, KRW: 139_000 }, includedAllowanceUsd: 80, caseLimit: 50, clientRequestLimit: 0 },
 ] as const satisfies readonly DefaultTier[];

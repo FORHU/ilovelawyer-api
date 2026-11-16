@@ -7,6 +7,8 @@ import LawyerProfileCtrl from "../controllers/lawyer-profile.controller";
 import OrganizationCardCtrl from "../controllers/organization-card.controller";
 import { freeCreditState } from "../middleware/free-credit.middleware";
 import AccountLimitsSvc from "../services/account-limits.service";
+import AccountTopUpPricingSvc from "../services/account-topup-pricing.service";
+import prisma from "../lib/prisma";
 import { AVATAR_MAX_BYTES } from "../constants";
 import WalletCtrl from "../controllers/wallet.controller";
 
@@ -19,9 +21,19 @@ router.use(validSession);
 
 router.get("/me", asyncHandler(UsersCtrl.me));
 // The account's free AI credit and what it has spent of it; { creditUsd: null } when it has none.
+// `display` is the credit and what's left in the site's currency (won on KR, at its top-up rate), so
+// the app never shows a KR lawyer dollars.
 router.get(
   "/me/free-credit",
-  asyncHandler(async (req, res) => res.json((await freeCreditState(req.user!.userId)) ?? { creditUsd: null })),
+  asyncHandler(async (req, res) => {
+    const state = await freeCreditState(req.user!.userId);
+    if (!state) return res.json({ creditUsd: null });
+    const tenantId = (await prisma.user.findUnique({ where: { id: req.user!.userId }, select: { tenantId: true } }))?.tenantId;
+    const inSiteCurrency = tenantId
+      ? await AccountTopUpPricingSvc.aiUsageConverter(tenantId)
+      : (usd: number) => ({ amountMinor: Math.round(usd * 100), currency: "USD" as const });
+    res.json({ ...state, display: { credit: inSiteCurrency(state.creditUsd), left: inSiteCurrency(Math.max(0, state.creditUsd - state.spentUsd)) } });
+  }),
 );
 // The account's AI usage allowance (AccountLimitsSvc, account-level — cases aren't billed
 // individually): only consumedPct is shown to the lawyer, never the dollar amount (product

@@ -1375,17 +1375,25 @@ enum AccountAiTopUpStatus {
 // idempotency fence: the allowance increment is applied at most once, inside the same transaction
 // that flips status PENDING -> SUCCEEDED (AccountAiTopUpRepo.settle).
 model AccountAiTopUp {
-  id              String               @id @default(cuid())
-  userId          String
-  topUpAmountUsd  Float
-  feeAmountUsd    Float
-  totalChargedUsd Float
-  provider        String
-  externalId      String?
-  status          AccountAiTopUpStatus @default(PENDING)
-  failureReason   String?
-  grantedAt       DateTime?
-  createdAt       DateTime             @default(now())
+  id                String               @id @default(cuid())
+  userId            String
+  // The AI usage this top-up adds, in US dollars (extraAiAllowanceUsd). On a US-dollar site it's
+  // the amount paid; on KR it's the won paid at the site's rate (AccountTopUpPricingSvc).
+  topUpAmountUsd    Float
+  // The fee and total in US dollars: exact on a US-dollar site, at the site's rate on KR.
+  feeAmountUsd      Float
+  totalChargedUsd   Float
+  // What the lawyer was charged, in `currency`'s smallest unit (cents; whole won on KR).
+  currency          String               @default("USD")
+  topUpAmountMinor  Int?
+  feeAmountMinor    Int?
+  totalChargedMinor Int?
+  provider          String
+  externalId        String?
+  status            AccountAiTopUpStatus @default(PENDING)
+  failureReason     String?
+  grantedAt         DateTime?
+  createdAt         DateTime             @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -3930,7 +3938,7 @@ model PaymentPlan {
   // PaymentPlanStripeSyncSvc mints a new Price when it differs from priceMinor.
   stripePriceAmountMinor Int?
   // The price in `currency`'s smallest unit (cents; whole won for KRW). B2B tiers: the monthly fee,
-  // in their site's currency (PLAN_CURRENCY_BY_TENANT). B2C rows (ClientPricingSvc) set feeUsd and
+  // in their site's currency (one per site; PaymentPlanSvc.changeCurrency). B2C rows (ClientPricingSvc) set feeUsd and
   // includedAllowanceUsd to 0 and use `level` as their display order.
   priceMinor             Int?
   credits                Int?

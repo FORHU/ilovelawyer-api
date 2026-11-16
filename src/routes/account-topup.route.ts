@@ -9,6 +9,7 @@ const router = express.Router();
 // involved, so there's nothing case-scoped for accountSpendLimit to gate here in the first place.
 router.use(validSession);
 
+router.get("/terms", asyncHandler(AccountTopUpCtrl.terms));
 router.post("/quote", asyncHandler(AccountTopUpCtrl.quote));
 router.post("/checkout", asyncHandler(AccountTopUpCtrl.startCheckout));
 router.get("/:topUpId", asyncHandler(AccountTopUpCtrl.status));

@@ -2,7 +2,8 @@ import type { AccountAiTopUp } from "@prisma/client";
 import type Stripe from "stripe";
 import prisma from "../lib/prisma";
 import AccountAiTopUpRepo from "../repositories/account-ai-topup.repository";
-import AccountTopUpPricingSvc from "./account-topup-pricing.service";
+import AccountTopUpPricingSvc, { type AccountTopUpQuote } from "./account-topup-pricing.service";
+import { type PlanCurrency } from "../constants/payment-plan.constants";
 import AccountLimitsSvc from "./account-limits.service";
 import { createAccountTopUpCheckout, accountTopUpCheckoutOutcome, ACCOUNT_TOPUP_METADATA_KIND, type AccountTopUpCheckout } from "../payments/account-topup-provider";
 import { stripeClient } from "../payments/stripe-client";
@@ -18,6 +19,19 @@ function checkoutDto(checkout: AccountTopUpCheckout | null) {
   return checkout ? { provider: "STRIPE" as const, clientSecret: checkout.clientSecret, publishableKey: checkout.publishableKey } : null;
 }
 
+/** A stored top-up's figures as the lawyer app shows them, in the currency it was charged in. A row
+ * from before charges had a currency (no minor amounts) was in dollars. */
+function amountsOf(topUp: AccountAiTopUp): AccountTopUpQuote {
+  const cents = (usd: number) => Math.round(usd * 100);
+  return AccountTopUpPricingSvc.toQuote({
+    currency: topUp.currency as PlanCurrency,
+    amountMinor: topUp.topUpAmountMinor ?? cents(topUp.topUpAmountUsd),
+    feeMinor: topUp.feeAmountMinor ?? cents(topUp.feeAmountUsd),
+    totalMinor: topUp.totalChargedMinor ?? cents(topUp.totalChargedUsd),
+    creditUsd: topUp.topUpAmountUsd,
+  });
+}
+
 async function tenantIdOf(userId: string): Promise<string> {
   const row = await prisma.user.findUnique({ where: { id: userId }, select: { tenantId: true } });
   if (!row?.tenantId) throw new HttpError("Your account has no region set, so a top-up fee can't be quoted", 409, "USER_NO_TENANT");
@@ -30,23 +44,31 @@ async function tenantIdOf(userId: string): Promise<string> {
  * payer, no credits/promo concepts — but shares its Stripe plumbing: stripeClient(), the webhook
  * mount, and the same checkout/settle/idempotency shape (AccountAiTopUpRepo mirrors ClientPaymentRepo).
  *
+ * It's charged in the lawyer's site currency (won on KR); the AI usage it adds is in dollars, at the
+ * site's rate (AccountTopUpPricingSvc). `amount` is in major units of that currency.
+ *
  * The underlying allowance ceiling isn't surfaced here as a bare number: quote/startCheckout return
- * only the lawyer's own chosen topUpAmountUsd and the fee on it. (The account's remaining balance
- * and percentage used are shown elsewhere — AccountLimitsSvc.allowanceInfo, GET /api/users/me/ai-allowance.)
+ * only the lawyer's own chosen amount and the fee on it. (The account's percentage used is shown
+ * elsewhere — AccountLimitsSvc.allowanceInfo, GET /api/users/me/ai-allowance.)
  */
 export default class AccountTopUpBillingSvc {
-  static async quote(userId: string, topUpAmountUsd: number) {
-    const tenantId = await tenantIdOf(userId);
-    return AccountTopUpPricingSvc.quote(tenantId, topUpAmountUsd);
+  /** The currency, limits and preset amounts the lawyer app's amount picker offers. */
+  static async terms(userId: string) {
+    return AccountTopUpPricingSvc.terms(await tenantIdOf(userId));
   }
 
-  static async startCheckout(userId: string, topUpAmountUsd: number, origin: string | undefined) {
+  static async quote(userId: string, amount: number) {
+    const tenantId = await tenantIdOf(userId);
+    return AccountTopUpPricingSvc.quote(tenantId, amount);
+  }
+
+  static async startCheckout(userId: string, amount: number, origin: string | undefined) {
     const tenantId = await tenantIdOf(userId);
     // A top-up adds to a plan; it isn't a way to keep going once the free trial is over.
     if (await AccountLimitsSvc.planTrialOverFor(userId)) {
       throw new HttpError("Your free trial has ended. Choose a plan to keep going; you can top up once you're on one.", 409, "PLAN_TRIAL_ENDED");
     }
-    const quote = await AccountTopUpPricingSvc.quote(tenantId, topUpAmountUsd);
+    const quote = await AccountTopUpPricingSvc.quoteMinor(tenantId, amount);
 
     // Reuse an already-open checkout for the exact same amount (the lawyer re-opening the modal, or
     // a second tab) instead of starting a second one; a different amount gets its own, and the old
@@ -54,18 +76,22 @@ export default class AccountTopUpBillingSvc {
     // freshly recomputed quote, so the figure shown matches what Stripe will actually charge even if
     // the admin fee changed in between.
     const open = await AccountAiTopUpRepo.findOpenForUser(userId);
-    if (open && open.externalId && open.topUpAmountUsd === quote.topUpAmountUsd) {
+    if (open && open.externalId && open.currency === quote.currency && open.topUpAmountMinor === quote.amountMinor) {
       const checkout = await AccountTopUpBillingSvc.reopenCheckout(open);
       if (checkout) {
-        return { topUpId: open.id, status: open.status, topUpAmountUsd: open.topUpAmountUsd, feeAmountUsd: open.feeAmountUsd, totalChargedUsd: open.totalChargedUsd, checkout: checkoutDto(checkout) };
+        return { topUpId: open.id, status: open.status, ...amountsOf(open), checkout: checkoutDto(checkout) };
       }
     }
 
     const pending = await AccountAiTopUpRepo.create({
       userId,
-      topUpAmountUsd: quote.topUpAmountUsd,
-      feeAmountUsd: quote.feeAmountUsd,
-      totalChargedUsd: quote.totalChargedUsd,
+      topUpAmountUsd: quote.creditUsd,
+      feeAmountUsd: quote.feeUsd,
+      totalChargedUsd: quote.totalUsd,
+      currency: quote.currency,
+      topUpAmountMinor: quote.amountMinor,
+      feeAmountMinor: quote.feeMinor,
+      totalChargedMinor: quote.totalMinor,
       provider: "STRIPE",
       externalId: null,
       status: "PENDING",
@@ -77,7 +103,8 @@ export default class AccountTopUpBillingSvc {
       checkout = await createAccountTopUpCheckout({
         topUpId: pending.id,
         userId,
-        totalChargedUsd: quote.totalChargedUsd,
+        currency: quote.currency,
+        totalChargedMinor: quote.totalMinor,
         customerEmail: await AccountTopUpBillingSvc.emailOf(userId),
         returnUrl: `${returnUrl}?topUpId=${encodeURIComponent(pending.id)}`,
       });
@@ -88,7 +115,7 @@ export default class AccountTopUpBillingSvc {
       throw new HttpError("We couldn't open the payment page. Try again in a moment.", 502, "PAYMENT_PROVIDER_ERROR");
     }
     await AccountAiTopUpRepo.setExternalId(pending.id, checkout.externalId);
-    return { topUpId: pending.id, status: "PENDING" as const, ...quote, checkout: checkoutDto(checkout) };
+    return { topUpId: pending.id, status: "PENDING" as const, ...AccountTopUpPricingSvc.toQuote(quote), checkout: checkoutDto(checkout) };
   }
 
   /** Where a top-up stands. A PENDING one is checked with Stripe first and settled if it has moved
@@ -101,14 +128,7 @@ export default class AccountTopUpBillingSvc {
       await AccountTopUpBillingSvc.settleFromStripe(topUp);
       topUp = (await AccountAiTopUpRepo.findForUser(topUpId, userId))!;
     }
-    return {
-      topUpId: topUp.id,
-      status: topUp.status,
-      topUpAmountUsd: topUp.topUpAmountUsd,
-      feeAmountUsd: topUp.feeAmountUsd,
-      totalChargedUsd: topUp.totalChargedUsd,
-      failureReason: topUp.failureReason,
-    };
+    return { topUpId: topUp.id, status: topUp.status, ...amountsOf(topUp), failureReason: topUp.failureReason };
   }
 
   /** One verified Stripe webhook event (StripeWebhookSvc has already ruled out a retried delivery).

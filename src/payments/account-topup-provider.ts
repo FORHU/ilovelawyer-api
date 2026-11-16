@@ -7,8 +7,10 @@ export interface AccountTopUpCheckoutRequest {
   /** Our AccountAiTopUp id: Stripe hands it back on the webhook (metadata and client_reference_id). */
   topUpId: string;
   userId: string;
-  /** The full charge (topUpAmountUsd + feeAmountUsd), in whole US dollars. */
-  totalChargedUsd: number;
+  /** The full charge (top-up plus fee) in `currency`'s smallest unit: cents, or whole won on KR, which
+   * Stripe treats as zero-decimal, so it's Stripe's unit_amount as it is. */
+  currency: string;
+  totalChargedMinor: number;
   customerEmail: string | null;
   /** Where Stripe sends the lawyer back, only for the few payment methods that must leave the page. */
   returnUrl: string;
@@ -50,8 +52,8 @@ export async function createAccountTopUpCheckout(request: AccountTopUpCheckoutRe
         {
           quantity: 1,
           price_data: {
-            currency: "usd",
-            unit_amount: Math.round(request.totalChargedUsd * 100),
+            currency: request.currency.toLowerCase(),
+            unit_amount: request.totalChargedMinor,
             product_data: { name: "ilovelawyer account AI top-up" },
           },
         },

@@ -4,9 +4,15 @@ import AccountLimitsSvc from "../services/account-limits.service";
 
 export interface NewAccountAiTopUp {
   userId: string;
+  /** The AI usage it adds, in dollars, and its fee and total in dollars (at the site's rate on KR). */
   topUpAmountUsd: number;
   feeAmountUsd: number;
   totalChargedUsd: number;
+  /** What the lawyer is charged, in `currency`'s smallest unit (whole won on KR). */
+  currency: string;
+  topUpAmountMinor: number;
+  feeAmountMinor: number;
+  totalChargedMinor: number;
   provider: string;
   externalId: string | null;
   status: AccountAiTopUpStatus;

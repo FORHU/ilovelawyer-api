@@ -19,8 +19,8 @@ export default class PaymentPlanStripeSyncSvc {
   /** The Price id a new checkout for this tier should use. */
   static async ensureStripePrice(plan: PaymentPlan): Promise<string> {
     const { amountMinor, currency } = planPrice(plan);
-    // The payment_plan_currency migration cleared stripePriceAmountMinor on the tiers whose
-    // currency changed, so their old Price never matches here.
+    // A currency change (the payment_plan_currency migration, PaymentPlanSvc.changeCurrency) clears
+    // stripePriceAmountMinor, so a Price in the old currency never matches here.
     if (plan.stripePriceId && plan.stripePriceAmountMinor === amountMinor) return plan.stripePriceId;
 
     const stripe = stripeClient();

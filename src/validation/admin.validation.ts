@@ -3,6 +3,7 @@ import { LAWYER_REJECTION_REASONS } from "../services/lawyer-verification.servic
 import { LAWYER_VERIFICATION_STATUSES, UK_JURISDICTIONS } from "../types/client-handoff";
 import { LAWYER_COUNTRIES } from "../constants/lawyer-application.constants";
 import { TENANT_CODES } from "../types/tenant-code";
+import { PLAN_CURRENCY_CODES } from "../constants/payment-plan.constants";
 
 export const listUsersSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
@@ -86,9 +87,12 @@ export const updateTenantSettingsSchema = Joi.object({
   autoApproveSignups: Joi.boolean().strict().optional(),
   accountTopUpFeeType: Joi.string().valid("FIXED", "PERCENT").optional(),
   accountTopUpFeeAmount: Joi.number().min(0).optional(),
+  // How much of the site's currency buys $1 of AI usage on a top-up (won on KR). AccountTopUpPricingSvc
+  // checks the range and refuses it on a US-dollar site.
+  accountTopUpRate: Joi.number().positive().optional(),
 })
   .and("accountTopUpFeeType", "accountTopUpFeeAmount")
-  .or("autoApproveSignups", "accountTopUpFeeType");
+  .or("autoApproveSignups", "accountTopUpFeeType", "accountTopUpRate");
 
 export const createPaymentPlanSchema = Joi.object({
   code: Joi.string().trim().min(1).max(40).required(),
@@ -120,6 +124,17 @@ export const updatePaymentPlanSchema = Joi.object({
   clientRequestLimit: Joi.number().integer().min(0).optional(),
   isActive: Joi.boolean().strict().optional(),
 }).min(1);
+
+// A site's new currency and a price in it for every one of its tiers (PaymentPlanSvc.changeCurrency
+// checks each tier is priced, and each price against the currency).
+export const changePaymentPlanCurrencySchema = Joi.object({
+  currency: Joi.string().valid(...PLAN_CURRENCY_CODES).required(),
+  prices: Joi.array()
+    .items(Joi.object({ planId: Joi.string().trim().min(1).required(), priceMinor: Joi.number().integer().min(0).required() }))
+    .min(1)
+    .max(50)
+    .required(),
+});
 
 export const lawSearchSchema = Joi.object({
   category: Joi.string().valid("jurisprudence", "republic-acts").required(),

@@ -1,6 +1,8 @@
 import type { PaymentPlanSubscriptionStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
-import { planCurrencyOf, planPrice } from "../constants/payment-plan.constants";
+import { planPrice } from "../constants/payment-plan.constants";
+import PaymentPlanSvc from "./payment-plan.service";
+import TenantRepo from "../repositories/tenant.repository";
 import type { TenantCode } from "../types/tenant-code";
 
 /** The admin's filters on lawyers' plan subscriptions. ALL: everything but checkouts that were never
@@ -101,7 +103,8 @@ export default class LawyerSubscriptionAdminSvc {
     const plans = byPlan.length
       ? await prisma.paymentPlan.findMany({ where: { id: { in: byPlan.map((g) => g.paymentPlanId) } }, select: { id: true, priceMinor: true, currency: true, feeUsd: true } })
       : [];
-    const currency = planCurrencyOf(tenant);
+    const tenantRow = await TenantRepo.findByCode(tenant);
+    const currency = tenantRow ? await PaymentPlanSvc.siteCurrency(tenantRow.id, tenant) : null;
     // A tier priced in another currency (one the payment_plan_currency migration didn't reach)
     // can't be added in; it's left out rather than counted at the wrong value.
     const feeOf = new Map(plans.map((p) => [p.id, planPrice(p)]));
@@ -110,6 +113,6 @@ export default class LawyerSubscriptionAdminSvc {
       const price = feeOf.get(g.paymentPlanId);
       return price?.currency === currency ? sum + price.amountMinor * g._count._all : sum;
     }, 0);
-    return { active, monthly: { amountMinor, currency }, pastDue, changing };
+    return { active, monthly: { amountMinor, currency: currency ?? "USD" }, pastDue, changing };
   }
 }

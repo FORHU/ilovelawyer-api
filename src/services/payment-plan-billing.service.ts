@@ -4,6 +4,7 @@ import prisma from "../lib/prisma";
 import { emitToUser } from "../lib/socket";
 import PaymentPlanSubscriptionRepo, { type SubscriptionPeriod } from "../repositories/payment-plan-subscription.repository";
 import PaymentPlanStripeSyncSvc from "./payment-plan-stripe-sync.service";
+import AccountTopUpPricingSvc from "./account-topup-pricing.service";
 import {
   createPaymentPlanCheckout,
   expirePaymentPlanCheckout,
@@ -101,12 +102,19 @@ export default class PaymentPlanBillingSvc {
       prisma.user.findUnique({ where: { id: userId }, select: { planTrialEndsAt: true } }),
     ]);
     const trialEndsAt = trial?.planTrialEndsAt ?? null;
+    const aiUsage = await AccountTopUpPricingSvc.aiUsageConverter(user.tenantId);
     const scheduled = live?.scheduledPaymentPlanId
       ? await prisma.paymentPlan.findUnique({ where: { id: live.scheduledPaymentPlanId }, select: { code: true } })
       : null;
     return {
-      // `price` is the monthly fee in the site's currency (won on KR), in its smallest unit.
-      plans: plans.map(({ priceMinor, currency, feeUsd, ...plan }) => ({ ...plan, price: planPrice({ priceMinor, currency, feeUsd }) })),
+      // `price` is the monthly fee in the site's currency (won on KR), in its smallest unit. `aiUsage`
+      // is the AI usage it includes (includedAllowanceUsd) in that currency too, at the site's top-up
+      // rate, so a KR lawyer reads ₩14,000 rather than $10.
+      plans: plans.map(({ priceMinor, currency, feeUsd, ...plan }) => ({
+        ...plan,
+        price: planPrice({ priceMinor, currency, feeUsd }),
+        aiUsage: aiUsage(plan.includedAllowanceUsd),
+      })),
       currentPlanCode: user.paymentPlan?.code ?? null,
       subscribed: !!live,
       // When the paid period ends: the next charge, and when a scheduled downgrade happens.
