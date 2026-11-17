@@ -250,6 +250,7 @@ describe("Client app cases", () => {
         {
           caseName: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
           caseAreas: ["EMPLOYMENT"],
+          clientCaseAreas: ["EMPLOYMENT"],
           ukJurisdiction: "England and Wales",
           outsideUk: false,
           jurisdiction: "Leeds",
@@ -320,7 +321,7 @@ describe("Client app cases", () => {
     it("lets a case keep a switched-off area it already has, but not add one", async () => {
       row = caseRow({ caseAreas: ["RETIRED"] });
       await ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["RETIRED", "FAMILY"] });
-      expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["RETIRED", "FAMILY"] });
+      expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["RETIRED", "FAMILY"], clientCaseAreas: ["RETIRED", "FAMILY"] });
       row = caseRow();
       expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["RETIRED"] }))).to.deep.equal({ status: 400, code: "CASE_AREA_INACTIVE" });
     });
@@ -465,7 +466,23 @@ describe("Client app cases", () => {
           code: "CASE_LOCKED_BY_REQUEST",
         });
         await ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["FAMILY"] });
-        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["FAMILY"] });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["FAMILY"], clientCaseAreas: ["FAMILY"] });
+      });
+
+      it("keeps the client's own picks apart from the areas Jev settled on, so saving other details can't narrow them", async () => {
+        row = caseRow({ caseAreas: ["EMPLOYMENT"], clientCaseAreas: ["EMPLOYMENT", "CONSUMER", "FAMILY"] });
+        expect((await ClientCaseSvc.get(workspace, "case-1")).areas.map((a) => a.code)).to.have.members(["EMPLOYMENT", "CONSUMER", "FAMILY"]);
+        // Even with a lawyer on the request, sending the client's own picks back is no change to them.
+        live = { id: "req-1", status: "CLAIMED" };
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { title: "New title", areas: ["EMPLOYMENT", "CONSUMER", "FAMILY"] });
+        expect((calls.caseUpdate as any[])[3]).to.include({ caseName: "New title" });
+        // Dropping one of them is a change to the type of issue, which a lawyer on the request fixes.
+        expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["EMPLOYMENT"] }))).to.deep.equal({ status: 409, code: "CASE_LOCKED_BY_REQUEST" });
+      });
+
+      it("shows a case made before the client's picks were kept (or in the lawyer app) by its areas", async () => {
+        row = caseRow({ caseAreas: ["EMPLOYMENT", "FAMILY"], clientCaseAreas: [] });
+        expect((await ClientCaseSvc.get(workspace, "case-1")).areas.map((a) => a.code)).to.have.members(["EMPLOYMENT", "FAMILY"]);
       });
     });
 

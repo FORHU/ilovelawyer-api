@@ -57,6 +57,13 @@ export default class CaseAreaSvc {
     return (await CaseAreaSvc.labeller(country))(codes);
   }
 
+  /** The codes the client picked for a case. Jev's list replaces `caseAreas` once the case is
+   * ready, so the picks are kept in `clientCaseAreas`; a case from before that (or one made in the
+   * lawyer app) has none there and falls back to `caseAreas`. */
+  static clientPicks(c: { clientCaseAreas?: string[] | null; caseAreas: string[] }): string[] {
+    return c.clientCaseAreas?.length ? c.clientCaseAreas : c.caseAreas;
+  }
+
   /** Loads the site's list once, for naming many cases' areas. */
   static async labeller(country: LawyerCountry = CLIENT_CASE_COUNTRY): Promise<(codes: string[]) => CaseAreaRef[]> {
     const areas = await CaseAreaRepo.list(country);
