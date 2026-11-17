@@ -265,6 +265,22 @@ describe("Client lawyer requests", () => {
       ]);
       expect(emitted[0]![2]).to.deep.include({ requestId: id, status: "WITHDRAWN" });
     });
+
+    it("hands back who was on the request and who it was routed to, for telling them the case was deleted (#994)", async () => {
+      const { id } = await ask();
+      claims.push({ requestId: id, lawyerId: "lawyer-a", outcome: null }, { requestId: id, lawyerId: "lawyer-c", outcome: null });
+
+      const told = await ClientRequestSvc.withdrawBeforeCaseDeleted("client-1", id);
+
+      expect(told).to.deep.equal({ requestId: id, heldBy: ["lawyer-a", "lawyer-c"], matching: ["lawyer-b"] });
+      expect(requests.get(id).withdrawnAt).to.be.instanceOf(Date);
+    });
+
+    it("refuses to withdraw a request for a deleted case once the lawyer is confirmed", async () => {
+      const { id } = await ask();
+      requests.get(id).status = "ENGAGED";
+      expect(await errorOf(ClientRequestSvc.withdrawBeforeCaseDeleted("client-1", id))).to.deep.equal({ status: 409, code: "INVALID_REQUEST_STATUS" });
+    });
   });
 
   // Review finding 7 (client #68): the app only says more quotes may come while they can.

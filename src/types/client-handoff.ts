@@ -313,6 +313,13 @@ export interface ClientRequestTakenEvent {
   requestId: string;
 }
 
+/** To the lawyers on a request, and to the other lawyers it matched, once the client has deleted
+ * its case: the request is gone for good, so a lawyer looking at it should be told, not left on a
+ * page that no longer loads. */
+export interface ClientRequestDeletedEvent {
+  requestId: string;
+}
+
 /** To the client and the lawyer holding the request whenever its status changes (quote sent,
  * confirmed, charge failed, engaged, closed, expired, withdrawn, back to ROUTED). */
 export interface ClientRequestUpdatedEvent {
@@ -385,6 +392,7 @@ export interface EngagementThreadPage {
 export const CLIENT_HANDOFF_SOCKET_EVENTS = {
   REQUEST_NEW: "client-request:new",
   REQUEST_TAKEN: "client-request:taken",
+  REQUEST_DELETED: "client-request:deleted",
   REQUEST_UPDATED: "client-request:updated",
   REQUEST_CLAIM_EXPIRING: "client-request:claim-expiring",
   ENGAGEMENT_MESSAGE: "engagement:message",
@@ -403,6 +411,7 @@ export interface WalletUpdatedEvent {
 export interface ClientHandoffSocketPayloads {
   "client-request:new": ClientRequestNewEvent;
   "client-request:taken": ClientRequestTakenEvent;
+  "client-request:deleted": ClientRequestDeletedEvent;
   "client-request:updated": ClientRequestUpdatedEvent;
   "client-request:claim-expiring": ClientRequestClaimExpiringEvent;
   "engagement:message": EngagementMessageEvent;

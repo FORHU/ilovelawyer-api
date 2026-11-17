@@ -9,6 +9,7 @@ import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
 import IntakeChatSvc from "./intake-chat.service";
 import ClientRequestSvc from "./client-request.service";
+import ClientRequestNotifySvc from "./client-request-notify.service";
 import DocumentSvc, { documentFileUrl } from "./document.service";
 import OrganizationSvc from "./organization.service";
 import HttpError from "../utils/http-error";
@@ -332,16 +333,21 @@ export default class ClientCaseSvc {
   static async remove(workspace: ClientWorkspace, userId: string, caseId: string) {
     const row = await ClientCaseRepo.findAnyById(caseId, workspace.id);
     if (!row) throw new HttpError("Case not found", 404);
-    await ClientCaseSvc.stepAsideRequest(userId, caseId);
+    const lawyersToTell = await ClientCaseSvc.stepAsideRequest(userId, caseId, true);
     await CaseSvc.delete(caseId, firmScope(workspace.id), userId);
+    // Only once the case is really gone: the lawyers are told it was deleted, so it must have been.
+    if (lawyersToTell) {
+      ClientRequestNotifySvc.tellCaseDeleted(lawyersToTell).catch((err) => logger.error("Client request: telling lawyers the case was deleted failed", { err, caseId }));
+    }
   }
 
   /** Before the case goes away or is set aside: an open request nobody has committed to is withdrawn
    * (a lawyer holding it is told); one with a confirmed or engaged lawyer blocks it, because the
-   * request, its fee and the lawyer's access all hang off the case. */
-  private static async stepAsideRequest(clientId: string, caseId: string) {
+   * request, its fee and the lawyer's access all hang off the case. When the case is being deleted
+   * (`deleting`), the lawyers to tell about it come back, since they can't be found once it's gone. */
+  private static async stepAsideRequest(clientId: string, caseId: string, deleting = false) {
     const live = await ClientRequestRepo.findLiveForCase(caseId);
-    if (!live) return;
+    if (!live) return null;
     if (LAWYER_COMMITTED.includes(live.status)) {
       throw new HttpError(
         "A lawyer is engaged on this case, or being confirmed. End the engagement first, then you can remove the case.",
@@ -350,7 +356,9 @@ export default class ClientCaseSvc {
         { requestId: live.id, status: live.status },
       );
     }
+    if (deleting) return ClientRequestSvc.withdrawBeforeCaseDeleted(clientId, live.id);
     await ClientRequestSvc.withdraw(clientId, live.id);
+    return null;
   }
 
   /** The chat, oldest first. `replying` is true while the AI is still answering the last message,

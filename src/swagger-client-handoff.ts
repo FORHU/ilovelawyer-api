@@ -151,6 +151,7 @@ export const clientHandoffTags: Tags = [
       "| --- | --- | --- |",
       "| `client-request:new` | `{ requestId, caseAreas, ukJurisdiction, urgency, routingExpiresAt }` | Routed to you |",
       "| `client-request:taken` | `{ requestId }` | Claimed by someone else, withdrawn or expired: drop it from the inbox |",
+      "| `client-request:deleted` | `{ requestId }` | The client deleted the case: the request is gone, so drop it and tell the lawyer if they have it open |",
       "| `client-request:updated` | `{ requestId, status, updatedAt }` | A request you hold changed |",
       "| `client-request:claim-expiring` | `{ requestId, claimExpiresAt }` | 2h before your hold ends |",
       "| `engagement:message` | `{ requestId, claimId, message }` | The client posts in your thread |",
