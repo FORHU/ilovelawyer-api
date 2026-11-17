@@ -5,6 +5,7 @@ import { TenantCode } from "../types/tenant-code";
 export const WIRE_CATEGORY: Record<TenantCode, Record<LawCategory, string>> = {
   UK: { JURISPRUDENCE: "uk-case-law", REPUBLIC_ACT: "uk-legislation" },
   PH: { JURISPRUDENCE: "jurisprudence", REPUBLIC_ACT: "republic-acts" },
+  KR: { JURISPRUDENCE: "jurisprudence", REPUBLIC_ACT: "republic-acts" },
 };
 
 /** The Library detail route (/homepage/library/laws/[id]) for a route id and category. The id is

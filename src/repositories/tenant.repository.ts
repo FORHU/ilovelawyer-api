@@ -14,6 +14,12 @@ export default class TenantRepo {
     return prisma.tenant.findUnique({ where: { code }, select: { id: true, code: true, name: true } });
   }
 
+  /** The code of the Tenant a user was created under (User.tenantId), or null when they have none. */
+  static async findCodeByUserId(userId: string): Promise<string | null> {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { tenant: { select: { code: true } } } });
+    return user?.tenant?.code ?? null;
+  }
+
   static async listAll() {
     return prisma.tenant.findMany({ select: { id: true, code: true, name: true }, orderBy: { code: "asc" } });
   }

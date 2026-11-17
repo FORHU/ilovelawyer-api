@@ -23,7 +23,7 @@ import * as mailerModule from "../src/utils/mailer";
 import * as templateModule from "../src/utils/template";
 import { REFRESH_TOKEN_SECRET, USER_APP_URL, CLIENT_URL } from "../src/config";
 import { CLIENT_TERMS_VERSION, TERMS_VERSION } from "../src/constants/auth.constants";
-import { emailLinkOriginForAccount, resolveTenantCodeFromHost } from "../src/utils/tenant-host";
+import { emailLinkOriginForAccount, resolveClientTenantCodeFromHost, resolveTenantCodeFromHost, resolveTenantCodeFromRequest } from "../src/utils/tenant-host";
 
 const PASSWORD = "Correct-horse-1";
 
@@ -187,13 +187,18 @@ describe("Client app decides the account role", () => {
 
     afterEach(() => restore.forEach((r) => r()));
 
-    const signup = (requestTenantCode: "PH" | "UK" | null = null) =>
+    const signup = (requestTenantCode: "PH" | "UK" | "KR" | null = null) =>
       AuthSvc.signup("a", "a@b.com", "Password123!", "A", requestTenantCode, true);
 
-    it("puts every client in the UK tenant, whatever site it signed up from", async () => {
+    it("puts a client in the default UK tenant when its site names no region", async () => {
       await inApp("user", () => signup(null));
-      await inApp("user", () => signup("PH"));
-      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-UK", "tenant-UK"]);
+      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-UK"]);
+    });
+
+    it("puts a client in the region of the client site it signed up from", async () => {
+      await inApp("user", () => signup("KR"));
+      await inApp("user", () => signup("UK"));
+      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-KR", "tenant-UK"]);
     });
 
     it("still takes a lawyer's tenant from the site, and none from an unknown one", async () => {
@@ -297,11 +302,62 @@ describe("Client app decides the account role", () => {
     });
   });
 
+  describe("signing in on another region's site", () => {
+    let restoreSite: () => void;
+    beforeEach(() => {
+      restoreSite = stash(AuthRepo, ["findSiteCode"]);
+    });
+    afterEach(() => restoreSite());
+
+    it("is refused with WRONG_TENANT and the account's own site", async () => {
+      (AuthRepo as any).findSiteCode = async () => "KR";
+      try {
+        await (AuthSvc as any).assertTenantAccess("u1", "UK");
+        expect.fail("should have thrown");
+      } catch (err: any) {
+        expect(err.statusCode).to.equal(409);
+        expect(err.code).to.equal("WRONG_TENANT");
+        expect(err.details).to.deep.equal({ site: "KR" });
+      }
+    });
+
+    it("lets the account's own site through", async () => {
+      (AuthRepo as any).findSiteCode = async () => "KR";
+      await (AuthSvc as any).assertTenantAccess("u1", "KR");
+    });
+  });
+
   describe("tenant from the client app's host", () => {
-    it("never reads a tenant from the client app's domains", () => {
+    const req = (origin: string | undefined, app?: "user") =>
+      ({ headers: { origin, ...(app ? { "x-client-app": app } : {}) } }) as unknown as Request;
+
+    it("keeps client domains out of the lawyer map", () => {
       expect(resolveTenantCodeFromHost("ilovelawyer.com")).to.equal(null);
       expect(resolveTenantCodeFromHost("app.ilovelawyer.com")).to.equal(null);
       expect(resolveTenantCodeFromHost("localhost:3004")).to.equal(null);
+      expect(resolveTenantCodeFromHost("kr.ilovelawyer.com")).to.equal(null);
+    });
+
+    it("maps client hosts to their region, ports ignored", () => {
+      expect(resolveClientTenantCodeFromHost("kr.ilovelawyer.com")).to.equal("KR");
+      expect(resolveClientTenantCodeFromHost("kr-app.ilovelawyer.com")).to.equal("KR");
+      expect(resolveClientTenantCodeFromHost("kr.localhost:3004")).to.equal("KR");
+      expect(resolveClientTenantCodeFromHost("kr-client-local.ilovelawyer.com:3004")).to.equal("KR");
+      expect(resolveClientTenantCodeFromHost("ilovelawyer.com")).to.equal("UK");
+      expect(resolveClientTenantCodeFromHost("localhost:3004")).to.equal("UK");
+      expect(resolveClientTenantCodeFromHost("evil.example.com")).to.equal(null);
+    });
+
+    it("resolves a client request through the client map, defaulting to UK", () => {
+      expect(resolveTenantCodeFromRequest(req("https://kr.ilovelawyer.com", "user"))).to.equal("KR");
+      expect(resolveTenantCodeFromRequest(req("https://ilovelawyer.com", "user"))).to.equal("UK");
+      expect(resolveTenantCodeFromRequest(req("https://unknown.example.com", "user"))).to.equal("UK");
+    });
+
+    it("resolves a lawyer request through the lawyer map only", () => {
+      expect(resolveTenantCodeFromRequest(req("https://ph.ilovelawyer.com"))).to.equal("PH");
+      expect(resolveTenantCodeFromRequest(req("https://kr.ilovelawyer.com"))).to.equal(null);
+      expect(resolveTenantCodeFromRequest(req("https://ilovelawyer.com"))).to.equal(null);
     });
   });
 
@@ -329,6 +385,15 @@ describe("Client app decides the account role", () => {
     it("sends a client to the first client app when it asked from the lawyer app or no origin", () => {
       expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, PH_LAWYER)).to.equal(CLIENT);
       expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, null)).to.equal(CLIENT);
+    });
+
+    it("sends a KR client to the KR client site, and not to a site of another region", () => {
+      const KR = "https://kr.ilovelawyer.com";
+      USER_APP_URL.splice(0, USER_APP_URL.length, CLIENT, KR);
+      CLIENT_URL.splice(0, CLIENT_URL.length, PH_LAWYER, CLIENT, KR);
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "KR" } }, null)).to.equal(KR);
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "KR" } }, CLIENT)).to.equal(KR);
+      expect(emailLinkOriginForAccount({ role: "USER", tenant: { code: "UK" } }, KR)).to.equal(CLIENT);
     });
 
     it("never sends a lawyer to the client app", () => {

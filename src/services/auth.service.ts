@@ -117,10 +117,10 @@ export default class AuthSvc {
   }
 
   /** The Tenant a new account is created under. A lawyer's comes from the site they signed up on
-   * (ph./uk. subdomain); a client's is always CLIENT_TENANT_CODE, since the client app's domain
-   * says nothing about the region. */
+   * (ph./uk. subdomain); a client's from the client site's host (kr.ilovelawyer.com), else
+   * CLIENT_TENANT_CODE when that host names no region. */
   private static signupTenantCode(role: Role, requestTenantCode: TenantCode | null): TenantCode | null {
-    return role === "USER" ? CLIENT_TENANT_CODE : requestTenantCode;
+    return role === "USER" ? (requestTenantCode ?? CLIENT_TENANT_CODE) : requestTenantCode;
   }
 
   /** Verify before plan (PlanGateSvc) holds new lawyers on the UK site only: there the Lawyer
@@ -215,7 +215,7 @@ export default class AuthSvc {
     // The organization's site, or a solo lawyer's own (they have no organization).
     const site = await AuthRepo.findSiteCode(userId);
     if (!site || site === requestTenantCode) return;
-    throw new HttpError(`This account belongs to the ${site} tenant and cannot sign in from ${requestTenantCode}.`, 409);
+    throw new HttpError(`This account belongs to the ${site} tenant and cannot sign in from ${requestTenantCode}.`, 409, "WRONG_TENANT", { site });
   }
 
   /** An account signs in only to its own app: LAWYER to ilovelawyer-app, USER to the client app

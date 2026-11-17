@@ -2,6 +2,7 @@ import { ClientRequestStatus, ClientSide, OrganizationRole, Prisma, RagStatus } 
 import ClientCaseRepo, { type ClientCaseRow } from "../repositories/client-case.repository";
 import type { CaseData } from "../repositories/case.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
+import TenantRepo from "../repositories/tenant.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import DocumentRepo from "../repositories/document.repository";
 import OrganizationMemberRepo from "../repositories/organization-member.repository";
@@ -212,7 +213,9 @@ export default class ClientCaseSvc {
     let member = await OrganizationMemberRepo.findAnyForUser(userId);
     if (!member) {
       try {
-        await OrganizationSvc.create(userId, name, undefined, CLIENT_TENANT_CODE, true);
+        // The client's own region (kr.ilovelawyer.com signs up in KR), not always the default one.
+        const tenantCode = asTenantCode((await TenantRepo.findCodeByUserId(userId)) ?? CLIENT_TENANT_CODE);
+        await OrganizationSvc.create(userId, name, undefined, tenantCode, true);
       } catch (err) {
         // Two first requests at once: the other one made it (OrganizationMember.userId is unique).
         if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;

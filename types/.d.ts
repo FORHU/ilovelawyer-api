@@ -21,7 +21,7 @@ declare global {
         ownerId: string | null;
         userId: string;
         role: OrganizationRole;
-        tenantCode: "PH" | "UK";
+        tenantCode: "PH" | "UK" | "KR";
         guest?: boolean;
       };
     }

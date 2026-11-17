@@ -2,6 +2,8 @@ import { Request } from "express";
 import { Role } from "@prisma/client";
 import { TenantCode } from "../types/tenant-code";
 import { CLIENT_URL, USER_APP_URL } from "../config";
+import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
+import { resolveClientApp } from "./client-app";
 
 /**
  * Explicit hostname → Tenant code map. No substring/`.includes()` matching — an unrecognized
@@ -34,10 +36,34 @@ const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "uk-local.ilovelawyer.com": "UK",
   "uk.ilovelawyer": "UK",
   "uk.localhost": "UK",
-  // The client app (ilovelawyer.com, app.ilovelawyer.com) is deliberately absent: one domain
-  // serves every region, so its host never names a Tenant. Client accounts get
-  // CLIENT_TENANT_CODE instead (AuthSvc.signupTenantCode).
+  // Client app hosts are deliberately absent: they have their own map, CLIENT_HOST_TENANT_CODE_MAP.
 };
+
+/**
+ * The client app's (ilovelawyer-client, USER accounts) hosts. Separate from HOST_TENANT_CODE_MAP so
+ * a client host never becomes a lawyer email origin (originForTenantCode). The apex and app. hosts
+ * serve the default client region (CLIENT_TENANT_CODE, UK); a regional client site has its own
+ * subdomain. Keep in sync with ilovelawyer-client/src/lib/tenant/client-tenant.ts.
+ */
+const CLIENT_HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
+  "ilovelawyer.com": "UK",
+  "app.ilovelawyer.com": "UK",
+  "ilovelawyer.local": "UK",
+  "client-local.ilovelawyer.com": "UK",
+  localhost: "UK",
+  "kr.ilovelawyer.com": "KR",
+  "kr-app.ilovelawyer.com": "KR",
+  "kr.localhost": "KR",
+  "kr.ilovelawyer.local": "KR",
+  "kr-client-local.ilovelawyer.com": "KR",
+};
+
+/** The Tenant a client app host serves, or null for a host that isn't a known client site. */
+export function resolveClientTenantCodeFromHost(hostname: string | undefined | null): TenantCode | null {
+  if (!hostname) return null;
+  const host = hostname.split(":")[0].trim().toLowerCase();
+  return CLIENT_HOST_TENANT_CODE_MAP[host] ?? null;
+}
 
 /** Strips a trailing `:port` (present on `Host`/`Origin` headers in local dev, e.g.
  * `ph.ilovelawyer.local:3002`) before the exact-match lookup. */
@@ -60,6 +86,9 @@ export function resolveTenantCodeFromRequest(req: Request): TenantCode | null {
   if (!originHeader || typeof originHeader !== "string") return null;
   try {
     const url = new URL(originHeader);
+    // The client app sends X-Client-App: user and has its own hosts. An unknown client host is the
+    // default client region rather than null, so a client is never left without a Tenant.
+    if (resolveClientApp(req) === "user") return resolveClientTenantCodeFromHost(url.hostname) ?? CLIENT_TENANT_CODE;
     return resolveTenantCodeFromHost(url.hostname);
   } catch {
     return null;
@@ -118,6 +147,14 @@ export function emailLinkOrigin(tenantCode: string | null | undefined, requestOr
   return originForTenantCode(tenantCode);
 }
 
+function clientOriginTenant(origin: string): TenantCode | null {
+  try {
+    return resolveClientTenantCodeFromHost(new URL(origin).hostname);
+  } catch {
+    return null;
+  }
+}
+
 /** Where a link emailed to `account` should open: the app the account belongs to. A client (USER)
  * account gets the client app — the site it asked from when that's a client origin (e.g.
  * app.ilovelawyer.com on staging), else the first USER_APP_URL — never the lawyer app, which would
@@ -129,7 +166,9 @@ export function emailLinkOriginForAccount(
   requestOrigin: string | null,
 ): string {
   if (account?.role === "USER" && USER_APP_URL.length > 0) {
-    return requestOrigin && USER_APP_URL.includes(requestOrigin) ? requestOrigin : USER_APP_URL[0];
+    const tenant = account.tenant?.code ?? CLIENT_TENANT_CODE;
+    if (requestOrigin && USER_APP_URL.includes(requestOrigin) && clientOriginTenant(requestOrigin) === tenant) return requestOrigin;
+    return USER_APP_URL.find((origin) => clientOriginTenant(origin) === tenant) ?? USER_APP_URL[0];
   }
   return emailLinkOrigin(account?.tenant?.code, requestOrigin);
 }

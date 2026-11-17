@@ -13,6 +13,7 @@ import ClientPaymentRepo from "../src/repositories/client-payment.repository";
 import ClientBillingSvc from "../src/services/client-billing.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
 import OrganizationSvc from "../src/services/organization.service";
+import TenantRepo from "../src/repositories/tenant.repository";
 import CaseSvc from "../src/services/case.service";
 import IntakeChatSvc from "../src/services/intake-chat.service";
 import DocumentSvc from "../src/services/document.service";
@@ -125,16 +126,21 @@ describe("Client app cases", () => {
     let restore: () => void;
     let member: unknown;
     let created: unknown[];
+    let userTenant: string | null;
 
     beforeEach(() => {
       const a = stash(OrganizationMemberRepo, ["findAnyForUser"]);
       const b = stash(OrganizationSvc, ["create"]);
+      const c = stash(TenantRepo, ["findCodeByUserId"]);
       restore = () => {
         a();
         b();
+        c();
       };
       member = null;
       created = [];
+      userTenant = "UK";
+      (TenantRepo as any).findCodeByUserId = async () => userTenant;
       (OrganizationMemberRepo as any).findAnyForUser = async () => member;
       (OrganizationSvc as any).create = async (...args: unknown[]) => {
         created.push(args);
@@ -147,6 +153,18 @@ describe("Client app cases", () => {
       const ws = await ClientCaseSvc.workspaceFor("u1", "Sam Client");
       expect(created).to.deep.equal([["u1", "Sam Client", undefined, "UK", true]]);
       expect(ws).to.deep.equal(workspace);
+    });
+
+    it("makes it on the client's own region, and on the default one when they have none", async () => {
+      userTenant = "KR";
+      await ClientCaseSvc.workspaceFor("u1", "Sam Client");
+      member = null;
+      userTenant = null;
+      await ClientCaseSvc.workspaceFor("u1", "Sam Client");
+      expect(created).to.deep.equal([
+        ["u1", "Sam Client", undefined, "KR", true],
+        ["u1", "Sam Client", undefined, "UK", true],
+      ]);
     });
 
     it("reuses the one they have", async () => {

@@ -24,9 +24,9 @@ export const TERMS_VERSION = "2026-10";
 // lawyer Terms above. Bump this whenever ilovelawyer-client/src/lib/auth/terms.ts materially changes.
 export const CLIENT_TERMS_VERSION = "client-2026-10.3";
 
-/** The Tenant every client account (USER) belongs to. The client app is served from one domain
- * for every region (ilovelawyer.com, app.ilovelawyer.com for staging), so the request's host can't
- * tell PH from UK the way the lawyer app's ph./uk. subdomains do. */
+/** The default Tenant of a client account (USER), used when the client site's host names none
+ * (ilovelawyer.com, app.ilovelawyer.com, localhost). A regional client site (kr.ilovelawyer.com)
+ * names its own: see CLIENT_HOST_TENANT_CODE_MAP in utils/tenant-host.ts. */
 export const CLIENT_TENANT_CODE: TenantCode = "UK";
 
 /** The Terms version an account of `role` agrees to: the client Terms for USER, the lawyer Terms

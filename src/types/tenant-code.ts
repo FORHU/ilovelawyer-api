@@ -3,9 +3,9 @@
  * codes at the TypeScript level. Keep in sync with prisma/seeders/tenant.seeder.ts.
  * Belongs to Organization only; never to User. See prisma/schema.prisma's Organization
  * model and docs/adr/0004-collapse-jurisdiction-into-tenant.md. */
-export type TenantCode = "PH" | "UK";
+export type TenantCode = "PH" | "UK" | "KR";
 
-const VALID_CODES: readonly TenantCode[] = ["PH", "UK"];
+const VALID_CODES: readonly TenantCode[] = ["PH", "UK", "KR"];
 
 /** Validates a Tenant.code value read from the DB (a plain `String` column, so TypeScript
  * can't narrow it on its own) against the known set. Throws rather than silently casting,
