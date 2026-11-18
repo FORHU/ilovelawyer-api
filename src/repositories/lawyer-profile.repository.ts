@@ -207,25 +207,27 @@ export default class LawyerProfileRepo {
     return { data: rows.map(flatten), total };
   }
 
-  /** Candidates for matching (#509): verified UK lawyers, minus anyone already excluded from this
-   * request. Accepting, not paused, enabled-by-org, capacity, practice area and jurisdiction are
-   * checked in ClientRequestMatchingSvc.matches — the single source of truth for the rule, so it
-   * stays unit-testable without a database. `openCount` comes from countOpenForLawyers below. */
-  static async findVerified(excludeUserIds: string[]) {
-    return LawyerProfileRepo.findVerifiedWhere({ userId: { notIn: excludeUserIds } });
+  /** Candidates for matching (#509): one site's verified lawyers (`country`, the request's site),
+   * minus anyone already excluded from this request. Accepting, not paused, enabled-by-org, capacity,
+   * practice area and jurisdiction are checked in ClientRequestMatchingSvc.matches — the single source
+   * of truth for the rule, so it stays unit-testable without a database. `openCount` comes from
+   * countOpenForLawyers below. */
+  static async findVerified(excludeUserIds: string[], country: string = "UK") {
+    return LawyerProfileRepo.findVerifiedWhere({ userId: { notIn: excludeUserIds }, country });
   }
 
-  /** One verified UK lawyer as matching reads them (findVerified), or null: who a client asks for by
-   * name from the marketplace. */
+  /** One verified lawyer, on any site, as matching reads them (findVerified), or null: who a client
+   * asks for by name from the marketplace. Matching then checks they're on the client's site. */
   static async findVerifiedById(userId: string) {
     return (await LawyerProfileRepo.findVerifiedWhere({ userId }))[0] ?? null;
   }
 
   private static async findVerifiedWhere(where: Prisma.LawyerClientProfileWhereInput) {
     const rows = await prisma.lawyerClientProfile.findMany({
-      where: { ...where, country: "UK", verificationStatus: "VERIFIED" },
+      where: { ...where, verificationStatus: "VERIFIED" },
       select: {
         userId: true,
+        country: true,
         acceptingRequests: true,
         enabledByOrganization: true,
         pausedUntil: true,
@@ -244,12 +246,12 @@ export default class LawyerProfileRepo {
     }));
   }
 
-  /** The client app's lawyer marketplace (ClientLawyerSvc): verified UK lawyers, with what the
-   * client sees of them and what availability is checked on (ClientRequestMatchingSvc.isAvailable).
-   * Their firm is their organization's (a user is in at most one). */
-  static async findForMarketplace(userId?: string) {
+  /** The client app's lawyer marketplace (ClientLawyerSvc): one site's verified lawyers (the
+   * client's), with what the client sees of them and what availability is checked on
+   * (ClientRequestMatchingSvc.isAvailable). Their firm is their organization's (a user is in at most one). */
+  static async findForMarketplace(userId?: string, country: string = "UK") {
     const rows = await prisma.lawyerClientProfile.findMany({
-      where: { country: "UK", verificationStatus: "VERIFIED", ...(userId ? { userId } : {}) },
+      where: { country, verificationStatus: "VERIFIED", ...(userId ? { userId } : {}) },
       include: {
         ...REGISTRATIONS,
         user: {

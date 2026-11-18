@@ -4,6 +4,7 @@ import { STRUCTURED_DATA_WAIT_MS } from "../constants/chatWonder.constants";
 import HttpError from "./http-error";
 import logger from "./logger";
 import { RelatedCase } from "./chatWonder";
+import type { TenantCode } from "../types/tenant-code";
 
 /** The intake persona's own, minimal WS client — deliberately NOT a reuse of
  * chatWonder.ts's streamChatWonderMessageOnce, and deliberately NOT a `personaTag` override
@@ -40,6 +41,15 @@ export class IntakeGenerationCancelledError extends Error {
 
 const INTAKE_TAG = "[intake]";
 
+/** Which intake persona Chat Wonder picks, from the client's own site — never from the caller's
+ * choice of tag: the tag above stays the literal "[intake]" for every site. A KR client's turn
+ * carries jurisdiction "KR", which Chat Wonder routes to its Korean intake persona (intake_kr), the
+ * same way "[legal ai]" plus "KR" reaches legal_kr. Every other site sends no jurisdiction, so the
+ * UK's turns are exactly what they were. */
+export function intakeJurisdictionFor(tenantCode: TenantCode | undefined): "KR" | undefined {
+  return tenantCode === "KR" ? "KR" : undefined;
+}
+
 export async function getChatWonderSessionIdForIntake(): Promise<string> {
   // Session-id minting is a plain, stateless GET with no persona concept server-side — reusing
   // chatWonder.ts's getChatWonderSessionId here would only reuse a string constant's worth of
@@ -58,6 +68,7 @@ export function streamIntakeChatWonderMessage(
   onAnswerComplete?: () => void,
   caseId?: string,
   userId?: string,
+  tenantCode?: TenantCode,
 ): Promise<IntakeChatWonderStreamResult> {
   if (signal?.aborted) return Promise.reject(new IntakeGenerationCancelledError());
   return new Promise((resolve, reject) => {
@@ -120,6 +131,7 @@ export function streamIntakeChatWonderMessage(
         document_context?: string;
         case_id?: string;
         user_id?: string;
+        jurisdiction?: "KR";
       } = {
         type: "chat",
         user_input: `${INTAKE_TAG} ${userInput}`,
@@ -129,6 +141,8 @@ export function streamIntakeChatWonderMessage(
       if (documentContext) payload.document_context = documentContext;
       if (caseId) payload.case_id = caseId;
       if (userId) payload.user_id = userId;
+      const jurisdiction = intakeJurisdictionFor(tenantCode);
+      if (jurisdiction) payload.jurisdiction = jurisdiction;
       ws.send(JSON.stringify(payload));
     };
 

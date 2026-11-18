@@ -1,5 +1,6 @@
 import ClientRequestRepo from "../repositories/client-request.repository";
 import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
+import { needsUkRegion } from "../constants/client-sites.constants";
 
 // Mirrors utils/client-budget.ts's ClientBudget from PR #624 (feat/client-case-budget, not yet
 // merged). Defined locally so matching doesn't block on that PR; swap this for a real import from
@@ -11,8 +12,11 @@ export interface ClientBudget {
 }
 
 export interface MatchCriteria {
-  /** The case's areas (Case.caseAreas). */
+  /** The request's site: its client's tenant. Only that site's lawyers match. Left out: the UK. */
+  country?: string;
+  /** The case's areas (Case.caseAreas), from the site's own list. */
   caseAreas: string[];
+  /** A UK case's part of the UK (needsUkRegion). Not read on another site. */
   ukJurisdiction: string | null;
   /** A request the client sent to one lawyer by name, while only they are offered it (onlyLawyerOf):
    * nobody else matches. Null or omitted: anyone who fits. */
@@ -29,6 +33,8 @@ export function onlyLawyerOf(r: { requestedOnly: boolean; requestedLawyerId: str
  * find-a-lawyer tool and the direct "browse lawyers" feature both start from raw criteria rather
  * than a request row. */
 export interface CriteriaMatchInput {
+  /** The client's site. Left out: the UK. */
+  country?: string;
   caseAreas: string[];
   ukJurisdiction: string | null;
   /** Client Budget (utils/client-budget). Null or omitted: no budget set, every lawyer scores 0. */
@@ -65,6 +71,8 @@ export interface MatchablePracticeArea {
  * `capacityLimit` null means unlimited. */
 export interface LawyerForMatching {
   userId: string;
+  /** The site the lawyer is registered on (LawyerClientProfile.country). Left out: the UK. */
+  country?: string;
   acceptingRequests: boolean;
   enabledByOrganization: boolean;
   pausedUntil: Date | null;
@@ -83,9 +91,9 @@ export function caseAreasOf(practiceAreas: MatchablePracticeArea[]): string[] {
 /**
  * The request matching engine (#509): which lawyers a client request is routed to. A lawyer
  * matches when they're verified, accepting requests, enabled by their organization (#518), not
- * paused, under capacity, and qualified for any one of the case's areas (through caseAreasOf) and
- * its UK jurisdiction. A request the client sent to one lawyer by name matches only them until it
- * goes wider (onlyLawyerOf).
+ * paused, under capacity, on the request's site, and qualified for any one of the case's areas
+ * (through caseAreasOf) and, on the UK, its part of the UK. A request the client sent to one lawyer
+ * by name matches only them until it goes wider (onlyLawyerOf).
  */
 export default class ClientRequestMatchingSvc {
   /** Whether the lawyer is taking new requests at all: accepting, enabled by their organization, not
@@ -99,12 +107,16 @@ export default class ClientRequestMatchingSvc {
   }
 
   static matches(lawyer: LawyerForMatching, criteria: MatchCriteria, now: Date = new Date()): boolean {
-    if (criteria.caseAreas.length === 0 || !criteria.ukJurisdiction) return false;
+    const country = criteria.country ?? "UK";
+    // A request stays on its own site: a KR client's goes to KR lawyers only, and the reverse.
+    if ((lawyer.country ?? "UK") !== country) return false;
+    const ukRegion = needsUkRegion(country) ? criteria.ukJurisdiction : null;
+    if (criteria.caseAreas.length === 0 || (needsUkRegion(country) && !ukRegion)) return false;
     if (criteria.onlyLawyerId != null && criteria.onlyLawyerId !== lawyer.userId) return false;
     if (!ClientRequestMatchingSvc.isAvailable(lawyer, now)) return false;
     const takes = caseAreasOf(lawyer.practiceAreas);
     if (!criteria.caseAreas.some((area) => takes.includes(area))) return false;
-    if (!lawyer.qualifiedJurisdictions.includes(criteria.ukJurisdiction)) return false;
+    if (ukRegion && !lawyer.qualifiedJurisdictions.includes(ukRegion)) return false;
     return true;
   }
 
@@ -119,8 +131,9 @@ export default class ClientRequestMatchingSvc {
   static async eligibleLawyerIds(requestId: string): Promise<string[]> {
     const request = await ClientRequestRepo.findForMatching(requestId);
     if (!request) return [];
-    const candidates = await LawyerProfileRepo.findVerified(request.excludedLawyerIds);
-    const criteria: MatchCriteria = { caseAreas: request.case.caseAreas, ukJurisdiction: request.case.ukJurisdiction, onlyLawyerId: onlyLawyerOf(request) };
+    const country = request.client?.tenant?.code ?? "UK";
+    const candidates = await LawyerProfileRepo.findVerified(request.excludedLawyerIds, country);
+    const criteria: MatchCriteria = { country, caseAreas: request.case.caseAreas, ukJurisdiction: request.case.ukJurisdiction, onlyLawyerId: onlyLawyerOf(request) };
     return candidates.filter((lawyer) => ClientRequestMatchingSvc.matches(lawyer, criteria)).map((lawyer) => lawyer.userId);
   }
 
@@ -128,8 +141,9 @@ export default class ClientRequestMatchingSvc {
    * chat's find-a-lawyer tool and the direct "browse lawyers" feature both call this. Budget never
    * excludes a lawyer, only orders the list: closest to the client's range first. */
   static async matchByCriteria(input: CriteriaMatchInput): Promise<RankedLawyerMatch[]> {
-    const candidates = await LawyerProfileRepo.findVerified([]);
-    const criteria: MatchCriteria = { caseAreas: input.caseAreas, ukJurisdiction: input.ukJurisdiction };
+    const country = input.country ?? "UK";
+    const candidates = await LawyerProfileRepo.findVerified([], country);
+    const criteria: MatchCriteria = { country, caseAreas: input.caseAreas, ukJurisdiction: input.ukJurisdiction };
     return candidates
       .filter((lawyer) => ClientRequestMatchingSvc.matches(lawyer, criteria))
       .map((lawyer) => ({ lawyerId: lawyer.userId, budgetFitScore: budgetFitScoreOf(lawyer.firstConsultationFeeMinor, input.budget) }))

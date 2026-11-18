@@ -9,6 +9,7 @@ import { renderTemplate } from "../utils/template";
 import { emailLinkOriginForAccount } from "../utils/tenant-host";
 import { OPS_ALERT_EMAILS } from "../config";
 import logger from "../utils/logger";
+import { moneyText } from "../utils/money-text";
 import prisma from "../lib/prisma";
 import CaseAreaSvc from "./case-area.service";
 import type { ClientRequestClaimExpiringEvent, ClientRequestNewEvent, ClientRequestTakenEvent, ClientRequestUpdatedEvent, RequestUrgency, UkJurisdiction } from "../types/client-handoff";
@@ -30,9 +31,22 @@ function formatUk(date: Date): string {
   return date.toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short", timeZone: "Europe/London" });
 }
 
-/** Links in a lawyer's email open on the UK lawyer app; in a client's, on the client app. */
-const lawyerInboxLink = () => `${emailLinkOriginForAccount({ role: "LAWYER", tenant: { code: "UK" } }, null)}${LAWYER_INBOX_PATH}`;
-const clientCaseLink = (caseId: string) => `${emailLinkOriginForAccount({ role: "USER" }, null)}/cases/${caseId}`;
+/** Links in a lawyer's email open on their own site's lawyer app; in a client's, on their own site's
+ * client app. */
+const lawyerInboxLink = (site: string = "UK") => `${emailLinkOriginForAccount({ role: "LAWYER", tenant: { code: site } }, null)}${LAWYER_INBOX_PATH}`;
+const clientCaseLink = (caseId: string, site: string = "UK") => `${emailLinkOriginForAccount({ role: "USER", tenant: { code: site } }, null)}/cases/${caseId}`;
+
+/** Korea's time, as a KR lawyer or client reads it: "2026년 10월 23일 금요일 오후 7:00". */
+function formatKr(date: Date): string {
+  return date.toLocaleString("ko-KR", { dateStyle: "full", timeStyle: "short", timeZone: "Asia/Seoul" });
+}
+
+const URGENCY_LABELS_KO: Record<RequestUrgency, string> = { URGENT: "긴급", SOON: "곧 기한 도래", ROUTINE: "일반" };
+
+/** A user's site: their organization's, else their own (UK when neither says). */
+async function siteOfUser(userId: string): Promise<string> {
+  return (await LawyerProfileRepo.findLawyerTenant(userId))?.tenantCode ?? "UK";
+}
 
 function logFailures(results: PromiseSettledResult<unknown>[], message: string, context: Record<string, unknown>) {
   const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
@@ -57,6 +71,8 @@ export default class ClientRequestNotifySvc {
 
     const lawyerIds = await ClientRequestMatchingSvc.eligibleLawyerIds(requestId);
     if (lawyerIds.length === 0) return 0;
+    const site = request.client?.tenant?.code ?? "UK";
+    if (site === "KR") return ClientRequestNotifySvc.announceKr(request, lawyerIds);
     const urgency = (request.brief as { urgency?: RequestUrgency } | null)?.urgency ?? "ROUTINE";
     const ukJurisdiction = request.case.ukJurisdiction ?? "";
     const caseAreas = (await CaseAreaSvc.refsOf(request.case.caseAreas)).map((a) => a.name);
@@ -95,6 +111,48 @@ export default class ClientRequestNotifySvc {
       }),
     );
     logFailures(results, "Client request: announcement email failed", { requestId });
+    return lawyerIds.length;
+  }
+
+  /** announce() for a KR request: KR lawyers, in Korean, with KR's area names and Korea's time, and
+   * no part of the UK. Text-only email: the templates are English. */
+  private static async announceKr(
+    request: { id: string; brief: unknown; routingExpiresAt: Date | null; requestedOnly: boolean; case: { caseAreas: string[] } },
+    lawyerIds: string[],
+  ): Promise<number> {
+    const urgency = (request.brief as { urgency?: RequestUrgency } | null)?.urgency ?? "ROUTINE";
+    const caseAreas = (await CaseAreaSvc.refsOf(request.case.caseAreas, "KR")).map((a) => a.name);
+    const event: ClientRequestNewEvent = {
+      requestId: request.id,
+      caseAreas,
+      ukJurisdiction: null as unknown as UkJurisdiction,
+      urgency,
+      routingExpiresAt: request.routingExpiresAt!.toISOString(),
+    };
+    const practiceArea = areasLabel(caseAreas);
+    const closes = formatKr(request.routingExpiresAt!);
+    const askedForYou = request.requestedOnly;
+    const link = lawyerInboxLink("KR");
+    const subject = askedForYou ? `의뢰인이 변호사님을 지정했습니다: ${practiceArea}` : `새 의뢰 요청: ${practiceArea}`;
+    const text = askedForYou
+      ? `의뢰인이 변호사님께 의뢰를 요청했습니다: ${practiceArea}. 긴급도: ${URGENCY_LABELS_KO[urgency]}. ${closes}까지 수락할 수 있으며, 그 후에는 다른 변호사에게 전달됩니다.\n\n${link}`
+      : `조건에 맞는 새 의뢰 요청이 있습니다: ${practiceArea}. 긴급도: ${URGENCY_LABELS_KO[urgency]}. ${closes}까지 수락할 수 있습니다.\n\n${link}`;
+    const emails = new Map((await LawyerProfileRepo.findEmails(lawyerIds)).map((u) => [u.id, u.email]));
+    const results = await Promise.allSettled(
+      lawyerIds.map(async (userId) => {
+        emitToUser(userId, "client-request:new", event);
+        await NotificationSvc.create({
+          userId,
+          type: "CLIENT_REQUEST",
+          title: askedForYou ? "의뢰인이 변호사님을 지정했습니다" : "새 의뢰 요청",
+          message: `${practiceArea}. ${URGENCY_LABELS_KO[urgency]}.`,
+          link: LAWYER_INBOX_PATH,
+        }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: request.id, userId }));
+        const to = emails.get(userId);
+        if (to) await sendEmail({ to, subject, text });
+      }),
+    );
+    logFailures(results, "Client request: announcement email failed", { requestId: request.id });
     return lawyerIds.length;
   }
 
@@ -163,15 +221,18 @@ export default class ClientRequestNotifySvc {
         // of this very claim doesn't match), so they're told directly.
         for (const lawyerId of notChosen) {
           emitToUser(lawyerId, "client-request:updated", updated);
+          const korean = (request.client?.tenant?.code ?? "UK") === "KR";
           await NotificationSvc.create({
             userId: lawyerId,
             type: "CLIENT_REQUEST",
-            title: "The client didn't choose a quote",
-            message: "The client didn't pick a lawyer in time, so the request has closed. Nothing was charged to you.",
+            title: korean ? "의뢰인이 견적을 선택하지 않았습니다" : "The client didn't choose a quote",
+            message: korean
+              ? "의뢰인이 기한 내에 변호사를 선택하지 않아 요청이 종료되었습니다. 변호사님께 청구된 금액은 없습니다."
+              : "The client didn't pick a lawyer in time, so the request has closed. Nothing was charged to you.",
             link: "/client-requests?view=history",
           }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: request.id }));
         }
-        await ClientRequestNotifySvc.tellClientExpired(request.client.email, request.caseId, unpicked).catch((err) =>
+        await ClientRequestNotifySvc.tellClientExpired(request.client.email, request.caseId, unpicked, request.client?.tenant?.code ?? "UK").catch((err) =>
           logger.error("Client request: expiry email to the client failed", { err, requestId: request.id }),
         );
         // Ops hear about requests no lawyer took up, not ones the client let lapse.
@@ -199,10 +260,21 @@ export default class ClientRequestNotifySvc {
         if (!(await ClientRequestClaimRepo.markReminderSent(claim.id, now))) continue;
         const event: ClientRequestClaimExpiringEvent = { requestId: claim.requestId, claimExpiresAt: claim.expiresAt.toISOString() };
         emitToUser(claim.lawyerId, "client-request:claim-expiring", event);
-        const ends = formatUk(claim.expiresAt);
-        const html = await renderTemplate("client-request-claim-expiring", { claimExpiresAt: ends, inboxLink: lawyerInboxLink() });
-        const text = `Your 24-hour hold on a client request ends at ${ends}. Send a quote before then, or it goes back to other lawyers.\n\n${lawyerInboxLink()}`;
-        await sendEmail({ to: claim.lawyer.email, subject: "Your hold on a client request ends in 2 hours", text, html }).catch((err) =>
+        const site = await siteOfUser(claim.lawyerId);
+        const sent =
+          site === "KR"
+            ? sendEmail({
+                to: claim.lawyer.email,
+                subject: "의뢰 요청 보류 시간이 2시간 후 끝납니다",
+                text: `의뢰 요청에 대한 24시간 보류가 ${formatKr(claim.expiresAt)}에 끝납니다. 그 전에 견적을 보내지 않으면 다른 변호사에게 돌아갑니다.\n\n${lawyerInboxLink("KR")}`,
+              })
+            : (async () => {
+                const ends = formatUk(claim.expiresAt);
+                const html = await renderTemplate("client-request-claim-expiring", { claimExpiresAt: ends, inboxLink: lawyerInboxLink() });
+                const text = `Your 24-hour hold on a client request ends at ${ends}. Send a quote before then, or it goes back to other lawyers.\n\n${lawyerInboxLink()}`;
+                return sendEmail({ to: claim.lawyer.email, subject: "Your hold on a client request ends in 2 hours", text, html });
+              })();
+        await sent.catch((err) =>
           logger.error("Client request: reminder email failed", { err, claimId: claim.id }),
         );
         reminded++;
@@ -219,7 +291,9 @@ export default class ClientRequestNotifySvc {
    * (at once, or on Stripe's webhook). Never the admin's note, nor why the lawyer left. Best effort:
    * a failure is logged.
    */
-  static async tellClientRefunded(input: { requestId: string; caseId: string; clientId: string; refundedMinor: number; paidMinor: number | null }) {
+  static async tellClientRefunded(input: { requestId: string; caseId: string; clientId: string; refundedMinor: number; paidMinor: number | null; currency?: string }) {
+    const site = await siteOfUser(input.clientId);
+    if (site === "KR") return ClientRequestNotifySvc.tellClientRefundedKr(input);
     const gbp = (minor: number) => `£${(minor / 100).toFixed(2)}`;
     const amount = gbp(input.refundedMinor);
     const full = input.paidMinor !== null && input.refundedMinor >= input.paidMinor;
@@ -250,6 +324,28 @@ export default class ClientRequestNotifySvc {
     }
   }
 
+  private static async tellClientRefundedKr(input: { requestId: string; caseId: string; clientId: string; refundedMinor: number; paidMinor: number | null; currency?: string }) {
+    const currency = input.currency ?? "KRW";
+    const amount = moneyText(input.refundedMinor, currency);
+    const full = input.paidMinor !== null && input.refundedMinor >= input.paidMinor;
+    const heading = `${amount} 환불이 처리되었습니다`;
+    const message = full
+      ? `변호사가 사건 대리를 중단한 경위를 검토한 후, ilovelawyer 수수료를 포함해 결제하신 금액 ${amount} 전액을 환불했습니다.`
+      : input.paidMinor !== null
+        ? `변호사가 사건 대리를 중단한 경위를 검토한 후, 결제하신 ${moneyText(input.paidMinor, currency)} 중 ${amount}을(를) 환불했습니다.`
+        : `변호사가 사건 대리를 중단한 경위를 검토한 후, ${amount}을(를) 환불했습니다.`;
+    const timing = "결제하신 카드로 환불되었으며, 명세서에 표시되기까지 영업일 기준 5~10일이 걸릴 수 있습니다.";
+    await NotificationSvc.create({ userId: input.clientId, type: "CLIENT_REQUEST", title: "환불이 진행 중입니다", message: `${amount}을(를) 결제하신 카드로 환불했습니다. ${timing}`, link: `/cases/${input.caseId}` }).catch(
+      (err) => logger.error("Lawyer exit: failed to create refund notification", { err, requestId: input.requestId }),
+    );
+    try {
+      const client = await prisma.user.findUnique({ where: { id: input.clientId }, select: { email: true } });
+      if (client?.email) await sendEmail({ to: client.email, subject: heading, text: [message, timing, clientCaseLink(input.caseId, "KR")].join("\n\n") });
+    } catch (err) {
+      logger.error("Lawyer exit: refund email failed", { err, requestId: input.requestId });
+    }
+  }
+
   /**
    * Tells the client their lawyer closed the engagement (#972), in the bell and by email: that the
    * work is finished, or (`exit`) that the lawyer can't continue, and what happens to their money.
@@ -262,6 +358,7 @@ export default class ClientRequestNotifySvc {
     lawyerName: string;
     exit: { status: "REFUNDING" | "AWAITING_REVIEW" | "WAITING_ON_DISPUTE" | "NEEDS_ATTENTION" | "SETTLED"; paid: boolean } | null;
   }) {
+    if ((await siteOfUser(input.clientId)) === "KR") return ClientRequestNotifySvc.tellClientClosedKr(input);
     const lawyer = input.lawyerName || "Your lawyer";
     const heading = input.exit ? `${lawyer} can't continue with your case` : `${lawyer} has closed your engagement`;
     const message = input.exit
@@ -294,8 +391,44 @@ export default class ClientRequestNotifySvc {
     }
   }
 
-  /** `unpicked`: lawyers quoted, but the client didn't pick one in time (several lawyers, phase 5). */
-  private static async tellClientExpired(email: string, caseId: string, unpicked: boolean) {
+  private static async tellClientClosedKr(input: {
+    requestId: string;
+    caseId: string;
+    clientId: string;
+    lawyerName: string;
+    exit: { status: "REFUNDING" | "AWAITING_REVIEW" | "WAITING_ON_DISPUTE" | "NEEDS_ATTENTION" | "SETTLED"; paid: boolean } | null;
+  }) {
+    const lawyer = input.lawyerName ? `${input.lawyerName} 변호사` : "담당 변호사";
+    const heading = input.exit ? `${lawyer}가 사건을 계속 맡을 수 없게 되었습니다` : `${lawyer}가 의뢰를 종료했습니다`;
+    const message = input.exit
+      ? `${lawyer}가 사건 대리를 중단했으며, 더 이상 사건에 접근할 수 없습니다.`
+      : `${lawyer}가 업무를 마치고 의뢰를 종료했습니다. 더 이상 사건에 접근할 수 없습니다.`;
+    const refund = !input.exit?.paid
+      ? null
+      : input.exit.status === "WAITING_ON_DISPUTE"
+        ? "이 결제에 대해 카드사가 이의 제기를 검토 중이며, 환불 금액은 카드사가 결정합니다."
+        : "결제 금액 중 얼마를 환불할지 검토 중입니다. 결과가 나오면 알려 드리겠습니다.";
+    const next = input.exit ? "준비되시면 사건 화면에서 다른 변호사를 요청할 수 있습니다." : "사건 화면에서 변호사를 평가할 수 있습니다.";
+    await NotificationSvc.create({ userId: input.clientId, type: "CLIENT_REQUEST", title: heading, message: [message, refund].filter(Boolean).join(" "), link: `/cases/${input.caseId}` }).catch(
+      (err) => logger.error("Client request: failed to create notification", { err, requestId: input.requestId }),
+    );
+    try {
+      const client = await prisma.user.findUnique({ where: { id: input.clientId }, select: { email: true } });
+      if (client?.email) await sendEmail({ to: client.email, subject: heading, text: [message, refund, next, clientCaseLink(input.caseId, "KR")].filter(Boolean).join("\n\n") });
+    } catch (err) {
+      logger.error("Client request: close email failed", { err, requestId: input.requestId });
+    }
+  }
+
+  /** `unpicked`: lawyers quoted, but the client didn't pick one in time (several lawyers, phase 5).
+   * A KR client hears in Korean, with a link to the KR site. */
+  private static async tellClientExpired(email: string, caseId: string, unpicked: boolean, site: string = "UK") {
+    if (site === "KR") {
+      const heading = unpicked ? "변호사 요청이 종료되었습니다" : "이번에는 변호사를 찾지 못했습니다";
+      const reason = unpicked ? "7일 이내에 견적을 선택하지 않아 요청이 종료되었습니다." : "48시간 이내에 요청을 수락한 변호사가 없어 요청이 종료되었습니다.";
+      await sendEmail({ to: email, subject: heading, text: `${reason} 사건 화면에서 다시 변호사를 요청할 수 있습니다.\n\n${clientCaseLink(caseId, "KR")}` });
+      return;
+    }
     const caseLink = clientCaseLink(caseId);
     const heading = unpicked ? "Your lawyer request has closed" : "We couldn't find a lawyer this time";
     const reason = unpicked

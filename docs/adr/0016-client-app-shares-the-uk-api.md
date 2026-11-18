@@ -8,7 +8,7 @@ Accepted (FORHU/ilovelawyer-app#845). One change from the first draft: the clien
 
 The UK client-to-lawyer hand-off (FORHU/ilovelawyer-app#862) connects two apps. Clients use the client app (ilovelawyer-client, ilovelawyer.com). Lawyers receive and take on clients in ilovelawyer-app (uk.ilovelawyer.com). After a client confirms a lawyer, the lawyer needs the client's case. How that works depends on where the client app's data lives. There are two choices: a permission grant in one database, or a sync between two systems.
 
-Part of this is already built. Since #501 the client app signs in against this API. Clients and lawyers share the `User` table, and `User.role` says which app an account belongs to (`USER` or `LAWYER`, see CONTEXT.md, **Client App**). Every `USER` account is created in the UK tenant. What isn't built yet is the client's data: cases, documents and AI chat are still mocked in the client app's `localStorage`.
+Part of this is already built. Since #501 the client app signs in against this API. Clients and lawyers share the `User` table, and `User.role` says which app an account belongs to (`USER` or `LAWYER`, see CONTEXT.md, **Client App**). Every `USER` account is created in the UK tenant. (Amended November 2026: the client app now has one host per site, `uk-client` / `ph-client` / `kr-client`, and a `USER` account is created in the tenant of the client host it signed up on; any other host is the UK site. See `CLIENT_HOST_TENANT_MAP` in `src/utils/tenant-host.ts`.) What isn't built yet is the client's data: cases, documents and AI chat are still mocked in the client app's `localStorage`.
 
 These existing pieces already do most of what the hand-off needs:
 
@@ -53,7 +53,7 @@ These existing pieces already do most of what the hand-off needs:
 ## Consequences
 
 - Moving client cases, documents and chat into the API has to be planned and built before the brief generator (#508) and the engagement grant (#514). It also needs the client app's own case payment (the per-case fee and top-ups the client pays). Today that is mocked, and it isn't part of #862.
-- Every client account and case is stored in London, including PH and US clients, who see "Not available yet" for a lawyer. This is consistent with every `USER` account already being on the UK tenant.
+- Every client account and case is stored in London, including PH and US clients, who see "Not available yet" for a lawyer. This is consistent with every `USER` account already being on the UK tenant. Since the November 2026 amendment, PH and KR client accounts are in their own tenants but still stored on this London stack; the KR Terms ask for consent to processing abroad (PIPA), to be confirmed by Korean counsel.
 - Lawyers' Stripe billing (#505) should be built on the payment-provider module that the PH subscriptions plan describes (`src/payments/`, `BillingWebhookEvent` idempotency, raw-body webhook mount). There should be one Stripe integration, not two.
 - The engagement's AI budget is shown to the lawyer: a meter, a warning at 80%, top-ups. The internal case allowance in `CaseLimitsSvc` is never shown. The two stay separate. An engaged case's usage counts against the engagement budget, not the hidden allowance.
 - The client's consent text has to say that the claiming lawyer sees party names for the conflict check, and that the lawyer may keep a copy of the case after the engagement ends. This goes to the solicitor review in FORHU/ilovelawyer-app#846, together with the referral-fee disclosure.

@@ -6,8 +6,10 @@ export interface DefaultCaseArea {
   description: string;
 }
 
-/** Client cases are UK only for now, so every case's areas are the UK list's. PH has its own list,
- * and its practice areas map to it, ready for when PH has client cases. */
+/** The case-area list a case uses when nothing says which site it's on: the UK's, where every client
+ * case was until the client app had one site per host. A client's own case uses its workspace's site
+ * list (ClientCaseSvc passes workspace.tenantCode): a KR client picks from KR's areas. The
+ * lawyer-facing paths (matching, briefs, requests) stay on this one, as only the UK takes requests. */
 export const CLIENT_CASE_COUNTRY: LawyerCountry = "UK";
 
 /** Where a case nothing else fits goes. Always there and always on: it can be renamed, but not

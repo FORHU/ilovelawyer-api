@@ -52,4 +52,18 @@ describe("streamIntakeChatWonderMessage payload", () => {
     expect(payload).to.not.have.property("case_id");
     expect(payload).to.not.have.property("user_id");
   });
+
+  it("sends jurisdiction KR for a KR client, keeping the plain [intake] tag (Chat Wonder's intake_kr)", async () => {
+    await streamIntakeChatWonderMessage("sess-1", "월급을 못 받았어요", () => {}, undefined, undefined, undefined, "case-1", "user-1", "KR");
+
+    const payload = JSON.parse(received[0]);
+    expect(payload.jurisdiction).to.equal("KR");
+    expect(payload.user_input).to.equal("[intake] 월급을 못 받았어요");
+  });
+
+  it("sends no jurisdiction for a UK client, so the UK intake's payload is unchanged", async () => {
+    await streamIntakeChatWonderMessage("sess-1", "hello", () => {}, undefined, undefined, undefined, "case-1", "user-1", "UK");
+
+    expect(JSON.parse(received[0])).to.not.have.property("jurisdiction");
+  });
 });

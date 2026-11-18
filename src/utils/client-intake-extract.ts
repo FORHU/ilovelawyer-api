@@ -50,15 +50,19 @@ export function caseDetailsPeople(parties: { name: string; designation: string }
 /** What the client already answered on the case-creation form — shared between
  * ClientIntakeSvc's extraction prompt (buildIntakePrompt below) and IntakeChatSvc's conversational
  * grounding (sent to chat-wonder as part of document_context), so a client never has to repeat a
- * wizard answer to the chat itself. Same wording in both places by construction, not by convention. */
+ * wizard answer to the chat itself. Same wording in both places by construction, not by convention.
+ *
+ * `ukCase` false (a client case on another site, e.g. KR) leaves out the "Part of the UK" line: it
+ * would only ever read "not set" there, which the UK intake treats as a question still to ask. */
 export function caseDetailsBlock(
   caseDetails: { title: string; caseAreas: string[]; ukJurisdiction: string | null; outsideUk?: boolean; where: string | null; side: string | null; notes: string | null },
   parties: { name: string; designation: string }[],
+  ukCase = true,
 ): string {
+  const partOfUk = ukCase ? `\nPart of the UK: ${caseDetails.ukJurisdiction ?? (caseDetails.outsideUk ? "outside the UK (the client said so)" : "not set")}` : "";
   return `Known case details (already confirmed by the client, do not repeat them as new facts):
 Title: ${caseDetails.title}
-Type of problem: ${caseDetails.caseAreas.join(", ") || "not set"}
-Part of the UK: ${caseDetails.ukJurisdiction ?? (caseDetails.outsideUk ? "outside the UK (the client said so)" : "not set")}
+Type of problem: ${caseDetails.caseAreas.join(", ") || "not set"}${partOfUk}
 Town or city: ${caseDetails.where ?? "not set"}
 The client is: ${caseDetails.side === "CLAIMANT" ? "bringing the complaint" : caseDetails.side === "RESPONDENT" ? "responding to one" : "not set"}
 The client's note: ${caseDetails.notes || "none"}

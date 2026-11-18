@@ -2,6 +2,8 @@ import { Request } from "express";
 import { Role } from "@prisma/client";
 import { TenantCode } from "../types/tenant-code";
 import { CLIENT_URL, USER_APP_URL } from "../config";
+import { DEFAULT_CLIENT_TENANT_CODE } from "../constants/auth.constants";
+import { resolveClientApp } from "./client-app";
 
 /**
  * Explicit hostname → Tenant code map. No substring/`.includes()` matching — an unrecognized
@@ -43,10 +45,55 @@ const HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "kr-local.ilovelawyer.com": "KR",
   "kr.ilovelawyer": "KR",
   "kr.localhost": "KR",
-  // The client app (ilovelawyer.com, app.ilovelawyer.com) is deliberately absent: one domain
-  // serves every region, so its host never names a Tenant. Client accounts get
-  // CLIENT_TENANT_CODE instead (AuthSvc.signupTenantCode).
+  // The client app's hosts are deliberately absent: they're in CLIENT_HOST_TENANT_MAP below. This
+  // map also decides where a lawyer's emailed links point (originForTenantCode), and a client
+  // host here could send a lawyer's password reset to the client app, which refuses lawyers.
 };
+
+/**
+ * The client app's (ilovelawyer-client) host → site map, kept apart from the lawyer hosts above and
+ * read only for a request from the client app (X-Client-App: user). Exact matches only. Keep in sync
+ * with ilovelawyer-client/src/lib/tenant/resolve-host.ts.
+ *
+ * `*-client.ilovelawyer.localhost` is local dev (browsers send *.localhost to 127.0.0.1 with no
+ * hosts-file entry); `*-client-local.ilovelawyer.com` is local dev over https for Google sign-in;
+ * `*-client-dev.ilovelawyer.com` the hosted dev environment; `*-client.ilovelawyer.com` production.
+ */
+const CLIENT_HOST_TENANT_MAP: Record<string, TenantCode> = Object.fromEntries(
+  (["UK", "PH", "KR"] as const).flatMap((site) => {
+    const prefix = site.toLowerCase();
+    return [
+      [`${prefix}-client.ilovelawyer.localhost`, site],
+      [`${prefix}-client-local.ilovelawyer.com`, site],
+      [`${prefix}-client-dev.ilovelawyer.com`, site],
+      [`${prefix}-client.ilovelawyer.com`, site],
+    ];
+  }),
+);
+
+/** The client site a host belongs to, or null for a host that isn't one site's own. */
+export function resolveClientTenantFromHost(hostname: string | undefined | null): TenantCode | null {
+  if (!hostname) return null;
+  const host = hostname.split(":")[0].trim().toLowerCase();
+  return CLIENT_HOST_TENANT_MAP[host] ?? null;
+}
+
+/** The site a client-app page on `origin` shows: its host's own, or DEFAULT_CLIENT_TENANT_CODE (UK)
+ * for any other host (localhost:3004, client-local, the old single domain), as the client app's
+ * siteForHost does. Null for something that isn't a URL. */
+export function clientSiteOfOrigin(origin: string): TenantCode | null {
+  try {
+    return resolveClientTenantFromHost(new URL(origin).hostname) ?? DEFAULT_CLIENT_TENANT_CODE;
+  } catch {
+    return null;
+  }
+}
+
+/** The client app's origin for `site` (USER_APP_URL, in list order), for a link that has to open
+ * that site: an emailed link, or the wrong-site screen's button. Null when none is configured. */
+export function clientOriginForSite(site: string): string | null {
+  return USER_APP_URL.find((origin) => clientSiteOfOrigin(origin) === site) ?? null;
+}
 
 /** Strips a trailing `:port` (present on `Host`/`Origin` headers in local dev, e.g.
  * `ph.ilovelawyer.local:3002`) before the exact-match lookup. */
@@ -67,6 +114,9 @@ export function resolveTenantCodeFromHost(hostname: string | undefined | null): 
 export function resolveTenantCodeFromRequest(req: Request): TenantCode | null {
   const originHeader = req.headers.origin || req.headers.referer;
   if (!originHeader || typeof originHeader !== "string") return null;
+  // The client app's hosts are their own map, and any other host it's on is the UK site, as the
+  // client app shows it (clientSiteOfOrigin).
+  if (resolveClientApp(req) === "user") return clientSiteOfOrigin(originHeader);
   try {
     const url = new URL(originHeader);
     return resolveTenantCodeFromHost(url.hostname);
@@ -128,17 +178,19 @@ export function emailLinkOrigin(tenantCode: string | null | undefined, requestOr
 }
 
 /** Where a link emailed to `account` should open: the app the account belongs to. A client (USER)
- * account gets the client app — the site it asked from when that's a client origin (e.g.
- * app.ilovelawyer.com on staging), else the first USER_APP_URL — never the lawyer app, which would
- * refuse it (WRONG_APP). Every other account keeps emailLinkOrigin's behaviour. Falls back to
- * emailLinkOrigin when USER_APP_URL is unset, so an environment without the client app behaves
- * exactly as before. */
+ * account gets the client app on its own site — the origin it asked from when that's a client
+ * origin of its site, else its site's first USER_APP_URL, else the first USER_APP_URL — never the
+ * lawyer app, which would refuse it (WRONG_APP). Every other account keeps emailLinkOrigin's
+ * behaviour. Falls back to emailLinkOrigin when USER_APP_URL is unset, so an environment without
+ * the client app behaves exactly as before. */
 export function emailLinkOriginForAccount(
   account: { role: Role; tenant?: { code: string } | null } | null,
   requestOrigin: string | null,
 ): string {
   if (account?.role === "USER" && USER_APP_URL.length > 0) {
-    return requestOrigin && USER_APP_URL.includes(requestOrigin) ? requestOrigin : USER_APP_URL[0];
+    const site = account.tenant?.code ?? DEFAULT_CLIENT_TENANT_CODE;
+    if (requestOrigin && USER_APP_URL.includes(requestOrigin) && clientSiteOfOrigin(requestOrigin) === site) return requestOrigin;
+    return clientOriginForSite(site) ?? USER_APP_URL[0];
   }
   return emailLinkOrigin(account?.tenant?.code, requestOrigin);
 }

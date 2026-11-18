@@ -1,4 +1,6 @@
 import type { LawyerVerificationStatus } from "@prisma/client";
+import { CLIENT_REQUESTS_OPEN_TENANTS } from "../constants/client-sites.constants";
+import type { TenantCode } from "../types/tenant-code";
 import LawyerProfileRepo, {
   type KrRegistrationFields,
   type LawyerProfileRow,
@@ -196,8 +198,8 @@ export default class LawyerProfileSvc {
     // required field, or changes what was verified, is switched off instead, so the edit still saves.
     if (after.acceptingRequests) {
       const missing = missingFields(after);
-      if (patch.acceptingRequests && after.country !== "UK") {
-        throw new HttpError("Client requests are only available on the UK site", 403, "NOT_UK_TENANT");
+      if (patch.acceptingRequests && !CLIENT_REQUESTS_OPEN_TENANTS.has(after.country as TenantCode)) {
+        throw new HttpError("Client requests aren't available on this site yet", 403, "NOT_UK_TENANT");
       }
       if (patch.acceptingRequests && missing.length) {
         throw new HttpError("Finish your profile before accepting client requests.", 422, "PROFILE_INCOMPLETE", { missing });

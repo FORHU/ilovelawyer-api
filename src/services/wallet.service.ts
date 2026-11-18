@@ -10,6 +10,7 @@ import { payoutProvider, payoutProviderNamed } from "../payments/payout-provider
 import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import { moneyText } from "../utils/money-text";
 import { CLIENT_HANDOFF_SOCKET_EVENTS, type WalletUpdatedEvent } from "../types/client-handoff";
 
 const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
@@ -42,6 +43,15 @@ export async function walletManagers(owner: WalletOwner): Promise<string[]> {
 async function tenantIdOfOwner(owner: WalletOwner): Promise<string | null> {
   if (owner.ownerType === "ORGANIZATION") return (await prisma.organization.findUnique({ where: { id: owner.ownerId }, select: { tenantId: true } }))?.tenantId ?? null;
   return (await prisma.user.findUnique({ where: { id: owner.ownerId }, select: { tenantId: true } }))?.tenantId ?? null;
+}
+
+/** The currency an owner's wallet is in: their site's request currency (KRW for a KR firm or
+ * lawyer), so a KR lawyer's earnings and withdrawals are in won. A wallet already holding money in
+ * another currency keeps it (WalletRepo.realignCurrency). */
+async function currencyOfOwner(owner: WalletOwner): Promise<string> {
+  const tenantId = await tenantIdOfOwner(owner);
+  if (!tenantId) return "GBP";
+  return (await PayoutSettingsSvc.forTenant(tenantId)).currency;
 }
 
 async function ownerName(owner: WalletOwner): Promise<{ name: string | null; email: string | null }> {
@@ -87,26 +97,33 @@ function entryDto(e: WalletLedgerEntry) {
  * reserve becomes WITHDRAWN on payout.paid, or goes back to AVAILABLE on payout.failed.
  */
 export default class WalletSvc {
+  /** The owner's wallet, made on first use, in their site's currency. One made in another currency
+   * that holds nothing in it yet (pounds, before KR earned in won) moves over. */
+  static async walletOf(owner: WalletOwner, currency?: string): Promise<Wallet> {
+    const want = currency ?? (await currencyOfOwner(owner));
+    return WalletRepo.realignCurrency(await WalletRepo.findOrCreate(owner, want), want);
+  }
+
   /** Wallet in the contract: the balances, the payout account, and the tenant's terms. */
   static async get(owner: WalletOwner) {
-    const wallet = await WalletRepo.findOrCreate(owner);
+    const wallet = await WalletSvc.walletOf(owner);
     return WalletSvc.dto(wallet);
   }
 
   static async ledger(owner: WalletOwner, page: number, limit: number) {
-    const wallet = await WalletRepo.findOrCreate(owner);
+    const wallet = await WalletSvc.walletOf(owner);
     const { total, data } = await WalletRepo.listEntries(wallet.id, page, limit);
     return { total, data: data.map(entryDto) };
   }
 
   static async earnings(owner: WalletOwner, page: number, limit: number) {
-    const wallet = await WalletRepo.findOrCreate(owner);
+    const wallet = await WalletSvc.walletOf(owner);
     const { total, data } = await WalletRepo.listEarnings(wallet.id, page, limit);
     return { total, data: data.map(earningDto) };
   }
 
   static async withdrawals(owner: WalletOwner, page: number, limit: number) {
-    const wallet = await WalletRepo.findOrCreate(owner);
+    const wallet = await WalletSvc.walletOf(owner);
     const { total, data } = await WalletRepo.listWithdrawals(wallet.id, page, limit);
     return { total, data: data.map(withdrawalDto) };
   }
@@ -117,11 +134,13 @@ export default class WalletSvc {
    * once). Audited, as changing where money goes.
    */
   static async startOnboarding(owner: WalletOwner, userId: string, returnUrl: string) {
-    let wallet = await WalletRepo.findOrCreate(owner);
+    let wallet = await WalletSvc.walletOf(owner);
     const provider = wallet.provider ? payoutProviderNamed(wallet.provider) : payoutProvider();
     if (!wallet.stripeAccountId) {
       const { name, email } = await ownerName(owner);
-      const account = await provider.createAccount({ walletId: wallet.id, ownerType: owner.ownerType, ownerId: owner.ownerId, email, name });
+      // The payout account is in the owner's country: Korea for a KR firm or lawyer paid in won.
+      const country = wallet.currency === "KRW" ? "KR" : "GB";
+      const account = await provider.createAccount({ walletId: wallet.id, ownerType: owner.ownerType, ownerId: owner.ownerId, email, name, country });
       wallet = await WalletRepo.setAccount(wallet.id, { provider: provider.name, stripeAccountId: account.accountId, payoutsEnabled: account.payoutsEnabled, detailsSubmitted: account.detailsSubmitted });
     }
     await SecurityAuditSvc.record({
@@ -140,7 +159,7 @@ export default class WalletSvc {
   /** Reads the payout account's state from Stripe again (the app coming back from onboarding, before
    * account.updated arrives). */
   static async refreshAccount(owner: WalletOwner) {
-    let wallet = await WalletRepo.findOrCreate(owner);
+    let wallet = await WalletSvc.walletOf(owner);
     if (wallet.stripeAccountId && wallet.provider) {
       const provider = payoutProviderNamed(wallet.provider);
       if (provider.mode === "connect") wallet = await WalletRepo.setAccountStatus(wallet.id, await provider.accountStatus(wallet.stripeAccountId));
@@ -156,7 +175,7 @@ export default class WalletSvc {
    * can't pay out twice. Audited.
    */
   static async withdraw(owner: WalletOwner, userId: string, amountMinor: number, idempotencyKey: string) {
-    const wallet = await WalletRepo.findOrCreate(owner);
+    const wallet = await WalletSvc.walletOf(owner);
     if (!wallet.stripeAccountId || !wallet.provider || !wallet.payoutsEnabled) {
       throw new HttpError("Set up your payout account before withdrawing.", 409, "PAYOUT_ACCOUNT_REQUIRED");
     }
@@ -174,7 +193,7 @@ export default class WalletSvc {
     });
     if ("refused" in reserved) {
       if (reserved.refused === "BELOW_MINIMUM") {
-        throw new HttpError(`The smallest withdrawal is £${(minMinor / 100).toFixed(2)}.`, 400, "WITHDRAWAL_BELOW_MINIMUM", { minimum: money(minMinor, wallet.currency) });
+        throw new HttpError(`The smallest withdrawal is ${moneyText(minMinor, wallet.currency)}.`, 400, "WITHDRAWAL_BELOW_MINIMUM", { minimum: money(minMinor, wallet.currency) });
       }
       throw new HttpError("That's more than your available balance.", 409, "INSUFFICIENT_BALANCE", { available: money(reserved.available, wallet.currency) });
     }

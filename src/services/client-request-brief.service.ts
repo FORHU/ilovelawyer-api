@@ -120,6 +120,11 @@ function redactionContext(source: BriefSource, extraPeople: { name: string }[] =
   return { people, documentNames: source.case.documents.map((d) => d.name) };
 }
 
+/** A request's site: its client's. Its brief is written for that site's lawyers. */
+function siteOfBrief(source: BriefSource): "UK" | "KR" {
+  return source.client?.tenant?.code === "KR" ? "KR" : "UK";
+}
+
 interface ConversationMessage {
   from: string;
   text: string;
@@ -134,10 +139,12 @@ interface ConversationMessage {
  * already worked out from the document. */
 function buildPrompt(source: BriefSource, caseAreas: string[], conversation: ConversationMessage[], documentExcerpts: string, now: Date): string {
   const c = source.case;
+  // A KR request's lawyers are Korean: the summary is for them, in Korean, with no part of the UK.
+  const korean = siteOfBrief(source) === "KR";
   const details = [
     `Case title: ${c.caseName}`,
     `Type of problem: ${caseAreas.join(", ") || "not set"}`,
-    `Part of the UK: ${c.ukJurisdiction ?? "not set"}`,
+    ...(korean ? [] : [`Part of the UK: ${c.ukJurisdiction ?? "not set"}`]),
     `Town or city: ${c.jurisdiction ?? "not set"}`,
     `The client is: ${c.clientSide === "CLAIMANT" ? "bringing the complaint" : c.clientSide === "RESPONDENT" ? "responding to one" : "not set"}`,
     `Others involved: ${c.parties.map((p) => `${p.designation}`).join(", ") || "none listed"}`,
@@ -145,11 +152,15 @@ function buildPrompt(source: BriefSource, caseAreas: string[], conversation: Con
   ].join("\n");
   const chat = conversation.map((m) => `${m.from === "user" ? "Client" : "AI"} (${ukDay(m.at)}): ${m.text}`).join("\n\n");
   const today = ukDay(now);
-  return `You are preparing an anonymised case summary for UK solicitors deciding whether to take on a new client.
+  const audience = korean ? "Korean lawyers (변호사) in the Republic of Korea" : "UK solicitors";
+  const writing = korean
+    ? "Write for a Korean lawyer, in Korean (한국어), 200 to 450 characters"
+    : "Write for a solicitor, in plain English, 80 to 180 words";
+  return `You are preparing an anonymised case summary for ${audience} deciding whether to take on a new client.
 
 Today's date is ${today}. Each message below shows the date it was sent. Work out any relative dates ("on Tuesday", "in two months") from those dates, or from a document's own dated content if the conversation doesn't give one — never guess one that isn't actually stated or computable.
 
-Write for a solicitor, in plain English, 80 to 180 words: what happened and when, where things stand now, what the client wants, and anything time-sensitive. Use the document excerpts below (if any) the same way you use the conversation — do not write as if no documents were given when excerpts are provided. Refer to people only by their role (the client, the employer, the landlord, the seller), never by name. Do not mention document names, addresses, email addresses or phone numbers, or anyone's name that appears in a document. Do not give legal advice. Use only the case details, the conversation and the document excerpts below.
+${writing}: what happened and when, where things stand now, what the client wants, and anything time-sensitive. Use the document excerpts below (if any) the same way you use the conversation — do not write as if no documents were given when excerpts are provided. Refer to people only by their role (the client, the employer, the landlord, the seller), never by name. Do not mention document names, addresses, email addresses or phone numbers, or anyone's name that appears in a document. Do not give legal advice. Use only the case details, the conversation and the document excerpts below.
 
 Then rate the urgency, counting from today: URGENT if a hearing, deadline or time limit is within 7 days or has passed, SOON if within 30 days, otherwise ROUTINE. Rate a rough time the same way: "in about two months" is ROUTINE, "in a couple of weeks" is SOON.
 
@@ -208,13 +219,16 @@ export default class ClientRequestBriefSvc {
       const { conversation, latestMessageId } = await ClientRequestBriefSvc.conversationOf(source);
       const session = await getChatWonderSessionId();
       const now = new Date();
-      const caseAreas = (await CaseAreaSvc.refsOf(source.case.caseAreas)).map((a) => a.name);
+      const site = siteOfBrief(source);
+      // The site's own area names (KR's are Korean).
+      const caseAreas = (await CaseAreaSvc.refsOf(source.case.caseAreas, site)).map((a) => a.name);
       const ready = source.case.documents.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
       const pack = ready.length ? await buildFactExcerptPack(ready) : { text: "", chunkIds: [], factCount: 0 };
       const documentExcerpts = ready.length
         ? wrapExtractedText("Use only these excerpts and the documents listed above.", excerptsWithHandles(pack.text, ready))
         : "";
-      const reply = await callChatWonderRest(buildPrompt(source, caseAreas, conversation, documentExcerpts, now), session, undefined, "UK", {
+      // The site's legal persona: legal_kr for a KR request, legal_uk otherwise.
+      const reply = await callChatWonderRest(buildPrompt(source, caseAreas, conversation, documentExcerpts, now), session, undefined, site, {
         usage: { feature: "clientRequestBrief", userId: source.clientId, caseId: source.caseId },
       });
       const parsed = parseBriefReply(String(reply.response ?? reply.intermediate_response ?? ""), now);
@@ -226,7 +240,7 @@ export default class ClientRequestBriefSvc {
       const brief: CaseBrief = {
         summary: redactBrief(parsed.summary, ctx),
         caseAreas,
-        ukJurisdiction: source.case.ukJurisdiction,
+        ukJurisdiction: site === "UK" ? source.case.ukJurisdiction : null,
         urgency: parsed.urgency,
         knownDeadline: parsed.knownDeadline,
         clientNote: redactBrief(source.note, ctx),

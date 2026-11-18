@@ -1,10 +1,10 @@
-import { clientWorkspaceOf } from "../middleware/require-client-account.middleware";
 import { Request, Response } from "express";
 import type { ObjectSchema } from "joi";
 import ClientRequestSvc from "../services/client-request.service";
 import QuotationPaymentSvc from "../services/quotation-payment.service";
 import EngagementMessageSvc from "../services/engagement-message.service";
 import HttpError from "../utils/http-error";
+import { clientWorkspaceOf } from "../middleware/require-client-account.middleware";
 import {
   clientRequestConsentSchema,
   clientRequestEligibilitySchema,
@@ -33,7 +33,8 @@ function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
 export default class ClientRequestCtrl {
   static async consent(req: Request, res: Response) {
     const { direct } = validate(clientRequestConsentSchema, req.query);
-    res.status(200).json(ClientRequestSvc.consent(direct));
+    // In the client's site's words (Korean on KR).
+    res.status(200).json(ClientRequestSvc.consent(direct, clientWorkspaceOf(req).tenantCode));
   }
 
   static async eligibility(req: Request, res: Response) {

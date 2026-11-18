@@ -49,8 +49,9 @@ export default class ClientCaseCtrl {
   }
 
   /** The "Type of issue" choices: the switched-on case areas, in order. */
-  static async caseAreas(_req: Request, res: Response) {
-    res.status(200).json(await CaseAreaSvc.listActive());
+  /** The client's own site's list: a KR client picks from KR's areas. */
+  static async caseAreas(req: Request, res: Response) {
+    res.status(200).json(await CaseAreaSvc.listActive(clientWorkspaceOf(req).tenantCode));
   }
 
   static async create(req: Request, res: Response) {

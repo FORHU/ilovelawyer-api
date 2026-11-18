@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { CLIENT_REQUEST_CURRENCIES } from "../constants/client-request.constants";
 import Joi from "joi";
 import PayoutSettingsSvc from "../services/payout-settings.service";
 import QuotationPaymentSvc from "../services/quotation-payment.service";
@@ -31,7 +32,7 @@ const refundSchema = Joi.object({
   /** Left out: everything not yet refunded, the platform fee included. */
   amount: Joi.object({
     amountMinor: Joi.number().integer().min(1).required(),
-    currency: Joi.string().valid("GBP").required(),
+    currency: Joi.string().valid(...CLIENT_REQUEST_CURRENCIES).required(),
   }).optional(),
   reason: Joi.string().trim().min(1).max(500).required(),
 });
@@ -60,7 +61,7 @@ const decideSchema = Joi.object({
   /** What the client gets back: 0 for nothing, at most the lawyer's share for part, or everything left. */
   refund: Joi.object({
     amountMinor: Joi.number().integer().min(0).required(),
-    currency: Joi.string().valid("GBP").required(),
+    currency: Joi.string().valid(...CLIENT_REQUEST_CURRENCIES).required(),
   }).required(),
   note: Joi.string().trim().allow("").max(1000).optional(),
 });

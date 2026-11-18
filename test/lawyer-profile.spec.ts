@@ -207,9 +207,15 @@ describe("Lawyer Application", () => {
       expect(dto.firstConsultationFee).to.deep.equal({ amountMinor: 100000, currency: "KRW" });
     });
 
-    it("never lets a KR lawyer accept client requests (UK only)", async () => {
+    it("lets a verified KR lawyer accept client requests: KR clients have them", async () => {
       who = { role: "LAWYER", tenantCode: "KR" };
       stored = row({ country: "KR", kr: { ...noKr, registrationNumber: "12345", localBar: "SEOUL" }, practiceAreas: [ref("kr-civil")], verificationStatus: "VERIFIED" });
+      expect(await errorOf(LawyerProfileSvc.update("u1", { acceptingRequests: true }))).to.not.deep.equal({ status: 403, code: "NOT_UK_TENANT" });
+    });
+
+    it("never lets a PH lawyer accept client requests: PH clients don't have them yet", async () => {
+      who = { role: "LAWYER", tenantCode: "PH" };
+      stored = row({ country: "PH", practiceAreas: [ref("ph-civil")], verificationStatus: "VERIFIED" });
       expect(await errorOf(LawyerProfileSvc.update("u1", { acceptingRequests: true }))).to.deep.equal({ status: 403, code: "NOT_UK_TENANT" });
     });
 

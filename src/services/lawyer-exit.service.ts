@@ -12,9 +12,9 @@ import WalletSvc from "./wallet.service";
 import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import { moneyText } from "../utils/money-text";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const gbp = (minor: number) => `£${(minor / 100).toFixed(2)}`;
 const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
 
 /** How a reason reads in a refund's reason (which is audited): the category only, never the note. */
@@ -251,6 +251,7 @@ export default class LawyerExitSvc {
         clientId: exit.clientId,
         refundedMinor,
         paidMinor: payment?.amountMinor ?? null,
+        currency: payment?.currency,
       });
     }
   }
@@ -269,7 +270,7 @@ export default class LawyerExitSvc {
       message: opts.byBank
         ? "The client's bank decided the dispute in their favour and returned their payment, so your fee for it was taken back."
         : exit.refundedMinor > 0
-          ? `The client was refunded ${gbp(exit.refundedMinor)}. Anything left of your fee is released after the usual hold.`
+          ? `The client was refunded ${moneyText(exit.refundedMinor, exit.currency)}. Anything left of your fee is released after the usual hold.`
           : "Nothing was refunded to the client. Your fee is released after the usual hold.",
       link: `/client-requests/${exit.requestId}`,
     });

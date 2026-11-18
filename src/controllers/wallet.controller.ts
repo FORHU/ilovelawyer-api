@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { CLIENT_REQUEST_CURRENCIES } from "../constants/client-request.constants";
 import Joi from "joi";
 import WalletSvc from "../services/wallet.service";
 import type { WalletOwner } from "../repositories/wallet.repository";
@@ -13,7 +14,7 @@ const onboardingSchema = Joi.object({ returnUrl: Joi.string().trim().max(2048).r
 const withdrawSchema = Joi.object({
   amount: Joi.object({
     amountMinor: Joi.number().integer().min(1).required(),
-    currency: Joi.string().valid("GBP").required(),
+    currency: Joi.string().valid(...CLIENT_REQUEST_CURRENCIES).required(),
   }).required(),
 });
 const idempotencyKeySchema = Joi.string().trim().min(8).max(200).required().messages({ "any.required": "Send an Idempotency-Key header with each withdrawal." });

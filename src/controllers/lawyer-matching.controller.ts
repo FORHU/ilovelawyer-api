@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { isTenantCode } from "../types/tenant-code";
 import ClientRequestMatchingSvc, { type ClientBudget } from "../services/client-request-matching.service";
 
 function budgetOf(body: unknown): ClientBudget | null | undefined {
@@ -20,14 +21,16 @@ export default class LawyerMatchingCtrl {
    * as it stands today — it would need its own, differently-authenticated route (or this one
    * opened to session auth), not assumed here. */
   static async byCriteria(req: Request, res: Response) {
-    const { caseAreas, ukJurisdiction, budget } = req.body ?? {};
+    const { caseAreas, ukJurisdiction, budget, country } = req.body ?? {};
     if (!Array.isArray(caseAreas) || caseAreas.some((a) => typeof a !== "string")) {
       return res.status(400).json({ message: "Provide `caseAreas` as a string array." });
     }
     if (ukJurisdiction !== undefined && ukJurisdiction !== null && typeof ukJurisdiction !== "string") {
       return res.status(400).json({ message: "Provide `ukJurisdiction` as a string, or null." });
     }
-    const matches = await ClientRequestMatchingSvc.matchByCriteria({ caseAreas, ukJurisdiction: ukJurisdiction ?? null, budget: budgetOf(budget) });
+    if (country !== undefined && !isTenantCode(country)) return res.status(400).json({ message: "Provide `country` as a site code (UK, PH, KR), or leave it out for the UK." });
+    // The client's site (KR's intake persona sends "KR"); left out, the UK, as before.
+    const matches = await ClientRequestMatchingSvc.matchByCriteria({ country, caseAreas, ukJurisdiction: ukJurisdiction ?? null, budget: budgetOf(budget) });
     return res.status(200).json({ matches });
   }
 }

@@ -312,7 +312,8 @@ export default class IntakeChatSvc {
       const organizationId = await CaseRepo.findOrganizationId(caseId);
       const row = organizationId ? await ClientCaseRepo.findById(caseId, organizationId) : null;
       if (row) {
-        const label = await CaseAreaSvc.labeller();
+        // The client's own site's area names (a KR case's codes are KR's list).
+        const label = await CaseAreaSvc.labeller(job.tenantCode);
         caseContext = caseDetailsBlock(
           {
             title: row.caseName,
@@ -324,6 +325,7 @@ export default class IntakeChatSvc {
             notes: row.notes,
           },
           row.parties.map((p) => ({ name: p.name, designation: p.designation })),
+          job.tenantCode === "UK",
         );
       }
     } catch (err) {
@@ -410,7 +412,7 @@ export default class IntakeChatSvc {
     };
 
     const stream = (sid: string, context: string) =>
-      streamIntakeChatWonderMessage(sid, userInput, checkpointedOnChunk, context || undefined, signal, () => emitEvent("chat:answer-complete", {}), caseId, userId);
+      streamIntakeChatWonderMessage(sid, userInput, checkpointedOnChunk, context || undefined, signal, () => emitEvent("chat:answer-complete", {}), caseId, userId, job.tenantCode);
     // documentContext plus the chat before this turn, for a session that has never seen it.
     const withEarlierChat = async () =>
       [documentContext, earlierConversationBlock(await IntakeChatRepo.listByCase(caseId), parentMessageId)].filter(Boolean).join("\n\n");

@@ -25,7 +25,8 @@ export default class CaseAreaRepo {
   }
 
   /** How many cases have each of the site's codes, and how many of its practice areas map to each.
-   * Cases carry no site: they're all CLIENT_CASE_COUNTRY's, so another site's areas count none. */
+   * CLIENT_CASE_COUNTRY counts every case, as before cases had a site; another site counts the cases
+   * of its own tenant's organizations (a KR client's case is in their KR workspace). */
   static async usage(country: LawyerCountry, codes: string[]): Promise<Map<string, { cases: number; practiceAreas: number }>> {
     const usage = new Map(codes.map((code) => [code, { cases: 0, practiceAreas: 0 }]));
     if (codes.length === 0) return usage;
@@ -34,7 +35,13 @@ export default class CaseAreaRepo {
         ? prisma.$queryRaw<{ code: string; n: number }[]>`
             SELECT code, count(*)::int AS n FROM "Case", unnest("caseAreas") AS code
             WHERE code = ANY(${codes}) GROUP BY code`
-        : [],
+        : prisma.$queryRaw<{ code: string; n: number }[]>`
+            SELECT area AS code, count(*)::int AS n
+            FROM "Case" c
+            JOIN "Organization" o ON o.id = c."organizationId"
+            JOIN "Tenant" t ON t.id = o."tenantId",
+            unnest(c."caseAreas") AS area
+            WHERE t.code = ${country} AND area = ANY(${codes}) GROUP BY area`,
       prisma.practiceArea.groupBy({ by: ["caseArea"], where: { country, caseArea: { in: codes } }, _count: { _all: true } }),
     ]);
     for (const { code, n } of cases) usage.get(code)!.cases = n;

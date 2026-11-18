@@ -23,6 +23,13 @@ export default class IntakeCaseCtrl {
       throw new HttpError("This is only available for client accounts", 403, "CLIENT_ACCOUNT_ONLY");
     }
     const workspace = await ClientCaseSvc.workspaceFor(userId, user.name || user.username);
+    // The UK's place fields mean nothing on another site's case (a KR case has only `where`). The
+    // KR intake persona is told never to send them, but a model slip must not write a UK region
+    // onto a Korean case, so they're dropped here rather than trusted.
+    if (workspace.tenantCode !== "UK") {
+      delete rest.ukJurisdiction;
+      delete rest.outsideUk;
+    }
     const result = await ClientCaseSvc.update(workspace, userId, req.params.caseId, rest);
     logger.info("Intake case: chat-wonder update applied", { caseId: req.params.caseId, userId, fields: Object.keys(rest) });
     res.status(200).json(result);

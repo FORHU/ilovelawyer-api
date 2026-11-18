@@ -187,13 +187,13 @@ describe("Client app decides the account role", () => {
 
     afterEach(() => restore.forEach((r) => r()));
 
-    const signup = (requestTenantCode: "PH" | "UK" | null = null) =>
+    const signup = (requestTenantCode: "PH" | "UK" | "KR" | null = null) =>
       AuthSvc.signup("a", "a@b.com", "Password123!", "A", requestTenantCode, true);
 
-    it("puts every client in the UK tenant, whatever site it signed up from", async () => {
+    it("puts a client in the site it signed up on, and in the UK when the request names none", async () => {
       await inApp("user", () => signup(null));
       await inApp("user", () => signup("PH"));
-      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-UK", "tenant-UK"]);
+      expect(created.map((d: any) => d.tenantId)).to.deep.equal(["tenant-UK", "tenant-PH"]);
     });
 
     it("still takes a lawyer's tenant from the site, and none from an unknown one", async () => {

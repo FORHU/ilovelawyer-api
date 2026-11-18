@@ -15,6 +15,15 @@ export const PAYOUT_SETTINGS_DEFAULTS = {
   minWithdrawalMinor: 1000,
 } as const;
 
+/** A KR site's starting terms, in won (no minor unit): the same 15% fee, and minimums about the
+ * size of the GBP ones (₩10,000 platform fee, ₩20,000 withdrawal). */
+export const PAYOUT_SETTINGS_DEFAULTS_KRW = {
+  ...PAYOUT_SETTINGS_DEFAULTS,
+  currency: "KRW",
+  minPlatformFeeMinor: 10_000,
+  minWithdrawalMinor: 20_000,
+} as const;
+
 /** What an admin may set, to catch a typo. */
 export const PAYOUT_LIMITS = {
   platformFeeBps: { min: 0, max: 5000 },

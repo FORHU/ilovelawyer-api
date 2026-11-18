@@ -22,6 +22,9 @@ export interface PayoutAccountRequest {
   ownerId: string;
   email: string | null;
   name: string | null;
+  /** Where the account's bank is (ISO 3166 alpha-2): GB for a UK owner, KR for a KR one paid in won.
+   * Left out: GB. A KR account needs the platform's Stripe account to support Connect payouts to Korea. */
+  country?: string;
 }
 
 export interface PayoutAccountStatus {
@@ -91,7 +94,7 @@ export const stripePayoutProvider: ConnectPayoutProvider = {
     const account = await stripeClient().accounts.create(
       {
         type: "express",
-        country: "GB",
+        country: request.country ?? "GB",
         ...(request.email ? { email: request.email } : {}),
         ...(request.name ? { business_profile: { name: request.name } } : {}),
         capabilities: { transfers: { requested: true } },
