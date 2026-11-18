@@ -52,9 +52,10 @@ describe("computeDamagesSummary", () => {
 });
 
 describe("currencyForTenant", () => {
-  it("is GBP for UK and PHP otherwise", () => {
+  it("is each tenant's own currency, and PHP when the tenant is unknown", () => {
     expect(currencyForTenant("UK")).to.equal("GBP");
     expect(currencyForTenant("PH")).to.equal("PHP");
+    expect(currencyForTenant("KR")).to.equal("KRW");
     expect(currencyForTenant(null)).to.equal("PHP");
   });
 });

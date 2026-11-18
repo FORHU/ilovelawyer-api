@@ -75,6 +75,7 @@ router.get("/settings", asyncHandler(AdminCtrl.getSettings));
 router.patch("/settings/tenants/:code", asyncHandler(AdminCtrl.updateTenantSettings));
 router.get("/settings/tenants/:code/payment-plans", asyncHandler(AdminCtrl.listPaymentPlans));
 router.post("/settings/tenants/:code/payment-plans", asyncHandler(AdminCtrl.createPaymentPlan));
+router.put("/settings/tenants/:code/payment-plans/currency", asyncHandler(AdminCtrl.changePaymentPlanCurrency));
 router.patch("/settings/tenants/:code/payment-plans/:planId", asyncHandler(AdminCtrl.updatePaymentPlan));
 router.delete("/settings/tenants/:code/payment-plans/:planId", asyncHandler(AdminCtrl.deactivatePaymentPlan));
 router.post("/tenants/:code/approve-pending", asyncHandler(AdminCtrl.approvePending));

@@ -26,6 +26,9 @@ export const LEGAL_TAG = "[legal ai]";
  * UK tool whitelist and prompt) without depending on that field at all. See
  * streamChatWonderMessage's withLegalTag, which picks between this and LEGAL_TAG. */
 export const LEGAL_TAG_UK = "[legal ai uk]";
+/** The same for the `legal_kr` persona (Korean Law MCP tools and legal_prompt_kr.txt, chat-wonder-v2-api
+ * PR #141). process_persona checks it before the UK tag and the jurisdiction fallback. */
+export const LEGAL_TAG_KR = "[legal ai kr]";
 /** Legal persona sends `__END__` first, then runs `[STRUCTURED_DATA]` (timeline + mind
  * map), reasoning, and (when triggered) audio overview as concurrent lightweight LLM
  * calls before `[DONE]`. Wait this long after `__END__` for all of that. */

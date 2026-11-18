@@ -34,6 +34,7 @@ import {
   buildUKMissingEvidencePrompt,
   buildUKCrossExaminationPrompt,
 } from "./uk/prompts";
+import { buildKRChatTitlePrompt } from "./kr/prompts";
 
 /** Every getter below selects strictly by tenantCode — never by client input — and throws
  * rather than falling back to another tenantCode's prompt when unmapped. */
@@ -176,6 +177,8 @@ export function getChatTitlePromptBuilder(tenantCode: TenantCode) {
       return buildPHChatTitlePrompt;
     case "UK":
       return buildUKChatTitlePrompt;
+    case "KR":
+      return buildKRChatTitlePrompt;
     default:
       throw new HttpError(`No chat-title prompt builder configured for tenantCode: ${tenantCode}`, 501);
   }

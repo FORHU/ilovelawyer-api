@@ -34,3 +34,9 @@ describe("legislationSection", () => {
     expect(legislationSection("https://www.legislation.gov.uk/ukpga/2015/15", "Consumer Rights Act 2015")).to.equal(null);
   });
 });
+
+describe("libraryHref for a tenant with no Library (KR)", () => {
+  it("refuses with 501 instead of building another tenant's link", () => {
+    expect(() => libraryHref("KR", "law-uuid-1", "JURISPRUDENCE")).to.throw(/not available/);
+  });
+});

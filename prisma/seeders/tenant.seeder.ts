@@ -1,5 +1,5 @@
 import prisma from "../../src/lib/prisma";
-import { PAYMENT_PLAN_DEFAULT_TIERS } from "../../src/constants/tenant-settings.constants";
+import { PAYMENT_PLAN_DEFAULT_TIERS, currencyOfTiers, legacyFeeUsd } from "../../src/constants/payment-plan.constants";
 import { CLIENT_PRICING_DEFAULTS } from "../../src/constants/client-pricing.constants";
 import { LAWYER_PRICING_DEFAULTS } from "../../src/constants/lawyer-pricing.constants";
 
@@ -9,6 +9,7 @@ import { LAWYER_PRICING_DEFAULTS } from "../../src/constants/lawyer-pricing.cons
 const TENANTS = [
   { code: "PH", name: "Philippines" },
   { code: "UK", name: "United Kingdom" },
+  { code: "KR", name: "South Korea" },
 ] as const;
 
 export async function seedTenants() {
@@ -23,12 +24,26 @@ export async function seedTenants() {
     // backfill seeds nothing — without these, every lawyer would have no tier and be locked.
     // Create-only: a tier an admin has since edited is left as it is. createdAt === updatedAt is
     // how the admin Settings page tells a never-edited default tier, same as the migration's rows.
-    for (const tier of PAYMENT_PLAN_DEFAULT_TIERS) {
+    // Each tier is priced in the site's currency: that of the tiers it already has (a site never mixes
+    // currencies), or its local default for a new site (pesos on PH, won on KR).
+    const existing = await prisma.paymentPlan.findMany({ where: { tenantId, planType: "B2B_SUBSCRIPTION" }, select: { priceMinor: true, currency: true, feeUsd: true, level: true } });
+    const planCurrency = currencyOfTiers(existing, tenant.code);
+    for (const { priceMinor, ...tier } of PAYMENT_PLAN_DEFAULT_TIERS) {
       const now = new Date();
+      const amountMinor = priceMinor[planCurrency];
       await prisma.paymentPlan.upsert({
         where: { tenantId_planType_code: { tenantId, planType: "B2B_SUBSCRIPTION", code: tier.code } },
         update: {},
-        create: { tenantId, planType: "B2B_SUBSCRIPTION", ...tier, createdAt: now, updatedAt: now },
+        create: {
+          tenantId,
+          planType: "B2B_SUBSCRIPTION",
+          ...tier,
+          priceMinor: amountMinor,
+          currency: planCurrency,
+          feeUsd: legacyFeeUsd(amountMinor, planCurrency),
+          createdAt: now,
+          updatedAt: now,
+        },
       });
     }
 

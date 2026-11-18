@@ -4,6 +4,7 @@ import prisma from "../lib/prisma";
 import { emitToUser } from "../lib/socket";
 import PaymentPlanSubscriptionRepo, { type SubscriptionPeriod } from "../repositories/payment-plan-subscription.repository";
 import PaymentPlanStripeSyncSvc from "./payment-plan-stripe-sync.service";
+import AccountTopUpPricingSvc from "./account-topup-pricing.service";
 import {
   createPaymentPlanCheckout,
   expirePaymentPlanCheckout,
@@ -21,6 +22,7 @@ import { returnOrigin } from "./client-billing.service";
 import { STRIPE_PUBLISHABLE_KEY } from "../config";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import { planPrice, toMajor } from "../constants/payment-plan.constants";
 
 const EXPIRED_REASON = "The payment page expired before you paid. Nothing was charged.";
 const REPLACED_REASON = "You chose another plan instead. Nothing was charged.";
@@ -94,17 +96,25 @@ export default class PaymentPlanBillingSvc {
       prisma.paymentPlan.findMany({
         where: { tenantId: user.tenantId, planType: "B2B_SUBSCRIPTION", isActive: true },
         orderBy: { level: "asc" },
-        select: { code: true, name: true, description: true, level: true, feeUsd: true, includedAllowanceUsd: true, caseLimit: true, clientRequestLimit: true },
+        select: { code: true, name: true, description: true, level: true, priceMinor: true, currency: true, feeUsd: true, includedAllowanceUsd: true, caseLimit: true, clientRequestLimit: true },
       }),
       PaymentPlanSubscriptionRepo.findLiveForUser(userId),
       prisma.user.findUnique({ where: { id: userId }, select: { planTrialEndsAt: true } }),
     ]);
     const trialEndsAt = trial?.planTrialEndsAt ?? null;
+    const aiUsage = await AccountTopUpPricingSvc.aiUsageConverter(user.tenantId);
     const scheduled = live?.scheduledPaymentPlanId
       ? await prisma.paymentPlan.findUnique({ where: { id: live.scheduledPaymentPlanId }, select: { code: true } })
       : null;
     return {
-      plans,
+      // `price` is the monthly fee in the site's currency (won on KR), in its smallest unit. `aiUsage`
+      // is the AI usage it includes (includedAllowanceUsd) in that currency too, at the site's top-up
+      // rate, so a KR lawyer reads ₩14,000 rather than $10.
+      plans: plans.map(({ priceMinor, currency, feeUsd, ...plan }) => ({
+        ...plan,
+        price: planPrice({ priceMinor, currency, feeUsd }),
+        aiUsage: aiUsage(plan.includedAllowanceUsd),
+      })),
       currentPlanCode: user.paymentPlan?.code ?? null,
       subscribed: !!live,
       // When the paid period ends: the next charge, and when a scheduled downgrade happens.
@@ -180,12 +190,14 @@ export default class PaymentPlanBillingSvc {
   static async previewChange(userId: string, planCode: string) {
     const { row, plan, kind } = await PaymentPlanBillingSvc.changeContext(userId, planCode);
     const base = { kind, planCode: plan.code, renewsAt: row.currentPeriodEnd };
-    if (kind !== "UPGRADE") return { ...base, amountDueNow: 0, currency: "USD", effectiveAt: kind === "DOWNGRADE" ? row.currentPeriodEnd : null };
+    const { currency } = planPrice(plan);
+    if (kind !== "UPGRADE") return { ...base, amountDueNow: 0, currency, effectiveAt: kind === "DOWNGRADE" ? row.currentPeriodEnd : null };
     const stripePriceId = await PaymentPlanBillingSvc.priceOf(plan);
     const preview = await PaymentPlanBillingSvc.provider(async () =>
       previewPaymentPlanUpgrade(await retrievePaymentPlanSubscription(row.stripeSubscriptionId!), stripePriceId),
     );
-    return { ...base, amountDueNow: preview.amountDueMinor / 100, currency: preview.currency.toUpperCase(), effectiveAt: null };
+    // amountDueNow is in major units: Stripe's amount has no decimals to take off for KRW.
+    return { ...base, amountDueNow: toMajor(preview.amountDueMinor, preview.currency), currency: preview.currency.toUpperCase(), effectiveAt: null };
   }
 
   /** Changes a live subscription's tier (see previewChange). An upgrade is applied here as soon as
@@ -241,7 +253,10 @@ export default class PaymentPlanBillingSvc {
       if (!row.scheduledPaymentPlanId) throw new HttpError(`You're already on ${plan.name}.`, 409, "SAME_PLAN");
       kind = "KEEP";
     } else {
-      kind = plan.feeUsd > current.feeUsd || (plan.feeUsd === current.feeUsd && plan.level > current.level) ? "UPGRADE" : "DOWNGRADE";
+      // Both tiers are the lawyer's own site's, so in the same currency.
+      const to = planPrice(plan).amountMinor;
+      const from = planPrice(current).amountMinor;
+      kind = to > from || (to === from && plan.level > current.level) ? "UPGRADE" : "DOWNGRADE";
     }
     return { row, current, plan, kind };
   }

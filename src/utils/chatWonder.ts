@@ -11,6 +11,7 @@ import {
   RETRY_DELAY_MS,
   LEGAL_TAG,
   LEGAL_TAG_UK,
+  LEGAL_TAG_KR,
   MINDMAP_RULE,
   STRUCTURED_DATA_WAIT_MS,
   CHAT_WONDER_SESSION_TIMEOUT_MS,
@@ -320,18 +321,24 @@ export interface RelatedCase {
   vetted: boolean;
 }
 
-function stripLegalTag(input: string): string {
+export function stripLegalTag(input: string): string {
   const lower = input.toLowerCase();
-  if (lower.startsWith(LEGAL_TAG_UK)) return input.slice(LEGAL_TAG_UK.length).trimStart();
-  if (lower.startsWith(LEGAL_TAG)) return input.slice(LEGAL_TAG.length).trimStart();
+  for (const tag of [LEGAL_TAG_KR, LEGAL_TAG_UK, LEGAL_TAG]) {
+    if (lower.startsWith(tag)) return input.slice(tag.length).trimStart();
+  }
   return input;
 }
 
+/** Each tenant's legal persona in Chat Wonder: `legal` (PH, juris.ph), `legal_uk` (UK Legal MCP),
+ * `legal_kr` (Korean Law MCP). */
+const LEGAL_TAG_BY_TENANT: Record<TenantCode, string> = { PH: LEGAL_TAG, UK: LEGAL_TAG_UK, KR: LEGAL_TAG_KR };
+
 // Picks the tag directly instead of relying on the separate `jurisdiction` payload field —
 // the_server.py::process_persona checks this tag first, before its jurisdiction fallback, so
-// this alone determines legal vs. legal_uk with no dependency on that field being read correctly.
-function withLegalTag(input: string, tenantCode?: TenantCode): string {
-  const tag = tenantCode === "UK" ? LEGAL_TAG_UK : LEGAL_TAG;
+// this alone determines legal vs. legal_uk vs. legal_kr with no dependency on that field being
+// read correctly. No tenant (a legacy tenant-less workspace) keeps the PH tag, as before.
+export function withLegalTag(input: string, tenantCode?: TenantCode): string {
+  const tag = tenantCode ? LEGAL_TAG_BY_TENANT[tenantCode] : LEGAL_TAG;
   return `${tag} ${stripLegalTag(input)}`;
 }
 
@@ -551,7 +558,7 @@ function streamChatWonderMessageOnce(
    * user_input when this is set, so chat-wonder is never told the tag format for a general
    * (no-Case) Consultation. */
   caseId?: string,
-  // Selects LEGAL_TAG vs. LEGAL_TAG_UK in withLegalTag below — not forwarded as a payload
+  // Selects LEGAL_TAG, LEGAL_TAG_UK or LEGAL_TAG_KR in withLegalTag below — not forwarded as a payload
   // field (see that function's comment for why the tag alone is enough).
   tenantCode?: TenantCode,
   /** Aborting closes the Chat Wonder socket and rejects with GenerationCancelledError. Closing

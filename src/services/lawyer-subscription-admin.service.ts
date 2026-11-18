@@ -1,5 +1,9 @@
 import type { PaymentPlanSubscriptionStatus, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
+import { planPrice } from "../constants/payment-plan.constants";
+import PaymentPlanSvc from "./payment-plan.service";
+import TenantRepo from "../repositories/tenant.repository";
+import type { TenantCode } from "../types/tenant-code";
 
 /** The admin's filters on lawyers' plan subscriptions. ALL: everything but checkouts that were never
  * paid (abandoned or replaced, EXPIRED). ACTIVE: paying, with nothing changing. CHANGING: cancelling
@@ -26,13 +30,18 @@ const WHERE: Record<LawyerSubscriptionFilter, Prisma.PaymentPlanSubscriptionWher
 /**
  * Lawyers' monthly plan subscriptions (PaymentPlanSubscription), for the admin's Lawyer
  * subscriptions page: who's on which plan, who's behind on payment, and who's cancelling or
- * downgrading. Read only. Fees are the plan's current monthly fee in US dollars (feeUsd); a
- * subscriber who joined before a fee change may still be charged their old price by Stripe.
+ * downgrading, one site at a time. Read only. Fees are the plan's current monthly fee in the site's
+ * plan currency (won on KR); a subscriber who joined before a fee change may still be charged their
+ * old price by Stripe.
  */
+/** Subscriptions to one site's tiers. */
+const onSite = (tenant: TenantCode): Prisma.PaymentPlanSubscriptionWhereInput => ({ paymentPlan: { tenant: { code: tenant } } });
+
 export default class LawyerSubscriptionAdminSvc {
-  /** A page of subscriptions, newest first, with the summary over all of them (whatever the filter). */
-  static async list(query: { status: LawyerSubscriptionFilter; page: number; limit: number }) {
-    const where = WHERE[query.status];
+  /** A page of one site's subscriptions, newest first, with the summary over all of that site's
+   * (whatever the filter). */
+  static async list(query: { tenant: TenantCode; status: LawyerSubscriptionFilter; page: number; limit: number }) {
+    const where: Prisma.PaymentPlanSubscriptionWhereInput = { AND: [WHERE[query.status], onSite(query.tenant)] };
     const [total, rows, summary] = await Promise.all([
       prisma.paymentPlanSubscription.count({ where }),
       prisma.paymentPlanSubscription.findMany({
@@ -41,11 +50,11 @@ export default class LawyerSubscriptionAdminSvc {
         skip: (query.page - 1) * query.limit,
         take: query.limit,
         include: {
-          paymentPlan: { select: { id: true, code: true, name: true, feeUsd: true, tenant: { select: { code: true } } } },
+          paymentPlan: { select: { id: true, code: true, name: true, priceMinor: true, currency: true, feeUsd: true, tenant: { select: { code: true } } } },
           user: { select: { id: true, name: true, email: true } },
         },
       }),
-      LawyerSubscriptionAdminSvc.summary(),
+      LawyerSubscriptionAdminSvc.summary(query.tenant),
     ]);
 
     const userIds = [...new Set(rows.map((r) => r.userId))];
@@ -68,7 +77,7 @@ export default class LawyerSubscriptionAdminSvc {
         id: r.id,
         status: r.status,
         lawyer: { id: r.user.id, name: r.user.name || r.user.email || null, firmName: firmOf.get(r.userId) ?? null },
-        plan: { id: r.paymentPlan.id, code: r.paymentPlan.code, name: r.paymentPlan.name, feeUsd: r.paymentPlan.feeUsd, tenantCode: r.paymentPlan.tenant.code },
+        plan: { id: r.paymentPlan.id, code: r.paymentPlan.code, name: r.paymentPlan.name, price: planPrice(r.paymentPlan), tenantCode: r.paymentPlan.tenant.code },
         currentPeriodStart: r.currentPeriodStart,
         currentPeriodEnd: r.currentPeriodEnd,
         cancelAtPeriodEnd: r.cancelAtPeriodEnd,
@@ -81,20 +90,29 @@ export default class LawyerSubscriptionAdminSvc {
     };
   }
 
-  /** Across every subscription: how many are active, what they bill each month at today's plan
-   * fees, how many are past due, and how many are cancelling or downgrading. */
-  static async summary() {
+  /** Across one site's subscriptions: how many are active, what they bill each month at today's
+   * plan fees (in the site's plan currency, smallest unit), how many are past due, and how many are
+   * cancelling or downgrading. */
+  static async summary(tenant: TenantCode) {
+    const site = onSite(tenant);
     const [byPlan, pastDue, changing] = await Promise.all([
-      prisma.paymentPlanSubscription.groupBy({ by: ["paymentPlanId"], where: { status: "ACTIVE" }, _count: { _all: true } }),
-      prisma.paymentPlanSubscription.count({ where: { status: "PAST_DUE" } }),
-      prisma.paymentPlanSubscription.count({ where: CHANGING }),
+      prisma.paymentPlanSubscription.groupBy({ by: ["paymentPlanId"], where: { AND: [{ status: "ACTIVE" }, site] }, _count: { _all: true } }),
+      prisma.paymentPlanSubscription.count({ where: { AND: [{ status: "PAST_DUE" }, site] } }),
+      prisma.paymentPlanSubscription.count({ where: { AND: [CHANGING, site] } }),
     ]);
     const plans = byPlan.length
-      ? await prisma.paymentPlan.findMany({ where: { id: { in: byPlan.map((g) => g.paymentPlanId) } }, select: { id: true, feeUsd: true } })
+      ? await prisma.paymentPlan.findMany({ where: { id: { in: byPlan.map((g) => g.paymentPlanId) } }, select: { id: true, priceMinor: true, currency: true, feeUsd: true } })
       : [];
-    const feeOf = new Map(plans.map((p) => [p.id, p.feeUsd]));
+    const tenantRow = await TenantRepo.findByCode(tenant);
+    const currency = tenantRow ? await PaymentPlanSvc.siteCurrency(tenantRow.id, tenant) : null;
+    // A tier priced in another currency (one the payment_plan_currency migration didn't reach)
+    // can't be added in; it's left out rather than counted at the wrong value.
+    const feeOf = new Map(plans.map((p) => [p.id, planPrice(p)]));
     const active = byPlan.reduce((n, g) => n + g._count._all, 0);
-    const monthlyUsd = byPlan.reduce((sum, g) => sum + (feeOf.get(g.paymentPlanId) ?? 0) * g._count._all, 0);
-    return { active, monthlyUsd: Math.round(monthlyUsd * 100) / 100, pastDue, changing };
+    const amountMinor = byPlan.reduce((sum, g) => {
+      const price = feeOf.get(g.paymentPlanId);
+      return price?.currency === currency ? sum + price.amountMinor * g._count._all : sum;
+    }, 0);
+    return { active, monthly: { amountMinor, currency: currency ?? "USD" }, pastDue, changing };
   }
 }

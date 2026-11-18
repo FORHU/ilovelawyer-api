@@ -7,8 +7,8 @@ import { stripeRefused } from "../payments/stripe-client";
 import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import { moneyText } from "../utils/money-text";
 
-const gbp = (minor: number) => `£${(minor / 100).toFixed(2)}`;
 
 /** Who is giving the money back: an admin, or ilovelawyer itself (a Lawyer Exit with no work done,
  * or a payment that came in after its request moved on). */
@@ -51,10 +51,10 @@ export default class QuotationRefundSvc {
     // Checked here for a clear answer, and again under the lock (createRefund), which also splits it.
     const { left, serviceLeft } = await QuotationRefundSvc.refundable(payment);
     const amount = amountMinor ?? left;
-    if (amount <= 0 || amount > left) throw new HttpError(`At most ${gbp(left)} is left to refund.`, 400, "REFUND_EXCEEDS_CHARGE");
+    if (amount <= 0 || amount > left) throw new HttpError(`At most ${moneyText(left, payment.currency)} is left to refund.`, 400, "REFUND_EXCEEDS_CHARGE");
     // Everything that's left: the platform fee comes back too. Less: only the lawyer's part.
     if (amount !== left && amount > serviceLeft) {
-      throw new HttpError(`A partial refund comes out of the lawyer's fee: at most ${gbp(serviceLeft)}. Refund ${gbp(left)} to give back everything.`, 400, "REFUND_EXCEEDS_CHARGE");
+      throw new HttpError(`A partial refund comes out of the lawyer's fee: at most ${moneyText(serviceLeft, payment.currency)}. Refund ${moneyText(left, payment.currency)} to give back everything.`, 400, "REFUND_EXCEEDS_CHARGE");
     }
     return amount;
   }

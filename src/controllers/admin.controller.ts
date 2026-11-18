@@ -11,6 +11,7 @@ import SecurityAuditSvc from "../services/security-audit.service";
 import HttpError from "../utils/http-error";
 import { sendExportZip, exportAuditPayload } from "../utils/export-response";
 import { asTenantCode, type TenantCode } from "../types/tenant-code";
+import { currencyOfTiers, PLAN_CURRENCIES, PLAN_CURRENCY_CODES, PLAN_CURRENCY_DEFAULT_BY_TENANT, planPrice } from "../constants/payment-plan.constants";
 import {
   listUsersSchema,
   listAuditEventsSchema,
@@ -25,6 +26,7 @@ import {
   updateTenantSettingsSchema,
   updateUserTenantSchema,
   createPaymentPlanSchema,
+  changePaymentPlanCurrencySchema,
   updatePaymentPlanSchema,
 } from "../validation/admin.validation";
 
@@ -144,7 +146,7 @@ export default class AdminCtrl {
     return res.status(200).json(user);
   }
 
-  /** PATCH /api/admin/users/:id/tenant — body { tenantCode: "PH" | "UK" }. */
+  /** PATCH /api/admin/users/:id/tenant — body { tenantCode: "PH" | "UK" | "KR" }. */
   static async changeUserTenant(req: Request, res: Response) {
     const { error, value } = updateUserTenantSchema.validate(req.body ?? {});
     if (error) throw new HttpError(error.message, 400);
@@ -210,12 +212,20 @@ export default class AdminCtrl {
       AccountTopUpPricingSvc.listForAdmin(),
       PaymentPlanSvc.listForAdmin(),
     ]);
-    const merged = tenants.map((t) => ({
-      ...t,
-      accountTopUp: topUpPricing.find((p) => p.code === t.code) ?? null,
-      paymentPlans: paymentPlans.find((p) => p.code === t.code)?.paymentPlans ?? [],
-    }));
-    return res.status(200).json({ tenants: merged });
+    const merged = tenants.map((t) => {
+      const plans = paymentPlans.find((p) => p.code === t.code);
+      return {
+        ...t,
+        accountTopUp: topUpPricing.find((p) => p.code === t.code) ?? null,
+        // The currency this site's lawyers are charged in (won on KR), its local default, and the tiers.
+        planCurrency: plans?.planCurrency ?? PLAN_CURRENCY_DEFAULT_BY_TENANT[parseTenantCode(t.code)],
+        defaultPlanCurrency: PLAN_CURRENCY_DEFAULT_BY_TENANT[parseTenantCode(t.code)],
+        paymentPlans: plans?.paymentPlans ?? [],
+      };
+    });
+    // What the Payment plans page's currency picker offers.
+    const planCurrencies = PLAN_CURRENCY_CODES.map((code) => ({ code, exponent: PLAN_CURRENCIES[code].exponent, maxMinor: PLAN_CURRENCIES[code].maxMinor }));
+    return res.status(200).json({ tenants: merged, planCurrencies });
   }
 
   static async updateTenantSettings(req: Request, res: Response) {
@@ -228,6 +238,9 @@ export default class AdminCtrl {
     if (value.accountTopUpFeeType !== undefined) {
       await AccountTopUpPricingSvc.setFee(code, value.accountTopUpFeeType, value.accountTopUpFeeAmount, req.user.userId);
     }
+    if (value.accountTopUpRate !== undefined) {
+      await AccountTopUpPricingSvc.setRate(code, value.accountTopUpRate, req.user.userId);
+    }
     if (!tenant) tenant = (await TenantSettingSvc.listForAdmin()).find((t) => t.code === code);
     const accountTopUp = await AccountTopUpPricingSvc.listForAdmin().then((all) => all.find((p) => p.code === code));
     return res.status(200).json({ ...tenant, accountTopUp });
@@ -239,7 +252,13 @@ export default class AdminCtrl {
     const tenant = await TenantRepo.findByCode(code);
     if (!tenant) throw new HttpError(`Unknown tenant ${code}`, 404);
     const plans = await PaymentPlanSvc.listForTenant(tenant.id);
-    return res.status(200).json({ paymentPlans: plans });
+    return res.status(200).json({
+      planCurrency: currencyOfTiers(plans, code),
+      paymentPlans: plans.map((p) => {
+        const price = planPrice(p);
+        return { ...p, priceMinor: price.amountMinor, currency: price.currency };
+      }),
+    });
   }
 
   /** POST /api/admin/settings/tenants/:code/payment-plans — add a new tier. */
@@ -259,6 +278,16 @@ export default class AdminCtrl {
     let plan = Object.keys(patch).length ? await PaymentPlanSvc.update(req.params.planId, patch, req.user.userId) : undefined;
     if (isActive !== undefined) plan = await PaymentPlanSvc.setActive(req.params.planId, isActive, req.user.userId);
     return res.status(200).json(plan);
+  }
+
+  /** PUT /api/admin/settings/tenants/:code/payment-plans/currency — move the site's lawyers to another
+   * currency, repricing every tier at once (PaymentPlanSvc.changeCurrency). */
+  static async changePaymentPlanCurrency(req: Request, res: Response) {
+    const code = parseTenantCode(req.params.code);
+    const { error, value } = changePaymentPlanCurrencySchema.validate(req.body ?? {});
+    if (error) throw new HttpError(error.message, 400);
+    const result = await PaymentPlanSvc.changeCurrency(code, value.currency, value.prices, req.user.userId);
+    return res.status(200).json(result);
   }
 
   /** DELETE /api/admin/settings/tenants/:code/payment-plans/:planId — soft-disable only; a tier is

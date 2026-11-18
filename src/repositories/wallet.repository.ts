@@ -104,6 +104,26 @@ export default class WalletRepo {
     }
   }
 
+  /**
+   * Moves a wallet that holds nothing in its own currency over to `currency`: no payout account, no
+   * withdrawals, and every earning and ledger entry already in `currency` (or none). For a wallet
+   * made in pounds before its site earned in won. Anything else is left as it is; returns the wallet
+   * either way.
+   */
+  static async realignCurrency(wallet: Wallet, currency: string): Promise<Wallet> {
+    if (wallet.currency === currency || wallet.stripeAccountId) return wallet;
+    return prisma.$transaction(async (tx) => {
+      const [withdrawals, otherEarnings, otherEntries] = await Promise.all([
+        tx.withdrawal.count({ where: { walletId: wallet.id } }),
+        tx.earning.count({ where: { walletId: wallet.id, currency: { not: currency } } }),
+        tx.walletLedgerEntry.count({ where: { walletId: wallet.id, currency: { not: currency } } }),
+      ]);
+      if (withdrawals || otherEarnings || otherEntries) return wallet;
+      const moved = await tx.wallet.updateMany({ where: { id: wallet.id, currency: wallet.currency, stripeAccountId: null }, data: { currency } });
+      return moved.count ? { ...wallet, currency } : wallet;
+    });
+  }
+
   static async findByOwner(owner: WalletOwner) {
     return prisma.wallet.findUnique({ where: { ownerType_ownerId: { ownerType: owner.ownerType, ownerId: owner.ownerId } } });
   }

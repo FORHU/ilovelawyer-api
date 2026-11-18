@@ -14,6 +14,10 @@ export default class TenantRepo {
     return prisma.tenant.findUnique({ where: { code }, select: { id: true, code: true, name: true } });
   }
 
+  static async findById(id: string) {
+    return prisma.tenant.findUnique({ where: { id }, select: { id: true, code: true, name: true } });
+  }
+
   static async listAll() {
     return prisma.tenant.findMany({ select: { id: true, code: true, name: true }, orderBy: { code: "asc" } });
   }

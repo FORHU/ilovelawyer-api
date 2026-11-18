@@ -16,7 +16,7 @@ import HttpError from "../utils/http-error";
 import { emitToUser } from "../lib/socket";
 import { CLIENT_HANDOFF_SOCKET_EVENTS, type EngagementDocumentAddedEvent, type EngagementDocumentRemovedEvent } from "../types/client-handoff";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
-import { asTenantCode, type TenantCode } from "../types/tenant-code";
+import { asTenantCode, isTenantCode, type TenantCode } from "../types/tenant-code";
 import { JevUnavailableError } from "../utils/typesafeClient";
 import {
   READINESS_CRITERIA,
@@ -26,7 +26,9 @@ import {
 } from "../utils/lawyer-readiness-jev";
 import logger from "../utils/logger";
 import ClientIntakeSvc from "./client-intake.service";
-import { CLIENT_TENANT_CODE } from "../constants/auth.constants";
+import { DEFAULT_CLIENT_TENANT_CODE } from "../constants/auth.constants";
+import { assertClientAiOpen } from "../constants/client-sites.constants";
+import AuthRepo from "../repositories/auth.repository";
 import { CLIENT_DOCUMENT_LINK_SECONDS } from "../constants/client-case.constants";
 import CaseAreaSvc, { type CaseAreaRef } from "./case-area.service";
 import { OTHER_CASE_AREA } from "../constants/case-area.constants";
@@ -206,13 +208,15 @@ function unchecked(ukJurisdiction: string | null, unavailable = false): LawyerRe
  * (ClientBillingSvc), with top-ups for more.
  */
 export default class ClientCaseSvc {
-  /** The workspace every client request runs in, made the first time it's needed. A client never
-   * joins an organization, so anything else means the account isn't a plain client. */
+  /** The workspace every client request runs in, made the first time it's needed, in the account's
+   * own site (the one it signed up on). A client never joins an organization, so anything else
+   * means the account isn't a plain client. */
   static async workspaceFor(userId: string, name: string): Promise<ClientWorkspace> {
     let member = await OrganizationMemberRepo.findAnyForUser(userId);
     if (!member) {
       try {
-        await OrganizationSvc.create(userId, name, undefined, CLIENT_TENANT_CODE, true);
+        const site = await AuthRepo.findSiteCode(userId);
+        await OrganizationSvc.create(userId, name, undefined, site && isTenantCode(site) ? site : DEFAULT_CLIENT_TENANT_CODE, true);
       } catch (err) {
         // Two first requests at once: the other one made it (OrganizationMember.userId is unique).
         if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
@@ -226,19 +230,20 @@ export default class ClientCaseSvc {
   }
 
   static async list(workspace: ClientWorkspace, archived = false) {
-    const [rows, label] = await Promise.all([ClientCaseRepo.list(workspace.id, archived ? "ARCHIVED" : "ACTIVE"), CaseAreaSvc.labeller()]);
+    const [rows, label] = await Promise.all([ClientCaseRepo.list(workspace.id, archived ? "ARCHIVED" : "ACTIVE"), CaseAreaSvc.labeller(workspace.tenantCode)]);
     return rows.map((row) => toDto(row, label));
   }
 
   static async get(workspace: ClientWorkspace, caseId: string) {
-    const [row, label] = await Promise.all([ClientCaseSvc.load(workspace, caseId), CaseAreaSvc.labeller()]);
+    const [row, label] = await Promise.all([ClientCaseSvc.load(workspace, caseId), CaseAreaSvc.labeller(workspace.tenantCode)]);
     return toDto(row, label);
   }
 
   /** Cases are free: a new one starts with the chat credits an admin set for the client's tenant
    * (the B2C_CASE row, ClientPricingSvc), written with the case itself. */
   static async create(workspace: ClientWorkspace, userId: string, input: NewClientCase) {
-    const caseAreas = await CaseAreaSvc.forCase(input.areas);
+    // The site's own list: a KR case takes KR's areas.
+    const caseAreas = await CaseAreaSvc.forCase(input.areas, [], workspace.tenantCode);
     const { credits } = (await ClientBillingSvc.pricing(userId)).case;
     const region = regionOf(input)!;
     const created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
@@ -269,7 +274,7 @@ export default class ClientCaseSvc {
   static async update(workspace: ClientWorkspace, userId: string, caseId: string, input: ClientCaseChanges) {
     const row = await ClientCaseSvc.load(workspace, caseId);
     const picked = CaseAreaSvc.clientPicks(row);
-    const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, picked);
+    const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, picked, workspace.tenantCode);
     // `outsideUk: false` on its own only clears "outside the UK"; on a case in the UK it changes nothing.
     let region = regionOf(input);
     if (!region && input.outsideUk === false && row.outsideUk) region = { ukJurisdiction: null, outsideUk: false };
@@ -385,6 +390,8 @@ export default class ClientCaseSvc {
    * see IntakeChatRepo.endPendingTurn. `documentIds` are the case's documents sent with it, each
    * READY (checked before the credit is spent, so a refused send costs nothing). */
   static async sendMessage(workspace: ClientWorkspace, userId: string, caseId: string, text: string, documentIds: string[] = []) {
+    // The intake persona is the UK's: never let it answer a client of a site that has none yet.
+    assertClientAiOpen(workspace.tenantCode);
     // Same ownership check consultationOf used to do as a side effect — explicit now that nothing
     // resolves a consultation here anymore.
     await ClientCaseSvc.load(workspace, caseId);
@@ -433,7 +440,8 @@ export default class ClientCaseSvc {
     const staleOutsideUk = cached?.blockedBy === "OUTSIDE_UK" && !row.outsideUk;
     if (cached?.basedOnMessageId === latestAnswer.id && Array.isArray(cached.caseAreas) && !staleOutsideUk) return cached;
 
-    const [options, label] = await Promise.all([CaseAreaSvc.forJev(), CaseAreaSvc.labeller()]);
+    // The case's own site's areas (a KR case's codes are KR's list).
+    const [options, label] = await Promise.all([CaseAreaSvc.forJev(workspace.tenantCode), CaseAreaSvc.labeller(workspace.tenantCode)]);
     let assessment: ReadinessAssessment;
     try {
       assessment = await assessLawyerReadiness({
@@ -455,11 +463,14 @@ export default class ClientCaseSvc {
       return unchecked(row.ukJurisdiction, true);
     }
 
-    const blockedBy: ReadinessBlock | null = row.outsideUk ? "OUTSIDE_UK" : assessment.personalInjury.met ? "PERSONAL_INJURY" : null;
+    // The UK's rules: outside the UK, and personal injury (the UK bans referral fees on it), block a
+    // UK case. A KR case has neither.
+    const ukCase = workspace.tenantCode === "UK";
+    const blockedBy: ReadinessBlock | null = !ukCase ? null : row.outsideUk ? "OUTSIDE_UK" : assessment.personalInjury.met ? "PERSONAL_INJURY" : null;
     // Not known yet isn't a block (apps from before #973 read any other blockedBy as personal
     // injury): "place" stays unmet until the case has a UK jurisdiction to match lawyers on, even when
     // the chat names a town, so the app keeps asking for it.
-    const criteria = regionUnknown(row) ? assessment.criteria.map((c) => (c.key === "place" ? { ...c, met: false } : c)) : assessment.criteria;
+    const criteria = ukCase && regionUnknown(row) ? assessment.criteria.map((c) => (c.key === "place" ? { ...c, met: false } : c)) : assessment.criteria;
     const ready = !blockedBy && criteria.every((c) => c.met);
     const confidence = new Map(assessment.caseAreas.map((a) => [a.code, a.confidence]));
     const result: LawyerReadiness = {
@@ -505,6 +516,7 @@ export default class ClientCaseSvc {
    * as sendMessage, except the intake worker transcribes this turn before generating a reply (see
    * IntakeChatSvc.enqueueIntakeGeneration's audioKey param). */
   static async sendVoiceMessage(workspace: ClientWorkspace, userId: string, caseId: string, audioKey: string) {
+    assertClientAiOpen(workspace.tenantCode);
     await ClientCaseSvc.load(workspace, caseId);
     await ClientBillingSvc.spendCredit(caseId);
     try {

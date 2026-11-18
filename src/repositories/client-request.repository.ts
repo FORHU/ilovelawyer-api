@@ -33,7 +33,8 @@ const ENDED_OUTCOMES: ClaimOutcome[] = ["RELEASED", "LAPSED", "DECLINED", "REASS
  * matching, and every claim on it, newest first, with the claiming lawyer's name. */
 const FOR_LAWYER = {
   case: { select: { caseName: true, caseAreas: true, ukJurisdiction: true, organizationId: true, organization: { select: { name: true } } } },
-  client: { select: { id: true, name: true, username: true } },
+  // The client's site is the request's: who it's for, and the currency it's quoted in.
+  client: { select: { id: true, name: true, username: true, tenant: { select: { code: true } } } },
   claims: { orderBy: { claimedAt: "desc" }, include: { lawyer: { select: { id: true, name: true } }, quotation: true } },
   // The per-case fee (#513), from CONFIRMED, on requests accepted before quotation payments.
   charges: { where: { kind: "PER_CASE_FEE" } },
@@ -52,7 +53,7 @@ const FOR_CLIENT = {
           id: true,
           name: true,
           avatar: { select: { s3Key: true } },
-          clientRequestProfile: { include: { ukRegistration: true, ...PRACTICE_AREAS_INCLUDE } },
+          clientRequestProfile: { include: { ukRegistration: true, krRegistration: true, ...PRACTICE_AREAS_INCLUDE } },
         },
       },
       organization: { select: { name: true, isPersonal: true } },
@@ -242,7 +243,7 @@ export default class ClientRequestRepo {
     return prisma.clientRequest.findUnique({
       where: { id },
       include: {
-        client: { select: { name: true, username: true } },
+        client: { select: { name: true, username: true, tenant: { select: { code: true } } } },
         case: {
           select: {
             caseName: true,
@@ -288,7 +289,14 @@ export default class ClientRequestRepo {
   static async findForMatching(id: string) {
     return prisma.clientRequest.findUnique({
       where: { id },
-      select: { excludedLawyerIds: true, requestedOnly: true, requestedLawyerId: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
+      select: {
+        excludedLawyerIds: true,
+        requestedOnly: true,
+        requestedLawyerId: true,
+        case: { select: { caseAreas: true, ukJurisdiction: true } },
+        // The request's site: its client's.
+        client: { select: { tenant: { select: { code: true } } } },
+      },
     });
   }
 
@@ -319,9 +327,10 @@ export default class ClientRequestRepo {
   }
 
   /** The inbox's candidates (#511): routed, inside the 48h, with a brief to read, not excluded
-   * for this lawyer, and in the case areas their practice areas map to (caseAreasOf) and their
-   * jurisdictions. Newest routing first. ClientRequestMatchingSvc.matches has the final say. */
-  static async listRoutedFor(lawyerId: string, areas: { caseAreas: string[]; jurisdictions: string[] }, now: Date) {
+   * for this lawyer, from a client on the lawyer's own site (`country`), and in the case areas their
+   * practice areas map to (caseAreasOf) and, on the UK, their jurisdictions. Newest routing first.
+   * ClientRequestMatchingSvc.matches has the final say. */
+  static async listRoutedFor(lawyerId: string, areas: { country: string; caseAreas: string[]; jurisdictions: string[] }, now: Date) {
     return prisma.clientRequest.findMany({
       where: {
         status: "ROUTED",
@@ -330,7 +339,11 @@ export default class ClientRequestRepo {
         NOT: { excludedLawyerIds: { has: lawyerId } },
         // One the client sent to a lawyer by name is only theirs until it goes wider.
         OR: [{ requestedOnly: false }, { requestedLawyerId: lawyerId }],
-        case: { caseAreas: { hasSome: areas.caseAreas }, ukJurisdiction: { in: areas.jurisdictions } },
+        client: { tenant: { code: areas.country } },
+        case:
+          areas.country === "UK"
+            ? { caseAreas: { hasSome: areas.caseAreas }, ukJurisdiction: { in: areas.jurisdictions } }
+            : { caseAreas: { hasSome: areas.caseAreas } },
       },
       orderBy: [{ routedAt: "desc" }, { id: "asc" }],
       include: FOR_LAWYER,
@@ -378,7 +391,14 @@ export default class ClientRequestRepo {
   static async findForAnnouncement(id: string) {
     return prisma.clientRequest.findUnique({
       where: { id },
-      select: { id: true, brief: true, routingExpiresAt: true, requestedOnly: true, case: { select: { caseAreas: true, ukJurisdiction: true } } },
+      select: {
+        id: true,
+        brief: true,
+        routingExpiresAt: true,
+        requestedOnly: true,
+        case: { select: { caseAreas: true, ukJurisdiction: true } },
+        client: { select: { tenant: { select: { code: true } } } },
+      },
     });
   }
 
@@ -393,7 +413,7 @@ export default class ClientRequestRepo {
         routedAt: true,
         pickByAt: true,
         case: { select: { caseAreas: true, ukJurisdiction: true } },
-        client: { select: { email: true } },
+        client: { select: { email: true, tenant: { select: { code: true } } } },
       },
       orderBy: { routingExpiresAt: "asc" },
     });

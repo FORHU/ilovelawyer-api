@@ -3,7 +3,6 @@ import type { LawyerExit, Quotation, QuotationPayment, QuotationRefund } from "@
 import QuotationRepo from "../repositories/quotation.repository";
 import QuotationPaymentRepo, { PAID_QUOTATION_PAYMENT_STATUSES } from "../repositories/quotation-payment.repository";
 import LawyerExitRepo from "../repositories/lawyer-exit.repository";
-import WalletRepo from "../repositories/wallet.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
 import OrganizationRepo from "../repositories/organization.repository";
@@ -17,10 +16,11 @@ import { emitToUser } from "../lib/socket";
 import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
+import { moneyText } from "../utils/money-text";
+import AuthRepo from "../repositories/auth.repository";
 import type { ClientRequestUpdatedEvent } from "../types/client-handoff";
 
 const UNREACHABLE = "We couldn't reach the payment provider. Try again in a moment.";
-const gbp = (minor: number) => `£${(minor / 100).toFixed(2)}`;
 const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
 
 /** QuotationPayment in the contract, for the client app. */
@@ -305,7 +305,11 @@ export default class QuotationPaymentSvc {
       logger.error("Quotation payment: settled payment has no quotation", { paymentId: payment.id });
       return;
     }
-    const wallet = await WalletRepo.findOrCreate(payeeOf(claim), payment.currency);
+    // The wallet in the payment's currency (won on KR): an empty one made in pounds moves over.
+    const wallet = await WalletSvc.walletOf(payeeOf(claim), payment.currency);
+    if (wallet.currency !== payment.currency) {
+      logger.error("Quotation payment: paid into a wallet in another currency", { paymentId: payment.id, walletId: wallet.id, wallet: wallet.currency, payment: payment.currency });
+    }
     const now = new Date();
     // The earning waits PENDING with no date: its hold starts when the engagement closes.
     const settled = await QuotationPaymentRepo.settle(payment.id, { walletId: wallet.id, lawyerId: claim.lawyerId }, paymentIntentId, now);
@@ -324,11 +328,11 @@ export default class QuotationPaymentSvc {
       });
       return;
     }
-    await QuotationPaymentSvc.afterEngaged(quotation, claim, settled.earning?.netMinor ?? 0, wallet.id);
+    await QuotationPaymentSvc.afterEngaged(quotation, claim, settled.earning?.netMinor ?? 0, wallet.id, payment.currency);
   }
 
   /** The request is ENGAGED: the lawyer gets read-only access to the case, both sides are told. */
-  static async afterEngaged(quotation: Quotation, claim: { organizationId: string | null; lawyerId: string }, earnedMinor: number, walletId: string | null) {
+  static async afterEngaged(quotation: Quotation, claim: { organizationId: string | null; lawyerId: string }, earnedMinor: number, walletId: string | null, currency = "GBP") {
     const request = await ClientRequestRepo.findForLawyer(quotation.requestId);
     if (!request) return;
     const now = new Date().toISOString();
@@ -337,14 +341,25 @@ export default class QuotationPaymentSvc {
     const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "ENGAGED", updatedAt: now };
     emitToUser(request.clientId, "client-request:updated", updated);
     emitToUser(claim.lawyerId, "client-request:updated", updated);
-    await notify(claim.lawyerId, {
-      title: "You're engaged on a client request",
-      message:
-        earnedMinor > 0
-          ? `The client paid your quote. ${gbp(earnedMinor)} is in your earnings, held until you close the engagement and for the usual hold after that.`
-          : "The client accepted your quote.",
-      link: `/client-requests/${request.id}`,
-    });
+    // A KR lawyer is told in Korean, in won.
+    const kr = (await AuthRepo.findSiteCode(claim.lawyerId)) === "KR";
+    await notify(claim.lawyerId, kr
+      ? {
+          title: "의뢰인 요청이 수임되었습니다",
+          message:
+            earnedMinor > 0
+              ? `의뢰인이 견적 금액을 결제했습니다. ${moneyText(earnedMinor, currency)}이(가) 수익에 추가되었으며, 의뢰를 종료한 뒤 보류 기간이 지나면 출금할 수 있습니다.`
+              : "의뢰인이 견적을 수락했습니다.",
+          link: `/client-requests/${request.id}`,
+        }
+      : {
+          title: "You're engaged on a client request",
+          message:
+            earnedMinor > 0
+              ? `The client paid your quote. ${moneyText(earnedMinor, currency)} is in your earnings, held until you close the engagement and for the usual hold after that.`
+              : "The client accepted your quote.",
+          link: `/client-requests/${request.id}`,
+        });
     if (walletId) await WalletSvc.changedById(walletId);
   }
 

@@ -54,11 +54,70 @@ export const CLIENT_REQUEST_DIRECT_CONSENT_TEXT = [
 export const CLIENT_REQUEST_REFERRAL_DISCLOSURE =
   "You pay the lawyer's quoted fee, nothing more, through ilovelawyer. ilovelawyer's platform fee comes out of what the lawyer receives, so it adds nothing to what you pay.";
 
+/**
+ * The KR site's wording: what a KR client agrees to and is shown, in Korean, for KR lawyers. Its own
+ * versions (a KR client records one of these, never a UK one), bumped whenever the Korean changes.
+ * DRAFT pending review by Korean counsel, together with the referral model itself (변호사법 제34조).
+ */
+export const KR_WHAT_HIRING_SHARES = "결제가 완료되면 변호사는 사건, 서류, AI와의 채팅 내용을 볼 수 있습니다. 양측 모두 언제든지 의뢰를 종료할 수 있습니다.";
+export const KR_LAWYER_KEEPS_COPY = "변호사는 관련 법령에 따라 의뢰가 끝난 후에도 사건 기록의 사본을 보관할 수 있습니다.";
+export const KR_CLIENT_REQUEST_SHARING_NOTICE = `${KR_WHAT_HIRING_SHARES} ${KR_LAWYER_KEEPS_COPY}`;
+
+export const KR_CLIENT_REQUEST_CONSENT_VERSION = "kr-2026-11-18-draft";
+export const KR_CLIENT_REQUEST_CONSENT_TEXT = [
+  "사건을 맡을 수 있는 검증된 한국 변호사에게 익명 처리된 사건 요약을 공유합니다. 이름과 서류는 포함되지 않습니다.",
+  `최대 ${CLIENT_REQUEST_MAX_LAWYERS}명의 변호사가 요청을 수락할 수 있습니다. 각 변호사는 이해충돌이 없는지 확인하기 위해서만 사건 관련 인물과 단체의 이름을 볼 수 있으며, 견적을 보낼 수 있습니다.`,
+  `그중 한 명을 선임하면 ilovelawyer를 통해 변호사의 견적 금액을 결제합니다. ${KR_WHAT_HIRING_SHARES}`,
+  KR_LAWYER_KEEPS_COPY,
+].join("\n\n");
+
+export const KR_CLIENT_REQUEST_DIRECT_CONSENT_VERSION = "kr-2026-11-18-direct-draft";
+export const KR_CLIENT_REQUEST_DIRECT_CONSENT_TEXT = [
+  "선택한 변호사에게만 먼저 익명 처리된 사건 요약을 공유합니다. 이름과 서류는 포함되지 않습니다.",
+  `변호사가 수락하면 이해충돌 확인을 위해서만 사건 관련 인물과 단체의 이름을 볼 수 있으며, 견적을 보낼 수 있습니다. 24시간 이내에 수락하지 않으면 조건에 맞는 다른 변호사 최대 ${CLIENT_REQUEST_MAX_LAWYERS}명이 수락할 수 있습니다.`,
+  `변호사를 선임하면 ilovelawyer를 통해 변호사의 견적 금액을 결제합니다. ${KR_WHAT_HIRING_SHARES}`,
+  KR_LAWYER_KEEPS_COPY,
+].join("\n\n");
+
+export const KR_CLIENT_REQUEST_REFERRAL_DISCLOSURE =
+  "ilovelawyer를 통해 변호사가 제시한 견적 금액만 결제하며, 추가로 내는 금액은 없습니다. ilovelawyer의 플랫폼 수수료는 변호사가 받는 금액에서 공제됩니다.";
+
+/** What a client on `site` agrees to and is shown about asking for a lawyer: the KR site's Korean, or
+ * the UK's. */
+export function requestWordingFor(site: string) {
+  return site === "KR"
+    ? {
+        consent: { version: KR_CLIENT_REQUEST_CONSENT_VERSION, consentText: KR_CLIENT_REQUEST_CONSENT_TEXT },
+        directConsent: { version: KR_CLIENT_REQUEST_DIRECT_CONSENT_VERSION, consentText: KR_CLIENT_REQUEST_DIRECT_CONSENT_TEXT },
+        referralDisclosure: KR_CLIENT_REQUEST_REFERRAL_DISCLOSURE,
+        sharingNotice: KR_CLIENT_REQUEST_SHARING_NOTICE,
+      }
+    : {
+        consent: { version: CLIENT_REQUEST_CONSENT_VERSION, consentText: CLIENT_REQUEST_CONSENT_TEXT },
+        directConsent: { version: CLIENT_REQUEST_DIRECT_CONSENT_VERSION, consentText: CLIENT_REQUEST_DIRECT_CONSENT_TEXT },
+        referralDisclosure: CLIENT_REQUEST_REFERRAL_DISCLOSURE,
+        sharingNotice: CLIENT_REQUEST_SHARING_NOTICE,
+      };
+}
+
 export const CLIENT_REQUEST_NOTE_MAX_LENGTH = 1000;
 
 /** A lawyer's quote (#512): the message to the client, and the most it can ask (£100,000, in pence). */
 export const CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH = 2000;
 export const CLIENT_REQUEST_QUOTE_MAX_MINOR = 10_000_000;
+
+/** The largest quote per currency, to catch a typo like an extra zero: £100,000 on UK, and about the
+ * same in won on KR (₩200,000,000; won has no minor unit). Validation lets the largest through and
+ * the service checks the quote's own currency (quoteMaxMinorOf). */
+const QUOTE_MAX_MINOR_BY_CURRENCY: Record<string, number> = { GBP: CLIENT_REQUEST_QUOTE_MAX_MINOR, KRW: 200_000_000 };
+export const CLIENT_REQUEST_QUOTE_MAX_MINOR_ANY = Math.max(...Object.values(QUOTE_MAX_MINOR_BY_CURRENCY));
+
+export function quoteMaxMinorOf(currency: string): number {
+  return QUOTE_MAX_MINOR_BY_CURRENCY[currency] ?? CLIENT_REQUEST_QUOTE_MAX_MINOR;
+}
+
+/** The currencies a client request is quoted and paid in, one per site that has requests. */
+export const CLIENT_REQUEST_CURRENCIES = ["GBP", "KRW"] as const;
 /** A lawyer's note when releasing a request (#512). Kept on the claim only. */
 export const CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH = 500;
 /** A lawyer's note when passing on a request. Read by ilovelawyer staff only. */

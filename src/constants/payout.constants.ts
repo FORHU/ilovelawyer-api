@@ -15,6 +15,15 @@ export const PAYOUT_SETTINGS_DEFAULTS = {
   minWithdrawalMinor: 1000,
 } as const;
 
+/** A KR site's starting terms, in won (no minor unit): the same 15% fee, and minimums about the
+ * size of the GBP ones (₩10,000 platform fee, ₩20,000 withdrawal). */
+export const PAYOUT_SETTINGS_DEFAULTS_KRW = {
+  ...PAYOUT_SETTINGS_DEFAULTS,
+  currency: "KRW",
+  minPlatformFeeMinor: 10_000,
+  minWithdrawalMinor: 20_000,
+} as const;
+
 /** What an admin may set, to catch a typo. */
 export const PAYOUT_LIMITS = {
   platformFeeBps: { min: 0, max: 5000 },
@@ -24,6 +33,18 @@ export const PAYOUT_LIMITS = {
 } as const;
 
 export const payoutSettingsCacheKey = (tenantId: string) => `payout-settings:v1:${tenantId}`;
+/**
+ * The currencies a wallet can be paid out in, and the country its Stripe Connect account is made in.
+ * Stripe can't make payout accounts in Korea ("KR is not currently supported"), so a won wallet
+ * keeps earning but can't set up payouts or withdraw until KR has a payout route of its own.
+ */
+export const PAYOUT_COUNTRY_BY_CURRENCY: Readonly<Record<string, string>> = { GBP: "GB" };
+
+/** Whether a wallet in `currency` can set up payouts and withdraw. */
+export function payoutsAvailableFor(currency: string): boolean {
+  return currency in PAYOUT_COUNTRY_BY_CURRENCY;
+}
+
 /** How long an admin's edit can take to reach the next quote or withdrawal. */
 export const PAYOUT_SETTINGS_CACHE_TTL_S = 60;
 

@@ -12,6 +12,7 @@ import ClientCaseRepo from "../src/repositories/client-case.repository";
 import ClientPaymentRepo from "../src/repositories/client-payment.repository";
 import ClientBillingSvc from "../src/services/client-billing.service";
 import OrganizationMemberRepo from "../src/repositories/organization-member.repository";
+import AuthRepo from "../src/repositories/auth.repository";
 import OrganizationSvc from "../src/services/organization.service";
 import CaseSvc from "../src/services/case.service";
 import IntakeChatSvc from "../src/services/intake-chat.service";
@@ -147,6 +148,17 @@ describe("Client app cases", () => {
       const ws = await ClientCaseSvc.workspaceFor("u1", "Sam Client");
       expect(created).to.deep.equal([["u1", "Sam Client", undefined, "UK", true]]);
       expect(ws).to.deep.equal(workspace);
+    });
+
+    it("makes it in the account's own site", async () => {
+      const restoreAuth = stash(AuthRepo, ["findSiteCode"]);
+      (AuthRepo as any).findSiteCode = async () => "KR";
+      try {
+        await ClientCaseSvc.workspaceFor("u1", "Sam Client");
+      } finally {
+        restoreAuth();
+      }
+      expect(created).to.deep.equal([["u1", "Sam Client", undefined, "KR", true]]);
     });
 
     it("reuses the one they have", async () => {

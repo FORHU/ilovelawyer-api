@@ -212,4 +212,22 @@ describe("PATCH /api/v1/intake-cases/:caseId", () => {
       expect(res.status).to.equal(400);
     });
   });
+
+  describe("a KR client's case (Chat Wonder's intake_kr)", () => {
+    it("drops the UK's place fields and keeps the town, so a model slip never writes a UK region onto a Korean case", async () => {
+      const userId = await seedClient(createdUserIds);
+      // The client signed up on the KR site: their workspace (made by seedCase) is a KR one.
+      await prisma.user.update({ where: { id: userId }, data: { tenant: { connect: { code: "KR" } } } });
+      const caseId = await seedCase(userId, null);
+      expect((await ClientCaseSvc.workspaceFor(userId, "Sam Client")).tenantCode).to.equal("KR");
+
+      const res = await request(app)
+        .patch(`/api/v1/intake-cases/${caseId}`)
+        .set("x-api-key", CHAT_WONDER_API_KEY)
+        .send({ userId, ukJurisdiction: "England and Wales", where: "서울 강남구" });
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.include({ ukJurisdiction: null, outsideUk: false, where: "서울 강남구" });
+    });
+  });
 });

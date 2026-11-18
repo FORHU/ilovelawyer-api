@@ -5,6 +5,7 @@ import asyncHandler from "../utils/async-handler";
 import validSession from "../middleware/valid-session.middleware";
 import requireClientAccount from "../middleware/require-client-account.middleware";
 import requireConsent from "../middleware/require-consent.middleware";
+import { requireClientAi, requireClientRequests } from "../middleware/require-client-site-feature.middleware";
 import ClientCaseCtrl from "../controllers/client-case.controller";
 import ClientRequestCtrl from "../controllers/client-request.controller";
 import ClientDictationCtrl from "../controllers/client-dictation.controller";
@@ -78,7 +79,7 @@ router.get("/payments/:paymentId", asyncHandler(ClientCaseCtrl.paymentStatus));
 
 // Speaking instead of typing in a composer (AWS Transcribe): the clip is sent for transcribing, so
 // it needs AI-processing consent like the chat does. Nothing is kept once the text is returned.
-router.post("/dictations", requireConsent("AI_PROCESSING"), dictationLimiter, dictationUpload.single("audio"), asyncHandler(ClientDictationCtrl.start));
+router.post("/dictations", requireClientAi, requireConsent("AI_PROCESSING"), dictationLimiter, dictationUpload.single("audio"), asyncHandler(ClientDictationCtrl.start));
 router.get("/dictations/:id", asyncHandler(ClientDictationCtrl.result));
 
 router.get("/limits", asyncHandler(ClientCaseCtrl.limits));
@@ -93,13 +94,13 @@ router.delete("/cases/:caseId", asyncHandler(ClientCaseCtrl.remove));
 router.post("/cases/:caseId/archive", asyncHandler(ClientCaseCtrl.archive));
 router.post("/cases/:caseId/unarchive", asyncHandler(ClientCaseCtrl.unarchive));
 router.get("/cases/:caseId/messages", asyncHandler(ClientCaseCtrl.listMessages));
-router.post("/cases/:caseId/messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
+router.post("/cases/:caseId/messages", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendMessage));
 // Stop an answer (its credit comes back) and delete a message (#568). Neither asks the AI anything,
 // so neither needs AI-processing consent.
 router.post("/cases/:caseId/messages/:messageId/cancel", asyncHandler(ClientCaseCtrl.cancelMessage));
 router.delete("/cases/:caseId/messages/:messageId", asyncHandler(ClientCaseCtrl.deleteMessage));
-router.post("/cases/:caseId/voice-messages/presign", asyncHandler(ClientCaseCtrl.presignVoiceMessage));
-router.post("/cases/:caseId/voice-messages", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendVoiceMessage));
+router.post("/cases/:caseId/voice-messages/presign", requireClientAi, asyncHandler(ClientCaseCtrl.presignVoiceMessage));
+router.post("/cases/:caseId/voice-messages", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.sendVoiceMessage));
 router.post("/cases/:caseId/documents/presign", asyncHandler(ClientCaseCtrl.presignDocument));
 router.post("/cases/:caseId/documents", asyncHandler(ClientCaseCtrl.addDocument));
 // The Documents tab's row actions (#574). Retry reads the file again like an upload does, so like
@@ -111,14 +112,14 @@ router.post("/cases/:caseId/documents/:documentId/retry", asyncHandler(ClientCas
 // small job of its own — see ClientOverviewSvc. Generate reads documents already on the case, so
 // it needs AI-processing consent like the chat does; the GET is a plain read and doesn't.
 router.get("/cases/:caseId/overview", asyncHandler(ClientCaseCtrl.overview));
-router.post("/cases/:caseId/overview/generate", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.generateOverview));
+router.post("/cases/:caseId/overview/generate", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.generateOverview));
 // The Intake tab (docs/plans/client-side-compressed-meteor.md): the Overview's traceable,
 // secretary-shaped replacement. Both tabs run side by side until the client app has moved over.
 router.get("/cases/:caseId/intake", asyncHandler(ClientCaseCtrl.intake));
-router.post("/cases/:caseId/intake/refresh", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.refreshIntake));
+router.post("/cases/:caseId/intake/refresh", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.refreshIntake));
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 // A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
-router.get("/cases/:caseId/lawyer-readiness", requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
+router.get("/cases/:caseId/lawyer-readiness", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
 
 // The lawyer marketplace: verified lawyers taking requests, filtered and sorted.
 // Email import (EPIC #982): the client's own Gmail, read-only. Nothing read here is stored.
@@ -135,16 +136,16 @@ router.post("/cases/:caseId/gmail-imports", emailImportConsent, gmailLimiter, as
 // "Suggest by AI" (#984): Intake searches the inbox for the case and ranks what it finds. Sends
 // email headers and previews to the AI, so it needs AI-processing consent, and each run is an AI
 // call plus up to ~45 Gmail reads, so it has its own tighter limit.
-router.post("/cases/:caseId/gmail-suggestions", emailImportConsent, requireConsent("AI_PROCESSING"), gmailSuggestLimiter, asyncHandler(ClientGmailCtrl.suggestForCase));
+router.post("/cases/:caseId/gmail-suggestions", requireClientAi, emailImportConsent, requireConsent("AI_PROCESSING"), gmailSuggestLimiter, asyncHandler(ClientGmailCtrl.suggestForCase));
 
-router.get("/lawyers", asyncHandler(ClientLawyerCtrl.list));
-router.get("/lawyers/:id", asyncHandler(ClientLawyerCtrl.get));
+router.get("/lawyers", requireClientRequests, asyncHandler(ClientLawyerCtrl.list));
+router.get("/lawyers/:id", requireClientRequests, asyncHandler(ClientLawyerCtrl.get));
 
 // Asking for a lawyer on one of the client's cases (the UK client-to-lawyer hand-off).
 router.get("/lawyer-requests/consent", asyncHandler(ClientRequestCtrl.consent));
-router.get("/lawyer-requests/eligibility", asyncHandler(ClientRequestCtrl.eligibility));
+router.get("/lawyer-requests/eligibility", requireClientRequests, asyncHandler(ClientRequestCtrl.eligibility));
 // The request's anonymised brief is AI-written (#508), so creating one needs AI-processing consent.
-router.post("/lawyer-requests", requireConsent("AI_PROCESSING"), asyncHandler(ClientRequestCtrl.create));
+router.post("/lawyer-requests", requireClientRequests, requireConsent("AI_PROCESSING"), asyncHandler(ClientRequestCtrl.create));
 router.get("/lawyer-requests", asyncHandler(ClientRequestCtrl.list));
 router.get("/lawyer-requests/:id", asyncHandler(ClientRequestCtrl.get));
 router.post("/lawyer-requests/:id/withdraw", asyncHandler(ClientRequestCtrl.withdraw));

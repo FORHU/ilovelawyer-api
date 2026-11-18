@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { CLIENT_REQUEST_CURRENCIES } from "../constants/client-request.constants";
 import Joi from "joi";
 import PayoutSettingsSvc from "../services/payout-settings.service";
 import QuotationPaymentSvc from "../services/quotation-payment.service";
@@ -6,7 +7,7 @@ import WalletSvc from "../services/wallet.service";
 import LawyerExitSvc from "../services/lawyer-exit.service";
 import LawyerSubscriptionAdminSvc, { LAWYER_SUBSCRIPTION_FILTERS, type LawyerSubscriptionFilter } from "../services/lawyer-subscription-admin.service";
 import { LAWYER_EXIT_STATUSES, QUOTATION_PAYMENT_STATUSES, type LawyerExitStatus, type QuotationPaymentStatus } from "../types/client-handoff";
-import { asTenantCode, type TenantCode } from "../types/tenant-code";
+import { TENANT_CODES, asTenantCode, type TenantCode } from "../types/tenant-code";
 import HttpError from "../utils/http-error";
 
 const settingsSchema = Joi.object({
@@ -31,7 +32,7 @@ const refundSchema = Joi.object({
   /** Left out: everything not yet refunded, the platform fee included. */
   amount: Joi.object({
     amountMinor: Joi.number().integer().min(1).required(),
-    currency: Joi.string().valid("GBP").required(),
+    currency: Joi.string().valid(...CLIENT_REQUEST_CURRENCIES).required(),
   }).optional(),
   reason: Joi.string().trim().min(1).max(500).required(),
 });
@@ -45,6 +46,11 @@ const lawyerExitsSchema = Joi.object({
   limit: Joi.number().integer().min(1).max(100).default(20),
 });
 const lawyerSubscriptionsSchema = Joi.object({
+  // The site whose subscriptions to list: the admin shows each site on its own page, with totals in
+  // that site's plan currency.
+  tenant: Joi.string()
+    .valid(...TENANT_CODES)
+    .required(),
   status: Joi.string()
     .valid(...LAWYER_SUBSCRIPTION_FILTERS)
     .default("ALL"),
@@ -55,7 +61,7 @@ const decideSchema = Joi.object({
   /** What the client gets back: 0 for nothing, at most the lawyer's share for part, or everything left. */
   refund: Joi.object({
     amountMinor: Joi.number().integer().min(0).required(),
-    currency: Joi.string().valid("GBP").required(),
+    currency: Joi.string().valid(...CLIENT_REQUEST_CURRENCIES).required(),
   }).required(),
   note: Joi.string().trim().allow("").max(1000).optional(),
 });
@@ -117,7 +123,7 @@ export default class PayoutAdminCtrl {
 
   /** GET /api/admin/lawyer-subscriptions[?status=ALL|ACTIVE|PAST_DUE|CHANGING|ENDED|PENDING&page=&limit=] */
   static async listLawyerSubscriptions(req: Request, res: Response) {
-    res.status(200).json(await LawyerSubscriptionAdminSvc.list(validate<{ status: LawyerSubscriptionFilter; page: number; limit: number }>(lawyerSubscriptionsSchema, req.query)));
+    res.status(200).json(await LawyerSubscriptionAdminSvc.list(validate<{ tenant: TenantCode; status: LawyerSubscriptionFilter; page: number; limit: number }>(lawyerSubscriptionsSchema, req.query)));
   }
 
   /** GET /api/admin/wallets[?page=&limit=] */

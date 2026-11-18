@@ -24,10 +24,18 @@ export const TERMS_VERSION = "2026-10";
 // lawyer Terms above. Bump this whenever ilovelawyer-client/src/lib/auth/terms.ts materially changes.
 export const CLIENT_TERMS_VERSION = "client-2026-10.3";
 
-/** The Tenant every client account (USER) belongs to. The client app is served from one domain
- * for every region (ilovelawyer.com, app.ilovelawyer.com for staging), so the request's host can't
- * tell PH from UK the way the lawyer app's ph./uk. subdomains do. */
-export const CLIENT_TENANT_CODE: TenantCode = "UK";
+/** The site a client account (USER) is opened in when the request doesn't come from one site's own
+ * client host (utils/tenant-host.ts CLIENT_HOST_TENANT_MAP): localhost:3004, client-local, and the
+ * single domain the client app had before it had one host per site. Every client account was
+ * opened in the UK until then, so those hosts stay the UK site. The client app's DEFAULT_SITE. */
+export const DEFAULT_CLIENT_TENANT_CODE: TenantCode = "UK";
+
+/** How a site's name reads in a client-facing message ("This account is on the Korea site"). */
+export const CLIENT_SITE_NAMES: Record<TenantCode, string> = { UK: "UK", PH: "Philippines", KR: "Korea" };
+
+/** Sites whose new lawyers wait for their Lawyer Application's approval before choosing a plan
+ * (verify before plan, PlanGateSvc): there the application is the bar check. */
+export const VERIFY_BEFORE_PLAN_TENANTS: ReadonlySet<TenantCode> = new Set(["UK", "KR"]);
 
 /** The Terms version an account of `role` agrees to: the client Terms for USER, the lawyer Terms
  * for everyone else. */

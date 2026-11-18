@@ -19,7 +19,7 @@ import {
   REQUEST_URGENCIES,
   UK_JURISDICTIONS,
 } from "./types/client-handoff";
-import { LAWYER_COUNTRIES, LAWYER_REJECTION_REASONS } from "./constants/lawyer-application.constants";
+import { KR_LOCAL_BARS, KR_QUALIFICATION_ROUTES, LAWYER_COUNTRIES, LAWYER_REJECTION_REASONS } from "./constants/lawyer-application.constants";
 
 /** A case's areas, by name (CaseArea). */
 const caseAreaNames = (description = "The case's areas by name, one or more"): Schema => ({ type: "array", items: { type: "string" }, description, example: ["Employment"] });
@@ -318,13 +318,26 @@ export const clientHandoffSchemas: Schemas = {
       mclePeriod: { type: "string", nullable: true, maxLength: 20, description: "As on the certificate, e.g. VII" },
     },
   },
+  KrRegistration: {
+    type: "object",
+    description: "The KR part of a Lawyer Application, checked against the Korean Bar Association. registrationNumber and localBar are required to submit.",
+    properties: {
+      country: { type: "string", enum: ["KR"] },
+      registrationNumber: { type: "string", nullable: true, maxLength: 10, description: "대한변호사협회 등록번호, digits" },
+      localBar: { ...enumOf(KR_LOCAL_BARS), nullable: true, description: "소속 지방변호사회" },
+      qualificationRoute: { ...enumOf(KR_QUALIFICATION_ROUTES), nullable: true, description: "BAR_EXAM (변호사시험) or JRTI (사법연수원)" },
+      qualificationCohort: { type: "integer", nullable: true, minimum: 1, description: "The bar exam round or JRTI class" },
+      specialties: { type: "array", items: { type: "string", maxLength: 40 }, maxItems: 10, description: "Specialist areas registered with the Korean Bar Association (전문분야)" },
+      registeredOn: { type: "string", format: "date", nullable: true, description: "Date of registration, YYYY-MM-DD" },
+    },
+  },
   ClientRequestProfile: {
     type: "object",
     description:
-      "A lawyer's Lawyer Application, UK or PH (the lawyer's site). On UK it also holds the settings for receiving client requests; on PH approval only shows a badge for now.",
+      "A lawyer's Lawyer Application, UK, PH or KR (the lawyer's site). On UK it also holds the settings for receiving client requests; on PH approval only shows a badge for now; on KR approval lets a new lawyer in (verify before plan).",
     properties: {
       country: enumOf(LAWYER_COUNTRIES),
-      registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
+      registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration"), ref("KrRegistration")], discriminator: { propertyName: "country" } },
       practiceAreas: { type: "array", items: ref("LawyerPracticeArea"), description: "From the site's list (GET /practice-areas), in its order" },
       bio: { type: "string", maxLength: 1500 },
       languages: { type: "array", items: { type: "string" } },
@@ -480,7 +493,9 @@ export const clientHandoffSchemas: Schemas = {
       balances: { type: "object", properties: { pending: money(), available: money("Can be below zero after a refund of money already withdrawn"), reserved: money("On its way to the bank"), withdrawn: money() } },
       payoutAccount: {
         type: "object",
-        properties: { provider: { type: "string", nullable: true, enum: ["STRIPE", "DUMMY"] }, connected: { type: "boolean" }, detailsSubmitted: { type: "boolean" }, payoutsEnabled: { type: "boolean" } },
+        properties: {
+          available: { type: "boolean", description: "False while the wallet's currency has no payout route (KRW): setting up payouts and withdrawing answer 409 PAYOUTS_NOT_AVAILABLE" },
+          provider: { type: "string", nullable: true, enum: ["STRIPE", "DUMMY"] }, connected: { type: "boolean" }, detailsSubmitted: { type: "boolean" }, payoutsEnabled: { type: "boolean" } },
       },
       minWithdrawal: money(),
       earningsHoldDays: { type: "integer", nullable: true },
@@ -1121,7 +1136,7 @@ export const clientHandoffPaths: Paths = {
       body: {
         type: "object",
         properties: {
-          registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration")], discriminator: { propertyName: "country" } },
+          registration: { oneOf: [ref("UkRegistration"), ref("PhRegistration"), ref("KrRegistration")], discriminator: { propertyName: "country" } },
           practiceAreaIds: {
             type: "array",
             items: { type: "string" },
@@ -1858,7 +1873,7 @@ export const clientHandoffPaths: Paths = {
       issue: "quotation payments", built: true,
       summary: "Change a tenant's quotation payment terms",
       description: "Any of platformFeeBps, minPlatformFeeMinor, earningsHoldDays, minWithdrawalMinor, within the limits (400 PAYOUT_SETTING_OUT_OF_RANGE). Reaches new quotes and withdrawals within about a minute; a sent quote keeps its fee. Audited (admin.settings.payout_settings_changed).",
-      parameters: [{ name: "code", in: "path", required: true, schema: { type: "string", enum: ["UK", "PH"] } }],
+      parameters: [{ name: "code", in: "path", required: true, schema: { type: "string", enum: ["UK", "PH", "KR"] } }],
       body: { type: "object", properties: { platformFeeBps: { type: "integer" }, minPlatformFeeMinor: { type: "integer" }, earningsHoldDays: { type: "integer" }, minWithdrawalMinor: { type: "integer" } } },
       responses: { 200: ok("Saved"), 400: err("PAYOUT_SETTING_OUT_OF_RANGE"), 403: err("Not a platform admin"), 404: err("Unknown tenant") },
     }),
@@ -1930,10 +1945,15 @@ export const clientHandoffPaths: Paths = {
       built: true,
       summary: "Lawyers' monthly plan subscriptions",
       description:
-        "Newest first. ALL (the default): everything but checkouts that were never paid. ACTIVE: paying, nothing changing. PAST_DUE: a renewal failed. CHANGING: cancelling or downgrading at the end of the period. ENDED: cancelled. PENDING: a checkout still open. `summary` covers every subscription whatever the filter: active, monthlyUsd (what active ones bill at today's plan fees), pastDue, changing.",
-      parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["ALL", "ACTIVE", "PAST_DUE", "CHANGING", "ENDED", "PENDING"] } }, ...pageParams],
+        "One site's subscriptions (`tenant`), newest first. ALL (the default): everything but checkouts that were never paid. ACTIVE: paying, nothing changing. PAST_DUE: a renewal failed. CHANGING: cancelling or downgrading at the end of the period. ENDED: cancelled. PENDING: a checkout still open. `summary` covers every subscription on that site whatever the filter: active, monthly ({ amountMinor, currency }: what active ones bill at today's plan fees, in the site's plan currency, KRW on KR), pastDue, changing.",
+      parameters: [
+        { name: "tenant", in: "query", required: true, schema: { type: "string", enum: ["PH", "UK", "KR"] } },
+        { name: "status", in: "query", schema: { type: "string", enum: ["ALL", "ACTIVE", "PAST_DUE", "CHANGING", "ENDED", "PENDING"] } },
+        ...pageParams,
+      ],
       responses: {
-        200: ok("A page of subscriptions, each with its lawyer (and firm), plan (name, feeUsd, tenantCode), current period, cancelAtPeriodEnd and scheduledPlan (a downgrade at the period's end), with the summary"),
+        200: ok("A page of subscriptions, each with its lawyer (and firm), plan (name, price { amountMinor, currency }, tenantCode), current period, cancelAtPeriodEnd and scheduledPlan (a downgrade at the period's end), with the summary"),
+        400: err("No tenant, or an unknown one"),
         403: err("Not a platform admin"),
       },
     }),

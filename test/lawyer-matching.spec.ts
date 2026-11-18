@@ -43,7 +43,7 @@ describe("POST /lawyer-matching/by-criteria", () => {
   it("passes caseAreas, ukJurisdiction and the ranked matches through", async () => {
     const res = await post({ caseAreas: ["EMPLOYMENT", "CONSUMER"], ukJurisdiction: "England and Wales" });
     expect(res.status).to.equal(200);
-    expect(received).to.deep.equal({ caseAreas: ["EMPLOYMENT", "CONSUMER"], ukJurisdiction: "England and Wales", budget: undefined });
+    expect(received).to.deep.equal({ country: undefined, caseAreas: ["EMPLOYMENT", "CONSUMER"], ukJurisdiction: "England and Wales", budget: undefined });
     expect(res.body).to.deep.equal({ matches: result });
   });
 

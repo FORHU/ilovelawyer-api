@@ -205,3 +205,21 @@ describe("resolveRelatedCaseLibraryLinks", () => {
     expect(result).to.deep.equal([{ ...items[0], url: null }]);
   });
 });
+
+describe("KR (no Library yet)", () => {
+  it("knows no law host, so nothing is resolved through PH or UK", () => {
+    expect(isKnownLawHost("https://juris.ph/case/123", "KR")).to.equal(false);
+    expect(isKnownLawHost("https://www.legislation.gov.uk/ukpga/2015/15", "KR")).to.equal(false);
+  });
+
+  it("leaves a KR answer's links exactly as written", async () => {
+    const content = "See [the Act](https://www.law.go.kr/법령/민법) and [a case](https://juris.ph/case/1).";
+    const result = await rewriteLegalCitationLinks(content, "KR");
+    expect(result).to.deep.equal({ content, rewrittenCount: 0, attemptedCount: 0, strippedCount: 0 });
+  });
+
+  it("keeps related cases' own links rather than stripping them", async () => {
+    const items = [relatedCase({ title: "대법원 판결", url: "https://www.law.go.kr/precSc" })];
+    expect(await resolveRelatedCaseLibraryLinks(items, "KR")).to.deep.equal(items);
+  });
+});

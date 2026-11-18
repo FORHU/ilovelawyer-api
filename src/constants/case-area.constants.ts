@@ -6,8 +6,10 @@ export interface DefaultCaseArea {
   description: string;
 }
 
-/** Client cases are UK only for now, so every case's areas are the UK list's. PH has its own list,
- * and its practice areas map to it, ready for when PH has client cases. */
+/** The case-area list a case uses when nothing says which site it's on: the UK's, where every client
+ * case was until the client app had one site per host. A client's own case uses its workspace's site
+ * list (ClientCaseSvc passes workspace.tenantCode): a KR client picks from KR's areas. The
+ * lawyer-facing paths (matching, briefs, requests) stay on this one, as only the UK takes requests. */
 export const CLIENT_CASE_COUNTRY: LawyerCountry = "UK";
 
 /** Where a case nothing else fits goes. Always there and always on: it can be renamed, but not
@@ -56,6 +58,20 @@ export const DEFAULT_CASE_AREAS: Record<LawyerCountry, readonly DefaultCaseArea[
     { code: "BUSINESS", name: "Business", description: "Running a corporation or partnership, the SEC, commercial contracts, disputes with partners, suppliers or business customers, shipping and energy." },
     { code: "INTELLECTUAL_PROPERTY", name: "Intellectual Property", description: "Copyright, trademarks, patents, someone copying your work, brand or invention." },
     { code: OTHER_CASE_AREA, name: "Other", description: "Anything else." },
+  ],
+  // Korean first, English in brackets, as the KR practice areas. KR has no client cases yet, so this
+  // list is only ready for when it does.
+  KR: [
+    { code: "EMPLOYMENT", name: "노동 (Labour)", description: "근로, 해고, 임금·퇴직금 체불, 직장 내 괴롭힘, 노동위원회 사건." },
+    { code: "FAMILY", name: "가사·이혼 (Family and Divorce)", description: "이혼, 재산분할, 양육권·양육비, 위자료, 가정폭력." },
+    { code: "PROPERTY", name: "부동산·임대차 (Real Estate and Leases)", description: "전세·월세 보증금, 임대차 분쟁, 부동산 매매, 등기, 재개발·재건축." },
+    { code: "CRIMINAL", name: "형사 (Criminal)", description: "수사나 재판을 받는 경우, 고소·고발, 사기, 폭행, 음주운전, 형사 합의." },
+    { code: "BUSINESS", name: "기업 (Business)", description: "회사 운영, 주주·동업자 분쟁, 거래처와의 계약 분쟁, 상거래." },
+    { code: "PUBLIC_BODIES", name: "행정 (Government and Public Bodies)", description: "행정기관의 처분, 영업정지, 인허가, 행정심판·행정소송." },
+    { code: "INTELLECTUAL_PROPERTY", name: "지식재산 (Intellectual Property)", description: "저작권, 상표, 특허, 디자인, 내 작품이나 브랜드를 베낀 경우." },
+    { code: "TAX", name: "조세 (Tax)", description: "세금 고지, 가산세, 세무조사, 상속세·증여세." },
+    { code: "MEDICAL", name: "의료 (Medical)", description: "의료사고, 의료분쟁, 병원과의 분쟁." },
+    { code: OTHER_CASE_AREA, name: "기타 (Other)", description: "돈을 빌려주고 못 받은 경우 등 그 밖의 민사 분쟁, 위 항목에 해당하지 않는 모든 사건." },
   ],
 };
 

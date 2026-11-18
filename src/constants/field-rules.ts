@@ -25,3 +25,20 @@ export const ROMAN_NUMERAL_PATTERN = /^[IVXLCDMivxlcdm]+$/;
 
 export const UK_POSTCODE_PATTERN = /^[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}$/i;
 export const PH_ZIP_CODE_PATTERN = /^\d{4}$/;
+/** A Korean postcode (우편번호): 5 digits since 2015. */
+export const KR_POSTCODE_PATTERN = /^\d{5}$/;
+
+/** What a KR firm is (KR only, optional): 법무법인, 법무법인(유한), 법무조합, 공동법률사무소, or a
+ * lawyer's own office (개인 법률사무소). */
+export const KR_FIRM_TYPES = ["LAW_FIRM", "LAW_FIRM_LLC", "LAW_PARTNERSHIP", "JOINT_OFFICE", "SOLE_OFFICE"] as const;
+
+/** Whether ten digits are a valid Korean business registration number (사업자등록번호, shown as
+ * 123-45-67890): the last digit is a check digit over the first nine. */
+export function isKrBusinessRegistrationNumber(value: string): boolean {
+  if (!/^\d{10}$/.test(value)) return false;
+  const d = [...value].map(Number);
+  const weights = [1, 3, 7, 1, 3, 7, 1, 3, 5];
+  let sum = weights.reduce((acc, w, i) => acc + d[i] * w, 0);
+  sum += Math.floor((d[8] * 5) / 10);
+  return (10 - (sum % 10)) % 10 === d[9];
+}

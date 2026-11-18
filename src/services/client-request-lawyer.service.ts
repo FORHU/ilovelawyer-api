@@ -30,11 +30,13 @@ import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent, CloseOutcome, LawyerExitForLawyer, QuotationInvoice, QuoteTerms } from "../types/client-handoff";
-import { CLIENT_REQUEST_MAX_LAWYERS } from "../constants/client-request.constants";
+import { CLIENT_REQUEST_MAX_LAWYERS, quoteMaxMinorOf } from "../constants/client-request.constants";
+import { CLIENT_REQUESTS_OPEN_TENANTS, requestCurrencyOf } from "../constants/client-sites.constants";
 import ChatRepo from "../repositories/chat.repository";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
 import { documentFileUrl } from "./document.service";
 import type { CaseIntake, IntakePackageCaseDetails, IntakePackageDocument, IntakePackageForLawyer, IntakePackageMessage } from "../types/client-intake";
+import { moneyText } from "../utils/money-text";
 
 /** What a case with no intake run yet looks like in the package — never undefined, so the lawyer
  * app always has something to render rather than a special-casing null. */
@@ -213,8 +215,13 @@ function chargeOf(r: LawyerRequest, lawyerId: string) {
   return { id: fee.id, status: fee.status, amount: { amountMinor: fee.amountMinor, currency: fee.currency }, failureReason: fee.failureReason };
 }
 
+/** A request's site: its client's (UK for a client from before sites). */
+function siteOf(r: { client?: { tenant?: { code: string } | null } | null }): string {
+  return r.client?.tenant?.code ?? "UK";
+}
+
 function criteriaOf(r: LawyerRequest) {
-  return { caseAreas: r.case.caseAreas, ukJurisdiction: r.case.ukJurisdiction, onlyLawyerId: onlyLawyerOf(r) };
+  return { country: siteOf(r), caseAreas: r.case.caseAreas, ukJurisdiction: r.case.ukJurisdiction, onlyLawyerId: onlyLawyerOf(r) };
 }
 
 /** How many lawyers can be on the request at once: one while it's limited to the lawyer the client
@@ -243,7 +250,11 @@ export default class ClientRequestLawyerSvc {
     // rule. Paged here, after it: the routed, unclaimed pool is small, and the lawyer-level checks
     // (accepting, paused, enabled) would otherwise make the database's total wrong.
     const now = new Date();
-    const candidates = await ClientRequestRepo.listRoutedFor(lawyer.userId, { caseAreas: caseAreasOf(profile.practiceAreas), jurisdictions: profile.qualifiedJurisdictions }, now);
+    const candidates = await ClientRequestRepo.listRoutedFor(
+      lawyer.userId,
+      { country: profile.country ?? "UK", caseAreas: caseAreasOf(profile.practiceAreas), jurisdictions: profile.qualifiedJurisdictions },
+      now,
+    );
     // Several lawyers: one already on it is in their "mine" view, and a full one leaves the inbox
     // until a place frees up.
     const inbox = candidates.filter(
@@ -443,7 +454,7 @@ export default class ClientRequestLawyerSvc {
    */
   static async saveQuotation(lawyer: LawyerContext, id: string, input: QuotationInput) {
     const now = new Date();
-    const draft = ClientRequestLawyerSvc.draftOf(input, now);
+    const draft = ClientRequestLawyerSvc.draftOf(input, now, lawyer.tenantCode);
     const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["ROUTED"]);
     const terms = await PayoutSettingsSvc.forTenantCode(lawyer.tenantCode);
     const saved = await QuotationRepo.saveDraft({ id: claim.id, requestId: id, lawyerId: lawyer.userId }, draft, terms, now);
@@ -451,9 +462,13 @@ export default class ClientRequestLawyerSvc {
     return toDto((await ClientRequestRepo.findForLawyer(id))!, lawyer.userId, await feeOf(lawyer));
   }
 
-  /** The draft a quotation input makes, checked: a fixed fee needs an amount, and the expiry is in the
-   * future and at most QUOTATION_MAX_VALIDITY_DAYS away. */
-  private static draftOf(input: QuotationInput, now: Date): QuotationDraft {
+  /** The draft a quotation input makes, checked: in the site's currency (GBP on UK, KRW on KR) and
+   * within its ceiling, a fixed fee needs an amount, and the expiry is in the future and at most
+   * QUOTATION_MAX_VALIDITY_DAYS away. */
+  private static draftOf(input: QuotationInput, now: Date, tenantCode: TenantCode): QuotationDraft {
+    const currency = requestCurrencyOf(tenantCode);
+    if (input.amount.currency !== currency) throw new HttpError(`Quote in ${currency} on this site.`, 400, "QUOTE_CURRENCY_MISMATCH", { currency });
+    if (input.amount.amountMinor > quoteMaxMinorOf(currency)) throw new HttpError("That amount is too large. Check it for an extra zero.", 400, "QUOTE_AMOUNT_TOO_LARGE");
     if (input.type === "FIXED_FEE" && input.amount.amountMinor <= 0) throw new HttpError("A fixed fee needs an amount.", 400);
     const expiresAt = new Date(input.expiresAt);
     if (!(expiresAt > now)) throw new HttpError("Choose an expiry in the future.", 400, "QUOTATION_EXPIRY_INVALID");
@@ -496,7 +511,7 @@ export default class ClientRequestLawyerSvc {
    */
   static async quote(lawyer: LawyerContext, id: string, input: Omit<QuotationInput, "expiresAt"> & { expiresAt?: QuotationInput["expiresAt"] }) {
     const now = new Date();
-    const draft = ClientRequestLawyerSvc.draftOf({ ...input, expiresAt: input.expiresAt ?? new Date(now.getTime() + QUOTATION_DEFAULT_VALIDITY_DAYS * DAY_MS) }, now);
+    const draft = ClientRequestLawyerSvc.draftOf({ ...input, expiresAt: input.expiresAt ?? new Date(now.getTime() + QUOTATION_DEFAULT_VALIDITY_DAYS * DAY_MS) }, now, lawyer.tenantCode);
     const { request, claim } = await ClientRequestLawyerSvc.heldClaim(lawyer, id, ["ROUTED"]);
     const sent = await QuotationRepo.saveAndSend({ id: claim.id, requestId: id, lawyerId: lawyer.userId }, draft, await PayoutSettingsSvc.forTenantCode(lawyer.tenantCode), now);
     if ("refused" in sent) throw await ClientRequestLawyerSvc.quotationRefused(sent.refused, id, request.status, claim.expiresAt, now);
@@ -705,7 +720,7 @@ export default class ClientRequestLawyerSvc {
     // Work claimed only means something on money paid through ilovelawyer.
     const workDone = !!input.workDone && !!payment;
     if (workDone && payment && input.claimed!.amountMinor > payment.serviceFeeMinor) {
-      throw new HttpError(`You can claim at most your share of the fee, £${(payment.serviceFeeMinor / 100).toFixed(2)}.`, 400, "CLAIM_EXCEEDS_FEE", {
+      throw new HttpError(`You can claim at most your share of the fee, ${moneyText(payment.serviceFeeMinor, payment.currency)}.`, 400, "CLAIM_EXCEEDS_FEE", {
         maximum: { amountMinor: payment.serviceFeeMinor, currency: payment.currency },
       });
     }
@@ -817,16 +832,20 @@ export default class ClientRequestLawyerSvc {
     return !r.excludedLawyerIds.includes(lawyerId) && ClientRequestMatchingSvc.matches(profile, criteriaOf(r));
   }
 
-  /** Client requests are UK only, for lawyers whose registration has been verified (#506).
+  /** Client requests are for lawyers on a site that has them (CLIENT_REQUESTS_OPEN_TENANTS: UK, KR),
+   * registered on that same site, whose registration has been verified (#506).
    * `openCount` (requests they're on or engaged on) makes the result usable as LawyerForMatching
    * directly — it only matters against capacity on a request this lawyer doesn't already hold,
    * since every call site here checks `held` (their own claim) before falling back to matches(). */
   private static async assertVerifiedLawyer(lawyer: LawyerContext): Promise<LawyerProfileRow & { openCount: number }> {
     const who = await LawyerProfileRepo.findLawyerTenant(lawyer.userId);
     if (!who || who.role !== "LAWYER") throw new HttpError("Client requests are for lawyer accounts", 403, "NOT_A_LAWYER");
-    if (lawyer.tenantCode !== "UK") throw new HttpError("Client requests are only available on the UK site", 403, "NOT_UK_TENANT");
+    if (!CLIENT_REQUESTS_OPEN_TENANTS.has(lawyer.tenantCode)) {
+      throw new HttpError("Client requests aren't available on this site yet", 403, "NOT_UK_TENANT");
+    }
     const profile = await LawyerProfileRepo.find(lawyer.userId);
-    if (!profile || profile.verificationStatus !== "VERIFIED") {
+    // A lawyer registered on one site never sees another site's clients.
+    if (!profile || profile.verificationStatus !== "VERIFIED" || (profile.country ?? "UK") !== lawyer.tenantCode) {
       throw new HttpError("You can see client requests once we've verified your registration.", 403, "LAWYER_NOT_VERIFIED");
     }
     const openCount = (await LawyerProfileRepo.countOpenForLawyers([lawyer.userId])).get(lawyer.userId) ?? 0;

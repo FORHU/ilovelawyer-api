@@ -34,7 +34,7 @@ describe("Admin payment-plan routes", () => {
     const created = await request(app)
       .post("/api/admin/settings/tenants/PH/payment-plans")
       .set("Authorization", `Bearer ${token}`)
-      .send({ code, name: "Route Test Tier", feeUsd: 20, includedAllowanceUsd: 10, caseLimit: 5 });
+      .send({ code, name: "Route Test Tier", priceMinor: 2000, includedAllowanceUsd: 10, caseLimit: 5 });
     expect(created.status).to.equal(201);
     expect(created.body.code).to.equal(code);
     createdPlanIds.push(created.body.id);
@@ -47,9 +47,9 @@ describe("Admin payment-plan routes", () => {
     const updated = await request(app)
       .patch(`/api/admin/settings/tenants/PH/payment-plans/${planId}`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ feeUsd: 77 });
+      .send({ priceMinor: 7700 });
     expect(updated.status).to.equal(200);
-    expect(updated.body.feeUsd).to.equal(77);
+    expect(updated.body).to.include({ priceMinor: 7700, currency: "USD" });
 
     // Assign a lawyer to the tier, then confirm deactivating it never deletes the row (the
     // lawyer's User.paymentPlanId must keep resolving).
@@ -75,7 +75,7 @@ describe("Admin payment-plan routes", () => {
     const res = await request(app)
       .post("/api/admin/settings/tenants/PH/payment-plans")
       .set("Authorization", `Bearer ${lawyerToken}`)
-      .send({ code: `${code}-denied`, name: "Nope", feeUsd: 1, includedAllowanceUsd: 1, caseLimit: 1 });
+      .send({ code: `${code}-denied`, name: "Nope", priceMinor: 100, includedAllowanceUsd: 1, caseLimit: 1 });
     expect(res.status).to.equal(403);
   });
 
@@ -83,8 +83,25 @@ describe("Admin payment-plan routes", () => {
     const res = await request(app)
       .post("/api/admin/settings/tenants/PH/payment-plans")
       .set("Authorization", `Bearer ${token}`)
-      .send({ code: "", name: "Bad", feeUsd: -5, includedAllowanceUsd: 1, caseLimit: 1 });
+      .send({ code: "", name: "Bad", priceMinor: -5, includedAllowanceUsd: 1, caseLimit: 1 });
     expect(res.status).to.equal(400);
+  });
+
+  it("rejects a fee that isn't a whole number of the smallest unit", async () => {
+    const res = await request(app)
+      .post("/api/admin/settings/tenants/KR/payment-plans")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ code: `${code}-frac`, name: "Bad", priceMinor: 29000.5, includedAllowanceUsd: 1, caseLimit: 1 });
+    expect(res.status).to.equal(400);
+  });
+
+  it("gives each site's plan currency in GET /api/admin/settings", async () => {
+    const res = await request(app).get("/api/admin/settings").set("Authorization", `Bearer ${token}`);
+    expect(res.status).to.equal(200);
+    const kr = res.body.tenants.find((t: { code: string }) => t.code === "KR");
+    expect(kr.planCurrency).to.equal("KRW");
+    expect(kr.paymentPlans.map((p: { code: string; priceMinor: number; currency: string }) => [p.code, p.currency])).to.deep.include(["standard", "KRW"]);
+    expect(res.body.tenants.find((t: { code: string }) => t.code === "PH").planCurrency).to.equal("USD");
   });
 
   it("includes paymentPlans in GET /api/admin/settings", async () => {

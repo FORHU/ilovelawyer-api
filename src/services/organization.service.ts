@@ -12,7 +12,7 @@ import AuthRepo from "../repositories/auth.repository";
 import TenantRepo from "../repositories/tenant.repository";
 import CaseAccess from "../utils/case-access";
 import HttpError from "../utils/http-error";
-import { PH_ZIP_CODE_PATTERN, UK_POSTCODE_PATTERN } from "../constants/field-rules";
+import { KR_POSTCODE_PATTERN, PH_ZIP_CODE_PATTERN, UK_POSTCODE_PATTERN } from "../constants/field-rules";
 import { hasOrgRole } from "../utils/org-role";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
@@ -26,18 +26,25 @@ import AuditSvc, { AuditAction } from "./audit.service";
 import logger from "../utils/logger";
 
 /** A firm regulator and its number are UK only: SRA, the Law Society of Scotland or of Northern
- * Ireland. A PH firm has no equivalent number yet. */
+ * Ireland. A firm type and business registration number (사업자등록번호) are KR only. A PH firm has
+ * no equivalent number yet. */
 function assertFirmDetailsFitTenant(details: FirmDetails, tenantCode: TenantCode) {
   if (tenantCode !== "UK" && (details.firmRegulator || details.firmRegistrationNumber)) {
     throw new HttpError("A firm regulator and number are only for UK firms", 400);
   }
-  // A UK postcode, or a PH 4-digit ZIP code: the address is in the firm's own country.
+  if (tenantCode !== "KR" && (details.firmType || details.businessRegistrationNumber)) {
+    throw new HttpError("A firm type and business registration number are only for KR firms", 400);
+  }
+  // The address is in the firm's own country: a UK postcode, a PH 4-digit ZIP code, a KR 5-digit postcode.
   const postcode = details.postcode?.trim();
   if (postcode && tenantCode === "UK" && !UK_POSTCODE_PATTERN.test(postcode)) {
     throw new HttpError("Enter a UK postcode, e.g. SW1A 1AA.", 400, "INVALID_POSTCODE");
   }
   if (postcode && tenantCode === "PH" && !PH_ZIP_CODE_PATTERN.test(postcode)) {
     throw new HttpError("Enter a 4-digit ZIP code.", 400, "INVALID_POSTCODE");
+  }
+  if (postcode && tenantCode === "KR" && !KR_POSTCODE_PATTERN.test(postcode)) {
+    throw new HttpError("Enter a 5-digit postcode, e.g. 06236.", 400, "INVALID_POSTCODE");
   }
 }
 
@@ -177,7 +184,7 @@ export default class OrganizationSvc {
       const existing = await OrganizationRepo.findBySlug(data.slug);
       if (existing && existing.id !== id) throw new HttpError("An organization with this slug already exists", 409);
     }
-    if (data.firmRegulator || data.firmRegistrationNumber) {
+    if (data.firmRegulator || data.firmRegistrationNumber || data.firmType || data.businessRegistrationNumber || data.postcode) {
       const org = await OrganizationRepo.findById(id);
       if (org) assertFirmDetailsFitTenant(data, org.tenant.code as TenantCode);
     }

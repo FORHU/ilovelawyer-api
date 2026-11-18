@@ -1,4 +1,6 @@
 import type { ClientRequestStatus, LawyerExit, QuotationPayment, QuotationRefund } from "@prisma/client";
+import { needsUkRegion } from "../constants/client-sites.constants";
+import { FEE_CURRENCY_BY_COUNTRY } from "../constants/lawyer-application.constants";
 import ClientRequestRepo, { type ClientRequestForClient } from "../repositories/client-request.repository";
 import { toPracticeAreaRefs } from "../repositories/practice-area.repository";
 import ClientCaseRepo from "../repositories/client-case.repository";
@@ -27,16 +29,22 @@ import { emitToUser } from "../lib/socket";
 import type { ClientWorkspace } from "./client-case.service";
 import type { ClientRefundSummary, ClientRequestTakenEvent, ClientRequestUpdatedEvent } from "../types/client-handoff";
 import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
+import AuthRepo from "../repositories/auth.repository";
 import {
-  CLIENT_REQUEST_CONSENT_TEXT,
-  CLIENT_REQUEST_CONSENT_VERSION,
-  CLIENT_REQUEST_DIRECT_CONSENT_TEXT,
-  CLIENT_REQUEST_DIRECT_CONSENT_VERSION,
   CLIENT_REQUEST_DIRECT_WINDOW_MS,
   CLIENT_REQUEST_MAX_LAWYERS,
-  CLIENT_REQUEST_SHARING_NOTICE,
-  CLIENT_REQUEST_REFERRAL_DISCLOSURE,
+  requestWordingFor,
 } from "../constants/client-request.constants";
+
+/** A client's site: their account's (UK for one from before sites). */
+async function siteOfClient(clientId: string): Promise<string> {
+  return (await AuthRepo.findSiteCode(clientId)) ?? "UK";
+}
+
+/** A lawyer's first-consultation fee is in their site's currency (pence on UK, won on KR). */
+function feeCurrencyOf(country: string): string {
+  return FEE_CURRENCY_BY_COUNTRY[country as keyof typeof FEE_CURRENCY_BY_COUNTRY] ?? "GBP";
+}
 
 /** Why the client can't ask for a lawyer on a case (CLIENT_HANDOFF_ERROR_CODES). */
 type IneligibleReason = "NOT_UK_CASE" | "REGION_UNKNOWN" | "PERSONAL_INJURY_EXCLUDED" | "REQUEST_ALREADY_OPEN";
@@ -72,14 +80,15 @@ function lawyerDto(claim: ClientRequestForClient["claims"][number]) {
     avatarUrl: claim.lawyer.avatar?.s3Key ? getStableProxyFileUrl(claim.lawyer.avatar.s3Key) : null,
     // A solo lawyer has no organization, so no firm (nor did a client-era personal workspace).
     firmName: claim.organization && !claim.organization.isPersonal ? claim.organization.name : null,
-    regulator: profile?.ukRegistration?.regulator ?? null,
-    registrationNumber: profile?.ukRegistration?.registrationNumber ?? null,
+    // A KR lawyer's is the Korean Bar Association number (LawyerKrRegistration).
+    regulator: profile?.country === "KR" ? "Korean Bar Association" : (profile?.ukRegistration?.regulator ?? null),
+    registrationNumber: profile?.country === "KR" ? (profile.krRegistration?.registrationNumber ?? null) : (profile?.ukRegistration?.registrationNumber ?? null),
     // By name: the list is the lawyer's site's, which admins edit (PracticeArea).
     practiceAreas: profile ? toPracticeAreaRefs(profile.practiceAreas).map((a) => a.name) : [],
     qualifiedJurisdictions: profile?.ukRegistration?.qualifiedJurisdictions ?? [],
     languages: profile?.languages ?? [],
     bio: profile?.bio ?? "",
-    firstConsultationFee: profile?.firstConsultationFeeMinor == null ? null : { amountMinor: profile.firstConsultationFeeMinor, currency: "GBP" },
+    firstConsultationFee: profile?.firstConsultationFeeMinor == null ? null : { amountMinor: profile.firstConsultationFeeMinor, currency: feeCurrencyOf(profile.country) },
     verifiedAt: profile?.verifiedAt ?? null,
   };
 }
@@ -153,7 +162,8 @@ async function refundsFor(requests: ClientRequestForClient[]): Promise<Map<strin
  * so the app doesn't promise quotes that can't come. `lawyer`/`quote`/`quotation` stay for one
  * lawyer (the one hired, or the only quote). The disclosure is what the client acknowledges to
  * accept. `awaitingPayment`: the client accepted a quotation and hasn't paid it yet. */
-function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = null) {
+function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = null, site: string = "UK") {
+  const wording = requestWordingFor(site);
   const one = oneLawyer(r);
   const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c), quotation: quotationFor(c) }));
   const hasQuote = lawyers.some((l) => l.quote);
@@ -182,8 +192,9 @@ function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = n
     quotation: one ? quotationFor(one) : null,
     // A quote accepted before quotation payments has no accepted amount: it's paid outside ilovelawyer.
     awaitingPayment: r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED" && one.quotation.acceptedAmountMinor !== null,
-    referralDisclosure: hasQuote ? CLIENT_REQUEST_REFERRAL_DISCLOSURE : null,
-    sharingNotice: hasQuote ? CLIENT_REQUEST_SHARING_NOTICE : null,
+    // In the client's site's words: Korean for a KR client.
+    referralDisclosure: hasQuote ? wording.referralDisclosure : null,
+    sharingNotice: hasQuote ? wording.sharingNotice : null,
     engagedAt: r.engagedAt,
     closedAt: r.closedAt,
     closedBy: r.closedBy,
@@ -202,11 +213,12 @@ function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = n
  * it is a later issue (#511).
  */
 export default class ClientRequestSvc {
-  /** What the client agrees to: asking every matching lawyer, or (`direct`) one lawyer by name first. */
-  static consent(direct = false) {
-    return direct
-      ? { version: CLIENT_REQUEST_DIRECT_CONSENT_VERSION, consentText: CLIENT_REQUEST_DIRECT_CONSENT_TEXT, referralDisclosure: CLIENT_REQUEST_REFERRAL_DISCLOSURE }
-      : { version: CLIENT_REQUEST_CONSENT_VERSION, consentText: CLIENT_REQUEST_CONSENT_TEXT, referralDisclosure: CLIENT_REQUEST_REFERRAL_DISCLOSURE };
+  /** What the client agrees to: asking every matching lawyer, or (`direct`) one lawyer by name first.
+   * In their site's words (`site`): a KR client agrees to the Korean, with its own version. */
+  static consent(direct = false, site: string = "UK") {
+    const wording = requestWordingFor(site);
+    const chosen = direct ? wording.directConsent : wording.consent;
+    return { version: chosen.version, consentText: chosen.consentText, referralDisclosure: wording.referralDisclosure };
   }
 
   /** Whether the app should offer "Get a lawyer" on this case, and if not, why. */
@@ -215,11 +227,15 @@ export default class ClientRequestSvc {
     if (!row) throw new HttpError("Case not found", 404);
     const no = (reason: IneligibleReason, openRequestId: string | null = null) => ({ eligible: false, reason, openRequestId });
 
-    if (row.outsideUk) return no("NOT_UK_CASE");
-    // Nobody has said where it is yet (#973): ask, rather than call it outside the UK.
-    if (!row.ukJurisdiction) return no("REGION_UNKNOWN");
-    // Personal injury is spotted by the lawyer readiness check (Jev), which reads the chat.
-    if ((row.lawyerReadiness as { blockedBy?: string } | null)?.blockedBy === "PERSONAL_INJURY") return no("PERSONAL_INJURY_EXCLUDED");
+    // The UK's rules: a UK case needs its part of the UK, and personal injury isn't connected (the
+    // UK bans referral fees on it). Another site's case has neither.
+    if (needsUkRegion(workspace.tenantCode)) {
+      if (row.outsideUk) return no("NOT_UK_CASE");
+      // Nobody has said where it is yet (#973): ask, rather than call it outside the UK.
+      if (!row.ukJurisdiction) return no("REGION_UNKNOWN");
+      // Personal injury is spotted by the lawyer readiness check (Jev), which reads the chat.
+      if ((row.lawyerReadiness as { blockedBy?: string } | null)?.blockedBy === "PERSONAL_INJURY") return no("PERSONAL_INJURY_EXCLUDED");
+    }
     const open = await ClientRequestRepo.findOpenForCase(caseId);
     if (open) return no("REQUEST_ALREADY_OPEN", open.id);
     return { eligible: true, reason: null, openRequestId: null };
@@ -227,7 +243,7 @@ export default class ClientRequestSvc {
 
   static async create(workspace: ClientWorkspace, clientId: string, input: NewClientRequest) {
     if (!input.consentAccepted) throw new HttpError("Agree to the consent to ask for a lawyer.", 400, "CONSENT_REQUIRED");
-    const consent = ClientRequestSvc.consent(!!input.lawyerId);
+    const consent = ClientRequestSvc.consent(!!input.lawyerId, workspace.tenantCode);
     if (input.consentVersion !== consent.version) {
       throw new HttpError("The consent text has changed. Read it again before sending.", 409, "CONSENT_VERSION_STALE", { version: consent.version });
     }
@@ -258,7 +274,7 @@ export default class ClientRequestSvc {
     // for their 24h, then every matching lawyer (ClientRequestNotifySvc.openDirectDue).
     const routed = await ClientRequestMatchingSvc.route(created.id, requestedLawyer ? CLIENT_REQUEST_DIRECT_WINDOW_MS : undefined);
     // Brand new, so nobody has claimed or quoted it.
-    return toDto({ ...routed, claims: [], feedback: null, requestedLawyer });
+    return toDto({ ...routed, claims: [], feedback: null, requestedLawyer }, null, workspace.tenantCode);
   }
 
   /** The lawyer a client asks for by name: verified, taking requests, and taking cases like this one
@@ -270,17 +286,22 @@ export default class ClientRequestSvc {
     if (!ClientRequestMatchingSvc.isAvailable(lawyer)) throw new HttpError("This lawyer isn't taking new requests right now.", 422, "LAWYER_NOT_AVAILABLE");
     const row = await ClientCaseRepo.findById(caseId, workspace.id);
     if (!row) throw new HttpError("Case not found", 404);
-    if (!ClientRequestMatchingSvc.matches(lawyer, { caseAreas: row.caseAreas, ukJurisdiction: row.ukJurisdiction })) {
-      throw new HttpError("This lawyer doesn't take cases like this one, or not in your part of the UK.", 422, "LAWYER_NOT_A_MATCH");
+    if (!ClientRequestMatchingSvc.matches(lawyer, { country: workspace.tenantCode, caseAreas: row.caseAreas, ukJurisdiction: row.ukJurisdiction })) {
+      throw new HttpError(
+        needsUkRegion(workspace.tenantCode) ? "This lawyer doesn't take cases like this one, or not in your part of the UK." : "This lawyer doesn't take cases like this one.",
+        422,
+        "LAWYER_NOT_A_MATCH",
+      );
     }
-    const name = (await LawyerProfileRepo.findForMarketplace(lawyerId))[0]?.user.name ?? "";
+    const name = (await LawyerProfileRepo.findForMarketplace(lawyerId, workspace.tenantCode))[0]?.user.name ?? "";
     return { id: lawyerId, name };
   }
 
   static async list(clientId: string, query: { caseId?: string; page: number; limit: number }) {
     const { total, data } = await ClientRequestRepo.listForClient(clientId, query.caseId, query.page, query.limit);
     const refunds = await refundsFor(data);
-    return { total, data: data.map((r) => toDto(r, refunds.get(r.id) ?? null)) };
+    const site = await siteOfClient(clientId);
+    return { total, data: data.map((r) => toDto(r, refunds.get(r.id) ?? null, site)) };
   }
 
   static async get(clientId: string, id: string) {
@@ -507,7 +528,7 @@ export default class ClientRequestSvc {
   /** The request as the client app reads it, with its refund summary. */
   private static async view(clientId: string, id: string) {
     const request = await ClientRequestSvc.load(clientId, id);
-    return toDto(request, (await refundsFor([request])).get(id) ?? null);
+    return toDto(request, (await refundsFor([request])).get(id) ?? null, await siteOfClient(clientId));
   }
 
   private static async load(clientId: string, id: string) {

@@ -7,6 +7,7 @@ import prisma from "../src/lib/prisma";
 import OrganizationSvc from "../src/services/organization.service";
 import { createOrganizationSchema } from "../src/validation/organization.validation";
 import { updateLawyerProfileSchema } from "../src/validation/lawyer-profile.validation";
+import { isKrBusinessRegistrationNumber } from "../src/constants/field-rules";
 
 const firm = (details: object) => createOrganizationSchema.validate({ name: "Rules LLP", ...details });
 const uk = (registration: object) => updateLawyerProfileSchema("UK").validate({ registration: { country: "UK", ...registration } });
@@ -28,6 +29,16 @@ describe("field rules", () => {
       expect(firm({ firmRegistrationNumber: "612345", city: "Stoke-on-Trent" }).error).to.equal(undefined);
       expect(firm({ firmRegistrationNumber: "SRA612345" }).error).to.not.equal(undefined);
       expect(firm({ city: "Manila 1000" }).error).to.not.equal(undefined);
+    });
+
+    it("takes a KR firm type and a business registration number with a valid check digit", () => {
+      // 220-81-62517 is a published company registration number.
+      expect(isKrBusinessRegistrationNumber("2208162517")).to.equal(true);
+      expect(isKrBusinessRegistrationNumber("2208162518")).to.equal(false);
+      expect(isKrBusinessRegistrationNumber("220-81-62517")).to.equal(false);
+      expect(firm({ firmType: "LAW_FIRM", businessRegistrationNumber: "2208162517" }).error).to.equal(undefined);
+      expect(firm({ businessRegistrationNumber: "2208162518" }).error).to.not.equal(undefined);
+      expect(firm({ firmType: "LLP" }).error).to.not.equal(undefined);
     });
   });
 
@@ -52,6 +63,13 @@ describe("field rules", () => {
       expect(ukErr.code).to.equal("INVALID_POSTCODE");
       const phErr = await OrganizationSvc.create(await owner(), "PH Bad", undefined, "PH", false, { postcode: "SW1A 1AA" }).catch((e) => e);
       expect(phErr.code).to.equal("INVALID_POSTCODE");
+    });
+
+    it("is a 5-digit postcode on KR, where the firm type and business number belong", async () => {
+      const kr = await OrganizationSvc.create(await owner(), "KR Rules", undefined, "KR", false, { postcode: "06236", firmType: "LAW_FIRM", businessRegistrationNumber: "2208162517" });
+      expect(kr).to.include({ postcode: "06236", firmType: "LAW_FIRM", businessRegistrationNumber: "2208162517" });
+      expect((await OrganizationSvc.create(await owner(), "KR Bad", undefined, "KR", false, { postcode: "1000" }).catch((e) => e)).code).to.equal("INVALID_POSTCODE");
+      expect((await OrganizationSvc.create(await owner(), "UK With KR", undefined, "UK", false, { firmType: "LAW_FIRM" }).catch((e) => e)).statusCode).to.equal(400);
     });
   });
 

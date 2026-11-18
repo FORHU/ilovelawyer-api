@@ -4,7 +4,7 @@ const MESSAGE_CHARS = 300;
 
 /** Asks whether an AI-generated consultation title still fits after a new message, and for a
  * better one if the subject has clearly shifted or sharpened. Biased hard toward KEEP so titles
- * don't churn on every follow-up. Shared by PH and UK — only the jurisdiction label differs. */
+ * don't churn on every follow-up. Shared by PH, UK and KR — only the jurisdiction label differs. */
 export function buildChatRetitlePrompt(p: {
   jurisdiction: string;
   currentTitle: string;
@@ -22,6 +22,7 @@ export function buildChatRetitlePrompt(p: {
     `- If it still fits, output exactly ${KEEP_TITLE_SENTINEL}. This is the usual answer: follow-ups, clarifications, thanks, small talk, gibberish and side questions never change the title.\n` +
     `- Change it only when the main subject has clearly shifted to something else, or become clearly more specific than the title (e.g. "Property Law: General Overview" -> "Property Law: Boundary Dispute With Neighbour" once the user describes their actual dispute).\n` +
     `- A new title uses the format [Legal Area]: [Specific Issue] ("General Question: [Topic]" for a real non-legal question — never for a greeting) — plain text, no markdown, no quotes, no trailing period, max ${TITLE_MAX_CHARS} characters.\n` +
+    `- Write a new title in the same language as the current title, with an ASCII colon.\n` +
     `Output only ${KEEP_TITLE_SENTINEL} or the new title, nothing else.`
   );
 }

@@ -5,7 +5,10 @@ import { organizationDeletionDueAt } from "../constants/organization-deletion.co
 
 /** A firm's optional details (onboarding's firm step, the Organization page). Null clears one. */
 export type FirmDetails = Partial<
-  Record<"phone" | "addressLine1" | "addressLine2" | "city" | "postcode" | "firmRegulator" | "firmRegistrationNumber", string | null>
+  Record<
+    "phone" | "addressLine1" | "addressLine2" | "city" | "postcode" | "firmRegulator" | "firmRegistrationNumber" | "firmType" | "businessRegistrationNumber",
+    string | null
+  >
 >;
 
 export default class OrganizationRepo {

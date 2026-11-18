@@ -2,7 +2,8 @@ import Joi from "joi";
 import {
   CLIENT_REQUEST_NOTE_MAX_LENGTH,
   CLIENT_REQUEST_PASS_NOTE_MAX_LENGTH,
-  CLIENT_REQUEST_QUOTE_MAX_MINOR,
+  CLIENT_REQUEST_CURRENCIES,
+  CLIENT_REQUEST_QUOTE_MAX_MINOR_ANY,
   CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH,
   CLIENT_REQUEST_RELEASE_NOTE_MAX_LENGTH,
   ENGAGEMENT_COMPLETION_DECLINE_MAX_LENGTH,
@@ -58,7 +59,7 @@ export const releaseClientRequestSchema = Joi.object({
 });
 
 /** PUT /client-requests/:id/quotation (a draft) and POST /client-requests/:id/quote (draft and send
- * in one). GBP only: client requests are UK only. `amount` is what the client pays; the platform fee
+ * in one). In the lawyer's site's currency (GBP on UK, KRW on KR), which the service checks. `amount` is what the client pays; the platform fee
  * is deducted from it and the lawyer receives the rest. A first consultation may be free
  * (0); the service refuses a fixed fee of 0. `expiresAt` is the lawyer's: the client accepts and pays
  * before it. */
@@ -67,8 +68,8 @@ export const quoteClientRequestSchema = Joi.object({
     .valid(...QUOTE_TYPES)
     .required(),
   amount: Joi.object({
-    amountMinor: Joi.number().integer().min(0).max(CLIENT_REQUEST_QUOTE_MAX_MINOR).required(),
-    currency: Joi.string().valid("GBP").required(),
+    amountMinor: Joi.number().integer().min(0).max(CLIENT_REQUEST_QUOTE_MAX_MINOR_ANY).required(),
+    currency: Joi.string().valid(...CLIENT_REQUEST_CURRENCIES).required(),
   }).required(),
   message: Joi.string().trim().min(1).max(CLIENT_REQUEST_QUOTE_MESSAGE_MAX_LENGTH).required(),
   expiresAt: Joi.date().iso().required(),
@@ -126,8 +127,8 @@ export const closeClientRequestSchema = Joi.object({
   claimed: Joi.when("workDone", {
     is: true,
     then: Joi.object({
-      amountMinor: Joi.number().integer().min(1).max(CLIENT_REQUEST_QUOTE_MAX_MINOR).required(),
-      currency: Joi.string().valid("GBP").required(),
+      amountMinor: Joi.number().integer().min(1).max(CLIENT_REQUEST_QUOTE_MAX_MINOR_ANY).required(),
+      currency: Joi.string().valid(...CLIENT_REQUEST_CURRENCIES).required(),
     }).required(),
     otherwise: Joi.forbidden(),
   }),

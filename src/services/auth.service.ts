@@ -19,9 +19,9 @@ import HttpError from "../utils/http-error";
 import { sendEmail } from "../utils/mailer";
 import { renderTemplate } from "../utils/template";
 import logger from "../utils/logger";
-import type { TenantCode } from "../types/tenant-code";
+import { isTenantCode, type TenantCode } from "../types/tenant-code";
 import { REFRESH_TOKEN_SECRET, REFRESH_TOKEN_EXPIRY_DAYS } from "../config";
-import { emailLinkOriginForAccount } from "../utils/tenant-host";
+import { clientOriginForSite, emailLinkOriginForAccount } from "../utils/tenant-host";
 import { currentClientApp, roleForClientApp } from "../utils/client-app";
 import {
   BCRYPT_SALT_ROUNDS,
@@ -30,7 +30,9 @@ import {
   EMAIL_VERIFICATION_RESEND_COOLDOWN_MS,
   EMAIL_VERIFICATION_MAX_ATTEMPTS,
   GOOGLE_PHOTO_SIGNUP_WAIT_MS,
-  CLIENT_TENANT_CODE,
+  DEFAULT_CLIENT_TENANT_CODE,
+  CLIENT_SITE_NAMES,
+  VERIFY_BEFORE_PLAN_TENANTS,
   termsVersionFor,
 } from "../constants";
 import { generateOtpCode, duplicateEmailMessage, isGoogleSsoAccount, isUniqueViolation, normalizeEmail } from "../utils/auth.utils";
@@ -116,17 +118,17 @@ export default class AuthSvc {
     return user;
   }
 
-  /** The Tenant a new account is created under. A lawyer's comes from the site they signed up on
-   * (ph./uk. subdomain); a client's is always CLIENT_TENANT_CODE, since the client app's domain
-   * says nothing about the region. */
+  /** The Tenant a new account is created under: the site they signed up on, from its host (a
+   * lawyer's ph./uk./kr. subdomain, a client's uk-/ph-/kr-client host; resolveTenantCodeFromRequest).
+   * A client account always gets one: DEFAULT_CLIENT_TENANT_CODE (UK) when the request names none. */
   private static signupTenantCode(role: Role, requestTenantCode: TenantCode | null): TenantCode | null {
-    return role === "USER" ? CLIENT_TENANT_CODE : requestTenantCode;
+    return role === "USER" ? (requestTenantCode ?? DEFAULT_CLIENT_TENANT_CODE) : requestTenantCode;
   }
 
-  /** Verify before plan (PlanGateSvc) holds new lawyers on the UK site only: there the Lawyer
-   * Application is the bar check; on PH it's a badge. */
+  /** Verify before plan (PlanGateSvc) holds new lawyers on the UK and KR sites: there the Lawyer
+   * Application is the bar check. On PH it's a badge. */
   static verifiesBeforePlan(role: Role, tenantCode: TenantCode | null): boolean {
-    return role === "LAWYER" && tenantCode === "UK";
+    return role === "LAWYER" && !!tenantCode && VERIFY_BEFORE_PLAN_TENANTS.has(tenantCode);
   }
 
   /** The 409 for a signup whose email already has an account. An email registered in the lawyer
@@ -215,6 +217,15 @@ export default class AuthSvc {
     // The organization's site, or a solo lawyer's own (they have no organization).
     const site = await AuthRepo.findSiteCode(userId);
     if (!site || site === requestTenantCode) return;
+    // The client app shows a "this account is on the Korea site" screen with a button to that
+    // site, so it gets a code and where to go. The lawyer app keeps its message.
+    if (currentClientApp() === "user") {
+      const name = isTenantCode(site) ? CLIENT_SITE_NAMES[site] : site;
+      throw new HttpError(`This account is on the ilovelawyer ${name} site. Sign in there instead.`, 409, "WRONG_SITE", {
+        site,
+        siteUrl: clientOriginForSite(site),
+      });
+    }
     throw new HttpError(`This account belongs to the ${site} tenant and cannot sign in from ${requestTenantCode}.`, 409);
   }
 

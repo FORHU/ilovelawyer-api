@@ -21,7 +21,8 @@ declare global {
         ownerId: string | null;
         userId: string;
         role: OrganizationRole;
-        tenantCode: "PH" | "UK";
+        // Inlined like the rest of this block; keep in step with src/types/tenant-code.ts.
+        tenantCode: "PH" | "UK" | "KR";
         guest?: boolean;
       };
     }

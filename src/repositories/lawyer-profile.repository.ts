@@ -1,4 +1,4 @@
-import { LawyerClientProfile, LawyerPhRegistration, LawyerUkRegistration, LawyerVerificationStatus, PracticeArea, Prisma } from "@prisma/client";
+import { LawyerClientProfile, LawyerKrRegistration, LawyerPhRegistration, LawyerUkRegistration, LawyerVerificationStatus, PracticeArea, Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import type { LawyerCountry } from "../constants/lawyer-application.constants";
 import { PRACTICE_AREAS_INCLUDE, toPracticeAreaRefs, type PracticeAreaRef } from "./practice-area.repository";
@@ -19,7 +19,33 @@ export interface UkRegistrationFields {
   qualifiedJurisdictions: string[];
 }
 
-const REGISTRATIONS = { ukRegistration: true, phRegistration: true, ...PRACTICE_AREAS_INCLUDE } satisfies Prisma.LawyerClientProfileInclude;
+/** The KR registration fields (Korean Bar Association), null or empty until the lawyer fills them in.
+ * `registeredOn` is a calendar date, "YYYY-MM-DD". */
+export interface KrRegistrationFields {
+  registrationNumber: string | null;
+  localBar: string | null;
+  qualificationRoute: string | null;
+  qualificationCohort: number | null;
+  specialties: string[];
+  registeredOn: string | null;
+}
+
+const REGISTRATIONS = { ukRegistration: true, phRegistration: true, krRegistration: true, ...PRACTICE_AREAS_INCLUDE } satisfies Prisma.LawyerClientProfileInclude;
+
+/** A DB date column (midnight UTC) as "YYYY-MM-DD", and back. */
+const toYmd = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+const fromYmd = (s: string | null) => (s ? new Date(`${s}T00:00:00.000Z`) : null);
+
+function krFields(kr: LawyerKrRegistration | null): KrRegistrationFields {
+  return {
+    registrationNumber: kr?.registrationNumber ?? null,
+    localBar: kr?.localBar ?? null,
+    qualificationRoute: kr?.qualificationRoute ?? null,
+    qualificationCohort: kr?.qualificationCohort ?? null,
+    specialties: kr?.specialties ?? [],
+    registeredOn: toYmd(kr?.registeredOn),
+  };
+}
 
 /** What the admin queue shows beside the application: who the lawyer is and their firm, details
  * included (a user is in at most one organization). */
@@ -42,6 +68,8 @@ const ADMIN_ROW_INCLUDE = {
               postcode: true,
               firmRegulator: true,
               firmRegistrationNumber: true,
+              firmType: true,
+              businessRegistrationNumber: true,
             },
           },
         },
@@ -51,12 +79,18 @@ const ADMIN_ROW_INCLUDE = {
 } satisfies Prisma.LawyerClientProfileInclude;
 
 /** A profile row with its country's registration folded in: the UK fields flat (the client hand-off
- * code reads them that way) and the PH ones under `ph`, and its practice areas in picker order.
- * Storage keeps one table per country; this is the shape every caller works with. */
+ * code reads them that way), the PH ones under `ph` and the KR ones under `kr`, and its practice
+ * areas in picker order. Storage keeps one table per country; this is the shape every caller works
+ * with. */
 function flatten<
-  T extends { ukRegistration: LawyerUkRegistration | null; phRegistration: LawyerPhRegistration | null; practiceAreas: { practiceArea: PracticeArea }[] },
+  T extends {
+    ukRegistration: LawyerUkRegistration | null;
+    phRegistration: LawyerPhRegistration | null;
+    krRegistration: LawyerKrRegistration | null;
+    practiceAreas: { practiceArea: PracticeArea }[];
+  },
 >(row: T) {
-  const { ukRegistration: uk, phRegistration: ph, practiceAreas, ...rest } = row;
+  const { ukRegistration: uk, phRegistration: ph, krRegistration: kr, practiceAreas, ...rest } = row;
   return {
     ...rest,
     practiceAreas: toPracticeAreaRefs(practiceAreas),
@@ -70,21 +104,34 @@ function flatten<
       mcleNumber: ph?.mcleNumber ?? null,
       mclePeriod: ph?.mclePeriod ?? null,
     } satisfies PhRegistrationFields,
+    kr: krFields(kr),
   };
 }
 
-export type LawyerProfileRow = LawyerClientProfile & UkRegistrationFields & { ph: PhRegistrationFields; practiceAreas: PracticeAreaRef[] };
+export type LawyerProfileRow = LawyerClientProfile &
+  UkRegistrationFields & { ph: PhRegistrationFields; kr: KrRegistrationFields; practiceAreas: PracticeAreaRef[] };
 export type AdminLawyerProfileRow = ReturnType<typeof flatten<Prisma.LawyerClientProfileGetPayload<{ include: typeof ADMIN_ROW_INCLUDE }>>>;
 
 /** Everything a lawyer's save writes: the shared profile fields and their country's registration. */
 export type LawyerProfileData = Omit<LawyerProfileRow, "userId" | "createdAt" | "updatedAt">;
 
-function registrationWrites(country: LawyerCountry, data: UkRegistrationFields & { ph: PhRegistrationFields }) {
-  if (country === "PH") {
-    return { phRegistration: { upsert: { create: { ...data.ph }, update: { ...data.ph } } } };
+function registrationWrites(country: LawyerCountry, data: UkRegistrationFields & { ph: PhRegistrationFields; kr: KrRegistrationFields }) {
+  switch (country) {
+    case "PH":
+      return { phRegistration: { upsert: { create: { ...data.ph }, update: { ...data.ph } } } };
+    case "KR": {
+      const kr = { ...data.kr, registeredOn: fromYmd(data.kr.registeredOn) };
+      return { krRegistration: { upsert: { create: kr, update: kr } } };
+    }
+    case "UK": {
+      const uk = { regulator: data.regulator, registrationNumber: data.registrationNumber, qualifiedJurisdictions: data.qualifiedJurisdictions };
+      return { ukRegistration: { upsert: { create: uk, update: uk } } };
+    }
+    default: {
+      const unhandled: never = country;
+      throw new Error(`No registration table for ${unhandled}`);
+    }
   }
-  const uk = { regulator: data.regulator, registrationNumber: data.registrationNumber, qualifiedJurisdictions: data.qualifiedJurisdictions };
-  return { ukRegistration: { upsert: { create: uk, update: uk } } };
 }
 
 export default class LawyerProfileRepo {
@@ -99,9 +146,9 @@ export default class LawyerProfileRepo {
     // firstVerifiedAt is markFirstVerified's alone: a save that read the profile before an admin
     // verified it mustn't write it back empty.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { regulator, registrationNumber, qualifiedJurisdictions, ph, practiceAreas, firstVerifiedAt, ...base } = data;
+    const { regulator, registrationNumber, qualifiedJurisdictions, ph, kr, practiceAreas, firstVerifiedAt, ...base } = data;
     const country = base.country as LawyerCountry;
-    const registration = { regulator, registrationNumber, qualifiedJurisdictions, ph };
+    const registration = { regulator, registrationNumber, qualifiedJurisdictions, ph, kr };
     // Created bare, then the registration and areas written in the same transaction: a nested write
     // needs the parent row to exist, and an update-path write covers both a new and an existing profile.
     const row = await prisma.$transaction(async (tx) => {
@@ -160,25 +207,27 @@ export default class LawyerProfileRepo {
     return { data: rows.map(flatten), total };
   }
 
-  /** Candidates for matching (#509): verified UK lawyers, minus anyone already excluded from this
-   * request. Accepting, not paused, enabled-by-org, capacity, practice area and jurisdiction are
-   * checked in ClientRequestMatchingSvc.matches — the single source of truth for the rule, so it
-   * stays unit-testable without a database. `openCount` comes from countOpenForLawyers below. */
-  static async findVerified(excludeUserIds: string[]) {
-    return LawyerProfileRepo.findVerifiedWhere({ userId: { notIn: excludeUserIds } });
+  /** Candidates for matching (#509): one site's verified lawyers (`country`, the request's site),
+   * minus anyone already excluded from this request. Accepting, not paused, enabled-by-org, capacity,
+   * practice area and jurisdiction are checked in ClientRequestMatchingSvc.matches — the single source
+   * of truth for the rule, so it stays unit-testable without a database. `openCount` comes from
+   * countOpenForLawyers below. */
+  static async findVerified(excludeUserIds: string[], country: string = "UK") {
+    return LawyerProfileRepo.findVerifiedWhere({ userId: { notIn: excludeUserIds }, country });
   }
 
-  /** One verified UK lawyer as matching reads them (findVerified), or null: who a client asks for by
-   * name from the marketplace. */
+  /** One verified lawyer, on any site, as matching reads them (findVerified), or null: who a client
+   * asks for by name from the marketplace. Matching then checks they're on the client's site. */
   static async findVerifiedById(userId: string) {
     return (await LawyerProfileRepo.findVerifiedWhere({ userId }))[0] ?? null;
   }
 
   private static async findVerifiedWhere(where: Prisma.LawyerClientProfileWhereInput) {
     const rows = await prisma.lawyerClientProfile.findMany({
-      where: { ...where, country: "UK", verificationStatus: "VERIFIED" },
+      where: { ...where, verificationStatus: "VERIFIED" },
       select: {
         userId: true,
+        country: true,
         acceptingRequests: true,
         enabledByOrganization: true,
         pausedUntil: true,
@@ -197,12 +246,12 @@ export default class LawyerProfileRepo {
     }));
   }
 
-  /** The client app's lawyer marketplace (ClientLawyerSvc): verified UK lawyers, with what the
-   * client sees of them and what availability is checked on (ClientRequestMatchingSvc.isAvailable).
-   * Their firm is their organization's (a user is in at most one). */
-  static async findForMarketplace(userId?: string) {
+  /** The client app's lawyer marketplace (ClientLawyerSvc): one site's verified lawyers (the
+   * client's), with what the client sees of them and what availability is checked on
+   * (ClientRequestMatchingSvc.isAvailable). Their firm is their organization's (a user is in at most one). */
+  static async findForMarketplace(userId?: string, country: string = "UK") {
     const rows = await prisma.lawyerClientProfile.findMany({
-      where: { country: "UK", verificationStatus: "VERIFIED", ...(userId ? { userId } : {}) },
+      where: { country, verificationStatus: "VERIFIED", ...(userId ? { userId } : {}) },
       include: {
         ...REGISTRATIONS,
         user: {

@@ -158,6 +158,13 @@ describe("Client intake extraction", () => {
     it("reads RESPONDENT as responding to the complaint", () => {
       expect(caseDetailsBlock({ ...details, side: "RESPONDENT" }, [])).to.include("The client is: responding to one");
     });
+
+    it("leaves out the part of the UK on another site's case, keeping the town", () => {
+      // A KR case never has one: "not set" would read to the intake as a question still to ask.
+      const block = caseDetailsBlock({ ...details, ukJurisdiction: null, where: "서울 강남구" }, [], false);
+      expect(block).to.not.include("Part of the UK");
+      expect(block).to.include("Type of problem: Employment\nTown or city: 서울 강남구");
+    });
   });
 
   describe("readinessBlock", () => {

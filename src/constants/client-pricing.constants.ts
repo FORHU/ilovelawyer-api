@@ -15,6 +15,8 @@ export const CLIENT_CURRENCIES = {
   AUD: { exponent: 2, minMinor: 50, maxMinor: 99_999 },
   JPY: { exponent: 0, minMinor: 50, maxMinor: 150_000 },
   PHP: { exponent: 2, minMinor: 2_000, maxMinor: 5_000_000 },
+  // Won has no minor unit. Stripe's minimum is about ₩700; ₩1,000 keeps a margin.
+  KRW: { exponent: 0, minMinor: 1_000, maxMinor: 1_500_000 },
 } as const;
 
 export type ClientCurrency = keyof typeof CLIENT_CURRENCIES;

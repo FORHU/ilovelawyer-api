@@ -2,6 +2,7 @@ import LawyerProfileRepo from "../repositories/lawyer-profile.repository";
 import ClientRequestMatchingSvc, { caseAreasOf } from "./client-request-matching.service";
 import CaseAreaSvc from "./case-area.service";
 import HttpError from "../utils/http-error";
+import { FEE_CURRENCY_BY_COUNTRY, type LawyerCountry } from "../constants/lawyer-application.constants";
 import { getStableProxyFileUrl } from "../utils/s3";
 import type { LawyerSort, ListClientLawyersQuery } from "../validation/client-lawyer.validation";
 
@@ -68,8 +69,9 @@ function lawyerDto(row: MarketplaceRow, rating: Rating | undefined) {
     avatarUrl: row.user.avatar?.s3Key ? getStableProxyFileUrl(row.user.avatar.s3Key) : null,
     firmName: org?.name ?? null,
     town: org?.city ?? null,
-    regulator: row.regulator,
-    registrationNumber: row.registrationNumber,
+    // A KR lawyer's registration is with the Korean Bar Association (LawyerKrRegistration).
+    regulator: row.country === "KR" ? "Korean Bar Association" : row.regulator,
+    registrationNumber: row.country === "KR" ? row.kr.registrationNumber : row.registrationNumber,
     // By name: the list is the lawyer's site's, which admins edit (PracticeArea).
     practiceAreas: row.practiceAreas.map((a) => a.name),
     // The client case areas they take, for matching the client's own case.
@@ -77,7 +79,10 @@ function lawyerDto(row: MarketplaceRow, rating: Rating | undefined) {
     qualifiedJurisdictions: row.qualifiedJurisdictions,
     languages: row.languages,
     bio: row.bio,
-    firstConsultationFee: row.firstConsultationFeeMinor === null ? null : { amountMinor: row.firstConsultationFeeMinor, currency: "GBP" },
+    firstConsultationFee:
+      row.firstConsultationFeeMinor === null
+        ? null
+        : { amountMinor: row.firstConsultationFeeMinor, currency: FEE_CURRENCY_BY_COUNTRY[row.country as keyof typeof FEE_CURRENCY_BY_COUNTRY] ?? "GBP" },
     verifiedAt: row.verifiedAt,
     rating: rating ? Math.round(rating.average * 10) / 10 : null,
     reviewCount: rating?.count ?? 0,
@@ -87,8 +92,9 @@ function lawyerDto(row: MarketplaceRow, rating: Rating | undefined) {
 /** How many reviews with a comment a profile shows, newest first. */
 const PROFILE_REVIEWS = 10;
 
-/** The client app's lawyer marketplace (GET /api/client/lawyers): verified UK lawyers who are taking
- * requests (ClientRequestMatchingSvc.isAvailable), filtered and ordered as the client asks. */
+/** The client app's lawyer marketplace (GET /api/client/lawyers): the client's own site's verified
+ * lawyers who are taking requests (ClientRequestMatchingSvc.isAvailable), filtered and ordered as the
+ * client asks. `country` is the client's site (their workspace's tenant). */
 export default class ClientLawyerSvc {
   /**
    * One lawyer's profile (GET /api/client/lawyers/:id): what the list shows, plus how their ratings
@@ -96,10 +102,10 @@ export default class ClientLawyerSvc {
    * who isn't taking requests right now is still shown, `available` false, so an old link still
    * opens; 404 for anyone else.
    */
-  static async get(id: string, now: Date = new Date()) {
-    const [row] = await LawyerProfileRepo.findForMarketplace(id);
+  static async get(id: string, now: Date = new Date(), country: string = "UK") {
+    const [row] = await LawyerProfileRepo.findForMarketplace(id, country);
     if (!row) throw new HttpError("That lawyer isn't listed.", 404, "LAWYER_NOT_FOUND");
-    const [feedback, label] = await Promise.all([LawyerProfileRepo.feedbackFor(id), CaseAreaSvc.labeller()]);
+    const [feedback, label] = await Promise.all([LawyerProfileRepo.feedbackFor(id), CaseAreaSvc.labeller(country as LawyerCountry)]);
     const rating = feedback.length ? { average: feedback.reduce((sum, f) => sum + f.rating, 0) / feedback.length, count: feedback.length } : undefined;
     return {
       ...lawyerDto(row, rating),
@@ -113,8 +119,8 @@ export default class ClientLawyerSvc {
     };
   }
 
-  static async list(query: ListClientLawyersQuery, now: Date = new Date()) {
-    const available = (await LawyerProfileRepo.findForMarketplace()).filter((row) => ClientRequestMatchingSvc.isAvailable(row, now));
+  static async list(query: ListClientLawyersQuery, now: Date = new Date(), country: string = "UK") {
+    const available = (await LawyerProfileRepo.findForMarketplace(undefined, country)).filter((row) => ClientRequestMatchingSvc.isAvailable(row, now));
     const ratings = await LawyerProfileRepo.ratingsFor(available.map((r) => r.userId));
     const shown = available.filter((row) => matchesQuery(row, query)).sort(sorter(query.sort, query.caseArea, ratings));
     const page = shown.slice((query.page - 1) * query.limit, query.page * query.limit);

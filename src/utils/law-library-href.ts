@@ -1,17 +1,25 @@
 import { LawCategory } from "@prisma/client";
 import { TenantCode } from "../types/tenant-code";
+import HttpError from "./http-error";
 
-/** The Library detail route's `?category=` value for each tenant and Law category. */
-export const WIRE_CATEGORY: Record<TenantCode, Record<LawCategory, string>> = {
+/** The Library detail route's `?category=` value for each tenant and Law category. A tenant with
+ * no Library yet (KR, until its law source ships) has no entry, never another tenant's. */
+export const WIRE_CATEGORY: Partial<Record<TenantCode, Record<LawCategory, string>>> = {
   UK: { JURISPRUDENCE: "uk-case-law", REPUBLIC_ACT: "uk-legislation" },
   PH: { JURISPRUDENCE: "jurisprudence", REPUBLIC_ACT: "republic-acts" },
 };
+
+export function hasLibrary(tenantCode: TenantCode): boolean {
+  return WIRE_CATEGORY[tenantCode] !== undefined;
+}
 
 /** The Library detail route (/homepage/library/laws/[id]) for a route id and category. The id is
  * NOT uniformly `Law.id` — GET /api/law/document takes "the juris source id for PH and our Law.id
  * uuid for UK" (law.controller.ts), so callers pass whichever the tenant uses. */
 export function libraryHref(tenantCode: TenantCode, routeId: string, category: LawCategory, section?: string | null): string {
-  const base = `/homepage/library/laws/${encodeURIComponent(routeId)}?category=${WIRE_CATEGORY[tenantCode][category]}`;
+  const wire = WIRE_CATEGORY[tenantCode];
+  if (!wire) throw new HttpError(`The Library is not available for this jurisdiction (${tenantCode}) yet`, 501);
+  const base = `/homepage/library/laws/${encodeURIComponent(routeId)}?category=${wire[category]}`;
   // A pinpoint ("s 49") opens the Act at that section; without it every section of one Act
   // linked to the same page.
   return section ? `${base}&section=${encodeURIComponent(section)}` : base;
