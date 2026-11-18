@@ -33,6 +33,18 @@ export const PAYOUT_LIMITS = {
 } as const;
 
 export const payoutSettingsCacheKey = (tenantId: string) => `payout-settings:v1:${tenantId}`;
+/**
+ * The currencies a wallet can be paid out in, and the country its Stripe Connect account is made in.
+ * Stripe can't make payout accounts in Korea ("KR is not currently supported"), so a won wallet
+ * keeps earning but can't set up payouts or withdraw until KR has a payout route of its own.
+ */
+export const PAYOUT_COUNTRY_BY_CURRENCY: Readonly<Record<string, string>> = { GBP: "GB" };
+
+/** Whether a wallet in `currency` can set up payouts and withdraw. */
+export function payoutsAvailableFor(currency: string): boolean {
+  return currency in PAYOUT_COUNTRY_BY_CURRENCY;
+}
+
 /** How long an admin's edit can take to reach the next quote or withdrawal. */
 export const PAYOUT_SETTINGS_CACHE_TTL_S = 60;
 

@@ -11,9 +11,22 @@ import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { moneyText } from "../utils/money-text";
+import { PAYOUT_COUNTRY_BY_CURRENCY, payoutsAvailableFor } from "../constants/payout.constants";
 import { CLIENT_HANDOFF_SOCKET_EVENTS, type WalletUpdatedEvent } from "../types/client-handoff";
 
 const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
+
+/** 409 PAYOUTS_NOT_AVAILABLE for a wallet whose currency has no payout route yet (won). */
+function assertPayoutsAvailable(wallet: Wallet) {
+  if (!payoutsAvailableFor(wallet.currency)) {
+    throw new HttpError(
+      wallet.currency === "KRW" ? "Payouts to Korea aren't available yet. Your earnings stay in your wallet until they are." : `Payouts in ${wallet.currency} aren't available yet.`,
+      409,
+      "PAYOUTS_NOT_AVAILABLE",
+      { currency: wallet.currency },
+    );
+  }
+}
 
 /** A Stripe withdrawal with no payout this long after it was made gets its payout run again... */
 const STALLED_PAYOUT_AFTER_MS = 5 * 60_000;
@@ -135,11 +148,12 @@ export default class WalletSvc {
    */
   static async startOnboarding(owner: WalletOwner, userId: string, returnUrl: string) {
     let wallet = await WalletSvc.walletOf(owner);
+    assertPayoutsAvailable(wallet);
     const provider = wallet.provider ? payoutProviderNamed(wallet.provider) : payoutProvider();
     if (!wallet.stripeAccountId) {
       const { name, email } = await ownerName(owner);
-      // The payout account is in the owner's country: Korea for a KR firm or lawyer paid in won.
-      const country = wallet.currency === "KRW" ? "KR" : "GB";
+      // The payout account is in the country of the wallet's currency (only GB so far).
+      const country = PAYOUT_COUNTRY_BY_CURRENCY[wallet.currency];
       const account = await provider.createAccount({ walletId: wallet.id, ownerType: owner.ownerType, ownerId: owner.ownerId, email, name, country });
       wallet = await WalletRepo.setAccount(wallet.id, { provider: provider.name, stripeAccountId: account.accountId, payoutsEnabled: account.payoutsEnabled, detailsSubmitted: account.detailsSubmitted });
     }
@@ -176,6 +190,7 @@ export default class WalletSvc {
    */
   static async withdraw(owner: WalletOwner, userId: string, amountMinor: number, idempotencyKey: string) {
     const wallet = await WalletSvc.walletOf(owner);
+    assertPayoutsAvailable(wallet);
     if (!wallet.stripeAccountId || !wallet.provider || !wallet.payoutsEnabled) {
       throw new HttpError("Set up your payout account before withdrawing.", 409, "PAYOUT_ACCOUNT_REQUIRED");
     }
@@ -422,6 +437,8 @@ export default class WalletSvc {
       currency: wallet.currency,
       balances: balancesDto(balances, wallet.currency),
       payoutAccount: {
+        // False while the wallet's currency has no payout route (won): no set-up, no withdrawals.
+        available: payoutsAvailableFor(wallet.currency),
         provider: wallet.provider,
         connected: !!wallet.stripeAccountId,
         detailsSubmitted: wallet.detailsSubmitted,

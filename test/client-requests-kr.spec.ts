@@ -15,6 +15,8 @@ import { randomUUID } from "node:crypto";
 import prisma from "../src/lib/prisma";
 import WalletRepo from "../src/repositories/wallet.repository";
 import { moneyText } from "../src/utils/money-text";
+import WalletSvc from "../src/services/wallet.service";
+import { payoutsAvailableFor } from "../src/constants/payout.constants";
 
 function stash<T extends object>(target: T, keys: string[]) {
   const saved = keys.map((k) => [k, (target as any)[k]] as const);
@@ -146,6 +148,27 @@ describe("Client requests on the KR site", () => {
       const pounds = await wallet("GBP");
       await prisma.walletLedgerEntry.create({ data: { walletId: pounds.id, bucket: "PENDING", kind: "EARNING", amountMinor: 500, currency: "GBP", idempotencyKey: randomUUID() } });
       expect((await WalletRepo.realignCurrency(pounds, "KRW")).currency).to.equal("GBP");
+    });
+
+    it("can't set up payouts or withdraw in won yet, and says so", async () => {
+      expect(payoutsAvailableFor("GBP")).to.equal(true);
+      expect(payoutsAvailableFor("KRW")).to.equal(false);
+      const restore = stash(WalletSvc, ["walletOf"]);
+      (WalletSvc as any).walletOf = async () => ({ id: "w-kr", ownerType: "USER", ownerId: "l1", currency: "KRW", provider: null, stripeAccountId: null, payoutsEnabled: false, detailsSubmitted: false });
+      try {
+        for (const attempt of [() => WalletSvc.startOnboarding({ ownerType: "USER", ownerId: "l1" }, "l1", "http://localhost/back"), () => WalletSvc.withdraw({ ownerType: "USER", ownerId: "l1" }, "l1", 50_000, "key-1")]) {
+          try {
+            await attempt();
+            expect.fail("should have refused");
+          } catch (e: any) {
+            expect(e.statusCode).to.equal(409);
+            expect(e.code).to.equal("PAYOUTS_NOT_AVAILABLE");
+            expect(e.message).to.include("Korea");
+          }
+        }
+      } finally {
+        restore();
+      }
     });
 
     it("writes amounts in their own currency", () => {

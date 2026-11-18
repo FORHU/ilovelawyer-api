@@ -493,7 +493,9 @@ export const clientHandoffSchemas: Schemas = {
       balances: { type: "object", properties: { pending: money(), available: money("Can be below zero after a refund of money already withdrawn"), reserved: money("On its way to the bank"), withdrawn: money() } },
       payoutAccount: {
         type: "object",
-        properties: { provider: { type: "string", nullable: true, enum: ["STRIPE", "DUMMY"] }, connected: { type: "boolean" }, detailsSubmitted: { type: "boolean" }, payoutsEnabled: { type: "boolean" } },
+        properties: {
+          available: { type: "boolean", description: "False while the wallet's currency has no payout route (KRW): setting up payouts and withdrawing answer 409 PAYOUTS_NOT_AVAILABLE" },
+          provider: { type: "string", nullable: true, enum: ["STRIPE", "DUMMY"] }, connected: { type: "boolean" }, detailsSubmitted: { type: "boolean" }, payoutsEnabled: { type: "boolean" } },
       },
       minWithdrawal: money(),
       earningsHoldDays: { type: "integer", nullable: true },
