@@ -97,7 +97,7 @@ export const SECURITY_AUDIT_ACTIONS = [
   "admin.support_ticket.resolved",
   "admin.support_ticket.reopened",
   "system.support_ticket.auto_resolved",
-  "admin.model_settings.updated",
+  "admin.persona_routing_override.updated",
   "admin.jurisdiction_module.toggled",
   "admin.lawyer.verified",
   "admin.lawyer.rejected",
@@ -164,7 +164,7 @@ export type SecurityAuditTargetType =
   | "file"
   | "integration"
   | "tenant"
-  | "model_setting"
+  | "persona_routing_override"
   | "jurisdiction_module"
   | "client_price"
   | "lawyer_price"
@@ -272,7 +272,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "admin.support_ticket.resolved": "Support ticket resolved",
   "admin.support_ticket.reopened": "Support ticket reopened",
   "system.support_ticket.auto_resolved": "Support ticket closed automatically after 7 days without a reply",
-  "admin.model_settings.updated": "AI model setting changed",
+  "admin.persona_routing_override.updated": "Persona's model-routing override changed",
   "admin.jurisdiction_module.toggled": "Jurisdiction module switched",
   "admin.lawyer.verified": "Lawyer's client-request profile verified by ilovelawyer",
   "admin.lawyer.rejected": "Lawyer's client-request profile rejected by ilovelawyer",

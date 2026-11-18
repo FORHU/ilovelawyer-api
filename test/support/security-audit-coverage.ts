@@ -384,5 +384,5 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /integrations/": INTEGRATION_DRAFT,
   "POST /integrations/:id/connect": ["integration.connected"],
   "POST /integrations/:id/disconnect": ["integration.disconnected"],
-  "PUT /model-settings/:toolName": ["admin.model_settings.updated"],
+  "PATCH /admin/persona-routing/:persona": ["admin.persona_routing_override.updated"],
 };
