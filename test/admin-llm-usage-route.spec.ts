@@ -168,6 +168,30 @@ describe("admin LLM usage routes", () => {
       expect(noMatch).to.deep.include({ calls: 0, tokens: 0, costUsd: 0 });
     });
 
+    it("filters by routingMode/decisionSource (CW-10, chat-wonder-v2-api#151)", async () => {
+      const routingFeature = `f-routing-${crypto.randomUUID()}`;
+      await prisma.llmUsage.create({
+        data: row({
+          feature: routingFeature,
+          via: "chat-wonder",
+          routingMode: "AUTO",
+          decisionSource: "race_corrected",
+          inputTokens: 50,
+          totalTokens: 50,
+          createdAt: new Date(now - DAY),
+        }),
+      });
+      try {
+        const q = (extra: string) => get(`/llm-usage/summary?organizationId=${orgId}&feature=${routingFeature}&${extra}`).expect(200).then((r) => r.body.totals);
+        expect(await q("decisionSource=race_corrected")).to.deep.include({ calls: 1, tokens: 50 });
+        expect(await q("decisionSource=default")).to.deep.include({ calls: 0, tokens: 0 });
+        expect(await q("routingMode=AUTO")).to.deep.include({ calls: 1, tokens: 50 });
+        expect(await q("routingMode=MANUAL")).to.deep.include({ calls: 0, tokens: 0 });
+      } finally {
+        await prisma.llmUsage.deleteMany({ where: { feature: routingFeature } });
+      }
+    });
+
     it("returns empty lists and zero totals for a range with no rows", async () => {
       const { body } = await get(`/llm-usage/summary?organizationId=${orgId}-none`).expect(200);
       expect(body.totals).to.deep.include({ calls: 0, tokens: 0 });
@@ -270,6 +294,12 @@ describe("admin LLM usage routes", () => {
       expect(first.rows).to.have.length(2);
       expect(second.rows).to.have.length(1);
       expect([...first.rows, ...second.rows].map((r: any) => r.id)).to.have.length(new Set([...first.rows, ...second.rows].map((r: any) => r.id)).size);
+    });
+
+    it("surfaces routingMode/decisionSource on each row, null when not reported", async () => {
+      const { body } = await get(`/llm-usage?organizationId=${orgId}`).expect(200);
+      const a = body.rows.find((r: any) => r.feature === "f-a");
+      expect(a).to.include({ routingMode: null, decisionSource: null });
     });
 
     it("applies filters and refuses a page size above the cap", async () => {

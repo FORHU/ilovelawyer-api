@@ -16,10 +16,10 @@ type Query = LlmUsageFilter & { page?: number; limit?: number };
 
 /** The last LLM_USAGE_DEFAULT_RANGE_DAYS days (before `to`, else before now) when no `from` is named. */
 export function toFilter(query: Query): LlmUsageFilter {
-  const { from, to, provider, model, feature, source, organizationId, userId, caseId } = query;
+  const { from, to, provider, model, feature, source, organizationId, userId, caseId, routingMode, decisionSource } = query;
   const start = from ?? new Date((to ?? new Date()).getTime() - LLM_USAGE_DEFAULT_RANGE_DAYS * 24 * 60 * 60 * 1000);
   if (to && start >= to) throw new HttpError("`from` must be before `to`", 400);
-  return { from: start, to, provider, model, feature, source, organizationId, userId, caseId };
+  return { from: start, to, provider, model, feature, source, organizationId, userId, caseId, routingMode, decisionSource };
 }
 
 export default class LlmUsageCtrl {
