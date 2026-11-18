@@ -9,6 +9,7 @@ import ClientBillingSvc from "./client-billing.service";
 import CaseSvc from "./case.service";
 import IntakeChatSvc from "./intake-chat.service";
 import ClientRequestSvc from "./client-request.service";
+import ClientRequestNotifySvc from "./client-request-notify.service";
 import DocumentSvc, { documentFileUrl } from "./document.service";
 import OrganizationSvc from "./organization.service";
 import HttpError from "../utils/http-error";
@@ -113,9 +114,9 @@ function toDto(row: ClientCaseRow, label: (codes: string[]) => CaseAreaRef[]) {
     id: row.id,
     title: row.caseName,
     /** In the site's order. A switched-off one the case still has is among them. */
-    areas: label(row.caseAreas),
+    areas: label(CaseAreaSvc.clientPicks(row)),
     /** The first area's code, for an app that predates several per case. */
-    area: row.caseAreas[0] ?? OTHER_CASE_AREA,
+    area: CaseAreaSvc.clientPicks(row)[0] ?? OTHER_CASE_AREA,
     /** Null when outside the UK or not known yet; outsideUk tells which. */
     ukJurisdiction: row.ukJurisdiction,
     /** True: the client said it's outside the UK. False with no ukJurisdiction: not known yet. */
@@ -248,6 +249,7 @@ export default class ClientCaseSvc {
     const created = await CaseSvc.create(firmScope(workspace.id), userId, workspace.role, {
       caseName: input.title,
       caseAreas,
+      clientCaseAreas: caseAreas,
       ukJurisdiction: region.ukJurisdiction ?? undefined,
       outsideUk: region.outsideUk,
       jurisdiction: input.where || undefined,
@@ -271,7 +273,8 @@ export default class ClientCaseSvc {
    */
   static async update(workspace: ClientWorkspace, userId: string, caseId: string, input: ClientCaseChanges) {
     const row = await ClientCaseSvc.load(workspace, caseId);
-    const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, row.caseAreas, workspace.tenantCode);
+    const picked = CaseAreaSvc.clientPicks(row);
+    const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, picked, workspace.tenantCode);
     // `outsideUk: false` on its own only clears "outside the UK"; on a case in the UK it changes nothing.
     let region = regionOf(input);
     if (!region && input.outsideUk === false && row.outsideUk) region = { ukJurisdiction: null, outsideUk: false };
@@ -281,7 +284,7 @@ export default class ClientCaseSvc {
       // A request needs a UK jurisdiction to be matched, so it can't be taken away while one is open.
       const leavesUk = region !== undefined && region.ukJurisdiction === null && row.ukJurisdiction !== null;
       const changesFixed =
-        (caseAreas !== undefined && !sameSet(caseAreas, row.caseAreas)) ||
+        (caseAreas !== undefined && !sameSet(caseAreas, picked)) ||
         (region !== undefined && region.ukJurisdiction !== row.ukJurisdiction) ||
         (input.others !== undefined && !samePeople(input.others, row.parties));
       if ((held && changesFixed) || leavesUk) {
@@ -300,7 +303,10 @@ export default class ClientCaseSvc {
 
     const data: CaseData = {};
     if (input.title !== undefined) data.caseName = input.title;
-    if (caseAreas !== undefined) data.caseAreas = caseAreas;
+    if (caseAreas !== undefined) {
+      data.caseAreas = caseAreas;
+      data.clientCaseAreas = caseAreas;
+    }
     if (region) {
       data.ukJurisdiction = region.ukJurisdiction;
       data.outsideUk = region.outsideUk;
@@ -337,16 +343,21 @@ export default class ClientCaseSvc {
   static async remove(workspace: ClientWorkspace, userId: string, caseId: string) {
     const row = await ClientCaseRepo.findAnyById(caseId, workspace.id);
     if (!row) throw new HttpError("Case not found", 404);
-    await ClientCaseSvc.stepAsideRequest(userId, caseId);
+    const lawyersToTell = await ClientCaseSvc.stepAsideRequest(userId, caseId, true);
     await CaseSvc.delete(caseId, firmScope(workspace.id), userId);
+    // Only once the case is really gone: the lawyers are told it was deleted, so it must have been.
+    if (lawyersToTell) {
+      ClientRequestNotifySvc.tellCaseDeleted(lawyersToTell).catch((err) => logger.error("Client request: telling lawyers the case was deleted failed", { err, caseId }));
+    }
   }
 
   /** Before the case goes away or is set aside: an open request nobody has committed to is withdrawn
    * (a lawyer holding it is told); one with a confirmed or engaged lawyer blocks it, because the
-   * request, its fee and the lawyer's access all hang off the case. */
-  private static async stepAsideRequest(clientId: string, caseId: string) {
+   * request, its fee and the lawyer's access all hang off the case. When the case is being deleted
+   * (`deleting`), the lawyers to tell about it come back, since they can't be found once it's gone. */
+  private static async stepAsideRequest(clientId: string, caseId: string, deleting = false) {
     const live = await ClientRequestRepo.findLiveForCase(caseId);
-    if (!live) return;
+    if (!live) return null;
     if (LAWYER_COMMITTED.includes(live.status)) {
       throw new HttpError(
         "A lawyer is engaged on this case, or being confirmed. End the engagement first, then you can remove the case.",
@@ -355,7 +366,9 @@ export default class ClientCaseSvc {
         { requestId: live.id, status: live.status },
       );
     }
+    if (deleting) return ClientRequestSvc.withdrawBeforeCaseDeleted(clientId, live.id);
     await ClientRequestSvc.withdraw(clientId, live.id);
+    return null;
   }
 
   /** The chat, oldest first. `replying` is true while the AI is still answering the last message,
@@ -434,7 +447,7 @@ export default class ClientCaseSvc {
       assessment = await assessLawyerReadiness({
         caseDetails: {
           title: row.caseName,
-          areas: label(row.caseAreas).map((a) => a.name),
+          areas: label(CaseAreaSvc.clientPicks(row)).map((a) => a.name),
           ukJurisdiction: row.ukJurisdiction,
           where: row.jurisdiction,
           side: row.clientSide,

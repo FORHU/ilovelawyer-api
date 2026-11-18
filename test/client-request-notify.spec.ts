@@ -249,6 +249,35 @@ describe("ClientRequestNotifySvc", () => {
     });
   });
 
+  describe("tellCaseDeleted (#994)", () => {
+    it("tells every lawyer on the request or routed it live, and puts it in the bell of the ones who were on it", async () => {
+      await ClientRequestNotifySvc.tellCaseDeleted({ requestId: "req-1", heldBy: ["lawyer-a", "lawyer-c"], matching: ["lawyer-b"] });
+
+      expect(emitted).to.deep.equal([
+        ["lawyer-a", "client-request:deleted", { requestId: "req-1" }],
+        ["lawyer-c", "client-request:deleted", { requestId: "req-1" }],
+        ["lawyer-b", "client-request:deleted", { requestId: "req-1" }],
+      ]);
+      expect(notifications.map((n) => n.userId)).to.deep.equal(["lawyer-a", "lawyer-c"]);
+      expect(notifications[0]).to.deep.include({ type: "CLIENT_REQUEST", title: "The client deleted this case", link: "/homepage/client-requests" });
+      expect(notifications[0].message).to.include("no longer available");
+    });
+
+    it("sends the live events even when a bell notification can't be made", async () => {
+      (NotificationSvc as any).create = async () => {
+        throw new Error("database down");
+      };
+      await ClientRequestNotifySvc.tellCaseDeleted({ requestId: "req-1", heldBy: ["lawyer-a"], matching: ["lawyer-b"] });
+      expect(emitted.map(([userId]) => userId)).to.deep.equal(["lawyer-a", "lawyer-b"]);
+    });
+
+    it("tells nobody when no lawyer was on the request or routed it", async () => {
+      await ClientRequestNotifySvc.tellCaseDeleted({ requestId: "req-1", heldBy: [], matching: [] });
+      expect(emitted).to.deep.equal([]);
+      expect(notifications).to.deep.equal([]);
+    });
+  });
+
   describe("remindDue", () => {
     const DUE = { id: "claim-1", requestId: "req-1", lawyerId: "lawyer-a", expiresAt: new Date(NOW.getTime() + 2 * HOUR_MS - 60_000), lawyer: { email: "lawyer-a@example.com" } };
     let unsent: Set<string>;

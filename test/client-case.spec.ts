@@ -20,6 +20,7 @@ import DocumentSvc from "../src/services/document.service";
 import DocumentRepo from "../src/repositories/document.repository";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientRequestSvc from "../src/services/client-request.service";
+import ClientRequestNotifySvc from "../src/services/client-request-notify.service";
 import CaseAreaRepo from "../src/repositories/case-area.repository";
 import requireClientAccount from "../src/middleware/require-client-account.middleware";
 import clientRoute from "../src/routes/client.route";
@@ -187,7 +188,8 @@ describe("Client app cases", () => {
       const fns = [
         stash(ClientCaseRepo, ["findById", "findAnyById", "list", "clearReadiness"]),
         stash(CaseSvc, ["create", "update", "archive", "unarchive", "delete"]),
-        stash(ClientRequestSvc, ["withdraw"]),
+        stash(ClientRequestSvc, ["withdraw", "withdrawBeforeCaseDeleted"]),
+        stash(ClientRequestNotifySvc, ["tellCaseDeleted"]),
         stash(IntakeChatSvc, ["listMessages", "enqueueIntakeGeneration"]),
         // Credits are test/client-billing.spec.ts's; here a new case starts with 50.
         stash(ClientPaymentRepo, ["spendCredit", "addCredits"]),
@@ -227,6 +229,11 @@ describe("Client app cases", () => {
       (CaseSvc as any).unarchive = async (...args: unknown[]) => record("caseUnarchive")(...args);
       (CaseSvc as any).delete = async (...args: unknown[]) => record("caseDelete")(...args);
       (ClientRequestSvc as any).withdraw = async (...args: unknown[]) => record("withdraw")(...args);
+      (ClientRequestSvc as any).withdrawBeforeCaseDeleted = async (...args: unknown[]) => {
+        record("withdrawBeforeCaseDeleted")(...args);
+        return { requestId: args[1], heldBy: ["lawyer-1"], matching: ["lawyer-2"] };
+      };
+      (ClientRequestNotifySvc as any).tellCaseDeleted = async (...args: unknown[]) => record("tellCaseDeleted")(...args);
       (CaseSvc as any).create = async (...args: unknown[]) => {
         record("caseCreate")(...args);
         return { id: "case-1" };
@@ -255,6 +262,7 @@ describe("Client app cases", () => {
         {
           caseName: "Dismissed without notice after three years in the job, by text message, on a Sunday evening before my shift",
           caseAreas: ["EMPLOYMENT"],
+          clientCaseAreas: ["EMPLOYMENT"],
           ukJurisdiction: "England and Wales",
           outsideUk: false,
           jurisdiction: "Leeds",
@@ -325,7 +333,7 @@ describe("Client app cases", () => {
     it("lets a case keep a switched-off area it already has, but not add one", async () => {
       row = caseRow({ caseAreas: ["RETIRED"] });
       await ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["RETIRED", "FAMILY"] });
-      expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["RETIRED", "FAMILY"] });
+      expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["RETIRED", "FAMILY"], clientCaseAreas: ["RETIRED", "FAMILY"] });
       row = caseRow();
       expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["RETIRED"] }))).to.deep.equal({ status: 400, code: "CASE_AREA_INACTIVE" });
     });
@@ -470,7 +478,23 @@ describe("Client app cases", () => {
           code: "CASE_LOCKED_BY_REQUEST",
         });
         await ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["FAMILY"] });
-        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["FAMILY"] });
+        expect((calls.caseUpdate as any[])[3]).to.deep.equal({ caseAreas: ["FAMILY"], clientCaseAreas: ["FAMILY"] });
+      });
+
+      it("keeps the client's own picks apart from the areas Jev settled on, so saving other details can't narrow them", async () => {
+        row = caseRow({ caseAreas: ["EMPLOYMENT"], clientCaseAreas: ["EMPLOYMENT", "CONSUMER", "FAMILY"] });
+        expect((await ClientCaseSvc.get(workspace, "case-1")).areas.map((a) => a.code)).to.have.members(["EMPLOYMENT", "CONSUMER", "FAMILY"]);
+        // Even with a lawyer on the request, sending the client's own picks back is no change to them.
+        live = { id: "req-1", status: "CLAIMED" };
+        await ClientCaseSvc.update(workspace, "u1", "case-1", { title: "New title", areas: ["EMPLOYMENT", "CONSUMER", "FAMILY"] });
+        expect((calls.caseUpdate as any[])[3]).to.include({ caseName: "New title" });
+        // Dropping one of them is a change to the type of issue, which a lawyer on the request fixes.
+        expect(await errorOf(ClientCaseSvc.update(workspace, "u1", "case-1", { areas: ["EMPLOYMENT"] }))).to.deep.equal({ status: 409, code: "CASE_LOCKED_BY_REQUEST" });
+      });
+
+      it("shows a case made before the client's picks were kept (or in the lawyer app) by its areas", async () => {
+        row = caseRow({ caseAreas: ["EMPLOYMENT", "FAMILY"], clientCaseAreas: [] });
+        expect((await ClientCaseSvc.get(workspace, "case-1")).areas.map((a) => a.code)).to.have.members(["EMPLOYMENT", "FAMILY"]);
       });
     });
 
@@ -484,8 +508,48 @@ describe("Client app cases", () => {
       it("withdraws an open request nobody has committed to before it deletes", async () => {
         live = { id: "req-1", status: "ROUTED" };
         await ClientCaseSvc.remove(workspace, "u1", "case-1");
-        expect(calls.withdraw).to.deep.equal(["u1", "req-1"]);
+        expect(calls.withdrawBeforeCaseDeleted).to.deep.equal(["u1", "req-1"]);
+        expect(calls.withdraw).to.equal(undefined);
         expect(calls.caseDelete).to.deep.equal(["case-1", { organizationId: "org-personal", ownerId: null }, "u1"]);
+      });
+
+      it("tells the lawyers on the request, and the ones it was routed to, once the case is deleted (#994)", async () => {
+        const order: string[] = [];
+        (CaseSvc as any).delete = async () => order.push("deleted");
+        (ClientRequestNotifySvc as any).tellCaseDeleted = async (...args: unknown[]) => {
+          order.push("told");
+          calls.tellCaseDeleted = args;
+        };
+        live = { id: "req-1", status: "CLAIMED" };
+        await ClientCaseSvc.remove(workspace, "u1", "case-1");
+        expect(calls.tellCaseDeleted).to.deep.equal([{ requestId: "req-1", heldBy: ["lawyer-1"], matching: ["lawyer-2"] }]);
+        expect(order).to.deep.equal(["deleted", "told"]);
+      });
+
+      it("tells nobody when the case could not be deleted", async () => {
+        (CaseSvc as any).delete = async () => {
+          throw new Error("database down");
+        };
+        live = { id: "req-1", status: "ROUTED" };
+        await errorOf(ClientCaseSvc.remove(workspace, "u1", "case-1"));
+        expect(calls.tellCaseDeleted).to.equal(undefined);
+      });
+
+      it("tells nobody about a case with no open request, or one that is only archived", async () => {
+        await ClientCaseSvc.remove(workspace, "u1", "case-1");
+        live = { id: "req-1", status: "ROUTED" };
+        await ClientCaseSvc.archive(workspace, "u1", "case-1");
+        expect(calls.tellCaseDeleted).to.equal(undefined);
+        expect(calls.withdraw).to.deep.equal(["u1", "req-1"]);
+      });
+
+      it("still deletes the case when telling the lawyers fails", async () => {
+        (ClientRequestNotifySvc as any).tellCaseDeleted = async () => {
+          throw new Error("socket down");
+        };
+        live = { id: "req-1", status: "ROUTED" };
+        await ClientCaseSvc.remove(workspace, "u1", "case-1");
+        expect(calls.caseDelete).to.not.equal(undefined);
       });
 
       it("refuses to delete or archive while a lawyer is confirmed or engaged", async () => {

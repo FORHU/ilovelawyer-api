@@ -12,7 +12,15 @@ import logger from "../utils/logger";
 import { moneyText } from "../utils/money-text";
 import prisma from "../lib/prisma";
 import CaseAreaSvc from "./case-area.service";
-import type { ClientRequestClaimExpiringEvent, ClientRequestNewEvent, ClientRequestTakenEvent, ClientRequestUpdatedEvent, RequestUrgency, UkJurisdiction } from "../types/client-handoff";
+import type {
+  ClientRequestClaimExpiringEvent,
+  ClientRequestDeletedEvent,
+  ClientRequestNewEvent,
+  ClientRequestTakenEvent,
+  ClientRequestUpdatedEvent,
+  RequestUrgency,
+  UkJurisdiction,
+} from "../types/client-handoff";
 
 /** The lawyer app's Client Requests page (ilovelawyer-app homepage/client-requests). */
 const LAWYER_INBOX_PATH = "/homepage/client-requests";
@@ -201,6 +209,30 @@ export default class ClientRequestNotifySvc {
     return opened;
   }
 
+  /**
+   * The client deleted the case a request was on (ClientRequestSvc.withdrawBeforeCaseDeleted): the
+   * request is gone, so a lawyer who has it open would otherwise be left on a page that no longer
+   * loads. Every lawyer who was on it or was routed it gets a live event, and the ones who were on
+   * it also get a bell notification, since they had put time into it. Best effort: the case is
+   * already deleted, so a failure is logged, not thrown.
+   */
+  static async tellCaseDeleted({ requestId, heldBy, matching }: { requestId: string; heldBy: string[]; matching: string[] }): Promise<void> {
+    const event: ClientRequestDeletedEvent = { requestId };
+    for (const userId of [...heldBy, ...matching]) emitToUser(userId, "client-request:deleted", event);
+    const results = await Promise.allSettled(
+      heldBy.map((userId) =>
+        NotificationSvc.create({
+          userId,
+          type: "CLIENT_REQUEST",
+          title: "The client deleted this case",
+          message: "The client deleted the case you were reviewing, so the request is no longer available. Nothing was charged to you.",
+          link: LAWYER_INBOX_PATH,
+        }),
+      ),
+    );
+    logFailures(results, "Client request: failed to create case-deleted notification", { requestId });
+  }
+
   /** Routed requests nobody claimed within 48h become EXPIRED. Their lawyers drop them, the
    * client is told they can ask again, and ops get one digest for the run. How many expired. */
   static async expireDue(now: Date): Promise<number> {
@@ -229,7 +261,7 @@ export default class ClientRequestNotifySvc {
             message: korean
               ? "의뢰인이 기한 내에 변호사를 선택하지 않아 요청이 종료되었습니다. 변호사님께 청구된 금액은 없습니다."
               : "The client didn't pick a lawyer in time, so the request has closed. Nothing was charged to you.",
-            link: "/client-requests?view=history",
+            link: `${LAWYER_INBOX_PATH}?view=history`,
           }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: request.id }));
         }
         await ClientRequestNotifySvc.tellClientExpired(request.client.email, request.caseId, unpicked, request.client?.tenant?.code ?? "UK").catch((err) =>

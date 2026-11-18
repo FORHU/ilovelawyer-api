@@ -6,14 +6,19 @@ import ExcelJS from "exceljs";
 import WordExtractor from "word-extractor";
 import { ocrDocument, ocrImageFromS3, ocrPdfFromS3, TEXTRACT_SYNC_MAX_BYTES } from "./ocr";
 import logger from "./logger";
+import { webpToJpeg } from "./upload-content";
 
 type DocType = "pdf" | "doc" | "docx" | "image" | "xlsx" | "txt";
 
-// Textract's synchronous DetectDocumentText only accepts these two raster formats (plus
-// single-page PDF, handled separately above) — anything else (WEBP, GIF, HEIC, ...) still
-// falls through to the "unsupported" error below rather than failing inside Textract itself.
-const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
-const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png"]);
+// Textract's synchronous DetectDocumentText only reads JPEG and PNG. WEBP is accepted too and is
+// re-encoded as JPEG before OCR (see below); HEIC never gets here, because it is converted to JPEG
+// when the upload is confirmed (DocumentSvc). Anything else (GIF, ...) still falls through to the
+// "unsupported" error below rather than failing inside Textract itself.
+const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
+
+const isWebp = (mimeType?: string | null, filename?: string) =>
+  mimeType === "image/webp" || filename?.split(".").pop()?.toLowerCase() === "webp";
 
 // .xlsm/.xlam are macro-enabled/add-in variants of the same OOXML zip container as .xlsx, so
 // exceljs reads them with the same workbook.xlsx.load path used for "xlsx" below.
@@ -194,7 +199,7 @@ export async function extractPages(
   // the scanned-PDF fallback below uses, just skipping the (always-empty) text attempt.
   if (type === "image") {
     logger.info("Document extraction: image upload, running OCR");
-    const ocrText = await ocrDocument(buffer);
+    const ocrText = await ocrDocument(isWebp(mimeType, filename) ? await webpToJpeg(buffer) : buffer);
     return { pages: pagesFromText(ocrText), method: "ocr", ocrAttempted: true };
   }
 
@@ -305,7 +310,7 @@ export async function extractPagesFromFile(
   if (type === "xlsx" && bytes > XLSX_STREAM_MIN_BYTES) {
     return { pages: await extractXlsxPagesFromFile(filePath), method: "text", ocrAttempted: false };
   }
-  if (type === "image" && bytes > TEXTRACT_SYNC_MAX_BYTES && s3Key) {
+  if (type === "image" && bytes > TEXTRACT_SYNC_MAX_BYTES && s3Key && !isWebp(mimeType, filename)) {
     logger.info("Document extraction: large image upload, running OCR from S3", { bytes });
     const ocrText = await ocrImageFromS3(s3Key, bytes);
     return { pages: pagesFromText(ocrText), method: "ocr", ocrAttempted: true };

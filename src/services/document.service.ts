@@ -8,7 +8,9 @@ import OrganizationRepo from "../repositories/organization.repository";
 import DocumentChunkSvc from "./document-chunk.service";
 import AuditSvc, { AuditAction } from "./audit.service";
 import DocumentExtractionQueue from "../queues/document-extraction.queue";
-import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer } from "../utils/s3";
+import { s3UrlForKey, getPresignedUploadUrl, getProxyFileUrl, getObjectBuffer, getObjectHead, uploadToS3, deleteFromS3 } from "../utils/s3";
+import { CONTENT_SNIFF_BYTES, contentMatchesExtension, extensionOf, heicToJpeg } from "../utils/upload-content";
+import logger from "../utils/logger";
 import { extractText } from "../utils/document-text-extraction";
 import HttpError from "../utils/http-error";
 import { assertBatchWithinLimit } from "../utils/upload-batch-limit";
@@ -17,7 +19,7 @@ import CaseAccess from "../utils/case-access";
 // inside function bodies.
 import ChatSvc from "./chat.service";
 import ChatRepo from "../repositories/chat.repository";
-import { DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
+import { ALLOWED_DOCUMENT_EXTENSIONS, DOCUMENT_CONFIRM_TX_TIMEOUT_MS } from "../constants";
 import { DocumentStatus } from "@prisma/client";
 import SecurityAuditSvc from "./security-audit.service";
 import type { WorkspaceScope } from "../utils/workspace";
@@ -153,6 +155,49 @@ export default class DocumentSvc {
     );
   }
 
+  /** Checks that each uploaded file is what its extension says (the extension alone is trivially
+   * faked), removing and refusing one that isn't, and converts HEIC photos to JPEG so they can be
+   * read and shown. A converted file replaces the original: new key, `.jpg` name, JPEG type. */
+  private static async verifyUploads<T extends { key: string; name: string; contentType?: string; fileSize?: number }>(items: T[]): Promise<T[]> {
+    const checked: T[] = [];
+    for (const item of items) {
+      let head: Buffer;
+      try {
+        head = await getObjectHead(item.key, CONTENT_SNIFF_BYTES);
+      } catch (err) {
+        // Nothing readable at the key (never uploaded, or S3 hiccup): nothing to inspect, and
+        // extraction will mark the document failed if the file really isn't there.
+        logger.warn("Upload content check skipped: could not read the object", { key: item.key, err });
+        checked.push(item);
+        continue;
+      }
+      if (!contentMatchesExtension(item.name, head)) {
+        await deleteFromS3(item.key).catch((err) => logger.warn("Could not remove a rejected upload", { key: item.key, err }));
+        throw new HttpError(
+          `${item.name} doesn't look like a real .${extensionOf(item.name)} file. Supported formats: ${ALLOWED_DOCUMENT_EXTENSIONS.join(", ").toUpperCase()}.`,
+          400,
+        );
+      }
+      checked.push(extensionOf(item.name) === "heic" ? await DocumentSvc.convertHeic(item) : item);
+    }
+    return checked;
+  }
+
+  private static async convertHeic<T extends { key: string; name: string; contentType?: string; fileSize?: number }>(item: T): Promise<T> {
+    let jpeg: Buffer;
+    try {
+      jpeg = await heicToJpeg(await getObjectBuffer(item.key));
+    } catch (err) {
+      logger.warn("HEIC conversion failed", { key: item.key, err });
+      await deleteFromS3(item.key).catch(() => undefined);
+      throw new HttpError(`${item.name} couldn't be read as a photo. Try exporting it as a JPEG.`, 400);
+    }
+    const key = item.key.replace(/.heic$/i, ".jpg");
+    await uploadToS3(key, jpeg, "image/jpeg");
+    await deleteFromS3(item.key).catch((err) => logger.warn("Could not remove the original HEIC", { key: item.key, err }));
+    return { ...item, key, name: item.name.replace(/.heic$/i, ".jpg"), contentType: "image/jpeg", fileSize: jpeg.length };
+  }
+
   /** Creates the Document row for a file already uploaded to S3 via the presigned PUT from `presign()`.
    * Extraction/embedding is queued when either caseId or consultationId is given — a bare
    * upload with neither (e.g. Document Analysis's "No Case" flow) stays un-embedded, since nothing
@@ -163,6 +208,7 @@ export default class DocumentSvc {
     data: { key: string; name: string; caseId?: string; consultationId?: string; contentType?: string; fileSize?: number },
   ) {
     await DocumentSvc.assertCanUploadTo(scope, userId, data.caseId, data.consultationId);
+    data = (await DocumentSvc.verifyUploads([data]))[0];
     const fileUrl = s3UrlForKey(data.key);
     const file = await FilesRepo.create(data.name, fileUrl, data.key);
     const doc = await DocumentRepo.create(await DocumentSvc.organizationFor(scope, data.caseId, data.consultationId), userId, {
@@ -188,6 +234,7 @@ export default class DocumentSvc {
   ) {
     assertBatchWithinLimit(items.map((item) => item.fileSize));
     await DocumentSvc.assertCanUploadTo(scope, userId, caseId, consultationId);
+    items = await DocumentSvc.verifyUploads(items);
     const documentOrganizationId = await DocumentSvc.organizationFor(scope, caseId, consultationId);
     const filesToCreate: Express.FileTypes[] = items.map((item) => ({
       filename: item.name,

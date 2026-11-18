@@ -248,6 +248,7 @@ export default class ClientRequestRepo {
           select: {
             caseName: true,
             caseAreas: true,
+            clientCaseAreas: true,
             ukJurisdiction: true,
             jurisdiction: true,
             clientSide: true,

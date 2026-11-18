@@ -91,7 +91,7 @@ export function briefFingerprint(source: BriefSource, latestMessageId: string | 
   const c = source.case;
   const basis = JSON.stringify([
     c.caseName,
-    c.caseAreas,
+    CaseAreaSvc.clientPicks(c),
     c.ukJurisdiction,
     c.jurisdiction,
     c.clientSide,
@@ -221,7 +221,7 @@ export default class ClientRequestBriefSvc {
       const now = new Date();
       const site = siteOfBrief(source);
       // The site's own area names (KR's are Korean).
-      const caseAreas = (await CaseAreaSvc.refsOf(source.case.caseAreas, site)).map((a) => a.name);
+      const caseAreas = (await CaseAreaSvc.refsOf(CaseAreaSvc.clientPicks(source.case), site)).map((a) => a.name);
       const ready = source.case.documents.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
       const pack = ready.length ? await buildFactExcerptPack(ready) : { text: "", chunkIds: [], factCount: 0 };
       const documentExcerpts = ready.length

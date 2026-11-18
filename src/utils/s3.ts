@@ -214,6 +214,15 @@ export async function downloadObjectToTempFile(key: string): Promise<{ path: str
   }
 }
 
+/** The first `bytes` bytes of an object (a ranged read), for checking what a file really is
+ * without downloading it. */
+export async function getObjectHead(key: string, bytes: number): Promise<Buffer> {
+  const res = await client.send(new GetObjectCommand({ Bucket: AWS_S3_BUCKET, Key: key, Range: `bytes=0-${bytes - 1}` }));
+  const chunks: Buffer[] = [];
+  for await (const chunk of res.Body as Readable) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
 /** Downloads an object's full contents into memory — used by the text preview to read an
  * uploaded Case Document's bytes back out of S3. Extraction uses downloadObjectToTempFile. */
 export async function getObjectBuffer(key: string): Promise<Buffer> {
