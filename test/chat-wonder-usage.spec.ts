@@ -220,7 +220,10 @@ describe("Chat Wonder LlmUsage rows", () => {
   });
 
   describe("Chat Wonder's reported usage (#404)", () => {
-    const block = { prompt_tokens: 5000, cached_input_tokens: 3000, completion_tokens: 400, total_tokens: 5400, call_count: 3, pass_count: 2, model: "gpt-x", by_model: [] };
+    const block = {
+      prompt_tokens: 5000, cached_input_tokens: 3000, completion_tokens: 400, total_tokens: 5400, call_count: 3, pass_count: 2, model: "gpt-x",
+      routing_mode: "AUTO", decision_source: "race_corrected", by_model: [],
+    };
     const frame = (data: unknown) => JSON.stringify({ type: "usage", session_id: "sess-1", data });
     const usage = { feature: "chat", userId: "user-1" };
 
@@ -241,7 +244,16 @@ describe("Chat Wonder LlmUsage rows", () => {
         feature: "chat",
         userId: "user-1",
         success: true,
+        routingMode: "AUTO",
+        decisionSource: "race_corrected",
       });
+    });
+
+    it("records null for routingMode/decisionSource when Chat Wonder doesn't send them (CW-9)", async () => {
+      const olderBlock = { prompt_tokens: 100, completion_tokens: 10, model: "gpt-x" };
+      script = ["Answer.", "__END__", frame(olderBlock), "[DONE]"];
+      await streamChatWonderMessage("sess-1", "Q", () => {}, undefined, undefined, undefined, "PH", undefined, undefined, undefined, { usage });
+      expect(rows[0]).to.include({ source: "REPORTED", routingMode: null, decisionSource: null });
     });
 
     it("falls back to the estimate when the stream carries no usage frame", async () => {
@@ -315,11 +327,24 @@ describe("Chat Wonder LlmUsage rows", () => {
 
     describe("parseReportedUsage", () => {
       it("reads the contract block", () => {
-        expect(parseReportedUsage(block)).to.deep.equal({ model: "gpt-x", inputTokens: 5000, cachedInputTokens: 3000, outputTokens: 400, passCount: 2 });
+        expect(parseReportedUsage(block)).to.deep.equal({
+          model: "gpt-x", inputTokens: 5000, cachedInputTokens: 3000, outputTokens: 400, passCount: 2,
+          routingMode: "AUTO", decisionSource: "race_corrected",
+        });
       });
 
       it("treats missing optional fields as null", () => {
-        expect(parseReportedUsage({ prompt_tokens: 10, completion_tokens: 2 })).to.deep.equal({ model: null, inputTokens: 10, cachedInputTokens: null, outputTokens: 2, passCount: null });
+        expect(parseReportedUsage({ prompt_tokens: 10, completion_tokens: 2 })).to.deep.equal({
+          model: null, inputTokens: 10, cachedInputTokens: null, outputTokens: 2, passCount: null,
+          routingMode: null, decisionSource: null,
+        });
+      });
+
+      it("reads routing_mode/decision_source and treats a non-string as absent", () => {
+        expect(parseReportedUsage({ prompt_tokens: 10, completion_tokens: 2, routing_mode: "MANUAL", decision_source: "manual" }))
+          .to.include({ routingMode: "MANUAL", decisionSource: "manual" });
+        expect(parseReportedUsage({ prompt_tokens: 10, completion_tokens: 2, routing_mode: 7, decision_source: "" }))
+          .to.include({ routingMode: null, decisionSource: null });
       });
 
       it("drops a cached count larger than the input rather than recording it", () => {

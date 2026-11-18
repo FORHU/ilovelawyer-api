@@ -22,6 +22,10 @@ export interface LlmUsageEntry {
   /** A subset of inputTokens, when the provider reports it. */
   cachedInputTokens?: number | null;
   passCount?: number | null;
+  /** chat-wonder-v2-api#150 (CW-9): routing_overrides.py's mode and model_router.py's decision
+   * for this call, when reported. Null for every provider/path that doesn't report it. */
+  routingMode?: string | null;
+  decisionSource?: string | null;
   /** Default to the current request's user and organization. Pass null for "no one" (a queue or
    * cron run has no request context). */
   userId?: string | null;
@@ -140,6 +144,8 @@ export default class LlmUsageSvc {
       // Cached tokens are part of inputTokens, so they are not added again.
       totalTokens: inputTokens + outputTokens,
       passCount: entry.passCount ?? null,
+      routingMode: entry.routingMode ?? null,
+      decisionSource: entry.decisionSource ?? null,
       estimatedCostUsd: estimateCostUsd(entry.model, { inputTokens, outputTokens, cachedInputTokens }),
       // An id the call names wins, then the scope an entry point set (queue, cron, pane run), then
       // the HTTP request's own user and organization.

@@ -4339,6 +4339,16 @@ model LlmUsage {
   /// From the price table (#401); null when the model is unknown, never 0.
   estimatedCostUsd  Float?
 
+  /// Chat Wonder's routing_overrides.py mode in effect for this call ("AUTO"/"MANUAL"/"env"),
+  /// or null when not reported (chat-wonder-v2-api#150, CW-9). Plain string, not the
+  /// RoutingMode enum PersonaRoutingOverride uses: this is ingested from an independently
+  /// deployed service, and a strict enum would reject the whole row on any value drift between
+  /// the two repos' deploys, defeating the point of a write that must never fail the turn.
+  routingMode    String?
+  /// What model_router.py decided ("default" | "race_corrected" | "tool_override" | "manual"),
+  /// or null when not reported. Same free-string reasoning as routingMode above.
+  decisionSource String?
+
   userId         String?
   organizationId String?
   caseId         String?
