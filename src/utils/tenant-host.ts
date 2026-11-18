@@ -50,10 +50,10 @@ const CLIENT_HOST_TENANT_CODE_MAP: Record<string, TenantCode> = {
   "app.ilovelawyer.com": "UK",
   "ilovelawyer.local": "UK",
   "client-local.ilovelawyer.com": "UK",
+  "uk-client-local.ilovelawyer.com": "UK",
   localhost: "UK",
   "kr.ilovelawyer.com": "KR",
   "kr-app.ilovelawyer.com": "KR",
-  "kr.localhost": "KR",
   "kr.ilovelawyer.local": "KR",
   "kr-client-local.ilovelawyer.com": "KR",
 };

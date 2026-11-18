@@ -341,8 +341,8 @@ describe("Client app decides the account role", () => {
     it("maps client hosts to their region, ports ignored", () => {
       expect(resolveClientTenantCodeFromHost("kr.ilovelawyer.com")).to.equal("KR");
       expect(resolveClientTenantCodeFromHost("kr-app.ilovelawyer.com")).to.equal("KR");
-      expect(resolveClientTenantCodeFromHost("kr.localhost:3004")).to.equal("KR");
       expect(resolveClientTenantCodeFromHost("kr-client-local.ilovelawyer.com:3004")).to.equal("KR");
+      expect(resolveClientTenantCodeFromHost("uk-client-local.ilovelawyer.com:3004")).to.equal("UK");
       expect(resolveClientTenantCodeFromHost("ilovelawyer.com")).to.equal("UK");
       expect(resolveClientTenantCodeFromHost("localhost:3004")).to.equal("UK");
       expect(resolveClientTenantCodeFromHost("evil.example.com")).to.equal(null);
