@@ -5,6 +5,7 @@ import requireAdmin from "../middleware/require-admin.middleware";
 import AdminCtrl from "../controllers/admin.controller";
 import SecurityAuditCtrl from "../controllers/security-audit.controller";
 import LlmUsageCtrl from "../controllers/llm-usage.controller";
+import PersonaRoutingOverrideCtrl from "../controllers/persona-routing-override.controller";
 import ClientBillingAdminCtrl from "../controllers/client-billing-admin.controller";
 import ClientRequestAdminCtrl from "../controllers/client-request-admin.controller";
 import ClientPricingAdminCtrl from "../controllers/client-pricing-admin.controller";
@@ -104,6 +105,11 @@ router.get("/audit-log/export", asyncHandler(SecurityAuditCtrl.exportForAdmin));
 router.get("/llm-usage/summary", asyncHandler(LlmUsageCtrl.summary));
 router.get("/llm-usage/people", asyncHandler(LlmUsageCtrl.people));
 router.get("/llm-usage", asyncHandler(LlmUsageCtrl.list));
+
+// chat-wonder-v2-api's per-persona manual routing override (CW-8). The read chat-wonder itself
+// polls is a separate, api-key-guarded route: /api/persona-routing.
+router.get("/persona-routing", asyncHandler(PersonaRoutingOverrideCtrl.listForAdmin));
+router.patch("/persona-routing/:persona", asyncHandler(PersonaRoutingOverrideCtrl.update));
 
 router.get("/billing/summary", asyncHandler(ClientBillingAdminCtrl.summary));
 router.get("/billing/clients/:userId", asyncHandler(ClientBillingAdminCtrl.client));

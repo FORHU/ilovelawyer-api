@@ -33,7 +33,7 @@ import generatedDocumentRoute from "./generated-document.route";
 import terminalRoute from "./terminal.route";
 import organizationRoute from "./organization.route";
 import { jurisdictionRouter, integrationRouter } from "./jurisdiction.route";
-import modelSettingsRoute from "./model-settings.route";
+import personaRoutingRoute from "./persona-routing.route";
 import adminRoute from "./admin.route";
 import lawRoute from "./law.route";
 import clientRoute from "./client.route";
@@ -58,7 +58,7 @@ router.use(planGate);
 router.use(
   [
     "/organizations", "/case-document", "/generated-document", "/my-cases", "/shared-cases", "/documents",
-    "/transcriptions", "/send-email", "/terminal", "/legal-rag", "/tts", "/law", "/legal-source-analysis", "/model-settings",
+    "/transcriptions", "/send-email", "/terminal", "/legal-rag", "/tts", "/law", "/legal-source-analysis", "/persona-routing",
   ],
   blockTrialWrites,
 );
@@ -97,7 +97,7 @@ router.use("/tts", ttsRoute);
 router.use("/terminal", terminalRoute);
 router.use("/jurisdictions", jurisdictionRouter);
 router.use("/integrations", integrationRouter);
-router.use("/model-settings", modelSettingsRoute);
+router.use("/persona-routing", personaRoutingRoute);
 router.use("/practice-areas", practiceAreaRoute);
 router.use("/lawyer-matching", lawyerMatchingRoute);
 // The client app (ilovelawyer-client): client accounts only.

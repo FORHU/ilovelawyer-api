@@ -1,7 +1,7 @@
 /** POST /lawyer-matching/by-criteria (#558-adjacent, intake's find-a-lawyer): criteria-based lawyer
  * matching for chat-wonder's find_lawyer tool and the client app's direct "browse lawyers" feature,
  * neither of which has a ClientRequest to match against. Guarded by apiKeyMiddleware
- * (CHAT_WONDER_API_KEY), same as case-document/generated-document/model-settings. No live Postgres:
+ * (CHAT_WONDER_API_KEY), same as case-document/generated-document/persona-routing. No live Postgres:
  * ClientRequestMatchingSvc is monkeypatched. */
 import { expect } from "chai";
 import { describe, it, beforeEach, afterEach } from "mocha";

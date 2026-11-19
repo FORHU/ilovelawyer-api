@@ -191,6 +191,7 @@ model User {
   clientRequestClaims         ClientRequestClaim[]
   clientRequestPasses         ClientRequestPass[]
   updatedTenantSettings       TenantSetting[]
+  updatedPersonaRoutingOverrides PersonaRoutingOverride[]
   clientPayments              ClientPayment[]
   supportTickets              SupportTicket[]
   accountAiTopUps             AccountAiTopUp[]
@@ -2516,21 +2517,33 @@ enum OrganizationRole {
   MEMBER
 }
 
-// ── Model Settings ────────────────────────────────────────────────────────────
-// Centralized, live-editable model selection for chat-wonder-v2-api's legal-ai
-// tools (GPT vs. DeepSeek). chat-wonder-v2-api reads these at runtime instead of
-// its own .env, falling back to .env only if this service is unreachable. See
-// chat-wonder-v2-api's docs/plans/deepseek-provider-flexibility-plan.md.
+// ── Persona Routing Override ───────────────────────────────────────────────────
+// Replaces the never-wired ModelSetting table (Aug 2026, chat-wonder-v2-api#104's
+// cross-repo model-routing work, CW-8). That one was tool-scoped and assumed a
+// model is always pinned; this is persona-scoped and models AUTO (let chat-wonder's
+// Decisions-API race pick) vs MANUAL (pin one) as a real state, not just a model
+// string. chat-wonder-v2-api polls this on a timer into its own cache — never read
+// per-turn — falling back to its env vars only when this is unreachable or a
+// persona has no row. See FORHU/ilovelawyer-api#663.
+model PersonaRoutingOverride {
+  id                String      @id @default(uuid())
+  persona           String      @unique
+  routingMode       RoutingMode @default(AUTO)
+  /// Required when routingMode is MANUAL; ignored otherwise.
+  manualPinnedModel String?
+  /// Per-tool model pins within this persona (CW-7's MODEL_SENSITIVE_TOOLS), keyed by tool name.
+  toolOverrides     Json?
+  updatedById       String?
+  updatedAt         DateTime    @updatedAt
 
-model ModelSetting {
-  id              String   @id @default(uuid())
-  toolName        String   @unique
-  description     String?
-  currentModel    String
-  availableModels Json
-  locked          Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedById])
+}
+
+enum RoutingMode {
+  AUTO
+  MANUAL
 }
 
 // ── Legal Terminal ────────────────────────────────────────────────────────────
