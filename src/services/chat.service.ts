@@ -1556,9 +1556,20 @@ export default class ChatSvc {
       });
     }
     // Same anchor as reasoning: the turn's LAST assistant message (a split reply's last topic).
-    if (confidence?.spans.length) {
+    // confidence.py's own payload design (build_payload's `checked`/`coverage` fields) exists
+    // specifically to tell "ran and found nothing to flag" (spans == [], checked == true) apart
+    // from "never ran" -- gating this save on spans.length collapsed that distinction back
+    // together and silently dropped the toggle for any turn whose spans happened to come back
+    // empty, independent of which model answered. Saving whenever a payload exists at all (not
+    // just when it has spans) is what that design already implies.
+    if (confidence) {
       await ChatRepo.saveConfidence(assistantMessage.id, confidence).catch((err) => {
         logger.error("Failed to persist confidence view", { err, messageId: assistantMessage.id });
+      });
+    } else if (p.confidence) {
+      logger.warn("Confidence view: payload present but dropped before persistence (flag off or remap emptied it)", {
+        messageId: assistantMessage.id,
+        confidenceViewEnabled: confidenceViewEnabled(),
       });
     }
     if (decisions?.records.length) {
