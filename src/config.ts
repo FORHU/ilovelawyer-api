@@ -176,6 +176,12 @@ export const JURIS_PH_API_URL = (process.env.JURIS_PH_API_URL || "https://juris.
  * chat-wonder-v2-api, which already calls this same server from the AI chat's tool loop).
  * uk-legal-mcp.ts posts `tools/call` requests directly at this one endpoint. */
 export const UK_LEGAL_MCP_URL = process.env.UK_LEGAL_MCP_URL || "https://uk-legal-mcp.fly.dev/mcp";
+/** Korean Law MCP — the KR Library's source (law.go.kr statutes and court decisions), the same
+ * hosted server chat-wonder-v2-api's legal_kr persona calls. Stateless JSON-RPC over HTTP, no key
+ * needed (shared quota); KOREAN_LAW_MCP_API_KEY (a law.go.kr OC key) raises the quota and is sent
+ * as the `apikey` header. See korean-law-mcp.ts. */
+export const KOREAN_LAW_MCP_URL = process.env.KOREAN_LAW_MCP_URL || "https://mcp.gomdori.app/law";
+export const KOREAN_LAW_MCP_API_KEY = process.env.KOREAN_LAW_MCP_API_KEY?.trim() || "";
 /** The National Archives Find Case Law base — a UK judgment's canonical URL is
  * `${UK_CASELAW_BASE_URL}/<slug>` (slug e.g. "uksc/2024/12"). Used to build `Law.jurisUrl` for
  * UK case-law rows (uk-law-mappers.ts) and to strip it back to a slug (uk-citation-resolution.ts);

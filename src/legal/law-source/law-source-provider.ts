@@ -10,7 +10,8 @@ import type { LawPreview } from "../../utils/law-preview";
  * legal-knowledge.registry.ts / prompt-registry.ts / deadline-engine.registry.ts.
  *
  * PH (`PhLawSourceProvider`) proxies juris.ph; UK (`UkLawSourceProvider`) proxies the UK Legal
- * MCP (search + detail) and the Find Case Law Atom feed (case-law browse). The response shapes
+ * MCP (search + detail) and the Find Case Law Atom feed (case-law browse). KR (`KrLawSourceProvider`)
+ * proxies the Korean Law MCP (law.go.kr statutes and decisions). The response shapes
  * are shared (`SearchResult` / `BrowseResult` / `DocumentResult` from law.service.ts); UK-only
  * columns are carried in the PH-named fields (see docs/adr/0005-uk-library-source.md).
  */

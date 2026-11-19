@@ -163,6 +163,8 @@ jobs:
           SEED_LAWYER_PASSWORD: ${{ secrets.SEED_LAWYER_PASSWORD }}
           # Cloudflare Turnstile secret for the signed-out Support Ticket form. Unset: signed-out tickets are refused.
           TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          KOREAN_LAW_MCP_URL: ${{ vars.KOREAN_LAW_MCP_URL }}
+          KOREAN_LAW_MCP_API_KEY: ${{ secrets.KOREAN_LAW_MCP_API_KEY }}
         run: |
           set -euo pipefail
           umask 077
@@ -247,6 +249,8 @@ jobs:
           add UK_LEGISLATION_BASE_URL   "${UK_LEGISLATION_BASE_URL:-}"
           add SEED_LAWYER_PASSWORD      "${SEED_LAWYER_PASSWORD:-}"
           add TURNSTILE_SECRET_KEY      "${TURNSTILE_SECRET_KEY:-}"
+          add KOREAN_LAW_MCP_URL        "${KOREAN_LAW_MCP_URL:-}"
+          add KOREAN_LAW_MCP_API_KEY    "${KOREAN_LAW_MCP_API_KEY:-}"
 
           # No AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY: the host's instance role
           # grants S3 and SQS. An empty pair here makes the SDK skip its
