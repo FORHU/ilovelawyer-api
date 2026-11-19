@@ -33,6 +33,37 @@ export default class LawRepo {
     return tenantId;
   }
 
+  /** KR Library rows (Korean Law MCP) resolve to the KR tenant the same way. */
+  static async resolveKrTenantId(): Promise<string> {
+    const tenantId = await TenantRepo.findIdByCode("KR");
+    if (!tenantId) throw new HttpError('No Tenant seeded for code "KR"', 500);
+    return tenantId;
+  }
+
+  /** Stored KR rows matching `q`, newest first: what the KR Library serves when the Korean Law MCP
+   * is unreachable. `courts` (court names) match the stored court exactly. */
+  static async localSearchKr(params: { category: LawCategory; q: string; limit: number; courts?: string[] }) {
+    const tenantId = await LawRepo.resolveKrTenantId();
+    return prisma.law.findMany({
+      where: {
+        tenantId,
+        category: params.category,
+        ...(params.courts?.length ? { division: { in: params.courts } } : {}),
+        ...(params.q.trim()
+          ? {
+              OR: [
+                { title: { contains: params.q, mode: "insensitive" } },
+                { caseNumber: { contains: params.q, mode: "insensitive" } },
+                { summary: { contains: params.q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ decisionDate: { sort: "desc", nulls: "last" } }, { year: { sort: "desc", nulls: "last" } }],
+      take: params.limit,
+    });
+  }
+
   /** jurisSourceId -> our row id, for the subset of the given ids we already store. */
   static async findStoredIds(jurisSourceIds: string[]): Promise<Map<string, string>> {
     if (jurisSourceIds.length === 0) return new Map();

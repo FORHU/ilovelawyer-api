@@ -3,9 +3,11 @@ import HttpError from "../../utils/http-error";
 import { LawSourceProvider } from "./law-source-provider";
 import { PhLawSourceProvider } from "./ph/ph-law-source.provider";
 import { UkLawSourceProvider } from "./uk/uk-law-source.provider";
+import { KrLawSourceProvider } from "./kr/kr-law-source.provider";
 
 const phProvider = new PhLawSourceProvider();
 const ukProvider = new UkLawSourceProvider();
+const krProvider = new KrLawSourceProvider();
 
 /** Selects the Library's live legal-source provider strictly by tenantCode — never by client
  * input, never with a cross-jurisdiction fallback. An unmapped tenantCode is a hard 501, not a
@@ -16,6 +18,8 @@ export function getLawSourceProvider(tenantCode: TenantCode): LawSourceProvider 
       return phProvider;
     case "UK":
       return ukProvider;
+    case "KR":
+      return krProvider;
     default:
       throw new HttpError(
         `Legal research is not available for this jurisdiction (${tenantCode}) — coming soon`,
