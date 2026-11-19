@@ -26,6 +26,12 @@ export interface ReportedUsage {
   outputTokens: number;
   /** Research-loop calls. Null when not reported. */
   passCount: number | null;
+  /** chat-wonder-v2-api#150 (CW-9): routing_overrides.py's mode for the dominant model this
+   * turn ("AUTO"/"MANUAL"/"env"), or null when not reported. */
+  routingMode: string | null;
+  /** What model_router.py decided for the dominant model this turn ("default" |
+   * "race_corrected" | "tool_override" | "manual"), or null when not reported. */
+  decisionSource: string | null;
 }
 
 /** Filled in by streamChatWonderMessageOnce as the call runs, so the one row recorded when it ends
@@ -42,6 +48,7 @@ export interface ChatWonderUsageProbe {
 }
 
 const count = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : null);
+const str = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
 
 /** Reads Chat Wonder's usage block. Returns undefined — so the caller falls back to its estimate —
  * for anything that is not a usable block: missing, not an object, or without real input and output
@@ -55,12 +62,14 @@ export function parseReportedUsage(raw: unknown): ReportedUsage | undefined {
     if (inputTokens === null || outputTokens === null) return undefined;
     const cached = count(block.cached_input_tokens);
     return {
-      model: typeof block.model === "string" && block.model.trim() ? block.model.trim() : null,
+      model: str(block.model),
       inputTokens,
       // A cached count above the input count can't be true; drop it rather than record nonsense.
       cachedInputTokens: cached !== null && cached <= inputTokens ? cached : null,
       outputTokens,
       passCount: count(block.pass_count),
+      routingMode: str(block.routing_mode),
+      decisionSource: str(block.decision_source),
     };
   } catch {
     return undefined;
@@ -114,6 +123,8 @@ export function recordChatWonderUsage(call: FinishedCall): void {
     outputTokens: reported ? reported.outputTokens : estimate.outputTokens,
     cachedInputTokens: reported?.cachedInputTokens ?? null,
     passCount: reported?.passCount ?? passCount,
+    routingMode: reported?.routingMode ?? null,
+    decisionSource: reported?.decisionSource ?? null,
     userId: call.usage?.userId !== undefined ? call.usage.userId : (call.trace?.userId ?? undefined),
     organizationId: call.usage?.organizationId,
     caseId: call.usage?.caseId ?? call.trace?.caseId ?? null,
