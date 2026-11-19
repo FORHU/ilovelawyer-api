@@ -13,6 +13,14 @@
  *  - jev: $0.042 in, output free, from a cost comparison table. Applies to every Jev model version
  *    (key ends in "*", see below).
  *
+ *  - deepseek-flash / deepseek-chat (DeepSeek's non-thinking mode) and deepseek-reasoner /
+ *    deepseek-pro (thinking mode): read from DeepSeek's own pricing page, 2026-11-19. DeepSeek
+ *    bills differently by time of day (UTC off-peak is roughly half price); PEAK rates are used
+ *    here so an unknown-time-of-day call is never undercounted, same reasoning as
+ *    FREE_CREDIT_UNPRICED_MODEL below. deepseek-chat/deepseek-reasoner were DeepSeek's model
+ *    names before 2026-07-24, when they became aliases for the non-thinking/thinking modes of a
+ *    newer model family; priced the same as their replacement here since they're the same calls.
+ *
  *  - gpt-4o ($2.50 in / $1.25 cached in / $10 out), gpt-4o-mini ($0.15 / $0.075 / $0.60) and
  *    text-embedding-3-small ($0.02 in, no output): read from OpenAI's own model pages,
  *    developers.openai.com/api/docs/models/<model>, on 2026-10-11. The ledger's "ILoveLawyer Model
@@ -43,6 +51,10 @@ export const LLM_PRICES: Record<string, ModelPrice> = {
   "gpt-4o-mini": { input: 0.15, cachedInput: 0.075, output: 0.6 },
   "text-embedding-3-small": { input: 0.02, output: 0 },
   "jev*": { input: 0.042, output: 0 },
+  "deepseek-flash": { input: 0.3, cachedInput: 0.006, output: 1.2 },
+  "deepseek-chat": { input: 0.3, cachedInput: 0.006, output: 1.2 },
+  "deepseek-reasoner": { input: 1.32, cachedInput: 0.044, output: 3.96 },
+  "deepseek-pro": { input: 1.32, cachedInput: 0.044, output: 3.96 },
 };
 
 /** The rate an account's unpriced Chat Wonder rows are charged at against its free credit (LlmUsageSvc.chatWonderSpendUsd):
