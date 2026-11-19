@@ -13,6 +13,11 @@ const filterKeys = {
   organizationId: Joi.string().trim().max(64).optional(),
   userId: Joi.string().trim().max(64).optional(),
   caseId: Joi.string().trim().max(64).optional(),
+  // Free strings, not a fixed enum (see LlmUsage.routingMode's schema comment): chat-wonder-v2-api
+  // may send a value this hasn't been told about yet, and the filter should still just match
+  // nothing rather than reject the whole request.
+  routingMode: Joi.string().trim().max(32).optional(),
+  decisionSource: Joi.string().trim().max(32).optional(),
 };
 
 export const llmUsageSummarySchema = Joi.object(filterKeys);

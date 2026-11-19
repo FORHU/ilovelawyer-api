@@ -18,6 +18,11 @@ export interface LlmUsageFilter {
   organizationId?: string;
   userId?: string;
   caseId?: string;
+  /** chat-wonder-v2-api#150 (CW-9/CW-10): routing_overrides.py's mode / model_router.py's
+   * decision for the row's dominant model. A row from before this shipped, or a provider other
+   * than chat-wonder, has neither. */
+  routingMode?: string;
+  decisionSource?: string;
 }
 
 function toWhere(filter: LlmUsageFilter): Prisma.LlmUsageWhereInput {
@@ -29,6 +34,8 @@ function toWhere(filter: LlmUsageFilter): Prisma.LlmUsageWhereInput {
   if (filter.organizationId) where.organizationId = filter.organizationId === LLM_USAGE_NONE ? null : filter.organizationId;
   if (filter.userId) where.userId = filter.userId === LLM_USAGE_NONE ? null : filter.userId;
   if (filter.caseId) where.caseId = filter.caseId;
+  if (filter.routingMode) where.routingMode = filter.routingMode;
+  if (filter.decisionSource) where.decisionSource = filter.decisionSource;
   if (filter.from || filter.to) where.createdAt = { ...(filter.from && { gte: filter.from }), ...(filter.to && { lt: filter.to }) };
   return where;
 }
@@ -47,6 +54,8 @@ function toSqlConditions(filter: LlmUsageFilter): Prisma.Sql[] {
   }
   if (filter.userId) conditions.push(filter.userId === LLM_USAGE_NONE ? Prisma.sql`"userId" IS NULL` : Prisma.sql`"userId" = ${filter.userId}`);
   if (filter.caseId) conditions.push(Prisma.sql`"caseId" = ${filter.caseId}`);
+  if (filter.routingMode) conditions.push(Prisma.sql`"routingMode" = ${filter.routingMode}`);
+  if (filter.decisionSource) conditions.push(Prisma.sql`"decisionSource" = ${filter.decisionSource}`);
   return conditions;
 }
 
