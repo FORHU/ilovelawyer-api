@@ -1,7 +1,17 @@
+import { LlmProvider } from "@prisma/client";
 import { TraceRun } from "../services/trace-collector.service";
 import LlmUsageSvc from "../services/llm-usage.service";
 import { estimateTokensFromChars } from "./token-estimate";
 import logger from "./logger";
+
+/** Which vendor actually served a model name, for `LlmUsage.provider`. Chat Wonder's own
+ * dispatch (model_registry.py's is_deepseek_model) is the source of truth this mirrors --
+ * everything it doesn't recognize as deepseek-* is still routed through OpenAI's SDK, so OPENAI
+ * stays the default rather than null/unknown. */
+export function providerForModel(model: string | null | undefined): LlmProvider {
+  if (model && model.trim().toLowerCase().startsWith("deepseek-")) return LlmProvider.DEEPSEEK;
+  return LlmProvider.OPENAI;
+}
 
 /** Who a Chat Wonder call is for, passed by the caller (epic #399, #402). Everything is optional
  * except `feature`; an id left out falls back to the call's `trace` run, then to the request
@@ -12,6 +22,22 @@ export interface ChatWonderUsageOptions {
   organizationId?: string | null;
   caseId?: string | null;
   consultationId?: string | null;
+}
+
+/** One model's slice of a turn (chat-wonder-v2-api llm_usage.py's `by_model` row) -- a turn can
+ * span several models when a CW-7 tool override mid-turn diverts one tool call to a different
+ * model than the turn's own default (e.g. a legal_uk turn on gpt-5.6-luna with one
+ * legislation_get_section call pinned to deepseek-reasoner). Each entry becomes its own LlmUsage
+ * row so that call's real vendor/tokens/decision_source aren't folded into the dominant model's
+ * row and lost. */
+export interface ReportedUsageByModel {
+  model: string | null;
+  inputTokens: number;
+  cachedInputTokens: number | null;
+  outputTokens: number;
+  calls: number;
+  routingMode: string | null;
+  decisionSource: string | null;
 }
 
 /** What Chat Wonder says one turn used (chat-wonder-v2-api#104): the `usage` key of a REST reply,
@@ -32,6 +58,10 @@ export interface ReportedUsage {
   /** What model_router.py decided for the dominant model this turn ("default" |
    * "race_corrected" | "tool_override" | "manual"), or null when not reported. */
   decisionSource: string | null;
+  /** Every model actually used this turn, dominant one included. Empty when `by_model` wasn't
+   * reported (an older Chat Wonder) -- recordChatWonderUsage then falls back to one row built
+   * from the fields above, same as before this existed. */
+  byModel: ReportedUsageByModel[];
 }
 
 /** Filled in by streamChatWonderMessageOnce as the call runs, so the one row recorded when it ends
@@ -53,6 +83,24 @@ const str = (value: unknown): string | null => (typeof value === "string" && val
 /** Reads Chat Wonder's usage block. Returns undefined — so the caller falls back to its estimate —
  * for anything that is not a usable block: missing, not an object, or without real input and output
  * token counts. Never throws. */
+function parseByModelRow(raw: unknown): ReportedUsageByModel | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const row = raw as Record<string, unknown>;
+  const inputTokens = count(row.prompt_tokens);
+  const outputTokens = count(row.completion_tokens);
+  if (inputTokens === null || outputTokens === null) return undefined;
+  const cached = count(row.cached_input_tokens);
+  return {
+    model: str(row.model),
+    inputTokens,
+    cachedInputTokens: cached !== null && cached <= inputTokens ? cached : null,
+    outputTokens,
+    calls: count(row.calls) ?? 1,
+    routingMode: str(row.routing_mode),
+    decisionSource: str(row.decision_source),
+  };
+}
+
 export function parseReportedUsage(raw: unknown): ReportedUsage | undefined {
   try {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
@@ -61,6 +109,9 @@ export function parseReportedUsage(raw: unknown): ReportedUsage | undefined {
     const outputTokens = count(block.completion_tokens);
     if (inputTokens === null || outputTokens === null) return undefined;
     const cached = count(block.cached_input_tokens);
+    const byModel = Array.isArray(block.by_model)
+      ? block.by_model.map(parseByModelRow).filter((r): r is ReportedUsageByModel => !!r)
+      : [];
     return {
       model: str(block.model),
       inputTokens,
@@ -70,6 +121,7 @@ export function parseReportedUsage(raw: unknown): ReportedUsage | undefined {
       passCount: count(block.pass_count),
       routingMode: str(block.routing_mode),
       decisionSource: str(block.decision_source),
+      byModel,
     };
   } catch {
     return undefined;
@@ -113,23 +165,50 @@ export function recordChatWonderUsage(call: FinishedCall): void {
   // a report means an older Chat Wonder is running or a path stopped reporting. The row is still an
   // estimate, but it must be visible: it shows up as "Not reported" on the admin page, and here.
   if (!reported && call.success) logger.warn("Chat Wonder call finished without a usage report; recording an estimate", { feature });
-  LlmUsageSvc.record({
-    provider: "OPENAI",
+
+  const shared = {
     via: "chat-wonder",
-    model: reported?.model ?? null,
     feature,
-    source: reported ? "REPORTED" : "ESTIMATED",
-    inputTokens: reported ? reported.inputTokens : estimate.inputTokens,
-    outputTokens: reported ? reported.outputTokens : estimate.outputTokens,
-    cachedInputTokens: reported?.cachedInputTokens ?? null,
-    passCount: reported?.passCount ?? passCount,
-    routingMode: reported?.routingMode ?? null,
-    decisionSource: reported?.decisionSource ?? null,
+    source: (reported ? "REPORTED" : "ESTIMATED") as "REPORTED" | "ESTIMATED",
     userId: call.usage?.userId !== undefined ? call.usage.userId : (call.trace?.userId ?? undefined),
     organizationId: call.usage?.organizationId,
     caseId: call.usage?.caseId ?? call.trace?.caseId ?? null,
     consultationId: call.usage?.consultationId ?? null,
     durationMs: Date.now() - call.startedAt,
     success: call.success,
+  };
+
+  // A turn can span more than one model (CW-7: a tool override mid-turn diverts one tool call to
+  // a different model than the turn's own default) -- one row per model so each one's real
+  // vendor/tokens/decision_source is kept, not folded into the dominant model's row and lost.
+  if (reported && reported.byModel.length > 0) {
+    for (const row of reported.byModel) {
+      LlmUsageSvc.record({
+        ...shared,
+        provider: providerForModel(row.model),
+        model: row.model,
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+        cachedInputTokens: row.cachedInputTokens,
+        // passCount is a whole-turn count (research-loop iterations), not per-model -- it stays
+        // on the dominant row (reported.model) only, so it isn't duplicated across every model's row.
+        passCount: row.model === reported.model ? (reported.passCount ?? passCount) : null,
+        routingMode: row.routingMode,
+        decisionSource: row.decisionSource,
+      });
+    }
+    return;
+  }
+
+  LlmUsageSvc.record({
+    ...shared,
+    provider: providerForModel(reported?.model),
+    model: reported?.model ?? null,
+    inputTokens: reported ? reported.inputTokens : estimate.inputTokens,
+    outputTokens: reported ? reported.outputTokens : estimate.outputTokens,
+    cachedInputTokens: reported?.cachedInputTokens ?? null,
+    passCount: reported?.passCount ?? passCount,
+    routingMode: reported?.routingMode ?? null,
+    decisionSource: reported?.decisionSource ?? null,
   });
 }

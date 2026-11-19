@@ -10,7 +10,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import * as config from "../src/config";
 import LlmUsageRepo from "../src/repositories/llm-usage.repository";
 import { callChatWonderRest, categorizeDocument, generateTitleViaWs, streamChatWonderMessage } from "../src/utils/chatWonder";
-import { parseReportedUsage, recordChatWonderUsage } from "../src/utils/chat-wonder-usage";
+import { parseReportedUsage, providerForModel, recordChatWonderUsage } from "../src/utils/chat-wonder-usage";
 import { newTraceRun } from "../src/services/trace-collector.service";
 import { runWithRequestContext } from "../src/lib/request-context";
 
@@ -329,15 +329,30 @@ describe("Chat Wonder LlmUsage rows", () => {
       it("reads the contract block", () => {
         expect(parseReportedUsage(block)).to.deep.equal({
           model: "gpt-x", inputTokens: 5000, cachedInputTokens: 3000, outputTokens: 400, passCount: 2,
-          routingMode: "AUTO", decisionSource: "race_corrected",
+          routingMode: "AUTO", decisionSource: "race_corrected", byModel: [],
         });
       });
 
       it("treats missing optional fields as null", () => {
         expect(parseReportedUsage({ prompt_tokens: 10, completion_tokens: 2 })).to.deep.equal({
           model: null, inputTokens: 10, cachedInputTokens: null, outputTokens: 2, passCount: null,
-          routingMode: null, decisionSource: null,
+          routingMode: null, decisionSource: null, byModel: [],
         });
+      });
+
+      it("reads by_model rows, dropping any that aren't usable", () => {
+        const withByModel = {
+          prompt_tokens: 5000, completion_tokens: 400, model: "gpt-5.6-luna",
+          by_model: [
+            { model: "gpt-5.6-luna", prompt_tokens: 3000, completion_tokens: 300, calls: 2, routing_mode: "MANUAL", decision_source: "manual" },
+            { model: "deepseek-reasoner", prompt_tokens: 2000, completion_tokens: 100, calls: 1, routing_mode: "MANUAL", decision_source: "tool_override" },
+            { garbage: true },
+          ],
+        };
+        expect(parseReportedUsage(withByModel)?.byModel).to.deep.equal([
+          { model: "gpt-5.6-luna", inputTokens: 3000, cachedInputTokens: null, outputTokens: 300, calls: 2, routingMode: "MANUAL", decisionSource: "manual" },
+          { model: "deepseek-reasoner", inputTokens: 2000, cachedInputTokens: null, outputTokens: 100, calls: 1, routingMode: "MANUAL", decisionSource: "tool_override" },
+        ]);
       });
 
       it("reads routing_mode/decision_source and treats a non-string as absent", () => {
@@ -370,6 +385,56 @@ describe("Chat Wonder LlmUsage rows", () => {
       const run = newTraceRun("witnessScoring", "case-9", "user-9");
       recordChatWonderUsage({ usage: { feature: "witnessRefresh" }, trace: run, startedAt: Date.now(), inputChars: 4, outputChars: 4, traceStarts: null, success: true });
       expect(rows[0]).to.include({ feature: "witnessRefresh", passCount: null, inputTokens: 1 });
+    });
+
+    it("provider follows the reported model, not a hardcoded OPENAI (deepseek-* -> DEEPSEEK)", () => {
+      recordChatWonderUsage({
+        usage: { feature: "chat" },
+        startedAt: Date.now(),
+        inputChars: 0,
+        outputChars: 0,
+        traceStarts: null,
+        success: true,
+        reported: { model: "deepseek-reasoner", inputTokens: 10, cachedInputTokens: null, outputTokens: 2, passCount: null, routingMode: "MANUAL", decisionSource: "manual", byModel: [] },
+      });
+      expect(rows[0]).to.include({ provider: "DEEPSEEK", model: "deepseek-reasoner" });
+    });
+
+    it("writes one row per by_model entry, each with its own provider, instead of folding them into the dominant model's row", () => {
+      recordChatWonderUsage({
+        usage: { feature: "chat", caseId: "case-9" },
+        startedAt: Date.now(),
+        inputChars: 0,
+        outputChars: 0,
+        traceStarts: null,
+        success: true,
+        reported: {
+          model: "gpt-5.6-luna", inputTokens: 5000, cachedInputTokens: null, outputTokens: 400, passCount: 3, routingMode: "MANUAL", decisionSource: "manual",
+          byModel: [
+            { model: "gpt-5.6-luna", inputTokens: 3000, cachedInputTokens: null, outputTokens: 300, calls: 2, routingMode: "MANUAL", decisionSource: "manual" },
+            { model: "deepseek-reasoner", inputTokens: 2000, cachedInputTokens: null, outputTokens: 100, calls: 1, routingMode: "MANUAL", decisionSource: "tool_override" },
+          ],
+        },
+      });
+      expect(rows).to.have.length(2);
+      expect(rows[0]).to.include({ provider: "OPENAI", model: "gpt-5.6-luna", inputTokens: 3000, outputTokens: 300, decisionSource: "manual", passCount: 3, caseId: "case-9" });
+      expect(rows[1]).to.include({ provider: "DEEPSEEK", model: "deepseek-reasoner", inputTokens: 2000, outputTokens: 100, decisionSource: "tool_override", caseId: "case-9" });
+      // passCount is a whole-turn count; only the dominant model's row carries it.
+      expect(rows[1].passCount).to.equal(null);
+    });
+  });
+
+  describe("providerForModel", () => {
+    it("maps any deepseek-* model to DEEPSEEK, case-insensitively", () => {
+      expect(providerForModel("deepseek-reasoner")).to.equal("DEEPSEEK");
+      expect(providerForModel("deepseek-chat")).to.equal("DEEPSEEK");
+      expect(providerForModel("DeepSeek-Chat")).to.equal("DEEPSEEK");
+    });
+
+    it("defaults everything else, including null, to OPENAI", () => {
+      expect(providerForModel("gpt-5.6-luna")).to.equal("OPENAI");
+      expect(providerForModel(null)).to.equal("OPENAI");
+      expect(providerForModel(undefined)).to.equal("OPENAI");
     });
   });
 });
