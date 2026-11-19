@@ -19,3 +19,16 @@ awslocal s3api put-bucket-policy --bucket "$BUCKET" --policy "{
     \"Resource\": \"arn:aws:s3:::$BUCKET/*\"
   }]
 }"
+# Document upload (create-case etc.) PUTs straight from the browser to a presigned URL on this
+# bucket, so the preflight needs a CORS rule same as the public-read policy above -- this is a
+# local emulator with a world-readable bucket already, so "*" costs nothing extra and never needs
+# updating as new local dev origins (ph./uk./*.localhost, *.ilovelawyer.local, etc.) are added.
+awslocal s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration "{
+  \"CORSRules\": [{
+    \"AllowedOrigins\": [\"*\"],
+    \"AllowedMethods\": [\"GET\", \"PUT\", \"HEAD\", \"POST\"],
+    \"AllowedHeaders\": [\"*\"],
+    \"ExposeHeaders\": [\"ETag\"],
+    \"MaxAgeSeconds\": 3000
+  }]
+}"
