@@ -706,6 +706,7 @@ describe("Client app cases", () => {
       "POST /cases/:caseId/overview/generate",
       "GET /cases/:caseId/intake",
       "POST /cases/:caseId/intake/refresh",
+      "GET /cases/:caseId/export",
       "POST /cases/:caseId/top-ups",
       "GET /cases/:caseId/lawyer-readiness",
       "POST /gmail/connect",

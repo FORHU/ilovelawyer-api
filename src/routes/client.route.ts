@@ -38,6 +38,14 @@ const gmailLimiter = rateLimit({
 
 const emailImportConsent = requireConsent("EMAIL_IMPORT");
 
+// The Case summary PDF is rendered on every download (nothing is stored), so it's bounded per account.
+const caseSummaryLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "You've downloaded a lot of case summaries just now. Try again in a few minutes." },
+});
+
 const gmailSuggestLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -117,6 +125,9 @@ router.post("/cases/:caseId/overview/generate", requireClientAi, requireConsent(
 // secretary-shaped replacement. Both tabs run side by side until the client app has moved over.
 router.get("/cases/:caseId/intake", asyncHandler(ClientCaseCtrl.intake));
 router.post("/cases/:caseId/intake/refresh", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.refreshIntake));
+// "Download case summary" (ilovelawyer-client#137): the stored intake as a PDF. A plain read — no AI,
+// no credits, so no AI consent — but each one renders a PDF, so a client gets a bounded number.
+router.get("/cases/:caseId/export", caseSummaryLimiter, asyncHandler(ClientCaseCtrl.exportSummary));
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 // A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
 router.get("/cases/:caseId/lawyer-readiness", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
