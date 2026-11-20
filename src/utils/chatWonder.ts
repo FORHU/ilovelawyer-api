@@ -772,6 +772,7 @@ function streamChatWonderMessageOnce(
             case_document_manifest?: { id: string; name: string; category: string | null }[];
             case_document_texts?: { id: string; name: string; text: string }[];
             reply_language?: string;
+            jurisdiction?: TenantCode;
             mind_map_requested?: boolean;
             case_mind_map_context?: string;
             skip_legal_verify?: boolean;
@@ -788,6 +789,13 @@ function streamChatWonderMessageOnce(
           }
           if (replyLanguage) {
             payload.reply_language = replyLanguage;
+          }
+          // chat-wonder-v2-api#145 (CW-6): the only thing that tells chat-wonder which tenant's
+          // allowed-language set to clamp the reply to — mirrors callChatWonderRest's existing
+          // `payload.jurisdiction = tenantCode` below, which withLegalTag's own comment already
+          // calls "chat-wonder-v2-api's own contract" for this wire field name.
+          if (tenantCode) {
+            payload.jurisdiction = tenantCode;
           }
           if (opts?.mindMapRequested) {
             payload.mind_map_requested = true;
