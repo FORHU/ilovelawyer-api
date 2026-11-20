@@ -126,3 +126,10 @@ export const addClientDocumentSchema = Joi.object({
   contentType: Joi.string().optional(),
   fileSize: fileSize.optional(),
 });
+
+/** GET /api/client/cases/:caseId/export (the client's Case summary): PDF only for now; `lang` is
+ * the client app's language, for the document's own labels. */
+export const exportClientCaseSummarySchema = Joi.object({
+  format: Joi.string().valid("pdf").default("pdf"),
+  lang: Joi.string().valid("en", "ko").default("en"),
+});

@@ -7,6 +7,7 @@ import GmailCaseImportSvc from "../services/gmail-case-import.service";
 import GmailCaseSuggestSvc from "../services/gmail-case-suggest.service";
 import { clientWorkspaceOf } from "../middleware/require-client-account.middleware";
 import HttpError from "../utils/http-error";
+import { contentDisposition } from "../utils/content-disposition";
 import {
   connectGmailSchema,
   gmailAttachmentParamsSchema,
@@ -19,12 +20,6 @@ function validate<T>(schema: ObjectSchema<T>, input: unknown): T {
   const { error, value } = schema.validate(input, { stripUnknown: true });
   if (error) throw new HttpError(error.message, 400);
   return value;
-}
-
-/** RFC 6266 filename for a download: an ASCII fallback plus the exact UTF-8 name. */
-function contentDisposition(filename: string): string {
-  const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
 /** The client app's Gmail connection and read-only inbox access (EPIC #982, #983). Connect and

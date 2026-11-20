@@ -129,6 +129,8 @@ export const SECURITY_AUDIT_ACTIONS = [
 
   // Exports and downloads
   "export.case_brief",
+  // The client app's Case summary PDF of one of the client's own cases (ilovelawyer-client#137).
+  "export.case_summary",
   "export.generated_document",
   "export.audit_log",
   "export.my_data",
@@ -293,6 +295,7 @@ export const SECURITY_AUDIT_ACTION_LABELS: Record<SecurityAuditAction, string> =
   "client_request.closed": "Engagement closed, lawyer's access removed",
   "system.quotation_payment.refunded": "Client's payment for a quote refunded automatically",
   "export.case_brief": "Case brief exported",
+  "export.case_summary": "Case summary downloaded by the client",
   "export.generated_document": "Document generated",
   "export.audit_log": "Audit log exported",
   "export.my_data": "Personal data exported by the account owner",
