@@ -23,6 +23,7 @@ import PlanTrialSweepQueue from "./queues/plan-trial-sweep.queue";
 import { DOCUMENT_EXTRACTION_IN_API, FREE_CREDIT_USD, PORT } from "./config";
 import logger from "./utils/logger";
 import { fieldEncryptionStatus } from "./utils/field-crypto";
+import { confidenceViewEnabled } from "./utils/message-confidence";
 import { verifyDocumentBucketRegion } from "./utils/s3";
 import LlmUsageSvc from "./services/llm-usage.service";
 
@@ -67,4 +68,10 @@ app.listen(PORT, "0.0.0.0", () => {
   const encryption = fieldEncryptionStatus();
   const state = encryption.enabled && encryption.keyConfigured ? "ON" : encryption.enabled ? "ENABLED BUT NO VALID KEY (privileged notes and chat messages cannot be saved)" : "OFF";
   logger.info(`Field encryption (privileged notes, document text, chat messages): ${state}`, encryption);
+  // Logged once, at boot, specifically because this flag is read from process.env with no
+  // validation anywhere else: a wrong or missing deploy-time variable name resolves to false
+  // with zero errors and zero other log lines. This is the only place the resolved value is
+  // ever visible, so an env mismatch shows up immediately in the first lines of every deploy's
+  // logs instead of silently disabling the feature for an unbounded amount of time.
+  logger.info(`Confidence view: ${confidenceViewEnabled() ? "ON" : "OFF"}`);
 });
