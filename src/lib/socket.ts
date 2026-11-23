@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { ACCESS_TOKEN_SECRET, CLIENT_URL } from "../config";
 import CaseAccess from "../utils/case-access";
 import logger from "../utils/logger";
+import { registerDictationHandlers } from "../sockets/client-dictation.socket";
 
 let io: IOServer | null = null;
 
@@ -113,6 +114,9 @@ export function initSocket(server: HTTPServer): IOServer {
     socket.on("disconnect", (reason) => {
       logger.info("Socket.IO: disconnected", { socketId: socket.id, userId, reason });
     });
+
+    // Live voice input for the client app (dictation:*), checked per start.
+    registerDictationHandlers(socket, userId);
 
     // Case rooms are opt-in and access-checked per join (unlike the user room above, which every
     // connection gets automatically) — a socket only sees ai-job:* events for cases it explicitly
