@@ -12,8 +12,8 @@ import { CLIENT_INTAKE_AI_BUDGET_USD, CLIENT_INTAKE_DAILY_CAP } from "../config"
 import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 import { buildFactExcerptPack, wrapExtractedText } from "../utils/case-document-excerpts";
 import { excerptsWithHandles } from "../utils/case-document-handles";
-import { buildIntakePrompt, parseIntakeReply, caseDetailsPeople, type IntakeMessageInput } from "../utils/client-intake-extract";
-import type { CaseIntake, IntakeCompleteness, IntakePerson } from "../types/client-intake";
+import { buildIntakePrompt, parseIntakeReply, caseDetailsPeople, deriveFormFields, type IntakeMessageInput } from "../utils/client-intake-extract";
+import type { CaseIntake, IntakeCompleteness, IntakeFormFields, IntakePerson } from "../types/client-intake";
 import logger from "../utils/logger";
 import CaseAreaSvc from "./case-area.service";
 
@@ -121,6 +121,10 @@ export default class ClientIntakeSvc {
     const fingerprint = await fingerprintOf(source, latestMessageId);
     const ready = source.documents.filter((d) => d.ragStatus === "READY").map((d) => ({ id: d.id, name: d.name }));
 
+    // Captured once and reused for #157's formFields.typeOfAction below, so a case with several
+    // areas isn't labelled twice for the one run.
+    const caseAreaNames = (await CaseAreaSvc.refsOf(source.caseAreas)).map((a) => a.name);
+
     let parsed: ReturnType<typeof parseIntakeReply> = null;
     try {
       const pack = ready.length ? await buildFactExcerptPack(ready) : { text: "", chunkIds: [], factCount: 0 };
@@ -130,7 +134,7 @@ export default class ClientIntakeSvc {
       const prompt = buildIntakePrompt({
         caseDetails: {
           title: source.caseName,
-          caseAreas: (await CaseAreaSvc.refsOf(source.caseAreas)).map((a) => a.name),
+          caseAreas: caseAreaNames,
           ukJurisdiction: source.ukJurisdiction,
           outsideUk: source.outsideUk,
           where: source.jurisdiction,
@@ -185,6 +189,13 @@ export default class ClientIntakeSvc {
       missing: parsed.missing,
       conflicts: parsed.conflicts,
       completeness: completenessOf(source.lawyerReadiness),
+      formFields: deriveFormFields({
+        people,
+        timeline: parsed.timeline,
+        goals: parsed.goals,
+        typeOfAction: caseAreaNames,
+        venue: source.ukJurisdiction ?? source.jurisdiction ?? null,
+      }),
     };
 
     await ClientIntakeRepo.saveResult(caseId, { data: intake, fingerprint });
@@ -210,6 +221,9 @@ export default class ClientIntakeSvc {
     const status: CaseIntake["status"] = liveJob ? "RUNNING" : data ? (stale ? "STALE" : "READY") : lastRunFailed ? "FAILED" : "EMPTY";
 
     if (!data) {
+      // No AI run yet, but parties/typeOfAction/venue are the case-creation form's own data, so
+      // they're real here too — only witnesses/timeline/clientGoals (AI-extracted) are empty.
+      const caseAreaNames = (await CaseAreaSvc.refsOf(source.caseAreas)).map((a) => a.name);
       return {
         generatedAt: null,
         status,
@@ -225,11 +239,22 @@ export default class ClientIntakeSvc {
         missing: [],
         conflicts: [],
         completeness: completenessOf(source.lawyerReadiness),
+        formFields: deriveFormFields({
+          people: caseDetailsPeople(source.parties).map((p) => ({ id: "", name: p.name, role: p.role, text: p.role, sources: [] })),
+          timeline: [],
+          goals: [],
+          typeOfAction: caseAreaNames,
+          venue: source.ukJurisdiction ?? source.jurisdiction ?? null,
+        }),
       };
     }
 
     return {
       ...data,
+      // Backward-compatible: an intake persisted before formFields existed has none in its stored
+      // JSON — this falls back to an all-missing shell rather than undefined, and self-heals on
+      // the next regeneration (any chat reply, document going READY, or case-details edit).
+      formFields: data.formFields ?? deriveFormFields({ people: data.people, timeline: data.timeline, goals: data.goals, typeOfAction: [], venue: null }),
       status,
       updates: { allowed: !liveJob, leftToday: Math.max(0, CLIENT_INTAKE_DAILY_CAP - ClientIntakeRepo.usedToday(stored)) },
       completeness: completenessOf(source.lawyerReadiness),

@@ -10,7 +10,7 @@
  */
 import crypto from "crypto";
 import { docsForPrompt, documentHandles, excerptsWithHandles, resolveDocumentRef, type CaseDoc } from "./case-document-handles";
-import type { CaseIntake, IntakeSource } from "../types/client-intake";
+import type { CaseIntake, IntakeEvent, IntakeFormFields, IntakeItem, IntakePerson, IntakeSource } from "../types/client-intake";
 
 export interface IntakeMessageInput {
   id: string;
@@ -45,6 +45,31 @@ const MAX_MESSAGE_CHARS = 1500;
  * already client-confirmed, so there's nothing to extract and nothing to get wrong. */
 export function caseDetailsPeople(parties: { name: string; designation: string }[]): { name: string; role: string }[] {
   return parties.map((p) => ({ name: p.name, role: p.designation }));
+}
+
+const WITNESS_ROLE = /witness/i;
+
+/** #157: the ticket's named field groups, derived from data ClientIntakeSvc already has — not a
+ * second AI call. parties/typeOfAction/venue are the deterministic case-creation form data (never
+ * guessed); witnesses/timeline/clientGoals are the already-extracted people/timeline/goals, split
+ * out and relabeled for the question-loop UI. */
+export function deriveFormFields(input: {
+  people: IntakePerson[];
+  timeline: IntakeEvent[];
+  goals: IntakeItem[];
+  typeOfAction: string[];
+  venue: string | null;
+}): IntakeFormFields {
+  const parties = input.people.filter((p) => !WITNESS_ROLE.test(p.role));
+  const witnesses = input.people.filter((p) => WITNESS_ROLE.test(p.role));
+  const missing: IntakeFormFields["missing"] = [];
+  if (!parties.length) missing.push("parties");
+  if (!witnesses.length) missing.push("witnesses");
+  if (!input.typeOfAction.length) missing.push("typeOfAction");
+  if (!input.venue) missing.push("venue");
+  if (!input.timeline.length) missing.push("timeline");
+  if (!input.goals.length) missing.push("clientGoals");
+  return { parties, witnesses, typeOfAction: input.typeOfAction, venue: input.venue, timeline: input.timeline, clientGoals: input.goals, missing };
 }
 
 /** What the client already answered on the case-creation form — shared between

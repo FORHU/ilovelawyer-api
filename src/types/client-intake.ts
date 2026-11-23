@@ -69,6 +69,27 @@ export interface IntakeCompleteness {
   ready: boolean;
 }
 
+/** #157's named field groups (parties, type of action, venue, timeline, witnesses, client goals —
+ * per the ticket's screenshot; the literal names are still flagged there as unconfirmed with the
+ * team). Not a second AI extraction: parties/typeOfAction/venue are the deterministic case-creation
+ * form data (never guessed), and witnesses/timeline/clientGoals are CaseIntake's own already-
+ * extracted people/timeline/goals, split out and relabeled for the question-loop UI's fill-progress
+ * display. See deriveFormFields (client-intake-extract.ts). */
+export interface IntakeFormFields {
+  parties: IntakePerson[];
+  witnesses: IntakePerson[];
+  /** The case's own area names (e.g. "Employment") — set at case creation, so this is empty only
+   * when the client genuinely hasn't chosen one yet. */
+  typeOfAction: string[];
+  /** Jurisdiction or town, set at case creation; null when not chosen yet. */
+  venue: string | null;
+  timeline: IntakeEvent[];
+  clientGoals: IntakeItem[];
+  /** Which of the six groups above is still empty — the fill-progress list `ilovelawyer-client`'s
+   * question loop reads to skip an already-answered question or show what's left. */
+  missing: ("parties" | "witnesses" | "typeOfAction" | "venue" | "timeline" | "clientGoals")[];
+}
+
 export interface CaseIntake {
   generatedAt: string | null;
   status: IntakeStatus;
@@ -87,6 +108,7 @@ export interface CaseIntake {
   /** From Lawyer Readiness (lawyer-readiness-jev.ts) when USE_JEV_LAWYER_READINESS is on; null
    * when the check is off or hasn't run yet. */
   completeness: IntakeCompleteness | null;
+  formFields: IntakeFormFields;
 }
 
 /** The redacted shape of the intake a lawyer sees before claiming a request, folded into

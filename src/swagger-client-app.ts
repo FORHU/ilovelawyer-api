@@ -37,10 +37,81 @@ const clientDocument = {
   properties: {
     id: { type: "string" },
     name: { type: "string" },
-    status: { type: "string", enum: ["PENDING", "READY", "FAILED"] },
+    status: { type: "string", enum: ["PENDING", "READY", "FAILED"], description: "The raw extraction state; kept for older apps" },
+    syncStatus: {
+      type: "string",
+      enum: ["processing", "done", "failed"],
+      description: "#159: `status` relabeled for the evidence UI. No `uploading` here — that's the client's own pre-confirm state, before a Document row (and so this field) exists.",
+    },
     size: { type: "integer", nullable: true, description: "Bytes; null when the upload didn't say" },
     uploadedAt: { type: "string", format: "date-time" },
     createdAt: { type: "string", format: "date-time", description: "Same as uploadedAt; kept for older apps" },
+  },
+};
+
+const intakeSource = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["CASE_DETAILS", "CLIENT", "DOCUMENT"] },
+    messageId: { type: "string", nullable: true },
+    documentId: { type: "string", nullable: true },
+    documentName: { type: "string", nullable: true },
+    page: { type: "integer", nullable: true },
+  },
+};
+const intakeItem = { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, sources: { type: "array", items: intakeSource } } };
+const intakePerson = { type: "object", properties: { ...intakeItem.properties, name: { type: "string" }, role: { type: "string" } } };
+const intakeEvent = {
+  type: "object",
+  properties: { ...intakeItem.properties, date: { type: "string", nullable: true }, datePrecision: { type: "string", enum: ["DAY", "MONTH", "YEAR", "UNKNOWN"] } },
+};
+const intakeFormFields = {
+  type: "object",
+  description:
+    "#157: the ticket's named field groups for the question-loop UI's fill progress. Not a second AI call — parties/typeOfAction/venue are the deterministic case-creation form data, witnesses/timeline/clientGoals are the already-extracted people/timeline/goals split out. The literal field names are still unconfirmed with the team per the ticket.",
+  properties: {
+    parties: { type: "array", items: intakePerson },
+    witnesses: { type: "array", items: intakePerson },
+    typeOfAction: { type: "array", items: { type: "string" }, description: "The case's own area names, e.g. \"Employment\" — set at case creation" },
+    venue: { type: "string", nullable: true },
+    timeline: { type: "array", items: intakeEvent },
+    clientGoals: { type: "array", items: intakeItem },
+    missing: {
+      type: "array",
+      items: { type: "string", enum: ["parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals"] },
+      description: "Which of the six groups above is still empty",
+    },
+  },
+};
+const caseIntake = {
+  type: "object",
+  properties: {
+    generatedAt: { type: "string", format: "date-time", nullable: true },
+    status: { type: "string", enum: ["EMPTY", "RUNNING", "READY", "FAILED", "STALE"] },
+    updates: { type: "object", properties: { allowed: { type: "boolean" }, leftToday: { type: "integer" } } },
+    summary: { type: "string", nullable: true, description: "AI-written; always shown labelled as an AI summary, never established fact" },
+    people: { type: "array", items: intakePerson },
+    timeline: { type: "array", items: intakeEvent },
+    facts: { type: "array", items: intakeItem },
+    goals: { type: "array", items: intakeItem },
+    concerns: { type: "array", items: intakeItem },
+    questionsForLawyer: { type: "array", items: intakeItem },
+    deadlines: { type: "array", items: { type: "object", properties: { ...intakeItem.properties, date: { type: "string", nullable: true } } } },
+    missing: {
+      type: "array",
+      items: { type: "object", properties: { id: { type: "string" }, question: { type: "string" }, why: { type: "string" } } },
+      description: "Open gaps the AI found in the conversation/documents — not sourced the way other items are",
+    },
+    conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, description: { type: "string" }, sources: { type: "array", items: intakeSource } } } },
+    completeness: {
+      type: "object",
+      nullable: true,
+      properties: {
+        ready: { type: "boolean" },
+        criteria: { type: "array", items: { type: "object", properties: { key: { type: "string" }, label: { type: "string" }, met: { type: "boolean" } } } },
+      },
+    },
+    formFields: intakeFormFields,
   },
 };
 
@@ -1102,6 +1173,29 @@ export const clientAppPaths: Paths = {
         404: err("No such payment"),
         409: err("REFUND_NOT_SUPPORTED (DUMMY or FREE), PAYMENT_NOT_REFUNDABLE (not SUCCEEDED) or ALREADY_REFUNDED"),
         502: err("PAYMENT_PROVIDER_ERROR: Stripe refused; the refund is recorded FAILED and nothing is held"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/intake": {
+    get: {
+      tags: [TAG],
+      summary: "The case's Intake tab: an AI extraction of the chat and READY documents, including #157's formFields view",
+      security,
+      parameters: [caseId],
+      responses: { 200: { description: "Intake", content: json(caseIntake) }, 404: err("Case not found") },
+    },
+  },
+  "/client/cases/{caseId}/intake/refresh": {
+    post: {
+      tags: [TAG],
+      summary: "Re-runs the Intake extraction now, instead of waiting for the next automatic trigger (a chat reply, a document going READY, a case-details edit)",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: { description: "Intake (RUNNING if a run was just queued)", content: json(caseIntake) },
+        402: err("INTAKE_BUDGET_REACHED: this case has reached its AI usage limit for the intake summary"),
+        404: err("Case not found"),
+        429: err("INTAKE_DAILY_LIMIT: today's update limit for this case's intake summary is used up"),
       },
     },
   },
