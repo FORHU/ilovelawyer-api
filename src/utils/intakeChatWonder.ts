@@ -41,13 +41,16 @@ export class IntakeGenerationCancelledError extends Error {
 
 const INTAKE_TAG = "[intake]";
 
-/** Which intake persona Chat Wonder picks, from the client's own site — never from the caller's
- * choice of tag: the tag above stays the literal "[intake]" for every site. A KR client's turn
- * carries jurisdiction "KR", which Chat Wonder routes to its Korean intake persona (intake_kr), the
- * same way "[legal ai]" plus "KR" reaches legal_kr. Every other site sends no jurisdiction, so the
- * UK's turns are exactly what they were. */
-export function intakeJurisdictionFor(tenantCode: TenantCode | undefined): "KR" | undefined {
-  return tenantCode === "KR" ? "KR" : undefined;
+/** The tenant forwarded on every intake turn, straight through. Two different things read it on
+ * the chat-wonder side: process_persona only special-cases a KR jurisdiction (routing to the
+ * Korean intake persona, intake_kr — the tag above stays the literal "[intake]" for every site,
+ * same as "[legal ai]" plus "KR" reaching legal_kr), but prepare_chat_messages' per-tenant
+ * reply-language clamp (chat-wonder-v2-api#145) reads it for every tenant, not just KR — a UK or
+ * PH client with no jurisdiction sent isn't clamped at all, so langid is free to guess a
+ * disallowed language. This now passes `tenantCode` through unchanged instead of narrowing it to
+ * KR-or-nothing. */
+export function intakeJurisdictionFor(tenantCode: TenantCode | undefined): TenantCode | undefined {
+  return tenantCode;
 }
 
 export async function getChatWonderSessionIdForIntake(): Promise<string> {
@@ -131,7 +134,7 @@ export function streamIntakeChatWonderMessage(
         document_context?: string;
         case_id?: string;
         user_id?: string;
-        jurisdiction?: "KR";
+        jurisdiction?: TenantCode;
       } = {
         type: "chat",
         user_input: `${INTAKE_TAG} ${userInput}`,
