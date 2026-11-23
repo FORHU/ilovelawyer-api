@@ -538,6 +538,9 @@ model IntakeMessage {
   documentIds         String[]                  @default([])
   findLawyerResultIds String[]                  @default([])
   markedReady         Boolean                   @default(false)
+  // #158: tappable reply candidates for the question THIS assistant turn asked, straight off the
+  // [INTAKE_SUGGESTIONS] frame. Set only on an assistant row; empty, never null, when CW sent none.
+  suggestions         String[]                  @default([])
   // Set on a voice-originated user message: the S3 key of the client's own recording, retained
   // (not deleted after transcription) the same way other case evidence is kept.
   audioKey            String?

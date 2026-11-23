@@ -150,7 +150,7 @@ export default class IntakeChatRepo {
   /** Saves the answer and marks its turn DONE in one transaction — only while the turn is still
    * PENDING. Null when the turn was already stopped or failed (and refunded): that answer is
    * dropped, so a late worker never delivers an answer the client got their credit back for. */
-  static async completeTurn(parentMessageId: string, caseId: string, content: string) {
+  static async completeTurn(parentMessageId: string, caseId: string, content: string, suggestions: string[] = []) {
     return prisma.$transaction(async (tx) => {
       const { count } = await tx.intakeMessage.updateMany({
         where: { id: parentMessageId, caseId, role: "user", replyStatus: "PENDING" },
@@ -158,7 +158,7 @@ export default class IntakeChatRepo {
       });
       if (count !== 1) return null;
       const stored = await tx.intakeMessage.create({
-        data: { caseId, role: "assistant", content: sealIntakeMessageContent(content), documentIds: [], parentMessageId },
+        data: { caseId, role: "assistant", content: sealIntakeMessageContent(content), documentIds: [], parentMessageId, suggestions },
       });
       return openIntakeMessage(stored) ?? stored;
     });
