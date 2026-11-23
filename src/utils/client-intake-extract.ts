@@ -47,6 +47,13 @@ export function caseDetailsPeople(parties: { name: string; designation: string }
   return parties.map((p) => ({ name: p.name, role: p.designation }));
 }
 
+/** Matches only because buildIntakePrompt's "people" instruction now requires the literal word
+ * "witness" in `role` for anyone who observed events without being a party to the claim — this
+ * regex and that prompt wording are one contract, not two independent guesses. Before that
+ * instruction existed, this matched whatever free-text role the model happened to write (e.g.
+ * "coworker", "bystander"), which silently misfiled real witnesses into `parties` instead of just
+ * missing them — the filter below is "not witness", so a false negative here isn't a gap, it's a
+ * wrong bucket. */
 const WITNESS_ROLE = /witness/i;
 
 /** #157: the ticket's named field groups, derived from data ClientIntakeSvc already has — not a
@@ -151,7 +158,7 @@ Conversation (cite by its handle, e.g. M1):
 ${chatLines || "(no conversation yet)"}
 
 From the conversation and the documents only — never invent or infer anything not stated — extract:
-- people: every actual name you see anywhere above — in the conversation or in a document excerpt — of a person, company or organisation, whoever they are: the client themselves if a document uses their name, the other side, a witness, an insurer, a solicitor on a letter, anyone. This list drives redaction before a lawyer sees any of this, so completeness matters more than relevance — include a name even if their role is unclear or they otherwise wouldn't be worth mentioning. Give each their name exactly as written, their role if known (or "unclear" if not), and the message or document handle(s) it came from.
+- people: every actual name you see anywhere above — in the conversation or in a document excerpt — of a person, company or organisation, whoever they are: the client themselves if a document uses their name, the other side, a witness, an insurer, a solicitor on a letter, anyone. This list drives redaction before a lawyer sees any of this, so completeness matters more than relevance — include a name even if their role is unclear or they otherwise wouldn't be worth mentioning. Give each their name exactly as written, their role if known (or "unclear" if not), and the message or document handle(s) it came from. If this person saw or can speak to what happened but is not themselves bringing or defending the claim, their role MUST contain the word "witness" (e.g. "witness", "witness — coworker who was present", "witness to the dismissal") — that exact word, not just the idea of it, is what tells the intake form to list them as a witness rather than a party, so never describe one only as "coworker", "bystander", or "passerby" without it.
 - timeline: dated events, each with a date (YYYY-MM-DD if a full date is given, or null if not), datePrecision ("DAY"/"MONTH"/"YEAR"/"UNKNOWN"), and its source handle(s). Never work out a date yourself — only use one that is actually stated or computable from a stated relative date ("last Tuesday") against today's date.
 - facts: other important factual statements, each with its source handle(s).
 - goals: what the client said they want to happen.

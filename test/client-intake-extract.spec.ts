@@ -225,6 +225,19 @@ describe("Client intake extraction", () => {
       expect(prompt).to.include("M1 (2026-03-04, client): I was dismissed on 3 March 2026.");
       expect(prompt).to.include("D1: Employment contract.pdf");
     });
+
+    it("requires the word \"witness\" in role for a non-party observer — deriveFormFields's role filter depends on this exact wording surviving here", () => {
+      const prompt = buildIntakePrompt({
+        caseDetails: { title: "Dismissal", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", where: "Leeds", side: "CLAIMANT", notes: null },
+        parties: [],
+        messages,
+        documents: docs,
+        documentExcerpts: "",
+        today: "2026-03-10",
+      });
+      expect(prompt).to.include('role MUST contain the word "witness"');
+      expect(prompt).to.include("never describe one only as");
+    });
   });
 
   describe("deriveFormFields (#157)", () => {
