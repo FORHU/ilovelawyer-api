@@ -2887,6 +2887,14 @@ model CaseMissingEvidence {
   resolvedById    String?
   notes           String?
   lawyerEditedAt  DateTime?
+  // Which intake-time evidence upload resolved this gap, if any (MissingEvidenceRepo
+  // .markFilledByDocument). A plain id, not a relation — same reasoning as claimId above: a
+  // document delete or a later rescan must never orphan or block this row. Set together;
+  // filledViaIntake distinguishes this from the lawyer later marking status RESOLVED by hand,
+  // which this does not touch.
+  filledByDocumentId String?
+  filledAt           DateTime?
+  filledViaIntake    Boolean                 @default(false)
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
@@ -2894,6 +2902,7 @@ model CaseMissingEvidence {
 
   @@index([caseId])
   @@index([claimId])
+  @@index([filledByDocumentId])
 }
 
 /// Jev's verdict on one candidate pair from the full-bundle contradiction scan

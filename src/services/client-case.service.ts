@@ -35,6 +35,7 @@ import { OTHER_CASE_AREA } from "../constants/case-area.constants";
 import { firmScope } from "../utils/workspace";
 import { getPresignedUploadUrl } from "../utils/s3";
 import { randomUUID } from "crypto";
+import { evidenceSyncStatus } from "../utils/evidence-sync-status";
 
 /** The client's personal workspace, as clientWorkspaceOf(req) gives it. */
 export interface ClientWorkspace {
@@ -105,7 +106,17 @@ const LAWYER_COMMITTED: ClientRequestStatus[] = ["CONFIRMED", "ENGAGED"];
 /** A document as the client app lists it. A Document has no upload time of its own: it's made when
  * the upload is confirmed, so createdAt is when it was uploaded. createdAt stays for older apps. */
 function toDocumentDto(d: { id: string; name: string; ragStatus: RagStatus; fileSize: number | null; createdAt: Date }) {
-  return { id: d.id, name: d.name, status: d.ragStatus, size: d.fileSize ?? null, uploadedAt: d.createdAt, createdAt: d.createdAt };
+  return {
+    id: d.id,
+    name: d.name,
+    status: d.ragStatus,
+    // #159: the uploading/processing/done/failed vocabulary the evidence UI wants, alongside the
+    // existing `status` field rather than replacing it — older clients keep reading `status`.
+    syncStatus: evidenceSyncStatus(d.ragStatus),
+    size: d.fileSize ?? null,
+    uploadedAt: d.createdAt,
+    createdAt: d.createdAt,
+  };
 }
 
 /** `label` names the case's areas (CaseAreaSvc.labeller). */
