@@ -967,6 +967,41 @@ export const clientAppPaths: Paths = {
       },
     },
   },
+  "/client/cases/{caseId}/export": {
+    get: {
+      tags: [TAG],
+      summary: "Download the case summary: the client's case as a PDF they can keep or take to any lawyer",
+      description: [
+        "Built at request time from the stored intake (GET /client/cases/{caseId}/intake) and the case details — a plain read: never starts an AI run, never spends chat credits, needs no AI-processing consent.",
+        "",
+        "Contains only what the client entered or uploaded and what the intake gathered from it: title, type of issue, part of the UK (UK site only), where, the intake's summary paragraph (tagged \"AI-written · check it against what you said\", as on the Overview), the client's own description, people and organisations, timeline, facts, what they want, concerns, questions for a lawyer, deadlines exactly as stated (with their sources, never computed), missing information, conflicting accounts, uploaded document names (not the files), an \"as of\" date and the line \"Prepared from the information you gave us. It isn't legal advice.\" Never an assessment (ADR 0018): no strengths, weaknesses, strategy, outlook or chat transcript.",
+        "",
+        "The PDF is the response body; nothing is stored. The filename (case-summary-<title>-<YYYY-MM-DD>.pdf, dated on the site's calendar) is in Content-Disposition, exposed to the browser. Each download writes an export.case_summary security audit row. Limited to 30 per account per 10 minutes.",
+      ].join("\n"),
+      security,
+      parameters: [
+        caseId,
+        { name: "format", in: "query", required: false, schema: { type: "string", enum: ["pdf"], default: "pdf" }, description: "PDF only for now" },
+        {
+          name: "lang",
+          in: "query",
+          required: false,
+          schema: { type: "string", enum: ["en", "ko"], default: "en" },
+          description: "The language of the document's own labels (the client app's current language). The client's words are printed as they wrote them.",
+        },
+      ],
+      responses: {
+        200: {
+          description: "The PDF (Content-Disposition: attachment; filename=…; filename*=UTF-8''…)",
+          content: { "application/pdf": { schema: { type: "string", format: "binary" } } },
+        },
+        400: err("format or lang isn't one of the allowed values"),
+        404: err("Not one of this client's cases"),
+        409: err("INTAKE_RUNNING: the overview is still being prepared, try again shortly. INTAKE_EMPTY: nothing gathered yet, so nothing to summarise"),
+        429: err("Too many downloads just now"),
+      },
+    },
+  },
   // ── Admin: client billing (ilovelawyer-admin, ADMIN accounts only) ───────
   "/admin/billing/summary": {
     get: {

@@ -7,11 +7,14 @@ import ClientOverviewSvc from "../services/client-overview.service";
 import ClientCaseOverviewSvc from "../services/client-case-overview.service";
 import ClientIntakeSvc from "../services/client-intake.service";
 import ClientBillingSvc from "../services/client-billing.service";
+import ClientCaseSummarySvc from "../services/client-case-summary.service";
 import HttpError from "../utils/http-error";
+import { contentDisposition } from "../utils/content-disposition";
 import { ALLOWED_DOCUMENT_EXTENSIONS, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "../constants";
 import {
   addClientDocumentSchema,
   createClientCaseSchema,
+  exportClientCaseSummarySchema,
   presignClientDocumentSchema,
   presignVoiceMessageSchema,
   quoteClientTopUpSchema,
@@ -140,6 +143,19 @@ export default class ClientCaseCtrl {
 
   static async intake(req: Request, res: Response) {
     res.status(200).json(await ClientIntakeSvc.get(clientWorkspaceOf(req), req.params.caseId));
+  }
+
+  /** The client's Case summary PDF, sent as the download itself (ClientCaseSummarySvc). */
+  static async exportSummary(req: Request, res: Response) {
+    const { lang } = validate<{ format: "pdf"; lang: "en" | "ko" }>(exportClientCaseSummarySchema, req.query);
+    const { buffer, filename } = await ClientCaseSummarySvc.exportPdf(clientWorkspaceOf(req), req.user.userId, req.params.caseId, lang);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader("Content-Disposition", contentDisposition(filename));
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.status(200).send(buffer);
   }
 
   static async refreshIntake(req: Request, res: Response) {
