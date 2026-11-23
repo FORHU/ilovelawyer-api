@@ -125,6 +125,11 @@ export const addClientDocumentSchema = Joi.object({
   name: filename,
   contentType: Joi.string().optional(),
   fileSize: fileSize.optional(),
+  // #159: set when this upload is the client's direct answer to a suggested evidence gap (the
+  // "fills this gap" UI action) -- an explicit link from what the client actually tapped, not a
+  // guess. Invalid/someone-else's-case ids are silently ignored in the service, same as any
+  // other id a client could tamper with.
+  missingEvidenceId: Joi.string().trim().min(1).optional(),
 });
 
 /** GET /api/client/cases/:caseId/export (the client's Case summary): PDF only for now; `lang` is

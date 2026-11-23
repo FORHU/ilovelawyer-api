@@ -10,7 +10,7 @@ import { transcribeS3Media } from "./transcription.service";
 import { MEDIA_DOCUMENT_EXTENSIONS, MEDIA_DOCUMENT_MIME_TYPES } from "../constants";
 import { chunkPages, resolveChunkingProfile } from "../utils/chunking";
 import { embedTexts, isRateLimit } from "../utils/embedding";
-import { categorizeDocument, describeImage } from "../utils/chatWonder";
+import { categorizeDocument, describeImage, extractEvidenceFacts } from "../utils/chatWonder";
 import { VISION_FALLBACK_MAX_BYTES } from "../utils/ocr";
 import logger from "../utils/logger";
 import LlmUsageSvc from "./llm-usage.service";
@@ -180,11 +180,34 @@ export default class DocumentExtractionSvc {
         const downloadedBytes = download?.bytes ?? doc.fileSize ?? 0;
         let description: string | null = null;
         if (downloadedBytes <= VISION_FALLBACK_MAX_BYTES) {
-          description = await describeImage(doc.file.s3Key, doc.name, {
-            userId: doc.userId,
-            caseId: doc.caseId,
-            consultationId: doc.consultationId,
-          });
+          // #159: a case-evidence image gets the structured extraction (sender/date/amount for an
+          // email screenshot, falling back to the same free-text description otherwise) instead of
+          // the plain describeImage call — same vision-fallback slot, richer result when the photo
+          // is an email/message screenshot. Non-case images (no caseId) keep the plain call.
+          if (doc.caseId) {
+            const result = await extractEvidenceFacts(doc.file.s3Key, doc.name, {
+              userId: doc.userId,
+              caseId: doc.caseId,
+              consultationId: doc.consultationId,
+            });
+            description = result?.facts
+              ? [
+                  "This is an email or message screenshot. Facts the AI read from it:",
+                  result.facts.sender ? `Sender: ${result.facts.sender}` : null,
+                  result.facts.date ? `Date: ${result.facts.date}` : null,
+                  result.facts.amount ? `Amount: ${result.facts.amount}` : null,
+                  result.facts.agreement ? `What was agreed: ${result.facts.agreement}` : null,
+                ]
+                  .filter(Boolean)
+                  .join("\n")
+              : (result?.description ?? null);
+          } else {
+            description = await describeImage(doc.file.s3Key, doc.name, {
+              userId: doc.userId,
+              caseId: doc.caseId,
+              consultationId: doc.consultationId,
+            });
+          }
         } else {
           logger.warn("Document extraction: image exceeds vision fallback size limit, skipping", { documentId, bytes: downloadedBytes });
         }

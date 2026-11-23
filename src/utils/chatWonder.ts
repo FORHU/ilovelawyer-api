@@ -309,6 +309,110 @@ export async function describeImage(
   }
 }
 
+export interface EvidenceFacts {
+  isEmailScreenshot: boolean;
+  facts: { sender: string | null; date: string | null; amount: string | null; agreement: string | null } | null;
+  description: string | null;
+}
+
+/** #159: the structured counterpart to describeImage for an image that's an email or message
+ * screenshot — sender/date/amount/what-was-agreed instead of a free-text description. Same
+ * best-effort contract as describeImage: any failure returns null, never throws, so a failed
+ * extraction falls back to the pre-existing vision-description/placeholder path rather than
+ * failing the document's extraction. */
+export async function extractEvidenceFacts(
+  s3Key: string,
+  filename: string,
+  usage?: Omit<ChatWonderUsageOptions, "feature">,
+): Promise<EvidenceFacts | null> {
+  const startedAt = Date.now();
+  let outputChars = 0;
+  let success = false;
+  let reported: ReportedUsage | undefined;
+  try {
+    const imageUrl = await getPresignedGetUrl(s3Key);
+    const { data } = await axios.post(
+      `${CHAT_WONDER_API_URL}/api/legal/extract-evidence-facts`,
+      { image_url: imageUrl, filename },
+      { timeout: CHAT_WONDER_REST_TIMEOUT_MS },
+    );
+    if (!data?.success) return null;
+    const facts =
+      data.is_email_screenshot && data.facts && typeof data.facts === "object"
+        ? {
+            sender: typeof data.facts.sender === "string" ? data.facts.sender : null,
+            date: typeof data.facts.date === "string" ? data.facts.date : null,
+            amount: typeof data.facts.amount === "string" ? data.facts.amount : null,
+            agreement: typeof data.facts.agreement === "string" ? data.facts.agreement : null,
+          }
+        : null;
+    const description = !data.is_email_screenshot && typeof data.description === "string" ? data.description : null;
+    outputChars = JSON.stringify(facts ?? description ?? "").length;
+    success = true;
+    reported = parseReportedUsage(data?.usage);
+    return { isEmailScreenshot: Boolean(data.is_email_screenshot), facts, description };
+  } catch (err) {
+    logger.warn("Chat Wonder evidence-fact extraction failed", { err, filename });
+    return null;
+  } finally {
+    recordChatWonderUsage({
+      usage: { ...usage, feature: "evidenceFactsExtract" },
+      startedAt,
+      inputChars: filename.length,
+      outputChars,
+      traceStarts: null,
+      reported,
+      success,
+    });
+  }
+}
+
+export interface NextEvidenceSuggestion {
+  gapId: string;
+  message: string;
+}
+
+/** #159: given a case's open CaseMissingEvidence gaps, asks CW which one is most worth the
+ * client's next upload and how to phrase asking for it. Best-effort: null on no gaps, no API key,
+ * or any failure — the caller shows nothing in that case, never an error. */
+export async function suggestNextEvidence(
+  gaps: { id: string; label: string; detail?: string | null }[],
+  usage?: Omit<ChatWonderUsageOptions, "feature">,
+): Promise<NextEvidenceSuggestion | null> {
+  if (!gaps.length) return null;
+  const startedAt = Date.now();
+  let success = false;
+  let reported: ReportedUsage | undefined;
+  let outputChars = 0;
+  try {
+    const { data } = await axios.post(
+      `${CHAT_WONDER_API_URL}/api/legal/suggest-next-evidence`,
+      { gaps: gaps.map((g) => ({ id: g.id, label: g.label, detail: g.detail ?? null })) },
+      { timeout: CHAT_WONDER_REST_TIMEOUT_MS },
+    );
+    if (!data?.success || !data.suggestion) return null;
+    const { gapId, message } = data.suggestion;
+    if (typeof gapId !== "string" || typeof message !== "string" || !message.trim()) return null;
+    outputChars = message.length;
+    success = true;
+    reported = parseReportedUsage(data?.usage);
+    return { gapId, message: message.trim() };
+  } catch (err) {
+    logger.warn("Chat Wonder suggest-next-evidence failed", { err, gapCount: gaps.length });
+    return null;
+  } finally {
+    recordChatWonderUsage({
+      usage: { ...usage, feature: "suggestNextEvidence" },
+      startedAt,
+      inputChars: gaps.reduce((sum, g) => sum + g.label.length + (g.detail?.length ?? 0), 0),
+      outputChars,
+      traceStarts: null,
+      reported,
+      success,
+    });
+  }
+}
+
 export interface RelatedCase {
   type: string;
   title: string | null;
