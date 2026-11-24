@@ -64,7 +64,7 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     // This runs without anyone pressing a button, on behalf of whoever uploaded or deleted the
     // document. If they have switched AI processing off, the case is left as it is: no analysis
     // is started (and no lock was taken yet, so nothing is left half-done).
-    if (!(await ConsentSvc.isAllowed(userId, "AI_PROCESSING"))) {
+    if (!(await ConsentSvc.mayRunAi(userId))) {
       logger.info("Case post-extraction: skipped, AI processing consent is withdrawn", { caseId, userId });
       return;
     }

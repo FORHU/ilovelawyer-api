@@ -283,7 +283,7 @@ export default class AiGenerationQueue {
       // jobs queued before the person withdrew. The routes refuse up front; this is the backstop.
       // A lock a controller already claimed for this job is left to expire through the usual
       // stale-job rule (utils/ai-generation-lock.utils).
-      if (!(await ConsentSvc.isAllowed(item.job.userId, "AI_PROCESSING"))) {
+      if (!(await ConsentSvc.mayRunAi(item.job.userId))) {
         logger.info("AI generation queue: job skipped, AI processing consent is withdrawn", {
           kind: item.job.kind,
           caseId: item.job.caseId,

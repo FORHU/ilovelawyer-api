@@ -5,7 +5,7 @@ import { TERMS_VERSION } from "./auth.constants";
  * the database enum (removing enum values needs a migration) but nothing in the system uses them,
  * so they are not listed, cannot be set, and have no version. Add a purpose here, with a version,
  * in the same change that adds the code that needs it. */
-export const ACTIVE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["TERMS_OF_SERVICE", "AI_PROCESSING", "EMAIL_IMPORT"];
+export const ACTIVE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["TERMS_OF_SERVICE", "AI_PROCESSING", "SENSITIVE_INFO", "EMAIL_IMPORT"];
 
 /** Version of the policy text behind each purpose a user can answer for. Bump one when its text
  * materially changes, so an old answer can be told apart from one given to the current text.
@@ -15,6 +15,8 @@ export const CONSENT_VERSIONS: Partial<Record<ConsentPurpose, string>> = {
   AI_PROCESSING: "2026-10",
   // The text in ilovelawyer-client's EmailImportConsent (EMAIL_IMPORT_CONSENT_POINTS).
   EMAIL_IMPORT: "2026-11",
+  // The client app's separate consent step for sensitive information (ilovelawyer-client#173).
+  SENSITIVE_INFO: "2026-11",
 };
 
 /** What a purpose allows for someone who has never answered it. AI processing is on by default:
@@ -26,13 +28,18 @@ export const CONSENT_WHEN_UNANSWERED: Partial<Record<ConsentPurpose, "allowed" |
   AI_PROCESSING: "allowed",
   // Reading someone's inbox is never assumed: the client agrees before connecting Gmail.
   EMAIL_IMPORT: "blocked",
+  // What a client tells us about their case often includes sensitive information (health, criminal
+  // records): PIPA Art. 23, UK GDPR Art. 9 and the Philippine DPA need a separate, explicit yes
+  // before the AI reads it, so it is never assumed. Only client accounts are asked (ConsentSvc.mayRunAi).
+  SENSITIVE_INFO: "blocked",
 };
 
 /** Purposes a user may grant or withdraw through the consent endpoint. Terms of Service is
  * excluded: withdrawing it means closing the account, which has its own flow. */
-export const SELF_SERVICE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["AI_PROCESSING", "EMAIL_IMPORT"];
+export const SELF_SERVICE_CONSENT_PURPOSES: readonly ConsentPurpose[] = ["AI_PROCESSING", "SENSITIVE_INFO", "EMAIL_IMPORT"];
 
 /** Where an answer was given, stored with it. "gmail" is the client app's Gmail connect step
- * (agreeing) or its Disconnect (withdrawing). */
-export const CONSENT_SOURCES = ["settings", "first_login", "trial", "gmail"] as const;
+ * (agreeing) or its Disconnect (withdrawing). "case_step" is the client app's sensitive-information
+ * step, shown before a client's first case message or upload. */
+export const CONSENT_SOURCES = ["settings", "first_login", "trial", "gmail", "case_step"] as const;
 export type ConsentSource = (typeof CONSENT_SOURCES)[number];

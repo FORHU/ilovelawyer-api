@@ -9,7 +9,10 @@ import ConsentSvc from "../services/consent.service";
 export default function requireConsent(purpose: ConsentPurpose) {
   return async function requireConsentMiddleware(req: Request, _res: Response, next: NextFunction) {
     try {
-      await ConsentSvc.assertAllowed(req.user.userId, purpose);
+      // AI_PROCESSING stands for "the AI may read this case", which for a client also needs the
+      // sensitive-information consent (ConsentSvc.mayRunAi).
+      if (purpose === "AI_PROCESSING") await ConsentSvc.assertMayRunAi(req.user.userId);
+      else await ConsentSvc.assertAllowed(req.user.userId, purpose);
       next();
     } catch (err) {
       next(err);

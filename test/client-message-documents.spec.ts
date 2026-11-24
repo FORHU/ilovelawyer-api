@@ -80,7 +80,7 @@ describe("Client message documents", () => {
     beforeEach(() => {
       stash(prisma.user as any, ["findUnique"]);
       stash(ClientCaseSvc, ["workspaceFor"]);
-      stash(ConsentSvc, ["assertAllowed"]);
+      stash(ConsentSvc, ["assertAllowed", "assertMayRunAi"]);
       stash(ClientCaseRepo, ["findById"]);
       stash(DocumentRepo, ["findManyForCase"]);
       stash(ClientPaymentRepo, ["spendCredit", "addCredits"]);
@@ -91,6 +91,7 @@ describe("Client message documents", () => {
       (prisma.user as any).findUnique = async () => ({ role, name: "Sam Client", username: "sam.1234" });
       (ClientCaseSvc as any).workspaceFor = async (userId: string) => ({ ...workspace, id: userId === "other-client" ? "org-2" : workspace.id });
       (ConsentSvc as any).assertAllowed = async () => undefined;
+      (ConsentSvc as any).assertMayRunAi = async () => undefined;
       (ClientCaseRepo as any).findById = async (id: string, orgId: string) =>
         id === "case-1" && orgId === workspace.id ? { id: "case-1", caseName: "Fired by my boss" } : null;
       (DocumentRepo as any).findManyForCase = async () => [{ id: "d1", name: "Payslip.pdf", ragStatus }];

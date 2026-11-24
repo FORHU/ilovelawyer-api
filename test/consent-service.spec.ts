@@ -7,6 +7,8 @@ import ConsentSvc from "../src/services/consent.service";
 import ConsentRepo from "../src/repositories/consent.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 import GmailConnectionSvc from "../src/services/gmail-connection.service";
+import DocumentExtractionQueue from "../src/queues/document-extraction.queue";
+import HttpError from "../src/utils/http-error";
 import { CONSENT_VERSIONS } from "../src/constants/consent.constants";
 import { CLIENT_TERMS_VERSION, TERMS_VERSION } from "../src/constants/auth.constants";
 
@@ -18,8 +20,19 @@ type Row = {
 };
 
 describe("ConsentSvc", () => {
-  const original = { findByUser: ConsentRepo.findByUser, findTerms: ConsentRepo.findTerms, set: ConsentRepo.set };
+  const original = {
+    findByUser: ConsentRepo.findByUser,
+    findTerms: ConsentRepo.findTerms,
+    set: ConsentRepo.set,
+    find: ConsentRepo.find,
+    findRole: ConsentRepo.findRole,
+    findPendingDocumentIds: ConsentRepo.findPendingDocumentIds,
+    enqueueMany: DocumentExtractionQueue.enqueueMany,
+  };
   let rows: Row[];
+  let role: string | null;
+  let pending: string[];
+  let queued: string[][];
   let terms: { termsAcceptedAt: Date | null; termsVersion: string | null; role?: string } | null;
   let sets: Array<{ purpose: ConsentPurpose; granted: boolean; version: string; source: string }>;
 
@@ -27,6 +40,13 @@ describe("ConsentSvc", () => {
     rows = [];
     terms = { termsAcceptedAt: null, termsVersion: null };
     sets = [];
+    role = "LAWYER";
+    pending = [];
+    queued = [];
+    ConsentRepo.find = (async (_u: string, purpose: ConsentPurpose) => rows.find((r) => r.purpose === purpose) ?? null) as unknown as typeof ConsentRepo.find;
+    ConsentRepo.findRole = (async () => role) as unknown as typeof ConsentRepo.findRole;
+    ConsentRepo.findPendingDocumentIds = async () => pending;
+    DocumentExtractionQueue.enqueueMany = (ids: string[]) => void queued.push(ids);
     ConsentRepo.findByUser = (async () => rows) as unknown as typeof ConsentRepo.findByUser;
     ConsentRepo.findTerms = (async () => terms) as unknown as typeof ConsentRepo.findTerms;
     ConsentRepo.set = (async (_u: string, purpose: ConsentPurpose, granted: boolean, version: string, source: string) => {
@@ -41,11 +61,15 @@ describe("ConsentSvc", () => {
     ConsentRepo.findByUser = original.findByUser;
     ConsentRepo.findTerms = original.findTerms;
     ConsentRepo.set = original.set;
+    ConsentRepo.find = original.find;
+    ConsentRepo.findRole = original.findRole;
+    ConsentRepo.findPendingDocumentIds = original.findPendingDocumentIds;
+    DocumentExtractionQueue.enqueueMany = original.enqueueMany;
   });
 
   it("lists the purposes the product uses (not analytics or marketing, which it does not), and a purpose never answered is not_set rather than withdrawn", async () => {
     const list = await ConsentSvc.list("u1");
-    expect(list.map((c) => c.purpose)).to.deep.equal(["TERMS_OF_SERVICE", "AI_PROCESSING", "EMAIL_IMPORT"]);
+    expect(list.map((c) => c.purpose)).to.deep.equal(["TERMS_OF_SERVICE", "AI_PROCESSING", "SENSITIVE_INFO", "EMAIL_IMPORT"]);
     expect(list.every((c) => c.status === "not_set" && c.version === null)).to.equal(true);
   });
 
@@ -159,5 +183,65 @@ describe("ConsentSvc", () => {
     }
     expect(status).to.equal(400);
     expect(sets).to.have.length(0);
+  });
+
+  describe("whether the AI may read a case (sensitive information, #699)", () => {
+    const grant = (purpose: ConsentPurpose, withdrawn = false) =>
+      rows.push({ purpose, version: "v", grantedAt: new Date(), withdrawnAt: withdrawn ? new Date() : null });
+    const refusal = async (userId: string) => {
+      try {
+        await ConsentSvc.assertMayRunAi(userId);
+      } catch (err) {
+        return err as HttpError;
+      }
+      return undefined;
+    };
+
+    it("asks a client to agree to sensitive information first, and names that purpose in the refusal", async () => {
+      role = "USER";
+      expect(await ConsentSvc.mayRunAi("c1")).to.equal(false);
+      const err = await refusal("c1");
+      expect(err?.statusCode).to.equal(403);
+      expect(err?.code).to.equal("CONSENT_REQUIRED");
+      expect(err?.details).to.deep.equal({ purpose: "SENSITIVE_INFO" });
+      grant("SENSITIVE_INFO");
+      expect(await ConsentSvc.mayRunAi("c1")).to.equal(true);
+    });
+
+    it("never asks a lawyer account, whose AI keeps working as before", async () => {
+      role = "LAWYER";
+      expect(await ConsentSvc.mayRunAi("l1")).to.equal(true);
+    });
+
+    it("blocks everyone who switched AI processing off, even with sensitive information agreed", async () => {
+      role = "USER";
+      grant("SENSITIVE_INFO");
+      grant("AI_PROCESSING", true);
+      expect(await ConsentSvc.mayRunAi("c1")).to.equal(false);
+      expect((await refusal("c1"))?.code).to.equal("CONSENT_REQUIRED");
+    });
+
+    it("is answered and withdrawn from the case step and settings at the current version", async () => {
+      role = "USER";
+      await ConsentSvc.set("c1", "SENSITIVE_INFO", true, "case_step");
+      expect(sets[0]).to.deep.equal({ purpose: "SENSITIVE_INFO", granted: true, version: CONSENT_VERSIONS.SENSITIVE_INFO, source: "case_step" });
+      await ConsentSvc.set("c1", "SENSITIVE_INFO", false);
+      expect(await ConsentSvc.mayRunAi("c1")).to.equal(false);
+    });
+
+    it("indexes the documents held back while the client hadn't agreed, once they do", async () => {
+      role = "USER";
+      pending = ["d1", "d2"];
+      await ConsentSvc.set("c1", "SENSITIVE_INFO", true, "case_step");
+      expect(queued).to.deep.equal([["d1", "d2"]]);
+    });
+
+    it("keeps them held when the AI still can't read the case", async () => {
+      role = "USER";
+      pending = ["d1"];
+      grant("AI_PROCESSING", true);
+      await ConsentSvc.set("c1", "SENSITIVE_INFO", true, "case_step");
+      expect(queued).to.deep.equal([]);
+    });
   });
 });

@@ -65,7 +65,8 @@ describe("AiGenerationQueue worker and AI processing consent", () => {
     it(`runs ${kind} when AI processing is allowed`, async () => {
       await run(kind);
       expect(ran).to.deep.equal([kind]);
-      expect(checkedFor).to.deep.equal(["user-1:AI_PROCESSING"]);
+      // ConsentSvc.mayRunAi: AI processing, then the client's sensitive-information consent.
+      expect(checkedFor).to.deep.equal(["user-1:AI_PROCESSING", "user-1:SENSITIVE_INFO"]);
     });
 
     it(`does not run ${kind} once AI processing is withdrawn`, async () => {

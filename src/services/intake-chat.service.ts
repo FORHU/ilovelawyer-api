@@ -231,11 +231,11 @@ export default class IntakeChatSvc {
   }
 
   static async processIntakeGenerationJob(job: IntakeChatGenerationJob): Promise<void> {
-    if (!(await ConsentSvc.isAllowed(job.userId, "AI_PROCESSING"))) {
+    if (!(await ConsentSvc.mayRunAi(job.userId))) {
       logger.info("Intake chat generation: skipped, AI processing consent is withdrawn", { jobId: job.jobId, caseId: job.caseId });
       await IntakeChatRepo.endPendingTurn(job.jobId, job.caseId, "FAILED").catch(() => {});
       try {
-        emitToUser(job.userId, "chat:error", { caseId: job.caseId, messageId: job.jobId, message: "AI processing is switched off for your account." });
+        emitToUser(job.userId, "chat:error", { caseId: job.caseId, messageId: job.jobId, message: "The AI can't read your case until you agree to it in your account settings." });
       } catch (err) {
         logger.warn("Intake chat generation: emitToUser failed, continuing without it", { err, jobId: job.jobId });
       }

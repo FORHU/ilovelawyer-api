@@ -309,7 +309,7 @@ export default class LiveDictationSvc {
     if (user?.role !== "USER") throw new HttpError("This is only available in the client app", 403, "CLIENT_ACCOUNT_ONLY");
     const workspace = await ClientCaseSvc.workspaceFor(userId, user.name || user.username);
     assertClientAiOpen(workspace.tenantCode);
-    await ConsentSvc.assertAllowed(userId, "AI_PROCESSING");
+    await ConsentSvc.assertMayRunAi(userId);
     return LIVE_DICTATION_LANGUAGE[workspace.tenantCode];
   }
 }
