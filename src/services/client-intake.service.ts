@@ -193,6 +193,9 @@ export default class ClientIntakeSvc {
         people,
         timeline: parsed.timeline,
         goals: parsed.goals,
+        relationship: parsed.relationship,
+        roleAndTerms: parsed.roleAndTerms,
+        reasonGiven: parsed.reasonGiven,
         typeOfAction: caseAreaNames,
         venue: source.ukJurisdiction ?? source.jurisdiction ?? null,
       }),
@@ -243,6 +246,9 @@ export default class ClientIntakeSvc {
           people: caseDetailsPeople(source.parties).map((p) => ({ id: "", name: p.name, role: p.role, text: p.role, sources: [] })),
           timeline: [],
           goals: [],
+          relationship: [],
+          roleAndTerms: [],
+          reasonGiven: [],
           typeOfAction: caseAreaNames,
           venue: source.ukJurisdiction ?? source.jurisdiction ?? null,
         }),
@@ -251,10 +257,14 @@ export default class ClientIntakeSvc {
 
     return {
       ...data,
-      // Backward-compatible: an intake persisted before formFields existed has none in its stored
-      // JSON — this falls back to an all-missing shell rather than undefined, and self-heals on
-      // the next regeneration (any chat reply, document going READY, or case-details edit).
-      formFields: data.formFields ?? deriveFormFields({ people: data.people, timeline: data.timeline, goals: data.goals, typeOfAction: [], venue: null }),
+      // Backward-compatible: an intake persisted before formFields existed, or before
+      // relationship/roleAndTerms/reasonGiven were added to it, has no usable shape in its stored
+      // JSON — this falls back to an all-missing shell rather than undefined fields, and self-heals
+      // on the next regeneration (any chat reply, document going READY, or case-details edit).
+      formFields:
+        data.formFields && "relationship" in data.formFields
+          ? data.formFields
+          : deriveFormFields({ people: data.people, timeline: data.timeline, goals: data.goals, relationship: [], roleAndTerms: [], reasonGiven: [], typeOfAction: [], venue: null }),
       status,
       updates: { allowed: !liveJob, leftToday: Math.max(0, CLIENT_INTAKE_DAILY_CAP - ClientIntakeRepo.usedToday(stored)) },
       completeness: completenessOf(source.lawyerReadiness),

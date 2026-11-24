@@ -68,7 +68,7 @@ const intakeEvent = {
 const intakeFormFields = {
   type: "object",
   description:
-    "#157: the ticket's named field groups for the question-loop UI's fill progress. Not a second AI call — parties/typeOfAction/venue are the deterministic case-creation form data, witnesses/timeline/clientGoals are the already-extracted people/timeline/goals split out. The literal field names are still unconfirmed with the team per the ticket.",
+    "#157: the ticket's named field groups for the question-loop UI's fill progress, matching the ticket's own case-draft screenshot (case title is set at case creation and isn't repeated here). Not a second AI call — parties/typeOfAction/venue are the deterministic case-creation form data; witnesses/timeline/clientGoals/relationship/roleAndTerms/reasonGiven are the already-extracted people/timeline/goals/relationship/roleAndTerms/reasonGiven split out. relationship/roleAndTerms/reasonGiven are deliberately generic across practice areas, not employment-specific.",
   properties: {
     parties: { type: "array", items: intakePerson },
     witnesses: { type: "array", items: intakePerson },
@@ -76,10 +76,13 @@ const intakeFormFields = {
     venue: { type: "string", nullable: true },
     timeline: { type: "array", items: intakeEvent },
     clientGoals: { type: "array", items: intakeItem },
+    relationship: { type: "array", items: intakeItem, description: "The relationship the claim arises from, e.g. employee/employer, tenant/landlord" },
+    roleAndTerms: { type: "array", items: intakeItem, description: "The client's role/position and the financial or contractual terms involved" },
+    reasonGiven: { type: "array", items: intakeItem, description: "The reason the OTHER side gave for the disputed action, as stated — never inferred" },
     missing: {
       type: "array",
-      items: { type: "string", enum: ["parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals"] },
-      description: "Which of the six groups above is still empty",
+      items: { type: "string", enum: ["parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals", "relationship", "roleAndTerms", "reasonGiven"] },
+      description: "Which of the groups above is still empty",
     },
   },
 };

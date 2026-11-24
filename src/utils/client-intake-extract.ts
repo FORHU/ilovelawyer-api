@@ -58,12 +58,19 @@ const WITNESS_ROLE = /witness/i;
 
 /** #157: the ticket's named field groups, derived from data ClientIntakeSvc already has — not a
  * second AI call. parties/typeOfAction/venue are the deterministic case-creation form data (never
- * guessed); witnesses/timeline/clientGoals are the already-extracted people/timeline/goals, split
- * out and relabeled for the question-loop UI. */
+ * guessed); witnesses/timeline/clientGoals/relationship/roleAndTerms/reasonGiven are the already-
+ * extracted people/timeline/goals/relationship/roleAndTerms/reasonGiven, split out and relabeled
+ * for the question-loop UI. relationship/roleAndTerms/reasonGiven are generic across practice
+ * areas (not employment-specific), per the ticket's screenshot: e.g. "tenant and landlord" /
+ * "contract value and deliverables" / "the reason the other side gave" read just as naturally for
+ * a housing or contract case as for a dismissal. */
 export function deriveFormFields(input: {
   people: IntakePerson[];
   timeline: IntakeEvent[];
   goals: IntakeItem[];
+  relationship: IntakeItem[];
+  roleAndTerms: IntakeItem[];
+  reasonGiven: IntakeItem[];
   typeOfAction: string[];
   venue: string | null;
 }): IntakeFormFields {
@@ -76,7 +83,21 @@ export function deriveFormFields(input: {
   if (!input.venue) missing.push("venue");
   if (!input.timeline.length) missing.push("timeline");
   if (!input.goals.length) missing.push("clientGoals");
-  return { parties, witnesses, typeOfAction: input.typeOfAction, venue: input.venue, timeline: input.timeline, clientGoals: input.goals, missing };
+  if (!input.relationship.length) missing.push("relationship");
+  if (!input.roleAndTerms.length) missing.push("roleAndTerms");
+  if (!input.reasonGiven.length) missing.push("reasonGiven");
+  return {
+    parties,
+    witnesses,
+    typeOfAction: input.typeOfAction,
+    venue: input.venue,
+    timeline: input.timeline,
+    clientGoals: input.goals,
+    relationship: input.relationship,
+    roleAndTerms: input.roleAndTerms,
+    reasonGiven: input.reasonGiven,
+    missing,
+  };
 }
 
 /** What the client already answered on the case-creation form — shared between
@@ -165,6 +186,9 @@ From the conversation and the documents only — never invent or infer anything 
 - concerns: what the client said they are worried about.
 - questionsForLawyer: anything the client explicitly asked to have a lawyer answer, or clearly wants a lawyer's view on, including anything that would be legal advice.
 - deadlines: a hearing, deadline or time limit, ONLY when a specific date or clearly stated time is actually given — never computed from a legal rule. Include the date if given (YYYY-MM-DD), else null, and say what was said.
+- relationship: the nature of the relationship between the client and the other side that this claim arises from (e.g. "employee of Acme Logistics since 2021", "tenant of 12 Mill Street", "customer under a 2024 service contract") — only when actually stated, never guessed from the type of case alone.
+- roleAndTerms: the client's role or position and the financial or contractual terms involved (a job title and salary; a tenancy's rent and length; a contract's value and what was to be delivered) — only when actually stated.
+- reasonGiven: the reason the OTHER side gave for the action being disputed (why they say they dismissed, evicted, refused, terminated, etc.) — the reason as stated, never a reason you infer must be true.
 - missing: open questions a solicitor would need answered that nothing above covers yet (no sources needed).
 - conflicts: places where two or more sources disagree on a fact, date, or detail — each needs at least two source handles, one from each side of the disagreement.
 
@@ -175,7 +199,7 @@ ${input.documentExcerpts}
 The "summary" must be consistent with every other field you produce here, not written as if the documents list or excerpts above didn't exist. If a document is listed above, the summary must not say no documents were provided — say what they show instead, or that they're still being read if excerpts aren't available yet. If "timeline"/"facts" below cite a document for something, the summary citing or contradicting that same fact must agree with it.
 
 Reply with only this JSON and nothing else, omitting a list entirely (as []) when there's nothing to put in it:
-{"summary": "80-150 words, plain English, neutral, third person, no legal conclusions", "people": [{"name": "", "role": "", "sources": ["M1"]}], "timeline": [{"text": "", "date": null, "datePrecision": "UNKNOWN", "sources": ["M2"]}], "facts": [{"text": "", "sources": ["M1"]}], "goals": [{"text": "", "sources": ["M1"]}], "concerns": [{"text": "", "sources": ["M1"]}], "questionsForLawyer": [{"text": "", "sources": ["M1"]}], "deadlines": [{"text": "", "date": null, "sources": ["M1"]}], "missing": [{"question": "", "why": ""}], "conflicts": [{"description": "", "sources": ["M1", "D1 p.2"]}]}`;
+{"summary": "80-150 words, plain English, neutral, third person, no legal conclusions", "people": [{"name": "", "role": "", "sources": ["M1"]}], "timeline": [{"text": "", "date": null, "datePrecision": "UNKNOWN", "sources": ["M2"]}], "facts": [{"text": "", "sources": ["M1"]}], "goals": [{"text": "", "sources": ["M1"]}], "concerns": [{"text": "", "sources": ["M1"]}], "questionsForLawyer": [{"text": "", "sources": ["M1"]}], "deadlines": [{"text": "", "date": null, "sources": ["M1"]}], "relationship": [{"text": "", "sources": ["M1"]}], "roleAndTerms": [{"text": "", "sources": ["M1"]}], "reasonGiven": [{"text": "", "sources": ["M1"]}], "missing": [{"question": "", "why": ""}], "conflicts": [{"description": "", "sources": ["M1", "D1 p.2"]}]}`;
 }
 
 /** A day as the client sees it, UK time (same rule as client-request-brief.service.ts's ukDay). */
@@ -256,6 +280,9 @@ export interface ParsedIntake {
   concerns: CaseIntake["concerns"];
   questionsForLawyer: CaseIntake["questionsForLawyer"];
   deadlines: CaseIntake["deadlines"];
+  relationship: IntakeItem[];
+  roleAndTerms: IntakeItem[];
+  reasonGiven: IntakeItem[];
   missing: CaseIntake["missing"];
   conflicts: CaseIntake["conflicts"];
 }
@@ -322,6 +349,9 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
   const goals = simpleList("goals", "goal");
   const concerns = simpleList("concerns", "concern");
   const questionsForLawyer = simpleList("questionsForLawyer", "question");
+  const relationship = simpleList("relationship", "relationship");
+  const roleAndTerms = simpleList("roleAndTerms", "roleAndTerms");
+  const reasonGiven = simpleList("reasonGiven", "reasonGiven");
 
   const deadlinesAll = arr(parsed.deadlines)
     .map((raw): CaseIntake["deadlines"][number] | null => {
@@ -354,10 +384,11 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
     .filter((x): x is CaseIntake["conflicts"][number] => x !== null);
   const conflicts = dedupe(conflictsAll).slice(0, MAX_LIST);
 
-  const nothingUsable = !summary && ![people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, missing, conflicts].some((l) => l.length);
+  const nothingUsable =
+    !summary && ![people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, relationship, roleAndTerms, reasonGiven, missing, conflicts].some((l) => l.length);
   if (nothingUsable) return null;
 
-  return { summary, people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, missing, conflicts };
+  return { summary, people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, relationship, roleAndTerms, reasonGiven, missing, conflicts };
 }
 
 function arr(v: unknown): Record<string, unknown>[] {

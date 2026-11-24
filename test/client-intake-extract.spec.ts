@@ -248,6 +248,9 @@ describe("Client intake extraction", () => {
         people: [person("the employer"), person("a witness to the dismissal")],
         timeline: [{ id: "e1", text: "Dismissed", sources: [], date: "2026-03-03", datePrecision: "DAY" }],
         goals: [{ id: "g1", text: "Get my job back", sources: [] }],
+        relationship: [{ id: "r1", text: "Employee of Acme Logistics since 2021", sources: [] }],
+        roleAndTerms: [{ id: "t1", text: "Warehouse supervisor, £32,000/year", sources: [] }],
+        reasonGiven: [{ id: "g2", text: "Employer said role was redundant", sources: [] }],
         typeOfAction: ["Employment"],
         venue: "England and Wales",
       });
@@ -258,10 +261,29 @@ describe("Client intake extraction", () => {
     });
 
     it("reports every empty group as missing, without guessing a value for it", () => {
-      const result = deriveFormFields({ people: [], timeline: [], goals: [], typeOfAction: [], venue: null });
-      expect(result.missing).to.deep.equal(["parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals"]);
+      const result = deriveFormFields({ people: [], timeline: [], goals: [], relationship: [], roleAndTerms: [], reasonGiven: [], typeOfAction: [], venue: null });
+      expect(result.missing).to.deep.equal([
+        "parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals", "relationship", "roleAndTerms", "reasonGiven",
+      ]);
       expect(result.parties).to.deep.equal([]);
       expect(result.venue).to.equal(null);
+    });
+
+    it("generalises across non-employment case types just as well — a tenancy reads naturally into the same fields", () => {
+      const result = deriveFormFields({
+        people: [person("the landlord")],
+        timeline: [],
+        goals: [],
+        relationship: [{ id: "r1", text: "Tenant of 12 Mill Street since 2023", sources: [] }],
+        roleAndTerms: [{ id: "t1", text: "Assured shorthold tenancy, £950/month rent", sources: [] }],
+        reasonGiven: [{ id: "g2", text: "Landlord cited rent arrears", sources: [] }],
+        typeOfAction: ["Housing"],
+        venue: "England and Wales",
+      });
+      expect(result.relationship[0]!.text).to.equal("Tenant of 12 Mill Street since 2023");
+      expect(result.missing).to.not.include("relationship");
+      expect(result.missing).to.not.include("roleAndTerms");
+      expect(result.missing).to.not.include("reasonGiven");
     });
   });
 });

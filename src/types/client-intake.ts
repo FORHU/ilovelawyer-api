@@ -69,12 +69,16 @@ export interface IntakeCompleteness {
   ready: boolean;
 }
 
-/** #157's named field groups (parties, type of action, venue, timeline, witnesses, client goals —
- * per the ticket's screenshot; the literal names are still flagged there as unconfirmed with the
- * team). Not a second AI extraction: parties/typeOfAction/venue are the deterministic case-creation
- * form data (never guessed), and witnesses/timeline/clientGoals are CaseIntake's own already-
- * extracted people/timeline/goals, split out and relabeled for the question-loop UI's fill-progress
- * display. See deriveFormFields (client-intake-extract.ts). */
+/** #157's named field groups, per the ticket's own screenshot of the lawyer's case-draft view:
+ * case title (set at case creation, not repeated here), type of action, venue, parties,
+ * relationship, role & terms, reason given, witnesses, client wants, timeline. Not a second AI
+ * extraction: parties/typeOfAction/venue are the deterministic case-creation form data (never
+ * guessed), and the rest are CaseIntake's own already-extracted people/timeline/goals/relationship/
+ * roleAndTerms/reasonGiven, split out and relabeled for the question-loop UI's fill-progress
+ * display. relationship/roleAndTerms/reasonGiven are deliberately generic across practice areas
+ * (e.g. "tenant and landlord" or "contract value and deliverables" read as naturally as an
+ * employment case's "employee and employer" / "job title and salary") rather than gated to one
+ * case type. See deriveFormFields (client-intake-extract.ts). */
 export interface IntakeFormFields {
   parties: IntakePerson[];
   witnesses: IntakePerson[];
@@ -85,9 +89,15 @@ export interface IntakeFormFields {
   venue: string | null;
   timeline: IntakeEvent[];
   clientGoals: IntakeItem[];
-  /** Which of the six groups above is still empty — the fill-progress list `ilovelawyer-client`'s
+  /** The nature of the relationship the claim arises from (employment, tenancy, contract, ...). */
+  relationship: IntakeItem[];
+  /** The client's role/position and the financial or contractual terms involved. */
+  roleAndTerms: IntakeItem[];
+  /** The reason the OTHER side gave for the disputed action, as stated — never inferred. */
+  reasonGiven: IntakeItem[];
+  /** Which of the groups above is still empty — the fill-progress list `ilovelawyer-client`'s
    * question loop reads to skip an already-answered question or show what's left. */
-  missing: ("parties" | "witnesses" | "typeOfAction" | "venue" | "timeline" | "clientGoals")[];
+  missing: ("parties" | "witnesses" | "typeOfAction" | "venue" | "timeline" | "clientGoals" | "relationship" | "roleAndTerms" | "reasonGiven")[];
 }
 
 export interface CaseIntake {
