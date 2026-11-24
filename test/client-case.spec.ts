@@ -277,7 +277,7 @@ describe("Client app cases", () => {
       expect(dto.areas).to.deep.equal([{ code: "EMPLOYMENT", name: "Employment" }]);
       expect(dto.others).to.deep.equal([{ id: "p1", name: "Acme Ltd", role: "Opposing party" }]);
       expect(dto.documents).to.deep.equal([
-        { id: "d1", name: "Contract.pdf", status: "READY", size: null, uploadedAt: new Date("2026-10-20"), createdAt: new Date("2026-10-20") },
+        { id: "d1", name: "Contract.pdf", status: "READY", syncStatus: "done", size: null, uploadedAt: new Date("2026-10-20"), createdAt: new Date("2026-10-20") },
       ]);
     });
 
@@ -676,6 +676,13 @@ describe("Client app cases", () => {
   it("serves exactly these routes", () => {
     expect(listRoutes(clientRoute).map((r) => `${r.method} ${r.path}`)).to.deep.equal([
       "GET /pricing",
+      "GET /support/content",
+      "GET /support/actions/deletion-check",
+      "POST /support/actions/:key",
+      "GET /support/ticket",
+      "POST /support/ticket/messages",
+      "POST /support/ticket/read",
+      "POST /support/outcomes",
       "POST /payments/top-up/quote",
       "POST /payments/case/quote",
       "POST /payments/case",
@@ -709,11 +716,14 @@ describe("Client app cases", () => {
       "GET /cases/:caseId/export",
       "POST /cases/:caseId/top-ups",
       "GET /cases/:caseId/lawyer-readiness",
+      "GET /cases/:caseId/missing-evidence",
       "POST /gmail/connect",
       "DELETE /gmail",
       "GET /gmail/messages",
       "GET /gmail/messages/:messageId",
       "GET /gmail/messages/:messageId/attachments/:partId/download",
+      "POST /cases/:caseId/gmail-imports",
+      "POST /cases/:caseId/gmail-suggestions",
       "GET /lawyers",
       "GET /lawyers/:id",
       "GET /lawyer-requests/consent",

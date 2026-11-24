@@ -860,6 +860,8 @@ export const clientAppPaths: Paths = {
     post: {
       tags: [TAG],
       summary: "Step 1 of an upload: a URL to PUT the file to S3",
+      description:
+        "#159: evidence images and PDFs use this same upload path as any other document — there is no separate evidence-only endpoint. Supported extensions: pdf, doc, docx, xlsx, xlsm, xlam, txt, jpg, jpeg, png, webp, heic, mp3, mp4, m4a, wav (document-upload.constants.ts's ALLOWED_DOCUMENT_EXTENSIONS, enforced server-side regardless of what the client already filters to). Size limit: 1 GB total per presign/confirm request (DOCUMENT_UPLOAD_BATCH_MAX_BYTES) — also the effective largest single file, since there's no separate per-file cap.",
       security,
       parameters: [caseId],
       requestBody: {
@@ -880,7 +882,21 @@ export const clientAppPaths: Paths = {
       parameters: [caseId],
       requestBody: {
         required: true,
-        content: json({ type: "object", required: ["key", "name"], properties: { key: { type: "string" }, name: { type: "string" }, contentType: { type: "string" }, fileSize: { type: "integer" } } }),
+        content: json({
+          type: "object",
+          required: ["key", "name"],
+          properties: {
+            key: { type: "string" },
+            name: { type: "string" },
+            contentType: { type: "string" },
+            fileSize: { type: "integer" },
+            missingEvidenceId: {
+              type: "string",
+              description:
+                "#159: the client's explicit \"this fills that gap\" action (from GET .../missing-evidence's gaps list) — never AI-matched. Silently ignored if it doesn't name an open gap on this case, same as any other id a client could tamper with.",
+            },
+          },
+        }),
       },
       responses: { 201: { description: "Added (status PENDING until it's read)", content: json(clientDocument) }, 404: err("Not one of this client's cases") },
     },
@@ -921,6 +937,48 @@ export const clientAppPaths: Paths = {
         200: { description: "Queued again (status PENDING)", content: json(clientDocument) },
         404: err("Not one of this client's cases, or not a document on it"),
         409: err("NOT_FAILED: only a FAILED document can be retried"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/missing-evidence": {
+    get: {
+      tags: [TAG],
+      summary: "#159: the case's open evidence gaps, in order, plus what to upload next",
+      description:
+        "Ordering rule (the ticket's own open question, now settled): open gaps first, then most severe (CRITICAL, MODERATE, MINOR), then newest first within the same severity — MissingEvidenceRepo.list's existing sort, not a new one. `suggestion` is CW's pick of which still-unfilled gap to ask for next, from the same list; null when CW isn't confident or the call fails (never blocks or delays this response). Requires AI_PROCESSING consent, since picking a suggestion calls CW.",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: {
+          description: "Open gaps and a suggestion",
+          content: json({
+            type: "object",
+            properties: {
+              gaps: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    label: { type: "string" },
+                    detail: { type: "string", nullable: true },
+                    severity: { type: "string", enum: ["CRITICAL", "MODERATE", "MINOR"] },
+                    suggestedSource: { type: "string", nullable: true },
+                    filledByDocumentId: { type: "string", nullable: true, description: "Set once a document has been uploaded for this gap via missingEvidenceId" },
+                    filledAt: { type: "string", format: "date-time", nullable: true },
+                  },
+                },
+              },
+              suggestion: {
+                type: "object",
+                nullable: true,
+                properties: { gapId: { type: "string" }, message: { type: "string" } },
+              },
+            },
+          }),
+        },
+        403: err("AI processing consent not given yet, or this client site has AI features turned off"),
+        404: err("Not one of this client's cases"),
       },
     },
   },
