@@ -729,14 +729,17 @@ export const clientAppPaths: Paths = {
                     id: { type: "string" },
                     role: { type: "string", enum: ["user", "ai"] },
                     text: { type: "string" },
-                    replyStatus: { type: "string", enum: ["PENDING", "DONE", "FAILED", "CANCELLED"], nullable: true },
-                    documents: {
+                    replyStatus: { type: "string", enum: ["PENDING", "DONE", "FAILED", "CANCELLED"], nullable: true, description: "Set on the client's own message (which turn this is); always null on the AI's" },
+                    documentIds: {
                       type: "array",
-                      description: "The case documents sent with a user message. Always empty on the AI's",
-                      items: {
-                        type: "object",
-                        properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["PENDING", "READY", "FAILED"] } },
-                      },
+                      items: { type: "string" },
+                      description: "The case documents sent with a user message, by id. Always empty on the AI's",
+                    },
+                    suggestions: {
+                      type: "array",
+                      items: { type: "string" },
+                      description:
+                        "#158: 2-4 short tappable replies to the question this AI message just asked, worded exactly as the client could say them. Empty — never omitted — when CW isn't confident enough to suggest anything; always empty on the client's own message. Tapping one sends it as an ordinary chat message, same as typing or speaking it.",
                     },
                     audioUrl: { type: "string", nullable: true, description: "Playable audio: the client's own recording on a voice-originated user message, or Polly's synthesized reply on its answer" },
                     createdAt: { type: "string", format: "date-time" },
