@@ -25,6 +25,7 @@ import {
   type ReadinessAssessment,
 } from "../utils/lawyer-readiness-jev";
 import logger from "../utils/logger";
+import MissingEvidenceRepo from "../repositories/missing-evidence.repository";
 import ClientIntakeSvc from "./client-intake.service";
 import { DEFAULT_CLIENT_TENANT_CODE } from "../constants/auth.constants";
 import { assertClientAiOpen } from "../constants/client-sites.constants";
@@ -35,6 +36,8 @@ import { OTHER_CASE_AREA } from "../constants/case-area.constants";
 import { firmScope } from "../utils/workspace";
 import { getPresignedUploadUrl } from "../utils/s3";
 import { randomUUID } from "crypto";
+import { evidenceSyncStatus } from "../utils/evidence-sync-status";
+import { suggestNextEvidence } from "../utils/chatWonder";
 
 /** The client's personal workspace, as clientWorkspaceOf(req) gives it. */
 export interface ClientWorkspace {
@@ -105,7 +108,17 @@ const LAWYER_COMMITTED: ClientRequestStatus[] = ["CONFIRMED", "ENGAGED"];
 /** A document as the client app lists it. A Document has no upload time of its own: it's made when
  * the upload is confirmed, so createdAt is when it was uploaded. createdAt stays for older apps. */
 function toDocumentDto(d: { id: string; name: string; ragStatus: RagStatus; fileSize: number | null; createdAt: Date }) {
-  return { id: d.id, name: d.name, status: d.ragStatus, size: d.fileSize ?? null, uploadedAt: d.createdAt, createdAt: d.createdAt };
+  return {
+    id: d.id,
+    name: d.name,
+    status: d.ragStatus,
+    // #159: the uploading/processing/done/failed vocabulary the evidence UI wants, alongside the
+    // existing `status` field rather than replacing it — older clients keep reading `status`.
+    syncStatus: evidenceSyncStatus(d.ragStatus),
+    size: d.fileSize ?? null,
+    uploadedAt: d.createdAt,
+    createdAt: d.createdAt,
+  };
 }
 
 /** `label` names the case's areas (CaseAreaSvc.labeller). */
@@ -237,6 +250,38 @@ export default class ClientCaseSvc {
   static async get(workspace: ClientWorkspace, caseId: string) {
     const [row, label] = await Promise.all([ClientCaseSvc.load(workspace, caseId), CaseAreaSvc.labeller(workspace.tenantCode)]);
     return toDto(row, label);
+  }
+
+  /**
+   * #159: the case's open evidence gaps (CaseMissingEvidence — "need a bank statement", "need the
+   * termination letter"), client-safe (none of the lawyer's own triage fields: resolutionNote,
+   * resolvedById, lawyerEditedAt), plus CW's pick of which one is most worth the client's next
+   * upload. These are NOT CaseIntake.missing/IntakeGap — that's the separate #157 readiness
+   * checklist (jurisdiction, other side, etc.); evidence-gaps.ts was wired to that one by mistake
+   * before this route existed, since it was the only "missing" concept the client could reach.
+   */
+  static async missingEvidence(workspace: ClientWorkspace, userId: string, caseId: string) {
+    await ClientCaseSvc.load(workspace, caseId);
+    const rows = await MissingEvidenceRepo.list(caseId);
+    const open = rows.filter((r) => r.status === "OPEN");
+    const gaps = open.map((r) => ({
+      id: r.id,
+      label: r.label,
+      detail: r.detail,
+      severity: r.severity,
+      suggestedSource: r.suggestedSource,
+      filledByDocumentId: r.filledByDocumentId,
+      filledAt: r.filledAt,
+    }));
+    const unfilled = open.filter((r) => !r.filledByDocumentId);
+    const picked = await suggestNextEvidence(
+      unfilled.map((r) => ({ id: r.id, label: r.label, detail: r.detail })),
+      { userId, caseId },
+    ).catch((err) => {
+      logger.warn("Client missing evidence: suggest-next-evidence failed, continuing without it", { err, caseId });
+      return null;
+    });
+    return { gaps, suggestion: picked };
   }
 
   /** Cases are free: a new one starts with the chat credits an admin set for the client's tenant
@@ -529,9 +574,23 @@ export default class ClientCaseSvc {
 
   /** Step two: records the uploaded file on the case. Extraction starts from here, and the AI uses
    * the document once it's READY. */
-  static async addDocument(workspace: ClientWorkspace, userId: string, caseId: string, file: { key: string; name: string; contentType?: string; fileSize?: number }) {
+  static async addDocument(
+    workspace: ClientWorkspace,
+    userId: string,
+    caseId: string,
+    file: { key: string; name: string; contentType?: string; fileSize?: number; missingEvidenceId?: string },
+  ) {
     await ClientCaseSvc.load(workspace, caseId);
-    const doc = await DocumentSvc.create(firmScope(workspace.id), userId, { ...file, caseId });
+    const { missingEvidenceId, ...fileFields } = file;
+    const doc = await DocumentSvc.create(firmScope(workspace.id), userId, { ...fileFields, caseId });
+    if (missingEvidenceId) {
+      // #159: the client's explicit "this fills that gap" action. Silently ignored if the id
+      // doesn't belong to this case (MissingEvidenceRepo.markFilledByDocument returns null then)
+      // -- same as any other id a client could tamper with, never surfaced as an upload error.
+      await MissingEvidenceRepo.markFilledByDocument(missingEvidenceId, caseId, doc.id).catch((err) => {
+        logger.warn("Client add document: failed to link evidence to its gap", { err, caseId, documentId: doc.id, missingEvidenceId });
+      });
+    }
     const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
     if (engaged) {
       const event: EngagementDocumentAddedEvent = {

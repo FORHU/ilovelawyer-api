@@ -99,6 +99,8 @@ export default class IntakeChatSvc {
           // relation like Message.documents) — the frontend already has a document-list endpoint
           // for a case; resolve names there rather than duplicating that join on every message read.
           documentIds: m.role === "user" ? m.documentIds : [],
+          // #158: tappable reply suggestions for THIS question — never on the user's own turn.
+          suggestions: m.role === "assistant" ? m.suggestions : [],
           audioUrl: audioKey ? getProxyFileUrl(audioKey, { disposition: "inline" }) : null,
           createdAt: m.createdAt,
         };
@@ -388,6 +390,7 @@ export default class IntakeChatSvc {
     let fullResponse: string;
     let lawyerMatches: unknown[] = [];
     let caseReady = false;
+    let suggestions: string[] = [];
     // Checkpoints the raw accumulated reply into the user message's pendingReplyContent every
     // CHECKPOINT_INTERVAL_MS — same idiom as ChatSvc.runChatGenerationJob — so Stop/cancel has an
     // actual partial reply to save instead of control.getPartial()'s placeholder "", and a
@@ -444,6 +447,7 @@ export default class IntakeChatSvc {
       fullResponse = redactDocumentIds(result.content, scopeDocs);
       lawyerMatches = result.lawyerMatches;
       caseReady = result.caseReady;
+      suggestions = result.suggestions;
     } catch (err) {
       if (err instanceof IntakeGenerationCancelledError) {
         logger.info("Intake chat generation: cancelled before completion", { jobId: parentMessageId, caseId });
@@ -467,6 +471,7 @@ export default class IntakeChatSvc {
       userId,
       fullResponse,
       lawyerMatches,
+      suggestions,
     });
 
     // mark_case_ready() is intake's own self-report — it can jump the gun or misjudge. Jev's
@@ -547,6 +552,7 @@ export default class IntakeChatSvc {
     userId: string;
     fullResponse: string;
     lawyerMatches: unknown[];
+    suggestions: string[];
   }): Promise<{ id: string } | null> {
     // SQS-redelivery idempotency: a worker crash after this point but before the ack means the
     // job redelivers — if a reply already exists for this parent, this is that redelivery, not a
@@ -557,7 +563,7 @@ export default class IntakeChatSvc {
 
     // Saved only if the turn is still PENDING: one the client stopped, or the stale sweep failed,
     // has had its credit back, so its answer is dropped rather than delivered.
-    const assistantMessage = await IntakeChatRepo.completeTurn(p.parentMessageId, p.caseId, p.fullResponse.trim());
+    const assistantMessage = await IntakeChatRepo.completeTurn(p.parentMessageId, p.caseId, p.fullResponse.trim(), p.suggestions);
     if (!assistantMessage) {
       logger.info("Intake chat generation: turn ended before its answer was saved, dropping reply", { jobId: p.parentMessageId, caseId: p.caseId });
       return null;

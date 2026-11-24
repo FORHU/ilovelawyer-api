@@ -4,7 +4,7 @@
  * two surviving sources for a conflict. No DB, no Chat Wonder call. */
 import { expect } from "chai";
 import { describe, it } from "mocha";
-import { parseIntakeReply, buildIntakePrompt, caseDetailsBlock, caseDetailsPeople, readinessBlock, type IntakeMessageInput } from "../src/utils/client-intake-extract";
+import { parseIntakeReply, buildIntakePrompt, caseDetailsBlock, caseDetailsPeople, deriveFormFields, readinessBlock, type IntakeMessageInput } from "../src/utils/client-intake-extract";
 import type { CaseDoc } from "../src/utils/case-document-handles";
 
 const docs: CaseDoc[] = [
@@ -224,6 +224,66 @@ describe("Client intake extraction", () => {
       expect(prompt).to.include("not giving legal advice");
       expect(prompt).to.include("M1 (2026-03-04, client): I was dismissed on 3 March 2026.");
       expect(prompt).to.include("D1: Employment contract.pdf");
+    });
+
+    it("requires the word \"witness\" in role for a non-party observer — deriveFormFields's role filter depends on this exact wording surviving here", () => {
+      const prompt = buildIntakePrompt({
+        caseDetails: { title: "Dismissal", caseAreas: ["Employment"], ukJurisdiction: "England and Wales", where: "Leeds", side: "CLAIMANT", notes: null },
+        parties: [],
+        messages,
+        documents: docs,
+        documentExcerpts: "",
+        today: "2026-03-10",
+      });
+      expect(prompt).to.include('role MUST contain the word "witness"');
+      expect(prompt).to.include("never describe one only as");
+    });
+  });
+
+  describe("deriveFormFields (#157)", () => {
+    const person = (role: string) => ({ id: "p1", name: "Jo", role, text: role, sources: [] });
+
+    it("splits people into parties and witnesses by role, and lists nothing missing when every group has something", () => {
+      const result = deriveFormFields({
+        people: [person("the employer"), person("a witness to the dismissal")],
+        timeline: [{ id: "e1", text: "Dismissed", sources: [], date: "2026-03-03", datePrecision: "DAY" }],
+        goals: [{ id: "g1", text: "Get my job back", sources: [] }],
+        relationship: [{ id: "r1", text: "Employee of Acme Logistics since 2021", sources: [] }],
+        roleAndTerms: [{ id: "t1", text: "Warehouse supervisor, £32,000/year", sources: [] }],
+        reasonGiven: [{ id: "g2", text: "Employer said role was redundant", sources: [] }],
+        typeOfAction: ["Employment"],
+        venue: "England and Wales",
+      });
+      expect(result.parties).to.have.length(1);
+      expect(result.witnesses).to.have.length(1);
+      expect(result.witnesses[0]!.role).to.equal("a witness to the dismissal");
+      expect(result.missing).to.deep.equal([]);
+    });
+
+    it("reports every empty group as missing, without guessing a value for it", () => {
+      const result = deriveFormFields({ people: [], timeline: [], goals: [], relationship: [], roleAndTerms: [], reasonGiven: [], typeOfAction: [], venue: null });
+      expect(result.missing).to.deep.equal([
+        "parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals", "relationship", "roleAndTerms", "reasonGiven",
+      ]);
+      expect(result.parties).to.deep.equal([]);
+      expect(result.venue).to.equal(null);
+    });
+
+    it("generalises across non-employment case types just as well — a tenancy reads naturally into the same fields", () => {
+      const result = deriveFormFields({
+        people: [person("the landlord")],
+        timeline: [],
+        goals: [],
+        relationship: [{ id: "r1", text: "Tenant of 12 Mill Street since 2023", sources: [] }],
+        roleAndTerms: [{ id: "t1", text: "Assured shorthold tenancy, £950/month rent", sources: [] }],
+        reasonGiven: [{ id: "g2", text: "Landlord cited rent arrears", sources: [] }],
+        typeOfAction: ["Housing"],
+        venue: "England and Wales",
+      });
+      expect(result.relationship[0]!.text).to.equal("Tenant of 12 Mill Street since 2023");
+      expect(result.missing).to.not.include("relationship");
+      expect(result.missing).to.not.include("roleAndTerms");
+      expect(result.missing).to.not.include("reasonGiven");
     });
   });
 });

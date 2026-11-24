@@ -538,6 +538,9 @@ model IntakeMessage {
   documentIds         String[]                  @default([])
   findLawyerResultIds String[]                  @default([])
   markedReady         Boolean                   @default(false)
+  // #158: tappable reply candidates for the question THIS assistant turn asked, straight off the
+  // [INTAKE_SUGGESTIONS] frame. Set only on an assistant row; empty, never null, when CW sent none.
+  suggestions         String[]                  @default([])
   // Set on a voice-originated user message: the S3 key of the client's own recording, retained
   // (not deleted after transcription) the same way other case evidence is kept.
   audioKey            String?
@@ -2887,6 +2890,14 @@ model CaseMissingEvidence {
   resolvedById    String?
   notes           String?
   lawyerEditedAt  DateTime?
+  // Which intake-time evidence upload resolved this gap, if any (MissingEvidenceRepo
+  // .markFilledByDocument). A plain id, not a relation — same reasoning as claimId above: a
+  // document delete or a later rescan must never orphan or block this row. Set together;
+  // filledViaIntake distinguishes this from the lawyer later marking status RESOLVED by hand,
+  // which this does not touch.
+  filledByDocumentId String?
+  filledAt           DateTime?
+  filledViaIntake    Boolean                 @default(false)
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
@@ -2894,6 +2905,7 @@ model CaseMissingEvidence {
 
   @@index([caseId])
   @@index([claimId])
+  @@index([filledByDocumentId])
 }
 
 /// Jev's verdict on one candidate pair from the full-bundle contradiction scan

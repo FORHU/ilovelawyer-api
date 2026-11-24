@@ -69,6 +69,37 @@ export interface IntakeCompleteness {
   ready: boolean;
 }
 
+/** #157's named field groups, per the ticket's own screenshot of the lawyer's case-draft view:
+ * case title (set at case creation, not repeated here), type of action, venue, parties,
+ * relationship, role & terms, reason given, witnesses, client wants, timeline. Not a second AI
+ * extraction: parties/typeOfAction/venue are the deterministic case-creation form data (never
+ * guessed), and the rest are CaseIntake's own already-extracted people/timeline/goals/relationship/
+ * roleAndTerms/reasonGiven, split out and relabeled for the question-loop UI's fill-progress
+ * display. relationship/roleAndTerms/reasonGiven are deliberately generic across practice areas
+ * (e.g. "tenant and landlord" or "contract value and deliverables" read as naturally as an
+ * employment case's "employee and employer" / "job title and salary") rather than gated to one
+ * case type. See deriveFormFields (client-intake-extract.ts). */
+export interface IntakeFormFields {
+  parties: IntakePerson[];
+  witnesses: IntakePerson[];
+  /** The case's own area names (e.g. "Employment") — set at case creation, so this is empty only
+   * when the client genuinely hasn't chosen one yet. */
+  typeOfAction: string[];
+  /** Jurisdiction or town, set at case creation; null when not chosen yet. */
+  venue: string | null;
+  timeline: IntakeEvent[];
+  clientGoals: IntakeItem[];
+  /** The nature of the relationship the claim arises from (employment, tenancy, contract, ...). */
+  relationship: IntakeItem[];
+  /** The client's role/position and the financial or contractual terms involved. */
+  roleAndTerms: IntakeItem[];
+  /** The reason the OTHER side gave for the disputed action, as stated — never inferred. */
+  reasonGiven: IntakeItem[];
+  /** Which of the groups above is still empty — the fill-progress list `ilovelawyer-client`'s
+   * question loop reads to skip an already-answered question or show what's left. */
+  missing: ("parties" | "witnesses" | "typeOfAction" | "venue" | "timeline" | "clientGoals" | "relationship" | "roleAndTerms" | "reasonGiven")[];
+}
+
 export interface CaseIntake {
   generatedAt: string | null;
   status: IntakeStatus;
@@ -87,6 +118,7 @@ export interface CaseIntake {
   /** From Lawyer Readiness (lawyer-readiness-jev.ts) when USE_JEV_LAWYER_READINESS is on; null
    * when the check is off or hasn't run yet. */
   completeness: IntakeCompleteness | null;
+  formFields: IntakeFormFields;
 }
 
 /** The redacted shape of the intake a lawyer sees before claiming a request, folded into

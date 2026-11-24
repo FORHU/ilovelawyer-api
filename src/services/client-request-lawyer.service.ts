@@ -55,6 +55,18 @@ const EMPTY_INTAKE: CaseIntake = {
   missing: [],
   conflicts: [],
   completeness: null,
+  formFields: {
+    parties: [],
+    witnesses: [],
+    typeOfAction: [],
+    venue: null,
+    timeline: [],
+    clientGoals: [],
+    relationship: [],
+    roleAndTerms: [],
+    reasonGiven: [],
+    missing: ["parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals", "relationship", "roleAndTerms", "reasonGiven"],
+  },
 };
 
 /** Who's asking, from the lawyer app's resolved workspace (X-Organization-Id): their firm, or null

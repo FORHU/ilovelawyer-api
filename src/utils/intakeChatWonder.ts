@@ -30,6 +30,9 @@ export interface IntakeChatWonderStreamResult {
   lawyerMatches: unknown[];
   /** True exactly when mark_case_ready fired this turn ([CASE_READY]true). */
   caseReady: boolean;
+  /** #158's tappable reply candidates for the question this turn just asked, straight from the
+   * [INTAKE_SUGGESTIONS] frame — [] when CW sent none (low confidence) or the frame never arrived. */
+  suggestions: string[];
 }
 
 export class IntakeGenerationCancelledError extends Error {
@@ -83,6 +86,7 @@ export function streamIntakeChatWonderMessage(
     let sourceMetadata: unknown[] = [];
     let lawyerMatches: unknown[] = [];
     let caseReady = false;
+    let suggestions: string[] = [];
     let postEndTimer: ReturnType<typeof setTimeout> | undefined;
 
     const finish = () => {
@@ -95,7 +99,7 @@ export function streamIntakeChatWonderMessage(
       } catch {
         // already closing
       }
-      resolve({ content: accumulated, relatedCases, sourceMetadata, lawyerMatches, caseReady });
+      resolve({ content: accumulated, relatedCases, sourceMetadata, lawyerMatches, caseReady, suggestions });
     };
 
     const fail = (err: Error) => {
@@ -179,6 +183,17 @@ export function streamIntakeChatWonderMessage(
       const caseReadyIdx = message.indexOf("[CASE_READY]");
       if (caseReadyIdx !== -1) {
         caseReady = message.slice(caseReadyIdx + "[CASE_READY]".length).trim() === "true";
+        return;
+      }
+
+      const suggestionsIdx = message.indexOf("[INTAKE_SUGGESTIONS]");
+      if (suggestionsIdx !== -1) {
+        try {
+          const parsed = JSON.parse(message.slice(suggestionsIdx + "[INTAKE_SUGGESTIONS]".length));
+          suggestions = Array.isArray(parsed?.suggestions) ? parsed.suggestions.filter((s: unknown) => typeof s === "string") : [];
+        } catch {
+          // malformed frame — leave suggestions as whatever it was
+        }
         return;
       }
 

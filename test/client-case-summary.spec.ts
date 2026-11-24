@@ -32,6 +32,18 @@ function intake(overrides: Partial<CaseIntake> = {}): CaseIntake {
     missing: [{ id: "x1", question: "When was the deposit paid?", why: "A lawyer will ask when it was protected." }],
     conflicts: [{ id: "k1", description: "The rent is £950 in the chat but £995 in the tenancy", sources: [CHAT, DOC] }],
     completeness: { ready: false, criteria: [{ key: "dates", label: "Key dates", met: true }] },
+    formFields: {
+      parties: [],
+      witnesses: [],
+      typeOfAction: [],
+      venue: null,
+      timeline: [],
+      clientGoals: [],
+      relationship: [],
+      roleAndTerms: [],
+      reasonGiven: [],
+      missing: [],
+    },
     ...overrides,
   };
 }

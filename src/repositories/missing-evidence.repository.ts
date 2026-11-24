@@ -29,6 +29,23 @@ export default class MissingEvidenceRepo {
     );
   }
 
+  /**
+   * #159: tags a gap as filled by an intake-time evidence upload. CW decides which gap the
+   * uploaded evidence resolved (from its structured extraction) and passes that gap's id back
+   * through ilovelawyer-api; this just records the link once the document's extraction has gone
+   * READY. Deliberately does not touch `status` — that stays the lawyer's own call via
+   * updateStatus below, so an intake fill surfaces as "evidence attached" without silently
+   * marking the gap RESOLVED on the client's say-so alone.
+   */
+  static async markFilledByDocument(id: string, caseId: string, documentId: string) {
+    const existing = await prisma.caseMissingEvidence.findFirst({ where: { id, caseId } });
+    if (!existing) return null;
+    return prisma.caseMissingEvidence.update({
+      where: { id },
+      data: { filledByDocumentId: documentId, filledAt: new Date(), filledViaIntake: true },
+    });
+  }
+
   /** The lawyer's triage. Mirrors EvidenceRepo.updateContradictionStatus: reopening clears the
    * resolution, so a row never shows a stale note beside an OPEN status. */
   static async updateStatus(

@@ -166,6 +166,10 @@ export default class ClientCaseCtrl {
     res.status(200).json(await ClientCaseSvc.lawyerReadiness(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
   }
 
+  static async missingEvidence(req: Request, res: Response) {
+    res.status(200).json(await ClientCaseSvc.missingEvidence(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
+  }
+
   static async pricing(req: Request, res: Response) {
     res.status(200).json(await ClientBillingSvc.pricing(req.user.userId));
   }

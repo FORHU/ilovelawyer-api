@@ -37,10 +37,84 @@ const clientDocument = {
   properties: {
     id: { type: "string" },
     name: { type: "string" },
-    status: { type: "string", enum: ["PENDING", "READY", "FAILED"] },
+    status: { type: "string", enum: ["PENDING", "READY", "FAILED"], description: "The raw extraction state; kept for older apps" },
+    syncStatus: {
+      type: "string",
+      enum: ["processing", "done", "failed"],
+      description: "#159: `status` relabeled for the evidence UI. No `uploading` here — that's the client's own pre-confirm state, before a Document row (and so this field) exists.",
+    },
     size: { type: "integer", nullable: true, description: "Bytes; null when the upload didn't say" },
     uploadedAt: { type: "string", format: "date-time" },
     createdAt: { type: "string", format: "date-time", description: "Same as uploadedAt; kept for older apps" },
+  },
+};
+
+const intakeSource = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["CASE_DETAILS", "CLIENT", "DOCUMENT"] },
+    messageId: { type: "string", nullable: true },
+    documentId: { type: "string", nullable: true },
+    documentName: { type: "string", nullable: true },
+    page: { type: "integer", nullable: true },
+  },
+};
+const intakeItem = { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, sources: { type: "array", items: intakeSource } } };
+const intakePerson = { type: "object", properties: { ...intakeItem.properties, name: { type: "string" }, role: { type: "string" } } };
+const intakeEvent = {
+  type: "object",
+  properties: { ...intakeItem.properties, date: { type: "string", nullable: true }, datePrecision: { type: "string", enum: ["DAY", "MONTH", "YEAR", "UNKNOWN"] } },
+};
+const intakeFormFields = {
+  type: "object",
+  description:
+    "#157: the ticket's named field groups for the question-loop UI's fill progress, matching the ticket's own case-draft screenshot (case title is set at case creation and isn't repeated here). Not a second AI call — parties/typeOfAction/venue are the deterministic case-creation form data; witnesses/timeline/clientGoals/relationship/roleAndTerms/reasonGiven are the already-extracted people/timeline/goals/relationship/roleAndTerms/reasonGiven split out. relationship/roleAndTerms/reasonGiven are deliberately generic across practice areas, not employment-specific.",
+  properties: {
+    parties: { type: "array", items: intakePerson },
+    witnesses: { type: "array", items: intakePerson },
+    typeOfAction: { type: "array", items: { type: "string" }, description: "The case's own area names, e.g. \"Employment\" — set at case creation" },
+    venue: { type: "string", nullable: true },
+    timeline: { type: "array", items: intakeEvent },
+    clientGoals: { type: "array", items: intakeItem },
+    relationship: { type: "array", items: intakeItem, description: "The relationship the claim arises from, e.g. employee/employer, tenant/landlord" },
+    roleAndTerms: { type: "array", items: intakeItem, description: "The client's role/position and the financial or contractual terms involved" },
+    reasonGiven: { type: "array", items: intakeItem, description: "The reason the OTHER side gave for the disputed action, as stated — never inferred" },
+    missing: {
+      type: "array",
+      items: { type: "string", enum: ["parties", "witnesses", "typeOfAction", "venue", "timeline", "clientGoals", "relationship", "roleAndTerms", "reasonGiven"] },
+      description: "Which of the groups above is still empty",
+    },
+  },
+};
+const caseIntake = {
+  type: "object",
+  properties: {
+    generatedAt: { type: "string", format: "date-time", nullable: true },
+    status: { type: "string", enum: ["EMPTY", "RUNNING", "READY", "FAILED", "STALE"] },
+    updates: { type: "object", properties: { allowed: { type: "boolean" }, leftToday: { type: "integer" } } },
+    summary: { type: "string", nullable: true, description: "AI-written; always shown labelled as an AI summary, never established fact" },
+    people: { type: "array", items: intakePerson },
+    timeline: { type: "array", items: intakeEvent },
+    facts: { type: "array", items: intakeItem },
+    goals: { type: "array", items: intakeItem },
+    concerns: { type: "array", items: intakeItem },
+    questionsForLawyer: { type: "array", items: intakeItem },
+    deadlines: { type: "array", items: { type: "object", properties: { ...intakeItem.properties, date: { type: "string", nullable: true } } } },
+    missing: {
+      type: "array",
+      items: { type: "object", properties: { id: { type: "string" }, question: { type: "string" }, why: { type: "string" } } },
+      description: "Open gaps the AI found in the conversation/documents — not sourced the way other items are",
+    },
+    conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, description: { type: "string" }, sources: { type: "array", items: intakeSource } } } },
+    completeness: {
+      type: "object",
+      nullable: true,
+      properties: {
+        ready: { type: "boolean" },
+        criteria: { type: "array", items: { type: "object", properties: { key: { type: "string" }, label: { type: "string" }, met: { type: "boolean" } } } },
+      },
+    },
+    formFields: intakeFormFields,
   },
 };
 
@@ -655,14 +729,17 @@ export const clientAppPaths: Paths = {
                     id: { type: "string" },
                     role: { type: "string", enum: ["user", "ai"] },
                     text: { type: "string" },
-                    replyStatus: { type: "string", enum: ["PENDING", "DONE", "FAILED", "CANCELLED"], nullable: true },
-                    documents: {
+                    replyStatus: { type: "string", enum: ["PENDING", "DONE", "FAILED", "CANCELLED"], nullable: true, description: "Set on the client's own message (which turn this is); always null on the AI's" },
+                    documentIds: {
                       type: "array",
-                      description: "The case documents sent with a user message. Always empty on the AI's",
-                      items: {
-                        type: "object",
-                        properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["PENDING", "READY", "FAILED"] } },
-                      },
+                      items: { type: "string" },
+                      description: "The case documents sent with a user message, by id. Always empty on the AI's",
+                    },
+                    suggestions: {
+                      type: "array",
+                      items: { type: "string" },
+                      description:
+                        "#158: 2-4 short tappable replies to the question this AI message just asked, worded exactly as the client could say them. Empty — never omitted — when CW isn't confident enough to suggest anything; always empty on the client's own message. Tapping one sends it as an ordinary chat message, same as typing or speaking it.",
                     },
                     audioUrl: { type: "string", nullable: true, description: "Playable audio: the client's own recording on a voice-originated user message, or Polly's synthesized reply on its answer" },
                     createdAt: { type: "string", format: "date-time" },
@@ -783,6 +860,8 @@ export const clientAppPaths: Paths = {
     post: {
       tags: [TAG],
       summary: "Step 1 of an upload: a URL to PUT the file to S3",
+      description:
+        "#159: evidence images and PDFs use this same upload path as any other document — there is no separate evidence-only endpoint. Supported extensions: pdf, doc, docx, xlsx, xlsm, xlam, txt, jpg, jpeg, png, webp, heic, mp3, mp4, m4a, wav (document-upload.constants.ts's ALLOWED_DOCUMENT_EXTENSIONS, enforced server-side regardless of what the client already filters to). Size limit: 1 GB total per presign/confirm request (DOCUMENT_UPLOAD_BATCH_MAX_BYTES) — also the effective largest single file, since there's no separate per-file cap.",
       security,
       parameters: [caseId],
       requestBody: {
@@ -803,7 +882,21 @@ export const clientAppPaths: Paths = {
       parameters: [caseId],
       requestBody: {
         required: true,
-        content: json({ type: "object", required: ["key", "name"], properties: { key: { type: "string" }, name: { type: "string" }, contentType: { type: "string" }, fileSize: { type: "integer" } } }),
+        content: json({
+          type: "object",
+          required: ["key", "name"],
+          properties: {
+            key: { type: "string" },
+            name: { type: "string" },
+            contentType: { type: "string" },
+            fileSize: { type: "integer" },
+            missingEvidenceId: {
+              type: "string",
+              description:
+                "#159: the client's explicit \"this fills that gap\" action (from GET .../missing-evidence's gaps list) — never AI-matched. Silently ignored if it doesn't name an open gap on this case, same as any other id a client could tamper with.",
+            },
+          },
+        }),
       },
       responses: { 201: { description: "Added (status PENDING until it's read)", content: json(clientDocument) }, 404: err("Not one of this client's cases") },
     },
@@ -844,6 +937,48 @@ export const clientAppPaths: Paths = {
         200: { description: "Queued again (status PENDING)", content: json(clientDocument) },
         404: err("Not one of this client's cases, or not a document on it"),
         409: err("NOT_FAILED: only a FAILED document can be retried"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/missing-evidence": {
+    get: {
+      tags: [TAG],
+      summary: "#159: the case's open evidence gaps, in order, plus what to upload next",
+      description:
+        "Ordering rule (the ticket's own open question, now settled): open gaps first, then most severe (CRITICAL, MODERATE, MINOR), then newest first within the same severity — MissingEvidenceRepo.list's existing sort, not a new one. `suggestion` is CW's pick of which still-unfilled gap to ask for next, from the same list; null when CW isn't confident or the call fails (never blocks or delays this response). Requires AI_PROCESSING consent, since picking a suggestion calls CW.",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: {
+          description: "Open gaps and a suggestion",
+          content: json({
+            type: "object",
+            properties: {
+              gaps: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    label: { type: "string" },
+                    detail: { type: "string", nullable: true },
+                    severity: { type: "string", enum: ["CRITICAL", "MODERATE", "MINOR"] },
+                    suggestedSource: { type: "string", nullable: true },
+                    filledByDocumentId: { type: "string", nullable: true, description: "Set once a document has been uploaded for this gap via missingEvidenceId" },
+                    filledAt: { type: "string", format: "date-time", nullable: true },
+                  },
+                },
+              },
+              suggestion: {
+                type: "object",
+                nullable: true,
+                properties: { gapId: { type: "string" }, message: { type: "string" } },
+              },
+            },
+          }),
+        },
+        403: err("AI processing consent not given yet, or this client site has AI features turned off"),
+        404: err("Not one of this client's cases"),
       },
     },
   },
@@ -1102,6 +1237,29 @@ export const clientAppPaths: Paths = {
         404: err("No such payment"),
         409: err("REFUND_NOT_SUPPORTED (DUMMY or FREE), PAYMENT_NOT_REFUNDABLE (not SUCCEEDED) or ALREADY_REFUNDED"),
         502: err("PAYMENT_PROVIDER_ERROR: Stripe refused; the refund is recorded FAILED and nothing is held"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/intake": {
+    get: {
+      tags: [TAG],
+      summary: "The case's Intake tab: an AI extraction of the chat and READY documents, including #157's formFields view",
+      security,
+      parameters: [caseId],
+      responses: { 200: { description: "Intake", content: json(caseIntake) }, 404: err("Case not found") },
+    },
+  },
+  "/client/cases/{caseId}/intake/refresh": {
+    post: {
+      tags: [TAG],
+      summary: "Re-runs the Intake extraction now, instead of waiting for the next automatic trigger (a chat reply, a document going READY, a case-details edit)",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: { description: "Intake (RUNNING if a run was just queued)", content: json(caseIntake) },
+        402: err("INTAKE_BUDGET_REACHED: this case has reached its AI usage limit for the intake summary"),
+        404: err("Case not found"),
+        429: err("INTAKE_DAILY_LIMIT: today's update limit for this case's intake summary is used up"),
       },
     },
   },

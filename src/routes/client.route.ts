@@ -131,6 +131,9 @@ router.get("/cases/:caseId/export", caseSummaryLimiter, asyncHandler(ClientCaseC
 router.post("/cases/:caseId/top-ups", asyncHandler(ClientCaseCtrl.topUp));
 // A GET, but it asks Jev about the case, so it needs AI-processing consent like the chat does.
 router.get("/cases/:caseId/lawyer-readiness", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.lawyerReadiness));
+// #159: the case's open evidence gaps, plus CW's pick of which to ask for next — a GET, but it
+// calls CW for the suggestion, same AI-consent reasoning as lawyer-readiness above.
+router.get("/cases/:caseId/missing-evidence", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.missingEvidence));
 
 // The lawyer marketplace: verified lawyers taking requests, filtered and sorted.
 // Email import (EPIC #982): the client's own Gmail, read-only. Nothing read here is stored.

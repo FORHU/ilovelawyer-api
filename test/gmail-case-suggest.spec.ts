@@ -46,6 +46,18 @@ const INTAKE: CaseIntake = {
   missing: [],
   conflicts: [],
   completeness: null,
+  formFields: {
+    parties: [],
+    witnesses: [],
+    typeOfAction: [],
+    venue: null,
+    timeline: [],
+    clientGoals: [],
+    relationship: [],
+    roleAndTerms: [],
+    reasonGiven: [],
+    missing: [],
+  },
 };
 
 describe("gmailQueriesFor", () => {
