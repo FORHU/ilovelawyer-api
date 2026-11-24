@@ -165,6 +165,7 @@ describe("Client document actions", () => {
         id: "d1",
         name: "Payslip.pdf",
         status: "PENDING",
+        syncStatus: "processing",
         size: 2048,
         uploadedAt: uploadedAt.toISOString(),
         createdAt: uploadedAt.toISOString(),
@@ -198,8 +199,8 @@ describe("Client document actions", () => {
       });
       const dto = await ClientCaseSvc.get(workspace, "case-1");
       expect(dto.documents).to.deep.equal([
-        { id: "d1", name: "Payslip.pdf", status: "READY", size: 2048, uploadedAt, createdAt: uploadedAt },
-        { id: "d2", name: "Letter.pdf", status: "PENDING", size: null, uploadedAt, createdAt: uploadedAt },
+        { id: "d1", name: "Payslip.pdf", status: "READY", syncStatus: "done", size: 2048, uploadedAt, createdAt: uploadedAt },
+        { id: "d2", name: "Letter.pdf", status: "PENDING", syncStatus: "processing", size: null, uploadedAt, createdAt: uploadedAt },
       ]);
     });
   });
