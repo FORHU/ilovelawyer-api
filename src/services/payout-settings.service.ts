@@ -7,6 +7,7 @@ import type { TenantCode } from "../types/tenant-code";
 import type { QuoteTerms } from "../types/client-handoff";
 import { PAYOUT_LIMITS, PAYOUT_SETTINGS_CACHE_TTL_S, PAYOUT_SETTINGS_DEFAULTS, PAYOUT_SETTINGS_DEFAULTS_KRW, payoutSettingsCacheKey } from "../constants/payout.constants";
 import { FEE_CURRENCY_BY_COUNTRY } from "../constants/lawyer-application.constants";
+import { paysLawyerDirectly } from "../constants/client-request.constants";
 
 /** A tenant's quotation payment terms as the services use them. */
 export interface PayoutTerms {
@@ -45,11 +46,13 @@ async function tenantIdOf(code: TenantCode): Promise<string> {
   return tenant.id;
 }
 
-/** A site's terms: what an admin set, the rest its defaults, always in the site's own currency. */
+/** A site's terms: what an admin set, the rest its defaults, always in the site's own currency. On a
+ * site where the client pays the lawyer directly (KR) there is no platform fee, whatever a row says. */
 function termsOf(row: Partial<PayoutTerms> | null, code?: string | null): PayoutTerms {
   const defaults = defaultsFor(code);
   const base = row ? { ...defaults, ...Object.fromEntries(FIELDS.map((f) => [f, row[f] ?? defaults[f]])) } : defaults;
-  return { ...base, currency: currencyFor(code) };
+  const noFee = paysLawyerDirectly(code) ? { platformFeeBps: 0, minPlatformFeeMinor: 0 } : {};
+  return { ...base, ...noFee, currency: currencyFor(code) };
 }
 
 /**
@@ -109,6 +112,9 @@ export default class PayoutSettingsSvc {
       if (value === undefined) continue;
       const { min, max } = PAYOUT_LIMITS[field];
       if (!Number.isInteger(value) || value < min || value > max) throw new HttpError(`${field} must be a whole number from ${min} to ${max}`, 400, "PAYOUT_SETTING_OUT_OF_RANGE");
+    }
+    if (paysLawyerDirectly(code) && ((patch.platformFeeBps ?? 0) !== 0 || (patch.minPlatformFeeMinor ?? 0) !== 0)) {
+      throw new HttpError(`${code} clients pay lawyers directly, so it has no platform fee.`, 400, "PLATFORM_FEE_NOT_ALLOWED");
     }
     const tenantId = await tenantIdOf(code);
     const before = termsOf(await PayoutSettingsRepo.find(tenantId), code);
