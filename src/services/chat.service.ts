@@ -573,7 +573,7 @@ export default class ChatSvc {
     // The route refuses a new message when AI processing is off. This catches a turn that was
     // already queued when the person switched it off: fail it the way an AI failure is failed, so
     // the page stops waiting, and never call Chat Wonder.
-    if (!(await ConsentSvc.isAllowed(job.userId, "AI_PROCESSING"))) {
+    if (!(await ConsentSvc.mayRunAi(job.userId))) {
       logger.info("Chat generation: skipped, AI processing consent is withdrawn", {
         jobId: job.jobId,
         consultationId: job.consultationId,

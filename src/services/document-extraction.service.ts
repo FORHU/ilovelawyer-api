@@ -14,6 +14,7 @@ import { categorizeDocument, describeImage } from "../utils/chatWonder";
 import { VISION_FALLBACK_MAX_BYTES } from "../utils/ocr";
 import logger from "../utils/logger";
 import LlmUsageSvc from "./llm-usage.service";
+import ConsentSvc from "./consent.service";
 
 /** mp3/mp4 evidence — transcribed via AWS Transcribe rather than text-extracted. */
 function isMediaDocument(mimeType?: string | null, filename?: string): boolean {
@@ -123,6 +124,16 @@ export default class DocumentExtractionSvc {
       if (!doc?.file?.s3Key) {
         logger.error("Document extraction: no file/s3Key for document", { documentId });
         await DocumentExtractionSvc.setStatus(documentId, "FAILED", "document:failed");
+        return;
+      }
+
+      // Indexing sends the document to AI providers (categorization, image description, embeddings).
+      // While the person who added it may not have the AI read their case (ConsentSvc.mayRunAi: AI
+      // processing off, or a client who hasn't agreed to sensitive information), it waits as PENDING
+      // and nothing leaves; ConsentSvc.set queues it again once they agree.
+      if (doc.userId && !(await ConsentSvc.mayRunAi(doc.userId))) {
+        logger.info("Document extraction: held, the owner hasn't consented to the AI reading it", { documentId, userId: doc.userId });
+        if (doc.ragStatus !== "PENDING") await DocumentRepo.updateRagStatus(documentId, "PENDING");
         return;
       }
 

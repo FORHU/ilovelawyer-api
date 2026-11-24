@@ -19,6 +19,7 @@ import * as chatWonder from "../src/utils/chatWonder";
 import prisma from "../src/lib/prisma";
 import DocumentRepo from "../src/repositories/document.repository";
 import DocumentChunkRepo from "../src/repositories/document-chunk.repository";
+import ConsentSvc from "../src/services/consent.service";
 import DocumentExtractionSvc, { EMBED_ROUND_CHUNKS, imageWithoutTextPlaceholder } from "../src/services/document-extraction.service";
 
 interface Emitted {
@@ -56,6 +57,7 @@ describe("DocumentExtractionSvc socket events", () => {
     deleteByDocument: DocumentChunkRepo.deleteByDocument,
     insertMany: DocumentChunkRepo.insertMany,
     verify: DocumentChunkRepo.verify,
+    mayRunAi: ConsentSvc.mayRunAi,
   };
 
   let emitted: Emitted[];
@@ -66,11 +68,14 @@ describe("DocumentExtractionSvc socket events", () => {
   let cleanups: number;
   let storageCalls: string[];
   let insertedIndexes: number[];
+  let aiAllowed: boolean;
   const downloadedBytes = 5678;
 
   beforeEach(() => {
     emitted = [];
     statusWrites = [];
+    aiAllowed = true;
+    (ConsentSvc as any).mayRunAi = async () => aiAllowed;
     doc = { ...baseDoc };
     pages = [{ pageNumber: 1, text: "This agreement is entered into by the parties." }];
     insertedCount = 0;
@@ -130,6 +135,28 @@ describe("DocumentExtractionSvc socket events", () => {
     DocumentChunkRepo.deleteByDocument = originals.deleteByDocument;
     DocumentChunkRepo.insertMany = originals.insertMany;
     DocumentChunkRepo.verify = originals.verify;
+    (ConsentSvc as any).mayRunAi = originals.mayRunAi;
+  });
+
+  it("holds the document back, sending nothing to the AI, while its owner hasn't consented (#699)", async () => {
+    aiAllowed = false;
+    let downloaded = false;
+    let embedded = false;
+    (s3 as any).downloadObjectToTempFile = async () => {
+      downloaded = true;
+      throw new Error("should not download");
+    };
+    (embedding as any).embedTexts = async () => {
+      embedded = true;
+      return [];
+    };
+    await DocumentExtractionSvc.process("doc1");
+
+    expect(downloaded).to.equal(false);
+    expect(embedded).to.equal(false);
+    expect(emitted).to.deep.equal([]);
+    expect(statusWrites).to.not.include("READY");
+    expect(statusWrites).to.not.include("FAILED");
   });
 
   it("emits document:started then document:ready (with pageCount and category) to the uploader on success", async () => {

@@ -4171,6 +4171,7 @@ enum ConsentPurpose {
   // The client app's Gmail email import (EPIC #982, #989): reading the connected inbox when the
   // client searches or asks the AI to suggest emails. Opt-in: blocked until answered.
   EMAIL_IMPORT
+  SENSITIVE_INFO
 }
 
 model Consent {

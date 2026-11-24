@@ -16,6 +16,7 @@ import AiGenerationJobRepo from "../src/repositories/ai-generation-job.repositor
 import AiGenerationLockSvc from "../src/services/ai-generation-lock.service";
 import LlmUsageRepo from "../src/repositories/llm-usage.repository";
 import ChatRepo from "../src/repositories/chat.repository";
+import ConsentRepo from "../src/repositories/consent.repository";
 import AiGenerationQueue from "../src/queues/ai-generation.queue";
 
 const stashed: (() => void)[] = [];
@@ -204,14 +205,20 @@ describe("ClientIntakeSvc", () => {
 
   describe("the route", () => {
     let role: string;
+    let sensitiveAgreed: boolean;
     const getRoute = (as: string) => request(app).get(`/api/client/cases/${CASE_ID}/intake`).set({ Authorization: `Bearer ${loginToken(as).accessToken}` });
     const postRoute = (as: string) => request(app).post(`/api/client/cases/${CASE_ID}/intake/refresh`).set({ Authorization: `Bearer ${loginToken(as).accessToken}` });
 
     beforeEach(() => {
       stash(prisma.user as any, ["findUnique"]);
       stash(ClientCaseSvc, ["workspaceFor"]);
+      stash(ConsentRepo, ["find"]);
       role = "USER";
+      sensitiveAgreed = true;
       (prisma.user as any).findUnique = async () => ({ role, name: "Sam Client", username: "sam.1234" });
+      // AI processing never answered (on by default); sensitive information agreed unless a test says not.
+      (ConsentRepo as any).find = async (_userId: string, purpose: string) =>
+        purpose === "SENSITIVE_INFO" && sensitiveAgreed ? { withdrawnAt: null } : null;
       (ClientCaseSvc as any).workspaceFor = async (userId: string) => ({ ...workspace, id: userId === "other-client" ? "org-2" : workspace.id });
     });
 
@@ -236,6 +243,14 @@ describe("ClientIntakeSvc", () => {
       const res = await postRoute("client");
       expect(res.status).to.equal(202);
       expect(res.body.status).to.equal("EMPTY");
+    });
+
+    it("POST refresh is refused until the client agrees to sensitive information (#699)", async () => {
+      sensitiveAgreed = false;
+      const res = await postRoute("client");
+      expect(res.status).to.equal(403);
+      expect(res.body.code).to.equal("CONSENT_REQUIRED");
+      expect(res.body.purpose).to.equal("SENSITIVE_INFO");
     });
   });
 });

@@ -3,6 +3,8 @@ import ConsentRepo from "../repositories/consent.repository";
 import HttpError from "../utils/http-error";
 import SecurityAuditSvc from "./security-audit.service";
 import GmailConnectionSvc from "./gmail-connection.service";
+import DocumentExtractionQueue from "../queues/document-extraction.queue";
+import logger from "../utils/logger";
 import {
   ACTIVE_CONSENT_PURPOSES,
   CONSENT_VERSIONS,
@@ -48,6 +50,36 @@ export default class ConsentSvc {
       "CONSENT_REQUIRED",
       { purpose },
     );
+  }
+
+  /** Whether the AI may read this person's case: their questions, documents and dictation. AI
+   * processing must not be withdrawn and, for a client account, sensitive information must have been
+   * agreed to as well (ilovelawyer-api#699): what a client describes often includes it. A lawyer
+   * account is not asked. Every AI entry point checks this, the routes up front and the workers as
+   * the backstop, so a job queued before a withdrawal doesn't run either. */
+  static async mayRunAi(userId: string): Promise<boolean> {
+    return (await ConsentSvc.missingForAi(userId)) === null;
+  }
+
+  /** 403 CONSENT_REQUIRED naming the purpose that is missing, so the client app knows whether to
+   * point at the AI setting or show its sensitive-information step. */
+  static async assertMayRunAi(userId: string): Promise<void> {
+    const missing = await ConsentSvc.missingForAi(userId);
+    if (missing === null) return;
+    if (missing === "AI_PROCESSING") return ConsentSvc.assertAllowed(userId, missing);
+    throw new HttpError(
+      "Before the AI reads your case, you need to agree to how sensitive information is handled.",
+      403,
+      "CONSENT_REQUIRED",
+      { purpose: missing },
+    );
+  }
+
+  private static async missingForAi(userId: string): Promise<ConsentPurpose | null> {
+    if (!(await ConsentSvc.isAllowed(userId, "AI_PROCESSING"))) return "AI_PROCESSING";
+    if (await ConsentSvc.isAllowed(userId, "SENSITIVE_INFO")) return null;
+    // Not agreed to: that only matters for a client account.
+    return (await ConsentRepo.findRole(userId)) === "USER" ? "SENSITIVE_INFO" : null;
   }
 
   /** Every purpose, in the enum's order, so a client can render the full list without guessing
@@ -105,6 +137,19 @@ export default class ConsentSvc {
       targetId: userId,
       payload: { purpose, granted, version, source },
     });
+    // Documents added while the AI couldn't read them were held back from indexing; index them now.
+    if (granted && (purpose === "AI_PROCESSING" || purpose === "SENSITIVE_INFO")) await ConsentSvc.releaseHeldDocuments(userId);
     return ConsentSvc.list(userId);
+  }
+
+  private static async releaseHeldDocuments(userId: string): Promise<void> {
+    try {
+      if (!(await ConsentSvc.mayRunAi(userId))) return;
+      const ids = await ConsentRepo.findPendingDocumentIds(userId);
+      if (ids.length) DocumentExtractionQueue.enqueueMany(ids);
+    } catch (err) {
+      // The answer is saved either way; a document left waiting is picked up by the case's next refresh.
+      logger.warn("Consent: couldn't queue documents held for consent", { err, userId });
+    }
   }
 }
