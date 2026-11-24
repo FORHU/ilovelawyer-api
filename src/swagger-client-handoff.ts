@@ -604,6 +604,7 @@ export const clientHandoffSchemas: Schemas = {
       quotation: { ...ref("Quotation"), nullable: true, description: "The lawyer's draft or sent quotation" },
       quoteTerms: ref("QuoteTerms"),
       perCaseFee: { ...money("The region's old introduction fee: only charged on requests confirmed before quotation payments"), readOnly: true },
+      paysLawyerDirectly: { type: "boolean", readOnly: true, description: "The client pays this lawyer directly (KR): no quotation payment, earning or platform fee through ilovelawyer" },
       charge: { ...ref("ChargeSummary"), nullable: true, description: "The per-case fee, on requests confirmed before quotation payments" },
       engagement: {
         type: "object",
@@ -661,7 +662,8 @@ export const clientHandoffSchemas: Schemas = {
       lawyer: { ...ref("LawyerPublicProfile"), nullable: true, description: "The lawyer hired, or until then the only quote; null with several. firmName is null for a solo practitioner's personal workspace" },
       quote: { ...ref("Quote"), nullable: true, description: "That lawyer's quote" },
       quotation: { ...ref("Quotation"), nullable: true, description: "That lawyer's quotation" },
-      awaitingPayment: { type: "boolean", description: "The client accepted a quotation and hasn't paid it yet (CONFIRMED)" },
+      awaitingPayment: { type: "boolean", description: "The client accepted a quotation and hasn't paid it yet (CONFIRMED). Never true when paysLawyerDirectly" },
+      paysLawyerDirectly: { type: "boolean", description: "On this site the client pays the hired lawyer directly (KR): accepting a quote engages the lawyer at once, and POST .../payment answers 409 LAWYER_FEES_DIRECT" },
       referralDisclosure: { type: "string", nullable: true, description: "Shown on the quote screen; the client acknowledges it to confirm" },
       sharingNotice: { type: "string", nullable: true, description: "What hiring a lawyer hands over (the case, documents and AI chat, and the lawyer's copy). Shown with the quotes and on the payment screen; the same words as the consent text" },
       engagedAt: dateTime(undefined, true),

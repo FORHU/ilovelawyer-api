@@ -30,7 +30,7 @@ import { emitToUser } from "../lib/socket";
 import HttpError from "../utils/http-error";
 import type { TenantCode } from "../types/tenant-code";
 import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent, CloseOutcome, LawyerExitForLawyer, QuotationInvoice, QuoteTerms } from "../types/client-handoff";
-import { CLIENT_REQUEST_MAX_LAWYERS, quoteMaxMinorOf } from "../constants/client-request.constants";
+import { CLIENT_REQUEST_MAX_LAWYERS, paysLawyerDirectly, quoteMaxMinorOf } from "../constants/client-request.constants";
 import { CLIENT_REQUESTS_OPEN_TENANTS, requestCurrencyOf } from "../constants/client-sites.constants";
 import ChatRepo from "../repositories/chat.repository";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
@@ -186,6 +186,8 @@ function toDto(r: LawyerRequest, lawyerId: string, terms: LawyerTerms, brief: un
     quotation: quotationOf(mine),
     quoteTerms: terms.quoteTerms,
     perCaseFee: terms.perCaseFee,
+    // The client pays this lawyer directly (KR): no payment, earning or fee through ilovelawyer.
+    paysLawyerDirectly: terms.paysLawyerDirectly,
     charge: chargeOf(r, lawyerId),
     engagement:
       mine?.outcome === "ENGAGED"
@@ -212,13 +214,14 @@ interface LawyerTerms {
   /** The tenant's introduction fee: only charged on requests accepted before quotation payments. */
   perCaseFee: Money;
   quoteTerms: QuoteTerms;
+  paysLawyerDirectly: boolean;
 }
 
 /** The lawyer's tenant's terms, set in admin: the old introduction fee (#598) and how the platform
  * fee on a quote is worked out (PayoutSettingsSvc). */
 async function feeOf(lawyer: LawyerContext): Promise<LawyerTerms> {
   const [pricing, quoteTerms] = await Promise.all([LawyerPricingSvc.forTenantCode(lawyer.tenantCode), PayoutSettingsSvc.quoteTerms(lawyer.tenantCode)]);
-  return { perCaseFee: pricing.introFee, quoteTerms };
+  return { perCaseFee: pricing.introFee, quoteTerms, paysLawyerDirectly: paysLawyerDirectly(lawyer.tenantCode) };
 }
 
 function chargeOf(r: LawyerRequest, lawyerId: string) {
