@@ -19,6 +19,7 @@ import logger from "../utils/logger";
 import { moneyText } from "../utils/money-text";
 import AuthRepo from "../repositories/auth.repository";
 import type { ClientRequestUpdatedEvent } from "../types/client-handoff";
+import { paysLawyerDirectly } from "../constants/client-request.constants";
 
 const UNREACHABLE = "We couldn't reach the payment provider. Try again in a moment.";
 const money = (amountMinor: number, currency: string) => ({ amountMinor, currency });
@@ -72,7 +73,8 @@ export default class QuotationPaymentSvc {
    * Starts (or resumes) paying the request's accepted quotation. With Stripe: a PENDING payment and a
    * PaymentIntent for the accepted amount, whose client secret the app hands to the Payment Element;
    * the same intent comes back while it's still open. With the dummy: it settles now (402
-   * PAYMENT_DECLINED for the test decline). 409 QUOTATION_EXPIRED after the lawyer's expiry.
+   * PAYMENT_DECLINED for the test decline). 409 QUOTATION_EXPIRED after the lawyer's expiry. 409
+   * LAWYER_FEES_DIRECT on a site where the client pays the lawyer directly (KR): nothing is paid here.
    */
   static async start(
     clientId: string,
@@ -81,6 +83,9 @@ export default class QuotationPaymentSvc {
     opts: { testOutcome?: "decline" } = {},
     resumedOnce = false,
   ): Promise<{ payment: ReturnType<typeof paymentDto>; intent: { clientSecret: string; publishableKey: string } | null }> {
+    if (paysLawyerDirectly(await AuthRepo.findSiteCode(clientId))) {
+      throw new HttpError("You pay this lawyer directly. Nothing is paid through ilovelawyer.", 409, "LAWYER_FEES_DIRECT");
+    }
     const quotation = await QuotationPaymentSvc.acceptedQuotation(clientId, requestId, quotationId);
     const provider = quotationPaymentProvider();
     const started = await QuotationPaymentRepo.start(quotation.id, { clientId, provider: provider.name });
@@ -331,8 +336,16 @@ export default class QuotationPaymentSvc {
     await QuotationPaymentSvc.afterEngaged(quotation, claim, settled.earning?.netMinor ?? 0, wallet.id, payment.currency);
   }
 
-  /** The request is ENGAGED: the lawyer gets read-only access to the case, both sides are told. */
-  static async afterEngaged(quotation: Quotation, claim: { organizationId: string | null; lawyerId: string }, earnedMinor: number, walletId: string | null, currency = "GBP") {
+  /** The request is ENGAGED: the lawyer gets read-only access to the case, both sides are told.
+   * `paidDirectly`: the client pays the lawyer directly (KR), so the lawyer is told to arrange it. */
+  static async afterEngaged(
+    quotation: Quotation,
+    claim: { organizationId: string | null; lawyerId: string },
+    earnedMinor: number,
+    walletId: string | null,
+    currency = "GBP",
+    opts: { paidDirectly?: boolean } = {},
+  ) {
     const request = await ClientRequestRepo.findForLawyer(quotation.requestId);
     if (!request) return;
     const now = new Date().toISOString();
@@ -349,7 +362,9 @@ export default class QuotationPaymentSvc {
           message:
             earnedMinor > 0
               ? `의뢰인이 견적 금액을 결제했습니다. ${moneyText(earnedMinor, currency)}이(가) 수익에 추가되었으며, 의뢰를 종료한 뒤 보류 기간이 지나면 출금할 수 있습니다.`
-              : "의뢰인이 견적을 수락했습니다.",
+              : opts.paidDirectly
+                ? "의뢰인이 견적을 수락했습니다. 보수는 의뢰인과 직접 협의해 받으며, ilovelawyer는 결제를 대신 받거나 수수료를 받지 않습니다."
+                : "의뢰인이 견적을 수락했습니다.",
           link: `/client-requests/${request.id}`,
         }
       : {
@@ -357,7 +372,9 @@ export default class QuotationPaymentSvc {
           message:
             earnedMinor > 0
               ? `The client paid your quote. ${moneyText(earnedMinor, currency)} is in your earnings, held until you close the engagement and for the usual hold after that.`
-              : "The client accepted your quote.",
+              : opts.paidDirectly
+                ? "The client accepted your quote. Arrange your fee with them directly: ilovelawyer doesn't take a payment or a fee."
+                : "The client accepted your quote.",
           link: `/client-requests/${request.id}`,
         });
     if (walletId) await WalletSvc.changedById(walletId);

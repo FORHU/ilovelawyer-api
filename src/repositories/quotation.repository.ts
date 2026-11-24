@@ -189,14 +189,20 @@ export default class QuotationRepo {
     );
   }
 
-  /** An accepted quotation with nothing to pay (a free first consultation): PAID and the request
-   * ENGAGED at once, the claim with it. False when it had moved on. */
-  static async engageUnpaid(quotation: Pick<Quotation, "id" | "requestId" | "claimId">, now: Date = new Date()): Promise<boolean> {
+  /** An accepted quotation with nothing to pay through ilovelawyer: a free first consultation, or
+   * (`paidDirectly`) any amount on a site where the client pays the lawyer directly. PAID and the
+   * request ENGAGED at once, the claim with it; no payment or earning is made. False when it had
+   * moved on. */
+  static async engageUnpaid(quotation: Pick<Quotation, "id" | "requestId" | "claimId">, opts: { paidDirectly?: boolean; now?: Date } = {}): Promise<boolean> {
+    const now = opts.now ?? new Date();
     const done = await refusing(() =>
       prisma.$transaction(async (tx) => {
         const engaged = await tx.clientRequest.updateMany({ where: { id: quotation.requestId, status: "CONFIRMED" }, data: { status: "ENGAGED", engagedAt: now } });
         if (engaged.count !== 1) throw new MovedOn();
-        const paid = await tx.quotation.updateMany({ where: { id: quotation.id, status: "ACCEPTED", acceptedAmountMinor: 0 }, data: { status: "PAID", paidAt: now } });
+        const paid = await tx.quotation.updateMany({
+          where: { id: quotation.id, status: "ACCEPTED", ...(opts.paidDirectly ? {} : { acceptedAmountMinor: 0 }) },
+          data: { status: "PAID", paidAt: now },
+        });
         if (paid.count !== 1) throw new MovedOn();
         await tx.clientRequestClaim.updateMany({ where: { id: quotation.claimId, outcome: null }, data: { outcome: "ENGAGED", openRequestId: null } });
         return true;

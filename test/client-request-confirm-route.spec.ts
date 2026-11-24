@@ -246,7 +246,7 @@ describe("client confirms and pays, and the engagement", () => {
 
     it("accepts the quote without charging the firm, and the client's payment engages the request", async () => {
       const { body } = await confirm().expect(200);
-      expect(body).to.deep.include({ status: "CONFIRMED", awaitingPayment: true });
+      expect(body).to.deep.include({ status: "CONFIRMED", awaitingPayment: true, paysLawyerDirectly: false });
       expect(body.quotation).to.deep.include({ status: "ACCEPTED" });
       expect(chargeRequests).to.have.length(0);
       expect((await state()).charges).to.have.length(0);

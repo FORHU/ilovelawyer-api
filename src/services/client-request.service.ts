@@ -33,6 +33,7 @@ import AuthRepo from "../repositories/auth.repository";
 import {
   CLIENT_REQUEST_DIRECT_WINDOW_MS,
   CLIENT_REQUEST_MAX_LAWYERS,
+  paysLawyerDirectly,
   requestWordingFor,
 } from "../constants/client-request.constants";
 
@@ -161,12 +162,14 @@ async function refundsFor(requests: ClientRequestForClient[]): Promise<Map<strin
  * pick; `openToLawyers`, whether more lawyers can still take it up (its 48h open and a place free),
  * so the app doesn't promise quotes that can't come. `lawyer`/`quote`/`quotation` stay for one
  * lawyer (the one hired, or the only quote). The disclosure is what the client acknowledges to
- * accept. `awaitingPayment`: the client accepted a quotation and hasn't paid it yet. */
+ * accept. `awaitingPayment`: the client accepted a quotation and hasn't paid it yet.
+ * `paysLawyerDirectly`: on this site the client pays the lawyer directly, never through ilovelawyer. */
 function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = null, site: string = "UK") {
   const wording = requestWordingFor(site);
   const one = oneLawyer(r);
   const lawyers = r.claims.map((c) => ({ claimId: c.id, joinedAt: c.claimedAt, lawyer: lawyerDto(c), quote: quoteDto(c), quotation: quotationFor(c) }));
   const hasQuote = lawyers.some((l) => l.quote);
+  const direct = paysLawyerDirectly(site);
   return {
     id: r.id,
     caseId: r.caseId,
@@ -191,7 +194,9 @@ function toDto(r: ClientRequestForClient, refund: ClientRefundSummary | null = n
     quote: one ? quoteDto(one) : null,
     quotation: one ? quotationFor(one) : null,
     // A quote accepted before quotation payments has no accepted amount: it's paid outside ilovelawyer.
-    awaitingPayment: r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED" && one.quotation.acceptedAmountMinor !== null,
+    // Never on a site where the client pays the lawyer directly.
+    awaitingPayment: !direct && r.status === "CONFIRMED" && one?.quotation?.status === "ACCEPTED" && one.quotation.acceptedAmountMinor !== null,
+    paysLawyerDirectly: direct,
     // In the client's site's words: Korean for a KR client.
     referralDisclosure: hasQuote ? wording.referralDisclosure : null,
     sharingNotice: hasQuote ? wording.sharingNotice : null,
@@ -343,7 +348,8 @@ export default class ClientRequestSvc {
    * ilovelawyer is paid: the request is CONFIRMED, the quotation ACCEPTED with its total fixed, and
    * the other lawyers on it are told the client chose someone else. The client then pays it
    * (QuotationPaymentSvc.start), and paying engages the request. A quotation with nothing to pay (a
-   * free first consultation) engages it at once. `claimId` (or `quotationId`) names the quote; it can
+   * free first consultation), or on a site where the client pays the lawyer directly
+   * (paysLawyerDirectly, KR), engages it at once. `claimId` (or `quotationId`) names the quote; it can
    * be left out when there's only one. 409 QUOTATION_EXPIRED after the lawyer's expiry. Nothing is
    * charged to the lawyer.
    */
@@ -372,7 +378,10 @@ export default class ClientRequestSvc {
     const updated: ClientRequestUpdatedEvent = { requestId: id, status: "CONFIRMED", updatedAt: new Date().toISOString() };
     emitToUser(lawyerId, "client-request:updated", updated);
     const free = accepted.quotation.acceptedAmountMinor === 0;
-    if (!free) {
+    // Nothing to pay through ilovelawyer: a free quote, or a site where the client pays the lawyer
+    // directly (KR). Either way the lawyer is engaged now.
+    const paidDirectly = !free && paysLawyerDirectly(await siteOfClient(clientId));
+    if (!free && !paidDirectly) {
       await NotificationSvc.create({
         userId: lawyerId,
         type: "CLIENT_REQUEST",
@@ -392,8 +401,8 @@ export default class ClientRequestSvc {
       }).catch((err) => logger.error("Client request: failed to create notification", { err, requestId: id }));
     }
 
-    if (free && (await QuotationRepo.engageUnpaid(accepted.quotation))) {
-      await QuotationPaymentSvc.afterEngaged(accepted.quotation, accepted.claim, 0, null);
+    if ((free || paidDirectly) && (await QuotationRepo.engageUnpaid(accepted.quotation, { paidDirectly }))) {
+      await QuotationPaymentSvc.afterEngaged(accepted.quotation, accepted.claim, 0, null, undefined, { paidDirectly });
     }
     return ClientRequestSvc.view(clientId, id);
   }
