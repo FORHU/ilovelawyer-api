@@ -1,5 +1,5 @@
 import type { OAS3Definition } from "swagger-jsdoc";
-import { CLIENT_PARTY_ROLES } from "./constants/client-case.constants";
+import { CLIENT_PARTY_ROLES, CLIENT_STORY_CORRECTION_MAX_LENGTH, CLIENT_STORY_MAX_LENGTH, CLIENT_STORY_MIN_LENGTH } from "./constants/client-case.constants";
 import { UK_JURISDICTIONS } from "./validation/case.validation";
 
 /** The client app's routes (client.route.ts), merged into swagger.ts. Client accounts only:
@@ -106,6 +106,16 @@ const caseIntake = {
       description: "Open gaps the AI found in the conversation/documents — not sourced the way other items are",
     },
     conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, description: { type: "string" }, sources: { type: "array", items: intakeSource } } } },
+    storySoFar: {
+      type: "array",
+      maxItems: 5,
+      description:
+        "\"Here's your story so far\": what the client told us, said back to them in their own language. Facts first, deadlines last. `text` may mark its key detail with **bold** and has no other markup; render only that, never as HTML. A DEADLINE is a date the client or a document stated, never one worked out.",
+      items: {
+        type: "object",
+        properties: { id: { type: "string" }, kind: { type: "string", enum: ["FACT", "DEADLINE"] }, text: { type: "string" }, sources: { type: "array", items: intakeSource } },
+      },
+    },
     completeness: {
       type: "object",
       nullable: true,
@@ -1260,6 +1270,243 @@ export const clientAppPaths: Paths = {
         402: err("INTAKE_BUDGET_REACHED: this case has reached its AI usage limit for the intake summary"),
         404: err("Case not found"),
         429: err("INTAKE_DAILY_LIMIT: today's update limit for this case's intake summary is used up"),
+      },
+    },
+  },
+  "/client/cases/story": {
+    post: {
+      tags: [TAG],
+      summary: "The story-first way in: make a case from the client's story and start reading it",
+      description:
+        "Creates a case with placeholder details (area OTHER, place not known yet) and keeps the story as its first chat message, with no AI reply. The Intake extraction then reads it in the background: poll GET /client/cases/{caseId}/intake until READY or FAILED. No chat credit is spent; the reading counts toward the case's AI budget, never the daily Update limit.",
+      security,
+      requestBody: {
+        required: true,
+        content: json({
+          type: "object",
+          required: ["text"],
+          properties: { text: { type: "string", minLength: CLIENT_STORY_MIN_LENGTH, maxLength: CLIENT_STORY_MAX_LENGTH, description: "What happened, typed or dictated" } },
+        }),
+      },
+      responses: {
+        202: {
+          description: "The case, the story's message id, and the intake (RUNNING once the reading is queued)",
+          content: json({ type: "object", properties: { case: clientCase, messageId: { type: "string" }, intake: caseIntake } }),
+        },
+        400: err("Validation error"),
+        403: err("CLIENT_AI_NOT_OPEN: the AI isn't available on this site yet; CONSENT_REQUIRED: AI processing or sensitive information isn't agreed to"),
+        429: err("Too many stories in a short time"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/evidence-suggestions": {
+    get: {
+      tags: [TAG],
+      summary: "The proof suggested for the case, without writing any",
+      description: "A plain read: never calls the AI. null when nothing has been suggested yet.",
+      security,
+      parameters: [caseId],
+      responses: { 200: { description: "The suggestions (as POST), or null" }, 404: err("Case not found") },
+    },
+    post: {
+      tags: [TAG],
+      summary: "The evidence step: suggest the proof the case needs, or return what was suggested",
+      description:
+        "The first call asks the AI once, reading the client's story and answers, for 2 to 5 pieces of proof in the story's language, saved as the case's evidence gaps (the lawyer sees them too). A reply with too few usable ones gets the app's general suggestions. Later calls return the same ones, with whether a document fills each (an upload sending its id as missingEvidenceId) or the client said they don't have it. No chat credit is spent.",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: {
+          description: "The suggestions",
+          content: json({
+            type: "object",
+            properties: {
+              suggestions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string", description: "Send as missingEvidenceId with the upload that fills it" },
+                    title: { type: "string" },
+                    why: { type: "string" },
+                    source: { type: "string", enum: ["photos", "files", "email", "memo"] },
+                    state: { type: "string", enum: ["OPEN", "ADDED", "DISMISSED"] },
+                    documentId: { type: "string", nullable: true },
+                  },
+                },
+              },
+              added: { type: "integer" },
+              open: { type: "integer" },
+            },
+          }),
+        },
+        403: err("CLIENT_AI_NOT_OPEN or CONSENT_REQUIRED"),
+        404: err("Case not found"),
+        429: err("Too many tries in a short time"),
+        502: err("EVIDENCE_FAILED: suggestions couldn't be written just now (nothing is saved; try again)"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/evidence/done": {
+    post: {
+      tags: [TAG],
+      summary: "The evidence step's Done: the client has added what they have",
+      description: "The intake reading runs once over the new proof and its notes (skipped when nothing changed). Returns the suggestions, or null when there are none.",
+      security,
+      parameters: [caseId],
+      responses: { 200: { description: "The suggestions, or null" }, 403: err("CLIENT_AI_NOT_OPEN or CONSENT_REQUIRED"), 404: err("Case not found") },
+    },
+  },
+  "/client/cases/{caseId}/documents/{documentId}/note": {
+    patch: {
+      tags: [TAG],
+      summary: "The client's own note on one of their documents",
+      description:
+        "Replaces the note the AI drafted once the document was read (the case's document list shows `note` and `noteBy`: AI or CLIENT). Empty clears it, and the AI doesn't draft another.",
+      security,
+      parameters: [caseId, { name: "documentId", in: "path", required: true, schema: { type: "string" } }],
+      requestBody: { required: true, content: json({ type: "object", required: ["note"], properties: { note: { type: "string", maxLength: 500 } } }) },
+      responses: {
+        200: { description: "The saved note", content: json({ type: "object", properties: { documentId: { type: "string" }, note: { type: "string", nullable: true }, noteBy: { type: "string", enum: ["CLIENT"] } } }) },
+        400: err("Validation error"),
+        404: err("Case or document not found"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/evidence-suggestions/{suggestionId}": {
+    patch: {
+      tags: [TAG],
+      summary: "\"I don't have this\" on a suggestion, or taking it back",
+      description: "The gap stays open for the lawyer, who knows to ask about it. Returns the suggestions.",
+      security,
+      parameters: [caseId, { name: "suggestionId", in: "path", required: true, schema: { type: "string" } }],
+      requestBody: { required: true, content: json({ type: "object", required: ["dismissed"], properties: { dismissed: { type: "boolean" } } }) },
+      responses: { 200: { description: "The suggestions" }, 400: err("Validation error"), 404: err("Case or suggestion not found") },
+    },
+  },
+  "/client/cases/{caseId}/questions": {
+    get: {
+      tags: [TAG],
+      summary: "Where the case's questions are, without starting them",
+      description: "A plain read for the case page's \"questions left\" banner: never writes a list or calls the AI. null when the case has no list yet, or it's still being written.",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: { description: "The same state as POST (status, total, answered, skipped, current, history), or null" },
+        404: err("Case not found"),
+      },
+    },
+    post: {
+      tags: [TAG],
+      summary: "The Questions step: start the details the case still needs, or pick them up where the client left off",
+      description:
+        "The first call writes the case's list once: the details still open (from the intake reading's formFields.missing and the unmet lawyer-readiness points, from a fixed set, at most six, place first and what the client wants last), each worded for this client by one AI call. On a UK case with no part of the UK, the place question is the app's own, with fixed chips. Later calls return the same list. No chat credit is spent.",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: {
+          description: "Where the questions are. `total` is fixed when the list is written (0 when nothing needed asking, with status DONE).",
+          content: json({
+            type: "object",
+            properties: {
+              status: { type: "string", enum: ["OPEN", "DONE"] },
+              total: { type: "integer" },
+              answered: { type: "integer" },
+              skipped: { type: "integer" },
+              current: {
+                type: "object",
+                nullable: true,
+                properties: {
+                  id: { type: "string" },
+                  detail: { type: "string", enum: ["place", "otherSide", "relationship", "terms", "reasonGiven", "status", "witnesses", "goal"] },
+                  question: { type: "string" },
+                  why: { type: "string" },
+                  chips: { type: "array", maxItems: 4, items: { type: "string" }, description: "Empty when the question has no natural short answers" },
+                  followUp: { type: "boolean", description: "A follow-up within the same detail (its id is \"<detail>.followUp\"); it doesn't move the progress bar" },
+                },
+              },
+              history: {
+                type: "array",
+                items: { type: "object", properties: { id: { type: "string" }, question: { type: "string" }, why: { type: "string" }, answer: { type: "string", nullable: true }, skipped: { type: "boolean" } } },
+              },
+            },
+          }),
+        },
+        403: err("CLIENT_AI_NOT_OPEN or CONSENT_REQUIRED"),
+        404: err("Case not found"),
+        409: err("INTAKE_RUNNING: the story is still being read; QUESTIONS_PREPARING: the list is being written by another request"),
+        429: err("Too many tries in a short time"),
+        502: err("QUESTIONS_FAILED: the list couldn't be written just now (nothing is saved; try again)"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/questions/answer": {
+    post: {
+      tags: [TAG],
+      summary: "Answer the question the client is on",
+      description:
+        "Kept on the list and in the case's chat (the question, then the answer), with no AI reply asked for. A place answer goes onto the case (a UK part of the UK, or outside the UK, then the town; a KR town). It may lead to one follow-up within the same detail: the list's own for that chip, or, for a typed or spoken answer that isn't a chip, one a small AI check asks for. After the last question the intake reading runs once and the lawyer readiness check is asked again next time. Returns the same state as POST .../questions.",
+      security,
+      parameters: [caseId],
+      requestBody: {
+        required: true,
+        content: json({
+          type: "object",
+          required: ["questionId", "text", "via"],
+          properties: {
+            questionId: { type: "string", description: "`current.id` from the last state: a detail, or \"<detail>.followUp\"" },
+            text: { type: "string", maxLength: CLIENT_STORY_CORRECTION_MAX_LENGTH },
+            via: { type: "string", enum: ["tap", "typed", "voice"] },
+          },
+        }),
+      },
+      responses: {
+        200: { description: "Where the questions are now" },
+        400: err("Validation error"),
+        403: err("CLIENT_AI_NOT_OPEN or CONSENT_REQUIRED"),
+        404: err("Case not found"),
+        409: err("QUESTIONS_NOT_STARTED, QUESTIONS_DONE, QUESTION_NOT_CURRENT (the screen is behind: read the state again), or TURN_IN_PROGRESS (a chat answer is being written)"),
+        429: err("Too many answers in a short time"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/questions/skip": {
+    post: {
+      tags: [TAG],
+      summary: "\"I don't know, skip\": leave the question the client is on for the lawyer to ask",
+      description: "Counts as done. A skipped follow-up leaves its detail answered as far as it went. `text` is what the client is shown saying, in their language (\"I'm not sure.\" when left out).",
+      security,
+      parameters: [caseId],
+      requestBody: {
+        required: true,
+        content: json({ type: "object", required: ["questionId"], properties: { questionId: { type: "string" }, text: { type: "string", maxLength: 100 } } }),
+      },
+      responses: {
+        200: { description: "Where the questions are now" },
+        403: err("CLIENT_AI_NOT_OPEN or CONSENT_REQUIRED"),
+        404: err("Case not found"),
+        409: err("QUESTIONS_NOT_STARTED, QUESTIONS_DONE, QUESTION_NOT_CURRENT or TURN_IN_PROGRESS"),
+      },
+    },
+  },
+  "/client/cases/{caseId}/story": {
+    post: {
+      tags: [TAG],
+      summary: "\"Something's not right\": add the client's fix to their story and read the case again",
+      description: "Kept as a chat message with no AI reply, like the story. The next chat turn starts a fresh AI session that sees it.",
+      security,
+      parameters: [caseId],
+      requestBody: {
+        required: true,
+        content: json({ type: "object", required: ["text"], properties: { text: { type: "string", maxLength: CLIENT_STORY_CORRECTION_MAX_LENGTH } } }),
+      },
+      responses: {
+        202: { description: "The fix's message id and the intake (RUNNING once the reading is queued)", content: json({ type: "object", properties: { messageId: { type: "string" }, intake: caseIntake } }) },
+        400: err("Validation error"),
+        403: err("CLIENT_AI_NOT_OPEN or CONSENT_REQUIRED"),
+        404: err("Case not found"),
+        409: err("INTAKE_RUNNING: the story is still being read; TURN_IN_PROGRESS: a chat answer is still being written"),
+        429: err("Too many stories in a short time"),
       },
     },
   },

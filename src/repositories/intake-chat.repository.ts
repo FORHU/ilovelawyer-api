@@ -41,6 +41,18 @@ export default class IntakeChatRepo {
     return openIntakeMessage(stored) ?? stored;
   }
 
+  /** A question and the client's answer to it from the Questions step (ClientQuestionsSvc), written
+   * together and kept in that order: the answer is stamped a millisecond after the question, since
+   * two rows written within the same millisecond would otherwise sort either way (listByCase orders
+   * by createdAt). Neither asks the AI for a reply. */
+  static async createExchange(caseId: string, userId: string, asked: string, said: string): Promise<void> {
+    const at = new Date();
+    await prisma.$transaction([
+      prisma.intakeMessage.create({ data: { caseId, role: "assistant", content: sealIntakeMessageContent(asked), createdAt: at } }),
+      prisma.intakeMessage.create({ data: { caseId, role: "user", content: sealIntakeMessageContent(said), userId, createdAt: new Date(at.getTime() + 1) } }),
+    ]);
+  }
+
   /** The SQS-redelivery idempotency guard, same idiom as ChatRepo.findAssistantReplyByParent: a
    * worker retried after a crash checks for an existing reply by parentMessageId before creating
    * a second one. */

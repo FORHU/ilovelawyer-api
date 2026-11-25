@@ -38,6 +38,33 @@ const gmailLimiter = rateLimit({
 
 const emailImportConsent = requireConsent("EMAIL_IMPORT");
 
+// Each story makes a case and starts an AI reading of it (no chat credit is spent), so a client can
+// only tell so many in a short time.
+const storyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "You've sent a lot of stories just now. Try again in a few minutes." },
+});
+
+// Starting the questions writes the case's list with the AI once; coming back to them is a plain
+// read. Bounded all the same, since a start can call the AI.
+const questionsLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "That's a lot of tries just now. Wait a few minutes, then carry on with your questions." },
+});
+
+// A typed or spoken answer can ask the AI whether it's complete. Generous: a case has at most six
+// questions and their follow-ups.
+const answersLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => req.user.userId,
+  message: { message: "That's a lot of answers just now. Wait a few minutes, then carry on." },
+});
+
 // The Case summary PDF is rendered on every download (nothing is stored), so it's bounded per account.
 const caseSummaryLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
@@ -96,6 +123,28 @@ router.get("/case-areas", asyncHandler(ClientCaseCtrl.caseAreas));
 
 router.get("/cases", asyncHandler(ClientCaseCtrl.list));
 router.post("/cases", asyncHandler(ClientCaseCtrl.create));
+// The story-first way in (the new-client flow): a case made from the client's story, which the AI
+// reads straight away, and their fix to it. Both start AI work, so both need AI-processing consent.
+router.post("/cases/story", requireClientAi, requireConsent("AI_PROCESSING"), storyLimiter, asyncHandler(ClientCaseCtrl.startStory));
+router.post("/cases/:caseId/story", requireClientAi, requireConsent("AI_PROCESSING"), storyLimiter, asyncHandler(ClientCaseCtrl.correctStory));
+// The Questions step after the story: the details the case still needs, one at a time. Starting
+// writes the list with the AI, so it needs AI-processing consent.
+// The evidence step after the questions: proof suggested from the story and answers. Starting asks
+// the AI once (consent needed); reading and "I don't have this" never do.
+router.get("/cases/:caseId/evidence-suggestions", asyncHandler(ClientCaseCtrl.evidence));
+router.post("/cases/:caseId/evidence-suggestions", requireClientAi, requireConsent("AI_PROCESSING"), questionsLimiter, asyncHandler(ClientCaseCtrl.startEvidence));
+router.patch("/cases/:caseId/evidence-suggestions/:suggestionId", asyncHandler(ClientCaseCtrl.dismissEvidence));
+// Done reads the case again (the intake reading), so it needs AI-processing consent.
+router.post("/cases/:caseId/evidence/done", requireClientAi, requireConsent("AI_PROCESSING"), asyncHandler(ClientCaseCtrl.evidenceDone));
+// The client's own note on a document: no AI involved.
+router.patch("/cases/:caseId/documents/:documentId/note", asyncHandler(ClientCaseCtrl.setDocumentNote));
+// A plain read, for the case page's "questions left" banner: never writes a list or asks the AI.
+router.get("/cases/:caseId/questions", asyncHandler(ClientCaseCtrl.questions));
+router.post("/cases/:caseId/questions", requireClientAi, requireConsent("AI_PROCESSING"), questionsLimiter, asyncHandler(ClientCaseCtrl.startQuestions));
+// An answer may ask the AI whether it's complete, so it needs the same consent; a skip asks nothing,
+// but the questions are an AI step all the same.
+router.post("/cases/:caseId/questions/answer", requireClientAi, requireConsent("AI_PROCESSING"), answersLimiter, asyncHandler(ClientCaseCtrl.answerQuestion));
+router.post("/cases/:caseId/questions/skip", requireClientAi, requireConsent("AI_PROCESSING"), answersLimiter, asyncHandler(ClientCaseCtrl.skipQuestion));
 router.get("/cases/:caseId", asyncHandler(ClientCaseCtrl.get));
 router.patch("/cases/:caseId", asyncHandler(ClientCaseCtrl.update));
 router.delete("/cases/:caseId", asyncHandler(ClientCaseCtrl.remove));

@@ -92,6 +92,11 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
         await ClientOverviewSvc.runQueued(caseId, userId, "post-extraction");
         logger.info("Client overview: automatic run completed", { caseId });
       }
+      // The evidence step's notes on the newly read documents, drafted before the intake reading so
+      // it reads them too. Only on a case in that step; never throws. Imported here: the evidence
+      // service sits above this queue's imports.
+      const ClientEvidenceSvc = (await import("../services/client-evidence.service")).default;
+      await ClientEvidenceSvc.draftNotes(caseId, userId);
       // The Intake tab's own trigger (ClientIntakeSvc), run alongside the overview's while both
       // exist (docs/plans/client-side-compressed-meteor.md Phase 6 retires the overview once the
       // client app has moved over). scheduleAuto has its own fingerprint check, so this is safe

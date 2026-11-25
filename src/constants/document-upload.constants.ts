@@ -16,14 +16,15 @@ export const BULK_ACTION_MAX = 50;
  * filters to these before ever calling presign/create, but that's advisory only — anyone can
  * call the API directly, so this is the authoritative check (enforced via filename extension in
  * document.validation.ts / case.validation.ts). */
-export const ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "xlsx", "xlsm", "xlam", "txt", "jpg", "jpeg", "png", "webp", "heic", "mp3", "mp4", "m4a", "wav"];
+export const ALLOWED_DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "xlsx", "xlsm", "xlam", "txt", "jpg", "jpeg", "png", "webp", "heic", "mp3", "mp4", "m4a", "wav", "webm"];
 
 /** Audio/video evidence — no text layer to extract, so the extraction pipeline transcribes these
  * with AWS Transcribe (see DocumentExtractionSvc) and indexes the transcript instead. */
-export const MEDIA_DOCUMENT_EXTENSIONS = ["mp3", "mp4", "m4a", "wav"];
+// webm: a voice memo recorded in Chrome (the evidence step); Safari records mp4.
+export const MEDIA_DOCUMENT_EXTENSIONS = ["mp3", "mp4", "m4a", "wav", "webm"];
 export const MEDIA_DOCUMENT_MIME_TYPES = [
   "audio/mpeg", "audio/mp3", "video/mp4", "audio/mp4",
-  "audio/x-m4a", "audio/m4a", "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave",
+  "audio/x-m4a", "audio/m4a", "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave", "audio/webm", "video/webm",
 ];
 
 export const ALLOWED_DOCUMENT_FILENAME_PATTERN = new RegExp(

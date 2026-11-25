@@ -8,11 +8,19 @@ import ClientCaseOverviewSvc from "../services/client-case-overview.service";
 import ClientIntakeSvc from "../services/client-intake.service";
 import ClientBillingSvc from "../services/client-billing.service";
 import ClientCaseSummarySvc from "../services/client-case-summary.service";
+import ClientStorySvc from "../services/client-story.service";
+import ClientQuestionsSvc, { type AnswerVia } from "../services/client-questions.service";
+import ClientEvidenceSvc from "../services/client-evidence.service";
 import HttpError from "../utils/http-error";
 import { contentDisposition } from "../utils/content-disposition";
 import { ALLOWED_DOCUMENT_EXTENSIONS, DOCUMENT_UPLOAD_BATCH_MAX_BYTES } from "../constants";
 import {
   addClientDocumentSchema,
+  answerClientQuestionSchema,
+  correctClientStorySchema,
+  dismissEvidenceSuggestionSchema,
+  documentNoteSchema,
+  skipClientQuestionSchema,
   createClientCaseSchema,
   exportClientCaseSummarySchema,
   presignClientDocumentSchema,
@@ -20,6 +28,7 @@ import {
   quoteClientTopUpSchema,
   sendClientMessageSchema,
   sendVoiceMessageSchema,
+  startClientStorySchema,
   topUpClientCaseSchema,
   updateClientCaseSchema,
 } from "../validation/client-case.validation";
@@ -61,6 +70,69 @@ export default class ClientCaseCtrl {
     // The schema needs one of areas or area, so withAreas always leaves areas set.
     const input = withAreas(validate<NewClientCase & { area?: string }>(createClientCaseSchema, req.body));
     res.status(201).json(await ClientCaseSvc.create(clientWorkspaceOf(req), req.user.userId, input));
+  }
+
+  /** The story-first way in: makes the case from the client's story and starts reading it. 202, as
+   * the reading finishes in the background (poll GET .../intake). */
+  static async startStory(req: Request, res: Response) {
+    const { text } = validate<{ text: string }>(startClientStorySchema, req.body);
+    res.status(202).json(await ClientStorySvc.start(clientWorkspaceOf(req), req.user.userId, text));
+  }
+
+  /** "Something's not right": the client's fix to the story, read together with it. */
+  static async correctStory(req: Request, res: Response) {
+    const { text } = validate<{ text: string }>(correctClientStorySchema, req.body);
+    res.status(202).json(await ClientStorySvc.correct(clientWorkspaceOf(req), req.user.userId, req.params.caseId, text));
+  }
+
+  /** The Questions step: starts the case's questions (writing the list once), or picks them up
+   * where the client left off. */
+  static async startQuestions(req: Request, res: Response) {
+    res.status(200).json(await ClientQuestionsSvc.start(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
+  }
+
+  /** The evidence step: the proof suggested for the case, written once with the AI. */
+  static async startEvidence(req: Request, res: Response) {
+    res.status(200).json(await ClientEvidenceSvc.start(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
+  }
+
+  /** The proof suggested for the case, without writing any (null when there's none yet). */
+  static async evidence(req: Request, res: Response) {
+    res.status(200).json(await ClientEvidenceSvc.read(clientWorkspaceOf(req), req.params.caseId));
+  }
+
+  /** The client's own note on one of their documents. */
+  static async setDocumentNote(req: Request, res: Response) {
+    const { note } = validate<{ note: string }>(documentNoteSchema, req.body);
+    res.status(200).json(await ClientEvidenceSvc.setNote(clientWorkspaceOf(req), req.params.caseId, req.params.documentId, note));
+  }
+
+  /** The evidence step's Done: reads the case once over the new proof. */
+  static async evidenceDone(req: Request, res: Response) {
+    res.status(200).json(await ClientEvidenceSvc.done(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
+  }
+
+  /** "I don't have this" on a suggestion, or taking it back. */
+  static async dismissEvidence(req: Request, res: Response) {
+    const { dismissed } = validate<{ dismissed: boolean }>(dismissEvidenceSuggestionSchema, req.body);
+    res.status(200).json(await ClientEvidenceSvc.setDismissed(clientWorkspaceOf(req), req.params.caseId, req.params.suggestionId, dismissed));
+  }
+
+  /** Where the case's questions are, without starting them (null when there's no list). */
+  static async questions(req: Request, res: Response) {
+    res.status(200).json(await ClientQuestionsSvc.read(clientWorkspaceOf(req), req.params.caseId));
+  }
+
+  /** The client's answer to the question they're on. */
+  static async answerQuestion(req: Request, res: Response) {
+    const input = validate<{ questionId: string; text: string; via: AnswerVia }>(answerClientQuestionSchema, req.body);
+    res.status(200).json(await ClientQuestionsSvc.answer(clientWorkspaceOf(req), req.user.userId, req.params.caseId, input));
+  }
+
+  /** "I don't know, skip". */
+  static async skipQuestion(req: Request, res: Response) {
+    const input = validate<{ questionId: string; text?: string }>(skipClientQuestionSchema, req.body);
+    res.status(200).json(await ClientQuestionsSvc.skip(clientWorkspaceOf(req), req.user.userId, req.params.caseId, input));
   }
 
   static async update(req: Request, res: Response) {

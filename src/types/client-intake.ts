@@ -62,6 +62,17 @@ export interface IntakeConflict {
   sources: IntakeSource[];
 }
 
+/** One line of "Here's your story so far" (the new-client flow): what the client told us, said
+ * back to them in their own terms and language. `text` may mark its key detail with **bold** and
+ * carries no other markup; the app renders only that. A "DEADLINE" line is a date the client or a
+ * document stated, never one worked out from a rule. */
+export interface IntakeStoryLine {
+  id: string;
+  kind: "FACT" | "DEADLINE";
+  text: string;
+  sources: IntakeSource[];
+}
+
 export type IntakeStatus = "EMPTY" | "RUNNING" | "READY" | "FAILED" | "STALE";
 
 export interface IntakeCompleteness {
@@ -115,6 +126,9 @@ export interface CaseIntake {
   deadlines: IntakeDeadline[];
   missing: IntakeGap[];
   conflicts: IntakeConflict[];
+  /** "Here's your story so far": at most five lines, facts first, deadlines last. Not part of the
+   * lawyer's anonymised brief (client-intake-redaction.ts keeps only what it names). */
+  storySoFar: IntakeStoryLine[];
   /** From Lawyer Readiness (lawyer-readiness-jev.ts) when USE_JEV_LAWYER_READINESS is on; null
    * when the check is off or hasn't run yet. */
   completeness: IntakeCompleteness | null;
@@ -183,6 +197,20 @@ export interface IntakePackageDocument {
   status: "PENDING" | "READY" | "FAILED";
   category: string | null;
   url: string | null;
+  /** The client's note on it from the evidence step: what it is, in their words (noteBy CLIENT), or
+   * the AI's draft the client left as it was (noteBy AI). Both null when it has none. */
+  note: string | null;
+  noteBy: "AI" | "CLIENT" | null;
+}
+
+/** A proof the evidence step suggested to the client, and what became of it: added (the document
+ * that fills it is one of `documents`), still to add, or one the client said they don't have. */
+export interface IntakePackageEvidence {
+  id: string;
+  title: string;
+  why: string;
+  state: "ADDED" | "OPEN" | "DISMISSED";
+  documentId: string | null;
 }
 
 export interface IntakePackageForLawyer {
@@ -192,4 +220,6 @@ export interface IntakePackageForLawyer {
   intake: CaseIntake;
   transcript: IntakePackageMessage[];
   documents: IntakePackageDocument[];
+  /** Empty when the case never went through the evidence step. */
+  evidence: IntakePackageEvidence[];
 }

@@ -14,6 +14,7 @@ import { redis } from "../lib/redis";
 import { emitToUser } from "../lib/socket";
 import { runInLlmUsageScope } from "../lib/llm-usage-scope";
 import ConsentSvc from "./consent.service";
+import { CLIENT_STORY_MAX_LENGTH } from "../constants/client-case.constants";
 import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import { stripStructuredBlocks } from "../utils/response-parser";
@@ -51,11 +52,16 @@ export function isUnknownSessionError(err: unknown): boolean {
  * answers would be lost and the AI would start the interview over. Empty when there's no history. */
 export function earlierConversationBlock(rows: { id: string; role: string; content: string }[], currentMessageId: string): string {
   const end = rows.findIndex((m) => m.id === currentMessageId);
+  // The client's first message is where they told what happened (a whole story, on the story-first
+  // way in): repeated in full, where later messages are cut.
+  const firstId = rows.find((m) => m.role === "user" && m.content.trim())?.id;
   const before = (end < 0 ? rows : rows.slice(0, end))
     .filter((m) => (m.role === "user" || m.role === "assistant") && m.content.trim())
     .slice(-EARLIER_CONVERSATION_MAX_MESSAGES);
   if (!before.length) return "";
-  const lines = before.map((m) => `${m.role === "user" ? "Client" : "You"}: ${m.content.trim().slice(0, EARLIER_CONVERSATION_MAX_CHARS_PER_MESSAGE)}`);
+  const lines = before.map(
+    (m) => `${m.role === "user" ? "Client" : "You"}: ${m.content.trim().slice(0, m.id === firstId ? CLIENT_STORY_MAX_LENGTH : EARLIER_CONVERSATION_MAX_CHARS_PER_MESSAGE)}`,
+  );
   return `Earlier conversation with this client (the chat session was restarted, so it is repeated here). Carry on from it: don't greet the client again or ask what they've already answered.\n${lines.join("\n")}`;
 }
 
@@ -154,6 +160,13 @@ export default class IntakeChatSvc {
       return { sessionId: stored, fresh: false };
     }
     return { sessionId: await IntakeChatSvc.newSession(caseId), fresh: true };
+  }
+
+  /** Drops the case's Chat Wonder session, so its next turn starts a fresh one that replays the chat
+   * so far: for a message added outside a turn (a story fix, ClientStorySvc.correct) that the open
+   * session would otherwise never see. */
+  static async forgetSession(caseId: string): Promise<void> {
+    await redis.del(intakeSessionKey(caseId));
   }
 
   /** A fresh Chat Wonder session for the case, stored so the next turns use it too. */

@@ -511,6 +511,28 @@ model CaseClientIntake {
   case        Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
 }
 
+/// The Questions step after a client's story (client-questions.service.ts): the details the
+/// case still needs, asked one at a time. One row per case. `plan` is the whole list as JSON
+/// (questions, chips, follow-ups, each detail's status and answer), sealed with the intake key
+/// (intake-field-crypto.ts, label "CaseQuestions.plan"): the questions quote the client's story.
+/// `total` is fixed when the list is made, so "N of M details" never shrinks. PLANNING while the
+/// list is being written (a second start waits); OPEN while questions remain; DONE after the last.
+model CaseQuestions {
+  caseId    String              @id
+  status    CaseQuestionsStatus @default(PLANNING)
+  total     Int                 @default(0)
+  plan      String?             @db.Text
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  case      Case                @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+enum CaseQuestionsStatus {
+  PLANNING
+  OPEN
+  DONE
+}
+
 /// The intake chat's own message table (ADR: separate pipeline, 2026-10-28) — deliberately NOT
 /// Message/Consultation. Keyed straight to Case: one intake thread per case, no session/thread
 /// row of its own. Sealed via src/utils/intake-field-crypto.ts (its own key, its own
@@ -1071,6 +1093,7 @@ model Case {
   clientRequests              ClientRequest[]
   clientOverview              CaseClientOverview?
   clientIntake                CaseClientIntake?
+  clientQuestions             CaseQuestions?
   intakeMessages              IntakeMessage[]
 
   @@index([userId])
@@ -2018,6 +2041,12 @@ model Document {
   isExhibit            Boolean   @default(false)
   witnessesExtractedAt DateTime?
   damagesExtractedAt   DateTime?
+  // The client's note on a document they added (the evidence step, ClientEvidenceSvc): what it
+  // is, in their words. Sealed with the intake key (label "Document.clientNote"). Drafted by the AI
+  // once the document is read, until the client writes their own (clientNoteBy CLIENT), which the
+  // AI never overwrites.
+  clientNote           String?             @db.Text
+  clientNoteBy         DocumentNoteAuthor?
   // Archiving is a pure visibility flag, same as Case.status — an ARCHIVED document stays fully
   // intact (chunks, RAG grounding, metadata, relationships) and is only hidden from the active
   // document view by default. See DocumentRepo.list's status param and DocumentRepo.setStatus.
@@ -2044,6 +2073,12 @@ model Document {
   @@index([caseId, status])
   @@index([consultationId])
   @@index([messageId])
+}
+
+/// Who wrote a document's client note: drafted by the AI, or the client's own.
+enum DocumentNoteAuthor {
+  AI
+  CLIENT
 }
 
 enum RagStatus {
@@ -2898,6 +2933,9 @@ model CaseMissingEvidence {
   filledByDocumentId String?
   filledAt           DateTime?
   filledViaIntake    Boolean                 @default(false)
+  // The client said "I don't have this" on a suggested proof (ClientEvidenceSvc). Not the lawyer's
+  // DISMISSED: the gap stays OPEN for the lawyer, who now knows to ask about it.
+  clientDismissedAt  DateTime?
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
