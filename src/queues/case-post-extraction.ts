@@ -88,9 +88,21 @@ export async function runCasePostExtraction(caseId: string, userId: string): Pro
     // client case's Case.readySetFingerprint is otherwise never written, so this check is what
     // keeps a quiet (unchanged) re-trigger from spending an overview run for nothing.
     if (await CaseRepo.isClientWorkspaceCase(caseId)) {
+      // The evidence step's notes on the newly read documents, first: the client is waiting on the
+      // screen for them, they're quick, and the intake reading below reads them too. Only on a case
+      // in that step; never throws. Imported here: the evidence service sits above this queue's
+      // imports.
+      const ClientEvidenceSvc = (await import("../services/client-evidence.service")).default;
+      await ClientEvidenceSvc.draftNotes(caseId, userId);
+      // The overview can fail outright (on KR its panes have no prompts yet, so every part fails):
+      // that must never stop the notes or the intake reading, so it's kept to itself.
       if (readySetChanged && (await ClientOverviewSvc.beginAuto(caseId))) {
-        await ClientOverviewSvc.runQueued(caseId, userId, "post-extraction");
-        logger.info("Client overview: automatic run completed", { caseId });
+        try {
+          await ClientOverviewSvc.runQueued(caseId, userId, "post-extraction");
+          logger.info("Client overview: automatic run completed", { caseId });
+        } catch (err) {
+          logger.warn("Client overview: automatic run failed, carrying on", { err, caseId });
+        }
       }
       // The Intake tab's own trigger (ClientIntakeSvc), run alongside the overview's while both
       // exist (docs/plans/client-side-compressed-meteor.md Phase 6 retires the overview once the

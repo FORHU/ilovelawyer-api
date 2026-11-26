@@ -45,6 +45,7 @@ const INTAKE: CaseIntake = {
   deadlines: [],
   missing: [],
   conflicts: [],
+  storySoFar: [],
   completeness: null,
   formFields: {
     parties: [],

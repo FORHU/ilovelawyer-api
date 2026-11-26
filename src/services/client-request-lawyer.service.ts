@@ -33,9 +33,13 @@ import type { ClientRequestTakenEvent, ClientRequestUpdatedEvent, CloseOutcome, 
 import { CLIENT_REQUEST_MAX_LAWYERS, paysLawyerDirectly, quoteMaxMinorOf } from "../constants/client-request.constants";
 import { CLIENT_REQUESTS_OPEN_TENANTS, requestCurrencyOf } from "../constants/client-sites.constants";
 import ChatRepo from "../repositories/chat.repository";
+import IntakeChatRepo from "../repositories/intake-chat.repository";
+import MissingEvidenceRepo from "../repositories/missing-evidence.repository";
+import { openDocumentNote } from "../repositories/document-note.repository";
+import { evidenceStateOf } from "../utils/client-evidence-plan";
 import ClientIntakeRepo from "../repositories/client-intake.repository";
 import { documentFileUrl } from "./document.service";
-import type { CaseIntake, IntakePackageCaseDetails, IntakePackageDocument, IntakePackageForLawyer, IntakePackageMessage } from "../types/client-intake";
+import type { CaseIntake, IntakePackageCaseDetails, IntakePackageDocument, IntakePackageEvidence, IntakePackageForLawyer, IntakePackageMessage } from "../types/client-intake";
 import { moneyText } from "../utils/money-text";
 
 /** What a case with no intake run yet looks like in the package — never undefined, so the lawyer
@@ -54,6 +58,7 @@ const EMPTY_INTAKE: CaseIntake = {
   deadlines: [],
   missing: [],
   conflicts: [],
+  storySoFar: [],
   completeness: null,
   formFields: {
     parties: [],
@@ -375,8 +380,8 @@ export default class ClientRequestLawyerSvc {
   /**
    * The full intake package (ADR 0018, docs/plans/client-side-compressed-meteor.md §3.3): the
    * live CaseIntake with real names/document names (no redaction — the lawyer is engaged and
-   * already has full case access), plus the case's own fields, the client's transcript and its
-   * documents. Read-only. Only the lawyer engaged on this request, and only while ENGAGED (same
+   * already has full case access), plus the case's own fields, the client's transcript, its
+   * documents with the client's notes, and the proof the client was asked for. Read-only. Only the lawyer engaged on this request, and only while ENGAGED (same
    * guard as copy()/close()); every read is audited, same reason as parties().
    */
   static async intakePackage(lawyer: LawyerContext, id: string): Promise<IntakePackageForLawyer> {
@@ -384,19 +389,32 @@ export default class ClientRequestLawyerSvc {
     const found = await ClientRequestRepo.findForIntakePackage(id);
     if (!found) throw NOT_FOUND();
 
-    const consultationId = found.case.consultations[0]?.id ?? null;
-    const rows = consultationId ? await ChatRepo.listMessagesByConsultation(consultationId) : [];
-    const transcript: IntakePackageMessage[] = rows
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ id: m.id, role: m.role === "user" ? ("CLIENT" as const) : ("AI" as const), text: m.content, createdAt: m.createdAt.toISOString() }));
-
-    const documents: IntakePackageDocument[] = found.case.documents.map((d) => ({
-      id: d.id,
-      name: d.name,
-      status: d.ragStatus,
-      category: d.category,
-      url: d.file?.s3Key ? documentFileUrl(d.file.s3Key, d.file.filename, { id: d.id, caseId: found.caseId }) : null,
+    const transcript: IntakePackageMessage[] = (await ClientRequestLawyerSvc.transcriptOf(found.caseId, found.case.consultations[0]?.id ?? null)).map((m) => ({
+      id: m.id,
+      role: m.role === "user" ? ("CLIENT" as const) : ("AI" as const),
+      text: m.content,
+      createdAt: m.createdAt.toISOString(),
     }));
+
+    const documents: IntakePackageDocument[] = found.case.documents.map((d) => {
+      const note = openDocumentNote(d.clientNote);
+      return {
+        id: d.id,
+        name: d.name,
+        status: d.ragStatus,
+        category: d.category,
+        url: d.file?.s3Key ? documentFileUrl(d.file.s3Key, d.file.filename, { id: d.id, caseId: found.caseId }) : null,
+        note,
+        noteBy: note ? (d.clientNoteBy ?? null) : null,
+      };
+    });
+
+    // A suggestion counts as added only while its document is still on the case.
+    const documentIds = new Set(documents.map((d) => d.id));
+    const evidence: IntakePackageEvidence[] = evidenceStateOf(await MissingEvidenceRepo.listClientIntake(found.caseId)).suggestions.map((s) => {
+      const filled = s.documentId && documentIds.has(s.documentId) ? s.documentId : null;
+      return { id: s.id, title: s.title, why: s.why, state: s.state === "ADDED" && !filled ? "OPEN" : s.state, documentId: filled };
+    });
 
     const stored = await ClientIntakeRepo.find(found.caseId);
     const intake = (stored?.data as unknown as CaseIntake | null) ?? EMPTY_INTAKE;
@@ -421,7 +439,16 @@ export default class ClientRequestLawyerSvc {
       payload: { requestId: id },
     });
 
-    return { requestId: id, caseId: found.caseId, caseDetails, intake, transcript, documents };
+    return { requestId: id, caseId: found.caseId, caseDetails, intake, transcript, documents, evidence };
+  }
+
+  /** The client's Interview, oldest first, client and AI turns only: the case's intake messages (the
+   * story, the questions and the chat), or, on a case from before they existed, its consultation. */
+  private static async transcriptOf(caseId: string, consultationId: string | null): Promise<{ id: string; role: string; content: string; createdAt: Date }[]> {
+    const spoken = (m: { role: string }) => m.role === "user" || m.role === "assistant";
+    const intake = (await IntakeChatRepo.listByCase(caseId)).filter(spoken);
+    if (intake.length || !consultationId) return intake;
+    return (await ChatRepo.listMessagesByConsultation(consultationId)).filter(spoken);
   }
 
   /**

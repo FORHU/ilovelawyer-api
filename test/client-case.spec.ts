@@ -277,7 +277,7 @@ describe("Client app cases", () => {
       expect(dto.areas).to.deep.equal([{ code: "EMPLOYMENT", name: "Employment" }]);
       expect(dto.others).to.deep.equal([{ id: "p1", name: "Acme Ltd", role: "Opposing party" }]);
       expect(dto.documents).to.deep.equal([
-        { id: "d1", name: "Contract.pdf", status: "READY", syncStatus: "done", size: null, uploadedAt: new Date("2026-10-20"), createdAt: new Date("2026-10-20") },
+        { note: null, noteBy: null, id: "d1", name: "Contract.pdf", status: "READY", syncStatus: "done", size: null, uploadedAt: new Date("2026-10-20"), createdAt: new Date("2026-10-20") },
       ]);
     });
 
@@ -693,6 +693,18 @@ describe("Client app cases", () => {
       "GET /case-areas",
       "GET /cases",
       "POST /cases",
+      "POST /cases/story",
+      "POST /cases/:caseId/story",
+      "POST /cases/:caseId/story/facts",
+      "GET /cases/:caseId/evidence-suggestions",
+      "POST /cases/:caseId/evidence-suggestions",
+      "PATCH /cases/:caseId/evidence-suggestions/:suggestionId",
+      "POST /cases/:caseId/evidence/done",
+      "PATCH /cases/:caseId/documents/:documentId/note",
+      "GET /cases/:caseId/questions",
+      "POST /cases/:caseId/questions",
+      "POST /cases/:caseId/questions/answer",
+      "POST /cases/:caseId/questions/skip",
       "GET /cases/:caseId",
       "PATCH /cases/:caseId",
       "DELETE /cases/:caseId",

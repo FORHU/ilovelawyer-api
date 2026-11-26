@@ -15,6 +15,8 @@ export interface GmailCaseImportInput {
   includeEmail: boolean;
   /** Attachments to add, each as its own document (partIds from the message view). */
   attachmentPartIds: string[];
+  /** The evidence step's suggestion this email answers: the first document added fills it. */
+  missingEvidenceId?: string;
 }
 
 /** A name that's safe as a document and file name: no path or control characters, no runs of
@@ -102,11 +104,18 @@ export default class GmailCaseImportSvc {
     }
 
     const documents = [];
-    for (const file of toSave) {
+    for (const [i, file] of toSave.entries()) {
       const key = caseDocumentKey(caseId, file.name);
       await GmailCaseImportSvc.upload(key, file.buffer, file.contentType);
       documents.push(
-        await ClientCaseSvc.addDocument(workspace, userId, caseId, { key, name: file.name, contentType: file.contentType, fileSize: file.buffer.length }),
+        await ClientCaseSvc.addDocument(workspace, userId, caseId, {
+          key,
+          name: file.name,
+          contentType: file.contentType,
+          fileSize: file.buffer.length,
+          // The email itself (or the first attachment) answers the suggestion it was added for.
+          ...(i === 0 && input.missingEvidenceId ? { missingEvidenceId: input.missingEvidenceId } : {}),
+        }),
       );
     }
 

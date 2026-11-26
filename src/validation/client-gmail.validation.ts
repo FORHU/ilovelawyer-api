@@ -33,4 +33,7 @@ export const importGmailToCaseSchema = Joi.object({
   messageId: Joi.string().pattern(GMAIL_ID).required(),
   includeEmail: Joi.boolean().default(true),
   attachmentPartIds: Joi.array().items(PART_ID).max(25).default([]),
+  // The evidence step's suggestion this email answers ("Messages from your manager"): the first
+  // document added is linked to it, as an upload from its card would be.
+  missingEvidenceId: Joi.string().trim().max(64).optional(),
 });

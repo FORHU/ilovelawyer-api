@@ -63,3 +63,8 @@ A JSON array of objects, at most 10, each carrying:
 If the documents leave nothing material unproven: reply with the empty array.
 `;
 }
+
+/** The `notes` marker on gaps suggested to the client from their story and answers (the evidence
+ * step, ClientEvidenceSvc). Different from AI_MISSING_EVIDENCE_NOTE, so the lawyer analysis's
+ * replaceAiItems never deletes them. */
+export const CLIENT_INTAKE_EVIDENCE_NOTE = "CLIENT_INTAKE";

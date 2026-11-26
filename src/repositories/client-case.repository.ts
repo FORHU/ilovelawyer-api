@@ -7,7 +7,7 @@ const CLIENT_CASE_INCLUDE = {
   parties: { orderBy: { id: "asc" } },
   documents: {
     where: { status: "ACTIVE" },
-    select: { id: true, name: true, ragStatus: true, fileSize: true, createdAt: true },
+    select: { id: true, name: true, ragStatus: true, fileSize: true, createdAt: true, clientNote: true, clientNoteBy: true },
     orderBy: { createdAt: "asc" },
   },
   consultations: {

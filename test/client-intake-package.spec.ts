@@ -7,6 +7,8 @@ import ClientRequestLawyerSvc, { type LawyerContext } from "../src/services/clie
 import ClientRequestRepo from "../src/repositories/client-request.repository";
 import ClientIntakeRepo from "../src/repositories/client-intake.repository";
 import ChatRepo from "../src/repositories/chat.repository";
+import IntakeChatRepo from "../src/repositories/intake-chat.repository";
+import MissingEvidenceRepo from "../src/repositories/missing-evidence.repository";
 import LawyerProfileRepo from "../src/repositories/lawyer-profile.repository";
 import SecurityAuditSvc from "../src/services/security-audit.service";
 
@@ -36,6 +38,9 @@ describe("ClientRequestLawyerSvc.intakePackage", () => {
   let found: any;
   let intakeStored: any;
   let messages: any[];
+  let intakeMessages: any[];
+  let suggestions: any[];
+  let consultationReads: number;
   let securityAudits: any[];
 
   beforeEach(() => {
@@ -43,6 +48,8 @@ describe("ClientRequestLawyerSvc.intakePackage", () => {
       stash(ClientRequestRepo, ["findForLawyer", "findForIntakePackage"]),
       stash(ClientIntakeRepo, ["find"]),
       stash(ChatRepo, ["listMessagesByConsultation"]),
+      stash(IntakeChatRepo, ["listByCase"]),
+      stash(MissingEvidenceRepo, ["listClientIntake"]),
       stash(LawyerProfileRepo, ["find", "findLawyerTenant", "countOpenForLawyers"]),
       stash(SecurityAuditSvc, ["record"]),
     ];
@@ -73,12 +80,21 @@ describe("ClientRequestLawyerSvc.intakePackage", () => {
       { id: "m2", role: "assistant", content: "Thanks, can you tell me more?", createdAt: new Date("2026-03-04T09:01:00Z") },
       { id: "m3", role: "system", content: "internal note", createdAt: new Date("2026-03-04T09:02:00Z") },
     ];
+    // A case from before intake messages: its Interview is in its consultation.
+    intakeMessages = [];
+    suggestions = [];
+    consultationReads = 0;
     securityAudits = [];
 
     (ClientRequestRepo as any).findForLawyer = async (id: string) => (id === REQUEST_ID ? request : null);
     (ClientRequestRepo as any).findForIntakePackage = async (id: string) => (id === REQUEST_ID ? found : null);
     (ClientIntakeRepo as any).find = async () => intakeStored;
-    (ChatRepo as any).listMessagesByConsultation = async () => messages;
+    (ChatRepo as any).listMessagesByConsultation = async () => {
+      consultationReads++;
+      return messages;
+    };
+    (IntakeChatRepo as any).listByCase = async (caseId: string) => (caseId === CASE_ID ? intakeMessages : []);
+    (MissingEvidenceRepo as any).listClientIntake = async (caseId: string) => (caseId === CASE_ID ? suggestions : []);
     (LawyerProfileRepo as any).find = async () => PROFILE;
     (LawyerProfileRepo as any).findLawyerTenant = async () => ({ role: "LAWYER", tenantCode: "UK" });
     (LawyerProfileRepo as any).countOpenForLawyers = async () => new Map();
@@ -111,6 +127,61 @@ describe("ClientRequestLawyerSvc.intakePackage", () => {
     expect(pkg.documents).to.have.length(1);
     expect(pkg.documents[0]).to.include({ id: "d1", name: "Dismissal letter.pdf", status: "READY", category: "evidence" });
     expect(pkg.documents[0].url).to.be.a("string");
+  });
+
+  it("reads the Interview from the case's intake messages (the story and the questions), not its old consultation", async () => {
+    intakeMessages = [
+      { id: "i1", role: "user", content: "My manager let me go on 3 March.", createdAt: new Date("2026-11-20T09:00:00Z") },
+      { id: "i2", role: "assistant", content: "Which part of the UK did this happen in?", createdAt: new Date("2026-11-20T09:01:00Z") },
+      { id: "i3", role: "user", content: "England and Wales", createdAt: new Date("2026-11-20T09:01:00.001Z") },
+      { id: "i4", role: "system", content: "internal", createdAt: new Date("2026-11-20T09:02:00Z") },
+    ];
+    const pkg = await ClientRequestLawyerSvc.intakePackage(me, REQUEST_ID);
+    expect(pkg.transcript.map((m) => [m.id, m.role, m.text])).to.deep.equal([
+      ["i1", "CLIENT", "My manager let me go on 3 March."],
+      ["i2", "AI", "Which part of the UK did this happen in?"],
+      ["i3", "CLIENT", "England and Wales"],
+    ]);
+    expect(consultationReads).to.equal(0);
+  });
+
+  it("gives each document the client's note, and no author when there's no note", async () => {
+    found.case.documents = [
+      { id: "d1", name: "payslip.jpg", ragStatus: "READY", category: null, clientNote: "My last payslip, for February.", clientNoteBy: "CLIENT", file: null },
+      { id: "d2", name: "contract.pdf", ragStatus: "READY", category: null, clientNote: "Your employment contract.", clientNoteBy: "AI", file: null },
+      // The AI had nothing to say about this one.
+      { id: "d3", name: "scan.png", ragStatus: "READY", category: null, clientNote: null, clientNoteBy: "AI", file: null },
+      { id: "d4", name: "older.pdf", ragStatus: "READY", category: null, clientNote: null, clientNoteBy: null, file: null },
+    ];
+    const pkg = await ClientRequestLawyerSvc.intakePackage(me, REQUEST_ID);
+    expect(pkg.documents.map((d) => [d.id, d.note, d.noteBy])).to.deep.equal([
+      ["d1", "My last payslip, for February.", "CLIENT"],
+      ["d2", "Your employment contract.", "AI"],
+      ["d3", null, null],
+      ["d4", null, null],
+    ]);
+  });
+
+  it("lists the proof the client was asked for: added (with its document), still to add, and what they don't have", async () => {
+    const gap = (over: Record<string, unknown>) => ({ label: "x", detail: null, suggestedSource: "files", filledByDocumentId: null, clientDismissedAt: null, ...over });
+    suggestions = [
+      gap({ id: "g1", label: "The dismissal letter", detail: "Shows when and how.", filledByDocumentId: "d1" }),
+      gap({ id: "g2", label: "Payslips" }),
+      gap({ id: "g3", label: "Emails from HR", clientDismissedAt: new Date() }),
+      // Filled by a document that's no longer on the case: still to add.
+      gap({ id: "g4", label: "Your contract", filledByDocumentId: "gone" }),
+    ];
+    const pkg = await ClientRequestLawyerSvc.intakePackage(me, REQUEST_ID);
+    expect(pkg.evidence).to.deep.equal([
+      { id: "g1", title: "The dismissal letter", why: "Shows when and how.", state: "ADDED", documentId: "d1" },
+      { id: "g2", title: "Payslips", why: "", state: "OPEN", documentId: null },
+      { id: "g3", title: "Emails from HR", why: "", state: "DISMISSED", documentId: null },
+      { id: "g4", title: "Your contract", why: "", state: "OPEN", documentId: null },
+    ]);
+  });
+
+  it("has no evidence list for a case that never went through the evidence step", async () => {
+    expect((await ClientRequestLawyerSvc.intakePackage(me, REQUEST_ID)).evidence).to.deep.equal([]);
   });
 
   it("returns an empty, EMPTY-status intake when none has ever run", async () => {

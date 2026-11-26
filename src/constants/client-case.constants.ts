@@ -4,6 +4,12 @@ export const CLIENT_PARTY_ROLES = ["Opposing party", "Witness", "Other"] as cons
 export const CLIENT_CASE_TITLE_MAX_LENGTH = 150;
 export const CLIENT_CASE_WHERE_MAX_LENGTH = 120;
 export const CLIENT_MESSAGE_MAX_LENGTH = 4000;
+/** A new client's story, told before any question is asked (POST /client/cases/story). Long enough
+ * for ten minutes of speech; short enough to sit in one extraction prompt in full. */
+export const CLIENT_STORY_MIN_LENGTH = 20;
+export const CLIENT_STORY_MAX_LENGTH = 8000;
+/** "Something's not right" after reading what we understood: a fix, not a second story. */
+export const CLIENT_STORY_CORRECTION_MAX_LENGTH = 1500;
 /** Case documents one chat message can carry. */
 export const CLIENT_MESSAGE_DOCUMENTS_MAX = 5;
 /** A voice message's recording — generously above a few minutes of webm/opus, well under what

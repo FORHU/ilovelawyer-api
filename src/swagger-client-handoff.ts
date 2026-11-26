@@ -242,12 +242,17 @@ export const clientHandoffSchemas: Schemas = {
       deadlines: { type: "array", items: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, date: { type: "string", format: "date", nullable: true } } } },
       missing: { type: "array", items: { type: "object", properties: { id: { type: "string" }, question: { type: "string" }, why: { type: "string" } } } },
       conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, description: { type: "string" } } } },
+      storySoFar: {
+        type: "array",
+        description: "What the client was told we understood from their story, in their words and language. `text` may mark a detail with **bold**.",
+        items: { type: "object", properties: { id: { type: "string" }, kind: enumOf(["FACT", "DEADLINE"]), text: { type: "string" } } },
+      },
       completeness: ref("IntakeCompleteness"),
     },
   },
   IntakePackageForLawyer: {
     type: "object",
-    description: "The engaged lawyer's full read of the client's intake (ADR 0018): the case's own fields, the client's transcript and its documents, alongside the live CaseIntake.",
+    description: "The engaged lawyer's full read of the client's intake (ADR 0018): the case's own fields, the client's transcript (their intake messages: the story, the questions and the chat), its documents with the client's notes, and the proof the client was asked for, alongside the live CaseIntake.",
     properties: {
       requestId: { type: "string" },
       caseId: { type: "string" },
@@ -265,7 +270,35 @@ export const clientHandoffSchemas: Schemas = {
       },
       intake: ref("CaseIntake"),
       transcript: { type: "array", items: { type: "object", properties: { id: { type: "string" }, role: { type: "string", enum: ["CLIENT", "AI"] }, text: { type: "string" }, createdAt: dateTime() } } },
-      documents: { type: "array", items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, status: { type: "string", enum: ["PENDING", "READY", "FAILED"] }, category: { type: "string", nullable: true }, url: { type: "string", nullable: true } } } },
+      documents: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            name: { type: "string" },
+            status: { type: "string", enum: ["PENDING", "READY", "FAILED"] },
+            category: { type: "string", nullable: true },
+            url: { type: "string", nullable: true },
+            note: { type: "string", nullable: true, description: "The client's note on it from the evidence step" },
+            noteBy: { type: "string", enum: ["AI", "CLIENT"], nullable: true, description: "CLIENT: in their words. AI: the AI's draft, left as it was. Null with no note." },
+          },
+        },
+      },
+      evidence: {
+        type: "array",
+        description: "The proof the evidence step suggested to the client. Empty when the case never went through it.",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            title: { type: "string" },
+            why: { type: "string" },
+            state: { type: "string", enum: ["ADDED", "OPEN", "DISMISSED"], description: "ADDED: documentId is one of documents. DISMISSED: the client said they don't have it." },
+            documentId: { type: "string", nullable: true },
+          },
+        },
+      },
     },
   },
   Quote: {

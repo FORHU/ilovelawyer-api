@@ -10,7 +10,8 @@
  */
 import crypto from "crypto";
 import { docsForPrompt, documentHandles, excerptsWithHandles, resolveDocumentRef, type CaseDoc } from "./case-document-handles";
-import type { CaseIntake, IntakeEvent, IntakeFormFields, IntakeItem, IntakePerson, IntakeSource } from "../types/client-intake";
+import type { CaseIntake, IntakeEvent, IntakeFormFields, IntakeItem, IntakePerson, IntakeSource, IntakeStoryLine } from "../types/client-intake";
+import { CLIENT_STORY_MAX_LENGTH } from "../constants/client-case.constants";
 
 export interface IntakeMessageInput {
   id: string;
@@ -22,6 +23,8 @@ export interface IntakeMessageInput {
 export interface IntakeDocumentInput {
   id: string;
   name: string;
+  /** The client's note on it (the evidence step), opened; shown beside its name. */
+  note?: string | null;
 }
 
 /** M1…Mn in the order given, same idiom as documentHandles. */
@@ -39,6 +42,48 @@ function resolveMessageRef(raw: string, messages: IntakeMessageInput[]): string 
 
 const MAX_MESSAGES = 60;
 const MAX_MESSAGE_CHARS = 1500;
+
+/** "Here's your story so far" shows at most this many lines. */
+export const STORY_SO_FAR_MAX = 5;
+/** A story line longer than this isn't a line the screen can show; it's dropped, not cut, so its
+ * bold markers never come apart. */
+const STORY_LINE_MAX_CHARS = 300;
+/** A suggested case title, cut at a word beyond this. */
+export const SUGGESTED_TITLE_MAX = 80;
+/** At most this many suggested case areas. */
+const SUGGESTED_AREAS_MAX = 2;
+
+/** Cuts `text` at a word to at most `max` characters. */
+function cutAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim();
+}
+
+/** The placeholder title a case made from a story starts with (ClientStorySvc), until the
+ * extraction suggests a better one: the story's first sentence, cut at a word. */
+export function storyTitle(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (!flat) return "New case";
+  const sentence = flat.match(/^.+?[.!?。](?=\s|$)/)?.[0] ?? flat;
+  if (sentence.length <= SUGGESTED_TITLE_MAX) return sentence.replace(/[.!?。]$/, "");
+  return cutAtWord(sentence, SUGGESTED_TITLE_MAX);
+}
+
+/** The case still has the details it was made with from a story (ClientStorySvc): its only area
+ * is `otherCode` and its title is still the one cut from the client's first message. Only then may
+ * the AI's suggested title and areas replace them, so nothing the client chose or edited is ever
+ * overwritten. A case made any other way (the form, the chat's first message) has a different
+ * title from the start, so it never matches. */
+export function hasStoryPlaceholderDetails(caseDetails: { title: string; caseAreaCodes: string[] }, firstMessage: string | null, otherCode: string): boolean {
+  return (
+    firstMessage !== null &&
+    caseDetails.title === storyTitle(firstMessage) &&
+    caseDetails.caseAreaCodes.length === 1 &&
+    caseDetails.caseAreaCodes[0] === otherCode
+  );
+}
 
 /** The deterministic part of `people`: the parties the client entered on the case form.
  * CASE_DETAILS-sourced, never asked of the AI — see the contract's note on why: a form field is
@@ -158,13 +203,32 @@ export function buildIntakePrompt(input: {
   documents: IntakeDocumentInput[];
   documentExcerpts: string;
   today: string;
+  /** Set while the case still has its story placeholders (hasStoryPlaceholderDetails): the site's
+   * case areas to suggest from, which also asks for a suggested title. */
+  suggestFrom?: { code: string; name: string }[];
 }): string {
   const msgs = input.messages.slice(-MAX_MESSAGES);
   const msgHandles = messageHandles(msgs);
+  // The client's first message is where they told what happened (a whole story, on the story-first
+  // way in), so it's given in full; later ones are cut.
+  const firstId = msgs.find((m) => m.role === "user")?.id;
   const chatLines = [...msgHandles]
-    .map(([handle, m]) => `${handle} (${ukDay(m.at)}, ${m.role === "user" ? "client" : "AI"}): ${m.text.slice(0, MAX_MESSAGE_CHARS)}`)
+    .map(([handle, m]) => `${handle} (${ukDay(m.at)}, ${m.role === "user" ? "client" : "AI"}): ${m.text.slice(0, m.id === firstId ? CLIENT_STORY_MAX_LENGTH : MAX_MESSAGE_CHARS)}`)
     .join("\n\n");
-  const docList = docsForPrompt(input.documents).map((d) => `${d.id}: ${d.name}`).join("\n") || "(none uploaded yet)";
+  const suggest = input.suggestFrom?.length ? input.suggestFrom : null;
+  const suggestInstructions = suggest
+    ? `
+- suggestedTitle: a short, neutral title for this case in the client's own language, at most ${SUGGESTED_TITLE_MAX} characters, saying what the problem is (e.g. "Dismissed without notice and owed wages"). No names of people, no legal conclusions.
+- suggestedAreas: the code(s) from this list that best fit the problem, at most ${SUGGESTED_AREAS_MAX}, or [] if the conversation doesn't make it clear. Use only these codes:
+${suggest.map((a) => `  ${a.code}: ${a.name}`).join("\n")}
+suggestedTitle and suggestedAreas need no sources.`
+    : "";
+  const suggestJson = suggest ? `, "suggestedTitle": "", "suggestedAreas": ["CODE"]` : "";
+  // Handles follow the input order, so each one's note is the input's at the same place.
+  const docList =
+    docsForPrompt(input.documents)
+      .map((d, i) => `${d.id}: ${d.name}${input.documents[i]?.note ? ` (the client's note: ${input.documents[i]!.note})` : ""}`)
+      .join("\n") || "(none uploaded yet)";
 
   return `You are organising a client's intake conversation for a UK solicitor who has not read it yet. You are not giving legal advice and must not propose a legal strategy, predict an outcome, or recommend a course of action.
 
@@ -189,8 +253,9 @@ From the conversation and the documents only — never invent or infer anything 
 - relationship: the nature of the relationship between the client and the other side that this claim arises from (e.g. "employee of Acme Logistics since 2021", "tenant of 12 Mill Street", "customer under a 2024 service contract") — only when actually stated, never guessed from the type of case alone.
 - roleAndTerms: the client's role or position and the financial or contractual terms involved (a job title and salary; a tenancy's rent and length; a contract's value and what was to be delivered) — only when actually stated.
 - reasonGiven: the reason the OTHER side gave for the action being disputed (why they say they dismissed, evicted, refused, terminated, etc.) — the reason as stated, never a reason you infer must be true.
-- missing: open questions a solicitor would need answered that nothing above covers yet (no sources needed).
+- missing: open questions a solicitor would need answered that nothing above covers yet (no sources needed). When the client was asked something and said they don't know or aren't sure, never guess the answer: list it here as a question for the lawyer to ask them.
 - conflicts: places where two or more sources disagree on a fact, date, or detail — each needs at least two source handles, one from each side of the disagreement.
+- storySoFar: up to ${STORY_SO_FAR_MAX} short lines that tell the client back the most important things they told us, so they can check we understood. Write each line to the client ("You…", "Your manager…"), in the same language the client wrote in, in plain everyday words with no legal terms. Put the one key detail of each line — a date, an amount, or the key fact — between ** and ** (e.g. "Your manager let you go on **3 March 2026**, effective immediately."), and use no other formatting. Each line has a kind: "DEADLINE" for a date by which something must be done that the client or a document actually stated, "FACT" for anything else. Never add advice, a legal view, or anything the client didn't say.${suggestInstructions}
 
 Every item except "missing" must cite at least one real handle (Mn for the conversation, Dn p.N for a document, with the page if you can tell which page). Never cite a handle that doesn't exist. Do not repeat the known case details above as if you'd found them in the conversation.
 
@@ -199,7 +264,7 @@ ${input.documentExcerpts}
 The "summary" must be consistent with every other field you produce here, not written as if the documents list or excerpts above didn't exist. If a document is listed above, the summary must not say no documents were provided — say what they show instead, or that they're still being read if excerpts aren't available yet. If "timeline"/"facts" below cite a document for something, the summary citing or contradicting that same fact must agree with it.
 
 Reply with only this JSON and nothing else, omitting a list entirely (as []) when there's nothing to put in it:
-{"summary": "80-150 words, plain English, neutral, third person, no legal conclusions", "people": [{"name": "", "role": "", "sources": ["M1"]}], "timeline": [{"text": "", "date": null, "datePrecision": "UNKNOWN", "sources": ["M2"]}], "facts": [{"text": "", "sources": ["M1"]}], "goals": [{"text": "", "sources": ["M1"]}], "concerns": [{"text": "", "sources": ["M1"]}], "questionsForLawyer": [{"text": "", "sources": ["M1"]}], "deadlines": [{"text": "", "date": null, "sources": ["M1"]}], "relationship": [{"text": "", "sources": ["M1"]}], "roleAndTerms": [{"text": "", "sources": ["M1"]}], "reasonGiven": [{"text": "", "sources": ["M1"]}], "missing": [{"question": "", "why": ""}], "conflicts": [{"description": "", "sources": ["M1", "D1 p.2"]}]}`;
+{"summary": "80-150 words, plain English, neutral, third person, no legal conclusions", "people": [{"name": "", "role": "", "sources": ["M1"]}], "timeline": [{"text": "", "date": null, "datePrecision": "UNKNOWN", "sources": ["M2"]}], "facts": [{"text": "", "sources": ["M1"]}], "goals": [{"text": "", "sources": ["M1"]}], "concerns": [{"text": "", "sources": ["M1"]}], "questionsForLawyer": [{"text": "", "sources": ["M1"]}], "deadlines": [{"text": "", "date": null, "sources": ["M1"]}], "relationship": [{"text": "", "sources": ["M1"]}], "roleAndTerms": [{"text": "", "sources": ["M1"]}], "reasonGiven": [{"text": "", "sources": ["M1"]}], "missing": [{"question": "", "why": ""}], "conflicts": [{"description": "", "sources": ["M1", "D1 p.2"]}], "storySoFar": [{"kind": "FACT", "text": "", "sources": ["M1"]}]${suggestJson}}`;
 }
 
 /** A day as the client sees it, UK time (same rule as client-request-brief.service.ts's ukDay). */
@@ -285,6 +350,31 @@ export interface ParsedIntake {
   reasonGiven: IntakeItem[];
   missing: CaseIntake["missing"];
   conflicts: CaseIntake["conflicts"];
+  storySoFar: IntakeStoryLine[];
+  /** Only when the prompt asked for it (buildIntakePrompt's suggestFrom); null otherwise. */
+  suggestedTitle: string | null;
+  /** Codes from `areaCodes` only; [] when none was given or the prompt didn't ask. */
+  suggestedAreas: string[];
+}
+
+/** A story line as the screen shows it: one line, no list marker, and `**` only in pairs (an
+ * unpaired one would leave the app showing stray asterisks, so all of them go). Null when there's
+ * nothing left or it's too long to be a line. */
+function storyLineText(raw: unknown): string | null {
+  let text = str(raw).replace(/\s+/g, " ").replace(/^(?:[-*•]|\d+[.)])\s+/, "").trim();
+  if ((text.match(/\*\*/g) ?? []).length % 2 !== 0) text = text.replace(/\*\*/g, "");
+  if (!text.replace(/\*\*/g, "").trim() || text.length > STORY_LINE_MAX_CHARS) return null;
+  return text;
+}
+
+/** A suggested title: one line, no quotes around it, no full stop, cut at a word. */
+function suggestedTitleText(raw: unknown): string | null {
+  const text = str(raw)
+    .replace(/\s+/g, " ")
+    .replace(/^["'“‘]+|["'”’]+$/g, "")
+    .replace(/[.。]$/, "")
+    .trim();
+  return text ? cutAtWord(text, SUGGESTED_TITLE_MAX) : null;
 }
 
 /** Parses the AI's JSON reply. Returns null when there's nothing usable at all (no summary and no
@@ -292,8 +382,9 @@ export interface ParsedIntake {
  * against the real documents/messages this run was built from; a handle that matches none is
  * dropped. An item left with no sources is dropped too, except `missing` (never sourced) and the
  * top-level `summary`. A conflict needs at least two surviving sources, or it's dropped: a single
- * source can't itself be a disagreement. */
-export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: IntakeMessageInput[]): ParsedIntake | null {
+ * source can't itself be a disagreement. A story line needs a source like any other item.
+ * `areaCodes` are the site's case-area codes a suggestedAreas entry must be one of. */
+export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: IntakeMessageInput[], areaCodes: string[] = []): ParsedIntake | null {
   const start = reply.indexOf("{");
   const end = reply.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
@@ -384,11 +475,46 @@ export function parseIntakeReply(reply: string, docs: CaseDoc[], messages: Intak
     .filter((x): x is CaseIntake["conflicts"][number] => x !== null);
   const conflicts = dedupe(conflictsAll).slice(0, MAX_LIST);
 
+  const storyAll = arr(parsed.storySoFar)
+    .map((raw): IntakeStoryLine | null => {
+      const text = storyLineText(raw.text);
+      if (!text) return null;
+      const sources = parseSources(raw, docs, messages);
+      if (!sources.length) return null;
+      const kind = raw.kind === "DEADLINE" ? "DEADLINE" : "FACT";
+      return { id: stableId(`story-${kind}`, text), kind, text, sources };
+    })
+    .filter((x): x is IntakeStoryLine => x !== null);
+  // Facts first, deadlines last, each in the order the AI gave them; then the screen's limit.
+  const storySoFar = [...dedupe(storyAll.filter((l) => l.kind === "FACT")), ...dedupe(storyAll.filter((l) => l.kind === "DEADLINE"))].slice(0, STORY_SO_FAR_MAX);
+
+  const suggestedTitle = suggestedTitleText(parsed.suggestedTitle);
+  const known = new Set(areaCodes);
+  const suggestedAreas = [...new Set((Array.isArray(parsed.suggestedAreas) ? parsed.suggestedAreas : []).map(str).filter((c) => known.has(c)))].slice(0, SUGGESTED_AREAS_MAX);
+
   const nothingUsable =
-    !summary && ![people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, relationship, roleAndTerms, reasonGiven, missing, conflicts].some((l) => l.length);
+    !summary &&
+    ![people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, relationship, roleAndTerms, reasonGiven, missing, conflicts, storySoFar].some((l) => l.length);
   if (nothingUsable) return null;
 
-  return { summary, people, timeline, facts, goals, concerns, questionsForLawyer, deadlines, relationship, roleAndTerms, reasonGiven, missing, conflicts };
+  return {
+    summary,
+    people,
+    timeline,
+    facts,
+    goals,
+    concerns,
+    questionsForLawyer,
+    deadlines,
+    relationship,
+    roleAndTerms,
+    reasonGiven,
+    missing,
+    conflicts,
+    storySoFar,
+    suggestedTitle,
+    suggestedAreas,
+  };
 }
 
 function arr(v: unknown): Record<string, unknown>[] {

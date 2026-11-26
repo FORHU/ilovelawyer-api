@@ -1,4 +1,5 @@
-import { ClientRequestStatus, ClientSide, OrganizationRole, Prisma, RagStatus } from "@prisma/client";
+import { ClientRequestStatus, ClientSide, DocumentNoteAuthor, OrganizationRole, Prisma, RagStatus } from "@prisma/client";
+import { openDocumentNote } from "../repositories/document-note.repository";
 import ClientCaseRepo, { type ClientCaseRow } from "../repositories/client-case.repository";
 import type { CaseData } from "../repositories/case.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
@@ -107,8 +108,20 @@ const LAWYER_COMMITTED: ClientRequestStatus[] = ["CONFIRMED", "ENGAGED"];
 
 /** A document as the client app lists it. A Document has no upload time of its own: it's made when
  * the upload is confirmed, so createdAt is when it was uploaded. createdAt stays for older apps. */
-function toDocumentDto(d: { id: string; name: string; ragStatus: RagStatus; fileSize: number | null; createdAt: Date }) {
+function toDocumentDto(d: {
+  id: string;
+  name: string;
+  ragStatus: RagStatus;
+  fileSize: number | null;
+  createdAt: Date;
+  clientNote?: string | null;
+  clientNoteBy?: DocumentNoteAuthor | null;
+}) {
   return {
+    // The evidence step's note on it: drafted by the AI ("AI") until the client writes their own
+    // ("CLIENT"). Null note with noteBy "AI" means the AI had nothing useful to say.
+    note: openDocumentNote(d.clientNote),
+    noteBy: d.clientNoteBy ?? null,
     id: d.id,
     name: d.name,
     status: d.ragStatus,
@@ -273,7 +286,8 @@ export default class ClientCaseSvc {
       filledByDocumentId: r.filledByDocumentId,
       filledAt: r.filledAt,
     }));
-    const unfilled = open.filter((r) => !r.filledByDocumentId);
+    // Nor one the client said they don't have (the evidence step's "I don't have this").
+    const unfilled = open.filter((r) => !r.filledByDocumentId && !r.clientDismissedAt);
     const picked = await suggestNextEvidence(
       unfilled.map((r) => ({ id: r.id, label: r.label, detail: r.detail })),
       { userId, caseId },
@@ -316,7 +330,15 @@ export default class ClientCaseSvc {
    * the place and the people are fixed (409 CASE_LOCKED_BY_REQUEST), and a case can't move outside
    * the UK while any request is open, since a lawyer can't be asked for one.
    */
-  static async update(workspace: ClientWorkspace, userId: string, caseId: string, input: ClientCaseChanges) {
+  static async update(
+    workspace: ClientWorkspace,
+    userId: string,
+    caseId: string,
+    input: ClientCaseChanges,
+    /** refreshIntake false: the caller is an intake run itself (a story case's suggested details),
+     * which saves its own up-to-date result, so a second run would only repeat it. */
+    { refreshIntake = true }: { refreshIntake?: boolean } = {},
+  ) {
     const row = await ClientCaseSvc.load(workspace, caseId);
     const picked = CaseAreaSvc.clientPicks(row);
     const caseAreas = input.areas === undefined ? undefined : await CaseAreaSvc.forCase(input.areas, picked, workspace.tenantCode);
@@ -365,7 +387,9 @@ export default class ClientCaseSvc {
     await ClientCaseRepo.clearReadiness(caseId);
     // The Intake tab's own trigger (ClientIntakeSvc): an edit to the case details is one of its
     // three automatic refresh triggers. Fire-and-forget, same as the chat and document triggers.
-    void ClientIntakeSvc.scheduleAuto(caseId, userId, "case-details").catch((err) => logger.warn("Client intake: post-update schedule failed", { err, caseId }));
+    if (refreshIntake) {
+      void ClientIntakeSvc.scheduleAuto(caseId, userId, "case-details").catch((err) => logger.warn("Client intake: post-update schedule failed", { err, caseId }));
+    }
     return ClientCaseSvc.get(workspace, caseId);
   }
 
@@ -611,6 +635,8 @@ export default class ClientCaseSvc {
   static async removeDocument(workspace: ClientWorkspace, userId: string, caseId: string, documentId: string) {
     const doc = await ClientCaseSvc.loadDocument(workspace, caseId, documentId);
     await DocumentSvc.delete(doc.id, firmScope(workspace.id), userId);
+    // The proof it was added for (the evidence step) is asked for again.
+    await MissingEvidenceRepo.clearFilledByDocument(caseId, doc.id);
     const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
     if (engaged) {
       const event: EngagementDocumentRemovedEvent = { requestId: engaged.requestId, caseId, documentId: doc.id, filename: doc.name };
