@@ -5,6 +5,7 @@ import { describe, it } from "mocha";
 import fs from "fs";
 import { PDFParse } from "pdf-parse";
 import { buildCaseSummaryDocument, caseSummaryFilename, type CaseSummaryInput } from "../src/utils/client-case-summary-document";
+import { safeDocumentEntryName, caseBundleFilename } from "../src/utils/client-case-bundle";
 import { renderCaseSummaryToPdf, SUMMARY_FONT_BOLD, SUMMARY_FONT_REGULAR, SUMMARY_LOGO } from "../src/utils/client-case-summary-pdf-renderer";
 import type { CaseIntake, IntakeSource } from "../src/types/client-intake";
 
@@ -177,6 +178,23 @@ describe("Client case summary — filename", () => {
     expect(caseSummaryFilename("전세 보증금 반환", now, "KR")).to.equal("case-summary-전세-보증금-반환-2026-11-20.pdf");
     expect(caseSummaryFilename("../a/b:c*?\"<>|", now, "UK")).to.equal("case-summary-a-b-c-2026-11-20.pdf");
     expect(caseSummaryFilename(" *** ", now, "UK")).to.equal("case-summary-case-2026-11-20.pdf");
+  });
+});
+
+describe("Client case bundle — filenames", () => {
+  const now = new Date("2026-11-20T10:00:00.000Z");
+
+  it("prefixes a document's entry name with 8 chars of its id, so same-named files never collide", () => {
+    expect(safeDocumentEntryName("abcdef12-3456-7890", "tenancy.pdf")).to.equal("documents/abcdef12-tenancy.pdf");
+  });
+
+  it("strips path separators and control characters from the document name", () => {
+    expect(safeDocumentEntryName("abcdef12-0000", "../../etc/passwd")).to.equal("documents/abcdef12-.._.._etc_passwd");
+    expect(safeDocumentEntryName("abcdef12-0000", null)).to.equal("documents/abcdef12-document");
+  });
+
+  it("names the zip like the pdf but with a .zip extension", () => {
+    expect(caseBundleFilename("Landlord won't return my deposit!", now, "UK")).to.equal("case-export-landlord-won-t-return-my-deposit-2026-11-20.zip");
   });
 });
 
