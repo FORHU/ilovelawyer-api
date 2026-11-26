@@ -10,6 +10,9 @@ import NotificationSvc from "./notification.service";
 import { normalizeEmail } from "../utils/auth.utils";
 import { CASE_LAWYER_INVITE_EXPIRY_MS } from "../constants/case-lawyer-invite.constants";
 import logger from "../utils/logger";
+import { sendEmail } from "../utils/mailer";
+import { renderTemplate } from "../utils/template";
+import { emailLinkOriginForAccount } from "../utils/tenant-host";
 
 /** `redeem`'s consent-capture fields on the ClientRequest it creates: this is a client inviting
  * their own named lawyer, not the marketplace consent flow, so it gets its own fixed version
@@ -46,9 +49,39 @@ const SIGNUP_STATUS: Record<CaseLawyerInviteStatus, SignupLookupDto["status"]> =
   EXPIRED: "expired",
 };
 
-/** Sends the lawyer their invite email. A no-op for now — Task 9 replaces this with the real send
- * (the link/email invite content and delivery aren't this task's job). */
-async function sendInviteEmail(_invite: { token: string; email: string }): Promise<void> {}
+/**
+ * Sends the lawyer their invite email: a signup link locked to their email, carrying the invite
+ * token, on the lawyer app's site-correct origin.
+ *
+ * The invitee isn't a lawyer yet (no tenant of their own), and the inviting client is on the
+ * client app with no lawyer-tenant concept either — so the site the link should open on is the
+ * client's own tenant (the site their case already lives on), exactly the resolution
+ * ClientRequestNotifySvc.siteOfUser/lawyerInboxLink already use for a marketplace client request's
+ * lawyer-facing emails (`src/services/client-request-notify.service.ts`): `client.tenant?.code ??
+ * "UK"` feeds `emailLinkOriginForAccount({ role: "LAWYER", tenant: { code: site } }, null)`. Same
+ * shape here, reused rather than reinvented.
+ */
+async function sendInviteEmail(invite: { token: string; email: string; clientId: string; caseId: string }): Promise<void> {
+  const [client, kase] = await Promise.all([
+    prisma.user.findUnique({ where: { id: invite.clientId }, select: { name: true, username: true, tenant: { select: { code: true } } } }),
+    prisma.case.findUnique({ where: { id: invite.caseId }, select: { caseName: true } }),
+  ]);
+  const clientName = (client?.name ?? "").trim().split(/\s+/)[0] || client?.username || "Your client";
+  const caseName = kase?.caseName ?? "their case";
+  const site = client?.tenant?.code ?? "UK";
+  const origin = emailLinkOriginForAccount({ role: "LAWYER", tenant: { code: site } }, null);
+
+  // The sign-up tab with the address filled in and locked (`invite`), plus the token this invite
+  // is redeemed with (Task 8's auth flow reads `caseInviteToken` and calls
+  // CaseLawyerInviteSvc.redeem). Same param shape as OrganizationSvc.inviteByEmail's signup link.
+  const params = new URLSearchParams({ tab: "signup", email: invite.email, invite: "1", caseInviteToken: invite.token });
+  const html = await renderTemplate("case-lawyer-invite-signup", {
+    clientName,
+    caseName,
+    signupLink: `${origin}/login?${params}`,
+  });
+  await sendEmail({ to: invite.email, subject: `${clientName} has invited you to represent them on ilovelawyer`, html });
+}
 
 /**
  * A client inviting their own lawyer onto a case (client-invites-own-lawyer): a link or email
@@ -61,11 +94,11 @@ export default class CaseLawyerInviteSvc {
     return CaseLawyerInviteSvc.createInvite(clientId, caseId, null);
   }
 
-  /** An invite emailed straight to the lawyer. Email delivery is stubbed (sendInviteEmail) until
-   * Task 9 wires it up. */
+  /** An invite emailed straight to the lawyer: a signup link locked to their email, carrying the
+   * invite token. */
   static async createEmailInvite(clientId: string, caseId: string, email: string): Promise<{ token: string; expiresAt: Date }> {
     const invite = await CaseLawyerInviteSvc.createInvite(clientId, caseId, email);
-    await sendInviteEmail({ token: invite.token, email });
+    await sendInviteEmail({ token: invite.token, email, clientId, caseId });
     return invite;
   }
 

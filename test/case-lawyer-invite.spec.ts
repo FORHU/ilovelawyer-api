@@ -9,6 +9,7 @@ import CaseLawyerInviteRepo from "../src/repositories/case-lawyer-invite.reposit
 import CaseLawyerInviteSvc from "../src/services/case-lawyer-invite.service";
 import CaseSeedSvc from "../src/services/case-seed.service";
 import HttpError from "../src/utils/http-error";
+import * as mailerModule from "../src/utils/mailer";
 
 describe("CaseLawyerInvite", function () {
   this.timeout(20_000);
@@ -242,6 +243,33 @@ describe("CaseLawyerInvite", function () {
       const created = await CaseLawyerInviteSvc.createEmailInvite(clientId, caseId, "lawyer@example.com");
       const row = await CaseLawyerInviteRepo.findByToken(created.token);
       expect(row?.email).to.equal("lawyer@example.com");
+    });
+
+    it("createEmailInvite sends an email with a signup link containing the token and locked email", async () => {
+      const originalSendEmail = mailerModule.sendEmail;
+      const sent: { to: string; subject: string; html?: string }[] = [];
+      (mailerModule as any).sendEmail = async (mail: { to: string; subject: string; html?: string }) => {
+        sent.push(mail);
+        return "sent";
+      };
+
+      let created: { token: string; expiresAt: Date };
+      try {
+        created = await CaseLawyerInviteSvc.createEmailInvite(clientId, caseId, "lawyer@example.com");
+      } finally {
+        (mailerModule as any).sendEmail = originalSendEmail;
+      }
+
+      expect(sent.length).to.equal(1);
+      expect(sent[0]!.to).to.equal("lawyer@example.com");
+      const html = sent[0]!.html!;
+      expect(html).to.include("tab=signup");
+      expect(html).to.include("invite=1");
+      expect(html).to.include("lawyer%40example.com");
+      expect(html).to.include(`caseInviteToken=${created.token}`);
+      // Real copy, not placeholder text: the client's case name actually appears in the body.
+      expect(html).to.include("Invite test");
+      expect(html).to.include("represent them on ilovelawyer");
     });
 
     it("getCurrentForCase returns null when there is no invite", async () => {
