@@ -4,8 +4,9 @@ import prisma from "../lib/prisma";
 /** Invites a client sends to bring their own lawyer onto a case — see CaseLawyerInvite in schema.prisma.
  * `tx` is optional: pass a transaction client to compose several calls into one `prisma.$transaction(...)`. */
 export default class CaseLawyerInviteRepo {
-  static async create(data: Prisma.CaseLawyerInviteUncheckedCreateInput): Promise<CaseLawyerInvite> {
-    return prisma.caseLawyerInvite.create({ data });
+  static async create(data: Prisma.CaseLawyerInviteUncheckedCreateInput, tx?: Prisma.TransactionClient): Promise<CaseLawyerInvite> {
+    const db = tx ?? prisma;
+    return db.caseLawyerInvite.create({ data });
   }
 
   /** The case's outstanding invite, if any. Only PENDING rows count; revoked, accepted and expired ones don't. */

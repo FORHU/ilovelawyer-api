@@ -44,15 +44,9 @@ export default class CaseLawyerInviteSvc {
   private static async createInvite(clientId: string, caseId: string, email: string | null): Promise<{ token: string; expiresAt: Date }> {
     await CaseLawyerInviteSvc.assertOwnsCase(clientId, caseId);
     await CaseLawyerInviteSvc.assertNoLiveLawyer(caseId);
-    // NOTE: CaseLawyerInviteRepo.create (Task 2, not touched here) takes no `tx` — only
-    // revokePendingForCase does. So only the revoke runs inside this transaction; create runs
-    // right after, via the repo's own client. Not fully atomic (a revoke that commits followed by
-    // a create that then failed would leave the case briefly with no invite at all), but the two
-    // rows involved never conflict with each other, so this is the closest this repo API allows
-    // without reshaping Task 2's reviewed method signatures. Flagged in the task report.
     const invite = await prisma.$transaction(async (tx) => {
       await CaseLawyerInviteRepo.revokePendingForCase(caseId, tx);
-      return CaseLawyerInviteRepo.create({ caseId, clientId, email, token: crypto.randomUUID(), expiresAt: new Date(Date.now() + CASE_LAWYER_INVITE_EXPIRY_MS) });
+      return CaseLawyerInviteRepo.create({ caseId, clientId, email, token: crypto.randomUUID(), expiresAt: new Date(Date.now() + CASE_LAWYER_INVITE_EXPIRY_MS) }, tx);
     });
     return { token: invite.token, expiresAt: invite.expiresAt };
   }

@@ -112,6 +112,31 @@ describe("CaseLawyerInvite", function () {
       expect(read.status).to.equal("REVOKED");
     });
 
+    it("create runs inside a supplied transaction, so it rolls back with a revoke in the same transaction", async () => {
+      // Proves revokePendingForCase and create genuinely share one transaction (CaseLawyerInviteSvc.createInvite's
+      // revoke-then-create): if the transaction aborts after both calls, BOTH must be undone. Before create(data, tx)
+      // existed, create ran on the module's own prisma client, outside the transaction, so it would have survived
+      // this abort and this assertion would have failed.
+      const pending = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+      const newToken = makeToken();
+
+      let thrown: unknown;
+      try {
+        await prisma.$transaction(async (tx) => {
+          await CaseLawyerInviteRepo.revokePendingForCase(caseId, tx);
+          await CaseLawyerInviteRepo.create({ caseId, clientId, token: newToken, expiresAt: future }, tx);
+          throw new Error("boom: abort after both writes");
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      expect((thrown as Error)?.message).to.equal("boom: abort after both writes");
+
+      const revokeRolledBack = await prisma.caseLawyerInvite.findUniqueOrThrow({ where: { id: pending.id } });
+      expect(revokeRolledBack.status).to.equal("PENDING");
+      expect(await CaseLawyerInviteRepo.findByToken(newToken)).to.equal(null);
+    });
+
     it("markAccepted sets status ACCEPTED, acceptedAt, acceptedById", async () => {
       const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
       const returned = await CaseLawyerInviteRepo.markAccepted(invite.id, lawyerId);
