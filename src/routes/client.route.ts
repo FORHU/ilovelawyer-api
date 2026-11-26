@@ -8,6 +8,7 @@ import requireConsent from "../middleware/require-consent.middleware";
 import { requireClientAi, requireClientRequests } from "../middleware/require-client-site-feature.middleware";
 import ClientCaseCtrl from "../controllers/client-case.controller";
 import ClientRequestCtrl from "../controllers/client-request.controller";
+import caseLawyerInviteRoute from "./case-lawyer-invite.route";
 import ClientDictationCtrl from "../controllers/client-dictation.controller";
 import ClientLawyerCtrl from "../controllers/client-lawyer.controller";
 import ClientGmailCtrl from "../controllers/client-gmail.controller";
@@ -233,5 +234,8 @@ router.post("/lawyer-requests/:id/feedback", asyncHandler(ClientRequestCtrl.feed
 router.get("/lawyer-requests/:id/messages", asyncHandler(ClientRequestCtrl.messages));
 router.post("/lawyer-requests/:id/messages", asyncHandler(ClientRequestCtrl.postMessage));
 router.post("/lawyer-requests/:id/messages/read", asyncHandler(ClientRequestCtrl.readMessages));
+
+// A client inviting their own lawyer onto a case (client-invites-own-lawyer), by link or email.
+router.use("/lawyer-invites", caseLawyerInviteRoute);
 
 export default router;
