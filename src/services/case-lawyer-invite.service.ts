@@ -1,9 +1,10 @@
 import crypto from "crypto";
-import type { CaseLawyerInviteStatus } from "@prisma/client";
+import { Prisma, type CaseLawyerInviteStatus } from "@prisma/client";
 import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import CaseLawyerInviteRepo from "../repositories/case-lawyer-invite.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
+import FilesRepo from "../repositories/files.repository";
 import CaseSeedSvc from "./case-seed.service";
 import NotificationSvc from "./notification.service";
 import { normalizeEmail } from "../utils/auth.utils";
@@ -167,10 +168,23 @@ export default class CaseLawyerInviteSvc {
     const result = await prisma.$transaction(async (tx) => {
       const marked = await CaseLawyerInviteRepo.markAccepted(invite.id, user.id, tx);
       if (marked.count === 0) {
-        // Lost a race (accepted, revoked or lazily expired since the checks above): abort, leaving
-        // the orphaned seeded Case as the one acceptable cost of not nesting seed()'s transaction.
+        // Lost a race (accepted, revoked or lazily expired since the checks above, in the time
+        // seed()'s S3 copies took): abort before writing anything else.
         throw new HttpError("Invite already used.", 409, "INVITE_ALREADY_USED");
       }
+
+      // Lock the source case's row for the rest of this transaction, then repeat the
+      // live-ENGAGED check through it: the pre-seed check above only ran once, before seed()'s
+      // (possibly slow) S3 copies, so a second invite on the same case — or a marketplace
+      // engagement reaching ENGAGED in the meantime — could otherwise slip an ENGAGED
+      // ClientRequest past it and in underneath this one. The lock serializes any other writer
+      // doing the same check against this case: whichever of two concurrent redeems gets here
+      // first holds the row until it commits or rolls back, so the second one's recheck (run only
+      // after it acquires the same lock) is guaranteed to see the first one's write once it's
+      // allowed to proceed.
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "Case" WHERE id = ${invite.caseId} FOR UPDATE`);
+      const stillUnengaged = await ClientRequestRepo.findEngagedLawyerForCase(invite.caseId, tx);
+      if (stillUnengaged) throw new HttpError("This case already has a lawyer.", 409, "CASE_ALREADY_HAS_LAWYER");
 
       const request = await tx.clientRequest.create({
         data: {
@@ -201,10 +215,19 @@ export default class CaseLawyerInviteSvc {
       return { requestId: request.id, caseId: seeded.caseId };
     }).catch((err) => {
       if (err instanceof HttpError && err.code === "INVITE_ALREADY_USED") return { error: "INVITE_ALREADY_USED" as const };
+      if (err instanceof HttpError && err.code === "CASE_ALREADY_HAS_LAWYER") return { error: "CASE_ALREADY_HAS_LAWYER" as const };
       throw err;
     });
 
-    if ("error" in result) return result;
+    if ("error" in result) {
+      // The transaction above rolled back, so seed()'s Case (and its copied Document/File rows)
+      // never got a ClientRequest pointing at it — clean it up rather than leaving a full copy of
+      // the client's case and documents orphaned (a real privacy concern: e.g. the client revokes
+      // the invite while this redeem is mid-flight, the lawyer loses the race, but would otherwise
+      // keep a copy of the case forever with nothing accounting for it).
+      await CaseLawyerInviteSvc.cleanupOrphanedSeed(seeded.caseId);
+      return result;
+    }
 
     await NotificationSvc.create({
       userId: invite.clientId,
@@ -222,6 +245,30 @@ export default class CaseLawyerInviteSvc {
     }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify lawyer", { err, lawyerId: user.id }));
 
     return result;
+  }
+
+  /**
+   * Best-effort removal of a Case that `CaseSeedSvc.seed` finished seeding but that `redeem`'s own
+   * transaction then rolled back on top of (a lost `markAccepted` race, or the in-transaction
+   * CASE_ALREADY_HAS_LAWYER recheck) — so no ClientRequest ever ends up pointing at it. Deletes the
+   * seeded Case's Document rows directly (cheaper than DocumentSvc.delete's per-document audit-log
+   * path, which also assumes a real actor/workspace context this cleanup doesn't have), marks each
+   * Document's File FOR_DELETION once orphaned (the existing sweep-job convention — see
+   * FilesRepo.markForDeletionIfOrphaned and DocumentSvc.delete, which does the same), then deletes
+   * the Case row itself. Never throws: a failure here must not mask or replace the real error
+   * `redeem` is already returning, so it's only ever logged.
+   */
+  private static async cleanupOrphanedSeed(caseId: string): Promise<void> {
+    try {
+      const docs = await prisma.document.findMany({ where: { caseId }, select: { id: true, fileId: true } });
+      await prisma.document.deleteMany({ where: { caseId } });
+      for (const doc of docs) {
+        if (doc.fileId) await FilesRepo.markForDeletionIfOrphaned(doc.fileId);
+      }
+      await prisma.case.delete({ where: { id: caseId } });
+    } catch (err) {
+      logger.error("CaseLawyerInviteSvc.redeem: failed to clean up an orphaned seeded case", { err, caseId });
+    }
   }
 
   /** Revokes the case's pending invite. 404 INVITE_NOT_FOUND when there was none to revoke. */

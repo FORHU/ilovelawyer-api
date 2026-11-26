@@ -7,6 +7,7 @@ import { describe, it, before, beforeEach, afterEach, after } from "mocha";
 import prisma from "../src/lib/prisma";
 import CaseLawyerInviteRepo from "../src/repositories/case-lawyer-invite.repository";
 import CaseLawyerInviteSvc from "../src/services/case-lawyer-invite.service";
+import CaseSeedSvc from "../src/services/case-seed.service";
 import HttpError from "../src/utils/http-error";
 
 describe("CaseLawyerInvite", function () {
@@ -350,6 +351,7 @@ describe("CaseLawyerInvite", function () {
 
       expect(result).to.deep.equal({ error: "INVITE_ALREADY_USED" });
       expect(await prisma.clientRequest.count({ where: { caseId } })).to.equal(0);
+      expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(0);
     });
 
     it("redeem returns INVITE_EXPIRED for a PENDING invite past expiresAt and flips its status", async () => {
@@ -388,6 +390,63 @@ describe("CaseLawyerInvite", function () {
       const result = await CaseLawyerInviteSvc.redeem({ id: lawyerId, email: lawyerEmail }, invite.token);
 
       expect(result).to.deep.equal({ error: "CASE_ALREADY_HAS_LAWYER" });
+      const row = await CaseLawyerInviteRepo.findByToken(invite.token);
+      expect(row?.status).to.equal("PENDING");
+      expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(0);
+    });
+
+    it("redeem loses a race where the invite is revoked mid-seed: returns INVITE_ALREADY_USED, creates no ClientRequest, and cleans up the seeded Case", async () => {
+      const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+      const originalSeed = CaseSeedSvc.seed;
+      let seededCaseId: string | undefined;
+      // Simulates another request (e.g. the client revoking) landing in the window while seed()'s
+      // S3 copies are in flight, between redeem's pre-seed checks and its own transaction.
+      CaseSeedSvc.seed = (async (input: Parameters<typeof CaseSeedSvc.seed>[0]) => {
+        await CaseLawyerInviteRepo.revokePendingForCase(caseId);
+        const seeded = await originalSeed(input);
+        seededCaseId = seeded.caseId;
+        return seeded;
+      }) as typeof CaseSeedSvc.seed;
+
+      let result: unknown;
+      try {
+        result = await CaseLawyerInviteSvc.redeem({ id: lawyerId, email: lawyerEmail }, invite.token);
+      } finally {
+        CaseSeedSvc.seed = originalSeed;
+      }
+
+      expect(result).to.deep.equal({ error: "INVITE_ALREADY_USED" });
+      expect(await prisma.clientRequest.count({ where: { caseId } })).to.equal(0);
+      expect(seededCaseId).to.be.a("string");
+      expect(await prisma.case.findUnique({ where: { id: seededCaseId! } })).to.equal(null);
+      const row = await CaseLawyerInviteRepo.findByToken(invite.token);
+      expect(row?.status).to.equal("REVOKED");
+    });
+
+    it("redeem loses a race where a competing ENGAGED request lands mid-seed: returns CASE_ALREADY_HAS_LAWYER, creates no second ClientRequest, and cleans up the seeded Case", async () => {
+      const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+      const originalSeed = CaseSeedSvc.seed;
+      let seededCaseId: string | undefined;
+      // Simulates a competing engagement (another invite redeemed first, or the marketplace path)
+      // reaching ENGAGED in the window while seed()'s S3 copies are in flight.
+      CaseSeedSvc.seed = (async (input: Parameters<typeof CaseSeedSvc.seed>[0]) => {
+        await engageLawyerOnCase();
+        const seeded = await originalSeed(input);
+        seededCaseId = seeded.caseId;
+        return seeded;
+      }) as typeof CaseSeedSvc.seed;
+
+      let result: unknown;
+      try {
+        result = await CaseLawyerInviteSvc.redeem({ id: lawyerId, email: lawyerEmail }, invite.token);
+      } finally {
+        CaseSeedSvc.seed = originalSeed;
+      }
+
+      expect(result).to.deep.equal({ error: "CASE_ALREADY_HAS_LAWYER" });
+      expect(await prisma.clientRequest.count({ where: { caseId, requestedLawyerId: lawyerId } })).to.equal(0);
+      expect(seededCaseId).to.be.a("string");
+      expect(await prisma.case.findUnique({ where: { id: seededCaseId! } })).to.equal(null);
       const row = await CaseLawyerInviteRepo.findByToken(invite.token);
       expect(row?.status).to.equal("PENDING");
     });

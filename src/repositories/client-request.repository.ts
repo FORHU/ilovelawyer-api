@@ -102,9 +102,12 @@ export default class ClientRequestRepo {
   }
 
   /** The lawyer with live, read-only access to this case right now, and who to credit a new
-   * document to (#514) — null when nobody's engaged on it. */
-  static async findEngagedLawyerForCase(caseId: string) {
-    const request = await prisma.clientRequest.findFirst({
+   * document to (#514) — null when nobody's engaged on it. `tx`: pass a transaction client to
+   * read this inside a caller's own transaction (e.g. CaseLawyerInviteSvc.redeem's recheck after
+   * locking the case row, so a race can't slip an ENGAGED request past this check). */
+  static async findEngagedLawyerForCase(caseId: string, tx?: Prisma.TransactionClient) {
+    const db = tx ?? prisma;
+    const request = await db.clientRequest.findFirst({
       where: { caseId, status: "ENGAGED" },
       select: {
         id: true,
