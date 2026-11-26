@@ -6,7 +6,7 @@ import { caseSummaryFilename } from "./client-case-summary-document";
  * stripped of path separators and control characters, the same rule as DataExportSvc's safeFileName. */
 export function safeDocumentEntryName(id: string, name: string | null): string {
   const cleaned = (name ?? "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
-  return `documents/${id.slice(0, 8)}-${cleaned || "document"}`;
+  return `documents/${id.slice(0, 8)}-${(cleaned || "document").slice(0, 150)}`;
 }
 
 /** case-export-<title>-<YYYY-MM-DD>.zip, the same slugging and dating rule as caseSummaryFilename. */
