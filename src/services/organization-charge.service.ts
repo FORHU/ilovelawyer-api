@@ -1,11 +1,12 @@
-import type { OrganizationCharge, OrganizationChargeKind, OrganizationChargeRefund } from "@prisma/client";
+import { Prisma, type OrganizationCharge, type OrganizationChargeKind, type OrganizationChargeRefund } from "@prisma/client";
 import type Stripe from "stripe";
+import prisma from "../lib/prisma";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import OrganizationBillingRepo, { payerOf } from "../repositories/organization-billing.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import { organizationCardProviderNamed, type CardChargeResult } from "../payments/organization-card-provider";
-import EngagementAccessSvc from "./engagement-access.service";
+import CaseSeedSvc from "./case-seed.service";
 import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
 import NotificationSvc from "./notification.service";
 import { emitToUser } from "../lib/socket";
@@ -216,7 +217,8 @@ export default class OrganizationChargeSvc {
       const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "ENGAGED", updatedAt: now };
       emitToUser(request.clientId, "client-request:updated", updated);
       if (charge.lawyerId) {
-        await EngagementAccessSvc.grant({ requestId: request.id, caseId: request.caseId, lawyerId: charge.lawyerId, organizationId: charge.organizationId });
+        const claimRow = request.claims.find((c) => c.lawyerId === charge.lawyerId && c.outcome === "ENGAGED");
+        if (claimRow) await OrganizationChargeSvc.seedLawyerCase(request.id, request.caseId, claimRow.id, charge.lawyerId, charge.organizationId);
         emitToUser(charge.lawyerId, "client-request:updated", updated);
         await OrganizationChargeSvc.notify(charge.lawyerId, {
           title: "You're engaged on a client request",
@@ -240,6 +242,33 @@ export default class OrganizationChargeSvc {
         message: `${charge.failureReason ?? "The card was declined."} The client is waiting: update the card, then retry from the request.`,
         link: `/client-requests/${request.id}`,
       });
+    }
+  }
+
+  /**
+   * Seeds the lawyer their own Case from the client's (CaseSeedSvc.seed, Task 10 — the marketplace
+   * path's equivalent of `CaseLawyerInviteSvc.redeem`'s seed-then-lock pattern), and records it on
+   * the claim. `OrganizationChargeRepo.settle` already committed this *request* ENGAGED in its own
+   * transaction before `after` is ever called — that can't be undone from here, the card was already
+   * charged. So the Case-row lock below isn't guarding this request's own transition (it's already
+   * happened); it's here so this and a same-case invite redemption (`CaseLawyerInviteSvc.redeem`,
+   * which takes the identical lock) are serialized against each other. `findEngagedLawyerForCase`
+   * finding *this* request (now ENGAGED) is normal, not a conflict — only a *different* request
+   * already ENGAGED on the case is the genuine double-engagement this lock exists to catch, and since
+   * the charge has already gone through, all that's left to do about it here is skip seeding and log
+   * loudly for ops to sort out; the claim's `lawyerCaseId` stays null.
+   */
+  private static async seedLawyerCase(requestId: string, caseId: string, claimId: string, lawyerId: string, organizationId: string | null): Promise<void> {
+    const seeded = await CaseSeedSvc.seed({ sourceCaseId: caseId, lawyerId, organizationId });
+    const ok = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "Case" WHERE id = ${caseId} FOR UPDATE`);
+      const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId, tx);
+      if (engaged && engaged.requestId !== requestId) return false;
+      await tx.clientRequestClaim.update({ where: { id: claimId }, data: { lawyerCaseId: seeded.caseId } });
+      return true;
+    });
+    if (!ok) {
+      logger.error("Organization charge: case already has a different engaged lawyer; the lawyer's seeded case is orphaned", { caseId, requestId, seededCaseId: seeded.caseId });
     }
   }
 

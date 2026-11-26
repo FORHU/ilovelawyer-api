@@ -1,12 +1,12 @@
 import type Stripe from "stripe";
-import type { LawyerExit, Quotation, QuotationPayment, QuotationRefund } from "@prisma/client";
+import { Prisma, type LawyerExit, type Quotation, type QuotationPayment, type QuotationRefund } from "@prisma/client";
 import QuotationRepo from "../repositories/quotation.repository";
 import QuotationPaymentRepo, { PAID_QUOTATION_PAYMENT_STATUSES } from "../repositories/quotation-payment.repository";
 import LawyerExitRepo from "../repositories/lawyer-exit.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import ClientPaymentRepo from "../repositories/client-payment.repository";
 import OrganizationRepo from "../repositories/organization.repository";
-import EngagementAccessSvc from "./engagement-access.service";
+import CaseSeedSvc from "./case-seed.service";
 import NotificationSvc from "./notification.service";
 import QuotationRefundSvc from "./quotation-refund.service";
 import LawyerExitSvc from "./lawyer-exit.service";
@@ -336,7 +336,8 @@ export default class QuotationPaymentSvc {
     await QuotationPaymentSvc.afterEngaged(quotation, claim, settled.earning?.netMinor ?? 0, wallet.id, payment.currency);
   }
 
-  /** The request is ENGAGED: the lawyer gets read-only access to the case, both sides are told.
+  /** The request is ENGAGED: the lawyer gets their own seeded Case (client-invites-own-lawyer,
+   * Task 10 — never shared `CaseAccess` into the client's case), both sides are told.
    * `paidDirectly`: the client pays the lawyer directly (KR), so the lawyer is told to arrange it. */
   static async afterEngaged(
     quotation: Quotation,
@@ -350,7 +351,8 @@ export default class QuotationPaymentSvc {
     if (!request) return;
     const now = new Date().toISOString();
     await OrganizationRepo.writeAudit({ caseId: request.caseId, action: "client_request.engaged", payload: { requestId: request.id, quotationId: quotation.id } });
-    await EngagementAccessSvc.grant({ requestId: request.id, caseId: request.caseId, lawyerId: claim.lawyerId, organizationId: claim.organizationId });
+    const claimRow = request.claims.find((c) => c.id === quotation.claimId);
+    if (claimRow) await QuotationPaymentSvc.seedLawyerCase(request.id, request.caseId, claimRow.id, claim.lawyerId, claim.organizationId);
     const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "ENGAGED", updatedAt: now };
     emitToUser(request.clientId, "client-request:updated", updated);
     emitToUser(claim.lawyerId, "client-request:updated", updated);
@@ -378,6 +380,33 @@ export default class QuotationPaymentSvc {
           link: `/client-requests/${request.id}`,
         });
     if (walletId) await WalletSvc.changedById(walletId);
+  }
+
+  /**
+   * Seeds the lawyer their own Case from the client's (CaseSeedSvc.seed, Task 10 — the marketplace
+   * path's equivalent of `CaseLawyerInviteSvc.redeem`'s seed-then-lock pattern), and records it on
+   * the claim. `QuotationPaymentRepo.settle` already committed this *request* ENGAGED in its own
+   * transaction before `afterEngaged` is ever called — that can't be undone from here, payment
+   * already taken. So the Case-row lock below isn't guarding this request's own transition (it's
+   * already happened); it's here so this and a same-case invite redemption (`CaseLawyerInviteSvc.redeem`,
+   * which takes the identical lock) are serialized against each other. `findEngagedLawyerForCase`
+   * finding *this* request (now ENGAGED) is normal, not a conflict — only a *different* request
+   * already ENGAGED on the case is the genuine double-engagement this lock exists to catch, and since
+   * the money's already moved, all that's left to do about it here is skip seeding and log loudly for
+   * ops to sort out; the claim's `lawyerCaseId` stays null.
+   */
+  private static async seedLawyerCase(requestId: string, caseId: string, claimId: string, lawyerId: string, organizationId: string | null): Promise<void> {
+    const seeded = await CaseSeedSvc.seed({ sourceCaseId: caseId, lawyerId, organizationId });
+    const ok = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "Case" WHERE id = ${caseId} FOR UPDATE`);
+      const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId, tx);
+      if (engaged && engaged.requestId !== requestId) return false;
+      await tx.clientRequestClaim.update({ where: { id: claimId }, data: { lawyerCaseId: seeded.caseId } });
+      return true;
+    });
+    if (!ok) {
+      logger.error("Quotation payment: case already has a different engaged lawyer; the lawyer's seeded case is orphaned", { caseId, requestId, seededCaseId: seeded.caseId });
+    }
   }
 
   /** Cancels a quotation's open PaymentIntents before it expires. True when one had gone through

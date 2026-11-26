@@ -182,6 +182,7 @@ describe("client confirms and pays, and the engagement", () => {
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.auditEvent.deleteMany({ where: { caseId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId, otherLawyerId, clientId] } } });
+    await prisma.case.deleteMany({ where: { copiedFromCaseId: caseId } });
     await prisma.case.deleteMany({ where: { id: caseId } });
     await prisma.organizationBilling.deleteMany({ where: { organizationId: { in: [orgId, otherOrgId] } } });
     await prisma.lawyerClientProfile.deleteMany({ where: { userId: { in: [lawyerId, otherLawyerId] } } });
@@ -199,6 +200,7 @@ describe("client confirms and pays, and the engagement", () => {
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.lawyerExit.deleteMany({ where: { caseId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
+    await prisma.case.deleteMany({ where: { copiedFromCaseId: caseId } });
     await prisma.organizationBilling.deleteMany({ where: { organizationId: orgId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId] } } });
     // A request the lawyer has joined and quoted on: still ROUTED, with their quote open and the
@@ -266,10 +268,15 @@ describe("client confirms and pays, and the engagement", () => {
       expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client accepted your quote", "You're engaged on a client request"]);
     });
 
-    it("grants the engaged lawyer read-only access to the client's case", async () => {
+    it("seeds the engaged lawyer their own Case instead of granting them CaseAccess into the client's", async () => {
       await engage();
+      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(claim.lawyerCaseId).to.be.a("string");
+      expect(claim.lawyerCaseId).to.not.equal(caseId);
+      const seededCase = await prisma.case.findUniqueOrThrow({ where: { id: claim.lawyerCaseId! } });
+      expect(seededCase).to.deep.include({ userId: lawyerId, organizationId: orgId, copiedFromCaseId: caseId });
       const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
-      expect(access?.permission).to.equal("VIEW");
+      expect(access).to.equal(null);
     });
 
     it("accepts once however many times it's confirmed at once", async () => {
@@ -338,14 +345,15 @@ describe("client confirms and pays, and the engagement", () => {
       expect(body.engagement).to.include({ caseId, workspaceId: clientOrgId });
     });
 
-    it("lets the engaged lawyer read the client's case as a guest of their portfolio", async () => {
-      const { body } = await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
-      expect(body.id).to.equal(caseId);
+    // Task 10: the marketplace path no longer grants CaseAccess (it seeds the lawyer their own Case
+    // instead, asserted in the "confirm" describe block above), so the engaged lawyer has no guest
+    // access into the client's original case at all any more — read or write.
+    it("gives the engaged lawyer no guest access to the client's original case (they work from their own seeded one)", async () => {
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(403);
     });
 
-    it("refuses every write the engaged lawyer makes on the client's case", async () => {
-      const { body } = await request(app).post(`/api/my-cases/${caseId}/archive`).set(asGuest()).expect(403);
-      expect(body.code).to.equal("SHARE_READ_ONLY");
+    it("refuses every write the engaged lawyer makes on the client's case too", async () => {
+      await request(app).post(`/api/my-cases/${caseId}/archive`).set(asGuest()).expect(403);
     });
 
     it("gives a lawyer who isn't engaged on this case no access at all", async () => {
@@ -364,7 +372,9 @@ describe("client confirms and pays, and the engagement", () => {
     it("work finished waits on the client, then closes the engagement and removes the lawyer's access", async () => {
       const asked = (await close({ outcome: "WORK_FINISHED" }).expect(200)).body;
       expect(asked.status).to.equal("ENGAGED");
-      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
+      // Task 10: no CaseAccess was ever granted (the lawyer works from their own seeded Case), so
+      // there's never been guest access to remove here — it's 403 throughout.
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(403);
 
       await confirmFinished().expect(200);
       const { body } = await lawyerView().expect(200);
@@ -491,6 +501,16 @@ describe("client confirms and pays, and the engagement", () => {
       expect(chargeRequests.map((r) => r.attempt)).to.deep.equal([2, 3]);
       expect((await state()).charges[0]).to.deep.include({ status: "SUCCEEDED", paymentIntentId: "pi_3", attempts: 3 });
       expect(chargeRequests[1]).to.deep.include({ amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" });
+
+      // Task 10: OrganizationChargeSvc's per-case-fee engagement also seeds the lawyer their own
+      // Case now, instead of granting CaseAccess into the client's.
+      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(claim.lawyerCaseId).to.be.a("string");
+      expect(claim.lawyerCaseId).to.not.equal(caseId);
+      const seededCase = await prisma.case.findUniqueOrThrow({ where: { id: claim.lawyerCaseId! } });
+      expect(seededCase).to.deep.include({ userId: lawyerId, organizationId: orgId, copiedFromCaseId: caseId });
+      const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
+      expect(access).to.equal(null);
     });
 
     it("refuses a retry from anyone but the lawyer holding it, or when nothing failed", async () => {

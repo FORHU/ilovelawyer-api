@@ -124,6 +124,7 @@ describe("quotation payments", function () {
     await prisma.auditEvent.deleteMany({ where: { caseId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, memberId, clientId] } } });
     await prisma.caseAccess.deleteMany({ where: { caseId } });
+    await prisma.case.deleteMany({ where: { copiedFromCaseId: caseId } });
     await prisma.case.deleteMany({ where: { id: caseId } });
     await prisma.lawyerClientProfile.deleteMany({ where: { userId: lawyerId } });
     await prisma.organizationMember.deleteMany({ where: { userId: { in: [lawyerId, memberId, clientId] } } });
@@ -138,6 +139,7 @@ describe("quotation payments", function () {
     await prisma.quotationPayment.deleteMany({ where: { clientId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.caseAccess.deleteMany({ where: { caseId } });
+    await prisma.case.deleteMany({ where: { copiedFromCaseId: caseId } });
     const now = new Date();
     const row = await prisma.clientRequest.create({
       data: { caseId, clientId, consentVersion: "test", consentAcceptedAt: now, status: "ROUTED", routedAt: now, routingExpiresAt: new Date(now.getTime() + 48 * HOUR_MS) },
@@ -235,7 +237,7 @@ describe("quotation payments", function () {
       expect(await prisma.organizationCharge.count({ where: { requestId } })).to.equal(0);
     });
 
-    it("the client pays the quote; the lawyer's firm gets it less the platform fee, PENDING, and access to the case", async () => {
+    it("the client pays the quote; the lawyer's firm gets it less the platform fee, PENDING, and seeds the lawyer their own Case", async () => {
       const id = await quoted();
       await accept(id).expect(200);
       const paid = (await pay(id).expect(200)).body;
@@ -248,8 +250,15 @@ describe("quotation payments", function () {
       const client = (await clientView().expect(200)).body;
       expect(client.status).to.equal("ENGAGED");
       expect(client.quotation.status).to.equal("PAID");
+      // Task 10: the marketplace path seeds the lawyer their own Case (CaseSeedSvc.seed) instead of
+      // granting them read-only CaseAccess into the client's.
+      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(claim.lawyerCaseId).to.be.a("string");
+      expect(claim.lawyerCaseId).to.not.equal(caseId);
+      const seededCase = await prisma.case.findUniqueOrThrow({ where: { id: claim.lawyerCaseId! } });
+      expect(seededCase).to.deep.include({ userId: lawyerId, organizationId: orgId, copiedFromCaseId: caseId });
       const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
-      expect(access?.permission).to.equal("VIEW");
+      expect(access).to.equal(null);
 
       const w = (await wallet().expect(200)).body;
       expect(w.balances.pending.amountMinor).to.equal(51000);
