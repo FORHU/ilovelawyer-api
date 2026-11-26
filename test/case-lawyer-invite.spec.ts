@@ -3,9 +3,11 @@
  * afterwards. */
 import crypto from "crypto";
 import { expect } from "chai";
-import { describe, it, before, beforeEach, after } from "mocha";
+import { describe, it, before, beforeEach, afterEach, after } from "mocha";
 import prisma from "../src/lib/prisma";
 import CaseLawyerInviteRepo from "../src/repositories/case-lawyer-invite.repository";
+import CaseLawyerInviteSvc from "../src/services/case-lawyer-invite.service";
+import HttpError from "../src/utils/http-error";
 
 describe("CaseLawyerInvite", function () {
   this.timeout(20_000);
@@ -134,6 +136,107 @@ describe("CaseLawyerInvite", function () {
       await CaseLawyerInviteRepo.markExpired(invite.id);
       const read = await prisma.caseLawyerInvite.findUniqueOrThrow({ where: { id: invite.id } });
       expect(read.status).to.equal("EXPIRED");
+    });
+  });
+
+  describe("CaseLawyerInviteSvc", function () {
+    const otherClientId = crypto.randomUUID();
+    const lawyerId = crypto.randomUUID();
+
+    before(async () => {
+      await prisma.user.create({ data: { id: otherClientId, email: `invite-other-${otherClientId}@example.com`, username: `invite-other-${otherClientId}` } });
+      await prisma.user.create({ data: { id: lawyerId, email: `invite-svc-lawyer-${lawyerId}@example.com`, username: `invite-svc-lawyer-${lawyerId}` } });
+    });
+
+    afterEach(async () => {
+      await prisma.clientRequestClaim.deleteMany({ where: { request: { caseId } } });
+      await prisma.clientRequest.deleteMany({ where: { caseId } });
+      await prisma.caseLawyerInvite.deleteMany({ where: { caseId } });
+    });
+
+    after(async () => {
+      await prisma.user.deleteMany({ where: { id: { in: [otherClientId, lawyerId] } } });
+    });
+
+    /** Puts an ENGAGED ClientRequest with an ENGAGED claim on the case, so
+     * ClientRequestRepo.findEngagedLawyerForCase (and so CASE_HAS_LAWYER) sees it. */
+    async function engageLawyerOnCase() {
+      const request = await prisma.clientRequest.create({
+        data: { caseId, clientId, status: "ENGAGED", consentVersion: "v1", consentAcceptedAt: new Date() },
+      });
+      await prisma.clientRequestClaim.create({ data: { requestId: request.id, lawyerId, outcome: "ENGAGED", expiresAt: future } });
+      return request;
+    }
+
+    it("createLinkInvite revokes an existing pending invite for the case first", async () => {
+      const first = await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+      const second = await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+
+      expect(second.token).to.not.equal(first.token);
+      const firstRow = await CaseLawyerInviteRepo.findByToken(first.token);
+      expect(firstRow?.status).to.equal("REVOKED");
+      const secondRow = await CaseLawyerInviteRepo.findByToken(second.token);
+      expect(secondRow?.status).to.equal("PENDING");
+    });
+
+    it("createLinkInvite 404s when the case isn't the client's own", async () => {
+      let err: unknown;
+      try {
+        await CaseLawyerInviteSvc.createLinkInvite(otherClientId, caseId);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).to.be.instanceOf(HttpError);
+      expect((err as HttpError).statusCode).to.equal(404);
+    });
+
+    it("createLinkInvite throws CASE_HAS_LAWYER when the case already has a live ENGAGED request", async () => {
+      await engageLawyerOnCase();
+
+      let err: unknown;
+      try {
+        await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).to.be.instanceOf(HttpError);
+      expect((err as HttpError).statusCode).to.equal(409);
+      expect((err as HttpError).code).to.equal("CASE_HAS_LAWYER");
+    });
+
+    it("createEmailInvite stores the invite's email", async () => {
+      const created = await CaseLawyerInviteSvc.createEmailInvite(clientId, caseId, "lawyer@example.com");
+      const row = await CaseLawyerInviteRepo.findByToken(created.token);
+      expect(row?.email).to.equal("lawyer@example.com");
+    });
+
+    it("getCurrentForCase returns null when there is no invite", async () => {
+      expect(await CaseLawyerInviteSvc.getCurrentForCase(clientId, caseId)).to.equal(null);
+    });
+
+    it("getCurrentForCase returns the pending invite's status", async () => {
+      const created = await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+      const current = await CaseLawyerInviteSvc.getCurrentForCase(clientId, caseId);
+      expect(current).to.not.equal(null);
+      expect(current?.status).to.equal("PENDING");
+      expect(current?.expiresAt.getTime()).to.equal(created.expiresAt.getTime());
+    });
+
+    it("revoke sets status REVOKED and 404s if there is no pending invite", async () => {
+      const created = await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+      await CaseLawyerInviteSvc.revoke(clientId, caseId);
+      const row = await CaseLawyerInviteRepo.findByToken(created.token);
+      expect(row?.status).to.equal("REVOKED");
+
+      let err: unknown;
+      try {
+        await CaseLawyerInviteSvc.revoke(clientId, caseId);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).to.be.instanceOf(HttpError);
+      expect((err as HttpError).statusCode).to.equal(404);
+      expect((err as HttpError).code).to.equal("INVITE_NOT_FOUND");
     });
   });
 });
