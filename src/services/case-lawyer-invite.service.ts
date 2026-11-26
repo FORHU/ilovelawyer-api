@@ -16,6 +16,22 @@ export interface InviteStatusDto {
   revokedAt: Date | null;
 }
 
+/** What the public signup page shows about an invite. Deliberately narrow: no case details beyond its
+ * name, no client surname, never the token. */
+export interface SignupLookupDto {
+  status: "valid" | "expired" | "revoked" | "accepted";
+  clientFirstName: string;
+  caseName: string;
+  email: string | null;
+}
+
+const SIGNUP_STATUS: Record<CaseLawyerInviteStatus, SignupLookupDto["status"]> = {
+  PENDING: "valid",
+  ACCEPTED: "accepted",
+  REVOKED: "revoked",
+  EXPIRED: "expired",
+};
+
 /** Sends the lawyer their invite email. A no-op for now — Task 9 replaces this with the real send
  * (the link/email invite content and delivery aren't this task's job). */
 async function sendInviteEmail(_invite: { token: string; email: string }): Promise<void> {}
@@ -59,6 +75,29 @@ export default class CaseLawyerInviteSvc {
     const invite = await CaseLawyerInviteRepo.findPendingForCase(caseId);
     if (!invite) return null;
     return { status: invite.status, email: invite.email, expiresAt: invite.expiresAt, acceptedAt: invite.acceptedAt, revokedAt: invite.revokedAt };
+  }
+
+  /** Public, unauthenticated: resolves an invite token for the signup page. A PENDING invite past its
+   * expiry is marked EXPIRED on read (lazy expiry) and reported as "expired". Never redeems the invite. */
+  static async lookupForSignup(token: string): Promise<SignupLookupDto> {
+    const invite = await CaseLawyerInviteRepo.findByToken(token);
+    if (!invite) throw new HttpError("Invite not found.", 404, "INVITE_NOT_FOUND");
+
+    let status: CaseLawyerInviteStatus = invite.status;
+    if (invite.status === "PENDING" && invite.expiresAt < new Date()) {
+      await CaseLawyerInviteRepo.markExpired(invite.id);
+      status = "EXPIRED";
+    }
+
+    const [client, kase] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: invite.clientId }, select: { name: true, username: true } }),
+      prisma.case.findUniqueOrThrow({ where: { id: invite.caseId }, select: { caseName: true } }),
+    ]);
+    // There's no stored first-name field on User: this is a best-effort split of the full `name`,
+    // falling back to `username` when `name` is empty or null.
+    const clientFirstName = (client.name ?? "").trim().split(/\s+/)[0] || client.username;
+
+    return { status: SIGNUP_STATUS[status], clientFirstName, caseName: kase.caseName, email: invite.email };
   }
 
   /** Revokes the case's pending invite. 404 INVITE_NOT_FOUND when there was none to revoke. */

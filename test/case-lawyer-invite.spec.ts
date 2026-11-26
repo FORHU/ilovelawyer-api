@@ -264,4 +264,83 @@ describe("CaseLawyerInvite", function () {
       expect((err as HttpError).code).to.equal("INVITE_NOT_FOUND");
     });
   });
+
+  describe("lookupForSignup", function () {
+    const noNameClientId = crypto.randomUUID();
+    const makeToken = () => `tok-${crypto.randomUUID()}`;
+    const past = new Date(Date.now() - 60_000);
+
+    before(async () => {
+      await prisma.user.update({ where: { id: clientId }, data: { name: "Jane Smith" } });
+      await prisma.user.create({ data: { id: noNameClientId, email: `invite-noname-${noNameClientId}@example.com`, username: `invite-noname-${noNameClientId}` } });
+    });
+
+    beforeEach(async () => {
+      await prisma.caseLawyerInvite.deleteMany({ where: { caseId } });
+    });
+
+    after(async () => {
+      await prisma.caseLawyerInvite.deleteMany({ where: { caseId } });
+      await prisma.user.deleteMany({ where: { id: noNameClientId } });
+    });
+
+    it("lookupForSignup reports expired for a PENDING invite past expiresAt, without redeeming it", async () => {
+      const token = makeToken();
+      const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token, expiresAt: past });
+
+      const result = await CaseLawyerInviteSvc.lookupForSignup(token);
+
+      expect(result.status).to.equal("expired");
+      const row = await prisma.caseLawyerInvite.findUniqueOrThrow({ where: { id: invite.id } });
+      expect(row.status).to.equal("EXPIRED");
+      expect(row.acceptedAt).to.equal(null);
+      expect(row.acceptedById).to.equal(null);
+    });
+
+    it("lookupForSignup maps each invite status to its DTO value", async () => {
+      const cases = [
+        ["PENDING", "valid"],
+        ["ACCEPTED", "accepted"],
+        ["REVOKED", "revoked"],
+        ["EXPIRED", "expired"],
+      ] as const;
+      for (const [dbStatus, dtoStatus] of cases) {
+        const token = makeToken();
+        await CaseLawyerInviteRepo.create({ caseId, clientId, token, status: dbStatus, expiresAt: future });
+        const result = await CaseLawyerInviteSvc.lookupForSignup(token);
+        expect(result.status, dbStatus).to.equal(dtoStatus);
+      }
+    });
+
+    it("lookupForSignup returns only status, first name, case name and email", async () => {
+      const token = makeToken();
+      await CaseLawyerInviteRepo.create({ caseId, clientId, token, email: "lawyer@example.com", expiresAt: future });
+
+      const result = await CaseLawyerInviteSvc.lookupForSignup(token);
+
+      expect(result).to.deep.equal({ status: "valid", clientFirstName: "Jane", caseName: "Invite test", email: "lawyer@example.com" });
+    });
+
+    it("lookupForSignup falls back to the username when the client has no name, and email is null when the invite has none", async () => {
+      const token = makeToken();
+      await CaseLawyerInviteRepo.create({ caseId, clientId: noNameClientId, token, expiresAt: future });
+
+      const result = await CaseLawyerInviteSvc.lookupForSignup(token);
+
+      expect(result.clientFirstName).to.equal(`invite-noname-${noNameClientId}`);
+      expect(result.email).to.equal(null);
+    });
+
+    it("lookupForSignup 404s for an unknown token", async () => {
+      let err: unknown;
+      try {
+        await CaseLawyerInviteSvc.lookupForSignup(makeToken());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).to.be.instanceOf(HttpError);
+      expect((err as HttpError).statusCode).to.equal(404);
+      expect((err as HttpError).code).to.equal("INVITE_NOT_FOUND");
+    });
+  });
 });
