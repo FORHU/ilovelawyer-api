@@ -90,9 +90,12 @@ export default class CaseLawyerInviteSvc {
     }
 
     const [client, kase] = await Promise.all([
-      prisma.user.findUniqueOrThrow({ where: { id: invite.clientId }, select: { name: true, username: true } }),
-      prisma.case.findUniqueOrThrow({ where: { id: invite.caseId }, select: { caseName: true } }),
+      prisma.user.findUnique({ where: { id: invite.clientId }, select: { name: true, username: true } }),
+      prisma.case.findUnique({ where: { id: invite.caseId }, select: { caseName: true } }),
     ]);
+    // The invite points at a client or case that's gone: from the public caller's side that's the
+    // same as a token that doesn't exist, so it gets the same clean 404 rather than a 500.
+    if (!client || !kase) throw new HttpError("Invite not found.", 404, "INVITE_NOT_FOUND");
     // There's no stored first-name field on User: this is a best-effort split of the full `name`,
     // falling back to `username` when `name` is empty or null.
     const clientFirstName = (client.name ?? "").trim().split(/\s+/)[0] || client.username;

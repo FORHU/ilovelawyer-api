@@ -282,6 +282,7 @@ describe("CaseLawyerInvite", function () {
     after(async () => {
       await prisma.caseLawyerInvite.deleteMany({ where: { caseId } });
       await prisma.user.deleteMany({ where: { id: noNameClientId } });
+      await prisma.user.update({ where: { id: clientId }, data: { name: null } });
     });
 
     it("lookupForSignup reports expired for a PENDING invite past expiresAt, without redeeming it", async () => {
@@ -341,6 +342,51 @@ describe("CaseLawyerInvite", function () {
       expect(err).to.be.instanceOf(HttpError);
       expect((err as HttpError).statusCode).to.equal(404);
       expect((err as HttpError).code).to.equal("INVITE_NOT_FOUND");
+    });
+
+    it("lookupForSignup 404s with INVITE_NOT_FOUND when the invite's case has gone, rather than throwing a Prisma error", async () => {
+      // Foreign keys cascade, so a real database can't hold an invite whose case is gone: simulate the
+      // race where the case is deleted between the invite load and the name lookup.
+      const token = makeToken();
+      await CaseLawyerInviteRepo.create({ caseId, clientId, token, expiresAt: future });
+      const original = prisma.case.findUnique;
+      prisma.case.findUnique = (async () => null) as unknown as typeof original;
+      let err: unknown;
+      try {
+        await CaseLawyerInviteSvc.lookupForSignup(token);
+      } catch (e) {
+        err = e;
+      } finally {
+        prisma.case.findUnique = original;
+      }
+      expect(err).to.be.instanceOf(HttpError);
+      expect((err as HttpError).statusCode).to.equal(404);
+      expect((err as HttpError).code).to.equal("INVITE_NOT_FOUND");
+    });
+
+    it("lookupForSignup 404s with INVITE_NOT_FOUND when the invite's client has gone", async () => {
+      const token = makeToken();
+      await CaseLawyerInviteRepo.create({ caseId, clientId, token, expiresAt: future });
+      const original = prisma.user.findUnique;
+      prisma.user.findUnique = (async () => null) as unknown as typeof original;
+      let err: unknown;
+      try {
+        await CaseLawyerInviteSvc.lookupForSignup(token);
+      } catch (e) {
+        err = e;
+      } finally {
+        prisma.user.findUnique = original;
+      }
+      expect(err).to.be.instanceOf(HttpError);
+      expect((err as HttpError).statusCode).to.equal(404);
+      expect((err as HttpError).code).to.equal("INVITE_NOT_FOUND");
+    });
+
+    it("markExpired leaves a non-PENDING invite's status unchanged", async () => {
+      const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), status: "ACCEPTED", expiresAt: past });
+      await CaseLawyerInviteRepo.markExpired(invite.id);
+      const read = await prisma.caseLawyerInvite.findUniqueOrThrow({ where: { id: invite.id } });
+      expect(read.status).to.equal("ACCEPTED");
     });
   });
 });

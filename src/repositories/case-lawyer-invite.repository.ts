@@ -35,7 +35,9 @@ export default class CaseLawyerInviteRepo {
     });
   }
 
+  /** Marks the invite EXPIRED only while it's still PENDING. A no-op otherwise, so a racing accept
+   * (or revoke) isn't overwritten by a stale expiry. */
   static async markExpired(id: string): Promise<void> {
-    await prisma.caseLawyerInvite.update({ where: { id }, data: { status: "EXPIRED" } });
+    await prisma.caseLawyerInvite.updateMany({ where: { id, status: "PENDING" }, data: { status: "EXPIRED" } });
   }
 }
