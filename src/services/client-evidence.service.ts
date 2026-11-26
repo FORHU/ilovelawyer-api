@@ -5,7 +5,7 @@ import CaseAreaSvc from "./case-area.service";
 import { assertClientAiOpen } from "../constants/client-sites.constants";
 import { caseDetailsBlock } from "../utils/client-intake-extract";
 import { conversationLines, languageOf } from "../utils/client-questions-plan";
-import { buildEvidencePrompt, buildNotePrompt, evidenceStateOf as stateOf, parseEvidenceReply, parseNoteReply, type EvidenceState } from "../utils/client-evidence-plan";
+import { buildEvidencePrompt, buildNotePrompt, evidenceStateOf as stateOf, parseEvidenceReply, readNoteReply, type EvidenceState } from "../utils/client-evidence-plan";
 import DocumentNoteRepo from "../repositories/document-note.repository";
 import ClientIntakeSvc from "./client-intake.service";
 import { buildFactExcerptPack } from "../utils/case-document-excerpts";
@@ -132,8 +132,12 @@ export default class ClientEvidenceSvc {
           logger.warn("Client evidence: drafting a note failed, will try again", { err, caseId, documentId: doc.id });
           continue;
         }
-        const note = parseNoteReply(reply, language);
-        if ((await DocumentNoteRepo.saveDraft(doc.id, note)) && note) drafted += 1;
+        const read = readNoteReply(reply, language);
+        // An empty reply is the AI having nothing to say; anything else dropped is worth knowing about.
+        if ("why" in read && read.why !== "empty") {
+          logger.info("Client evidence: a drafted note was discarded", { caseId, documentId: doc.id, why: read.why, replyChars: reply.length });
+        }
+        if ((await DocumentNoteRepo.saveDraft(doc.id, read.note)) && read.note) drafted += 1;
       }
       return drafted;
     } catch (err) {

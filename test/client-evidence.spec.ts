@@ -15,7 +15,7 @@ import IntakeChatRepo from "../src/repositories/intake-chat.repository";
 import ConsentRepo from "../src/repositories/consent.repository";
 import * as chatWonder from "../src/utils/chatWonder";
 import { CLIENT_INTAKE_EVIDENCE_NOTE } from "../src/constants/missing-evidence.constants";
-import { MAX_SUGGESTIONS, NOTE_MAX_CHARS, buildEvidencePrompt, buildNotePrompt, generalSuggestions, parseEvidenceReply, parseNoteReply } from "../src/utils/client-evidence-plan";
+import { MAX_SUGGESTIONS, NOTE_MAX_CHARS, NOTE_TARGET_CHARS, buildEvidencePrompt, buildNotePrompt, generalSuggestions, parseEvidenceReply, parseNoteReply, readNoteReply } from "../src/utils/client-evidence-plan";
 import DocumentNoteRepo from "../src/repositories/document-note.repository";
 import DocumentSvc from "../src/services/document.service";
 import ClientRequestRepo from "../src/repositories/client-request.repository";
@@ -261,6 +261,35 @@ describe("Client evidence", () => {
       expect(parseNoteReply(JSON.stringify({ note: "x".repeat(NOTE_MAX_CHARS + 1) }), "en")).to.equal(null);
       expect(parseNoteReply('{"note": ""}', "en")).to.equal(null);
       expect(parseNoteReply("no json", "en")).to.equal(null);
+    });
+
+    it("keeps a note that runs long to its whole sentences that fit, rather than dropping it", () => {
+      const first = "This is my jeonse lease agreement for the apartment I rented in Mapo-gu, Seoul, from 1 November 2024 to 31 October 2026.";
+      const second = "It shows that I paid a total deposit of 150,000,000 won, and that the deposit is due back to me on the day I hand back the property.";
+      const third = "It also shows the fixed date stamp from 4 November 2024.";
+      const long = `${first} ${second} ${third} ${"It was signed with an agent present. ".repeat(4)}`.trim();
+      expect(long.length).to.be.greaterThan(NOTE_MAX_CHARS);
+      const kept = parseNoteReply(JSON.stringify({ note: long }), "en");
+      expect(kept!.length).to.be.at.most(NOTE_MAX_CHARS);
+      expect(kept!.startsWith(`${first} ${second}`)).to.equal(true);
+      expect(kept!.endsWith(".")).to.equal(true);
+      // Two full sentences of about 260 characters, as Chat Wonder writes them, are kept whole.
+      const usual = `${first} ${second}`;
+      expect(usual.length).to.be.greaterThan(240);
+      expect(parseNoteReply(JSON.stringify({ note: usual }), "en")).to.equal(usual);
+    });
+
+    it("says why a note was dropped, for the log", () => {
+      expect(readNoteReply("no json", "en")).to.deep.equal({ note: null, why: "no-json" });
+      expect(readNoteReply('{"note": ""}', "en")).to.deep.equal({ note: null, why: "empty" });
+      expect(readNoteReply('{"note": "我的工資單。"}', "en")).to.deep.equal({ note: null, why: "wrong-language" });
+      expect(readNoteReply(JSON.stringify({ note: "x".repeat(NOTE_MAX_CHARS + 1) }), "en")).to.deep.equal({ note: null, why: "too-long" });
+    });
+
+    it("asks for a note within the length it keeps", () => {
+      const prompt = buildNotePrompt({ name: "lease.pdf", category: null, content: "x", fills: null, story: "s", language: "en" });
+      expect(prompt).to.include(`${NOTE_TARGET_CHARS} characters at most`);
+      expect(NOTE_TARGET_CHARS).to.be.lessThan(NOTE_MAX_CHARS);
     });
 
     describe("drafting", () => {

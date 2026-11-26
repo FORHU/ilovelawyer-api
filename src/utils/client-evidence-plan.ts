@@ -83,7 +83,10 @@ Most useful first. Reply with only this JSON and nothing else:
 }
 
 /** A drafted note longer than this isn't a short note; it's dropped (the client writes their own). */
-export const NOTE_MAX_CHARS = 240;
+export const NOTE_MAX_CHARS = 400;
+/** What the prompt asks for: well under NOTE_MAX_CHARS, which leaves room for a model that runs a
+ * little long (a note of two full sentences is often 250 characters). */
+export const NOTE_TARGET_CHARS = 250;
 
 /** The note on one document the client added: what it is and what it shows, in their words. */
 export function buildNotePrompt(input: {
@@ -106,23 +109,48 @@ The document: ${input.name}${input.category ? ` (${input.category})` : ""}${inpu
 What it says:
 ${input.content || "(nothing could be read from it)"}
 
-Write one or two short sentences in ${language} only, in the first person as the client ("My last payslip, for December 2025."), in plain everyday words with no legal terms, saying only what the document itself shows. Never a legal conclusion, an outcome, or advice. When nothing could be read from it, give an empty note.
+Write one or two short sentences, ${NOTE_TARGET_CHARS} characters at most, in ${language} only, in the first person as the client ("My last payslip, for December 2025."), in plain everyday words with no legal terms, saying only what the document itself shows. Never a legal conclusion, an outcome, or advice. When nothing could be read from it, give an empty note.
 
 Reply with only this JSON and nothing else:
 {"note": ""}`;
 }
 
-/** The drafted note, or null: none, too long, or in another language than the case's. */
-export function parseNoteReply(reply: string, language: PlanLanguage): string | null {
+/** A note longer than NOTE_MAX_CHARS kept to its whole sentences that fit; null when even the first
+ * doesn't. A long note is never thrown away whole: the document would be marked as tried and never
+ * get one. */
+export function fitNote(note: string): string | null {
+  if (note.length <= NOTE_MAX_CHARS) return note;
+  const head = note.slice(0, NOTE_MAX_CHARS + 1);
+  // The last sentence end (a full stop, question or exclamation mark) inside the limit.
+  const ends = [...head.matchAll(/[.!?\u3002](?=\s|$)/g)].map((m) => (m.index ?? 0) + 1).filter((i) => i <= NOTE_MAX_CHARS);
+  return ends.length ? note.slice(0, ends[ends.length - 1]).trim() : null;
+}
+
+/** Why a reply gave no note, for the log (never the note itself, which is the client's). */
+export type NoteDiscard = "no-json" | "empty" | "too-long" | "wrong-language";
+
+/** The drafted note, or null with why: no JSON, empty, too long even cut to its sentences, or in
+ * another language than the case's. */
+export function readNoteReply(reply: string, language: PlanLanguage): { note: string } | { note: null; why: NoteDiscard } {
   const start = reply.indexOf("{");
   const end = reply.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
+  if (start < 0 || end <= start) return { note: null, why: "no-json" };
+  let raw: string;
   try {
-    const note = str((JSON.parse(reply.slice(start, end + 1)) as Record<string, unknown>).note);
-    return note && note.length <= NOTE_MAX_CHARS && fitsLanguage(note, language) ? note : null;
+    raw = str((JSON.parse(reply.slice(start, end + 1)) as Record<string, unknown>).note);
   } catch {
-    return null;
+    return { note: null, why: "no-json" };
   }
+  if (!raw) return { note: null, why: "empty" };
+  const note = fitNote(raw);
+  if (!note) return { note: null, why: "too-long" };
+  if (!fitsLanguage(note, language)) return { note: null, why: "wrong-language" };
+  return { note };
+}
+
+/** The drafted note, or null: none, too long, or in another language than the case's. */
+export function parseNoteReply(reply: string, language: PlanLanguage): string | null {
+  return readNoteReply(reply, language).note;
 }
 
 function str(v: unknown): string {
