@@ -2,10 +2,13 @@ import path from "path";
 import PDFDocument from "pdfkit";
 import type { CaseSummaryDocument, SummaryItem, SummarySection } from "./client-case-summary-document";
 
-// The client's Case summary as a PDF (ilovelawyer-client#137): the ilovelawyer lockup, the case
-// details in a panel, the AI-written summary (tagged as such), the stated deadlines set apart, the timeline with a date column, then the
-// rest as bullets, and the disclaimer in a box. Every block is measured before it's drawn and
-// moved whole to the next page when it wouldn't fit, so a row never splits from its background.
+// The client's Case summary as a PDF (ilovelawyer-client#137): a branded header band and footer
+// (the same dark/purple identity as the email templates — src/templates/_layout.mjml — drawn fresh
+// here rather than reused, since an MJML layout can't be rendered into an existing PDFKit document)
+// around the case details in a panel, the AI-written summary (tagged as such), the stated deadlines
+// set apart, the timeline with a date column, then the rest as bullets, and the disclaimer in a box.
+// Every block is measured before it's drawn and moved whole to the next page when it wouldn't fit,
+// so a row never splits from its background.
 //
 // Pretendard (SIL OFL 1.1, src/assets/fonts) rather than the built-in Helvetica the lawyer brief
 // uses: a KR client's intake is written in Korean, which the standard PDF fonts can't draw.
@@ -14,11 +17,17 @@ import type { CaseSummaryDocument, SummaryItem, SummarySection } from "./client-
 const ASSETS_DIR = path.join(__dirname, "../assets");
 export const SUMMARY_FONT_REGULAR = path.join(ASSETS_DIR, "fonts/Pretendard-Regular.otf");
 export const SUMMARY_FONT_BOLD = path.join(ASSETS_DIR, "fonts/Pretendard-Bold.otf");
-export const SUMMARY_LOGO = path.join(ASSETS_DIR, "brand/ilovelawyer-lockup-light.png");
+// The light-colored lockup, the same file src/utils/template.ts puts on the email layout's dark
+// header band — this is that same band, drawn in the PDF instead of in an inbox.
+export const SUMMARY_LOGO = path.join(ASSETS_DIR, "brand/ilovelawyer-lockup-dark.png");
 
 const M = 50;
-const FOOTER_SPACE = 34;
-const LOGO_HEIGHT = 26;
+const BAND_HEIGHT = 54;
+const ACCENT_HEIGHT = 3;
+const BAND_LOGO_HEIGHT = 20;
+const TOP_MARGIN = BAND_HEIGHT + ACCENT_HEIGHT + 26;
+const FOOTER_BAND_HEIGHT = 40;
+const FOOTER_SPACE = FOOTER_BAND_HEIGHT;
 const DATE_COLUMN = 104;
 const LABEL_COLUMN = 112;
 const PAD = 12;
@@ -37,6 +46,17 @@ const C = {
   chip: "#efece5",
 };
 
+// The brand identity from src/templates/_layout.mjml: a near-black header band, the purple accent
+// line under it, and the light grey footer — reproduced in PDFKit's own drawing primitives rather
+// than shared code, since the email layout is MJML (compiled to HTML) and has no PDF equivalent.
+const BRAND = {
+  band: "#0b0b0f",
+  accent: "#9d8fe8",
+  footerBg: "#f4f4f5",
+  footerText: "#71717a",
+  footerMuted: "#a1a1aa",
+};
+
 const T = { body: 10.5, lead: 11, date: 9.5, note: 9.5, source: 8.5, heading: 12.5, tag: 7.5 };
 const GAP = { text: 1.5, afterItem: 7, afterSection: 14 };
 
@@ -44,7 +64,7 @@ export function renderCaseSummaryToPdf(summary: CaseSummaryDocument): Promise<Bu
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: "A4",
-      margins: { top: M, left: M, right: M, bottom: M + FOOTER_SPACE },
+      margins: { top: TOP_MARGIN, left: M, right: M, bottom: M + FOOTER_SPACE },
       bufferPages: true,
       info: { Title: `${summary.kicker} — ${summary.title}`, Subject: summary.disclaimer, Author: "ilovelawyer" },
       lang: summary.lang,
@@ -57,6 +77,12 @@ export function renderCaseSummaryToPdf(summary: CaseSummaryDocument): Promise<Bu
     doc.registerFont("Body", SUMMARY_FONT_REGULAR);
     doc.registerFont("Bold", SUMMARY_FONT_BOLD);
     const page = new Page(doc);
+
+    // The brand band is drawn at (0, 0), ahead of the top margin, on every page: pageAdded doesn't
+    // fire for the document's own first page (see drawFooters below for the same gotcha), so that
+    // one is drawn by hand.
+    doc.on("pageAdded", () => drawBrandBand(doc));
+    drawBrandBand(doc);
 
     drawHeader(doc, page, summary);
     drawDetails(doc, page, summary);
@@ -217,16 +243,26 @@ class Page {
   }
 }
 
+/** The near-black band across the top of every page, with the ilovelawyer lockup — the email
+ * layout's own header band, redrawn here. Explicit coordinates throughout, so this never touches
+ * pdfkit's text-flow cursor (doc.x/doc.y) the way a .text() call would. */
+function drawBrandBand(doc: PDFKit.PDFDocument) {
+  const width = doc.page.width;
+  doc.rect(0, 0, width, BAND_HEIGHT).fill(BRAND.band);
+  doc.rect(0, BAND_HEIGHT, width, ACCENT_HEIGHT).fill(BRAND.accent);
+  doc.image(SUMMARY_LOGO, M, (BAND_HEIGHT - BAND_LOGO_HEIGHT) / 2, { height: BAND_LOGO_HEIGHT });
+}
+
+/** The case's own kicker, title and as-of date, under the brand band — page 1 only; later pages
+ * carry just the band, the same as the email layout never repeats its subject line either. */
 function drawHeader(doc: PDFKit.PDFDocument, page: Page, summary: CaseSummaryDocument) {
-  const top = M;
-  doc.image(SUMMARY_LOGO, M, top, { height: LOGO_HEIGHT });
   doc
     .font("Bold")
     .fontSize(8.5)
     .fillColor(C.gold)
-    .text(summary.kicker.toUpperCase(), M, top + 9, { width: page.width, align: "right", characterSpacing: 1.2 });
+    .text(summary.kicker.toUpperCase(), M, doc.y, { width: page.width, align: "right", characterSpacing: 1.2 });
 
-  doc.y = top + LOGO_HEIGHT + 22;
+  doc.y += 16;
   doc.font("Bold").fontSize(22).fillColor(C.ink).text(summary.title, M, doc.y, { width: page.width, lineGap: 1 });
   doc.font("Body").fontSize(10).fillColor(C.ink2).text(summary.asOf, M, doc.y + 3, { width: page.width });
   doc.x = M;
@@ -264,23 +300,33 @@ function drawSection(page: Page, section: SummarySection) {
   page.space(section.kind === "callout" ? GAP.afterSection + 4 : GAP.afterSection - GAP.afterItem);
 }
 
-/** "ilovelawyer · <title>" on the left, "Page n of N" on the right, on every page. Drawn below the
- * bottom margin, so the margin is lifted for the draw, or pdfkit would add a page for it (see
- * case-brief-pdf-renderer.ts's footer). */
+/** The email layout's own light-grey footer band, with "ilovelawyer · <title>" and "Page n of N" on
+ * its first line and the copyright line it always closes with on its second, on every page. Drawn
+ * below the bottom margin, so the margin is lifted for the draw, or pdfkit would add a page for it
+ * (see case-brief-pdf-renderer.ts's footer). */
 function drawFooters(doc: PDFKit.PDFDocument, summary: CaseSummaryDocument) {
   const range = doc.bufferedPageRange();
   const width = doc.page.width - M * 2;
+  const year = new Date().getFullYear();
   for (let i = range.start; i < range.start + range.count; i++) {
     doc.switchToPage(i);
     const margin = doc.page.margins.bottom;
     doc.page.margins.bottom = 0;
-    const y = doc.page.height - M;
-    doc.moveTo(M, y - 8).lineTo(M + width, y - 8).lineWidth(0.5).strokeColor(C.line).stroke();
+    const bandY = doc.page.height - FOOTER_BAND_HEIGHT;
+    doc.rect(0, bandY, doc.page.width, FOOTER_BAND_HEIGHT).fill(BRAND.footerBg);
+    doc.moveTo(0, bandY).lineTo(doc.page.width, bandY).lineWidth(0.5).strokeColor(C.line).stroke();
+
+    const y = bandY + 11;
     const pageText = summary.pageLabel.replace("{n}", String(i - range.start + 1)).replace("{total}", String(range.count));
-    doc.font("Body").fontSize(8).fillColor(C.muted);
+    doc.font("Body").fontSize(8).fillColor(BRAND.footerText);
     const pageWidth = doc.widthOfString(pageText);
     doc.text(`ilovelawyer · ${summary.title}`, M, y, { width: width - pageWidth - 16, lineBreak: false, ellipsis: true });
     doc.text(pageText, M + width - pageWidth, y, { lineBreak: false });
+    doc
+      .font("Body")
+      .fontSize(7.5)
+      .fillColor(BRAND.footerMuted)
+      .text(`© ${year} ilovelawyer. All rights reserved.`, M, y + 13, { width, align: "center", lineBreak: false });
     doc.page.margins.bottom = margin;
   }
 }
