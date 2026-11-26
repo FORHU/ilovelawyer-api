@@ -22,6 +22,7 @@ import AiGenerationQueue from "../src/queues/ai-generation.queue";
 import * as intakeExtract from "../src/utils/client-intake-extract";
 import * as chatWonder from "../src/utils/chatWonder";
 import { CLIENT_STORY_MAX_LENGTH } from "../src/constants/client-case.constants";
+import { STORY_FACTS_MAX, buildStoryFactsPrompt, parseStoryFactsReply } from "../src/utils/client-story-facts";
 
 const stashed: (() => void)[] = [];
 function stash<T extends object>(target: T, keys: string[]) {
@@ -108,6 +109,115 @@ describe("Client story", () => {
     it("folds line breaks and falls back for an empty story", () => {
       expect(storyTitle("I was fired\n\nby text")).to.equal("I was fired by text");
       expect(storyTitle("   ")).to.equal("New case");
+    });
+  });
+
+  describe("the story's facts", () => {
+    const reply = (facts: unknown) => `Here you go: ${JSON.stringify({ facts })}`;
+
+    it("asks for short labelled facts from the story only, in its language", () => {
+      const prompt = buildStoryFactsPrompt({ story: STORY, language: "en", today: "2026-11-26" });
+      expect(prompt).to.include(STORY);
+      expect(prompt).to.include("in English only");
+      expect(prompt).to.include(`up to ${STORY_FACTS_MAX} facts`);
+      expect(prompt).to.include("never guess");
+      expect(buildStoryFactsPrompt({ story: "3월 3일에 해고됐어요", language: "ko", today: "2026-11-26" })).to.include("in Korean only");
+    });
+
+    it("keeps short facts in the AI's order, one per label, at most six", () => {
+      const facts = parseStoryFactsReply(
+        reply([
+          { label: "Date", value: "Mar 3, 2026" },
+          { label: "Issue", value: "Dismissal" },
+          { label: "date", value: "Mar 4, 2026" },
+          { label: "Owed", value: "2 months' pay" },
+          { label: "Notice", value: "None given" },
+          { label: "Employer", value: "Acme Logistics" },
+          { label: "Deadline", value: "Quitclaim by Mar 31" },
+          { label: "Place", value: "Manchester" },
+        ]),
+        "en",
+      );
+      expect(facts.map((f) => f.label)).to.deep.equal(["Date", "Issue", "Owed", "Notice", "Employer", "Deadline"]);
+      expect(facts[0]).to.deep.equal({ label: "Date", value: "Mar 3, 2026" });
+    });
+
+    it("drops what's too long, empty, or in the wrong language, and gives none for a reply it can't read", () => {
+      const facts = parseStoryFactsReply(
+        reply([
+          { label: "Issue", value: "x".repeat(41) },
+          { label: "", value: "Dismissal" },
+          { label: "날짜", value: "3월 3일" },
+          { label: "Employer", value: "株式会社" },
+          { label: "Owed", value: "2 months' pay" },
+        ]),
+        "en",
+      );
+      expect(facts).to.deep.equal([{ label: "Owed", value: "2 months' pay" }]);
+      expect(parseStoryFactsReply("Sorry, I can't help", "en")).to.deep.equal([]);
+      expect(parseStoryFactsReply("{not json", "en")).to.deep.equal([]);
+    });
+
+    it("lets a Korean story's fact keep a name as it was told, never Chinese", () => {
+      const facts = parseStoryFactsReply(
+        reply([
+          { label: "회사", value: "Acme Logistics" },
+          { label: "날짜", value: "2026년 3월 3일" },
+          { label: "Owed", value: "2개월 치 임금" },
+          { label: "장소", value: "首尔" },
+        ]),
+        "ko",
+      );
+      expect(facts).to.deep.equal([
+        { label: "회사", value: "Acme Logistics" },
+        { label: "날짜", value: "2026년 3월 3일" },
+      ]);
+    });
+
+    describe("facts()", () => {
+      let calls: string[];
+      let failCall: boolean;
+      beforeEach(() => {
+        stubStoryDeps();
+        stash(IntakeChatRepo, ["listByCase"]);
+        stash(chatWonder, ["callChatWonderRest", "getChatWonderSessionId"]);
+        calls = [];
+        failCall = false;
+        (IntakeChatRepo as any).listByCase = async () => [
+          { id: "m1", role: "user", content: STORY },
+          { id: "m2", role: "assistant", content: "Which part of the UK?" },
+        ];
+        (chatWonder as any).getChatWonderSessionId = async () => "session-1";
+        (chatWonder as any).callChatWonderRest = async (prompt: string) => {
+          calls.push(prompt);
+          if (failCall) throw new Error("Chat Wonder down");
+          return { response: reply([{ label: "Date", value: "Mar 3, 2026" }, { label: "Owed", value: "2 months' pay" }]) };
+        };
+      });
+
+      it("reads the story (the client's first message) once, and returns its facts", async () => {
+        const { facts } = await ClientStorySvc.facts(workspace, "user-1", CASE_ID);
+        expect(facts).to.deep.equal([
+          { label: "Date", value: "Mar 3, 2026" },
+          { label: "Owed", value: "2 months' pay" },
+        ]);
+        expect(calls).to.have.length(1);
+        expect(calls[0]).to.include(STORY);
+      });
+
+      it("gives no facts, without failing, when the call doesn't work or there's no story", async () => {
+        failCall = true;
+        expect(await ClientStorySvc.facts(workspace, "user-1", CASE_ID)).to.deep.equal({ facts: [] });
+        (IntakeChatRepo as any).listByCase = async () => [];
+        calls = [];
+        expect(await ClientStorySvc.facts(workspace, "user-1", CASE_ID)).to.deep.equal({ facts: [] });
+        expect(calls).to.have.length(0);
+      });
+
+      it("is refused on a site whose AI isn't open, and 404s for another client's case", async () => {
+        expect((await errorOf(ClientStorySvc.facts({ ...workspace, tenantCode: "PH" }, "user-1", CASE_ID)))?.status).to.equal(403);
+        expect((await errorOf(ClientStorySvc.facts(workspace, "user-1", "someone-elses")))?.status).to.equal(404);
+      });
     });
   });
 

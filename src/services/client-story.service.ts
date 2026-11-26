@@ -10,6 +10,9 @@ import HttpError from "../utils/http-error";
 import logger from "../utils/logger";
 import type { CaseIntake } from "../types/client-intake";
 import { storyTitle } from "../utils/client-intake-extract";
+import { languageOf } from "../utils/client-questions-plan";
+import { buildStoryFactsPrompt, parseStoryFactsReply, type StoryFact } from "../utils/client-story-facts";
+import { callChatWonderRest, getChatWonderSessionId } from "../utils/chatWonder";
 
 export { storyTitle };
 
@@ -82,5 +85,28 @@ export default class ClientStorySvc {
     await IntakeChatSvc.forgetSession(caseId);
     await ClientIntakeSvc.scheduleAuto(caseId, userId, "story");
     return { messageId: message.id, intake: await ClientIntakeSvc.get(workspace, caseId) };
+  }
+
+  /**
+   * The story's key facts as short labelled chips ("Date Mar 3, 2026"), for the screen to show while
+   * the full reading runs: one small Chat Wonder call, in the story's language. Shown only, never
+   * stored. Never fails: a call that doesn't work gives no facts, and the screen shows no chips.
+   */
+  static async facts(workspace: ClientWorkspace, userId: string, caseId: string): Promise<{ facts: StoryFact[] }> {
+    assertClientAiOpen(workspace.tenantCode);
+    await ClientCaseSvc.load(workspace, caseId);
+    const story = (await IntakeChatRepo.listByCase(caseId)).find((m) => m.role === "user")?.content ?? "";
+    if (!story.trim()) return { facts: [] };
+    const language = languageOf(story);
+    const prompt = buildStoryFactsPrompt({ story, language, today: new Date().toISOString().slice(0, 10) });
+    try {
+      const answer = await callChatWonderRest(prompt, await getChatWonderSessionId(), undefined, workspace.tenantCode, {
+        usage: { feature: "clientStoryFacts", userId, caseId },
+      });
+      return { facts: parseStoryFactsReply(String(answer.response ?? answer.intermediate_response ?? ""), language) };
+    } catch (err) {
+      logger.warn("Client story: picking out the facts failed", { err, caseId });
+      return { facts: [] };
+    }
   }
 }

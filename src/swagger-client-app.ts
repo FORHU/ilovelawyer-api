@@ -1299,6 +1299,28 @@ export const clientAppPaths: Paths = {
       },
     },
   },
+  "/client/cases/{caseId}/story/facts": {
+    post: {
+      tags: [TAG],
+      summary: "The story's key facts, as chips to show while it's read",
+      description:
+        "One small AI call, apart from the full reading, picking out up to 6 short labelled facts in the story's language (\"Date\" \"Mar 3, 2026\", \"Owed\" \"2 months' pay\"), only what the story says. Nothing is stored. Never fails for the AI: a call that doesn't work gives an empty list. No chat credit is spent.",
+      security,
+      parameters: [caseId],
+      responses: {
+        200: {
+          description: "The facts, most important first",
+          content: json({
+            type: "object",
+            properties: { facts: { type: "array", items: { type: "object", properties: { label: { type: "string" }, value: { type: "string" } } } } },
+          }),
+        },
+        403: err("CLIENT_AI_NOT_OPEN; CONSENT_REQUIRED"),
+        404: err("Case not found"),
+        429: err("Too many tries in a short time"),
+      },
+    },
+  },
   "/client/cases/{caseId}/evidence-suggestions": {
     get: {
       tags: [TAG],

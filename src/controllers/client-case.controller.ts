@@ -79,6 +79,11 @@ export default class ClientCaseCtrl {
     res.status(202).json(await ClientStorySvc.start(clientWorkspaceOf(req), req.user.userId, text));
   }
 
+  /** The story's key facts, as chips for the screen while it's read. */
+  static async storyFacts(req: Request, res: Response) {
+    res.status(200).json(await ClientStorySvc.facts(clientWorkspaceOf(req), req.user.userId, req.params.caseId));
+  }
+
   /** "Something's not right": the client's fix to the story, read together with it. */
   static async correctStory(req: Request, res: Response) {
     const { text } = validate<{ text: string }>(correctClientStorySchema, req.body);

@@ -127,6 +127,8 @@ router.post("/cases", asyncHandler(ClientCaseCtrl.create));
 // reads straight away, and their fix to it. Both start AI work, so both need AI-processing consent.
 router.post("/cases/story", requireClientAi, requireConsent("AI_PROCESSING"), storyLimiter, asyncHandler(ClientCaseCtrl.startStory));
 router.post("/cases/:caseId/story", requireClientAi, requireConsent("AI_PROCESSING"), storyLimiter, asyncHandler(ClientCaseCtrl.correctStory));
+// The story's key facts as chips, shown while it's read: one small AI call, nothing stored.
+router.post("/cases/:caseId/story/facts", requireClientAi, requireConsent("AI_PROCESSING"), questionsLimiter, asyncHandler(ClientCaseCtrl.storyFacts));
 // The Questions step after the story: the details the case still needs, one at a time. Starting
 // writes the list with the AI, so it needs AI-processing consent.
 // The evidence step after the questions: proof suggested from the story and answers. Starting asks
