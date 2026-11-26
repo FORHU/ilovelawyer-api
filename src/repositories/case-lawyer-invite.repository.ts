@@ -27,10 +27,13 @@ export default class CaseLawyerInviteRepo {
     });
   }
 
-  static async markAccepted(id: string, acceptedById: string, tx?: Prisma.TransactionClient): Promise<CaseLawyerInvite> {
+  /** Marks the invite ACCEPTED only while it's still PENDING, matching markExpired's guard — a
+   * racing accept, revoke or lazy expiry can't be overwritten. Returns the count of rows actually
+   * updated (0 or 1), so a caller can tell a genuine accept apart from a race that lost. */
+  static async markAccepted(id: string, acceptedById: string, tx?: Prisma.TransactionClient): Promise<{ count: number }> {
     const db = tx ?? prisma;
-    return db.caseLawyerInvite.update({
-      where: { id },
+    return db.caseLawyerInvite.updateMany({
+      where: { id, status: "PENDING" },
       data: { status: "ACCEPTED", acceptedAt: new Date(), acceptedById },
     });
   }

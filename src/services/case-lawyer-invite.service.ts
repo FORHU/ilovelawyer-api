@@ -4,7 +4,20 @@ import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import CaseLawyerInviteRepo from "../repositories/case-lawyer-invite.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
+import CaseSeedSvc from "./case-seed.service";
+import NotificationSvc from "./notification.service";
+import { normalizeEmail } from "../utils/auth.utils";
 import { CASE_LAWYER_INVITE_EXPIRY_MS } from "../constants/case-lawyer-invite.constants";
+import logger from "../utils/logger";
+
+/** `redeem`'s consent-capture fields on the ClientRequest it creates: this is a client inviting
+ * their own named lawyer, not the marketplace consent flow, so it gets its own fixed version
+ * string rather than reusing CLIENT_REQUEST_CONSENT_VERSION. */
+const OWN_LAWYER_INVITE_CONSENT_VERSION = "own-lawyer-invite-1";
+
+export type RedeemResult =
+  | { requestId: string; caseId: string }
+  | { error: "INVITE_NOT_FOUND" | "INVITE_ALREADY_USED" | "INVITE_EXPIRED" | "INVITE_EMAIL_MISMATCH" | "CASE_ALREADY_HAS_LAWYER" | "CASE_NOT_FOUND" };
 
 /** The invite as the client app reads it (InviteStatusDto in the contract): just enough to show
  * where it stands, never the token (that's only ever handed back once, at creation). */
@@ -101,6 +114,114 @@ export default class CaseLawyerInviteSvc {
     const clientFirstName = (client.name ?? "").trim().split(/\s+/)[0] || client.username;
 
     return { status: SIGNUP_STATUS[status], clientFirstName, caseName: kase.caseName, email: invite.email };
+  }
+
+  /**
+   * The lawyer redeeming their invite token, right after signing up/in (Task 8 calls this from the
+   * auth flow): attaches them to the case for real — a fresh, lawyer-owned Case seeded from the
+   * client's (CaseSeedSvc.seed), and an ENGAGED ClientRequest+ClientRequestClaim so the rest of the
+   * platform (billing exemptions, `findEngagedLawyerForCase`, the client's case page) sees this
+   * exactly like a marketplace engagement. Never throws for any of the listed outcomes — Task 8's
+   * caller must be able to treat a bad or stale invite as "nothing to attach" and carry on.
+   *
+   * Transaction-nesting note: `CaseSeedSvc.seed` opens its own `prisma.$transaction` (and makes
+   * network calls to S3 before that), so it can't run inside this method's own transaction — Prisma
+   * doesn't support composing two separate `$transaction` calls into one atomic unit, and even if it
+   * did, holding a transaction open across S3 round-trips would be its own problem (seed's own
+   * comments make the same call for its own writes). So `seed()` runs first, as its own atomic unit,
+   * and only once it has succeeded does this method open its own transaction to create the
+   * ClientRequest/Claim (with `lawyerCaseId` already known) and mark the invite ACCEPTED (guarded,
+   * so a race that already consumed the invite rolls this transaction back). The one failure window
+   * this leaves: if this method's own transaction fails *after* `seed()` already committed a new
+   * Case, that Case is orphaned — lawyer-owned, not referenced by any ClientRequest, otherwise
+   * harmless and cleanable. The alternative (create the ClientRequest first, seed second) was worse:
+   * it risks a live ENGAGED request with no case behind it, which every other read of "is this case
+   * attached" would trip over.
+   */
+  static async redeem(user: { id: string; email: string }, token: string): Promise<RedeemResult> {
+    const invite = await CaseLawyerInviteRepo.findByToken(token);
+    if (!invite) return { error: "INVITE_NOT_FOUND" };
+
+    if (invite.status !== "PENDING") return { error: "INVITE_ALREADY_USED" };
+    if (invite.expiresAt < new Date()) {
+      await CaseLawyerInviteRepo.markExpired(invite.id);
+      return { error: "INVITE_EXPIRED" };
+    }
+
+    if (invite.email && normalizeEmail(invite.email) !== normalizeEmail(user.email)) {
+      return { error: "INVITE_EMAIL_MISMATCH" };
+    }
+
+    const engaged = await ClientRequestRepo.findEngagedLawyerForCase(invite.caseId);
+    if (engaged) return { error: "CASE_ALREADY_HAS_LAWYER" };
+
+    // CaseSeedSvc.seed does no validation of the source case at all (by design — that's this
+    // method's job): a case that's gone, or archived out from under a live invite, isn't a valid
+    // seed source. ARCHIVED is the only other status Case has (CaseStatus); treat it the same as
+    // deleted, since an archived case is one the client has put away, not one to attach a lawyer to.
+    const sourceCase = await prisma.case.findUnique({ where: { id: invite.caseId }, select: { id: true, status: true } });
+    if (!sourceCase || sourceCase.status !== "ACTIVE") return { error: "CASE_NOT_FOUND" };
+
+    const seeded = await CaseSeedSvc.seed({ sourceCaseId: invite.caseId, lawyerId: user.id, organizationId: null });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const marked = await CaseLawyerInviteRepo.markAccepted(invite.id, user.id, tx);
+      if (marked.count === 0) {
+        // Lost a race (accepted, revoked or lazily expired since the checks above): abort, leaving
+        // the orphaned seeded Case as the one acceptable cost of not nesting seed()'s transaction.
+        throw new HttpError("Invite already used.", 409, "INVITE_ALREADY_USED");
+      }
+
+      const request = await tx.clientRequest.create({
+        data: {
+          caseId: invite.caseId,
+          clientId: invite.clientId,
+          status: "ENGAGED",
+          note: "",
+          consentVersion: OWN_LAWYER_INVITE_CONSENT_VERSION,
+          consentAcceptedAt: invite.createdAt,
+          requestedLawyerId: user.id,
+          requestedOnly: true,
+          engagedAt: new Date(),
+        },
+      });
+
+      await tx.clientRequestClaim.create({
+        data: {
+          requestId: request.id,
+          lawyerId: user.id,
+          organizationId: null,
+          claimedAt: new Date(),
+          expiresAt: new Date(),
+          outcome: "ENGAGED",
+          lawyerCaseId: seeded.caseId,
+        },
+      });
+
+      return { requestId: request.id, caseId: seeded.caseId };
+    }).catch((err) => {
+      if (err instanceof HttpError && err.code === "INVITE_ALREADY_USED") return { error: "INVITE_ALREADY_USED" as const };
+      throw err;
+    });
+
+    if ("error" in result) return result;
+
+    await NotificationSvc.create({
+      userId: invite.clientId,
+      type: "CASE_UPDATE",
+      title: "Your lawyer has joined ilovelawyer",
+      message: "Your lawyer has joined ilovelawyer and can now see your case.",
+      link: `/cases/${invite.caseId}`,
+    }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify client", { err, caseId: invite.caseId }));
+    await NotificationSvc.create({
+      userId: user.id,
+      type: "CASE_UPDATE",
+      title: "You're attached to your client's case",
+      message: "You've joined your client's case through their invite and can now see it.",
+      link: `/cases/${result.caseId}`,
+    }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify lawyer", { err, lawyerId: user.id }));
+
+    return result;
   }
 
   /** Revokes the case's pending invite. 404 INVITE_NOT_FOUND when there was none to revoke. */
