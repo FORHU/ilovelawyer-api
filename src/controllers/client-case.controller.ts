@@ -147,7 +147,44 @@ export default class ClientCaseCtrl {
 
   /** The client's Case summary PDF, sent as the download itself (ClientCaseSummarySvc). */
   static async exportSummary(req: Request, res: Response) {
-    const { lang } = validate<{ format: "pdf"; lang: "en" | "ko" }>(exportClientCaseSummarySchema, req.query);
+    const { format, lang } = validate<{ format: "pdf" | "zip"; lang: "en" | "ko" }>(exportClientCaseSummarySchema, req.query);
+
+    if (format === "zip") {
+      let started = false;
+      try {
+        // Waits for the client to catch up when its connection is slower than our database and storage.
+        const sink = (chunk: Buffer) => {
+          if (!started) {
+            started = true;
+            res.status(200);
+            res.setHeader("Content-Type", "application/zip");
+            res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+            res.setHeader("X-Content-Type-Options", "nosniff");
+            res.setHeader("Cache-Control", "private, no-store");
+          }
+          return res.write(chunk) ? undefined : new Promise<void>((resolve) => res.once("drain", resolve));
+        };
+        await ClientCaseSummarySvc.streamZip(
+          clientWorkspaceOf(req),
+          req.user.userId,
+          req.params.caseId,
+          lang,
+          sink,
+          undefined,
+          (filename) => res.setHeader("Content-Disposition", contentDisposition(filename)),
+        );
+        res.end();
+      } catch (err) {
+        // A guard clause (INTAKE_RUNNING/INTAKE_EMPTY) fails before any byte is written, so it can
+        // still be reported the normal way — same 409/code the pdf export gives for the same case.
+        // Once streaming has actually started, headers are already sent and an error page can't
+        // be; the client sees a failed download instead of a truncated file that looks complete.
+        if (!started) throw err;
+        res.destroy(err as Error);
+      }
+      return;
+    }
+
     const { buffer, filename } = await ClientCaseSummarySvc.exportPdf(clientWorkspaceOf(req), req.user.userId, req.params.caseId, lang);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", String(buffer.length));

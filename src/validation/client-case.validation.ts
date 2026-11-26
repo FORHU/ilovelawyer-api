@@ -132,9 +132,10 @@ export const addClientDocumentSchema = Joi.object({
   missingEvidenceId: Joi.string().trim().min(1).optional(),
 });
 
-/** GET /api/client/cases/:caseId/export (the client's Case summary): PDF only for now; `lang` is
- * the client app's language, for the document's own labels. */
+/** GET /api/client/cases/:caseId/export (the client's Case summary): a PDF of the overview and
+ * analysis, or a ZIP of that same PDF plus every file the client uploaded ("Download case
+ * files"). `lang` is the client app's language, for the document's own labels. */
 export const exportClientCaseSummarySchema = Joi.object({
-  format: Joi.string().valid("pdf").default("pdf"),
+  format: Joi.string().valid("pdf", "zip").default("pdf"),
   lang: Joi.string().valid("en", "ko").default("en"),
 });

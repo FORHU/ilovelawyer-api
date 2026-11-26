@@ -66,7 +66,10 @@ export default class ClientCaseSummarySvc {
 
   /** The same case summary PDF plus every file the client uploaded to the case, as a streamed ZIP
    * (ilovelawyer-client's "Download case files"). A document whose stored file can't be read is
-   * skipped rather than failing the whole download, same as DataExportSvc.streamZip. */
+   * skipped rather than failing the whole download, same as DataExportSvc.streamZip.
+   *
+   * `onFilename`, when given, fires once the name is known but before any byte reaches `sink` —
+   * the caller's chance to set Content-Disposition while headers can still be changed. */
   static async streamZip(
     workspace: ClientWorkspace,
     userId: string,
@@ -74,6 +77,7 @@ export default class ClientCaseSummarySvc {
     lang: SummaryLang,
     sink: ZipSink,
     files: ExportFileSource = s3FileSource,
+    onFilename?: (filename: string) => void,
   ): Promise<{ filename: string; filesIncluded: number; filesSkipped: number }> {
     const found = await ClientCaseSvc.get(workspace, caseId);
     const intake = await ClientIntakeSvc.get(workspace, caseId);
@@ -84,6 +88,9 @@ export default class ClientCaseSummarySvc {
     if (!intake.generatedAt) {
       throw new HttpError("There's nothing to put in a case summary yet. Tell us about your case in the chat first.", 409, "INTAKE_EMPTY");
     }
+
+    const filename = caseBundleFilename(found.title, new Date(), workspace.tenantCode);
+    onFilename?.(filename);
 
     const summary = buildCaseSummaryDocument({
       title: found.title,
@@ -125,8 +132,6 @@ export default class ClientCaseSummarySvc {
       }
     }
     await zip.finish();
-
-    const filename = caseBundleFilename(found.title, new Date(), workspace.tenantCode);
 
     await SecurityAuditSvc.record({
       action: "export.case_summary",
