@@ -25,6 +25,9 @@ import DamagesExtractSvc from "../src/services/damages-extract.service";
 import CaseMindMapSvc from "../src/services/case-mind-map.service";
 import HttpError from "../src/utils/http-error";
 import { redis } from "../src/lib/redis";
+import ClientOverviewSvc from "../src/services/client-overview.service";
+import ClientEvidenceSvc from "../src/services/client-evidence.service";
+import ClientIntakeSvc from "../src/services/client-intake.service";
 
 function fingerprintOf(ids: string[]): string {
   return crypto.createHash("sha256").update([...ids].sort().join(",")).digest("hex");
@@ -409,5 +412,55 @@ describe("case-post-extraction: automatic refresh scheduling and execution", () 
     await runCasePostExtraction("case-1", "user-1");
 
     expect(generateCalls).to.equal(0);
+  });
+
+  describe("a client's case", () => {
+    const clientOriginals = {
+      isClient: CaseRepo.isClientWorkspaceCase,
+      beginAuto: ClientOverviewSvc.beginAuto,
+      overviewRun: ClientOverviewSvc.runQueued,
+      draftNotes: ClientEvidenceSvc.draftNotes,
+      scheduleAuto: ClientIntakeSvc.scheduleAuto,
+    };
+    let steps: string[];
+    let overviewError: Error | null;
+
+    beforeEach(() => {
+      steps = [];
+      overviewError = null;
+      (DocumentRepo as any).listAllByCase = async () => readyDocs(["d1", "d2"]);
+      (CaseRepo as any).isClientWorkspaceCase = async () => true;
+      (ClientOverviewSvc as any).beginAuto = async () => true;
+      (ClientOverviewSvc as any).runQueued = async () => {
+        steps.push("overview");
+        if (overviewError) throw overviewError;
+      };
+      (ClientEvidenceSvc as any).draftNotes = async () => {
+        steps.push("notes");
+        return 2;
+      };
+      (ClientIntakeSvc as any).scheduleAuto = async (_c: string, _u: string, reason: string) => void steps.push(`intake:${reason}`);
+    });
+
+    afterEach(() => {
+      (CaseRepo as any).isClientWorkspaceCase = clientOriginals.isClient;
+      (ClientOverviewSvc as any).beginAuto = clientOriginals.beginAuto;
+      (ClientOverviewSvc as any).runQueued = clientOriginals.overviewRun;
+      (ClientEvidenceSvc as any).draftNotes = clientOriginals.draftNotes;
+      (ClientIntakeSvc as any).scheduleAuto = clientOriginals.scheduleAuto;
+    });
+
+    it("drafts the documents' notes first, then the overview, then the intake reading, and stamps the set", async () => {
+      await runCasePostExtraction("case-1", "user-1");
+      expect(steps).to.deep.equal(["notes", "overview", "intake:document"]);
+      expect(fingerprintStore["case-1"]).to.equal(fingerprintOf(["d1", "d2"]));
+    });
+
+    it("still drafts the notes and reads the case when the overview fails outright (as on KR, with no pane prompts)", async () => {
+      overviewError = new HttpError("Every part of the overview failed to generate", 502, "OVERVIEW_GENERATION_FAILED");
+      await runCasePostExtraction("case-1", "user-1");
+      expect(steps).to.deep.equal(["notes", "overview", "intake:document"]);
+      expect(fingerprintStore["case-1"]).to.equal(fingerprintOf(["d1", "d2"]));
+    });
   });
 });

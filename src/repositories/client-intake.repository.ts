@@ -18,7 +18,8 @@ export interface ClientIntakeCaseSource {
   notes: string | null;
   lawyerReadiness: unknown;
   parties: { name: string; designation: string }[];
-  documents: { id: string; name: string; ragStatus: string }[];
+  /** clientNote is sealed: open with openDocumentNote. */
+  documents: { id: string; name: string; ragStatus: string; clientNote: string | null }[];
 }
 
 export default class ClientIntakeRepo {
@@ -36,7 +37,7 @@ export default class ClientIntakeRepo {
         notes: true,
         lawyerReadiness: true,
         parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } },
-        documents: { where: { status: "ACTIVE" }, select: { id: true, name: true, ragStatus: true }, orderBy: { createdAt: "asc" } },
+        documents: { where: { status: "ACTIVE" }, select: { id: true, name: true, ragStatus: true, clientNote: true }, orderBy: { createdAt: "asc" } },
       },
     });
   }

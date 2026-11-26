@@ -156,6 +156,7 @@ describe("AuthSvc Google sign-in", () => {
       expect(sentEmails).to.deep.equal(["signup-pending"]);
       expect(sessions).to.have.length(1);
       expect(result.user).to.deep.equal({ id: "new-user" });
+      expect(result.isNewAccount).to.equal(true);
     });
 
     it("waits for a quick Google photo copy so the response already carries the avatar", async () => {
@@ -203,11 +204,12 @@ describe("AuthSvc Google sign-in", () => {
     it("never asks a returning Google user for Terms", async () => {
       (AuthRepo as any).findByGoogleId = async () => row({ googleId: "sub-1" });
 
-      await AuthSvc.loginWithGoogle("token", true, null, false);
+      const result = await AuthSvc.loginWithGoogle("token", true, null, false);
 
       expect(createdGoogleUsers).to.be.empty;
       expect(sentEmails).to.be.empty;
       expect(sessions).to.have.length(1);
+      expect(result.isNewAccount).to.equal(false);
     });
 
     it("rejects an unverified Google email", async () => {
@@ -281,6 +283,8 @@ describe("AuthSvc Google sign-in", () => {
       expect(result.user).to.deep.equal({ id: "winner" });
       expect(sessions.map((s) => s.userId)).to.deep.equal(["winner"]);
       expect(sentEmails).to.be.empty;
+      // The request that won the race made the account; this one only signs in to it.
+      expect(result.isNewAccount).to.equal(false);
     });
 
     it("resolves an email race won by the same identity, and reports a different one as a conflict", async () => {

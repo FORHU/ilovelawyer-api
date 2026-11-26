@@ -683,6 +683,9 @@ export default class AuthSvc {
       accessToken,
       refreshToken,
       deletionCancelled,
+      // This request made the account (not a returning user, nor the loser of a creation race): the
+      // client app takes a new account into its first-case onboarding.
+      isNewAccount: created,
     };
   }
 

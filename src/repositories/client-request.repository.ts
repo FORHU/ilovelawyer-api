@@ -466,7 +466,7 @@ export default class ClientRequestRepo {
             parties: { select: { name: true, designation: true }, orderBy: { id: "asc" } },
             documents: {
               where: { status: "ACTIVE" },
-              select: { id: true, name: true, ragStatus: true, category: true, file: { select: { s3Key: true, fileUrl: true, filename: true } } },
+              select: { id: true, name: true, ragStatus: true, category: true, clientNote: true, clientNoteBy: true, file: { select: { s3Key: true, fileUrl: true, filename: true } } },
               orderBy: { createdAt: "asc" },
             },
             consultations: { where: { status: "ACTIVE" }, select: { id: true }, orderBy: { createdAt: "asc" }, take: 1 },

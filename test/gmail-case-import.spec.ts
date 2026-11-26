@@ -169,6 +169,11 @@ describe("GmailCaseImportSvc", () => {
     expect(audits[0].payload).to.deep.include({ messageId: "m1", email: true, attachmentPartIds: ["1"], documentIds: ["doc-1", "doc-2"] });
   });
 
+  it("links the email (the first document added) to the evidence suggestion it was added for, and only that one", async () => {
+    await GmailCaseImportSvc.importToCase(workspace, "user-1", "case-1", { messageId: "m1", includeEmail: true, attachmentPartIds: ["1"], missingEvidenceId: "gap-1" });
+    expect(added.map((d) => (d as { missingEvidenceId?: string }).missingEvidenceId)).to.deep.equal(["gap-1", undefined]);
+  });
+
   it("adds only the attachments when the email itself isn't wanted", async () => {
     await GmailCaseImportSvc.importToCase(workspace, "user-1", "case-1", { messageId: "m1", includeEmail: false, attachmentPartIds: ["1"] });
     expect(added.map((d) => d.name)).to.deep.equal(["tenancy-agreement.pdf"]);

@@ -32,6 +32,7 @@ function intake(overrides: Partial<CaseIntake> = {}): CaseIntake {
     deadlines: [{ id: "d1", date: "2026-12-01", text: "The agent said to reply by 1 December", sources: [CHAT, DOC] }],
     missing: [{ id: "x1", question: "When was the deposit paid?", why: "A lawyer will ask when it was protected." }],
     conflicts: [{ id: "k1", description: "The rent is £950 in the chat but £995 in the tenancy", sources: [CHAT, DOC] }],
+    storySoFar: [],
     completeness: { ready: false, criteria: [{ key: "dates", label: "Key dates", met: true }] },
     formFields: {
       parties: [],

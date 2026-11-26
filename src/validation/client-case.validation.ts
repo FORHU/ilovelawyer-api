@@ -7,6 +7,9 @@ import {
   CLIENT_MESSAGE_DOCUMENTS_MAX,
   CLIENT_MESSAGE_MAX_LENGTH,
   CLIENT_PARTY_ROLES,
+  CLIENT_STORY_CORRECTION_MAX_LENGTH,
+  CLIENT_STORY_MAX_LENGTH,
+  CLIENT_STORY_MIN_LENGTH,
   VOICE_MESSAGE_MAX_BYTES,
 } from "../constants/client-case.constants";
 import { CLIENT_SIDES, PARTY_NAME_MAX_LENGTH, UK_JURISDICTIONS } from "./case.validation";
@@ -103,6 +106,47 @@ export const sendClientMessageSchema = Joi.object({
   text: Joi.string().trim().min(1).max(CLIENT_MESSAGE_MAX_LENGTH).required(),
   // The case's documents to send with it. Repeats are folded in ClientCaseSvc.sendMessage.
   documentIds: Joi.array().items(Joi.string().trim().min(1)).max(CLIENT_MESSAGE_DOCUMENTS_MAX).optional(),
+});
+
+export const startClientStorySchema = Joi.object({
+  text: Joi.string()
+    .trim()
+    .min(CLIENT_STORY_MIN_LENGTH)
+    .max(CLIENT_STORY_MAX_LENGTH)
+    .required()
+    .messages({ "string.min": "Tell us a little more: a sentence or two is enough." }),
+});
+
+export const correctClientStorySchema = Joi.object({
+  text: Joi.string().trim().min(1).max(CLIENT_STORY_CORRECTION_MAX_LENGTH).required(),
+});
+
+// The Questions step. questionId is the screen's current question (a detail, or "<detail>.followUp").
+const questionId = Joi.string().trim().max(40).required();
+
+export const answerClientQuestionSchema = Joi.object({
+  questionId,
+  text: Joi.string().trim().min(1).max(CLIENT_STORY_CORRECTION_MAX_LENGTH).required(),
+  via: Joi.string().valid("tap", "typed", "voice").required(),
+});
+
+export const skipClientQuestionSchema = Joi.object({
+  questionId,
+  // What the client is shown saying ("I'm not sure."), in their language; English when left out.
+  text: Joi.string().trim().max(100).optional(),
+});
+
+/** How long the client's own note on a document may be. */
+export const DOCUMENT_NOTE_MAX_LENGTH = 500;
+
+// The client's own note on a document; empty clears it.
+export const documentNoteSchema = Joi.object({
+  note: Joi.string().trim().allow("").max(DOCUMENT_NOTE_MAX_LENGTH).required(),
+});
+
+// The evidence step: "I don't have this" (true), or taking it back (false).
+export const dismissEvidenceSuggestionSchema = Joi.object({
+  dismissed: Joi.boolean().required(),
 });
 
 export const presignClientDocumentSchema = Joi.object({
