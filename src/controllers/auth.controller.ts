@@ -38,17 +38,23 @@ export default class AuthCtrl {
   }
 
   static async login(req: Request, res: Response) {
-    const { email, password, remember } = req.body;
+    const { email, password, remember, caseInviteToken } = req.body;
 
-    const { error } = loginSchema.validate({ email, password, remember });
+    const { error } = loginSchema.validate({ email, password, remember, caseInviteToken });
     if (error) {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken, deletionCancelled } = await AuthSvc.login(email, password, !!remember, resolveTenantCodeFromRequest(req));
+    const { user, accessToken, refreshToken, deletionCancelled, caseLawyerInvite } = await AuthSvc.login(
+      email,
+      password,
+      !!remember,
+      resolveTenantCodeFromRequest(req),
+      caseInviteToken,
+    );
     setRefreshTokenCookie(res, refreshToken, !!remember);
 
-    return res.status(200).json({ user, accessToken, deletionCancelled });
+    return res.status(200).json({ user, accessToken, deletionCancelled, caseLawyerInvite });
   }
 
   /** Completes the one-time forced password update a 428 from login() sends the client to. */
@@ -98,24 +104,25 @@ export default class AuthCtrl {
   }
 
   static async google(req: Request, res: Response) {
-    const { idToken, remember, acceptedTerms } = req.body;
+    const { idToken, remember, acceptedTerms, caseInviteToken } = req.body;
 
-    const { error } = googleLoginSchema.validate({ idToken, remember, acceptedTerms });
+    const { error } = googleLoginSchema.validate({ idToken, remember, acceptedTerms, caseInviteToken });
     if (error) {
       throw new HttpError(error.message, 400);
     }
 
     // The app always sends `remember` now (the sign-in tab's checkbox, or true from the
     // sign-up tab); the `true` fallback only keeps older clients' behavior unchanged.
-    const { user, accessToken, refreshToken, deletionCancelled, isNewAccount } = await AuthSvc.loginWithGoogle(
+    const { user, accessToken, refreshToken, deletionCancelled, isNewAccount, caseLawyerInvite } = await AuthSvc.loginWithGoogle(
       idToken,
       remember ?? true,
       resolveTenantCodeFromRequest(req),
       acceptedTerms === true,
+      caseInviteToken,
     );
     setRefreshTokenCookie(res, refreshToken, remember ?? true);
 
-    return res.status(200).json({ user, accessToken, deletionCancelled, isNewAccount });
+    return res.status(200).json({ user, accessToken, deletionCancelled, isNewAccount, caseLawyerInvite });
   }
 
   /** Completes the password-confirmed link a GOOGLE_LINK_REQUIRED 409 from google() sends the
@@ -211,17 +218,17 @@ export default class AuthCtrl {
   }
 
   static async verifyOtp(req: Request, res: Response) {
-    const { email, code } = req.body;
+    const { email, code, caseInviteToken } = req.body;
 
-    const { error } = verifyOtpSchema.validate({ email, code });
+    const { error } = verifyOtpSchema.validate({ email, code, caseInviteToken });
     if (error) {
       throw new HttpError(error.message, 400);
     }
 
-    const { user, accessToken, refreshToken } = await AuthSvc.verifyOtp(email, code);
+    const { user, accessToken, refreshToken, caseLawyerInvite } = await AuthSvc.verifyOtp(email, code, caseInviteToken);
     setRefreshTokenCookie(res, refreshToken, true);
 
-    return res.status(200).json({ user, accessToken });
+    return res.status(200).json({ user, accessToken, caseLawyerInvite });
   }
 
   static async consumeLoginLink(req: Request, res: Response) {

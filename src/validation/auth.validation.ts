@@ -23,6 +23,7 @@ export const loginSchema = Joi.object({
   email: Joi.string().trim().email().required(),
   password: Joi.string().min(8).required(),
   remember: Joi.boolean().optional(),
+  caseInviteToken: Joi.string().uuid().optional(),
 });
 
 export const updateRequiredPasswordSchema = Joi.object({
@@ -36,6 +37,7 @@ export const googleLoginSchema = Joi.object({
   idToken: Joi.string().required(),
   remember: Joi.boolean().optional(),
   acceptedTerms: Joi.boolean().optional(),
+  caseInviteToken: Joi.string().uuid().optional(),
 });
 
 export const googleLinkSchema = Joi.object({
@@ -68,6 +70,7 @@ export const cancelSignupSchema = Joi.object({
 export const verifyOtpSchema = Joi.object({
   email: Joi.string().trim().email().required(),
   code: Joi.string().length(6).required(),
+  caseInviteToken: Joi.string().uuid().optional(),
 });
 
 export const consumeLoginLinkSchema = Joi.object({

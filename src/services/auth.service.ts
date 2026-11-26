@@ -11,6 +11,7 @@ import PaymentPlanSvc from "./payment-plan.service";
 import loginToken from "../utils/loginToken";
 import AvatarSvc from "./avatar.service";
 import AccountDeletionSvc from "./account-deletion.service";
+import CaseLawyerInviteSvc, { type RedeemResult } from "./case-lawyer-invite.service";
 import SecurityAuditSvc from "./security-audit.service";
 import AuditSvc, { AuditAction } from "./audit.service";
 import GoogleCalendarSvc from "./google-calendar.service";
@@ -254,6 +255,27 @@ export default class AuthSvc {
     return AccountDeletionSvc.restoreOnSignIn(user);
   }
 
+  /** Redeems an optional case-lawyer invite token at the moment an account becomes logged in and
+   * verified (verifyOtp, the signup branch of loginWithGoogle, login, and the Google sign-in
+   * branch). `null` when no token was given at all, so the caller can tell "no token" apart from
+   * "token given but it didn't work" in the response. CaseLawyerInviteSvc.redeem only returns an
+   * error object (never throws) for its own enumerated outcomes — it can still throw a genuine
+   * exception for anything else (a DB failure, something unexpected inside its transaction), and
+   * that must never block or fail the surrounding auth flow. A thrown exception is logged (so
+   * it's not silently swallowed) and reported back as the generic "nothing to attach" outcome. */
+  private static async redeemCaseInvite(
+    user: { id: string; email: string },
+    caseInviteToken: string | undefined,
+  ): Promise<RedeemResult | null> {
+    if (!caseInviteToken) return null;
+    try {
+      return await CaseLawyerInviteSvc.redeem(user, caseInviteToken);
+    } catch (err) {
+      logger.error("AuthSvc: case-lawyer invite redemption threw", { err, userId: user.id });
+      return { error: "INVITE_NOT_FOUND" };
+    }
+  }
+
   /** Runs one sign-in path and writes its auth.login security audit row: SUCCESS naming the
    * signed-in user, or FAILURE with the refusal's reason and the email that was tried (so a firm
    * sees failed attempts against its members). `method` says which path it was. */
@@ -274,16 +296,28 @@ export default class AuthSvc {
     return result;
   }
 
-  static async login(email: string, password: string, remember = false, requestTenantCode: TenantCode | null = null) {
+  static async login(
+    email: string,
+    password: string,
+    remember = false,
+    requestTenantCode: TenantCode | null = null,
+    caseInviteToken?: string,
+  ) {
     return AuthSvc.auditSignIn(
       "password",
       email,
-      () => AuthSvc.passwordLogin(email, password, remember, requestTenantCode),
+      () => AuthSvc.passwordLogin(email, password, remember, requestTenantCode, caseInviteToken),
       (result) => result.user?.id,
     );
   }
 
-  private static async passwordLogin(email: string, password: string, remember: boolean, requestTenantCode: TenantCode | null) {
+  private static async passwordLogin(
+    email: string,
+    password: string,
+    remember: boolean,
+    requestTenantCode: TenantCode | null,
+    caseInviteToken?: string,
+  ) {
     const user = await AuthRepo.findByEmail(email);
     // A Google SSO account gets the same generic 401 as a wrong password, so this endpoint
     // can't be used to learn which emails are Google accounts. forgotPassword emails the
@@ -319,6 +353,7 @@ export default class AuthSvc {
     AuthSvc.assertClientApp(user);
     await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
     const deletionCancelled = await AuthSvc.restoreIfScheduled(user);
+    const caseLawyerInvite = await AuthSvc.redeemCaseInvite(user, caseInviteToken);
 
     const { accessToken, refreshToken } = loginToken(user.id, remember);
 
@@ -332,6 +367,7 @@ export default class AuthSvc {
       accessToken,
       refreshToken,
       deletionCancelled,
+      caseLawyerInvite,
     };
   }
 
@@ -432,11 +468,16 @@ export default class AuthSvc {
     return result;
   }
 
-  static async verifyOtp(email: string, code: string) {
-    return AuthSvc.auditSignIn("email_verification", email, () => AuthSvc.verifyOtpAndSignIn(email, code), (result) => result.user?.id);
+  static async verifyOtp(email: string, code: string, caseInviteToken?: string) {
+    return AuthSvc.auditSignIn(
+      "email_verification",
+      email,
+      () => AuthSvc.verifyOtpAndSignIn(email, code, caseInviteToken),
+      (result) => result.user?.id,
+    );
   }
 
-  private static async verifyOtpAndSignIn(email: string, code: string) {
+  private static async verifyOtpAndSignIn(email: string, code: string, caseInviteToken?: string) {
     const user = await AuthRepo.findByEmail(email);
     if (!user) {
       throw new HttpError("Invalid or expired code", 400);
@@ -464,6 +505,7 @@ export default class AuthSvc {
     await AuthRepo.markEmailVerified(user.id);
     await SecurityAuditSvc.record({ action: "auth.email_verified", actorId: user.id });
     await AuthSvc.autoApproveIfEnabled(user);
+    const caseLawyerInvite = await AuthSvc.redeemCaseInvite(user, caseInviteToken);
     await AuthRepo.updateLastLogin(user.id);
 
     // No "remember" preference exists at signup time — default true, matching
@@ -478,6 +520,7 @@ export default class AuthSvc {
       user: await AuthRepo.findById(user.id),
       accessToken,
       refreshToken,
+      caseLawyerInvite,
     };
   }
 
@@ -575,16 +618,23 @@ export default class AuthSvc {
     remember = true,
     requestTenantCode: TenantCode | null = null,
     acceptedTerms = false,
+    caseInviteToken?: string,
   ) {
     return AuthSvc.auditSignIn(
       "google",
       undefined,
-      () => AuthSvc.googleSignIn(idToken, remember, requestTenantCode, acceptedTerms),
+      () => AuthSvc.googleSignIn(idToken, remember, requestTenantCode, acceptedTerms, caseInviteToken),
       (result) => result.user?.id,
     );
   }
 
-  private static async googleSignIn(idToken: string, remember: boolean, requestTenantCode: TenantCode | null, acceptedTerms: boolean) {
+  private static async googleSignIn(
+    idToken: string,
+    remember: boolean,
+    requestTenantCode: TenantCode | null,
+    acceptedTerms: boolean,
+    caseInviteToken?: string,
+  ) {
     const { googleId, email: googleEmail, name, picture, isEmailVerified } = await verifyGoogleToken(idToken);
 
     if (!googleId) {
@@ -598,6 +648,7 @@ export default class AuthSvc {
     const email = normalizeEmail(googleEmail);
     let user = await AuthRepo.findByGoogleId(googleId);
     let created = false;
+    let caseLawyerInvite: RedeemResult | null = null;
 
     if (!user) {
       const existingByEmail = await AuthRepo.findByEmail(email);
@@ -650,6 +701,7 @@ export default class AuthSvc {
       // Google has already verified the email, so this is the verification moment — the
       // counterpart of verifyOtp's call for password signups.
       const autoApproved = await AuthSvc.autoApproveIfEnabled(user);
+      caseLawyerInvite = await AuthSvc.redeemCaseInvite(user, caseInviteToken);
 
       // Same as password signup — sent once, only by the request that actually created the
       // account. Returning users and the loser of a creation race never hit this (the winner
@@ -667,6 +719,7 @@ export default class AuthSvc {
       AuthSvc.assertClientApp(user);
       await AuthSvc.assertTenantAccess(user.id, requestTenantCode);
       await AuthRepo.updateLastLogin(user.id);
+      caseLawyerInvite = await AuthSvc.redeemCaseInvite(user, caseInviteToken);
     }
 
     // A just-created account never has a deletion scheduled, so this only ever acts on a
@@ -686,6 +739,7 @@ export default class AuthSvc {
       // This request made the account (not a returning user, nor the loser of a creation race): the
       // client app takes a new account into its first-case onboarding.
       isNewAccount: created,
+      caseLawyerInvite,
     };
   }
 
