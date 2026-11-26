@@ -130,4 +130,10 @@ describe("KR: the client pays the lawyer directly", () => {
     expect((await clientView().expect(200)).body.paysLawyerDirectly).to.equal(true);
     expect((await lawyerView().expect(200)).body.paysLawyerDirectly).to.equal(true);
   });
+
+  it("shows the lawyer no platform fee and no introduction fee (#694)", async () => {
+    const { body } = await lawyerView().expect(200);
+    expect(body.quoteTerms).to.deep.equal({ platformFeeBps: 0, minPlatformFee: { amountMinor: 0, currency: "KRW" } });
+    expect(body.perCaseFee.amountMinor).to.equal(0);
+  });
 });

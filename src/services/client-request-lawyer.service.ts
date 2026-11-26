@@ -218,10 +218,12 @@ interface LawyerTerms {
 }
 
 /** The lawyer's tenant's terms, set in admin: the old introduction fee (#598) and how the platform
- * fee on a quote is worked out (PayoutSettingsSvc). */
+ * fee on a quote is worked out (PayoutSettingsSvc). Where the client pays the lawyer directly (KR)
+ * neither applies: the introduction fee reads 0 and quoteTerms has no fee. */
 async function feeOf(lawyer: LawyerContext): Promise<LawyerTerms> {
   const [pricing, quoteTerms] = await Promise.all([LawyerPricingSvc.forTenantCode(lawyer.tenantCode), PayoutSettingsSvc.quoteTerms(lawyer.tenantCode)]);
-  return { perCaseFee: pricing.introFee, quoteTerms, paysLawyerDirectly: paysLawyerDirectly(lawyer.tenantCode) };
+  const direct = paysLawyerDirectly(lawyer.tenantCode);
+  return { perCaseFee: direct ? { ...pricing.introFee, amountMinor: 0 } : pricing.introFee, quoteTerms, paysLawyerDirectly: direct };
 }
 
 function chargeOf(r: LawyerRequest, lawyerId: string) {

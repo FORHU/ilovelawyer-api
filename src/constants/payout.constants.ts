@@ -15,12 +15,13 @@ export const PAYOUT_SETTINGS_DEFAULTS = {
   minWithdrawalMinor: 1000,
 } as const;
 
-/** A KR site's starting terms, in won (no minor unit): the same 15% fee, and minimums about the
- * size of the GBP ones (₩10,000 platform fee, ₩20,000 withdrawal). */
+/** A KR site's terms, in won (no minor unit). No platform fee: KR clients pay the lawyer directly
+ * (paysLawyerDirectly, FORHU/ilovelawyer-api#694), so PayoutSettingsSvc keeps both fee fields at 0. */
 export const PAYOUT_SETTINGS_DEFAULTS_KRW = {
   ...PAYOUT_SETTINGS_DEFAULTS,
   currency: "KRW",
-  minPlatformFeeMinor: 10_000,
+  platformFeeBps: 0,
+  minPlatformFeeMinor: 0,
   minWithdrawalMinor: 20_000,
 } as const;
 

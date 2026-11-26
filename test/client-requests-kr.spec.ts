@@ -16,7 +16,8 @@ import prisma from "../src/lib/prisma";
 import WalletRepo from "../src/repositories/wallet.repository";
 import { moneyText } from "../src/utils/money-text";
 import WalletSvc from "../src/services/wallet.service";
-import { payoutsAvailableFor } from "../src/constants/payout.constants";
+import { payoutsAvailableFor, payoutSettingsCacheKey, platformFeeOf } from "../src/constants/payout.constants";
+import { redis } from "../src/lib/redis";
 
 function stash<T extends object>(target: T, keys: string[]) {
   const saved = keys.map((k) => [k, (target as any)[k]] as const);
@@ -118,6 +119,53 @@ describe("Client requests on the KR site", () => {
       expect(terms.currency).to.equal("KRW");
       expect((await PayoutSettingsSvc.quoteTerms("KR")).minPlatformFee.currency).to.equal("KRW");
       expect((await PayoutSettingsSvc.forTenantCode("UK")).currency).to.equal("GBP");
+    });
+  });
+
+  // KR clients pay the lawyer directly (#695), so there's nothing to take a fee from (#694).
+  describe("no platform fee", () => {
+    let krTenantId: string;
+    let saved: Awaited<ReturnType<typeof prisma.payoutSettings.findUnique>>;
+    const forget = () => redis.del(payoutSettingsCacheKey(krTenantId));
+
+    beforeEach(async () => {
+      krTenantId = (await prisma.tenant.upsert({ where: { code: "KR" }, update: {}, create: { code: "KR", name: "South Korea" } })).id;
+      saved = await prisma.payoutSettings.findUnique({ where: { tenantId: krTenantId } });
+      await forget();
+    });
+    afterEach(async () => {
+      // Put back whatever the KR row was before the test.
+      await prisma.payoutSettings.deleteMany({ where: { tenantId: krTenantId } });
+      if (saved) await prisma.payoutSettings.create({ data: saved });
+      await forget();
+    });
+
+    it("has none on KR, so a KR quote is priced with no fee, and keeps the UK's", async () => {
+      const kr = await PayoutSettingsSvc.forTenantCode("KR");
+      expect(kr).to.deep.include({ platformFeeBps: 0, minPlatformFeeMinor: 0 });
+      expect(platformFeeOf(300_000, kr.platformFeeBps, kr.minPlatformFeeMinor)).to.equal(0);
+      expect(await PayoutSettingsSvc.quoteTerms("KR")).to.deep.equal({ platformFeeBps: 0, minPlatformFee: { amountMinor: 0, currency: "KRW" } });
+      expect((await PayoutSettingsSvc.forTenantCode("UK")).platformFeeBps).to.be.greaterThan(0);
+    });
+
+    it("ignores a fee left on a KR settings row from before", async () => {
+      await prisma.payoutSettings.deleteMany({ where: { tenantId: krTenantId } });
+      await prisma.payoutSettings.create({ data: { tenantId: krTenantId, platformFeeBps: 1500, minPlatformFeeMinor: 10_000, earningsHoldDays: 7, minWithdrawalMinor: 20_000, currency: "KRW" } });
+      expect(await PayoutSettingsSvc.forTenantCode("KR")).to.deep.include({ platformFeeBps: 0, minPlatformFeeMinor: 0, minWithdrawalMinor: 20_000 });
+    });
+
+    it("refuses an admin setting a KR fee, and still takes KR's other terms", async () => {
+      for (const patch of [{ platformFeeBps: 1500 }, { minPlatformFeeMinor: 10_000 }]) {
+        try {
+          await PayoutSettingsSvc.update("KR", patch, randomUUID());
+          expect.fail("should have refused");
+        } catch (e: any) {
+          expect(e.statusCode).to.equal(400);
+          expect(e.code).to.equal("PLATFORM_FEE_NOT_ALLOWED");
+        }
+      }
+      const updated = await PayoutSettingsSvc.update("KR", { earningsHoldDays: 3, platformFeeBps: 0 }, randomUUID());
+      expect(updated.settings).to.deep.include({ earningsHoldDays: 3, platformFeeBps: 0, minPlatformFeeMinor: 0 });
     });
   });
 
