@@ -193,6 +193,8 @@ model User {
   updatedTenantSettings       TenantSetting[]
   updatedPersonaRoutingOverrides PersonaRoutingOverride[]
   clientPayments              ClientPayment[]
+  caseLawyerInvitesSent       CaseLawyerInvite[]  @relation("CaseLawyerInviteClient")
+  caseLawyerInvitesAccepted   CaseLawyerInvite[]  @relation("CaseLawyerInviteAcceptedBy")
   supportTickets              SupportTicket[]
   accountAiTopUps             AccountAiTopUp[]
   clientRequestProfile        LawyerClientProfile?
@@ -1095,6 +1097,7 @@ model Case {
   clientIntake                CaseClientIntake?
   clientQuestions             CaseQuestions?
   intakeMessages              IntakeMessage[]
+  lawyerInvites               CaseLawyerInvite[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1643,6 +1646,8 @@ model ClientRequestClaim {
   // messages from the other side after it are unread.
   lawyerReadAt     DateTime?
   clientReadAt     DateTime?
+  // The client's own-lawyer invite case this claim belongs to, if the lawyer came in through one.
+  lawyerCaseId     String?
 
   request      ClientRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
   lawyer       User                @relation(fields: [lawyerId], references: [id], onDelete: Cascade)
@@ -4606,4 +4611,33 @@ model SupportOutcome {
 
   @@index([createdAt, kind])
   @@index([flowId])
+}
+
+enum CaseLawyerInviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+model CaseLawyerInvite {
+  id           String                 @id @default(uuid())
+  caseId       String
+  clientId     String
+  email        String?
+  token        String                 @unique @default(uuid())
+  status       CaseLawyerInviteStatus @default(PENDING)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  acceptedById String?
+  revokedAt    DateTime?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  case       Case  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  client     User  @relation("CaseLawyerInviteClient", fields: [clientId], references: [id], onDelete: Cascade)
+  acceptedBy User? @relation("CaseLawyerInviteAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([caseId, status])
+  @@index([token])
 }

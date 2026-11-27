@@ -92,8 +92,14 @@ export default class ClientRequestRepo {
     return live ? { id: live.id, status: live.status, lawyersOn: live._count.claims } : null;
   }
 
-  static async findOpenForCase(caseId: string) {
-    return prisma.clientRequest.findFirst({ where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } }, select: { id: true } });
+  /** The case's open request (anything not closed, expired or withdrawn — REQUESTED through
+   * ENGAGED): the "at most one open request per case" check ClientRequestSvc's
+   * REQUEST_ALREADY_OPEN and CaseLawyerInviteSvc's invite/redeem guards are both built on. `tx`:
+   * pass a transaction client to read this inside a caller's own transaction (e.g.
+   * CaseLawyerInviteSvc.redeem's recheck after locking the case row). */
+  static async findOpenForCase(caseId: string, tx?: Prisma.TransactionClient) {
+    const db = tx ?? prisma;
+    return db.clientRequest.findFirst({ where: { caseId, status: { notIn: CLOSED_REQUEST_STATUSES } }, select: { id: true, status: true } });
   }
 
   /** Records the engaged lawyer's finished workspace copy (#514), once CaseCopyQueue makes one. */
@@ -102,10 +108,18 @@ export default class ClientRequestRepo {
   }
 
   /** The lawyer with live, read-only access to this case right now, and who to credit a new
-   * document to (#514) — null when nobody's engaged on it. */
-  static async findEngagedLawyerForCase(caseId: string) {
-    const request = await prisma.clientRequest.findFirst({
-      where: { caseId, status: "ENGAGED" },
+   * document to (#514) — null when nobody's engaged on it. `tx`: pass a transaction client to
+   * read this inside a caller's own transaction (e.g. CaseLawyerInviteSvc.redeem's recheck after
+   * locking the case row, so a race can't slip an ENGAGED request past this check).
+   * `excludeRequestId`: leave the caller's own request out of the search — a caller rechecking for
+   * a *different* ENGAGED request on the case (e.g. the marketplace path's own seedLawyerCase,
+   * Task 10) must not have its answer depend on which of two ENGAGED rows Postgres happens to
+   * return first; without this, a genuine second ENGAGED request could be missed whenever the
+   * caller's own row sorts first. */
+  static async findEngagedLawyerForCase(caseId: string, tx?: Prisma.TransactionClient, excludeRequestId?: string) {
+    const db = tx ?? prisma;
+    const request = await db.clientRequest.findFirst({
+      where: { caseId, status: "ENGAGED", ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}) },
       select: {
         id: true,
         client: { select: { id: true, name: true, username: true } },
@@ -121,7 +135,9 @@ export default class ClientRequestRepo {
   /** The engagement a lawyer's workspace copy belongs to (#515), with who to tell about its AI
    * budget — null for a case that isn't one, or whose engagement has no assigned lawyer any more
    * (closed and reassigned have both kept the same claim's outcome, so this still resolves after
-   * close; a withdrawn or expired request was never engaged, so it was never copied). */
+   * close; a withdrawn or expired request was never engaged, so it was never copied). Legacy only:
+   * "copy to my workspace" is retired (ClientRequestLawyerSvc.copy), so no new copyCaseId is ever
+   * written; kept so a copy made before then stays metered (EngagementAiBudgetSvc). */
   static async findByCopyCaseId(caseId: string) {
     const request = await prisma.clientRequest.findFirst({
       where: { copyCaseId: caseId },
@@ -129,6 +145,17 @@ export default class ClientRequestRepo {
     });
     if (!request) return null;
     return { id: request.id, copyCaseId: request.copyCaseId!, lawyerId: request.claims[0]?.lawyerId ?? null };
+  }
+
+  /** The engagement a lawyer's own seeded Case belongs to (ClientRequestClaim.lawyerCaseId, written by
+   * CaseLawyerInviteSvc.redeem and the marketplace paths' seedLawyerCase): what its AI budget is
+   * metered against (#515). Same shape as findByCopyCaseId, which it replaces for every engagement
+   * made since auto-seeding. `lawyerId` is null once the claim is no longer the engaged one; a close
+   * keeps the claim's ENGAGED outcome, so this still resolves after close. */
+  static async findByLawyerCaseId(caseId: string) {
+    const claim = await prisma.clientRequestClaim.findFirst({ where: { lawyerCaseId: caseId }, select: { requestId: true, lawyerId: true, outcome: true } });
+    if (!claim) return null;
+    return { id: claim.requestId, lawyerCaseId: caseId, lawyerId: claim.outcome === "ENGAGED" ? claim.lawyerId : null };
   }
 
   /** Only the client's own. */

@@ -5,6 +5,7 @@ import helmet from "helmet";
 import swaggerUi from "swagger-ui-express";
 import router from "./routes";
 import StripeWebhookCtrl from "./controllers/stripe-webhook.controller";
+import CaseLawyerInviteCtrl from "./controllers/case-lawyer-invite.controller";
 import asyncHandler from "./utils/async-handler";
 import errorHandler from "./middleware/error-handler.middleware";
 import { isDev, CLIENT_URL } from "./config";
@@ -55,6 +56,11 @@ app.disable("x-powered-by");
 // The raw spec, for the frontends to generate types from and mock planned routes against.
 app.get("/api-docs.json", (_req, res) => res.json(swaggerSpec));
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// The signup page's own-lawyer invite lookup (client-invites-own-lawyer): public, deliberately
+// mounted here rather than through the /api router, so it never picks up validSession or any
+// other authenticated-route middleware the router applies.
+app.get("/api/case-lawyer-invites/:token", asyncHandler(CaseLawyerInviteCtrl.lookup));
 
 // Use router for routing
 app.use("/api", router);

@@ -1,6 +1,6 @@
 /** The client confirms (accepts) or declines the quote and pays it, and what the engagement then allows:
  * POST /client/lawyer-requests/:id/confirm and /decline, paying through POST .../quotations/:id/payment
- * (the dummy provider), copy, read-only access, close, end and feedback. A request accepted before
+ * (the dummy provider), the retired copy, access, close, end and feedback. A request accepted before
  * quotation payments keeps its per-case fee, and POST /client-requests/:id/charge/retry still retries
  * it. Through the real routes against the real database, with its own UK firm, lawyer, client, case and
  * request. The firm's card is charged through a fake provider whose answers each test sets. */
@@ -14,7 +14,6 @@ import prisma from "../src/lib/prisma";
 import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import ClientBillingSvc from "../src/services/client-billing.service";
-import CaseCopyQueue from "../src/queues/case-copy.queue";
 import {
   setOrganizationCardProvider,
   ORGANIZATION_CHARGE_PURPOSE,
@@ -182,6 +181,7 @@ describe("client confirms and pays, and the engagement", () => {
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.auditEvent.deleteMany({ where: { caseId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId, otherLawyerId, clientId] } } });
+    await prisma.case.deleteMany({ where: { copiedFromCaseId: caseId } });
     await prisma.case.deleteMany({ where: { id: caseId } });
     await prisma.organizationBilling.deleteMany({ where: { organizationId: { in: [orgId, otherOrgId] } } });
     await prisma.lawyerClientProfile.deleteMany({ where: { userId: { in: [lawyerId, otherLawyerId] } } });
@@ -199,6 +199,7 @@ describe("client confirms and pays, and the engagement", () => {
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.lawyerExit.deleteMany({ where: { caseId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
+    await prisma.case.deleteMany({ where: { copiedFromCaseId: caseId } });
     await prisma.organizationBilling.deleteMany({ where: { organizationId: orgId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, adminId, memberId] } } });
     // A request the lawyer has joined and quoted on: still ROUTED, with their quote open and the
@@ -266,10 +267,15 @@ describe("client confirms and pays, and the engagement", () => {
       expect((await notificationsFor(lawyerId)).map((n) => n.title)).to.deep.equal(["A client accepted your quote", "You're engaged on a client request"]);
     });
 
-    it("grants the engaged lawyer read-only access to the client's case", async () => {
+    it("seeds the engaged lawyer their own Case instead of granting them CaseAccess into the client's", async () => {
       await engage();
+      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(claim.lawyerCaseId).to.be.a("string");
+      expect(claim.lawyerCaseId).to.not.equal(caseId);
+      const seededCase = await prisma.case.findUniqueOrThrow({ where: { id: claim.lawyerCaseId! } });
+      expect(seededCase).to.deep.include({ userId: lawyerId, organizationId: orgId, copiedFromCaseId: caseId });
       const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
-      expect(access?.permission).to.equal("VIEW");
+      expect(access).to.equal(null);
     });
 
     it("accepts once however many times it's confirmed at once", async () => {
@@ -285,44 +291,36 @@ describe("client confirms and pays, and the engagement", () => {
     });
   });
 
-  describe("copy", () => {
+  // "Copy to my workspace" (#514) is retired: engaging already seeds the lawyer their own Case
+  // (asserted in "confirm" above), so the endpoint refuses deliberately, the same way for everyone.
+  describe("copy (retired)", () => {
     beforeEach(async () => {
       await engage();
     });
 
-    it("queues a workspace copy for the lawyer and finishes it through the copy queue", async () => {
-      const { body, status } = await copy();
-      expect(status).to.equal(202);
-      expect(body.status).to.equal("PENDING");
-      expect(body.caseCopyId).to.be.a("string");
-
-      await CaseCopyQueue.tick();
-
-      const job = await prisma.caseCopy.findUniqueOrThrow({ where: { id: body.caseCopyId } });
-      expect(job.status).to.equal("DONE");
-      expect(job.copyCaseId).to.be.a("string");
-
-      const copied = await prisma.case.findUniqueOrThrow({ where: { id: job.copyCaseId! } });
-      expect(copied).to.deep.include({ organizationId: orgId, copiedFromCaseId: caseId, caseName: "Unfair dismissal" });
-
-      const updatedRequest = await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
-      expect(updatedRequest.copyCaseId).to.equal(job.copyCaseId);
+    it("answers the engaged lawyer 410 COPY_RETIRED, pointing at their own case, and queues nothing", async () => {
+      const { body } = await copy().expect(410);
+      expect(body.code).to.equal("COPY_RETIRED");
+      expect(body.message).to.match(/retired/i);
+      expect(body.message).to.include("lawyerCaseId");
+      expect(await prisma.caseCopy.count({ where: { requestId } })).to.equal(0);
+      expect((await prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } })).copyCaseId).to.equal(null);
+      expect(await prisma.auditEvent.count({ where: { caseId, action: "client_request.copied" } })).to.equal(0);
     });
 
-    it("doesn't queue a second copy for a second call", async () => {
-      const first = await copy().expect(202);
-      const second = await copy().expect(202);
-      expect(second.body.caseCopyId).to.equal(first.body.caseCopyId);
-      expect(await prisma.caseCopy.count({ where: { requestId } })).to.equal(1);
-    });
-
-    it("refuses a lawyer who isn't the one engaged on the request", async () => {
-      await copy(otherLawyerId, otherOrgId).expect(404);
-    });
-
-    it("can't be copied before the engagement", async () => {
+    it("answers the same 410 to a lawyer who isn't on the request, and before the engagement, so it reveals nothing", async () => {
+      expect((await copy(otherLawyerId, otherOrgId).expect(410)).body.code).to.equal("COPY_RETIRED");
       await prisma.clientRequest.update({ where: { id: requestId }, data: { status: "CONFIRMED" } });
-      expect((await copy().expect(409)).body.code).to.equal("INVALID_REQUEST_STATUS");
+      expect((await copy().expect(410)).body.code).to.equal("COPY_RETIRED");
+      expect(await prisma.caseCopy.count({ where: { requestId } })).to.equal(0);
+    });
+
+    it("the lawyer's own seeded Case is what the request points them at instead", async () => {
+      const { body } = await lawyerView().expect(200);
+      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(body.engagement.lawyerCaseId).to.be.a("string");
+      expect(body.engagement.lawyerCaseId).to.equal(claim.lawyerCaseId);
+      expect(body.engagement.copyCaseId).to.equal(null);
     });
   });
 
@@ -338,14 +336,15 @@ describe("client confirms and pays, and the engagement", () => {
       expect(body.engagement).to.include({ caseId, workspaceId: clientOrgId });
     });
 
-    it("lets the engaged lawyer read the client's case as a guest of their portfolio", async () => {
-      const { body } = await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
-      expect(body.id).to.equal(caseId);
+    // Task 10: the marketplace path no longer grants CaseAccess (it seeds the lawyer their own Case
+    // instead, asserted in the "confirm" describe block above), so the engaged lawyer has no guest
+    // access into the client's original case at all any more — read or write.
+    it("gives the engaged lawyer no guest access to the client's original case (they work from their own seeded one)", async () => {
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(403);
     });
 
-    it("refuses every write the engaged lawyer makes on the client's case", async () => {
-      const { body } = await request(app).post(`/api/my-cases/${caseId}/archive`).set(asGuest()).expect(403);
-      expect(body.code).to.equal("SHARE_READ_ONLY");
+    it("refuses every write the engaged lawyer makes on the client's case too", async () => {
+      await request(app).post(`/api/my-cases/${caseId}/archive`).set(asGuest()).expect(403);
     });
 
     it("gives a lawyer who isn't engaged on this case no access at all", async () => {
@@ -364,7 +363,9 @@ describe("client confirms and pays, and the engagement", () => {
     it("work finished waits on the client, then closes the engagement and removes the lawyer's access", async () => {
       const asked = (await close({ outcome: "WORK_FINISHED" }).expect(200)).body;
       expect(asked.status).to.equal("ENGAGED");
-      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(200);
+      // Task 10: no CaseAccess was ever granted (the lawyer works from their own seeded Case), so
+      // there's never been guest access to remove here — it's 403 throughout.
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest()).expect(403);
 
       await confirmFinished().expect(200);
       const { body } = await lawyerView().expect(200);
@@ -382,14 +383,13 @@ describe("client confirms and pays, and the engagement", () => {
       expect(await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } })).to.equal(null);
     });
 
-    it("keeps the lawyer's workspace copy made before close", async () => {
-      const { body: copied } = await copy().expect(202);
-      await CaseCopyQueue.tick();
+    it("keeps the lawyer's own seeded Case after close, still pointed at from the request", async () => {
+      const { lawyerCaseId } = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(lawyerCaseId).to.be.a("string");
       await closeFinished();
 
-      const job = await prisma.caseCopy.findUniqueOrThrow({ where: { id: copied.caseCopyId } });
-      expect(job.status).to.equal("DONE");
-      expect(await prisma.case.findUnique({ where: { id: job.copyCaseId! } })).to.not.equal(null);
+      expect(await prisma.case.findUnique({ where: { id: lawyerCaseId! } })).to.deep.include({ userId: lawyerId, copiedFromCaseId: caseId });
+      expect((await lawyerView().expect(200)).body.engagement.lawyerCaseId).to.equal(lawyerCaseId);
     });
 
     it("can't be closed twice", async () => {
@@ -491,6 +491,16 @@ describe("client confirms and pays, and the engagement", () => {
       expect(chargeRequests.map((r) => r.attempt)).to.deep.equal([2, 3]);
       expect((await state()).charges[0]).to.deep.include({ status: "SUCCEEDED", paymentIntentId: "pi_3", attempts: 3 });
       expect(chargeRequests[1]).to.deep.include({ amountMinor: CLIENT_REQUEST_PER_CASE_FEE_MINOR, currency: "GBP" });
+
+      // Task 10: OrganizationChargeSvc's per-case-fee engagement also seeds the lawyer their own
+      // Case now, instead of granting CaseAccess into the client's.
+      const claim = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claimId } });
+      expect(claim.lawyerCaseId).to.be.a("string");
+      expect(claim.lawyerCaseId).to.not.equal(caseId);
+      const seededCase = await prisma.case.findUniqueOrThrow({ where: { id: claim.lawyerCaseId! } });
+      expect(seededCase).to.deep.include({ userId: lawyerId, organizationId: orgId, copiedFromCaseId: caseId });
+      const access = await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } });
+      expect(access).to.equal(null);
     });
 
     it("refuses a retry from anyone but the lawyer holding it, or when nothing failed", async () => {

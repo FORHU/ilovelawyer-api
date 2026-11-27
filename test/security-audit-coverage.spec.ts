@@ -10,7 +10,7 @@ import fs from "fs";
 import path from "path";
 import router from "../src/routes";
 import { SECURITY_AUDIT_ACTIONS } from "../src/constants/security-audit.constants";
-import { SECURITY_AUDIT_COVERAGE } from "./support/security-audit-coverage";
+import { RETIRED_SECURITY_AUDIT_ACTIONS, SECURITY_AUDIT_COVERAGE } from "./support/security-audit-coverage";
 import { listRoutes } from "./support/list-routes";
 
 const MUST_CLASSIFY_GET = /export|download|resolve|csv/i;
@@ -60,7 +60,10 @@ describe("Security audit coverage", () => {
       .filter((file) => file !== catalogFile)
       .map((file) => fs.readFileSync(file, "utf8"))
       .join("\n");
-    const neverWritten = SECURITY_AUDIT_ACTIONS.filter((action) => !source.includes(`"${action}"`));
+    const retired = new Set<string>(RETIRED_SECURITY_AUDIT_ACTIONS);
+    const neverWritten = SECURITY_AUDIT_ACTIONS.filter((action) => !retired.has(action) && !source.includes(`"${action}"`));
     expect(neverWritten, "Actions in the catalog that no code writes").to.deep.equal([]);
+    const stillWritten = RETIRED_SECURITY_AUDIT_ACTIONS.filter((action) => source.includes(`"${action}"`));
+    expect(stillWritten, "Retired actions that code still writes (take them off RETIRED_SECURITY_AUDIT_ACTIONS)").to.deep.equal([]);
   });
 });

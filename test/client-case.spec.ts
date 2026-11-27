@@ -757,6 +757,10 @@ describe("Client app cases", () => {
       "GET /lawyer-requests/:id/messages",
       "POST /lawyer-requests/:id/messages",
       "POST /lawyer-requests/:id/messages/read",
+      "GET /lawyer-invites/",
+      "POST /lawyer-invites/link",
+      "POST /lawyer-invites/email",
+      "POST /lawyer-invites/revoke",
     ]);
   });
 });

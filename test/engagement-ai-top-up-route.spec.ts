@@ -1,8 +1,8 @@
 /** Buying an AI top-up pack for an engagement (#516): POST /client-requests/:id/ai-top-ups and GET
  * /billing/top-up-packs. Never without the lawyer's approval, charged to the per-case fee's card,
  * credit added only once the payment goes through (direct answer or Stripe's webhook), and shown in
- * the fee history. Through the real routes against the real database, on the engage-then-copy flow
- * the #515 budget tests already set up. */
+ * the fee history. Through the real routes against the real database, on the same engage flow (which
+ * seeds the lawyer's own Case, the engaged claim's lawyerCaseId) the #515 budget tests set up. */
 import crypto from "crypto";
 import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
@@ -14,7 +14,6 @@ import { sentQuotation, cleanQuotationMoney } from "./support/quotation-fixture"
 import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
 import * as socket from "../src/lib/socket";
-import CaseCopyQueue from "../src/queues/case-copy.queue";
 import OrganizationChargeSvc from "../src/services/organization-charge.service";
 import { ENGAGEMENT_AI_BUDGET_GBP_PER_USD, ENGAGEMENT_AI_BUDGET_INCLUDED_USD } from "../src/config";
 import { LAWYER_PRICING_DEFAULTS } from "../src/constants/lawyer-pricing.constants";
@@ -35,7 +34,7 @@ describe("engagement AI top-ups", () => {
   const orgId = crypto.randomUUID();
   const caseId = crypto.randomUUID();
   let requestId: string;
-  let copyCaseId: string;
+  let lawyerCaseId: string;
 
   // What the fake Stripe answers to the next top-up (the per-case fee at confirm always succeeds).
   let topUpAnswer: (req: CardChargeRequest) => CardChargeResult = SUCCEEDED;
@@ -69,7 +68,6 @@ describe("engagement AI top-ups", () => {
   const auth = (id: string) => ({ Authorization: `Bearer ${loginToken(id, false).accessToken}` });
   const asLawyer = { ...auth(lawyerId), "X-Organization-Id": orgId };
   const confirm = () => request(app).post(`/api/client/lawyer-requests/${requestId}/confirm`).set(auth(clientId)).send({ disclosureAcknowledged: true });
-  const copy = () => request(app).post(`/api/client-requests/${requestId}/copy`).set(asLawyer);
   const aiBudget = () => request(app).get(`/api/client-requests/${requestId}/ai-budget`).set(asLawyer);
   const topUp = (body: object = { packId: PACK.id, approved: true }) => request(app).post(`/api/client-requests/${requestId}/ai-top-ups`).set(asLawyer).send(body);
   const fees = () => request(app).get(`/api/organizations/${orgId}/billing/fees?kind=AI_TOP_UP`).set(asLawyer);
@@ -100,7 +98,7 @@ describe("engagement AI top-ups", () => {
     await cleanQuotationMoney({ organizationIds: [orgId] }, [clientId]);
     Object.assign(socket, { emitToUser: realEmit });
     await prisma.notification.deleteMany({ where: { userId: lawyerId } });
-    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: copyCaseId }] } });
+    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: lawyerCaseId }] } });
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.case.deleteMany({ where: { OR: [{ id: caseId }, { copiedFromCaseId: caseId }] } });
@@ -119,7 +117,7 @@ describe("engagement AI top-ups", () => {
     emitted.length = 0;
     Object.assign(socket, { emitToUser: (userId: string, event: string, payload: unknown) => emitted.push({ userId, event, payload }) });
     await prisma.organizationBilling.update({ where: { organizationId: orgId }, data: { paymentMethodId: "stripe_pm_topup" } });
-    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: copyCaseId ?? "none" }] } });
+    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: lawyerCaseId ?? "none" }] } });
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
 
@@ -135,9 +133,8 @@ describe("engagement AI top-ups", () => {
     await confirm().expect(200);
     // The client pays the quote (the dummy provider): that engages the request.
     await request(app).post(`/api/client/lawyer-requests/${requestId}/quotations/${quotation.id}/payment`).set(auth(clientId)).send({}).expect(200);
-    const { body } = await copy().expect(202);
-    await CaseCopyQueue.tick();
-    copyCaseId = (await prisma.caseCopy.findUniqueOrThrow({ where: { id: body.caseCopyId } })).copyCaseId!;
+    // Engaging seeded the lawyer their own Case (the claim's lawyerCaseId): what the budget meters.
+    lawyerCaseId = (await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claim.id } })).lawyerCaseId!;
     charged = [];
   });
 
@@ -175,7 +172,7 @@ describe("engagement AI top-ups", () => {
 
     it("lets AI work carry on once a spent budget is topped up", async () => {
       await prisma.llmUsage.create({
-        data: { provider: "OPENAI", feature: "chat", source: "ESTIMATED", inputTokens: 1, outputTokens: 1, totalTokens: 2, estimatedCostUsd: ENGAGEMENT_AI_BUDGET_INCLUDED_USD, caseId: copyCaseId },
+        data: { provider: "OPENAI", feature: "chat", source: "ESTIMATED", inputTokens: 1, outputTokens: 1, totalTokens: 2, estimatedCostUsd: ENGAGEMENT_AI_BUDGET_INCLUDED_USD, caseId: lawyerCaseId },
       });
       expect((await aiBudget().expect(200)).body.state).to.equal("EXHAUSTED");
       await topUp().expect(202);

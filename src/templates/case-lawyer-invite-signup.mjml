@@ -1,0 +1,6 @@
+<mj-text font-size="22px" line-height="30px" font-weight="bold" color="#0b0b0f">You have been invited to represent a client</mj-text>
+<mj-text>Hello,</mj-text>
+<mj-text>{{clientName}} has invited you to represent them on ilovelawyer for their case, "{{caseName}}".</mj-text>
+<mj-text>Create your ilovelawyer account with this email address, then you'll see their case and can get started.</mj-text>
+<mj-button href="{{{signupLink}}}">Sign up</mj-button>
+<mj-text>Or copy and paste this link: {{{signupLink}}}</mj-text>

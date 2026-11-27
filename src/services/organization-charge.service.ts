@@ -1,12 +1,13 @@
-import type { OrganizationCharge, OrganizationChargeKind, OrganizationChargeRefund } from "@prisma/client";
+import { Prisma, type OrganizationCharge, type OrganizationChargeKind, type OrganizationChargeRefund } from "@prisma/client";
 import type Stripe from "stripe";
+import prisma from "../lib/prisma";
 import OrganizationChargeRepo from "../repositories/organization-charge.repository";
 import OrganizationBillingRepo, { payerOf } from "../repositories/organization-billing.repository";
 import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import { organizationCardProviderNamed, type CardChargeResult } from "../payments/organization-card-provider";
-import EngagementAccessSvc from "./engagement-access.service";
-import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
+import CaseSeedSvc from "./case-seed.service";
+import EngagementAiBudgetSvc, { meteredCaseIdOf } from "./engagement-ai-budget.service";
 import NotificationSvc from "./notification.service";
 import { emitToUser } from "../lib/socket";
 import logger from "../utils/logger";
@@ -216,7 +217,8 @@ export default class OrganizationChargeSvc {
       const updated: ClientRequestUpdatedEvent = { requestId: request.id, status: "ENGAGED", updatedAt: now };
       emitToUser(request.clientId, "client-request:updated", updated);
       if (charge.lawyerId) {
-        await EngagementAccessSvc.grant({ requestId: request.id, caseId: request.caseId, lawyerId: charge.lawyerId, organizationId: charge.organizationId });
+        const claimRow = request.claims.find((c) => c.lawyerId === charge.lawyerId && c.outcome === "ENGAGED");
+        if (claimRow) await OrganizationChargeSvc.seedLawyerCase(request.id, request.caseId, claimRow.id, charge.lawyerId, charge.organizationId);
         emitToUser(charge.lawyerId, "client-request:updated", updated);
         await OrganizationChargeSvc.notify(charge.lawyerId, {
           title: "You're engaged on a client request",
@@ -243,6 +245,61 @@ export default class OrganizationChargeSvc {
     }
   }
 
+  /**
+   * Seeds the lawyer their own Case from the client's (CaseSeedSvc.seed, Task 10 — the marketplace
+   * path's equivalent of `CaseLawyerInviteSvc.redeem`'s seed-then-lock pattern), and records it on
+   * the claim. `OrganizationChargeRepo.settle` already committed this *request* ENGAGED in its own
+   * transaction before `after` is ever called — that can't be undone from here, the card was
+   * already charged. So the Case-row lock below isn't guarding this request's own transition (it's already
+   * happened); it's here so this and a same-case invite redemption (`CaseLawyerInviteSvc.redeem`,
+   * which takes the identical lock) are serialized against each other, and only one of them ends up
+   * with a seeded Case. The recheck excludes this request at the DB level (`excludeRequestId`), so
+   * finding anything means a *different* request is already ENGAGED on the case: seeding is skipped
+   * (the now-pointless seeded Case is discarded, CaseSeedSvc.discard), it's logged at error level,
+   * and the claim's `lawyerCaseId` stays null.
+   *
+   * KNOWN LIMITATION: on the marketplace-payment path specifically, OrganizationChargeRepo.settle
+   * commits this request ENGAGED (driven by the card charge's answer or Stripe's webhook) strictly
+   * before this lock ever runs — so two ENGAGED requests on one case, each with its own payment
+   * already captured, CAN happen here. Nothing refunds automatically. Not fixed because ilovelawyer
+   * is moving away from handling marketplace lawyer-payment transactions (future revenue: lawyer
+   * subscription fee + client top-up credits). Tracked in the follow-up ticket (not yet filed)
+   * alongside the ilovelawyer-app engagement-view gap. CaseLawyerInviteSvc's own checks now refuse
+   * an invite (and its redemption) while any marketplace request is open on the case, so reaching
+   * this needs a genuine concurrent race, not ordinary sequential use.
+   *
+   * A failed `seed()` itself (an S3 outage, say) is caught rather than left to propagate: this runs
+   * in the middle of `after`'s post-charge steps, and a thrown error here must not stop
+   * the notifications/socket emits that come after it — same "skip, don't block" outcome as a
+   * lock-loss.
+   */
+  private static async seedLawyerCase(requestId: string, caseId: string, claimId: string, lawyerId: string, organizationId: string | null): Promise<void> {
+    let seeded: { caseId: string };
+    try {
+      seeded = await CaseSeedSvc.seed({ sourceCaseId: caseId, lawyerId, organizationId });
+    } catch (err) {
+      logger.error("Organization charge: seeding the lawyer's own case failed; the claim's lawyerCaseId stays unset", { err, caseId, requestId });
+      return;
+    }
+    const ok = await prisma.$transaction(async (tx) => {
+      // Correctness depends on Postgres's default READ COMMITTED isolation (the recheck below sees
+      // whatever a lock holder committed before releasing it); under REPEATABLE READ/SERIALIZABLE it
+      // would read an older snapshot and could miss a same-case invite redemption's commit.
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "Case" WHERE id = ${caseId} FOR UPDATE`);
+      // Excludes this request itself: findEngagedLawyerForCase is a plain findFirst, so without this
+      // exclusion a genuine conflict (two ENGAGED requests on the case) could be missed whenever
+      // Postgres happens to return this request's own row first.
+      const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId, tx, requestId);
+      if (engaged) return false;
+      await tx.clientRequestClaim.update({ where: { id: claimId }, data: { lawyerCaseId: seeded.caseId } });
+      return true;
+    });
+    if (!ok) {
+      logger.error("Organization charge: case already has a different engaged lawyer; discarding the lawyer's seeded case", { caseId, requestId, seededCaseId: seeded.caseId });
+      await CaseSeedSvc.discard(seeded.caseId);
+    }
+  }
+
   /** A top-up that went through: the lawyer's AI meter is sent the new budget (engagement:ai-budget),
    * so blocked AI work can carry on. One that was declined, perhaps later by the bank: the lawyer is
    * told no credit was added. Nobody else is waiting on it. */
@@ -250,7 +307,7 @@ export default class OrganizationChargeSvc {
     if (!charge.requestId || !charge.lawyerId || outcome === "PENDING") return;
     if (outcome === "SUCCEEDED") {
       const request = await ClientRequestRepo.findForLawyer(charge.requestId);
-      const budget = await EngagementAiBudgetSvc.forRequest(charge.requestId, request?.copyCaseId ?? null);
+      const budget = await EngagementAiBudgetSvc.forRequest(charge.requestId, request ? meteredCaseIdOf(request) : null);
       const event: EngagementAiBudgetEvent = { requestId: charge.requestId, percentUsed: budget.percentUsed, state: budget.state };
       emitToUser(charge.lawyerId, CLIENT_HANDOFF_SOCKET_EVENTS.ENGAGEMENT_AI_BUDGET, event);
       return;

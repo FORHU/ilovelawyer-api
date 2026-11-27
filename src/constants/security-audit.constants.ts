@@ -119,6 +119,8 @@ export const SECURITY_AUDIT_ACTIONS = [
   "client_request.parties_viewed",
   "client_request.intake_package_viewed",
   "client_request.released",
+  // Retired with "copy to my workspace" (the lawyer's own Case is seeded at engagement now): no
+  // longer written, kept so rows recorded before then keep their label and stay filterable.
   "client_request.copied",
   "client_request.ai_top_up_approved",
   "client_request.closed",
