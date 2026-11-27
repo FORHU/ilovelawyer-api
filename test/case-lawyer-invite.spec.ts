@@ -2,6 +2,7 @@
  * default, and the token is unique. Against the real database; the fixture user and case are removed
  * afterwards. */
 import crypto from "crypto";
+import type { ClientRequestStatus } from "@prisma/client";
 import { expect } from "chai";
 import { describe, it, before, beforeEach, afterEach, after } from "mocha";
 import prisma from "../src/lib/prisma";
@@ -10,6 +11,10 @@ import CaseLawyerInviteSvc from "../src/services/case-lawyer-invite.service";
 import CaseSeedSvc from "../src/services/case-seed.service";
 import HttpError from "../src/utils/http-error";
 import * as mailerModule from "../src/utils/mailer";
+
+/** Every status a ClientRequest is still open in (not CLOSED, EXPIRED or WITHDRAWN) short of ENGAGED:
+ * a marketplace request in flight. */
+const OPEN_NOT_ENGAGED: ClientRequestStatus[] = ["REQUESTED", "ROUTED", "CLAIMED", "QUOTED", "CONFIRMED"];
 
 describe("CaseLawyerInvite", function () {
   this.timeout(20_000);
@@ -239,6 +244,33 @@ describe("CaseLawyerInvite", function () {
       expect((err as HttpError).code).to.equal("CASE_HAS_LAWYER");
     });
 
+    // The final review's C2: an invite used to be blocked only by an ENGAGED request, so a client
+    // with a marketplace request still in flight could invite their own lawyer too, and both could
+    // end up engaged. Every open (not closed, expired or withdrawn) status blocks it now.
+    for (const status of OPEN_NOT_ENGAGED) {
+      it(`createLinkInvite throws REQUEST_ALREADY_OPEN while a ${status} marketplace request is open, and creates no invite`, async () => {
+        const open = await prisma.clientRequest.create({ data: { caseId, clientId, status, consentVersion: "v1", consentAcceptedAt: new Date() } });
+
+        let err: unknown;
+        try {
+          await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+        } catch (e) {
+          err = e;
+        }
+        expect(err).to.be.instanceOf(HttpError);
+        expect((err as HttpError).statusCode).to.equal(409);
+        expect((err as HttpError).code).to.equal("REQUEST_ALREADY_OPEN");
+        expect((err as HttpError).details).to.deep.equal({ openRequestId: open.id });
+        expect(await prisma.caseLawyerInvite.count({ where: { caseId } })).to.equal(0);
+      });
+    }
+
+    it("createLinkInvite is allowed again once the marketplace request has closed", async () => {
+      await prisma.clientRequest.create({ data: { caseId, clientId, status: "WITHDRAWN", consentVersion: "v1", consentAcceptedAt: new Date() } });
+      const created = await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+      expect((await CaseLawyerInviteRepo.findByToken(created.token))?.status).to.equal("PENDING");
+    });
+
     it("createEmailInvite stores the invite's email", async () => {
       const created = await CaseLawyerInviteSvc.createEmailInvite(clientId, caseId, "lawyer@example.com");
       const row = await CaseLawyerInviteRepo.findByToken(created.token);
@@ -311,7 +343,7 @@ describe("CaseLawyerInvite", function () {
     const otherLawyerIds: string[] = [];
 
     before(async () => {
-      await prisma.user.create({ data: { id: lawyerId, email: lawyerEmail, username: `invite-redeem-lawyer-${lawyerId}` } });
+      await prisma.user.create({ data: { id: lawyerId, email: lawyerEmail, username: `invite-redeem-lawyer-${lawyerId}`, role: "LAWYER" } });
     });
 
     afterEach(async () => {
@@ -477,6 +509,106 @@ describe("CaseLawyerInvite", function () {
       expect(await prisma.case.findUnique({ where: { id: seededCaseId! } })).to.equal(null);
       const row = await CaseLawyerInviteRepo.findByToken(invite.token);
       expect(row?.status).to.equal("PENDING");
+    });
+
+    // C2: the pre-seed check refuses any open request, not only an ENGAGED one, so a marketplace
+    // request in flight can't later settle to ENGAGED alongside this invite's.
+    for (const status of OPEN_NOT_ENGAGED) {
+      it(`redeem returns CASE_ALREADY_HAS_LAWYER while a ${status} marketplace request is open, seeding nothing and leaving the invite PENDING`, async () => {
+        const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+        await prisma.clientRequest.create({ data: { caseId, clientId, status, consentVersion: "v1", consentAcceptedAt: new Date() } });
+        const originalSeed = CaseSeedSvc.seed;
+        let seedCalled = false;
+        CaseSeedSvc.seed = (async (input: Parameters<typeof CaseSeedSvc.seed>[0]) => {
+          seedCalled = true;
+          return originalSeed(input);
+        }) as typeof CaseSeedSvc.seed;
+
+        let result: unknown;
+        try {
+          result = await CaseLawyerInviteSvc.redeem({ id: lawyerId, email: lawyerEmail }, invite.token);
+        } finally {
+          CaseSeedSvc.seed = originalSeed;
+        }
+
+        expect(result).to.deep.equal({ error: "CASE_ALREADY_HAS_LAWYER" });
+        expect(seedCalled).to.equal(false);
+        expect(await prisma.clientRequest.count({ where: { caseId, requestedLawyerId: lawyerId } })).to.equal(0);
+        expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(0);
+        expect((await CaseLawyerInviteRepo.findByToken(invite.token))?.status).to.equal("PENDING");
+      });
+    }
+
+    it("redeem's in-transaction recheck catches a non-ENGAGED open request landing mid-seed: CASE_ALREADY_HAS_LAWYER, and the seeded Case is cleaned up", async () => {
+      const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+      const originalSeed = CaseSeedSvc.seed;
+      let seededCaseId: string | undefined;
+      // The client asks for a marketplace lawyer (a ROUTED request, nobody engaged) while seed()'s S3
+      // copies are in flight: the old ENGAGED-only recheck let this through.
+      CaseSeedSvc.seed = (async (input: Parameters<typeof CaseSeedSvc.seed>[0]) => {
+        await prisma.clientRequest.create({ data: { caseId, clientId, status: "ROUTED", consentVersion: "v1", consentAcceptedAt: new Date() } });
+        const seeded = await originalSeed(input);
+        seededCaseId = seeded.caseId;
+        return seeded;
+      }) as typeof CaseSeedSvc.seed;
+
+      let result: unknown;
+      try {
+        result = await CaseLawyerInviteSvc.redeem({ id: lawyerId, email: lawyerEmail }, invite.token);
+      } finally {
+        CaseSeedSvc.seed = originalSeed;
+      }
+
+      expect(result).to.deep.equal({ error: "CASE_ALREADY_HAS_LAWYER" });
+      expect(await prisma.clientRequest.count({ where: { caseId, requestedLawyerId: lawyerId } })).to.equal(0);
+      expect(seededCaseId).to.be.a("string");
+      expect(await prisma.case.findUnique({ where: { id: seededCaseId! } })).to.equal(null);
+      expect((await CaseLawyerInviteRepo.findByToken(invite.token))?.status).to.equal("PENDING");
+    });
+
+    it("redeem discards the seeded Case on any failure after seed(), not only a lost race, and rethrows the original error", async () => {
+      const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+      const originalSeed = CaseSeedSvc.seed;
+      const originalMarkAccepted = CaseLawyerInviteRepo.markAccepted;
+      let seededCaseId: string | undefined;
+      CaseSeedSvc.seed = (async (input: Parameters<typeof CaseSeedSvc.seed>[0]) => {
+        const seeded = await originalSeed(input);
+        seededCaseId = seeded.caseId;
+        return seeded;
+      }) as typeof CaseSeedSvc.seed;
+      // Something that isn't one of redeem's own outcomes failing inside its transaction (a
+      // lock-wait or interactive-transaction timeout, say).
+      const boom = new Error("lock wait timeout");
+      CaseLawyerInviteRepo.markAccepted = (async () => {
+        throw boom;
+      }) as typeof CaseLawyerInviteRepo.markAccepted;
+
+      let thrown: unknown;
+      try {
+        await CaseLawyerInviteSvc.redeem({ id: lawyerId, email: lawyerEmail }, invite.token);
+      } catch (err) {
+        thrown = err;
+      } finally {
+        CaseSeedSvc.seed = originalSeed;
+        CaseLawyerInviteRepo.markAccepted = originalMarkAccepted;
+      }
+
+      expect(thrown).to.equal(boom);
+      expect(seededCaseId).to.be.a("string");
+      expect(await prisma.case.findUnique({ where: { id: seededCaseId! } })).to.equal(null);
+      expect(await prisma.clientRequest.count({ where: { caseId } })).to.equal(0);
+      expect((await CaseLawyerInviteRepo.findByToken(invite.token))?.status).to.equal("PENDING");
+    });
+
+    it("redeem returns NOT_A_LAWYER for a non-lawyer account (the client opening their own link), attaching nothing", async () => {
+      const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+
+      const result = await CaseLawyerInviteSvc.redeem({ id: clientId, email: `invite-${clientId}@example.com` }, invite.token);
+
+      expect(result).to.deep.equal({ error: "NOT_A_LAWYER" });
+      expect(await prisma.clientRequest.count({ where: { caseId } })).to.equal(0);
+      expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(0);
+      expect((await CaseLawyerInviteRepo.findByToken(invite.token))?.status).to.equal("PENDING");
     });
 
     it("redeem returns INVITE_NOT_FOUND for an unknown token", async () => {

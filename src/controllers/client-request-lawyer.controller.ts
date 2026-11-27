@@ -72,8 +72,10 @@ export default class ClientRequestLawyerCtrl {
     res.status(200).json(await ClientRequestLawyerSvc.retryCharge(lawyerOf(req), req.params.id));
   }
 
-  static async copy(req: Request, res: Response) {
-    res.status(202).json(await ClientRequestLawyerSvc.copy(lawyerOf(req), req.params.id));
+  /** Retired: always 410 COPY_RETIRED (ClientRequestLawyerSvc.copy). Kept mounted so a lawyer app
+   * still showing the old button gets a clear answer rather than a 404. */
+  static async copy(req: Request, _res: Response) {
+    await ClientRequestLawyerSvc.copy(lawyerOf(req), req.params.id);
   }
 
   static async invoice(req: Request, res: Response) {

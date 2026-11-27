@@ -7,7 +7,7 @@ import OrganizationRepo from "../repositories/organization.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
 import { organizationCardProviderNamed, type CardChargeResult } from "../payments/organization-card-provider";
 import CaseSeedSvc from "./case-seed.service";
-import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
+import EngagementAiBudgetSvc, { meteredCaseIdOf } from "./engagement-ai-budget.service";
 import NotificationSvc from "./notification.service";
 import { emitToUser } from "../lib/socket";
 import logger from "../utils/logger";
@@ -249,18 +249,29 @@ export default class OrganizationChargeSvc {
    * Seeds the lawyer their own Case from the client's (CaseSeedSvc.seed, Task 10 — the marketplace
    * path's equivalent of `CaseLawyerInviteSvc.redeem`'s seed-then-lock pattern), and records it on
    * the claim. `OrganizationChargeRepo.settle` already committed this *request* ENGAGED in its own
-   * transaction before `after` is ever called — that can't be undone from here, the card was already
-   * charged. So the Case-row lock below isn't guarding this request's own transition (it's already
+   * transaction before `after` is ever called — that can't be undone from here, the card was
+   * already charged. So the Case-row lock below isn't guarding this request's own transition (it's already
    * happened); it's here so this and a same-case invite redemption (`CaseLawyerInviteSvc.redeem`,
-   * which takes the identical lock) are serialized against each other. `findEngagedLawyerForCase`
-   * finding *this* request (now ENGAGED) is normal, not a conflict — only a *different* request
-   * already ENGAGED on the case is the genuine double-engagement this lock exists to catch, and since
-   * the charge has already gone through, all that's left to do about it here is skip seeding
-   * (cleaning up the now-pointless seeded Case, CaseSeedSvc.discard) and log loudly for ops to sort
-   * out; the claim's `lawyerCaseId` stays null. A failed `seed()` itself (an S3 outage, say) is
-   * caught rather than left to propagate: this runs in the middle of `after`'s post-charge steps,
-   * and a thrown error here must not stop the notifications/socket emits that come after it — same
-   * "skip, don't block" outcome as a lock-loss.
+   * which takes the identical lock) are serialized against each other, and only one of them ends up
+   * with a seeded Case. The recheck excludes this request at the DB level (`excludeRequestId`), so
+   * finding anything means a *different* request is already ENGAGED on the case: seeding is skipped
+   * (the now-pointless seeded Case is discarded, CaseSeedSvc.discard), it's logged at error level,
+   * and the claim's `lawyerCaseId` stays null.
+   *
+   * KNOWN LIMITATION: on the marketplace-payment path specifically, OrganizationChargeRepo.settle
+   * commits this request ENGAGED (driven by the card charge's answer or Stripe's webhook) strictly
+   * before this lock ever runs — so two ENGAGED requests on one case, each with its own payment
+   * already captured, CAN happen here. Nothing refunds automatically. Not fixed because ilovelawyer
+   * is moving away from handling marketplace lawyer-payment transactions (future revenue: lawyer
+   * subscription fee + client top-up credits). Tracked in the follow-up ticket (not yet filed)
+   * alongside the ilovelawyer-app engagement-view gap. CaseLawyerInviteSvc's own checks now refuse
+   * an invite (and its redemption) while any marketplace request is open on the case, so reaching
+   * this needs a genuine concurrent race, not ordinary sequential use.
+   *
+   * A failed `seed()` itself (an S3 outage, say) is caught rather than left to propagate: this runs
+   * in the middle of `after`'s post-charge steps, and a thrown error here must not stop
+   * the notifications/socket emits that come after it — same "skip, don't block" outcome as a
+   * lock-loss.
    */
   private static async seedLawyerCase(requestId: string, caseId: string, claimId: string, lawyerId: string, organizationId: string | null): Promise<void> {
     let seeded: { caseId: string };
@@ -271,6 +282,9 @@ export default class OrganizationChargeSvc {
       return;
     }
     const ok = await prisma.$transaction(async (tx) => {
+      // Correctness depends on Postgres's default READ COMMITTED isolation (the recheck below sees
+      // whatever a lock holder committed before releasing it); under REPEATABLE READ/SERIALIZABLE it
+      // would read an older snapshot and could miss a same-case invite redemption's commit.
       await tx.$queryRaw(Prisma.sql`SELECT id FROM "Case" WHERE id = ${caseId} FOR UPDATE`);
       // Excludes this request itself: findEngagedLawyerForCase is a plain findFirst, so without this
       // exclusion a genuine conflict (two ENGAGED requests on the case) could be missed whenever
@@ -293,7 +307,7 @@ export default class OrganizationChargeSvc {
     if (!charge.requestId || !charge.lawyerId || outcome === "PENDING") return;
     if (outcome === "SUCCEEDED") {
       const request = await ClientRequestRepo.findForLawyer(charge.requestId);
-      const budget = await EngagementAiBudgetSvc.forRequest(charge.requestId, request?.copyCaseId ?? null);
+      const budget = await EngagementAiBudgetSvc.forRequest(charge.requestId, request ? meteredCaseIdOf(request) : null);
       const event: EngagementAiBudgetEvent = { requestId: charge.requestId, percentUsed: budget.percentUsed, state: budget.state };
       emitToUser(charge.lawyerId, CLIENT_HANDOFF_SOCKET_EVENTS.ENGAGEMENT_AI_BUDGET, event);
       return;

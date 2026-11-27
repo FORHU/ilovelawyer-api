@@ -27,6 +27,15 @@ const TIER2_READ: Exempt = { exempt: "Opening a case — a read, Tier 2 (audit p
 const READ: Exempt = { exempt: "Lists past exports; each download through its link is recorded as file.accessed" };
 const INTEGRATION_DRAFT: Exempt = { exempt: "Creates a disconnected connector record; connecting it is recorded" };
 
+/** Catalog actions no code writes any more, kept in SECURITY_AUDIT_ACTIONS only so rows recorded
+ * before their route was retired keep their label and can still be filtered on in the audit log.
+ * test/security-audit-coverage.spec.ts exempts these from "writes every catalog action somewhere
+ * in src/" — and fails if one of them is ever written again. */
+export const RETIRED_SECURITY_AUDIT_ACTIONS: readonly SecurityAuditAction[] = [
+  // "Copy to my workspace" (POST /client-requests/:id/copy) is retired: seeding replaced it.
+  "client_request.copied",
+];
+
 export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditAction[] | Exempt> = {
   "POST /organizations/": ["org.created"],
   "POST /organizations/invites/:id/accept": ["org.invite_accepted", "org.member_left", "org.archived"],
@@ -322,7 +331,7 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "PUT /client-requests/:id/quotation": { exempt: "The lawyer's own draft quote, which nobody else sees; it changes nobody's access" },
   "POST /client-requests/:id/quotation/send": { exempt: "A quote to the client; it changes nobody's access. Recorded in the case activity feed" },
   "POST /client-requests/:id/quotation/withdraw": ["client_request.released"],
-  "POST /client-requests/:id/copy": ["client_request.copied"],
+  "POST /client-requests/:id/copy": { exempt: "Retired: always answers 410 COPY_RETIRED; nothing is copied, queued, opened or stored (the lawyer's own Case is seeded at engagement)" },
   "POST /client-requests/:id/ai-top-ups": ["client_request.ai_top_up_approved"],
   // A Lawyer Exit (#972) refunds nothing by itself: an admin decides the refund.
   "POST /client-requests/:id/close": ["client_request.closed"],
@@ -337,6 +346,12 @@ export const SECURITY_AUDIT_COVERAGE: Record<string, readonly SecurityAuditActio
   "POST /client/lawyer-requests/:id/feedback": { exempt: "The client's own rating of the lawyer after the engagement closes; no access change" },
   "POST /client/lawyer-requests/:id/messages": { exempt: "A message to the engaged lawyer in their thread; it changes nobody's access (sharing a document only points at one already on the case)" },
   "POST /client/lawyer-requests/:id/messages/read": { exempt: "Marks the client's own thread read" },
+  // A client inviting their own lawyer onto their case (client-invites-own-lawyer). Issuing or
+  // revoking an invite grants nobody anything: the lawyer only gets their own seeded Case once they
+  // redeem it at sign-in, and redemption is recorded with that sign-in (auth.login).
+  "POST /client/lawyer-invites/link": { exempt: "A client issuing a shareable invite link for their own lawyer on their own case; it grants no access until a lawyer redeems it" },
+  "POST /client/lawyer-invites/email": { exempt: "A client emailing their own lawyer an invite to their own case; it grants no access until the lawyer redeems it" },
+  "POST /client/lawyer-invites/revoke": { exempt: "A client withdrawing their own pending invite before anyone redeemed it; it removes nobody's access" },
   "POST /client/payments/top-up/quote": { exempt: "Prices a top-up pack with a promo code; nothing is charged or stored" },
   "POST /client/payments/case/quote": { exempt: "Removed with pay per case: always 410, nothing is stored" },
   "POST /client/payments/case": { exempt: "Removed with pay per case: always 410, nothing is stored" },

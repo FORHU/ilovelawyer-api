@@ -77,8 +77,8 @@ describe("a client invite and a marketplace engagement racing for the same case 
 
   before(async () => {
     await prisma.user.create({ data: { id: clientId, email: `race-client-${clientId}@example.com`, username: `race-client-${clientId}` } });
-    await prisma.user.create({ data: { id: inviteLawyerId, email: `race-invite-lawyer-${inviteLawyerId}@example.com`, username: `race-invite-lawyer-${inviteLawyerId}` } });
-    await prisma.user.create({ data: { id: marketLawyerId, email: `race-market-lawyer-${marketLawyerId}@example.com`, username: `race-market-lawyer-${marketLawyerId}` } });
+    await prisma.user.create({ data: { id: inviteLawyerId, email: `race-invite-lawyer-${inviteLawyerId}@example.com`, username: `race-invite-lawyer-${inviteLawyerId}`, role: "LAWYER" } });
+    await prisma.user.create({ data: { id: marketLawyerId, email: `race-market-lawyer-${marketLawyerId}@example.com`, username: `race-market-lawyer-${marketLawyerId}`, role: "LAWYER" } });
     await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Race case", caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } });
   });
 
@@ -95,14 +95,10 @@ describe("a client invite and a marketplace engagement racing for the same case 
     await prisma.user.deleteMany({ where: { id: { in: [clientId, inviteLawyerId, marketLawyerId] } } });
   });
 
-  it("the marketplace engagement wins: it lands first, so the invite's own lock+recheck (Task 7) catches the conflict and aborts", async () => {
-    const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
-
-    // The marketplace side's own ClientRequest+Claim+Quotation, still CONFIRMED/unquoted-outcome:
-    // the race is in flipping these to ENGAGED (what QuotationPaymentRepo.settle's own transaction
-    // would do) while the invite's seed() is in flight, then calling the real afterEngaged.
+  /** The marketplace side's own ClientRequest+Claim+Quotation in `status` (not yet ENGAGED). */
+  async function marketplaceRequest(status: "CONFIRMED" | "ROUTED", quotationStatus: "ACCEPTED" | "PAID") {
     const marketRequest = await prisma.clientRequest.create({
-      data: { caseId, clientId, status: "CONFIRMED", consentVersion: "v1", consentAcceptedAt: new Date() },
+      data: { caseId, clientId, status, consentVersion: "v1", consentAcceptedAt: new Date() },
     });
     const marketClaim = await prisma.clientRequestClaim.create({
       data: { requestId: marketRequest.id, lawyerId: marketLawyerId, organizationId: null, claimedAt: new Date(), expiresAt: future },
@@ -118,22 +114,29 @@ describe("a client invite and a marketplace engagement racing for the same case 
         platformFeeMinor: 9000,
         totalAmountMinor: 60000,
         expiresAt: future,
-        status: "ACCEPTED",
+        status: quotationStatus,
       },
     });
+    return { marketRequest, marketClaim, quotation };
+  }
+
+  it("the marketplace engagement wins: it lands first, so the invite's own lock+recheck (Task 7) catches the conflict and aborts", async () => {
+    const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
 
     const originalSeed = CaseSeedSvc.seed;
     let marketplaceSeededCaseId: string | undefined;
     let triggered = false;
-    // While the invite redemption's own seed() (the slow, shared step) is in flight, the
-    // marketplace payment settles (flips its request+claim ENGAGED, as QuotationPaymentRepo.settle
-    // would) and runs the real afterEngaged — which takes the identical Case-row lock and, finding
-    // no competing ENGAGED request yet (the invite hasn't created its ClientRequest yet; that only
-    // happens after seed() returns), seeds and records its own Case normally. Guarded by `triggered`
-    // so afterEngaged's own nested seed() call (for the marketplace Case itself) doesn't recurse.
+    // The case has no open request when the invite is redeemed, so redeem's pre-seed check passes.
+    // While its seed() (the slow, shared step) is in flight, a marketplace request appears and
+    // settles (created and flipped ENGAGED, as QuotationPaymentRepo.settle would) and the real
+    // afterEngaged runs — which takes the identical Case-row lock and, finding no competing ENGAGED
+    // request yet (the invite hasn't created its ClientRequest yet; that only happens after seed()
+    // returns), seeds and records its own Case normally. Guarded by `triggered` so afterEngaged's
+    // own nested seed() call (for the marketplace Case itself) doesn't recurse.
     CaseSeedSvc.seed = (async (input: Parameters<typeof CaseSeedSvc.seed>[0]) => {
       if (!triggered) {
         triggered = true;
+        const { marketRequest, marketClaim, quotation } = await marketplaceRequest("CONFIRMED", "ACCEPTED");
         await prisma.clientRequest.update({ where: { id: marketRequest.id }, data: { status: "ENGAGED", engagedAt: new Date() } });
         await prisma.clientRequestClaim.update({ where: { id: marketClaim.id }, data: { outcome: "ENGAGED" } });
         await QuotationPaymentSvc.afterEngaged(quotation, { organizationId: null, lawyerId: marketLawyerId }, 0, null, "GBP");
@@ -170,83 +173,66 @@ describe("a client invite and a marketplace engagement racing for the same case 
     expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(1);
   });
 
-  it("the invite wins: it lands first, so the marketplace engagement's own lock+recheck (Task 10) catches the conflict and skips seeding", async () => {
+  // The final review's C2. This test used to set a CONFIRMED marketplace request up, redeem the
+  // invite past it, and assert two ENGAGED requests on the case as the expected outcome — the bug
+  // itself, encoded as a requirement. An open marketplace request (here CONFIRMED: the client
+  // accepted the quote but hasn't paid) now blocks the invite outright, so when the client then pays,
+  // the case ends with exactly one ENGAGED request and one lawyer, never two.
+  it("an invite redeemed while a marketplace request is still open is refused, so when the client then pays the case ends with exactly one ENGAGED request", async () => {
     const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+    const { marketRequest, marketClaim, quotation } = await marketplaceRequest("CONFIRMED", "PAID");
 
-    // The marketplace side's own ClientRequest+Claim+Quotation, still CONFIRMED/unquoted-outcome: the
-    // invite's own precheck (below) must see no live engagement yet, exactly as it would if the
-    // client's payment hadn't settled yet either.
-    const marketRequest = await prisma.clientRequest.create({
-      data: { caseId, clientId, status: "CONFIRMED", consentVersion: "v1", consentAcceptedAt: new Date() },
-    });
-    const marketClaim = await prisma.clientRequestClaim.create({
-      data: { requestId: marketRequest.id, lawyerId: marketLawyerId, organizationId: null, claimedAt: new Date(), expiresAt: future },
-    });
-    const quotation = await prisma.quotation.create({
-      data: {
-        claimId: marketClaim.id,
-        requestId: marketRequest.id,
-        lawyerId: marketLawyerId,
-        type: "FIXED_FEE",
-        serviceFeeMinor: 51000,
-        platformFeeBps: 1500,
-        platformFeeMinor: 9000,
-        totalAmountMinor: 60000,
-        expiresAt: future,
-        status: "PAID",
-      },
-    });
+    // Ordinary sequential use, no race: the lawyer redeems first...
+    const inviteResult = await CaseLawyerInviteSvc.redeem({ id: inviteLawyerId, email: `race-invite-lawyer-${inviteLawyerId}@example.com` }, invite.token);
+    expect(inviteResult).to.deep.equal({ error: "CASE_ALREADY_HAS_LAWYER" });
+    expect(await prisma.clientRequest.count({ where: { caseId, requestedLawyerId: inviteLawyerId } })).to.equal(0);
+    expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(0);
+    expect((await CaseLawyerInviteRepo.findByToken(invite.token))?.status).to.equal("PENDING");
 
-    const originalSeed = CaseSeedSvc.seed;
-    let inviteResult: unknown;
-    let triggered = false;
-    // While the marketplace engagement's own seed() (afterEngaged's seedLawyerCase, called directly
-    // below) is in flight, the invite redemption runs to completion for real — its own lock+recheck
-    // (Task 7) sees no competing ENGAGED request yet (the marketplace payment hasn't been recorded as
-    // ENGAGED yet either) and commits normally. Only once the invite's done does the marketplace
-    // request+claim flip ENGAGED (as QuotationPaymentRepo.settle's own transaction already would have
-    // by the time afterEngaged runs for real) and control returns to seedLawyerCase's own lock+recheck.
-    // Guarded by `triggered` so the invite's own nested seed() call doesn't recurse back into this.
-    CaseSeedSvc.seed = (async (input: Parameters<typeof CaseSeedSvc.seed>[0]) => {
-      if (!triggered) {
-        triggered = true;
-        inviteResult = await CaseLawyerInviteSvc.redeem({ id: inviteLawyerId, email: `race-invite-lawyer-${inviteLawyerId}@example.com` }, invite.token);
-        await prisma.clientRequest.update({ where: { id: marketRequest.id }, data: { status: "ENGAGED", engagedAt: new Date() } });
-        await prisma.clientRequestClaim.update({ where: { id: marketClaim.id }, data: { outcome: "ENGAGED" } });
-      }
-      return originalSeed(input);
-    }) as typeof CaseSeedSvc.seed;
+    // ...then the client pays the marketplace quote (QuotationPaymentRepo.settle flips it ENGAGED)
+    // and the real afterEngaged seeds that lawyer their Case, unopposed.
+    await prisma.clientRequest.update({ where: { id: marketRequest.id }, data: { status: "ENGAGED", engagedAt: new Date() } });
+    await prisma.clientRequestClaim.update({ where: { id: marketClaim.id }, data: { outcome: "ENGAGED" } });
+    await QuotationPaymentSvc.afterEngaged(quotation, { organizationId: null, lawyerId: marketLawyerId }, 0, null, "GBP");
 
-    try {
-      await QuotationPaymentSvc.afterEngaged(quotation, { organizationId: null, lawyerId: marketLawyerId }, 0, null, "GBP");
-    } finally {
-      CaseSeedSvc.seed = originalSeed;
-    }
+    expect(await prisma.clientRequest.count({ where: { caseId, status: "ENGAGED" } })).to.equal(1);
+    const marketClaimAfter = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: marketClaim.id } });
+    expect(marketClaimAfter.lawyerCaseId).to.be.a("string");
+    expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(1);
+    const marketCase = await prisma.case.findUniqueOrThrow({ where: { id: marketClaimAfter.lawyerCaseId! } });
+    expect(marketCase).to.deep.include({ userId: marketLawyerId, copiedFromCaseId: caseId });
 
-    // The invite won: it ran to completion while the marketplace engagement's seed() was in flight,
-    // and its own lock+recheck found nothing in its way.
-    expect((inviteResult as { error?: string } | undefined)?.error).to.equal(undefined);
+    // And a redeem retried after the engagement is still refused: the case has its lawyer.
+    const retried = await CaseLawyerInviteSvc.redeem({ id: inviteLawyerId, email: `race-invite-lawyer-${inviteLawyerId}@example.com` }, invite.token);
+    expect(retried).to.deep.equal({ error: "CASE_ALREADY_HAS_LAWYER" });
+    expect(await prisma.clientRequest.count({ where: { caseId, status: "ENGAGED" } })).to.equal(1);
+  });
+
+  it("the invite wins a genuine race: it engages first, so the marketplace engagement's own lock+recheck (Task 10) catches the conflict and skips seeding", async () => {
+    // Only reachable now as a true concurrent race: the marketplace request appears while the
+    // marketplace path's seed() is in flight *after* the invite already engaged (in ordinary use
+    // the invite's ENGAGED request makes ClientRequestSvc refuse a new one with REQUEST_ALREADY_OPEN,
+    // and the test above shows the other order refused at redeem). This keeps proving Task 10's
+    // seed-side lock and recheck still decide who gets a seeded Case when both do engage —
+    // the parked KNOWN LIMITATION in seedLawyerCase's doc comment.
+    const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token: makeToken(), expiresAt: future });
+    const inviteResult = await CaseLawyerInviteSvc.redeem({ id: inviteLawyerId, email: `race-invite-lawyer-${inviteLawyerId}@example.com` }, invite.token);
+    expect((inviteResult as { error?: string }).error).to.equal(undefined);
     const inviteCaseId = (inviteResult as { caseId: string }).caseId;
+
+    // The marketplace request that slipped in concurrently, already settled ENGAGED by its payment.
+    const { marketClaim, quotation } = await marketplaceRequest("CONFIRMED", "PAID");
+    await prisma.clientRequest.update({ where: { id: quotation.requestId }, data: { status: "ENGAGED", engagedAt: new Date() } });
+    await prisma.clientRequestClaim.update({ where: { id: marketClaim.id }, data: { outcome: "ENGAGED" } });
+    await QuotationPaymentSvc.afterEngaged(quotation, { organizationId: null, lawyerId: marketLawyerId }, 0, null, "GBP");
+
     const inviteCase = await prisma.case.findUniqueOrThrow({ where: { id: inviteCaseId } });
     expect(inviteCase).to.deep.include({ userId: inviteLawyerId, copiedFromCaseId: caseId });
-    const inviteRow = await CaseLawyerInviteRepo.findByToken(invite.token);
-    expect(inviteRow?.status).to.equal("ACCEPTED");
-
-    // The marketplace engagement lost: Task 10's own lock+recheck in seedLawyerCase, run after the
-    // invite already committed, found that different, already-ENGAGED request and skipped seeding —
-    // its claim's lawyerCaseId stays null rather than pointing at a Case nothing else accounts for,
-    // and the Case CaseSeedSvc.seed had already built for it was discarded rather than left orphaned.
-    const marketClaimAfter = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: marketClaim.id } });
-    expect(marketClaimAfter.lawyerCaseId).to.equal(null);
-    // Phrased as counts, not "which specific side won", so this doesn't depend on which of the two
-    // ENGAGED requests (this one's own, or the invite's) a plain findFirst happens to return first
-    // (the bug the exclusion fix — findEngagedLawyerForCase's `excludeRequestId` — closes): both
-    // requests genuinely are ENGAGED at this point (the marketplace payment's own transaction already
-    // committed that independently of this lock, see seedLawyerCase's own doc comment), but exactly
-    // one claim across both ends up with a seeded Case, and exactly one seeded Case exists at all.
-    expect(await prisma.clientRequest.count({ where: { caseId, status: "ENGAGED" } })).to.equal(2);
-    const seededClaims = await prisma.clientRequestClaim.count({ where: { request: { caseId }, lawyerCaseId: { not: null } } });
-    expect(seededClaims).to.equal(1);
+    expect((await CaseLawyerInviteRepo.findByToken(invite.token))?.status).to.equal("ACCEPTED");
+    // The marketplace engagement lost the seed: its claim's lawyerCaseId stays null and the Case
+    // CaseSeedSvc.seed built for it was discarded, so exactly one seeded Case exists.
+    expect((await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: marketClaim.id } })).lawyerCaseId).to.equal(null);
+    expect(await prisma.clientRequestClaim.count({ where: { request: { caseId }, lawyerCaseId: { not: null } } })).to.equal(1);
     expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(1);
   });
 });

@@ -45,6 +45,19 @@ describe("engagement completion", function () {
   const row = () => prisma.clientRequest.findUniqueOrThrow({ where: { id: requestId } });
   const earning = () => prisma.earning.findFirstOrThrow({ where: { requestId } });
   const hasAccess = async () => !!(await prisma.caseAccess.findUnique({ where: { caseId_userId: { caseId, userId: lawyerId } } }));
+  /** The lawyer's own Case for the engagement, seeded from the client's when they were engaged
+   * (Task 10: replaced the CaseAccess grant into the client's case). */
+  const lawyerCaseId = async () => (await prisma.clientRequestClaim.findFirstOrThrow({ where: { requestId, lawyerId, outcome: "ENGAGED" } })).lawyerCaseId;
+  /** The lawyer still works on the engagement: no guest access to the client's case (never granted
+   * since seeding), but their own seeded Case is there and opens for them. */
+  const expectLawyerStillWorking = async () => {
+    expect(await hasAccess()).to.equal(false);
+    const seeded = await lawyerCaseId();
+    expect(seeded).to.be.a("string");
+    expect(seeded).to.not.equal(caseId);
+    expect(await prisma.case.findUniqueOrThrow({ where: { id: seeded! } })).to.deep.include({ userId: lawyerId, copiedFromCaseId: caseId });
+    await request(app).get(`/api/my-cases/${seeded}`).set(asLawyer).expect(200);
+  };
   const bells = async (userId: string) => (await prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: "asc" } })).map((n) => n.title);
   /** The ask as if it was made `days` ago. */
   const askedDaysAgo = (days: number) => prisma.clientRequest.update({ where: { id: requestId }, data: { completionRequestedAt: new Date(Date.now() - days * DAY_MS) } });
@@ -83,6 +96,7 @@ describe("engagement completion", function () {
     await prisma.quotationPayment.deleteMany({ where: { clientId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.caseAccess.deleteMany({ where: { caseId } });
+    await prisma.case.deleteMany({ where: { copiedFromCaseId: caseId } });
     await prisma.notification.deleteMany({ where: { userId: { in: [lawyerId, clientId] } } });
   };
 
@@ -132,14 +146,14 @@ describe("engagement completion", function () {
   });
 
   describe("the lawyer says the work is finished", () => {
-    it("doesn't close it: it waits on the client, and the lawyer keeps their access", async () => {
+    it("doesn't close it: it waits on the client, and the lawyer keeps working from their own seeded Case", async () => {
       const body = (await finished("Your settlement agreement is signed.").expect(200)).body;
       expect(body.status).to.equal("ENGAGED");
       expect(body.engagement.closedAt).to.equal(null);
       expect(body.engagement.completion).to.deep.include({ note: "Your settlement agreement is signed.", declinedAt: null, confirmedBy: null });
       expect(new Date(body.engagement.completion.autoClosesAt).getTime()).to.be.closeTo(Date.now() + 7 * DAY_MS, 60_000);
-      expect(await hasAccess()).to.equal(true);
-      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest).expect(200);
+      await expectLawyerStillWorking();
+      await request(app).get(`/api/my-cases/${caseId}`).set(asGuest).expect(403);
       expect((await earning()).availableAt).to.equal(null);
       expect(audits.map((a) => a.action)).to.not.include("client_request.closed");
     });
@@ -207,7 +221,7 @@ describe("engagement completion", function () {
       const body = (await decline({ reason: "You haven't sent the signed copy yet." }).expect(200)).body;
       expect(body.status).to.equal("ENGAGED");
       expect(body.completion).to.deep.include({ requestedAt: null, autoClosesAt: null, declineReason: "You haven't sent the signed copy yet." });
-      expect(await hasAccess()).to.equal(true);
+      await expectLawyerStillWorking();
       const notes = await prisma.notification.findMany({ where: { userId: lawyerId } });
       expect(notes.map((n) => [n.title, n.message])).to.deep.include(["The client says the work isn't finished", "You haven't sent the signed copy yet."]);
       expect((await lawyerView().expect(200)).body.engagement.completion).to.deep.include({ declineReason: "You haven't sent the signed copy yet." });

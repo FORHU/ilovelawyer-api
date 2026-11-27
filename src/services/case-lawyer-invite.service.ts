@@ -18,9 +18,14 @@ import { emailLinkOriginForAccount } from "../utils/tenant-host";
  * string rather than reusing CLIENT_REQUEST_CONSENT_VERSION. */
 const OWN_LAWYER_INVITE_CONSENT_VERSION = "own-lawyer-invite-1";
 
+/** `CASE_ALREADY_HAS_LAWYER` covers any open ClientRequest on the case (ClientRequestRepo.findOpenForCase),
+ * not only an ENGAGED one: a marketplace request still in flight (REQUESTED/ROUTED/CONFIRMED) is a
+ * lawyer the client is already in the middle of hiring, and redeeming past it would let that request
+ * later engage too. `NOT_A_LAWYER`: the account redeeming isn't a lawyer account (e.g. the client
+ * opening their own link while signed in). */
 export type RedeemResult =
   | { requestId: string; caseId: string }
-  | { error: "INVITE_NOT_FOUND" | "INVITE_ALREADY_USED" | "INVITE_EXPIRED" | "INVITE_EMAIL_MISMATCH" | "CASE_ALREADY_HAS_LAWYER" | "CASE_NOT_FOUND" };
+  | { error: "INVITE_NOT_FOUND" | "INVITE_ALREADY_USED" | "INVITE_EXPIRED" | "INVITE_EMAIL_MISMATCH" | "CASE_ALREADY_HAS_LAWYER" | "CASE_NOT_FOUND" | "NOT_A_LAWYER" };
 
 /** The invite as the client app reads it (InviteStatusDto in the contract): just enough to show
  * where it stands, never the token (that's only ever handed back once, at creation). */
@@ -85,7 +90,9 @@ async function sendInviteEmail(invite: { token: string; email: string; clientId:
 /**
  * A client inviting their own lawyer onto a case (client-invites-own-lawyer): a link or email
  * invite, superseding any still-pending one on the case, so a case ever has at most one live
- * invite. Blocked once the case already has an ENGAGED lawyer through the marketplace flow.
+ * invite. Blocked while the case has any open ClientRequest — an ENGAGED lawyer, or a marketplace
+ * request still in flight — the same "at most one open request per case" invariant
+ * ClientRequestSvc's REQUEST_ALREADY_OPEN enforces, checked again at redemption.
  */
 export default class CaseLawyerInviteSvc {
   /** A shareable link invite: the client sends the token themselves. */
@@ -164,10 +171,10 @@ export default class CaseLawyerInviteSvc {
    * comments make the same call for its own writes). So `seed()` runs first, as its own atomic unit,
    * and only once it has succeeded does this method open its own transaction to create the
    * ClientRequest/Claim (with `lawyerCaseId` already known) and mark the invite ACCEPTED (guarded,
-   * so a race that already consumed the invite rolls this transaction back). The one failure window
-   * this leaves: if this method's own transaction fails *after* `seed()` already committed a new
-   * Case, that Case is orphaned — lawyer-owned, not referenced by any ClientRequest, otherwise
-   * harmless and cleanable. The alternative (create the ClientRequest first, seed second) was worse:
+   * so a race that already consumed the invite rolls this transaction back). If this method's own
+   * transaction fails or loses a race *after* `seed()` already committed a new Case, that Case is
+   * discarded (CaseSeedSvc.discard, best effort) whatever the failure was, and a genuine exception
+   * is still rethrown. The alternative (create the ClientRequest first, seed second) was worse:
    * it risks a live ENGAGED request with no case behind it, which every other read of "is this case
    * attached" would trip over.
    */
@@ -181,12 +188,21 @@ export default class CaseLawyerInviteSvc {
       return { error: "INVITE_EXPIRED" };
     }
 
+    // Only a lawyer account can become the lawyer on a case: a client (or anyone else) signing in
+    // with the link — the inviting client opening their own link, say — gets nothing, and the
+    // invite stays PENDING for the lawyer it was meant for.
+    const redeemer = await prisma.user.findUnique({ where: { id: user.id }, select: { role: true } });
+    if (redeemer?.role !== "LAWYER") return { error: "NOT_A_LAWYER" };
+
     if (invite.email && normalizeEmail(invite.email) !== normalizeEmail(user.email)) {
       return { error: "INVITE_EMAIL_MISMATCH" };
     }
 
-    const engaged = await ClientRequestRepo.findEngagedLawyerForCase(invite.caseId);
-    if (engaged) return { error: "CASE_ALREADY_HAS_LAWYER" };
+    // Any open request, not only an ENGAGED one (ClientRequestRepo.findOpenForCase, the platform's
+    // "at most one open request per case" check): a marketplace request still in flight would
+    // otherwise settle to ENGAGED later, alongside this one.
+    const open = await ClientRequestRepo.findOpenForCase(invite.caseId);
+    if (open) return { error: "CASE_ALREADY_HAS_LAWYER" };
 
     // CaseSeedSvc.seed does no validation of the source case at all (by design — that's this
     // method's job): a case that's gone, or archived out from under a live invite, isn't a valid
@@ -197,26 +213,82 @@ export default class CaseLawyerInviteSvc {
 
     const seeded = await CaseSeedSvc.seed({ sourceCaseId: invite.caseId, lawyerId: user.id, organizationId: null });
 
-    const result = await prisma.$transaction(async (tx) => {
-      const marked = await CaseLawyerInviteRepo.markAccepted(invite.id, user.id, tx);
+    // From here on seed()'s Case exists: every way out that doesn't attach it to the ClientRequest
+    // below — a lost race (the two converted HttpErrors) or any other failure (a lock-wait or
+    // interactive-transaction timeout, more reachable now that redeems wait on each other's case
+    // lock; a DB error) — must discard it, or a full copy of the client's case and documents is
+    // left with the lawyer and nothing accounting for it. CaseSeedSvc.discard never throws, so the
+    // cleanup can't mask the original error, which is rethrown unchanged.
+    let result: RedeemResult;
+    try {
+      result = await CaseLawyerInviteSvc.attachSeeded(invite, user.id, seeded.caseId);
+    } catch (err) {
+      await CaseSeedSvc.discard(seeded.caseId);
+      throw err;
+    }
+
+    if ("error" in result) {
+      // The transaction rolled back, so seed()'s Case (and its copied Document/File rows) never got
+      // a ClientRequest pointing at it — clean it up rather than leaving a full copy of the client's
+      // case and documents orphaned (a real privacy concern: e.g. the client revokes the invite
+      // while this redeem is mid-flight, the lawyer loses the race, but would otherwise keep a copy
+      // of the case forever with nothing accounting for it).
+      await CaseSeedSvc.discard(seeded.caseId);
+      return result;
+    }
+
+    // Honest about what the lawyer has: their own copy of the case as it was when they joined, not
+    // a live view — documents the client adds afterwards don't reach it (a one-time seed).
+    await NotificationSvc.create({
+      userId: invite.clientId,
+      type: "CASE_UPDATE",
+      title: "Your lawyer has joined ilovelawyer",
+      message: "Your lawyer has joined ilovelawyer and has a copy of your case as it was when they joined. Anything you add from now on isn't shared with them automatically.",
+      link: `/cases/${invite.caseId}`,
+    }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify client", { err, caseId: invite.caseId }));
+    await NotificationSvc.create({
+      userId: user.id,
+      type: "CASE_UPDATE",
+      title: "You're attached to your client's case",
+      message: "You've joined your client's case through their invite. You have your own copy of it, as it was when you joined.",
+      link: `/cases/${result.caseId}`,
+    }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify lawyer", { err, lawyerId: user.id }));
+
+    return result;
+  }
+
+  /** redeem's own transaction, once seed() has made the lawyer's Case: marks the invite ACCEPTED
+   * (guarded), locks the client's case row and rechecks for an open request through it, then
+   * writes the ENGAGED ClientRequest+Claim pointing at the seeded Case. A lost race comes back as
+   * one of redeem's error outcomes (the transaction rolled back); anything else throws. */
+  private static async attachSeeded(
+    invite: { id: string; caseId: string; clientId: string; createdAt: Date },
+    lawyerId: string,
+    seededCaseId: string,
+  ): Promise<RedeemResult> {
+    return prisma.$transaction(async (tx) => {
+      const marked = await CaseLawyerInviteRepo.markAccepted(invite.id, lawyerId, tx);
       if (marked.count === 0) {
         // Lost a race (accepted, revoked or lazily expired since the checks above, in the time
         // seed()'s S3 copies took): abort before writing anything else.
         throw new HttpError("Invite already used.", 409, "INVITE_ALREADY_USED");
       }
 
-      // Lock the source case's row for the rest of this transaction, then repeat the
-      // live-ENGAGED check through it: the pre-seed check above only ran once, before seed()'s
-      // (possibly slow) S3 copies, so a second invite on the same case — or a marketplace
-      // engagement reaching ENGAGED in the meantime — could otherwise slip an ENGAGED
+      // Lock the source case's row for the rest of this transaction, then repeat the open-request
+      // check through it: the pre-seed check above only ran once, before seed()'s (possibly slow)
+      // S3 copies, so a second invite on the same case — or a marketplace engagement reaching
+      // ENGAGED, or a new marketplace request, in the meantime — could otherwise slip an open
       // ClientRequest past it and in underneath this one. The lock serializes any other writer
       // doing the same check against this case: whichever of two concurrent redeems gets here
       // first holds the row until it commits or rolls back, so the second one's recheck (run only
       // after it acquires the same lock) is guaranteed to see the first one's write once it's
       // allowed to proceed.
+      // Correctness depends on Postgres's default READ COMMITTED isolation (each statement sees rows
+      // committed before it started): under REPEATABLE READ/SERIALIZABLE the recheck below would
+      // read this transaction's older snapshot and could miss the other writer's commit.
       await tx.$queryRaw(Prisma.sql`SELECT id FROM "Case" WHERE id = ${invite.caseId} FOR UPDATE`);
-      const stillUnengaged = await ClientRequestRepo.findEngagedLawyerForCase(invite.caseId, tx);
-      if (stillUnengaged) throw new HttpError("This case already has a lawyer.", 409, "CASE_ALREADY_HAS_LAWYER");
+      const stillOpen = await ClientRequestRepo.findOpenForCase(invite.caseId, tx);
+      if (stillOpen) throw new HttpError("This case already has a lawyer.", 409, "CASE_ALREADY_HAS_LAWYER");
 
       const request = await tx.clientRequest.create({
         data: {
@@ -226,7 +298,7 @@ export default class CaseLawyerInviteSvc {
           note: "",
           consentVersion: OWN_LAWYER_INVITE_CONSENT_VERSION,
           consentAcceptedAt: invite.createdAt,
-          requestedLawyerId: user.id,
+          requestedLawyerId: lawyerId,
           requestedOnly: true,
           engagedAt: new Date(),
         },
@@ -235,48 +307,21 @@ export default class CaseLawyerInviteSvc {
       await tx.clientRequestClaim.create({
         data: {
           requestId: request.id,
-          lawyerId: user.id,
+          lawyerId,
           organizationId: null,
           claimedAt: new Date(),
           expiresAt: new Date(),
           outcome: "ENGAGED",
-          lawyerCaseId: seeded.caseId,
+          lawyerCaseId: seededCaseId,
         },
       });
 
-      return { requestId: request.id, caseId: seeded.caseId };
-    }).catch((err) => {
-      if (err instanceof HttpError && err.code === "INVITE_ALREADY_USED") return { error: "INVITE_ALREADY_USED" as const };
-      if (err instanceof HttpError && err.code === "CASE_ALREADY_HAS_LAWYER") return { error: "CASE_ALREADY_HAS_LAWYER" as const };
+      return { requestId: request.id, caseId: seededCaseId };
+    }).catch((err): RedeemResult => {
+      if (err instanceof HttpError && err.code === "INVITE_ALREADY_USED") return { error: "INVITE_ALREADY_USED" };
+      if (err instanceof HttpError && err.code === "CASE_ALREADY_HAS_LAWYER") return { error: "CASE_ALREADY_HAS_LAWYER" };
       throw err;
     });
-
-    if ("error" in result) {
-      // The transaction above rolled back, so seed()'s Case (and its copied Document/File rows)
-      // never got a ClientRequest pointing at it — clean it up rather than leaving a full copy of
-      // the client's case and documents orphaned (a real privacy concern: e.g. the client revokes
-      // the invite while this redeem is mid-flight, the lawyer loses the race, but would otherwise
-      // keep a copy of the case forever with nothing accounting for it).
-      await CaseSeedSvc.discard(seeded.caseId);
-      return result;
-    }
-
-    await NotificationSvc.create({
-      userId: invite.clientId,
-      type: "CASE_UPDATE",
-      title: "Your lawyer has joined ilovelawyer",
-      message: "Your lawyer has joined ilovelawyer and can now see your case.",
-      link: `/cases/${invite.caseId}`,
-    }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify client", { err, caseId: invite.caseId }));
-    await NotificationSvc.create({
-      userId: user.id,
-      type: "CASE_UPDATE",
-      title: "You're attached to your client's case",
-      message: "You've joined your client's case through their invite and can now see it.",
-      link: `/cases/${result.caseId}`,
-    }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify lawyer", { err, lawyerId: user.id }));
-
-    return result;
   }
 
   /** Revokes the case's pending invite. 404 INVITE_NOT_FOUND when there was none to revoke. */
@@ -294,11 +339,18 @@ export default class CaseLawyerInviteSvc {
     if (!row) throw new HttpError("Case not found", 404);
   }
 
-  /** 409 CASE_HAS_LAWYER when the case already has a lawyer engaged on it through the marketplace
-   * flow (ClientRequestRepo.findEngagedLawyerForCase — the same "is anyone live on this case"
-   * check the marketplace flow itself relies on). */
+  /** Refuses a new invite while the case has any open ClientRequest (ClientRequestRepo.findOpenForCase,
+   * the same "at most one open request per case" check ClientRequestSvc's REQUEST_ALREADY_OPEN is
+   * built on): 409 CASE_HAS_LAWYER when a lawyer is already ENGAGED on it; 409 REQUEST_ALREADY_OPEN —
+   * the code the client app already knows from asking for a marketplace lawyer — when a marketplace
+   * request is still in flight, so the client withdraws that one first rather than end up hiring
+   * two lawyers. */
   private static async assertNoLiveLawyer(caseId: string): Promise<void> {
-    const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
-    if (engaged) throw new HttpError("This case already has a lawyer. End that engagement before inviting another.", 409, "CASE_HAS_LAWYER");
+    const open = await ClientRequestRepo.findOpenForCase(caseId);
+    if (!open) return;
+    if (open.status === "ENGAGED") throw new HttpError("This case already has a lawyer. End that engagement before inviting another.", 409, "CASE_HAS_LAWYER");
+    throw new HttpError("You've already asked for a lawyer on this case. Withdraw that request before inviting your own lawyer.", 409, "REQUEST_ALREADY_OPEN", {
+      openRequestId: open.id,
+    });
   }
 }

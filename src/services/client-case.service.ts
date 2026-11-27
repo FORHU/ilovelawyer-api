@@ -615,6 +615,11 @@ export default class ClientCaseSvc {
         logger.warn("Client add document: failed to link evidence to its gap", { err, caseId, documentId: doc.id, missingEvidenceId });
       });
     }
+    // Heads-up only: the engaged lawyer's own Case (ClientRequestClaim.lawyerCaseId) is a one-time
+    // seed from when they were engaged, so this document does NOT reach it, and since seeding
+    // replaced CaseAccess they can't open it on the client's case either. Sharing new documents with
+    // the lawyer (e.g. through the engagement thread) is a follow-up; until then this event must not
+    // be presented as "the lawyer can see it".
     const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
     if (engaged) {
       const event: EngagementDocumentAddedEvent = {

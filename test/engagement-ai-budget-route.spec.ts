@@ -1,7 +1,9 @@
 /** The engagement's AI budget meter and the block on further AI work once it's spent (#515):
  * GET /client-requests/:id/ai-budget, and the 403 ENGAGEMENT_AI_BUDGET_SPENT a write that would
- * start AI work gets once the lawyer's workspace copy has used it all. Through the real routes
- * against the real database, reusing the engage-then-copy flow #514's tests already cover. */
+ * start AI work gets once the lawyer's own seeded Case for the engagement (the engaged claim's
+ * lawyerCaseId, made when the client's payment engaged it) has used it all. Through the real routes
+ * against the real database. "Copy to my workspace" is retired, so the budget no longer meters a
+ * workspace copy. */
 import crypto from "crypto";
 import { expect } from "chai";
 import { describe, it, before, after, beforeEach, afterEach } from "mocha";
@@ -11,7 +13,6 @@ import prisma from "../src/lib/prisma";
 import { sentQuotation, cleanQuotationMoney } from "./support/quotation-fixture";
 import { givePracticeArea } from "./support/practice-area-fixture";
 import loginToken from "../src/utils/loginToken";
-import CaseCopyQueue from "../src/queues/case-copy.queue";
 import { accountSpendLimit } from "../src/middleware/account-spend-limit.middleware";
 import EngagementAiBudgetSvc from "../src/services/engagement-ai-budget.service";
 import { ENGAGEMENT_AI_BUDGET_GBP_PER_USD, ENGAGEMENT_AI_BUDGET_INCLUDED_USD } from "../src/config";
@@ -25,7 +26,7 @@ describe("engagement AI budget", () => {
   const orgId = crypto.randomUUID();
   const caseId = crypto.randomUUID();
   let requestId: string;
-  let copyCaseId: string;
+  let lawyerCaseId: string;
 
   const fakeStripe: HostedOrganizationCardProvider = {
     name: "STRIPE",
@@ -51,9 +52,7 @@ describe("engagement AI budget", () => {
   const auth = (id: string) => ({ Authorization: `Bearer ${loginToken(id, false).accessToken}` });
   const asLawyer = { ...auth(lawyerId), "X-Organization-Id": orgId };
   const confirm = () => request(app).post(`/api/client/lawyer-requests/${requestId}/confirm`).set(auth(clientId)).send({ disclosureAcknowledged: true });
-  const copy = () => request(app).post(`/api/client-requests/${requestId}/copy`).set(asLawyer);
   const aiBudget = () => request(app).get(`/api/client-requests/${requestId}/ai-budget`).set(asLawyer);
-  const uploadToCopy = () => request(app).post(`/api/my-cases/${copyCaseId}/documents`).set(asLawyer).send({ key: "k1", name: "doc.pdf" });
 
   const spend = async (caseIdToSpend: string, usd: number) =>
     prisma.llmUsage.create({
@@ -86,7 +85,7 @@ describe("engagement AI budget", () => {
 
   after(async () => {
     await cleanQuotationMoney({ organizationIds: [orgId] }, [clientId]);
-    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: copyCaseId }] } });
+    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: lawyerCaseId }] } });
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
     await prisma.case.deleteMany({ where: { OR: [{ id: caseId }, { copiedFromCaseId: caseId }] } });
@@ -99,7 +98,7 @@ describe("engagement AI budget", () => {
 
   beforeEach(async () => {
     setOrganizationCardProvider(fakeStripe);
-    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: copyCaseId ?? "none" }] } });
+    await prisma.llmUsage.deleteMany({ where: { OR: [{ caseId }, { caseId: lawyerCaseId ?? "none" }] } });
     await prisma.organizationCharge.deleteMany({ where: { organizationId: orgId } });
     await prisma.clientRequest.deleteMany({ where: { caseId } });
 
@@ -115,9 +114,8 @@ describe("engagement AI budget", () => {
     await confirm().expect(200);
     // The client pays the quote (the dummy provider): that engages the request.
     await request(app).post(`/api/client/lawyer-requests/${requestId}/quotations/${quotation.id}/payment`).set(auth(clientId)).send({}).expect(200);
-    const { body } = await copy().expect(202);
-    await CaseCopyQueue.tick();
-    copyCaseId = (await prisma.caseCopy.findUniqueOrThrow({ where: { id: body.caseCopyId } })).copyCaseId!;
+    // Engaging seeded the lawyer their own Case (the claim's lawyerCaseId): what the budget meters.
+    lawyerCaseId = (await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: claim.id } })).lawyerCaseId!;
   });
 
   describe("GET /client-requests/:id/ai-budget", () => {
@@ -129,9 +127,9 @@ describe("engagement AI budget", () => {
       expect(body.state).to.equal("OK");
     });
 
-    it("attributes usage on the workspace copy, not the client's own case", async () => {
+    it("attributes usage on the lawyer's own seeded Case, not the client's own case", async () => {
       await spend(caseId, 100); // on the client's case, never AI'd on; shouldn't count
-      await spend(copyCaseId, ENGAGEMENT_AI_BUDGET_INCLUDED_USD * 0.5);
+      await spend(lawyerCaseId, ENGAGEMENT_AI_BUDGET_INCLUDED_USD * 0.5);
 
       const { body } = await aiBudget().expect(200);
       expect(body.used.amountMinor).to.equal(Math.round(ENGAGEMENT_AI_BUDGET_INCLUDED_USD * 0.5 * ENGAGEMENT_AI_BUDGET_GBP_PER_USD * 100));
@@ -139,10 +137,10 @@ describe("engagement AI budget", () => {
     });
 
     it("shows WARNING at 80% and EXHAUSTED at 100%", async () => {
-      await spend(copyCaseId, ENGAGEMENT_AI_BUDGET_INCLUDED_USD * 0.8);
+      await spend(lawyerCaseId, ENGAGEMENT_AI_BUDGET_INCLUDED_USD * 0.8);
       expect((await aiBudget().expect(200)).body.state).to.equal("WARNING");
 
-      await spend(copyCaseId, ENGAGEMENT_AI_BUDGET_INCLUDED_USD * 0.2);
+      await spend(lawyerCaseId, ENGAGEMENT_AI_BUDGET_INCLUDED_USD * 0.2);
       expect((await aiBudget().expect(200)).body.state).to.equal("EXHAUSTED");
     });
 
@@ -162,7 +160,7 @@ describe("engagement AI budget", () => {
     afterEach(() => restore?.());
 
     const next = () => new Promise<unknown>((resolve) => {
-      const req = { path: `/${copyCaseId}/documents`, method: "POST", user: { userId: lawyerId } } as any;
+      const req = { path: `/${lawyerCaseId}/documents`, method: "POST", user: { userId: lawyerId } } as any;
       accountSpendLimit(req, {} as any, resolve);
     });
 
@@ -171,6 +169,15 @@ describe("engagement AI budget", () => {
       restore = () => (EngagementAiBudgetSvc.assertHasBudget = stash);
       EngagementAiBudgetSvc.assertHasBudget = async () => {};
       expect(await next()).to.equal(undefined);
+    });
+
+    // The real EngagementAiBudgetSvc this time, metering the seeded Case end to end: the lookup
+    // goes through ClientRequestClaim.lawyerCaseId, not the retired copy's ClientRequest.copyCaseId.
+    it("refuses AI work on the lawyer's seeded Case once its budget is spent, and only then", async () => {
+      expect(await next()).to.equal(undefined);
+      await spend(lawyerCaseId, ENGAGEMENT_AI_BUDGET_INCLUDED_USD);
+      const refusal = (await next()) as { statusCode?: number; code?: string };
+      expect(refusal).to.include({ statusCode: 403, code: "ENGAGEMENT_AI_BUDGET_SPENT" });
     });
 
     it("passes the 403 ENGAGEMENT_AI_BUDGET_SPENT refusal on to next()", async () => {

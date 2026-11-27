@@ -26,7 +26,8 @@ router.post("/:id/quotation/withdraw", asyncHandler(ClientRequestLawyerCtrl.with
 // Retrying the per-case fee after the card was declined and updated (#513). Only requests accepted
 // before quotation payments have one.
 router.post("/:id/charge/retry", asyncHandler(ClientRequestLawyerCtrl.retryCharge));
-// Copying the engaged client's case to the lawyer's own workspace (#514).
+// "Copy to my workspace" (#514), retired: always 410 COPY_RETIRED, since every engagement now seeds
+// the lawyer their own Case. Kept mounted so an older lawyer app gets that answer, not a 404.
 router.post("/:id/copy", asyncHandler(ClientRequestLawyerCtrl.copy));
 // The client's intake package (ADR 0018): the full CaseIntake, the transcript and the
 // documents, once engaged. Read-only; every read is audited.

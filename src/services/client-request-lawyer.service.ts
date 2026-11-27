@@ -20,10 +20,8 @@ import WalletSvc from "./wallet.service";
 import WalletRepo from "../repositories/wallet.repository";
 import { quotationDto } from "./quotation.dto";
 import { QUOTATION_DEFAULT_VALIDITY_DAYS, QUOTATION_MAX_VALIDITY_DAYS } from "../constants/payout.constants";
-import CaseCopyRepo from "../repositories/case-copy.repository";
-import CaseCopyQueue from "../queues/case-copy.queue";
 import EngagementAccessSvc from "./engagement-access.service";
-import EngagementAiBudgetSvc from "./engagement-ai-budget.service";
+import EngagementAiBudgetSvc, { meteredCaseIdOf } from "./engagement-ai-budget.service";
 import SecurityAuditSvc from "./security-audit.service";
 import AccountLimitsSvc from "./account-limits.service";
 import { emitToUser } from "../lib/socket";
@@ -197,15 +195,25 @@ function toDto(r: LawyerRequest, lawyerId: string, terms: LawyerTerms, brief: un
     engagement:
       mine?.outcome === "ENGAGED"
         ? {
+            // The client's own case. Since auto-seeding replaced CaseAccess grants the lawyer can
+            // no longer open it; kept because it's still the engagement's identity (the case the
+            // request is on) and older lawyer apps read it. Open `lawyerCaseId` instead.
             caseId: r.caseId,
-            // The client's workspace the case lives in: what the lawyer app sends as
-            // X-Organization-Id to open it read-only, as for any case shared to view
-            // (CaseShareRepo's workspaceId: the case's organization, else the owner's own).
+            // The lawyer's own Case for this engagement, seeded from the client's when they were
+            // engaged (invite redemption or a marketplace engagement): the one they can open and
+            // work in. A snapshot as of that moment, not a live view of the client's case. Null
+            // only if seeding failed (logged for ops) or on an engagement from before seeding.
+            lawyerCaseId: mine.lawyerCaseId,
+            // The client's workspace the case lives in, as for any case shared to view
+            // (CaseShareRepo's workspaceId: the case's organization, else the owner's own). Only
+            // meaningful for a legacy engagement that still holds CaseAccess.
             workspaceId: r.case.organizationId ?? `user:${r.client.id}`,
             clientName: r.client.name || r.client.username,
             engagedAt: r.engagedAt!,
             closedAt: r.closedAt,
             closedBy: r.closedBy,
+            // A workspace copy made through the retired "copy to my workspace", on an engagement
+            // from before seeding; null on every newer one.
             copyCaseId: r.copyCaseId,
             // The lawyer's "the work is finished", waiting on the client or answered.
             completion: completionDto(r),
@@ -618,40 +626,20 @@ export default class ClientRequestLawyerSvc {
   }
 
   /**
-   * "Copy to my workspace" (#514): a snapshot of the client's live case, queued through
-   * CaseCopySvc and shown in the portfolio like other copies. Once, while ENGAGED, by the lawyer
-   * the request is engaged on. The existing copy is returned on a second call rather than queuing
-   * another one.
+   * "Copy to my workspace" (#514) — RETIRED. Every engagement now seeds the lawyer their own Case
+   * from the client's at the moment it's engaged (CaseSeedSvc.seed, recorded as the engaged claim's
+   * `lawyerCaseId` and shown on the request as `engagement.lawyerCaseId`), so a manual copy has
+   * nothing left to do. Always 410 COPY_RETIRED, deliberately, for every caller and every request:
+   * nothing is looked up, queued or recorded, so the answer can't be used to probe which requests
+   * exist. Copies made before retirement (ClientRequest.copyCaseId) are untouched and still metered
+   * (EngagementAiBudgetSvc).
    */
-  static async copy(lawyer: LawyerContext, id: string) {
-    const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "Copy the case once you're engaged on it.");
-
-    const existing = await CaseCopyRepo.findForRequest(id);
-    if (existing) return { caseCopyId: existing.id, status: existing.status };
-    // The copy is a case of their own, so their plan's case limit applies (and a trial that's over).
-    await AccountLimitsSvc.assertCanCreateCase(lawyer.userId);
-
-    const job = await CaseCopyRepo.enqueueForRequest({
-      requestId: id,
-      sourceCaseId: request.caseId,
-      caseName: request.case.caseName,
-      sourceOrganizationName: request.case.organization?.name ?? "",
-      userId: lawyer.userId,
-      targetOrganizationId: lawyer.organizationId,
-    });
-    const payload = { requestId: id, caseCopyId: job.id };
-    await OrganizationRepo.writeAudit({ caseId: request.caseId, actorId: lawyer.userId, action: "client_request.copied", payload });
-    await SecurityAuditSvc.record({
-      action: "client_request.copied",
-      actorId: lawyer.userId,
-      organizationId: lawyer.organizationId,
-      targetType: "case",
-      targetId: request.caseId,
-      caseId: request.caseId,
-      payload,
-    });
-    CaseCopyQueue.kick();
-    return { caseCopyId: job.id, status: job.status };
+  static async copy(_lawyer: LawyerContext, _id: string): Promise<never> {
+    throw new HttpError(
+      "Copy to my workspace has been retired: you already have your own case for this engagement, made for you when you were engaged. Open it from the request (engagement.lawyerCaseId).",
+      410,
+      "COPY_RETIRED",
+    );
   }
 
   /**
@@ -720,10 +708,10 @@ export default class ClientRequestLawyerSvc {
   }
 
   /** The engagement's AI budget meter (#515): what's included, any top-ups, what's been spent on
-   * the workspace copy, and whether AI work can still run. */
+   * the lawyer's own Case for the engagement (meteredCaseIdOf), and whether AI work can still run. */
   static async aiBudget(lawyer: LawyerContext, id: string) {
     const request = await ClientRequestLawyerSvc.engagedRequest(lawyer, id, "This request isn't engaged.");
-    return EngagementAiBudgetSvc.forRequest(id, request.copyCaseId);
+    return EngagementAiBudgetSvc.forRequest(id, meteredCaseIdOf(request));
   }
 
   /**
