@@ -392,20 +392,34 @@ export default class QuotationPaymentSvc {
    * which takes the identical lock) are serialized against each other. `findEngagedLawyerForCase`
    * finding *this* request (now ENGAGED) is normal, not a conflict — only a *different* request
    * already ENGAGED on the case is the genuine double-engagement this lock exists to catch, and since
-   * the money's already moved, all that's left to do about it here is skip seeding and log loudly for
-   * ops to sort out; the claim's `lawyerCaseId` stays null.
+   * the money's already moved, all that's left to do about it here is skip seeding (cleaning up the
+   * now-pointless seeded Case, CaseSeedSvc.discard) and log loudly for ops to sort out; the claim's
+   * `lawyerCaseId` stays null. A failed `seed()` itself (an S3 outage, say) is caught rather than
+   * left to propagate: this runs in the middle of `afterEngaged`'s post-payment steps, and a thrown
+   * error here must not stop the notifications/socket emits that come after it — same "skip, don't
+   * block" outcome as a lock-loss.
    */
   private static async seedLawyerCase(requestId: string, caseId: string, claimId: string, lawyerId: string, organizationId: string | null): Promise<void> {
-    const seeded = await CaseSeedSvc.seed({ sourceCaseId: caseId, lawyerId, organizationId });
+    let seeded: { caseId: string };
+    try {
+      seeded = await CaseSeedSvc.seed({ sourceCaseId: caseId, lawyerId, organizationId });
+    } catch (err) {
+      logger.error("Quotation payment: seeding the lawyer's own case failed; the claim's lawyerCaseId stays unset", { err, caseId, requestId });
+      return;
+    }
     const ok = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw(Prisma.sql`SELECT id FROM "Case" WHERE id = ${caseId} FOR UPDATE`);
-      const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId, tx);
-      if (engaged && engaged.requestId !== requestId) return false;
+      // Excludes this request itself: findEngagedLawyerForCase is a plain findFirst, so without this
+      // exclusion a genuine conflict (two ENGAGED requests on the case) could be missed whenever
+      // Postgres happens to return this request's own row first.
+      const engaged = await ClientRequestRepo.findEngagedLawyerForCase(caseId, tx, requestId);
+      if (engaged) return false;
       await tx.clientRequestClaim.update({ where: { id: claimId }, data: { lawyerCaseId: seeded.caseId } });
       return true;
     });
     if (!ok) {
-      logger.error("Quotation payment: case already has a different engaged lawyer; the lawyer's seeded case is orphaned", { caseId, requestId, seededCaseId: seeded.caseId });
+      logger.error("Quotation payment: case already has a different engaged lawyer; discarding the lawyer's seeded case", { caseId, requestId, seededCaseId: seeded.caseId });
+      await CaseSeedSvc.discard(seeded.caseId);
     }
   }
 

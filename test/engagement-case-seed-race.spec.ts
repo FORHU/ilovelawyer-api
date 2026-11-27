@@ -15,6 +15,56 @@ import CaseLawyerInviteRepo from "../src/repositories/case-lawyer-invite.reposit
 import CaseLawyerInviteSvc from "../src/services/case-lawyer-invite.service";
 import CaseSeedSvc from "../src/services/case-seed.service";
 import QuotationPaymentSvc from "../src/services/quotation-payment.service";
+import ClientRequestRepo from "../src/repositories/client-request.repository";
+
+describe("ClientRequestRepo.findEngagedLawyerForCase's excludeRequestId (Task 10, Critical #1 fix)", function () {
+  this.timeout(10_000);
+  const clientId = crypto.randomUUID();
+  const lawyerAId = crypto.randomUUID();
+  const lawyerBId = crypto.randomUUID();
+  const caseId = crypto.randomUUID();
+  const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  before(async () => {
+    await prisma.user.create({ data: { id: clientId, email: `exclude-client-${clientId}@example.com`, username: `exclude-client-${clientId}` } });
+    await prisma.user.create({ data: { id: lawyerAId, email: `exclude-a-${lawyerAId}@example.com`, username: `exclude-a-${lawyerAId}` } });
+    await prisma.user.create({ data: { id: lawyerBId, email: `exclude-b-${lawyerBId}@example.com`, username: `exclude-b-${lawyerBId}` } });
+    await prisma.case.create({ data: { id: caseId, userId: clientId, caseName: "Exclusion test", caseAreas: ["EMPLOYMENT"], ukJurisdiction: "England and Wales" } });
+  });
+
+  after(async () => {
+    await prisma.clientRequestClaim.deleteMany({ where: { request: { caseId } } });
+    await prisma.clientRequest.deleteMany({ where: { caseId } });
+    await prisma.case.deleteMany({ where: { id: caseId } });
+    await prisma.user.deleteMany({ where: { id: { in: [clientId, lawyerAId, lawyerBId] } } });
+  });
+
+  // Deterministic by construction, not by Postgres's (unspecified) row-return order: with two
+  // ENGAGED ClientRequests on the same case, excluding either one's id must always leave exactly
+  // the *other* one as the answer — never itself, and never undecided based on which happened to be
+  // inserted or updated first. This is the exact gap Critical #1 flagged: the old call site
+  // (`findEngagedLawyerForCase(caseId, tx)` + a JS-side `engaged.requestId !== requestId` check)
+  // could silently miss a genuine conflict whenever the plain `findFirst` happened to return the
+  // caller's own row.
+  it("always returns the other ENGAGED request, excluding the caller's own, regardless of which was written first", async () => {
+    const requestA = await prisma.clientRequest.create({ data: { caseId, clientId, status: "ENGAGED", engagedAt: new Date(), consentVersion: "v1", consentAcceptedAt: new Date() } });
+    await prisma.clientRequestClaim.create({ data: { requestId: requestA.id, lawyerId: lawyerAId, outcome: "ENGAGED", claimedAt: new Date(), expiresAt: future } });
+    const requestB = await prisma.clientRequest.create({ data: { caseId, clientId, status: "ENGAGED", engagedAt: new Date(), consentVersion: "v1", consentAcceptedAt: new Date() } });
+    await prisma.clientRequestClaim.create({ data: { requestId: requestB.id, lawyerId: lawyerBId, outcome: "ENGAGED", claimedAt: new Date(), expiresAt: future } });
+
+    // Excluding A's own id must find B, excluding B's own id must find A — both directions, so this
+    // isn't just testing whichever one Postgres happens to prefer.
+    const foundExcludingA = await ClientRequestRepo.findEngagedLawyerForCase(caseId, undefined, requestA.id);
+    expect(foundExcludingA?.requestId).to.equal(requestB.id);
+    const foundExcludingB = await ClientRequestRepo.findEngagedLawyerForCase(caseId, undefined, requestB.id);
+    expect(foundExcludingB?.requestId).to.equal(requestA.id);
+
+    // With no exclusion, it's still just "the first ENGAGED one" — some row, not necessarily either
+    // in particular; the exclusion is what makes the "is there a *different* one" question answerable.
+    const foundNoExclusion = await ClientRequestRepo.findEngagedLawyerForCase(caseId);
+    expect([requestA.id, requestB.id]).to.include(foundNoExclusion?.requestId);
+  });
+});
 
 describe("a client invite and a marketplace engagement racing for the same case (Task 10)", function () {
   this.timeout(20_000);
@@ -114,6 +164,9 @@ describe("a client invite and a marketplace engagement racing for the same case 
     const inviteRow = await CaseLawyerInviteRepo.findByToken(invite.token);
     expect(inviteRow?.status).to.equal("PENDING");
     // Exactly one lawyer-owned Case descends from the client's case: the marketplace engagement's.
+    // Phrased as counts, not "which specific side won", so this doesn't depend on which of two
+    // ENGAGED rows a plain findFirst happens to return first (the bug the exclusion fix closes).
+    expect(await prisma.clientRequest.count({ where: { caseId, status: "ENGAGED" } })).to.equal(1);
     expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(1);
   });
 
@@ -181,8 +234,19 @@ describe("a client invite and a marketplace engagement racing for the same case 
 
     // The marketplace engagement lost: Task 10's own lock+recheck in seedLawyerCase, run after the
     // invite already committed, found that different, already-ENGAGED request and skipped seeding —
-    // its claim's lawyerCaseId stays null rather than pointing at a Case nothing else accounts for.
+    // its claim's lawyerCaseId stays null rather than pointing at a Case nothing else accounts for,
+    // and the Case CaseSeedSvc.seed had already built for it was discarded rather than left orphaned.
     const marketClaimAfter = await prisma.clientRequestClaim.findUniqueOrThrow({ where: { id: marketClaim.id } });
     expect(marketClaimAfter.lawyerCaseId).to.equal(null);
+    // Phrased as counts, not "which specific side won", so this doesn't depend on which of the two
+    // ENGAGED requests (this one's own, or the invite's) a plain findFirst happens to return first
+    // (the bug the exclusion fix — findEngagedLawyerForCase's `excludeRequestId` — closes): both
+    // requests genuinely are ENGAGED at this point (the marketplace payment's own transaction already
+    // committed that independently of this lock, see seedLawyerCase's own doc comment), but exactly
+    // one claim across both ends up with a seeded Case, and exactly one seeded Case exists at all.
+    expect(await prisma.clientRequest.count({ where: { caseId, status: "ENGAGED" } })).to.equal(2);
+    const seededClaims = await prisma.clientRequestClaim.count({ where: { request: { caseId }, lawyerCaseId: { not: null } } });
+    expect(seededClaims).to.equal(1);
+    expect(await prisma.case.count({ where: { copiedFromCaseId: caseId } })).to.equal(1);
   });
 });

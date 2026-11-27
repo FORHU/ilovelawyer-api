@@ -3,6 +3,7 @@ import path from "path";
 import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 import DocumentRepo from "../repositories/document.repository";
+import FilesRepo from "../repositories/files.repository";
 import CaseCopySvc from "./case-copy.service";
 import HttpError from "../utils/http-error";
 import { caseScope } from "../utils/workspace";
@@ -121,5 +122,30 @@ export default class CaseSeedSvc {
     });
 
     return { caseId };
+  }
+
+  /**
+   * Best-effort removal of a Case that `seed` finished seeding but that its caller then decided
+   * not to keep (lost a race to attach it to anything — a lock-loss in `CaseLawyerInviteSvc.redeem`
+   * or in the marketplace path's own `seedLawyerCase`, Task 10) — so no ClientRequest ever ends up
+   * pointing at it. Deletes the seeded Case's Document rows directly (cheaper than
+   * DocumentSvc.delete's per-document audit-log path, which also assumes a real actor/workspace
+   * context this cleanup doesn't have), marks each Document's File FOR_DELETION once orphaned (the
+   * existing sweep-job convention — see FilesRepo.markForDeletionIfOrphaned and DocumentSvc.delete,
+   * which does the same), then deletes the Case row itself. Never throws: a failure here must not
+   * mask or replace whatever real error or outcome the caller is already returning, so it's only
+   * ever logged.
+   */
+  static async discard(caseId: string): Promise<void> {
+    try {
+      const docs = await prisma.document.findMany({ where: { caseId }, select: { id: true, fileId: true } });
+      await prisma.document.deleteMany({ where: { caseId } });
+      for (const doc of docs) {
+        if (doc.fileId) await FilesRepo.markForDeletionIfOrphaned(doc.fileId);
+      }
+      await prisma.case.delete({ where: { id: caseId } });
+    } catch (err) {
+      logger.error("CaseSeedSvc.discard: failed to clean up an orphaned seeded case", { err, caseId });
+    }
   }
 }

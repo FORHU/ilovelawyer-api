@@ -104,11 +104,16 @@ export default class ClientRequestRepo {
   /** The lawyer with live, read-only access to this case right now, and who to credit a new
    * document to (#514) — null when nobody's engaged on it. `tx`: pass a transaction client to
    * read this inside a caller's own transaction (e.g. CaseLawyerInviteSvc.redeem's recheck after
-   * locking the case row, so a race can't slip an ENGAGED request past this check). */
-  static async findEngagedLawyerForCase(caseId: string, tx?: Prisma.TransactionClient) {
+   * locking the case row, so a race can't slip an ENGAGED request past this check).
+   * `excludeRequestId`: leave the caller's own request out of the search — a caller rechecking for
+   * a *different* ENGAGED request on the case (e.g. the marketplace path's own seedLawyerCase,
+   * Task 10) must not have its answer depend on which of two ENGAGED rows Postgres happens to
+   * return first; without this, a genuine second ENGAGED request could be missed whenever the
+   * caller's own row sorts first. */
+  static async findEngagedLawyerForCase(caseId: string, tx?: Prisma.TransactionClient, excludeRequestId?: string) {
     const db = tx ?? prisma;
     const request = await db.clientRequest.findFirst({
-      where: { caseId, status: "ENGAGED" },
+      where: { caseId, status: "ENGAGED", ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}) },
       select: {
         id: true,
         client: { select: { id: true, name: true, username: true } },

@@ -4,7 +4,6 @@ import prisma from "../lib/prisma";
 import HttpError from "../utils/http-error";
 import CaseLawyerInviteRepo from "../repositories/case-lawyer-invite.repository";
 import ClientRequestRepo from "../repositories/client-request.repository";
-import FilesRepo from "../repositories/files.repository";
 import CaseSeedSvc from "./case-seed.service";
 import NotificationSvc from "./notification.service";
 import { normalizeEmail } from "../utils/auth.utils";
@@ -258,7 +257,7 @@ export default class CaseLawyerInviteSvc {
       // the client's case and documents orphaned (a real privacy concern: e.g. the client revokes
       // the invite while this redeem is mid-flight, the lawyer loses the race, but would otherwise
       // keep a copy of the case forever with nothing accounting for it).
-      await CaseLawyerInviteSvc.cleanupOrphanedSeed(seeded.caseId);
+      await CaseSeedSvc.discard(seeded.caseId);
       return result;
     }
 
@@ -278,30 +277,6 @@ export default class CaseLawyerInviteSvc {
     }).catch((err) => logger.error("CaseLawyerInviteSvc.redeem: failed to notify lawyer", { err, lawyerId: user.id }));
 
     return result;
-  }
-
-  /**
-   * Best-effort removal of a Case that `CaseSeedSvc.seed` finished seeding but that `redeem`'s own
-   * transaction then rolled back on top of (a lost `markAccepted` race, or the in-transaction
-   * CASE_ALREADY_HAS_LAWYER recheck) — so no ClientRequest ever ends up pointing at it. Deletes the
-   * seeded Case's Document rows directly (cheaper than DocumentSvc.delete's per-document audit-log
-   * path, which also assumes a real actor/workspace context this cleanup doesn't have), marks each
-   * Document's File FOR_DELETION once orphaned (the existing sweep-job convention — see
-   * FilesRepo.markForDeletionIfOrphaned and DocumentSvc.delete, which does the same), then deletes
-   * the Case row itself. Never throws: a failure here must not mask or replace the real error
-   * `redeem` is already returning, so it's only ever logged.
-   */
-  private static async cleanupOrphanedSeed(caseId: string): Promise<void> {
-    try {
-      const docs = await prisma.document.findMany({ where: { caseId }, select: { id: true, fileId: true } });
-      await prisma.document.deleteMany({ where: { caseId } });
-      for (const doc of docs) {
-        if (doc.fileId) await FilesRepo.markForDeletionIfOrphaned(doc.fileId);
-      }
-      await prisma.case.delete({ where: { id: caseId } });
-    } catch (err) {
-      logger.error("CaseLawyerInviteSvc.redeem: failed to clean up an orphaned seeded case", { err, caseId });
-    }
   }
 
   /** Revokes the case's pending invite. 404 INVITE_NOT_FOUND when there was none to revoke. */
