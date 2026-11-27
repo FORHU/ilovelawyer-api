@@ -91,6 +91,42 @@ describe("CaseLawyerInvite", function () {
       expect(await CaseLawyerInviteRepo.findPendingForCase(caseId)).to.equal(null);
     });
 
+    it("findLatestForCase returns the row with the newest createdAt, regardless of status", async () => {
+      const oldest = await CaseLawyerInviteRepo.create({
+        caseId,
+        clientId,
+        token: makeToken(),
+        status: "REVOKED",
+        expiresAt: future,
+        createdAt: new Date(Date.now() - 3000),
+      });
+      const middle = await CaseLawyerInviteRepo.create({
+        caseId,
+        clientId,
+        token: makeToken(),
+        status: "ACCEPTED",
+        expiresAt: future,
+        createdAt: new Date(Date.now() - 2000),
+      });
+      const newest = await CaseLawyerInviteRepo.create({
+        caseId,
+        clientId,
+        token: makeToken(),
+        status: "EXPIRED",
+        expiresAt: future,
+        createdAt: new Date(Date.now() - 1000),
+      });
+
+      const found = await CaseLawyerInviteRepo.findLatestForCase(caseId);
+      expect(found?.id).to.equal(newest.id);
+      expect(found?.id).to.not.equal(middle.id);
+      expect(found?.id).to.not.equal(oldest.id);
+    });
+
+    it("findLatestForCase returns null when the case has no invites", async () => {
+      expect(await CaseLawyerInviteRepo.findLatestForCase(caseId)).to.equal(null);
+    });
+
     it("findByToken returns the matching row, or null for an unknown token", async () => {
       const token = makeToken();
       const invite = await CaseLawyerInviteRepo.create({ caseId, clientId, token, expiresAt: future });
@@ -312,6 +348,73 @@ describe("CaseLawyerInvite", function () {
       const created = await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
       const current = await CaseLawyerInviteSvc.getCurrentForCase(clientId, caseId);
       expect(current).to.not.equal(null);
+      expect(current?.status).to.equal("PENDING");
+      expect(current?.expiresAt.getTime()).to.equal(created.expiresAt.getTime());
+    });
+
+    it("getCurrentForCase returns an ACCEPTED invite (not null) when it's the most recent one for the case", async () => {
+      const accepted = await CaseLawyerInviteRepo.create({ caseId, clientId, token: crypto.randomUUID(), status: "ACCEPTED", expiresAt: future });
+      const current = await CaseLawyerInviteSvc.getCurrentForCase(clientId, caseId);
+      expect(current).to.not.equal(null);
+      expect(current?.status).to.equal("ACCEPTED");
+      expect(current?.expiresAt.getTime()).to.equal(accepted.expiresAt.getTime());
+    });
+
+    it("getCurrentForCase returns a REVOKED invite (not null) when it's the most recent one for the case", async () => {
+      await CaseLawyerInviteRepo.create({ caseId, clientId, token: crypto.randomUUID(), status: "REVOKED", expiresAt: future });
+      const current = await CaseLawyerInviteSvc.getCurrentForCase(clientId, caseId);
+      expect(current).to.not.equal(null);
+      expect(current?.status).to.equal("REVOKED");
+    });
+
+    it("getCurrentForCase returns the newest of several historical rows for the case", async () => {
+      await CaseLawyerInviteRepo.create({
+        caseId,
+        clientId,
+        token: crypto.randomUUID(),
+        status: "REVOKED",
+        expiresAt: future,
+        createdAt: new Date(Date.now() - 2000),
+      });
+      const newer = await CaseLawyerInviteRepo.create({
+        caseId,
+        clientId,
+        token: crypto.randomUUID(),
+        status: "ACCEPTED",
+        expiresAt: future,
+        createdAt: new Date(Date.now() - 1000),
+      });
+
+      const current = await CaseLawyerInviteSvc.getCurrentForCase(clientId, caseId);
+      expect(current?.status).to.equal("ACCEPTED");
+      expect(current?.acceptedAt?.getTime()).to.equal(newer.acceptedAt?.getTime());
+    });
+
+    it("getCurrentForCase returns the new PENDING invite, not an old revoked/accepted one, once createLinkInvite replaces it", async () => {
+      // The sequence the client app relies on: a lawyer is revoked/removed from a case, then the
+      // client creates a brand-new invite. getCurrentForCase must report the NEW pending invite,
+      // not the stale outcome of the old one — createInvite's fresh createdAt on the new row is
+      // what findLatestForCase's ordering depends on to get this right.
+      await CaseLawyerInviteRepo.create({
+        caseId,
+        clientId,
+        token: crypto.randomUUID(),
+        status: "ACCEPTED",
+        expiresAt: future,
+        createdAt: new Date(Date.now() - 5000),
+      });
+      await CaseLawyerInviteRepo.create({
+        caseId,
+        clientId,
+        token: crypto.randomUUID(),
+        status: "REVOKED",
+        expiresAt: future,
+        createdAt: new Date(Date.now() - 3000),
+      });
+
+      const created = await CaseLawyerInviteSvc.createLinkInvite(clientId, caseId);
+
+      const current = await CaseLawyerInviteSvc.getCurrentForCase(clientId, caseId);
       expect(current?.status).to.equal("PENDING");
       expect(current?.expiresAt.getTime()).to.equal(created.expiresAt.getTime());
     });

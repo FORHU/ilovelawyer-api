@@ -97,10 +97,12 @@ describe("case-lawyer-invite routes", function () {
     it("revokes the pending invite", async () => {
       const { body: created } = await createLink().expect(201);
       await revoke().expect(204);
-      // getCurrentForCase only ever sees a PENDING row, so read the row itself to see the revoke.
       const row = await prisma.caseLawyerInvite.findFirstOrThrow({ where: { caseId, token: created.token } });
       expect(row.status).to.equal("REVOKED");
-      expect((await getCurrent().expect(200)).body).to.equal(null);
+      // getCurrentForCase now reports the most recent invite regardless of status, so the revoked
+      // one it just confirmed above shows up here too, rather than null.
+      const current = (await getCurrent().expect(200)).body;
+      expect(current.status).to.equal("REVOKED");
     });
 
     it("404s when there is nothing to revoke", async () => {

@@ -14,6 +14,18 @@ export default class CaseLawyerInviteRepo {
     return prisma.caseLawyerInvite.findFirst({ where: { caseId, status: "PENDING" } });
   }
 
+  /** The case's most recent invite of any status — the row to show as "the invite on this case",
+   * once it's no longer necessarily PENDING. `createInvite` always revokes any still-PENDING row
+   * before creating a new one (in the same transaction), and every other status-changing call
+   * (`markAccepted`, `markExpired`, the standalone `revoke`) only ever touches an existing row in
+   * place — none of them ever creates a new row — so a case's rows are strictly ordered by
+   * `createdAt`: the newest `createdAt` is unambiguously the current invite, whatever its status,
+   * and a brand-new PENDING invite created after an old ACCEPTED/REVOKED/EXPIRED one always sorts
+   * ahead of it. */
+  static async findLatestForCase(caseId: string): Promise<CaseLawyerInvite | null> {
+    return prisma.caseLawyerInvite.findFirst({ where: { caseId }, orderBy: { createdAt: "desc" } });
+  }
+
   static async findByToken(token: string): Promise<CaseLawyerInvite | null> {
     return prisma.caseLawyerInvite.findUnique({ where: { token } });
   }

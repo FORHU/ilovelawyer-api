@@ -120,12 +120,12 @@ export default class CaseLawyerInviteSvc {
     return { token: invite.token, expiresAt: invite.expiresAt };
   }
 
-  /** The case's current invite, however it stands — null once there's never been one, or the only
-   * one has been revoked, accepted or expired (findPendingForCase only sees PENDING rows; showing
-   * the client their invite's outcome once it's no longer pending is a gap left for later). */
+  /** The case's current invite, however it stands — null once there's never been one. Reports the
+   * most recent invite on the case regardless of status, so the client sees ACCEPTED/REVOKED/EXPIRED
+   * outcomes too, not only a still-outstanding PENDING one. */
   static async getCurrentForCase(clientId: string, caseId: string): Promise<InviteStatusDto | null> {
     await CaseLawyerInviteSvc.assertOwnsCase(clientId, caseId);
-    const invite = await CaseLawyerInviteRepo.findPendingForCase(caseId);
+    const invite = await CaseLawyerInviteRepo.findLatestForCase(caseId);
     if (!invite) return null;
     return { status: invite.status, email: invite.email, expiresAt: invite.expiresAt, acceptedAt: invite.acceptedAt, revokedAt: invite.revokedAt };
   }
